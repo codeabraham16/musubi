@@ -181,7 +181,6 @@ tibio(){ printf '  \033[33m~ %s\033[0m\n' "$1"; POSTURA=1; }
 DIVERGE=0
 SIN_VERIFICAR=0
 POSTURA=0
-
 # ── CÓMO SE PREGUNTA ────────────────────────────────────────────────────────────────────────
 # Un GET devuelve TRES cosas y las tres hacen falta: el cuerpo, el código HTTP y el error de curl.
 # «no contestó», «contestó 401» y «contestó un HTML de otro servicio» son fallas distintas, se
@@ -255,6 +254,95 @@ razon_muda() {
 }
 
 printf '\033[1mverificar-despliegue\033[0m — repo %s contra %s\n' "$REPO" "${SSH_HOST:-127.0.0.1}"
+
+# ── 0 · LA REFERENCIA: ¿CONTRA QUÉ SE COMPARA TODO LO DE ABAJO? ──────────────────────────────
+#
+# ESTA SECCIÓN EXISTE PORQUE EL RESTO DEL GUION NO SE PUEDE CREER SIN ELLA.
+#
+# Todo lo que sigue compara producción contra `$REPO/...` — o sea contra EL ÁRBOL DE TRABAJO: el
+# `VERSION` de la sección 5, los cinco archivos de reglas, los guiones derivados. El árbol de
+# trabajo es lo que haya checkouteado en ese momento: una rama vieja, un merge a medio hacer, un
+# archivo editado y sin commitear. El guion nunca lo decía, y quien lee el informe supone `main`.
+#
+# MEDIDO EL 2026-09-10, Y POR ESO ESTÁ ESTO ACÁ. El cerebro corría 0.139.7 y `origin/main` había
+# cortado 0.140.1 tres horas antes. La corrida de las 08:12 imprimió «cerebro en 0.139.7 — mismo
+# release que el repo (0.139.7)» y salió 0. No mintió: comparó contra el árbol, parado en una rama
+# con el VERSION viejo. La ÚNICA defensa automática contra «arreglado en el repo, nunca llegado a
+# la máquina» quedó ciega justo cuando el checkout no está en el último main — que es el estado
+# NORMAL de un repo en el que se trabaja, no una excepción rara.
+#
+# ES LA FORMA DE A113 OTRA VEZ: un número que viaja junto a lo que vigila no lo vigila. Allá eran
+# dos archivos de reglas que el despliegue copiaba juntos, así que se quedaban viejos juntos; acá
+# son la referencia y el verificador, que salen del mismo checkout.
+#
+# POR QUÉ `dudoso` Y NO `rojo`: un checkout que no es `origin/main` no dice que producción esté
+# mal. Dice que ESTA CORRIDA NO PUEDE CONTESTAR la pregunta. Es «no vi», que en este guion sale
+# con 2 y a propósito no comparte código con el verde.
+#
+# Y POR QUÉ EL GUION HACE EL FETCH: sin traer la referencia, «HEAD == origin/main» se contesta
+# contra un `origin/main` local que puede ser de la semana pasada — o sea, se compara el repo
+# contra sí mismo. Traerla es parte de hacer la pregunta, no un efecto secundario. Sólo mueve el
+# ref de seguimiento; no toca el árbol ni el HEAD. Con `MUSUBI_SIN_FETCH=1` no se trae, y entonces
+# se informa la edad de lo que hay.
+titulo "la referencia (contra qué se compara todo lo de abajo)"
+
+REF_EDAD_MAX_H="${MUSUBI_REF_EDAD_MAX_H:-24}"
+
+if ! git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+  dudoso "el árbol de $REPO no es un repositorio git: se compara contra los archivos que haya ahí, sin saber de qué commit salieron"
+else
+  if [ -z "${MUSUBI_SIN_FETCH:-}" ]; then
+    if git -C "$REPO" fetch --quiet origin "+refs/heads/main:refs/remotes/origin/main" 2>/dev/null; then
+      gris "referencia traída de origin/main recién"
+    else
+      dudoso "no se pudo traer origin/main (sin red, sin remoto o sin permiso): la referencia es la que había guardada, y su edad va abajo"
+    fi
+  else
+    gris "MUSUBI_SIN_FETCH=1: no se trajo la referencia, se usa la que hay"
+  fi
+
+  if ! git -C "$REPO" rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+    dudoso "este árbol no tiene la referencia origin/main: no hay contra qué medir el checkout, así que ningún «coincide» de abajo dice contra qué"
+  else
+    REF_RAMA="$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+    REF_HEAD="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo '?')"
+    REF_MAIN="$(git -C "$REPO" rev-parse --short origin/main 2>/dev/null || echo '?')"
+    REF_ATRAS="$(git -C "$REPO" rev-list --count HEAD..origin/main 2>/dev/null || echo '?')"
+    REF_ADELANTE="$(git -C "$REPO" rev-list --count origin/main..HEAD 2>/dev/null || echo '?')"
+    # EL SUCIO CUENTA LOS NO TRACKEADOS TAMBIÉN. Un archivo de reglas nuevo y sin agregar cambia
+    # lo que este guion compara, y ya nos costó una vez: el sufijo `-sucio` de `construir.sh` no
+    # veía los archivos sin trackear y declaró limpio un binario que se llevaba código de más.
+    REF_SUCIO="$(git -C "$REPO" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+
+    # La edad de la referencia se mide por el último fetch, no por la fecha del commit: un
+    # `origin/main` de hace una semana puede apuntar a un commit de hoy y seguir estando viejo.
+    REF_EDAD_H=""
+    GITDIR="$(git -C "$REPO" rev-parse --git-common-dir 2>/dev/null || echo '')"
+    case "$GITDIR" in
+      "") ;;
+      /*) ;;
+      *) GITDIR="$REPO/$GITDIR" ;;
+    esac
+    if [ -n "$GITDIR" ] && [ -f "$GITDIR/FETCH_HEAD" ]; then
+      REF_EDAD_H=$(( ( $(date +%s) - $(stat -c %Y "$GITDIR/FETCH_HEAD" 2>/dev/null || echo 0) ) / 3600 ))
+    fi
+
+    if [ "$REF_ATRAS" = "0" ] && [ "$REF_ADELANTE" = "0" ] && [ "$REF_SUCIO" = "0" ]; then
+      verde "el árbol es origin/main exacto ($REF_MAIN) y está limpio: todo lo de abajo compara contra eso"
+    else
+      MOTIVO=""
+      [ "$REF_ATRAS" != "0" ]    && MOTIVO="$MOTIVO, le faltan $REF_ATRAS commits de origin/main"
+      [ "$REF_ADELANTE" != "0" ] && MOTIVO="$MOTIVO, tiene $REF_ADELANTE commits que origin/main no"
+      if [ "$REF_SUCIO" = "1" ]; then MOTIVO="$MOTIVO, y 1 archivo sin commitear"
+      elif [ "$REF_SUCIO" != "0" ]; then MOTIVO="$MOTIVO, y $REF_SUCIO archivos sin commitear"; fi
+      dudoso "el árbol NO es origin/main: está en «$REF_RAMA» ($REF_HEAD)${MOTIVO}. Todo lo de abajo compara contra ESE árbol, así que un «coincide» no dice que producción esté al día con main"
+    fi
+
+    if [ -n "$REF_EDAD_H" ] && [ "$REF_EDAD_H" -gt "$REF_EDAD_MAX_H" ]; then
+      dudoso "la referencia origin/main se trajo hace ${REF_EDAD_H} h (el techo es ${REF_EDAD_MAX_H} h): compararse contra ella es compararse contra un main viejo"
+    fi
+  fi
+fi
 
 # ── 1 · LA CADENA DE ALERTAS, ESLABÓN POR ESLABÓN ───────────────────────────────────────────
 # Va PRIMERO a propósito. Si Prometheus no contesta, las comparaciones de abajo no pueden decir
