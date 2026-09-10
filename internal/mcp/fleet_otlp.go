@@ -465,9 +465,18 @@ func (s *McpServer) empujarUnaVez(ctx context.Context, ahora time.Time) {
 	// empujador fantasma SIGUE MANDANDO DATOS.
 	p, ok := s.principalDelEmpuje()
 	if !ok {
+		// Mismo criterio que las políticas: revocado y vencido apagan el empuje igual, y se
+		// arreglan en dos lugares distintos. El lookup de diagnóstico es el único que ve la
+		// credencial muerta; el que decide (porNombre, arriba) ya la negó.
+		nota := "el principal ya no está en principals.yaml"
+		if s.buscarPrincipal == nil {
+			nota = "no hay registro de principals cargado"
+		} else if p, hay := s.buscarPrincipal.porNombreAunqueVencida(strings.TrimSpace(s.empujeCfg.Principal)); hay && p.Vencida(ahoraParaVencimiento()) {
+			nota = "la credencial VENCIÓ el " + p.Expires.UTC().Format(time.RFC3339) + "; renovále el `expires:`"
+		}
 		s.avisarUnaVez("empuje_sin_principal", func() {
-			logx.Warn("empuje OTLP: el principal ya no está en principals.yaml; no se empuja nada (no se repite este aviso hasta que se resuelva)",
-				"principal", s.empujeCfg.Principal)
+			logx.Warn("empuje OTLP: no se empuja nada (no se repite este aviso hasta que se resuelva)",
+				"principal", s.empujeCfg.Principal, "nota", nota)
 		})
 		s.empujeDatapoints.Store(0)
 		s.empujeFallos.Add(1)

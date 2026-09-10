@@ -218,10 +218,19 @@ func (s *McpServer) actuarSiCorresponde(pol fleet.Politica, d fleet.Device, valo
 		// resto del scheduler sólo se anuncia cuando hubo trabajo. Lo destapó el e2e: 17 avisos
 		// idénticos en un minuto. La MÉTRICA sí se incrementa siempre, porque de ella vive la
 		// alerta PoliticaSinPermiso: lo que se acota es el ruido, no la señal.
+		// El MOTIVO se distingue: «revocado» y «vencido» apagan la política igual, pero mandan a
+		// dos lugares distintos a arreglarla. Decir «ya no está en principals.yaml» de alguien
+		// que está ahí escrito manda a buscar donde no está el problema — por eso el segundo
+		// lookup es el de diagnóstico, que sí ve la credencial muerta.
+		nota := "el principal ya no está en principals.yaml; la política quedó inerte"
+		if p, hay := s.buscarPrincipal.porNombreAunqueVencida(pol.Principal); hay && p.Vencida(ahoraParaVencimiento()) {
+			nota = "la credencial VENCIÓ el " + p.Expires.UTC().Format(time.RFC3339) +
+				"; sigue escrita en principals.yaml pero ya no ejecuta nada: renovále el `expires:`"
+		}
 		s.avisarUnaVez("sin_principal:"+pol.Nombre, func() {
 			logx.Warn("política sin principal: no actúa (no se repite este aviso hasta que se resuelva)",
 				"politica", pol.Nombre, "principal", pol.Principal, "device", d.Name,
-				"nota", "el principal ya no está en principals.yaml; la política quedó inerte")
+				"nota", nota)
 		})
 		s.metrics.contarPolitica(pol.Nombre, "sin_principal")
 		return false

@@ -24,6 +24,40 @@ type PrincipalInfo struct {
 	// declara): sin esto, un `token list` no distingue una cabina de un reader normal.
 	Read  string
 	Write string
+	// Expires es el `expires:` TAL CUAL figura en el registro (vacío ⇒ no vence nunca).
+	Expires string
+	// Vencimiento es ese campo YA RESUELTO contra el reloj, porque un listado que muestra
+	// «2020-01-01» y nada más obliga a que quien lo lee haga la cuenta de cabeza.
+	//
+	// Es un string con cuatro estados y NO un bool `Expired` a propósito: con un bool, una fecha
+	// ILEGIBLE tendría que salir como `false`, o sea «no vencida» — «no pude medir» disfrazado de
+	// «medí y está bien», que es justo el modo de falla que el vencimiento vino a eliminar. Acá
+	// lo ilegible se llama ilegible.
+	Vencimiento string
+}
+
+// Los cuatro estados de vencimiento de un principal listado. Ninguno significa «no sé»: el «no
+// sé» tiene su propio nombre (ilegible) y se ve.
+const (
+	VencimientoNoVence  = "no vence" // sin `expires:` — el comportamiento histórico
+	VencimientoVigente  = "vigente"  // tiene fecha y todavía no llegó
+	VencimientoVencida  = "VENCIDA"  // la fecha pasó: no autentica ni actúa
+	VencimientoIlegible = "ilegible" // el `expires:` no es RFC3339 (el cerebro NO arranca así)
+)
+
+// estadoDeVencimiento resuelve el `expires:` crudo contra el reloj del registro.
+func estadoDeVencimiento(nombre, expires string) string {
+	if strings.TrimSpace(expires) == "" {
+		return VencimientoNoVence
+	}
+	t, err := parsearVencimiento(nombre, expires)
+	if err != nil {
+		return VencimientoIlegible
+	}
+	if (Principal{Expires: t}).Vencida(ahoraParaVencimiento()) {
+		return VencimientoVencida
+	}
+	return VencimientoVigente
 }
 
 // GenerateToken produce un token opaco aleatorio (256 bits) con prefijo "msb_". Es el
@@ -170,7 +204,15 @@ func ListPrincipalsInfo(path string) ([]PrincipalInfo, error) {
 	out := make([]PrincipalInfo, 0, len(f.Principals))
 	for _, p := range f.Principals {
 		r, w := EffectiveCaps(p.Role, p.Read, p.Write)
-		out = append(out, PrincipalInfo{Name: p.Name, ProjectID: p.ProjectID, Role: p.Role, Read: r, Write: w})
+		out = append(out, PrincipalInfo{
+			Name: p.Name, ProjectID: p.ProjectID, Role: p.Role, Read: r, Write: w,
+			// EL VENCIMIENTO VIAJA EN EL LISTADO. Sin esto, una credencial que venció en 2020
+			// se listaba idéntica a una viva: un operador no tenía UNA SOLA superficie donde
+			// ver que esa identidad está muerta, y el listado —que es donde se va a mirar— era
+			// justamente el que no lo decía.
+			Expires:     strings.TrimSpace(p.Expires),
+			Vencimiento: estadoDeVencimiento(p.Name, p.Expires),
+		})
 	}
 	return out, nil
 }

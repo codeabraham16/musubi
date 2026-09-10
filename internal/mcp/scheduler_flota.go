@@ -136,9 +136,23 @@ func (s *McpServer) validarPrincipalDePolitica(pol fleet.Politica, lookup princi
 	if lookup == nil {
 		return fmt.Errorf("política %q: hay políticas configuradas pero no hay registro de principals (principals.yaml). Una política actúa con la autoridad de alguien: sin registro no hay a quién nombrar", pol.Nombre)
 	}
-	pr, existe := lookup.porNombre(pol.Principal)
+	// LOOKUP DE DIAGNÓSTICO, A PROPÓSITO. Acá se valida la CONFIGURACIÓN, no se ejecuta nada, y
+	// las dos cosas que porNombre hace de más romperían este chequeo:
+	//   - una credencial vencida anoche haría que el cerebro ENTERO no arranque, convirtiendo una
+	//     política inerte (que ya se avisa y se cuenta en cada tick) en una caída total;
+	//   - y el error diría «no existe en principals.yaml» de alguien que está ahí escrito, que
+	//     manda a buscar el problema donde no está.
+	// La ejecución la cierra porNombre en actuarSiCorresponde/politicaPuedeActuar, no esto.
+	pr, existe := lookup.porNombreAunqueVencida(pol.Principal)
 	if !existe {
 		return fmt.Errorf("política %q: el principal %q no existe en principals.yaml", pol.Nombre, pol.Principal)
+	}
+	if pr.Vencida(ahoraParaVencimiento()) {
+		// Se dice fuerte y una sola vez, al arranque: una política que nace inerte es una alarma
+		// apagada, y ese es el modo de falla que este archivo entero existe para no tener.
+		logx.Warn("política con la credencial VENCIDA: no va a actuar hasta que se renueve el `expires:`",
+			"politica", pol.Nombre, "principal", pol.Principal,
+			"vencio", pr.Expires.UTC().Format(time.RFC3339))
 	}
 	// Un principal SIN ninguna concesión de `exec` deja a la política garantizadamente muerta: va
 	// a evaluar, va a dar positivo y no va a poder hacer nada. Descubrirlo durante un incidente es
@@ -190,9 +204,16 @@ func (s *McpServer) validarPrincipalDeEmpuje(lookup principalResolver) error {
 	if lookup == nil {
 		return fmt.Errorf("el empuje OTLP nombra al principal %q pero no hay registro de principals. %s", nombre, ejemplo)
 	}
-	pr, existe := lookup.porNombre(nombre)
+	// Lookup de DIAGNÓSTICO por el mismo motivo que en validarPrincipalDePolitica: una fecha que
+	// pasó anoche no puede impedir arrancar, y el mensaje no puede decir «no existe» de alguien
+	// que sí está. El empuje real lo cierra porNombre en principalDelEmpuje, en cada tick.
+	pr, existe := lookup.porNombreAunqueVencida(nombre)
 	if !existe {
 		return fmt.Errorf("el empuje OTLP nombra al principal %q, que no existe en principals.yaml. %s", nombre, ejemplo)
+	}
+	if pr.Vencida(ahoraParaVencimiento()) {
+		logx.Warn("el empuje OTLP nombra una credencial VENCIDA: no se va a exportar nada hasta que se renueve el `expires:`",
+			"principal", nombre, "vencio", pr.Expires.UTC().Format(time.RFC3339))
 	}
 	// Sin ninguna concesión `metrics` el empuje queda garantizadamente vacío: va a resolver, va a
 	// barrer y no va a ver una sola máquina (C1 — el rol NO otorga capacidades de flota, ni
