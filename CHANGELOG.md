@@ -7,391 +7,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
-### Changed
-- **`Capver` sube a 2, y ahora algo lo obliga.** `buildid.go` dice, tres líneas arriba de la
-  constante, «sube cuando cambia el CONTRATO». El 2026-09-09 esa regla se incumplió **en el mismo
-  archivo donde está escrita**: `663d5a0` le agregó tres campos a `CuerpoLatido`
-  —`servicios_omitidos`, `servicios_error`, `token_fuente`— y dejó `Capver` en 1.
-
-  **No falló el conocimiento ni la documentación: falló que nada convertía esa frase en una
-  guarda.** `EnLaBanda()` custodia que un capver esté *dentro* del rango; nadie custodiaba que el
-  rango *suba* cuando el contrato cambia.
-
-  **Lo que costó, medido**: `davantis-1` (0.139.1, sin el campo) y `musubi-server` (0.139.6, con él)
-  declaraban los dos `capver=1` hablando contratos distintos, así que el cerebro no podía
-  distinguirlos — y `musubi_fleet_device_services_unknown` devolvía `0` en cuanto
-  `servicios_error` venía vacío, que es lo que manda un agente que **no conoce el campo**. Las
-  cuatro máquinas de la flota con la serie en 0, y dos de esos ceros no significaban nada.
-  `MaquinaNoPuedeEnumerar` dispara con `== 1`, así que el falso 0 era una alerta **perdida**, no
-  una falsa.
-
-  **`CapverMin` no se mueve**: la banda `[1, 2]` sigue atendiendo a los agentes viejos, que es
-  exactamente para lo que existe. Subir `Capver` no retira soporte; retirarlo es mover `CapverMin`,
-  que es otra decisión y tiene su propia bitácora.
-
-  **La guarda fija el conjunto de campos a un valor de capver**, no cuenta nada. Contar campos
-  contra líneas de bitácora no pasa el sabotaje inverso —subir `Capver` sin tocar campos es
-  legítimo, el contrato puede moverse en otro lado— y custodiaría «dos archivos cambian juntos»,
-  que es otra cosa. Se fijan los **tags JSON y los tipos**, no los nombres Go: lo que viaja es el
-  tag, así que renombrar el campo dejando el tag igual no es un cambio de contrato, y cambiar el
-  tag dejando el nombre **sí** lo es. Cuatro sabotajes corridos, los cuatro en su dirección.
-
-  **No hay `pin[1]`, y no es un olvido**: a la hora en que se declaró `Capver = 1` (09:09)
-  `CuerpoLatido` no existía como tipo — nació once minutos después, en `77c7ca5`. Antes el cuerpo
-  era un mapa, así que no hay conjunto de campos que fijar. Escribir uno reconstruido sería
-  inventar un registro histórico.
-
-  **Y el exportador deja de publicar un cero que significa «no sé»**: `services_unknown` y
-  `services_omitted` se **omiten** para un agente por debajo del capver 2, siguiendo la regla que ya
-  gobierna el resto del exportador —un dato ausente no es un cero—. Del lado de Prometheus «no sé»
-  se pregunta con `absent()`.
-
-- **`sync.max_attempts` dejó de mentir.** Su documentación decía «la cantidad de intentos
-  transitorios antes de mandar la fila a dead-letter», y hace tiempo que no hace nada: nació en F2
-  como el cortacircuito del outbox y `sync-hardening` se lo quitó a propósito (R3), porque un
-  central caído por horas no puede costar memoria compartida. Medido: no la lee nadie salvo el
-  rellenador de defaults, ninguna tool la reporta, y `TestDrainTransientNeverDies` ya fija el
-  comportamiento correcto poniéndola en 2 y drenando 4 veces.
-
-  **No es prolijidad, y por eso el cambio existe:** esa frase es exactamente la que `syncclient.go`
-  citaba para justificar que reintentar de más era «barato y ACOTADO». Sobre una cota que ya no
-  existía, un rechazo determinista se reintentó 605 veces en 74 h. Lo que reemplazó a la cota no es
-  otro tope sino visibilidad — `doctor` lo señala con `outbox_stall`, y se rescata con
-  `musubi_sync_requeue`.
-
-  **Se conserva el campo en vez de borrarlo**, y también es deliberado: el YAML no se parsea en modo
-  estricto, así que un `max_attempts: 5` ya escrito —el config del cerebro central lo tiene—
-  seguiría cargando en silencio, sólo que sin ningún lugar donde leer que no sirve.
-
-### Fixed
-- **La taxonomía de procedencia estaba definida, testeada y desconectada: no la llamaba nadie.**
-  `validProvenance` existía desde F4 con su comentario diciendo «taxonomía CERRADA. Un valor fuera
-  del conjunto es un error, no un default silencioso», su test `TestTaxonomiaDeProcedenciaEsCerrada`
-  en verde, y **cero callers de producción**. El propio grafo de código lo decía —«1 directo, 0
-  fuera de tests»— y nadie lo miró. La columna `provenance` se escribía sin pasar por ninguna
-  validación.
-
-  Cómo se descubrió: apareció una fila con procedencia `llm:llm:claude-opus-5` (topic
-  `cuerpo/11-banco-hermetica`, 2026-09-10 12:11:23). `ProposeObservation` recibe el MODELO y le
-  pega el prefijo, así que un caller que manda `llm:claude-opus-5` —una confusión razonable—
-  produce el prefijo duplicado. El sello deja de decir qué modelo escribió, que es lo único para lo
-  que existe.
-
-  **Una guarda desconectada es peor que ninguna**, y por eso el arreglo no es endurecer la función:
-  es cablearla. La validación vive ahora en `saveObservation`, el único INSERT que escribe esa
-  columna, y `ProposeObservation` **rechaza** un modelo que ya trae el prefijo en vez de recortarlo
-  en silencio — la misma razón que la confianza fuera de rango: recortar convierte el error de
-  quien llama en un dato plausible y equivocado guardado para siempre.
-
-  Los dos puntos siguen siendo legítimos DENTRO del modelo (`llm:ollama:qwen`,
-  `llm:groq/llama-3.3`): lo que se rechaza es repetir el prefijo, no el separador. Ese caso está en
-  el test a propósito, y el cuarto sabotaje lo prueba: prohibir el segundo `:` —el arreglo
-  ingenuo— pasa el test del prefijo duplicado y rompe a todos los modelos con namespace.
-
-  Cuatro sabotajes, los cuatro vistos en rojo contra el invariante que atacan: desconectar la
-  llamada del camino de escritura, volver a la regla laxa de antes, recortar en silencio, y
-  prohibir el segundo `:`. El test nuevo le pega a `saveObservation` y no a `validProvenance`,
-  porque un test que sólo llamara a la función volvería a quedar verde el día que alguien
-  desconecte la llamada otra vez.
-
-  ⚠️ Queda una fila con el sello mal formado en el libro mayor local. El arreglo impide que entren
-  nuevas; no lava las viejas.
-- **`matar-zombis-agente.sh` no mataba nada: un `\"` en una rama que no se ejecutaba rompía todo el
-  bloque.** En una cadena de PowerShell con comillas dobles el escape es el **backtick**, no la barra
-  invertida, así que ese `\"` cerraba la cadena y dejaba el resto suelto. Medido en `davantis-1` el
-  2026-09-10: `UnexpectedToken`, y el paso 2 murió sin ejecutar una línea.
-
-  **Lo grave es dónde estaba**: en la rama `$nuevos.Count -eq 0`, que *no se tomó* —la máquina sí
-  tenía el proceso nuevo—. PowerShell parsea el bloque entero antes de correr nada, así que un error
-  de sintaxis en una rama muerta se llevó puesta la viva. El paso 1 había identificado el zombi
-  correctamente.
-
-  **Por qué se coló**: el mismo `\"` es *correcto* en las cadenas de bash de ese mismo archivo —el
-  JSON de `musubi_fleet_log`, los `echo` del final— y las dos clases conviven en el mismo renglón.
-  Por eso la guarda nueva no es un grep del archivo, que se pondría rojo sobre los `echo` que están
-  bien: **extrae los bloques de PowerShell** y mira sólo esos.
-
-  **El primer escáner que escribí dio verde sobre el archivo con el bug**, y queda escrito porque es
-  la lección: seguía el estado de comillas de bash carácter por carácter y el `$( … )` anidado se lo
-  desordenaba. Lo cacé corriéndolo contra una copia del archivo roto antes de creerle al verde.
-
-- **Un argumento omitido en `construir.sh` apagó `musubi_fleet_device_agent_stale` para la flota
-  entera, y nada lo dijo.** El guión arma `<VERSION>[-<track>].<commit>`, así que con el track vacío
-  el guión desaparece y quedan cuatro componentes: `0.139.6.7e2d211`. `fleet.NucleoDeVersion` corta
-  en el primer `-`, parte por `.` y exige tres, y `VersionDelAgenteDifiere` le pregunta **al cerebro
-  primero**: si la versión del cerebro no parsea, contesta `comparable=false` para *todas* las
-  máquinas. No se cae una: se apaga la serie que dice cuáles están atrasadas.
-
-  **Medido el 2026-09-09**: 3 series a las 20:30 UTC, redespliegue del cerebro a las 20:39, 0 series
-  a las 21:00. El binario reemplazado era `0.139.3-main.326e411` y parseaba. La diferencia entera
-  fue el primer argumento.
-
-  **El track pasa a ser obligatorio y no se le pone un default**, que es la decisión del cambio. Un
-  default haría que la versión parsee y escondería la pregunta que importa —de qué track salió lo
-  que se despliega—, que es justamente lo que la versión existe para declarar. Ningún llamador del
-  repo lo omitía.
-
-  **La prueba que lo habría cazado ya existía y estaba verde**: `internal/fleet/version_test.go`
-  fija `{"0.130.0.1", "", false} // cuatro componentes`, pero como *entrada basura de afuera*, sin
-  conectarla con que es la salida de nuestro propio guión. Así que la guarda nueva no agrega más
-  casos a mano: `deploy/pruebas/version-parseable.sh` **corre** `construir.sh` en un clon —sin
-  track, con track, árbol limpio y sucio— y le pasa cada versión resultante al `NucleoDeVersion` de
-  verdad, con un control que exige que la forma mala conocida siga rechazada. Tres sabotajes
-  corridos; el tercero sale en 2 y no en rojo, para distinguir «falló el guión» de «falló la
-  medición».
-
-- **Y el hermano: `verificar-despliegue.sh` reportaba «producción diverge del repo» sobre un binario
-  del release correcto.** Reimplementa `NucleoDeVersion` en shell —no puede llamar al de verdad:
-  corre sin Go, a veces contra un servidor que tampoco lo tiene— y divergía en tres cosas, las tres
-  dando falso rojo: `${VER_VIVA%%-*}` sin validar que queden tres componentes (`0.139.7.abc1234`
-  quedaba entero), sin sacar el prefijo `v` (`v0.106.0-28-gdf2ec21` → `v0.106.0`) y cortando sólo en
-  `-` y no en `-` o `+` (`0.130.0+build5` entero). Las dos últimas son las **dos familias que el Go
-  declara tolerar**.
-
-  **El alcance, acotado después de medirlo**: `nucleo_de_version` tiene un solo llamador y lo
-  alimenta una sola variable, que sale de `musubi version` **en el servidor**. O sea que sólo ve la
-  versión del *cerebro*; a los agentes los compara el Go, que sí saca el `v` y sí corta en `+`. Las
-  tres divergencias son alcanzables cuando el cerebro tiene esa forma —hoy, la de cuatro
-  componentes— y no antes.
-
-  Quedó tapado porque el día que se midió el rojo era cierto por otro motivo (`0.139.6` ≠ `0.139.7`):
-  la causa buena escondida detrás de una verdadera. Y el mensaje nombraba la causa equivocada —decía
-  «diverge» cuando lo que pasaba era «no puedo parsear esto»—, que manda a arreglar lo que no está
-  roto.
-
-  Ahora el verificador contesta **`dudoso`** cuando no puede parsear, por la misma razón que ya
-  aplicaba al `VER_VIVA` vacío: no poder comparar no es lo mismo que comparar y que dé distinto. Y
-  el arnés **extrae esa función del archivo de producción** y corre las dos implementaciones contra
-  la misma tabla, así que una divergencia futura se ve. Sabotaje: devolverle su versión de una
-  línea; nombra las cuatro discrepancias, una por una.
-
-- **`/readyz` sondeaba con una lectura, y por eso el central pasó once horas diciendo «listo»
-  mientras no se podía guardar nada.** El 2026-08-23 `save_observation` colgaba 150 s,
-  `memory_expand` y `token_list` 30 s, y `/readyz` contestaba 200 en 0,1 s todo el tiempo: las
-  lecturas andaban perfecto. La falla no la detectó la sonda — la detectó alguien que intentó
-  guardar. **Una sonda que mide lo que no falla no es una sonda, es un tranquilizante**, y para un
-  cerebro «listo» significa que ACEPTA MEMORIA.
-
-  Ahora el sondeo escribe: una sola fila de `meta` que se pisa a sí misma, así que preguntar seguido
-  no ensucia la base ni la hace crecer. El 503 declara **cuál** sonda falló (`motor`, `lectura` o
-  `escritura`) y el detalle, porque estos incidentes se investigan después de reiniciar, cuando ya no
-  hay nada que reproducir. Un nodo abierto en sólo lectura —base más nueva que el binario— sigue
-  reportándose listo y lo dice en el cuerpo: es un estado declarado, no una falla.
-
-  **Tres decisiones que no son obvias**, y que el banco fija:
-
-  - **El tope de espera (8 s) tiene que superar el `busy_timeout` del DSN (5 s.)** Una escritura
-    legítimamente contendida espera hasta ese busy_timeout antes de conseguir su turno, así que un
-    tope menor convertiría la carga normal en una alarma. Y tiene que ser finito, que es el punto:
-    sin corte, la sonda se cuelga junto con la escritura y el cuelgue sigue invisible un escalón más
-    arriba.
-  - **El estado del sondeo sobrevive entre pedidos.** Si la escritura cuelga, una goroutine por
-    pedido dejaría una colgada por cada sondeo: con un monitor cada 15 s son 2.640 en once horas. La
-    sonda pasaría de diagnosticar el problema a agravarlo. Con estado hay **una sola**.
-  - **Y por eso el timeout NO limpia la marca de «en vuelo»**: la goroutine sigue colgada de verdad.
-    Se limpia cuando la escritura termina —si termina—, y ahí el nodo vuelve a verde solo, sin que
-    nadie lo reinicie.
-
-  Banco en `internal/mcp/readyz_escritura_test.go` (S1–S6), los seis vistos en rojo bajo un sabotaje
-  que ataca su propio invariante: volver la sonda a una lectura, limpiar la marca en el timeout, no
-  limpiarla nunca, asumir que el timeout está bien, ignorar el error de escritura, y no reportar
-  listo nunca. Vale la pena el detalle de que **bajo el primer sabotaje el test viejo `TestReadyz`
-  sigue en VERDE**: era ciego a este defecto por construcción, que es exactamente por qué duró tanto.
-
-- **El canario de escala llevaba siete semanas cantando la canción equivocada, y por eso nadie lo
-  oyó.** `bench-scale` tiene **8 corridas en toda su historia y las 8 son rojas** (2026-07-20 a
-  2026-09-07): no se rompió en julio, nunca estuvo verde ni una vez. Todas bajo el rótulo «la búsqueda
-  vectorial dejó de escalar sublinealmente a 100k (¿IVF caído a full-scan?)». Medido: el invariante
-  estaba **sano todo ese tiempo** — el ratio real es **3,42x contra un umbral de 6**, con la teoría
-  prediciendo √10 ≈ 3,16. El benchmark nunca llegaba a medir: reventaba SEMBRANDO, en la fila
-  ~11.200, con `SQLITE_BUSY`.
-
-  **La causa, y por qué `busy_timeout` no la cubría.** Al cruzar `ExactThreshold` (10.000 filas) el
-  propio engine lanza el entrenamiento del índice vectorial en segundo plano — y ese entrenador
-  escribe. Aparece un segundo escritor justo donde antes había uno. `db.Begin()` abría una
-  transacción **diferida**: nace lectora y se sube a escritora en el primer INSERT, que es el patrón
-  exacto de `saveObservation`. Si entre la lectura y la subida otra conexión escribió, SQLite
-  devuelve `SQLITE_BUSY_SNAPSHOT`, y ese busy **no lo reintenta `busy_timeout`**: vuelve al instante,
-  porque el snapshot ya quedó viejo y esperar no lo arreglaría. Los 5 segundos configurados no se
-  aplicaban justo en el caso para el que uno los pone. El arreglo es `_txlock=immediate` en el DSN:
-  `Begin()` toma el lock de escritura desde el arranque, no hay subida, y el busy que queda sí es de
-  los que la espera cubre. Con eso, `n=100000` pasó por primera vez.
-
-  **Y el canario dejó de comerse su propia evidencia.** Los dos pasos hacían `out=$(go test …)`
-  seguido de `echo "$out"`: bajo `bash -e`, si el benchmark falla el step muere EN la asignación y
-  el echo nunca corre. Ocho corridas mostraron el script y ninguna salida — la evidencia se perdía
-  justo cuando hacía falta, y ahí se fueron las siete semanas. Ahora van con `tee` (imprime antes de
-  juzgar) y `PIPESTATUS` (conserva el código real, que el pipe se comía), y un fallo de sembrado
-  dice que **no llegó a medir**, en vez de hacerse pasar por una regresión de escala.
-
-  **Y el mismo defecto estaba vivo en `ci.yml`, donde corre en cada PR** — o sea, cien veces más
-  seguido que el canario semanal. Los dos pasos de `bench-guard` tenían el `out=$(go test …)`
-  idéntico; ahora llevan `tee` + `PIPESTATUS` igual que el canario. Dos huecos más del mismo
-  archivo, encontrados por la misma revisión: el paso de `Maintain` heredaba el `success()`
-  implícito, así que un fallo del paso vectorial **salteaba el segundo canario entero** y la corrida
-  perdía el 100% de esa señal sin decirlo (ahora `if: ${{ !cancelled() }}`); y el techo del job era
-  `timeout-minutes: 90` contra dos pasos que suman 30m + 60m = **90 exactos**, sin margen para el
-  checkout ni la compilación — un corte del job llegaría ANTES de que el timeout de Go imprima nada.
-  Pasa a 120: el techo del job tiene que ser mayor que la suma, no igual.
-
-  Por último, el `awk` que extrae los B/op anclaba en `/n=10000-/`, y ese guión es el sufijo de
-  GOMAXPROCS **que Go omite cuando vale 1**: en un runner de un solo core la guarda no matchearía
-  nada y moriría diciendo «no se pudo medir». Ahora ancla al campo completo, con el sufijo opcional.
-
-  El banco vive en `internal/memory/txlock_test.go` y son cinco casos, cada invariante visto en rojo
-  bajo un sabotaje que lo ataca a él:
-
-  | sabotaje | X1 | X2 | X3 | X4 | X5 |
-  |---|---|---|---|---|---|
-  | sin `_txlock=immediate` | 🔴 | 🔴 | 🔴 | 🔴 | ✅ |
-  | sin `busy_timeout` | 🔴 | ✅ | 🔴 | ✅ | ✅ |
-  | el `Begin` de `Consolidate` antes del barrido | ✅ | ✅ | ✅ | ✅ | 🔴 |
-
-  X4 es el que faltaba y el que más importa: X1–X3 fabricaban el segundo escritor a mano, así que
-  ninguno ejercitaba al entrenador de fondo REAL — el escenario que de verdad rompió sólo lo cubría
-  el benchmark semanal, a 100.000 filas. Ahora falla en **0,19 s** bajo su sabotaje.
-
-  Tres correcciones más del banco, todas del mismo tipo: **una guarda que no puede ponerse roja no
-  verifica nada.** X2 tenía una aserción tautológica sobre una ruta que arma el propio helper. X3
-  comparaba contra un piso fijo de 100 ms, y esa constante tiene una asimetría fea — nunca da un
-  rojo falso, pero da VERDE falso en cuanto una escritura sin contención cruza los 100 ms por
-  lentitud de la máquina; bajo `-race`, que es como corre `test` en CI, eso pasa. Ahora el piso se
-  calibra contra una escritura sin contención medida en la misma máquina y en el mismo momento. Y
-  `esBaseBloqueada` clasificaba el busy por el TEXTO del error teniendo el código tipado disponible
-  (`modernc.org/sqlite/error.go:12-21`).
-
-  **Y el pragma trajo un costo propio, que una revisión adversarial del PR encontró y que se
-  arregla acá mismo.** `immediate` corre la ventana de exclusión hacia atrás, hasta el `Begin` — así
-  que abrir la transacción al principio de una función y escribir mucho después deja de ser gratis.
-  `Consolidate` hacía exactamente eso: abría antes del emparejamiento por trigramas, que es **CPU
-  pura y no toca la base**. Medido: a 40.000 observaciones sostenía el lock **8,9 s**, más que el
-  `busy_timeout(5000)`, y los demás escritores del proceso empezaban a fallar. Peor todavía, cuando
-  no hay duplicados —el régimen normal de una base ya consolidada— los tres `UPDATE` no se ejecutan
-  nunca: la transacción sostenía el lock durante todo el barrido para después commitear **cero
-  filas**. Era, literalmente, la transacción de sólo lectura que el comentario del DSN afirmaba que
-  no existía.
-
-  Ahora las fusiones se acumulan en memoria durante el barrido y la transacción se abre después,
-  sólo si hay algo que escribir. La secuencia de SQL es idéntica, y la regla queda escrita al lado
-  del DSN: **al agregar una transacción nueva, abrirla lo más tarde posible.**
-
-  De la misma revisión salió que el censo que respaldaba «`immediate` no serializa ninguna lectura»
-  decía 21 transacciones y **son 30**. La conclusión aguanta —las 30 escriben— pero el número era la
-  única evidencia del reclamo, así que ahora el comentario lleva el comando para rehacer la cuenta
-  en vez de pedir que se le crea. Y documenta la salida que el driver deja abierta para el día que
-  haga falta una de sólo lectura: `BeginTx` con `ReadOnly: true` esquiva `immediate`
-  (`modernc.org/sqlite@v1.58.0/tx.go:22-24`).
-
-  El segundo paso del canario, `Maintain`, también midió por primera vez: **10,98x contra un umbral
-  de 20** (lineal ≈ 10x, cuadrático ≈ 100x) — sano, igual que el primero. Y ese número trajo un
-  ajuste que no es cosmético: tarda 941 s en local, así que el `-timeout=30m` del paso quedaba
-  dentro del ruido de un runner compartido. Pasa a 60m, con `timeout-minutes: 120` en el job para
-  que un cuelgue no se coma las 6 h de default. Un canario que expira sigue siendo un canario en
-  rojo permanente.
-
-  **Y el canario se corrió de verdad, no sólo en local.** Corrida `34387150955` sobre la rama, la
-  primera de las nueve de su historia que termina en verde: `SearchVector` **2,9x** (umbral 6) y
-  `Maintain` **10,7x** (umbral 20). El job entero tardó **10 min 32 s** — que de paso desmintió una
-  suposición que yo mismo había escrito en el archivo: «un runner de GitHub es más lento» y una
-  estimación de 21 min a partir del tiempo local. Es más rápido. La frase se reemplazó por el número
-  medido, porque una suposición sin medir es exactamente el defecto que este cambio vino a sacar.
-
-- **Promover a `shared` esquivaba la guarda del sobre: era la segunda puerta del mismo cuarto.** La
-  guarda que rechaza un `content` que se comió el cierre de su propia llamada vive en
-  `saveObservation`, «donde nace el contenido». Pero `PromoteObservation` es un `UPDATE` por id que
-  no pasa por ahí — exactamente el argumento por el que la guarda de CUARENTENA ya había tenido que
-  ponerse en `PromoteObservationCtx`, porque la promoción tampoco pasa por el predicado de
-  visibilidad.
-
-  Sin la guarda, una observación local guardada por un binario anterior se marcaba `shared`, se
-  encolaba, el central la rechazaba por su propia guarda y moría en dead-letter. Nadie perdía
-  memoria, pero quedaba una fila que decía ser memoria de equipo y nunca iba a llegar al equipo — y
-  el usuario se enteraba por el `doctor` horas después, no por el error de la operación que lo
-  causó.
-
-  **Sólo si todavía no es `shared`, y es deliberado.** Promover una ya-shared es un no-op
-  documentado e idempotente; hacerlo fallar rompería ese contrato para las filas que ya están del
-  otro lado —guardadas antes de que la guarda existiera— sin evitar ningún daño, porque el cruce ya
-  ocurrió. Lo que esta guarda impide es la decisión NUEVA de compartir contenido dañado, no el
-  registro de una vieja.
-- **11 observaciones que alguien marcó como importantes estaban rankeadas como si no lo fueran, y
-  el arreglo estaba a la vista.** El `doctor` ya las contaba: de las 73 que se guardaron con el
-  sobre de la llamada adentro del `content`, 11 todavía declaran ahí qué `importance` se les pidió
-  —1.5, 1.6, 1.9, 2.0— mientras su columna dice **1.0**, el default y el valor más común de toda la
-  memoria. El recall ordena por `importance`: se hundieron en el montón justo las que alguien marcó
-  para no perder.
-
-  La nota de diseño daba tres razones para no reparar, y las tres siguen siendo ciertas — pero las
-  tres hablan de **lavar el texto**, no de corregir la columna. Contra una reparación que toca sólo
-  `importance`: no hay falso verde (el check sigue contando las 73, porque el sobre sigue ahí), no
-  se borra evidencia (el número se lee del sobre y el sobre se queda), y el `content_hash` no cambia
-  (`ContentHash` deriva sólo del content, así que el dedup sigue reconociendo la fila). El diseño
-  había empaquetado dos reparaciones y rechazado ambas porque una es peligrosa.
-
-  `musubi doctor --repair swallowed_envelope` ahora devuelve ese número y no toca una coma del
-  texto. Como el hash no cambia, la corrección **no viaja al central** —y no podría: el central
-  rechazaría ese push con su propia guarda del sobre—, así que se corre en cada cerebro.
-
-  De paso, el número pasa a leerse **sólo de la cola después del último `</content>`** y no de todo
-  el texto: desde que ese valor se escribe, una observación que documente este mismo defecto podría
-  citar un `<importance>` en su prosa y hacer que la reparación escriba algo que nadie pidió.
-- **Un rechazo de guarda salía como «error interno del servidor», y el nodo que lo recibía lo
-  reintentaba para siempre.** Medido el 2026-09-08 en `kernelos-pc`: **605 intentos en 74 h** contra
-  una observación que el central nunca iba a aceptar, reintentándose cada 5 minutos sin que nada
-  fuera a cambiar jamás.
-
-  Son dos decisiones correctas que se contradecían. `syncclient.go` clasifica `-32603` como
-  TRANSITORIO a propósito —un `SQLITE_BUSY` del central no puede costar memoria— y su comentario se
-  apoya en que «el outbox corta solo al llegar a `max_attempts`». Pero `scheduler.go` eliminó ese
-  tope, también a propósito: un central inalcanzable por horas tampoco puede costar memoria. Cada
-  una se defiende sola; juntas, la cota en la que se apoyaba la primera dejó de existir. Lo que
-  quedó no fue reintentar de más: fue reintentar para siempre.
-
-  El arreglo no toca ninguna de las dos políticas —las dos son correctas— sino la mentira que las
-  hacía chocar: el central declaraba «me rompí yo» cuando en realidad había MIRADO el pedido y lo
-  había rechazado. Ahora un rechazo determinista viaja como `-32602`, que el cliente ya trata como
-  definitivo, y la fila muere en el primer intento con su razón guardada en `last_error`. La
-  memoria no se pierde: queda local y en dead-letter, rescatable con `musubi_sync_requeue`.
-
-  El default sigue siendo «error interno» a propósito. Sólo se degrada a culpa del llamador lo que
-  una guarda rechazó mirando el pedido; mentir en la otra dirección haría que un cliente TIRE
-  memoria buena porque al central se le llenó el disco.
-- **El redespliegue del cerebro dejaba procesos corriendo el binario anterior, y uno de ellos era
-  el que sostenía la memoria.** Medido en el central el 2026-09-08, con el despliegue anterior ya
-  hecho:
-
-  ```
-  pid 2892216  musubi daemon      exe: /usr/local/bin/musubi (deleted)   ← 6 días
-  pid 1048700  musubi serve       exe: /usr/local/bin/musubi
-  pid 1048702  musubi dashboard   exe: /usr/local/bin/musubi
-  pid 1121750  musubi agent       exe: /usr/local/bin/musubi
-  ```
-
-  El del ejecutable **borrado** es un `musubi daemon` que lanza `musubi-gateway.service` —el bot de
-  Telegram— como su servidor MCP. `redesplegar-cerebro.sh` reiniciaba tres unidades y ninguna era
-  ésa, así que ese proceso sobrevivía a cada despliegue con el binario anterior. No es higiene: es
-  el proceso que hasta ahora corría el único ciclo de mantenimiento de la memoria del cerebro.
-
-  El guion no podía encontrarlo aunque quisiera: `musubi-gateway` y `musubi-whatsapp` son unidades
-  de **usuario** (uid 1000), no del sistema, así que un `systemctl stop` como root no las ve. Van
-  ahora en su propia lista y se reinician **después** de que el cerebro quedó verificado — antes
-  sería apagar el bot para después descubrir que el despliegue no servía.
-
-  Y de paso, una corrección a nuestra propia nota: `systemctl --user` **sí** funciona por SSH no
-  interactivo, siempre que se le pase `XDG_RUNTIME_DIR=/run/user/<uid>`.
-
-- **Y una comprobación que hace innecesario acordarse de esa lista.** Las listas envejecen —ésta se
-  quedó sin el gateway y nadie lo notó— así que el guion ya no mira una lista sino el **kernel**:
-  recorre `/proc/*/exe` y falla si quedó cualquier proceso cuyo ejecutable sea el que se acaba de
-  reemplazar y ya no exista en disco, se llame como se llame y lo lance quien lo lance.
-
-  No vuelve atrás el despliegue —el cerebro está sano y volver sería peor— pero termina en 1: un
-  proceso viejo escribiendo sobre una base recién migrada es exactamente el estado que no se quiere
-  descubrir por casualidad tres semanas después. El detector se verificó **contra el servidor
-  real**, donde encontró el único proceso rezagado que hay.
-
+## [0.140.0] - 2026-09-10
 
 ### Added
+
 - **El cerebro central mantiene su propia memoria, y ahora se puede ver si lo hace.** `runServe` no
   arrancaba el ciclo de memoria —consolidar, olvidar, purgar— y sin embargo ya recibía
   `WithMaintenance(cfg.Maintenance)`: la config estaba cableada desde siempre y **el consumidor no
@@ -659,109 +278,6 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   prueba más de lo que prueba — lo que garantiza es detección en la deriva, que es el único
   momento en que una constante tipeada hace daño.
 
-### Fixed
-- **El tope del bucle de corrección se hacía cumplir solo con instrucciones.** El paso 8 de
-  `adversarial-review` dice «K=3 vueltas, y agotarlo es un rechazo», pero nada en el código
-  impedía abrir la vuelta K+1: quedaba en manos de quien estaba, justamente, cansado de
-  corregir. El riesgo de un bucle sin salida no es girar para siempre — es que el agente ceda y
-  apruebe para terminar, que es exactamente lo que el tope existe para evitar.
-
-  Ahora `OpenDebate` se niega a abrir un debate cuyo topic declare una vuelta por encima de su
-  propio tope, con un error que dice qué pasó y qué hacer. No hace falta estado nuevo: el topic
-  ya declara `vuelta k/K`, y negarse a abrir falla del lado seguro —un debate que no existe no
-  puede aprobar nada—. La convención pasa a tener UNA definición (`memory.VueltaDelTopic`), que
-  es la misma que `musubi arnes` usa para medir: con dos regex separadas, endurecer una dejaría
-  a la otra midiendo la convención vieja, y las dos seguirían andando.
-
-  El mensaje va en el error y no en las reglas de la skill a propósito: el error cuesta tokens
-  sólo cuando se dispara, y las reglas los cuestan en cada turno.
-- 🔴 **La profundidad de revisión estaba calibrada a ojo, y medirla mostró que no distinguía
-  nada.** Los cortes de `codeintel.Profundidad` se eligieron cuando la función se escribió, sin
-  una distribución que los respaldara. Medido ahora sobre los **108 PRs reales** de este repo
-  —con el grafo indexado, descontados los back-merges (que no son un PR sino «todo lo que main
-  ganó») y los duplicados— el reparto era **1 % mínima · 30 % estándar · 67 % profunda**: dos de
-  cada tres cambios pedían el panel más caro. Un criterio que casi siempre contesta lo mismo
-  dejó de ser un criterio.
-
-  Tres causas independientes, cada una medida:
-
-  1. **Los escalones estaban por debajo de la mediana.** `lineas` topeaba en 200 con una mediana
-     de 373; `simbolos` en 9 con una mediana de 15. Seis de cada diez PRs sacaban el máximo en
-     esas dos. Ahora cada borde sale de un cuantil observado (P33 / P75) y se redondea a un
-     número que una persona pueda rehacer de cabeza, que es la razón de ser de los escalones.
-  2. **`hay_borrados` no medía lo que decía.** En un diff unificado, MODIFICAR una línea es un
-     borrado más un agregado, así que «hay al menos una línea borrada» era cierto en el **83 %**
-     de los PRs: una constante disfrazada de señal, que le sumaba un punto a todo el mundo. Lo
-     que la señal existe para ver —un archivo borrado entero, o uno que saca más de lo que
-     pone— pasa en el **12 %**, y eso es lo que mide ahora. El punto ciego original (el hunk que
-     sólo borra) lo cubre `lineas`, que desde F2 suma agregadas Y borradas.
-  3. **Tocar un README volvía inalcanzable el panel más barato.** El piso de honestidad usaba
-     `IndexableForGraph` para decidir si el radio quedó ciego, y esa función contesta otra
-     pregunta: «¿el indexador debe recolectar este archivo?». Con eso, un CHANGELOG.md caía en
-     la misma bolsa que un `.ts` sin indexar. Medido: el **84 %** de los PRs tocaba algún archivo
-     no indexable y en el **62 %** ése era el ÚNICO motivo de ceguera, con el código enteramente
-     cubierto. Un PR de 0 puntos terminaba en `estandar` por un `.md`. La función nueva
-     `PuedeTenerRadio` separa «no es código» (no hay nada que saber) de «es código que este
-     build no indexa» (ahí no saber es real), y **ante la duda cuenta como código**, que es el
-     error barato.
-
-  Reparto resultante, misma población y mismas funciones de producción: **22 % · 49 % · 28 %**.
-  La ceguera del radio baja de 88 % a 36 %, y lo que queda es ceguera de verdad —símbolos que ya
-  no existen en el `HEAD` de hoy—. 17 sabotajes verificados en rojo, cada uno atacando el
-  invariante que su test declara.
-
-  **Un test de este mismo track medía el proxy y no la cosa**, y se descubrió saboteándolo:
-  congelaba la tabla de escalones llamando a `escalon()` con números escritos a mano, así que
-  mover una constante calibrada lo dejaba verde. Ahora pasa por `Profundidad` y lee el desglose.
-- 🔴 **El tercer cero: el gate que corrió y no tuvo nada que avisar.** Encontrado **corriendo
-  `musubi arnes` contra el repo de verdad**, no leyendo el código. Con el árbol limpio el gate mide,
-  no tiene nada que decir y por eso no imputa tokens — y el comando leía ese cero como «no se
-  inyectó nunca, es un problema de cableado», mandando a arreglar algo que funciona.
-
-  Es **exactamente la confusión que `musubi arnes` existe para evitar**, una capa más abajo: un cero
-  que sirve a la vez de valor de fallo y de valor tranquilizador. Ahora el gate cuenta las veces que
-  **midió**, no sólo las que habló, y hay tres veredictos donde había dos: `APAGADO` (nunca midió) ·
-  `EN REPOSO` (midió N veces y no tuvo nada que avisar) · `IGNORADO` (avisó y nadie lo siguió).
-  Verificado de punta a punta con los tres casos.
-- **Ocho tests del paquete `mcp` se ponían rojos si tenías `MUSUBI_TOOLS_ALL=1`.** Es un
-  interruptor **documentado** —devuelve al catálogo las nueve tools dormidas sin recompilar— y
-  media docena de tests afirman sobre la FORMA de ese catálogo heredando la variable del entorno.
-  Resultado: **rojos en la máquina de quien la usa, verdes en CI**, que no la tiene. El peor rojo
-  posible: el que sólo ve quien trabaja, y que por eso se aprende a ignorar.
-
-  Se arregla en el nivel correcto —un `TestMain` del paquete, no test por test— porque lo que se
-  hereda no es el dato de un caso sino la configuración global sobre la que casi todos afirman.
-  Verificado: sin el `TestMain` caen 8; con él, 0.
-- **El gate avisaba sobre su propio workspace.** En un repo recién creado, `.musubi/config.yaml` y
-  `.musubi/config.example.yaml` quedan sin trackear y contaban como dos archivos de producción —
-  justo el umbral. El gate se avisaba a sí mismo, y un aviso que salta por el ruido de la propia
-  herramienta es el que enseña a ignorar la herramienta.
-- **La integración de las seis fases: lo que ninguna podía ver mirándose a sí misma.**
-  - 🔴 **El presupuesto de `Rules` se cruzó.** Cuatro fases escriben en el mismo campo y la suma
-    llegó a **5.645 runas** contra un umbral de 5.000. Se resolvió por la salida que el plan
-    prefiere —podar lo que el **código ya ejecuta**: la profundidad no se explica, se lee de
-    `revision`— y quedó en **4.979**, con margen 21. Como `rules_too_long` es un *warning* y
-    `report.OK()` sólo mira errores, **un umbral que nada puede hacer fallar se cruza y nadie se
-    entera**: ahora hay un test que lo hace fallar.
-  - **Un merge limpio no es evidencia de nada.** `debate_test.go` fusionó las dos ramas sin un
-    solo conflicto y **no compilaba**: el test que agregó F4 usaba las firmas que F3 había
-    cambiado. Lo detectó `go vet`, no git.
-  - **La renumeración de los pasos, con sus referencias internas.** F2 inserta un paso y corre
-    todos los demás; F3 y F4 editan el CONTENIDO de esos mismos pasos. Quedarse con un lado
-    perdía el otro entero y compilaba igual. Además hay referencias internas («va por el paso 7»)
-    que había que mover con ellos.
-  - **El golden completo se puso rojo al integrar** —F2 y F3 tocan descripciones distintas— que es
-    exactamente para lo que se agregó.
-- **`receipt emit` ignoraba las banderas desconocidas y aprobaba igual.** En el comando cuyo único
-  trabajo es otorgar permiso de entrega, «bandera desconocida ⇒ apruebo» es el default al revés.
-  Pasó de verdad: un `receipt emit --help` emitió un recibo aprobado. Ahora sale con error.
-- **`receipt show` panicaba con una huella corta.** Hacía `r.Fingerprint[:12]` sobre un valor que
-  se decodifica de `meta` —o sea de un texto que alguien puede editar—, así que se caía justo el
-  comando que sirve para diagnosticar.
-- **La skill ya ordena congelar el hallazgo** antes de que entre al debate (era el hueco que F5
-  dejó declarado).
-
-### Added
 - **El gate de revisión post-apply: la revisión se ofrece cuando todavía es barata.** Musubi ya
   tenía el mecanismo (`adversarial-review`, `musubi_debate`) y la autoridad (el recibo de RDD), pero
   nada CONECTABA el momento en que hay algo que revisar con el momento en que se revisa. El único
@@ -852,6 +368,62 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   conflicto de merge sin necesidad.
 
 ### Changed
+
+- **`Capver` sube a 2, y ahora algo lo obliga.** `buildid.go` dice, tres líneas arriba de la
+  constante, «sube cuando cambia el CONTRATO». El 2026-09-09 esa regla se incumplió **en el mismo
+  archivo donde está escrita**: `663d5a0` le agregó tres campos a `CuerpoLatido`
+  —`servicios_omitidos`, `servicios_error`, `token_fuente`— y dejó `Capver` en 1.
+
+  **No falló el conocimiento ni la documentación: falló que nada convertía esa frase en una
+  guarda.** `EnLaBanda()` custodia que un capver esté *dentro* del rango; nadie custodiaba que el
+  rango *suba* cuando el contrato cambia.
+
+  **Lo que costó, medido**: `davantis-1` (0.139.1, sin el campo) y `musubi-server` (0.139.6, con él)
+  declaraban los dos `capver=1` hablando contratos distintos, así que el cerebro no podía
+  distinguirlos — y `musubi_fleet_device_services_unknown` devolvía `0` en cuanto
+  `servicios_error` venía vacío, que es lo que manda un agente que **no conoce el campo**. Las
+  cuatro máquinas de la flota con la serie en 0, y dos de esos ceros no significaban nada.
+  `MaquinaNoPuedeEnumerar` dispara con `== 1`, así que el falso 0 era una alerta **perdida**, no
+  una falsa.
+
+  **`CapverMin` no se mueve**: la banda `[1, 2]` sigue atendiendo a los agentes viejos, que es
+  exactamente para lo que existe. Subir `Capver` no retira soporte; retirarlo es mover `CapverMin`,
+  que es otra decisión y tiene su propia bitácora.
+
+  **La guarda fija el conjunto de campos a un valor de capver**, no cuenta nada. Contar campos
+  contra líneas de bitácora no pasa el sabotaje inverso —subir `Capver` sin tocar campos es
+  legítimo, el contrato puede moverse en otro lado— y custodiaría «dos archivos cambian juntos»,
+  que es otra cosa. Se fijan los **tags JSON y los tipos**, no los nombres Go: lo que viaja es el
+  tag, así que renombrar el campo dejando el tag igual no es un cambio de contrato, y cambiar el
+  tag dejando el nombre **sí** lo es. Cuatro sabotajes corridos, los cuatro en su dirección.
+
+  **No hay `pin[1]`, y no es un olvido**: a la hora en que se declaró `Capver = 1` (09:09)
+  `CuerpoLatido` no existía como tipo — nació once minutos después, en `77c7ca5`. Antes el cuerpo
+  era un mapa, así que no hay conjunto de campos que fijar. Escribir uno reconstruido sería
+  inventar un registro histórico.
+
+  **Y el exportador deja de publicar un cero que significa «no sé»**: `services_unknown` y
+  `services_omitted` se **omiten** para un agente por debajo del capver 2, siguiendo la regla que ya
+  gobierna el resto del exportador —un dato ausente no es un cero—. Del lado de Prometheus «no sé»
+  se pregunta con `absent()`.
+
+- **`sync.max_attempts` dejó de mentir.** Su documentación decía «la cantidad de intentos
+  transitorios antes de mandar la fila a dead-letter», y hace tiempo que no hace nada: nació en F2
+  como el cortacircuito del outbox y `sync-hardening` se lo quitó a propósito (R3), porque un
+  central caído por horas no puede costar memoria compartida. Medido: no la lee nadie salvo el
+  rellenador de defaults, ninguna tool la reporta, y `TestDrainTransientNeverDies` ya fija el
+  comportamiento correcto poniéndola en 2 y drenando 4 veces.
+
+  **No es prolijidad, y por eso el cambio existe:** esa frase es exactamente la que `syncclient.go`
+  citaba para justificar que reintentar de más era «barato y ACOTADO». Sobre una cota que ya no
+  existía, un rechazo determinista se reintentó 605 veces en 74 h. Lo que reemplazó a la cota no es
+  otro tope sino visibilidad — `doctor` lo señala con `outbox_stall`, y se rescata con
+  `musubi_sync_requeue`.
+
+  **Se conserva el campo en vez de borrarlo**, y también es deliberado: el YAML no se parsea en modo
+  estricto, así que un `max_attempts: 5` ya escrito —el config del cerebro central lo tiene—
+  seguiría cargando en silencio, sólo que sin ningún lugar donde leer que no sirve.
+
 - **El bucle de corrección deja de girar.** `adversarial-review` ordenaba, textualmente: *«iterá
   (fix → re-debate) **hasta que el cambio sobreviva**»*. Tres defectos en una frase: **sin tope** de
   vueltas, **sin alcance decreciente** —cada vuelta re-litigaba todo desde cero, incluidos los
@@ -911,6 +483,446 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - 11 sabotajes, cada invariante visto en ROJO.
 
 ### Fixed
+
+- **La taxonomía de procedencia estaba definida, testeada y desconectada: no la llamaba nadie.**
+  `validProvenance` existía desde F4 con su comentario diciendo «taxonomía CERRADA. Un valor fuera
+  del conjunto es un error, no un default silencioso», su test `TestTaxonomiaDeProcedenciaEsCerrada`
+  en verde, y **cero callers de producción**. El propio grafo de código lo decía —«1 directo, 0
+  fuera de tests»— y nadie lo miró. La columna `provenance` se escribía sin pasar por ninguna
+  validación.
+
+  Cómo se descubrió: apareció una fila con procedencia `llm:llm:claude-opus-5` (topic
+  `cuerpo/11-banco-hermetica`, 2026-09-10 12:11:23). `ProposeObservation` recibe el MODELO y le
+  pega el prefijo, así que un caller que manda `llm:claude-opus-5` —una confusión razonable—
+  produce el prefijo duplicado. El sello deja de decir qué modelo escribió, que es lo único para lo
+  que existe.
+
+  **Una guarda desconectada es peor que ninguna**, y por eso el arreglo no es endurecer la función:
+  es cablearla. La validación vive ahora en `saveObservation`, el único INSERT que escribe esa
+  columna, y `ProposeObservation` **rechaza** un modelo que ya trae el prefijo en vez de recortarlo
+  en silencio — la misma razón que la confianza fuera de rango: recortar convierte el error de
+  quien llama en un dato plausible y equivocado guardado para siempre.
+
+  Los dos puntos siguen siendo legítimos DENTRO del modelo (`llm:ollama:qwen`,
+  `llm:groq/llama-3.3`): lo que se rechaza es repetir el prefijo, no el separador. Ese caso está en
+  el test a propósito, y el cuarto sabotaje lo prueba: prohibir el segundo `:` —el arreglo
+  ingenuo— pasa el test del prefijo duplicado y rompe a todos los modelos con namespace.
+
+  Cuatro sabotajes, los cuatro vistos en rojo contra el invariante que atacan: desconectar la
+  llamada del camino de escritura, volver a la regla laxa de antes, recortar en silencio, y
+  prohibir el segundo `:`. El test nuevo le pega a `saveObservation` y no a `validProvenance`,
+  porque un test que sólo llamara a la función volvería a quedar verde el día que alguien
+  desconecte la llamada otra vez.
+
+  ⚠️ Queda una fila con el sello mal formado en el libro mayor local. El arreglo impide que entren
+  nuevas; no lava las viejas.
+
+- **`matar-zombis-agente.sh` no mataba nada: un `\"` en una rama que no se ejecutaba rompía todo el
+  bloque.** En una cadena de PowerShell con comillas dobles el escape es el **backtick**, no la barra
+  invertida, así que ese `\"` cerraba la cadena y dejaba el resto suelto. Medido en `davantis-1` el
+  2026-09-10: `UnexpectedToken`, y el paso 2 murió sin ejecutar una línea.
+
+  **Lo grave es dónde estaba**: en la rama `$nuevos.Count -eq 0`, que *no se tomó* —la máquina sí
+  tenía el proceso nuevo—. PowerShell parsea el bloque entero antes de correr nada, así que un error
+  de sintaxis en una rama muerta se llevó puesta la viva. El paso 1 había identificado el zombi
+  correctamente.
+
+  **Por qué se coló**: el mismo `\"` es *correcto* en las cadenas de bash de ese mismo archivo —el
+  JSON de `musubi_fleet_log`, los `echo` del final— y las dos clases conviven en el mismo renglón.
+  Por eso la guarda nueva no es un grep del archivo, que se pondría rojo sobre los `echo` que están
+  bien: **extrae los bloques de PowerShell** y mira sólo esos.
+
+  **El primer escáner que escribí dio verde sobre el archivo con el bug**, y queda escrito porque es
+  la lección: seguía el estado de comillas de bash carácter por carácter y el `$( … )` anidado se lo
+  desordenaba. Lo cacé corriéndolo contra una copia del archivo roto antes de creerle al verde.
+
+- **Un argumento omitido en `construir.sh` apagó `musubi_fleet_device_agent_stale` para la flota
+  entera, y nada lo dijo.** El guión arma `<VERSION>[-<track>].<commit>`, así que con el track vacío
+  el guión desaparece y quedan cuatro componentes: `0.139.6.7e2d211`. `fleet.NucleoDeVersion` corta
+  en el primer `-`, parte por `.` y exige tres, y `VersionDelAgenteDifiere` le pregunta **al cerebro
+  primero**: si la versión del cerebro no parsea, contesta `comparable=false` para *todas* las
+  máquinas. No se cae una: se apaga la serie que dice cuáles están atrasadas.
+
+  **Medido el 2026-09-09**: 3 series a las 20:30 UTC, redespliegue del cerebro a las 20:39, 0 series
+  a las 21:00. El binario reemplazado era `0.139.3-main.326e411` y parseaba. La diferencia entera
+  fue el primer argumento.
+
+  **El track pasa a ser obligatorio y no se le pone un default**, que es la decisión del cambio. Un
+  default haría que la versión parsee y escondería la pregunta que importa —de qué track salió lo
+  que se despliega—, que es justamente lo que la versión existe para declarar. Ningún llamador del
+  repo lo omitía.
+
+  **La prueba que lo habría cazado ya existía y estaba verde**: `internal/fleet/version_test.go`
+  fija `{"0.130.0.1", "", false} // cuatro componentes`, pero como *entrada basura de afuera*, sin
+  conectarla con que es la salida de nuestro propio guión. Así que la guarda nueva no agrega más
+  casos a mano: `deploy/pruebas/version-parseable.sh` **corre** `construir.sh` en un clon —sin
+  track, con track, árbol limpio y sucio— y le pasa cada versión resultante al `NucleoDeVersion` de
+  verdad, con un control que exige que la forma mala conocida siga rechazada. Tres sabotajes
+  corridos; el tercero sale en 2 y no en rojo, para distinguir «falló el guión» de «falló la
+  medición».
+
+- **Y el hermano: `verificar-despliegue.sh` reportaba «producción diverge del repo» sobre un binario
+  del release correcto.** Reimplementa `NucleoDeVersion` en shell —no puede llamar al de verdad:
+  corre sin Go, a veces contra un servidor que tampoco lo tiene— y divergía en tres cosas, las tres
+  dando falso rojo: `${VER_VIVA%%-*}` sin validar que queden tres componentes (`0.139.7.abc1234`
+  quedaba entero), sin sacar el prefijo `v` (`v0.106.0-28-gdf2ec21` → `v0.106.0`) y cortando sólo en
+  `-` y no en `-` o `+` (`0.130.0+build5` entero). Las dos últimas son las **dos familias que el Go
+  declara tolerar**.
+
+  **El alcance, acotado después de medirlo**: `nucleo_de_version` tiene un solo llamador y lo
+  alimenta una sola variable, que sale de `musubi version` **en el servidor**. O sea que sólo ve la
+  versión del *cerebro*; a los agentes los compara el Go, que sí saca el `v` y sí corta en `+`. Las
+  tres divergencias son alcanzables cuando el cerebro tiene esa forma —hoy, la de cuatro
+  componentes— y no antes.
+
+  Quedó tapado porque el día que se midió el rojo era cierto por otro motivo (`0.139.6` ≠ `0.139.7`):
+  la causa buena escondida detrás de una verdadera. Y el mensaje nombraba la causa equivocada —decía
+  «diverge» cuando lo que pasaba era «no puedo parsear esto»—, que manda a arreglar lo que no está
+  roto.
+
+  Ahora el verificador contesta **`dudoso`** cuando no puede parsear, por la misma razón que ya
+  aplicaba al `VER_VIVA` vacío: no poder comparar no es lo mismo que comparar y que dé distinto. Y
+  el arnés **extrae esa función del archivo de producción** y corre las dos implementaciones contra
+  la misma tabla, así que una divergencia futura se ve. Sabotaje: devolverle su versión de una
+  línea; nombra las cuatro discrepancias, una por una.
+
+- **`/readyz` sondeaba con una lectura, y por eso el central pasó once horas diciendo «listo»
+  mientras no se podía guardar nada.** El 2026-08-23 `save_observation` colgaba 150 s,
+  `memory_expand` y `token_list` 30 s, y `/readyz` contestaba 200 en 0,1 s todo el tiempo: las
+  lecturas andaban perfecto. La falla no la detectó la sonda — la detectó alguien que intentó
+  guardar. **Una sonda que mide lo que no falla no es una sonda, es un tranquilizante**, y para un
+  cerebro «listo» significa que ACEPTA MEMORIA.
+
+  Ahora el sondeo escribe: una sola fila de `meta` que se pisa a sí misma, así que preguntar seguido
+  no ensucia la base ni la hace crecer. El 503 declara **cuál** sonda falló (`motor`, `lectura` o
+  `escritura`) y el detalle, porque estos incidentes se investigan después de reiniciar, cuando ya no
+  hay nada que reproducir. Un nodo abierto en sólo lectura —base más nueva que el binario— sigue
+  reportándose listo y lo dice en el cuerpo: es un estado declarado, no una falla.
+
+  **Tres decisiones que no son obvias**, y que el banco fija:
+
+  - **El tope de espera (8 s) tiene que superar el `busy_timeout` del DSN (5 s.)** Una escritura
+    legítimamente contendida espera hasta ese busy_timeout antes de conseguir su turno, así que un
+    tope menor convertiría la carga normal en una alarma. Y tiene que ser finito, que es el punto:
+    sin corte, la sonda se cuelga junto con la escritura y el cuelgue sigue invisible un escalón más
+    arriba.
+  - **El estado del sondeo sobrevive entre pedidos.** Si la escritura cuelga, una goroutine por
+    pedido dejaría una colgada por cada sondeo: con un monitor cada 15 s son 2.640 en once horas. La
+    sonda pasaría de diagnosticar el problema a agravarlo. Con estado hay **una sola**.
+  - **Y por eso el timeout NO limpia la marca de «en vuelo»**: la goroutine sigue colgada de verdad.
+    Se limpia cuando la escritura termina —si termina—, y ahí el nodo vuelve a verde solo, sin que
+    nadie lo reinicie.
+
+  Banco en `internal/mcp/readyz_escritura_test.go` (S1–S6), los seis vistos en rojo bajo un sabotaje
+  que ataca su propio invariante: volver la sonda a una lectura, limpiar la marca en el timeout, no
+  limpiarla nunca, asumir que el timeout está bien, ignorar el error de escritura, y no reportar
+  listo nunca. Vale la pena el detalle de que **bajo el primer sabotaje el test viejo `TestReadyz`
+  sigue en VERDE**: era ciego a este defecto por construcción, que es exactamente por qué duró tanto.
+
+- **El canario de escala llevaba siete semanas cantando la canción equivocada, y por eso nadie lo
+  oyó.** `bench-scale` tiene **8 corridas en toda su historia y las 8 son rojas** (2026-07-20 a
+  2026-09-07): no se rompió en julio, nunca estuvo verde ni una vez. Todas bajo el rótulo «la búsqueda
+  vectorial dejó de escalar sublinealmente a 100k (¿IVF caído a full-scan?)». Medido: el invariante
+  estaba **sano todo ese tiempo** — el ratio real es **3,42x contra un umbral de 6**, con la teoría
+  prediciendo √10 ≈ 3,16. El benchmark nunca llegaba a medir: reventaba SEMBRANDO, en la fila
+  ~11.200, con `SQLITE_BUSY`.
+
+  **La causa, y por qué `busy_timeout` no la cubría.** Al cruzar `ExactThreshold` (10.000 filas) el
+  propio engine lanza el entrenamiento del índice vectorial en segundo plano — y ese entrenador
+  escribe. Aparece un segundo escritor justo donde antes había uno. `db.Begin()` abría una
+  transacción **diferida**: nace lectora y se sube a escritora en el primer INSERT, que es el patrón
+  exacto de `saveObservation`. Si entre la lectura y la subida otra conexión escribió, SQLite
+  devuelve `SQLITE_BUSY_SNAPSHOT`, y ese busy **no lo reintenta `busy_timeout`**: vuelve al instante,
+  porque el snapshot ya quedó viejo y esperar no lo arreglaría. Los 5 segundos configurados no se
+  aplicaban justo en el caso para el que uno los pone. El arreglo es `_txlock=immediate` en el DSN:
+  `Begin()` toma el lock de escritura desde el arranque, no hay subida, y el busy que queda sí es de
+  los que la espera cubre. Con eso, `n=100000` pasó por primera vez.
+
+  **Y el canario dejó de comerse su propia evidencia.** Los dos pasos hacían `out=$(go test …)`
+  seguido de `echo "$out"`: bajo `bash -e`, si el benchmark falla el step muere EN la asignación y
+  el echo nunca corre. Ocho corridas mostraron el script y ninguna salida — la evidencia se perdía
+  justo cuando hacía falta, y ahí se fueron las siete semanas. Ahora van con `tee` (imprime antes de
+  juzgar) y `PIPESTATUS` (conserva el código real, que el pipe se comía), y un fallo de sembrado
+  dice que **no llegó a medir**, en vez de hacerse pasar por una regresión de escala.
+
+  **Y el mismo defecto estaba vivo en `ci.yml`, donde corre en cada PR** — o sea, cien veces más
+  seguido que el canario semanal. Los dos pasos de `bench-guard` tenían el `out=$(go test …)`
+  idéntico; ahora llevan `tee` + `PIPESTATUS` igual que el canario. Dos huecos más del mismo
+  archivo, encontrados por la misma revisión: el paso de `Maintain` heredaba el `success()`
+  implícito, así que un fallo del paso vectorial **salteaba el segundo canario entero** y la corrida
+  perdía el 100% de esa señal sin decirlo (ahora `if: ${{ !cancelled() }}`); y el techo del job era
+  `timeout-minutes: 90` contra dos pasos que suman 30m + 60m = **90 exactos**, sin margen para el
+  checkout ni la compilación — un corte del job llegaría ANTES de que el timeout de Go imprima nada.
+  Pasa a 120: el techo del job tiene que ser mayor que la suma, no igual.
+
+  Por último, el `awk` que extrae los B/op anclaba en `/n=10000-/`, y ese guión es el sufijo de
+  GOMAXPROCS **que Go omite cuando vale 1**: en un runner de un solo core la guarda no matchearía
+  nada y moriría diciendo «no se pudo medir». Ahora ancla al campo completo, con el sufijo opcional.
+
+  El banco vive en `internal/memory/txlock_test.go` y son cinco casos, cada invariante visto en rojo
+  bajo un sabotaje que lo ataca a él:
+
+  | sabotaje | X1 | X2 | X3 | X4 | X5 |
+  |---|---|---|---|---|---|
+  | sin `_txlock=immediate` | 🔴 | 🔴 | 🔴 | 🔴 | ✅ |
+  | sin `busy_timeout` | 🔴 | ✅ | 🔴 | ✅ | ✅ |
+  | el `Begin` de `Consolidate` antes del barrido | ✅ | ✅ | ✅ | ✅ | 🔴 |
+
+  X4 es el que faltaba y el que más importa: X1–X3 fabricaban el segundo escritor a mano, así que
+  ninguno ejercitaba al entrenador de fondo REAL — el escenario que de verdad rompió sólo lo cubría
+  el benchmark semanal, a 100.000 filas. Ahora falla en **0,19 s** bajo su sabotaje.
+
+  Tres correcciones más del banco, todas del mismo tipo: **una guarda que no puede ponerse roja no
+  verifica nada.** X2 tenía una aserción tautológica sobre una ruta que arma el propio helper. X3
+  comparaba contra un piso fijo de 100 ms, y esa constante tiene una asimetría fea — nunca da un
+  rojo falso, pero da VERDE falso en cuanto una escritura sin contención cruza los 100 ms por
+  lentitud de la máquina; bajo `-race`, que es como corre `test` en CI, eso pasa. Ahora el piso se
+  calibra contra una escritura sin contención medida en la misma máquina y en el mismo momento. Y
+  `esBaseBloqueada` clasificaba el busy por el TEXTO del error teniendo el código tipado disponible
+  (`modernc.org/sqlite/error.go:12-21`).
+
+  **Y el pragma trajo un costo propio, que una revisión adversarial del PR encontró y que se
+  arregla acá mismo.** `immediate` corre la ventana de exclusión hacia atrás, hasta el `Begin` — así
+  que abrir la transacción al principio de una función y escribir mucho después deja de ser gratis.
+  `Consolidate` hacía exactamente eso: abría antes del emparejamiento por trigramas, que es **CPU
+  pura y no toca la base**. Medido: a 40.000 observaciones sostenía el lock **8,9 s**, más que el
+  `busy_timeout(5000)`, y los demás escritores del proceso empezaban a fallar. Peor todavía, cuando
+  no hay duplicados —el régimen normal de una base ya consolidada— los tres `UPDATE` no se ejecutan
+  nunca: la transacción sostenía el lock durante todo el barrido para después commitear **cero
+  filas**. Era, literalmente, la transacción de sólo lectura que el comentario del DSN afirmaba que
+  no existía.
+
+  Ahora las fusiones se acumulan en memoria durante el barrido y la transacción se abre después,
+  sólo si hay algo que escribir. La secuencia de SQL es idéntica, y la regla queda escrita al lado
+  del DSN: **al agregar una transacción nueva, abrirla lo más tarde posible.**
+
+  De la misma revisión salió que el censo que respaldaba «`immediate` no serializa ninguna lectura»
+  decía 21 transacciones y **son 30**. La conclusión aguanta —las 30 escriben— pero el número era la
+  única evidencia del reclamo, así que ahora el comentario lleva el comando para rehacer la cuenta
+  en vez de pedir que se le crea. Y documenta la salida que el driver deja abierta para el día que
+  haga falta una de sólo lectura: `BeginTx` con `ReadOnly: true` esquiva `immediate`
+  (`modernc.org/sqlite@v1.58.0/tx.go:22-24`).
+
+  El segundo paso del canario, `Maintain`, también midió por primera vez: **10,98x contra un umbral
+  de 20** (lineal ≈ 10x, cuadrático ≈ 100x) — sano, igual que el primero. Y ese número trajo un
+  ajuste que no es cosmético: tarda 941 s en local, así que el `-timeout=30m` del paso quedaba
+  dentro del ruido de un runner compartido. Pasa a 60m, con `timeout-minutes: 120` en el job para
+  que un cuelgue no se coma las 6 h de default. Un canario que expira sigue siendo un canario en
+  rojo permanente.
+
+  **Y el canario se corrió de verdad, no sólo en local.** Corrida `34387150955` sobre la rama, la
+  primera de las nueve de su historia que termina en verde: `SearchVector` **2,9x** (umbral 6) y
+  `Maintain` **10,7x** (umbral 20). El job entero tardó **10 min 32 s** — que de paso desmintió una
+  suposición que yo mismo había escrito en el archivo: «un runner de GitHub es más lento» y una
+  estimación de 21 min a partir del tiempo local. Es más rápido. La frase se reemplazó por el número
+  medido, porque una suposición sin medir es exactamente el defecto que este cambio vino a sacar.
+
+- **Promover a `shared` esquivaba la guarda del sobre: era la segunda puerta del mismo cuarto.** La
+  guarda que rechaza un `content` que se comió el cierre de su propia llamada vive en
+  `saveObservation`, «donde nace el contenido». Pero `PromoteObservation` es un `UPDATE` por id que
+  no pasa por ahí — exactamente el argumento por el que la guarda de CUARENTENA ya había tenido que
+  ponerse en `PromoteObservationCtx`, porque la promoción tampoco pasa por el predicado de
+  visibilidad.
+
+  Sin la guarda, una observación local guardada por un binario anterior se marcaba `shared`, se
+  encolaba, el central la rechazaba por su propia guarda y moría en dead-letter. Nadie perdía
+  memoria, pero quedaba una fila que decía ser memoria de equipo y nunca iba a llegar al equipo — y
+  el usuario se enteraba por el `doctor` horas después, no por el error de la operación que lo
+  causó.
+
+  **Sólo si todavía no es `shared`, y es deliberado.** Promover una ya-shared es un no-op
+  documentado e idempotente; hacerlo fallar rompería ese contrato para las filas que ya están del
+  otro lado —guardadas antes de que la guarda existiera— sin evitar ningún daño, porque el cruce ya
+  ocurrió. Lo que esta guarda impide es la decisión NUEVA de compartir contenido dañado, no el
+  registro de una vieja.
+
+- **11 observaciones que alguien marcó como importantes estaban rankeadas como si no lo fueran, y
+  el arreglo estaba a la vista.** El `doctor` ya las contaba: de las 73 que se guardaron con el
+  sobre de la llamada adentro del `content`, 11 todavía declaran ahí qué `importance` se les pidió
+  —1.5, 1.6, 1.9, 2.0— mientras su columna dice **1.0**, el default y el valor más común de toda la
+  memoria. El recall ordena por `importance`: se hundieron en el montón justo las que alguien marcó
+  para no perder.
+
+  La nota de diseño daba tres razones para no reparar, y las tres siguen siendo ciertas — pero las
+  tres hablan de **lavar el texto**, no de corregir la columna. Contra una reparación que toca sólo
+  `importance`: no hay falso verde (el check sigue contando las 73, porque el sobre sigue ahí), no
+  se borra evidencia (el número se lee del sobre y el sobre se queda), y el `content_hash` no cambia
+  (`ContentHash` deriva sólo del content, así que el dedup sigue reconociendo la fila). El diseño
+  había empaquetado dos reparaciones y rechazado ambas porque una es peligrosa.
+
+  `musubi doctor --repair swallowed_envelope` ahora devuelve ese número y no toca una coma del
+  texto. Como el hash no cambia, la corrección **no viaja al central** —y no podría: el central
+  rechazaría ese push con su propia guarda del sobre—, así que se corre en cada cerebro.
+
+  De paso, el número pasa a leerse **sólo de la cola después del último `</content>`** y no de todo
+  el texto: desde que ese valor se escribe, una observación que documente este mismo defecto podría
+  citar un `<importance>` en su prosa y hacer que la reparación escriba algo que nadie pidió.
+
+- **Un rechazo de guarda salía como «error interno del servidor», y el nodo que lo recibía lo
+  reintentaba para siempre.** Medido el 2026-09-08 en `kernelos-pc`: **605 intentos en 74 h** contra
+  una observación que el central nunca iba a aceptar, reintentándose cada 5 minutos sin que nada
+  fuera a cambiar jamás.
+
+  Son dos decisiones correctas que se contradecían. `syncclient.go` clasifica `-32603` como
+  TRANSITORIO a propósito —un `SQLITE_BUSY` del central no puede costar memoria— y su comentario se
+  apoya en que «el outbox corta solo al llegar a `max_attempts`». Pero `scheduler.go` eliminó ese
+  tope, también a propósito: un central inalcanzable por horas tampoco puede costar memoria. Cada
+  una se defiende sola; juntas, la cota en la que se apoyaba la primera dejó de existir. Lo que
+  quedó no fue reintentar de más: fue reintentar para siempre.
+
+  El arreglo no toca ninguna de las dos políticas —las dos son correctas— sino la mentira que las
+  hacía chocar: el central declaraba «me rompí yo» cuando en realidad había MIRADO el pedido y lo
+  había rechazado. Ahora un rechazo determinista viaja como `-32602`, que el cliente ya trata como
+  definitivo, y la fila muere en el primer intento con su razón guardada en `last_error`. La
+  memoria no se pierde: queda local y en dead-letter, rescatable con `musubi_sync_requeue`.
+
+  El default sigue siendo «error interno» a propósito. Sólo se degrada a culpa del llamador lo que
+  una guarda rechazó mirando el pedido; mentir en la otra dirección haría que un cliente TIRE
+  memoria buena porque al central se le llenó el disco.
+
+- **El redespliegue del cerebro dejaba procesos corriendo el binario anterior, y uno de ellos era
+  el que sostenía la memoria.** Medido en el central el 2026-09-08, con el despliegue anterior ya
+  hecho:
+
+  ```
+  pid 2892216  musubi daemon      exe: /usr/local/bin/musubi (deleted)   ← 6 días
+  pid 1048700  musubi serve       exe: /usr/local/bin/musubi
+  pid 1048702  musubi dashboard   exe: /usr/local/bin/musubi
+  pid 1121750  musubi agent       exe: /usr/local/bin/musubi
+  ```
+
+  El del ejecutable **borrado** es un `musubi daemon` que lanza `musubi-gateway.service` —el bot de
+  Telegram— como su servidor MCP. `redesplegar-cerebro.sh` reiniciaba tres unidades y ninguna era
+  ésa, así que ese proceso sobrevivía a cada despliegue con el binario anterior. No es higiene: es
+  el proceso que hasta ahora corría el único ciclo de mantenimiento de la memoria del cerebro.
+
+  El guion no podía encontrarlo aunque quisiera: `musubi-gateway` y `musubi-whatsapp` son unidades
+  de **usuario** (uid 1000), no del sistema, así que un `systemctl stop` como root no las ve. Van
+  ahora en su propia lista y se reinician **después** de que el cerebro quedó verificado — antes
+  sería apagar el bot para después descubrir que el despliegue no servía.
+
+  Y de paso, una corrección a nuestra propia nota: `systemctl --user` **sí** funciona por SSH no
+  interactivo, siempre que se le pase `XDG_RUNTIME_DIR=/run/user/<uid>`.
+
+- **Y una comprobación que hace innecesario acordarse de esa lista.** Las listas envejecen —ésta se
+  quedó sin el gateway y nadie lo notó— así que el guion ya no mira una lista sino el **kernel**:
+  recorre `/proc/*/exe` y falla si quedó cualquier proceso cuyo ejecutable sea el que se acaba de
+  reemplazar y ya no exista en disco, se llame como se llame y lo lance quien lo lance.
+
+  No vuelve atrás el despliegue —el cerebro está sano y volver sería peor— pero termina en 1: un
+  proceso viejo escribiendo sobre una base recién migrada es exactamente el estado que no se quiere
+  descubrir por casualidad tres semanas después. El detector se verificó **contra el servidor
+  real**, donde encontró el único proceso rezagado que hay.
+
+- **El tope del bucle de corrección se hacía cumplir solo con instrucciones.** El paso 8 de
+  `adversarial-review` dice «K=3 vueltas, y agotarlo es un rechazo», pero nada en el código
+  impedía abrir la vuelta K+1: quedaba en manos de quien estaba, justamente, cansado de
+  corregir. El riesgo de un bucle sin salida no es girar para siempre — es que el agente ceda y
+  apruebe para terminar, que es exactamente lo que el tope existe para evitar.
+
+  Ahora `OpenDebate` se niega a abrir un debate cuyo topic declare una vuelta por encima de su
+  propio tope, con un error que dice qué pasó y qué hacer. No hace falta estado nuevo: el topic
+  ya declara `vuelta k/K`, y negarse a abrir falla del lado seguro —un debate que no existe no
+  puede aprobar nada—. La convención pasa a tener UNA definición (`memory.VueltaDelTopic`), que
+  es la misma que `musubi arnes` usa para medir: con dos regex separadas, endurecer una dejaría
+  a la otra midiendo la convención vieja, y las dos seguirían andando.
+
+  El mensaje va en el error y no en las reglas de la skill a propósito: el error cuesta tokens
+  sólo cuando se dispara, y las reglas los cuestan en cada turno.
+
+- 🔴 **La profundidad de revisión estaba calibrada a ojo, y medirla mostró que no distinguía
+  nada.** Los cortes de `codeintel.Profundidad` se eligieron cuando la función se escribió, sin
+  una distribución que los respaldara. Medido ahora sobre los **108 PRs reales** de este repo
+  —con el grafo indexado, descontados los back-merges (que no son un PR sino «todo lo que main
+  ganó») y los duplicados— el reparto era **1 % mínima · 30 % estándar · 67 % profunda**: dos de
+  cada tres cambios pedían el panel más caro. Un criterio que casi siempre contesta lo mismo
+  dejó de ser un criterio.
+
+  Tres causas independientes, cada una medida:
+
+  1. **Los escalones estaban por debajo de la mediana.** `lineas` topeaba en 200 con una mediana
+     de 373; `simbolos` en 9 con una mediana de 15. Seis de cada diez PRs sacaban el máximo en
+     esas dos. Ahora cada borde sale de un cuantil observado (P33 / P75) y se redondea a un
+     número que una persona pueda rehacer de cabeza, que es la razón de ser de los escalones.
+  2. **`hay_borrados` no medía lo que decía.** En un diff unificado, MODIFICAR una línea es un
+     borrado más un agregado, así que «hay al menos una línea borrada» era cierto en el **83 %**
+     de los PRs: una constante disfrazada de señal, que le sumaba un punto a todo el mundo. Lo
+     que la señal existe para ver —un archivo borrado entero, o uno que saca más de lo que
+     pone— pasa en el **12 %**, y eso es lo que mide ahora. El punto ciego original (el hunk que
+     sólo borra) lo cubre `lineas`, que desde F2 suma agregadas Y borradas.
+  3. **Tocar un README volvía inalcanzable el panel más barato.** El piso de honestidad usaba
+     `IndexableForGraph` para decidir si el radio quedó ciego, y esa función contesta otra
+     pregunta: «¿el indexador debe recolectar este archivo?». Con eso, un CHANGELOG.md caía en
+     la misma bolsa que un `.ts` sin indexar. Medido: el **84 %** de los PRs tocaba algún archivo
+     no indexable y en el **62 %** ése era el ÚNICO motivo de ceguera, con el código enteramente
+     cubierto. Un PR de 0 puntos terminaba en `estandar` por un `.md`. La función nueva
+     `PuedeTenerRadio` separa «no es código» (no hay nada que saber) de «es código que este
+     build no indexa» (ahí no saber es real), y **ante la duda cuenta como código**, que es el
+     error barato.
+
+  Reparto resultante, misma población y mismas funciones de producción: **22 % · 49 % · 28 %**.
+  La ceguera del radio baja de 88 % a 36 %, y lo que queda es ceguera de verdad —símbolos que ya
+  no existen en el `HEAD` de hoy—. 17 sabotajes verificados en rojo, cada uno atacando el
+  invariante que su test declara.
+
+  **Un test de este mismo track medía el proxy y no la cosa**, y se descubrió saboteándolo:
+  congelaba la tabla de escalones llamando a `escalon()` con números escritos a mano, así que
+  mover una constante calibrada lo dejaba verde. Ahora pasa por `Profundidad` y lee el desglose.
+
+- 🔴 **El tercer cero: el gate que corrió y no tuvo nada que avisar.** Encontrado **corriendo
+  `musubi arnes` contra el repo de verdad**, no leyendo el código. Con el árbol limpio el gate mide,
+  no tiene nada que decir y por eso no imputa tokens — y el comando leía ese cero como «no se
+  inyectó nunca, es un problema de cableado», mandando a arreglar algo que funciona.
+
+  Es **exactamente la confusión que `musubi arnes` existe para evitar**, una capa más abajo: un cero
+  que sirve a la vez de valor de fallo y de valor tranquilizador. Ahora el gate cuenta las veces que
+  **midió**, no sólo las que habló, y hay tres veredictos donde había dos: `APAGADO` (nunca midió) ·
+  `EN REPOSO` (midió N veces y no tuvo nada que avisar) · `IGNORADO` (avisó y nadie lo siguió).
+  Verificado de punta a punta con los tres casos.
+
+- **Ocho tests del paquete `mcp` se ponían rojos si tenías `MUSUBI_TOOLS_ALL=1`.** Es un
+  interruptor **documentado** —devuelve al catálogo las nueve tools dormidas sin recompilar— y
+  media docena de tests afirman sobre la FORMA de ese catálogo heredando la variable del entorno.
+  Resultado: **rojos en la máquina de quien la usa, verdes en CI**, que no la tiene. El peor rojo
+  posible: el que sólo ve quien trabaja, y que por eso se aprende a ignorar.
+
+  Se arregla en el nivel correcto —un `TestMain` del paquete, no test por test— porque lo que se
+  hereda no es el dato de un caso sino la configuración global sobre la que casi todos afirman.
+  Verificado: sin el `TestMain` caen 8; con él, 0.
+
+- **El gate avisaba sobre su propio workspace.** En un repo recién creado, `.musubi/config.yaml` y
+  `.musubi/config.example.yaml` quedan sin trackear y contaban como dos archivos de producción —
+  justo el umbral. El gate se avisaba a sí mismo, y un aviso que salta por el ruido de la propia
+  herramienta es el que enseña a ignorar la herramienta.
+
+- **La integración de las seis fases: lo que ninguna podía ver mirándose a sí misma.**
+  - 🔴 **El presupuesto de `Rules` se cruzó.** Cuatro fases escriben en el mismo campo y la suma
+    llegó a **5.645 runas** contra un umbral de 5.000. Se resolvió por la salida que el plan
+    prefiere —podar lo que el **código ya ejecuta**: la profundidad no se explica, se lee de
+    `revision`— y quedó en **4.979**, con margen 21. Como `rules_too_long` es un *warning* y
+    `report.OK()` sólo mira errores, **un umbral que nada puede hacer fallar se cruza y nadie se
+    entera**: ahora hay un test que lo hace fallar.
+  - **Un merge limpio no es evidencia de nada.** `debate_test.go` fusionó las dos ramas sin un
+    solo conflicto y **no compilaba**: el test que agregó F4 usaba las firmas que F3 había
+    cambiado. Lo detectó `go vet`, no git.
+  - **La renumeración de los pasos, con sus referencias internas.** F2 inserta un paso y corre
+    todos los demás; F3 y F4 editan el CONTENIDO de esos mismos pasos. Quedarse con un lado
+    perdía el otro entero y compilaba igual. Además hay referencias internas («va por el paso 7»)
+    que había que mover con ellos.
+  - **El golden completo se puso rojo al integrar** —F2 y F3 tocan descripciones distintas— que es
+    exactamente para lo que se agregó.
+
+- **`receipt emit` ignoraba las banderas desconocidas y aprobaba igual.** En el comando cuyo único
+  trabajo es otorgar permiso de entrega, «bandera desconocida ⇒ apruebo» es el default al revés.
+  Pasó de verdad: un `receipt emit --help` emitió un recibo aprobado. Ahora sale con error.
+
+- **`receipt show` panicaba con una huella corta.** Hacía `r.Fingerprint[:12]` sobre un valor que
+  se decodifica de `meta` —o sea de un texto que alguien puede editar—, así que se caía justo el
+  comando que sirve para diagnosticar.
+
+- **La skill ya ordena congelar el hallazgo** antes de que entre al debate (era el hueco que F5
+  dejó declarado).
+
 - 🔴 **El golden de tools era ciego para las nueve tools dormidas, y no podía ponerse rojo.** La
   regla 5 del repo dice que al cambiar una tool hay que regenerar el golden «o el build queda verde
   y mal». Pero el golden congela `handleToolsList()`, que **filtra las dormidas**: se le cambió el
