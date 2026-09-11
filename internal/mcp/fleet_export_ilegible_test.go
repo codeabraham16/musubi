@@ -84,10 +84,30 @@ func (a almacenQueNoSeDejaLeer) AprobacionesPendientes(projectID string, ahora t
 	return a.StorageBackend.AprobacionesPendientes(projectID, ahora, tope)
 }
 
-// Sabotaje que la pone roja: en cualquiera de los cuatro barridos, volver el `ilegible = true` a
-// un `continue` mudo.
+func (a almacenQueNoSeDejaLeer) ProyectosConBajasRecientes(desde time.Time, tope int) ([]string, error) {
+	if a.rompe == "bajas" {
+		return nil, errAlmacenSimulado
+	}
+	return a.StorageBackend.ProyectosConBajasRecientes(desde, tope)
+}
+
+func (a almacenQueNoSeDejaLeer) RotacionesAbiertas() ([]memory.RotacionAbierta, error) {
+	if a.rompe == "rotaciones" {
+		return nil, errAlmacenSimulado
+	}
+	return a.StorageBackend.RotacionesAbiertas()
+}
+
+// Sabotaje que la pone roja: en cualquiera de los SEIS barridos, volver el `ilegible = true` a un
+// `continue` (o a un `return`) mudo.
+//
+// ERAN CUATRO Y SON SEIS. Los dos que faltaban —`bajas` y `rotaciones`— son los que este PR
+// agrega, y los dos nacieron sin devolver nada: `renderBajasRecientes` tiraba con `_, _` el
+// truncado y lo ilegible de `proyectosVisibles`, y `renderRotacionesAbiertas` LOGUEABA el nombre
+// de la serie `kind="unreadable"` y después hacía `return` sin encenderla. Una guarda que cubre
+// 4 de 6 barridos es la forma que este repo persigue con nombre propio.
 func TestUnPedazoDeLaFlotaQueNoSePudoLeerNoSeInformaComoSinRecorte(t *testing.T) {
-	for _, rompe := range []string{"proyectos", "devices", "servicios", "aprobaciones"} {
+	for _, rompe := range []string{"proyectos", "devices", "servicios", "aprobaciones", "bajas", "rotaciones"} {
 		t.Run(rompe, func(t *testing.T) {
 			s := newTestServer(t, embedding.NoopProvider{})
 			ahora := time.Now()
@@ -136,6 +156,77 @@ func TestUnPedazoDeLaFlotaQueNoSePudoLeerNoSeInformaComoSinRecorte(t *testing.T)
 				t.Errorf("un proyecto ilegible se llevó puesto el scrape del proyecto sano:\n%s", salida)
 			}
 		})
+	}
+}
+
+// TestElProyectoQueSeApagoEnteroYNoSeDejaLeerLoDeclara — el caso que el vecino NO puede satisfacer.
+//
+// POR QUÉ NO ALCANZA CON EL CASO `devices` DE LA TABLA DE ARRIBA. Ahí se rompe `ListarDevices` de
+// «casa», que TIENE máquinas vivas: el barrido principal la visita primero, marca `ilegible` y la
+// serie sale en 1. O sea que ese caso queda verde tenga o no tenga su propio manejo el barrido de
+// bajas — lo satisface el hermano de al lado, y una guarda satisfecha por el vecino no custodia
+// nada. Es la misma trampa que este repo ya se comió siete veces con las guardas de texto.
+//
+// EL ÚNICO PROYECTO QUE MIDE ESTE BARRIDO Y NINGÚN OTRO es el que se apagó entero:
+// `ProyectosConDevices` filtra `revoked = 0`, así que un proyecto cuya ÚNICA máquina se revocó no
+// está en su lista y `devicesVisiblesParaMetricas` nunca llama a `ListarDevices` sobre él. Sólo
+// llega ahí `renderBajasRecientes`, por la vía de `ProyectosConBajasRecientes`.
+//
+// Y ES EL CASO QUE MÁS IMPORTA, no un borde: es el tenant recién dado de baja. Todas sus alertas
+// se van a resolver juntas, y sin la serie de baja del otro lado del canal llega el mismo
+// [RESOLVED] que produce un arreglo.
+//
+// Sabotaje que la pone roja (verificado): en `renderBajasRecientes`, volver el `ilegible = true`
+// de la rama de error de `ListarDevices` al `continue // lo ilegible ya lo cuenta el barrido
+// principal` que había — el comentario que era falso justo para estos proyectos.
+func TestElProyectoQueSeApagoEnteroYNoSeDejaLeerLoDeclara(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	ahora := time.Now()
+
+	// «casa» queda VIVA para que el scrape tome el camino normal y no el del bloque vacío: así
+	// el barrido principal corre entero y sano, y lo único que puede encender la serie es el
+	// barrido de bajas.
+	maquinaConMuestra(t, s, "casa", "pc-gio", *muestraDePrueba(), ahora)
+
+	// «sola» se apaga entera: su única máquina se revoca.
+	maquinaConMuestra(t, s, "sola", "pc-sola", *muestraDePrueba(), ahora)
+	if ok, err := s.engine.RevocarDevice("sola", "pc-sola"); err != nil || !ok {
+		t.Fatalf("no se pudo revocar la única máquina de «sola»: ok=%v err=%v", ok, err)
+	}
+
+	// CONTROL POSITIVO, y no es adorno: sin él, un montaje que no produjera la baja dejaría el
+	// resto de la prueba midiendo el vacío y pasando en verde por el motivo equivocado.
+	var sano strings.Builder
+	renderFlota(&sano, s.engine, ptrPrincipal(principalDePrometheus()), ahora,
+		s.sondaIntervalo, versionDePrueba, nil, s.techoServiciosPorProyecto)
+	if !strings.Contains(sano.String(), nombreBajaReciente+`{project="sola",device="pc-sola"}`) {
+		t.Fatalf("el montaje no produce la baja que esta prueba necesita medir; sin eso, romper la "+
+			"lectura no prueba nada:\n%s", sano.String())
+	}
+
+	// Y AHORA SÍ: la lectura de «sola» falla, y nadie más que el barrido de bajas la mira.
+	eng := almacenQueNoSeDejaLeer{StorageBackend: s.engine, rompe: "devices", proyecto: "sola"}
+	var log bytes.Buffer
+	restaurar := logx.Capturar(&log)
+	var b strings.Builder
+	renderFlota(&b, eng, ptrPrincipal(principalDePrometheus()), ahora,
+		s.sondaIntervalo, versionDePrueba, nil, s.techoServiciosPorProyecto)
+	restaurar()
+	salida := b.String()
+
+	if !strings.Contains(salida, nombreExportTruncado+`{kind="unreadable"} 1`) {
+		t.Errorf("no se pudieron leer las máquinas de «sola» —el proyecto que se apagó entero— y el "+
+			"export no lo declara.\n"+
+			"  Su baja no sale por ningún lado, así que MaquinaRevocada no puede disparar y del otro "+
+			"lado del canal el [RESOLVED] de ese tenant se lee como un arreglo.\n"+
+			"  El barrido principal no lo tapa: ProyectosConDevices filtra revoked = 0, así que "+
+			"nunca visita ese proyecto.\n%s", bloqueDeTruncado(salida))
+	}
+	if !strings.Contains(salida, nombreBajaReciente+`{project="casa"`) && strings.Contains(salida, nombreBajaReciente) {
+		t.Errorf("un proyecto ilegible se llevó puesto el barrido de bajas del resto:\n%s", salida)
+	}
+	if !strings.Contains(log.String(), "export de flota:") {
+		t.Errorf("la lectura falló y el log no dice qué proyecto ni con qué error:\n%s", log.String())
 	}
 }
 

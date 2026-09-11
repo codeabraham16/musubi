@@ -92,14 +92,24 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 		// almacén no se dejó leer» terminaban los dos en este mismo comentario que Prometheus
 		// descarta, sin una sola serie. Con `kind="unreadable"` los dos casos dejan de ser el
 		// mismo silencio.
-		renderTruncado(b, recorte, techoServicios)
-		renderTechos(b, techoServicios, 0, 0)
-		renderReferenciaDeVersion(b, versionCerebro)
 		// Y LAS BAJAS, PRECISAMENTE ACÁ. Este `return` se toma cuando no queda NINGUNA máquina
 		// visible — que es exactamente lo que pasa cuando se revocó la última. Saltearlo dejaba el
 		// aviso de la baja sin salir justo en el caso en que más importa: el proyecto entero se
 		// apagó y sus alertas se van a resolver todas juntas, en silencio.
-		renderBajasRecientes(b, engine, p, ahora)
+		//
+		// CORRE ANTES QUE `renderTruncado` Y SE GUARDA EN UN BUFFER, por lo mismo que en el camino
+		// normal: lo que este barrido descubre —que no pudo leer— tiene que alcanzar a la serie
+		// que lo anuncia. Emitiendo el truncado primero, el hecho nacía tarde y
+		// `kind="unreadable"` salía en 0 diciendo «medí todo» sobre un barrido que había fallado.
+		// El ORDEN DE SALIDA no cambia: las bajas siguen siendo lo último del bloque.
+		var cuerpo strings.Builder
+		truncBajas, ilegBajas := renderBajasRecientes(&cuerpo, engine, p, ahora)
+		recorte.Proyectos = recorte.Proyectos || truncBajas
+		recorte.Ilegible = recorte.Ilegible || ilegBajas
+		renderTruncado(b, recorte, techoServicios)
+		renderTechos(b, techoServicios, 0, 0)
+		renderReferenciaDeVersion(b, versionCerebro)
+		b.WriteString(cuerpo.String())
 		return
 	}
 	if recorte.Proyectos {
@@ -134,8 +144,10 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 	// SI EL TAILNET VE A LAS QUE NO LATEN (Ola 3). Va con las mismas máquinas ya compuertadas.
 	renderVidaDeRed(&cuerpo, vistos, ahora, vidaDe)
 	// LAS BAJAS RECIENTES, que no están en `vistos` justamente por estar dadas de baja.
-	renderBajasRecientes(&cuerpo, engine, p, ahora)
-	renderRotacionesAbiertas(&cuerpo, engine, p, ahora)
+	truncBajas, ilegBajas := renderBajasRecientes(&cuerpo, engine, p, ahora)
+	recorte.Proyectos = recorte.Proyectos || truncBajas
+	recorte.Ilegible = recorte.Ilegible || ilegBajas
+	recorte.Ilegible = renderRotacionesAbiertas(&cuerpo, engine, p, ahora) || recorte.Ilegible
 
 	renderTruncado(b, recorte, techoServicios)
 	// EL MARGEN, ANTES DEL CORTE. `export_truncated` avisa cuando un techo YA cortó, o sea
@@ -253,12 +265,31 @@ const ventanaDeBajaReciente = 24 * time.Hour
 // LEE LAS REVOCADAS APARTE, y no puede hacerse metiéndolas en `vistos`: ahí adentro emitirían
 // TODAS sus series —cpu, disco, servicios— y volverían a la flota como si estuvieran vivas, que
 // es exactamente lo contrario de lo que esto quiere decir.
-func renderBajasRecientes(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time) {
-	proyectos, _, _ := proyectosVisibles(engine, p)
+func renderBajasRecientes(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time) (truncado, ilegible bool) {
+	proyectos, truncado, ilegible := proyectosVisibles(engine, p)
 	// Y LOS PROYECTOS QUE YA NO TIENEN MÁQUINAS VIVAS. `proyectosVisibles` los descubre con
 	// `ProyectosConDevices`, que filtra `revoked = 0`: el proyecto cuya ÚLTIMA máquina se dio de
 	// baja desaparece entero, y su baja —la que más importa anunciar— no saldría por ningún lado.
-	if conBajas, err := engine.ProyectosConBajasRecientes(ahora.Add(-ventanaDeBajaReciente), proyectosParaExportar); err == nil {
+	//
+	// SE PIDE UNO MÁS QUE EL TECHO, igual que `ProyectosConDevices`, y por el mismo motivo: con
+	// `LIMIT 64`, «son exactamente 64» y «hay más de 64» vuelven como la misma respuesta y el
+	// llamador ya no puede distinguirlas ni queriendo. El de más se descarta; lo que se guarda es
+	// el HECHO de que había más.
+	conBajas, err := engine.ProyectosConBajasRecientes(ahora.Add(-ventanaDeBajaReciente), proyectosParaExportar+1)
+	switch {
+	case err != nil:
+		// ACÁ SE PIERDEN JUSTO LOS QUE ESTA CONSULTA EXISTE PARA RESCATAR. Los proyectos que
+		// todavía tienen máquinas vivas ya entraron por `proyectosVisibles`; el que se apagó
+		// entero sólo puede entrar por acá. Sin esta marca, su baja no sale y la única serie que
+		// habla del recorte afirma que no se recortó nada.
+		ilegible = true
+		logx.Error("export de flota: no se pudo listar los proyectos con bajas recientes; el proyecto que se apagó entero NO anuncia su baja",
+			"error", err, "serie", nombreExportTruncado+`{kind="unreadable"}`)
+	default:
+		if len(conBajas) > proyectosParaExportar {
+			truncado = true
+			conBajas = conBajas[:proyectosParaExportar]
+		}
 		ya := map[string]bool{}
 		for _, q := range proyectos {
 			ya[q] = true
@@ -273,7 +304,17 @@ func renderBajasRecientes(b *strings.Builder, engine memory.StorageBackend, p *P
 	for _, proy := range proyectos {
 		devices, err := engine.ListarDevices(proy, true) // true = incluir revocadas
 		if err != nil {
-			continue // lo ilegible ya lo cuenta el barrido principal
+			// EL COMENTARIO QUE HABÍA ACÁ ERA FALSO PARA LA MITAD DE ESTA LISTA. Decía «lo
+			// ilegible ya lo cuenta el barrido principal», y eso sólo vale para los proyectos que
+			// vinieron de `proyectosVisibles`. Los que agrega `ProyectosConBajasRecientes` —los
+			// que NO tienen ninguna máquina viva— el barrido principal no los visita nunca:
+			// `ProyectosConDevices` filtra `revoked = 0`, así que ese proyecto no está en su
+			// lista y `devicesVisiblesParaMetricas` jamás llama a `ListarDevices` sobre él.
+			// Nadie contaba ese ilegible.
+			ilegible = true
+			logx.Error("export de flota: no se pudieron listar las máquinas de un proyecto al buscar bajas recientes; sus bajas NO se anuncian",
+				"project", proy, "error", err, "serie", nombreExportTruncado+`{kind="unreadable"}`)
+			continue
 		}
 		for _, d := range devices {
 			if !d.Revoked || d.RevokedAt.IsZero() {
@@ -301,6 +342,7 @@ func renderBajasRecientes(b *strings.Builder, engine memory.StorageBackend, p *P
 			fmt.Fprintf(b, "%s{project=%q,device=%q} %d\n", nombreBajaReciente, d.ProjectID, d.Name, int64(edad.Seconds()))
 		}
 	}
+	return truncado, ilegible
 }
 
 // nombreRotacionAbierta dice que una máquina tiene una rotación de token en curso, y cuánto le
@@ -327,27 +369,47 @@ func renderBajasRecientes(b *strings.Builder, engine memory.StorageBackend, p *P
 const nombreRotacionAbierta = "musubi_fleet_rotation_expires_in_seconds"
 
 // renderRotacionesAbiertas emite una línea por rotación en curso.
-func renderRotacionesAbiertas(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time) {
+func renderRotacionesAbiertas(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time) (ilegible bool) {
 	abiertas, err := engine.RotacionesAbiertas()
 	if err != nil {
+		// EL LOG YA NOMBRABA LA SERIE Y NADIE LA ENCENDÍA. Decía «serie:
+		// musubi_fleet_export_truncated{kind="unreadable"}» y después hacía `return` sin devolver
+		// nada, así que esa serie seguía en 0: el log describía un aviso que no existía. Copiar
+		// del hermano el mensaje y no el retorno es la forma exacta de la lección aprendida de un
+		// lado y no del otro.
 		logx.Error("export de flota: no se pudieron listar las rotaciones abiertas; ninguna alerta las cubre",
 			"error", err, "serie", nombreExportTruncado+`{kind="unreadable"}`)
-		return
+		return true
 	}
 	tipoEscrito := false
 	for _, r := range abiertas {
 		if r.Vence.IsZero() {
 			// Una fila con fecha ilegible es un estado que no debería existir. Se salta y se dice,
 			// en vez de emitir un número inventado que una alerta leería como un vencimiento.
-			logx.Warn("export de flota: una rotación abierta tiene una fecha de vencimiento ilegible",
-				"device", r.Name, "project", r.ProjectID)
+			//
+			// Y CUENTA COMO ILEGIBLE, que es lo que le faltaba: esa rotación queda SIN SERIE, así
+			// que `RotacionDeTokenSinCompletar` no la puede ver. Su ausencia y «no hay ninguna
+			// rotación en curso» se leen igual desde Prometheus, y son cosas opuestas.
+			ilegible = true
+			logx.Warn("export de flota: una rotación abierta tiene una fecha de vencimiento ilegible; esa rotación queda sin serie y ninguna alerta la cubre",
+				"device", r.Name, "project", r.ProjectID, "serie", nombreExportTruncado+`{kind="unreadable"}`)
 			continue
 		}
 		// LA COMPUERTA ES LA MISMA QUE PARA LAS MÉTRICAS DE ESA MÁQUINA. No se filtra ningún hash
 		// —esta serie no lleva ninguno— pero saber que una máquina está rotando su credencial es
 		// información de esa máquina, y no tiene por qué verla quien no la ve a ella.
 		d, hay, err := engine.DevicePorID(r.DeviceID)
-		if err != nil || !hay || !PuedeSobreDevice(p, d, fleet.CapMetrics) {
+		if err != nil {
+			// SE PARTE EL `||` PORQUE MEZCLABA TRES COSAS DISTINTAS EN UN MISMO SILENCIO: «no
+			// pude leer la máquina», «la máquina no existe» y «no tenés permiso para verla». Las
+			// dos últimas son respuestas legítimas y su `continue` mudo está bien. La primera es
+			// una medición que no se pudo hacer, y salía por el mismo lugar.
+			ilegible = true
+			logx.Error("export de flota: no se pudo leer la máquina de una rotación abierta; esa rotación queda sin serie",
+				"device_id", r.DeviceID, "error", err, "serie", nombreExportTruncado+`{kind="unreadable"}`)
+			continue
+		}
+		if !hay || !PuedeSobreDevice(p, d, fleet.CapMetrics) {
 			continue
 		}
 		if !tipoEscrito {
@@ -358,6 +420,7 @@ func renderRotacionesAbiertas(b *strings.Builder, engine memory.StorageBackend, 
 		fmt.Fprintf(b, "%s{project=%q,device=%q} %d\n",
 			nombreRotacionAbierta, r.ProjectID, r.Name, int64(r.Vence.Sub(ahora).Seconds()))
 	}
+	return ilegible
 }
 
 func renderVidaDeRed(b *strings.Builder, vistos []fleet.Device, ahora time.Time, vidaDe vidaDeRedLookup) {
