@@ -92,7 +92,24 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 		// almacén no se dejó leer» terminaban los dos en este mismo comentario que Prometheus
 		// descarta, sin una sola serie. Con `kind="unreadable"` los dos casos dejan de ser el
 		// mismo silencio.
+		// Y LAS BAJAS, PRECISAMENTE ACÁ. Este `return` se toma cuando no queda NINGUNA máquina
+		// visible — que es exactamente lo que pasa cuando se revocó la última. Saltearlo dejaba el
+		// aviso de la baja sin salir justo en el caso en que más importa: el proyecto entero se
+		// apagó y sus alertas se van a resolver todas juntas, en silencio.
+		//
+		// CORRE ANTES QUE `renderTruncado` Y SE GUARDA EN UN BUFFER, por lo mismo que en el camino
+		// normal: lo que este barrido descubre —que no pudo leer— tiene que alcanzar a la serie
+		// que lo anuncia. Emitiendo el truncado primero, el hecho nacía tarde y
+		// `kind="unreadable"` salía en 0 diciendo «medí todo» sobre un barrido que había fallado.
+		// El ORDEN DE SALIDA no cambia: las bajas siguen siendo lo último del bloque.
+		var cuerpo strings.Builder
+		truncBajas, ilegBajas := renderBajasRecientes(&cuerpo, engine, p, ahora)
+		recorte.Proyectos = recorte.Proyectos || truncBajas
+		recorte.Ilegible = recorte.Ilegible || ilegBajas
 		renderTruncado(b, recorte, techoServicios)
+		renderTechos(b, techoServicios, 0, 0)
+		renderReferenciaDeVersion(b, versionCerebro)
+		b.WriteString(cuerpo.String())
 		return
 	}
 	if recorte.Proyectos {
@@ -118,7 +135,7 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 	// QUÉ CORRE ADENTRO de esas máquinas (A43). Va DESPUÉS y con las mismas máquinas ya
 	// compuertadas: la lista `vistos` es la que pasó por PuedeSobreDevice, y reusarla es lo que
 	// evita un segundo lugar donde olvidarse la compuerta.
-	truncadoSvs, ilegibleSvs := renderServicios(&cuerpo, engine, vistos, ahora, techoServicios)
+	truncadoSvs, ilegibleSvs, peorProyecto := renderServicios(&cuerpo, engine, vistos, ahora, techoServicios)
 	recorte.Servicios = truncadoSvs
 	recorte.Ilegible = recorte.Ilegible || ilegibleSvs
 	// QUIÉN ESTÁ ESPERANDO UN SEGUNDO PAR DE OJOS (Ola 2). Va con las mismas máquinas ya
@@ -126,8 +143,17 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 	recorte.Ilegible = renderAprobaciones(&cuerpo, engine, vistos, ahora) || recorte.Ilegible
 	// SI EL TAILNET VE A LAS QUE NO LATEN (Ola 3). Va con las mismas máquinas ya compuertadas.
 	renderVidaDeRed(&cuerpo, vistos, ahora, vidaDe)
+	// LAS BAJAS RECIENTES, que no están en `vistos` justamente por estar dadas de baja.
+	truncBajas, ilegBajas := renderBajasRecientes(&cuerpo, engine, p, ahora)
+	recorte.Proyectos = recorte.Proyectos || truncBajas
+	recorte.Ilegible = recorte.Ilegible || ilegBajas
+	recorte.Ilegible = renderRotacionesAbiertas(&cuerpo, engine, p, ahora) || recorte.Ilegible
 
 	renderTruncado(b, recorte, techoServicios)
+	// EL MARGEN, ANTES DEL CORTE. `export_truncated` avisa cuando un techo YA cortó, o sea
+	// después de perder cobertura; estas dos dicen cuánto falta.
+	renderTechos(b, techoServicios, proyectosDistintos(vistos), peorProyecto)
+	renderReferenciaDeVersion(b, versionCerebro)
 	b.WriteString(cuerpo.String())
 }
 
@@ -190,6 +216,211 @@ var seriesSoloDelScrape = []string{
 	// durante meses: la custodia leía UN archivo y esta serie vive en otro. Es la de mayor
 	// consecuencia de las cinco —tres alertas cuelgan de ella y no tiene copia por OTLP—.
 	nombrePoliticaAcciones,
+	// Los techos y el uso: dicen CUÁNTO FALTA para que un recorte empiece, así que tienen que
+	// llegar aunque el empuje esté apagado — de hecho el empuje es una de las cosas que se
+	// dimensionan con ellas.
+	nombreTecho,
+	nombreUso,
+	// Es un hecho del cerebro, no telemetría de una máquina: no viaja por el empuje.
+	nombreReferenciaVersion,
+	// Una máquina revocada no está en el barrido del empuje —no es visible— así que su baja sólo
+	// puede llegar por el scrape.
+	nombreBajaReciente,
+	// La rotación es un estado del REGISTRO, no de la muestra: no viaja por el empuje.
+	nombreRotacionAbierta,
+}
+
+// nombreBajaReciente dice que una máquina SE DIO DE BAJA hace poco, con su antigüedad.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// REVOCAR UNA MÁQUINA RESOLVÍA SUS ALERTAS EN SILENCIO.
+//
+// `revoked` es una BANDERA y no un DELETE, así que la fila queda — pero la máquina sale del
+// export, sus series se vuelven obsoletas, y TODAS sus alertas se resuelven solas. Del otro lado
+// del canal, «se arregló» y «la sacamos del inventario» llegan como el MISMO `[RESOLVED]`, sin
+// una palabra que los distinga. Quien lo lee concluye que el problema se atendió — y la máquina
+// con el disco lleno que se dio de baja sin arreglar queda cerrada en la cabeza de todos.
+//
+// ES UNA SERIE ACOTADA EN EL TIEMPO y no una bandera permanente: acompaña a las resoluciones y
+// después desaparece sola. Una serie que viviera para siempre convertiría el aviso en parte del
+// paisaje, que es otra forma de no decir nada.
+//
+// EL NOMBRE NO LLEVA `device_` A PROPÓSITO, y no es estilo: `prometheus.yml` descarta
+// `musubi_fleet_(device|service)_.*` del scrape porque esa familia llega por el empuje OTLP. Esta
+// serie NO puede viajar por el empuje —el empuje recorre las máquinas VISIBLES, y una máquina
+// revocada no lo es— así que con ese prefijo se descartaría en el scrape y no llegaría por
+// ningún lado. Es el mismo criterio que `musubi_fleet_net_up` y `musubi_fleet_approval_pending`.
+// ────────────────────────────────────────────────────────────────────────────────────────────
+const nombreBajaReciente = "musubi_fleet_revoked_ago_seconds"
+
+// ventanaDeBajaReciente es cuánto tiempo se sigue anunciando una baja.
+//
+// Sale de la vida de una alerta, no de un gusto: tiene que cubrir con margen el `for:` de la
+// alerta que la lee más el tiempo que el canal tarda en entregar, para que el aviso de la baja y
+// las resoluciones que produjo lleguen juntos.
+const ventanaDeBajaReciente = 24 * time.Hour
+
+// renderBajasRecientes emite una línea por máquina dada de baja adentro de la ventana.
+//
+// LEE LAS REVOCADAS APARTE, y no puede hacerse metiéndolas en `vistos`: ahí adentro emitirían
+// TODAS sus series —cpu, disco, servicios— y volverían a la flota como si estuvieran vivas, que
+// es exactamente lo contrario de lo que esto quiere decir.
+func renderBajasRecientes(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time) (truncado, ilegible bool) {
+	proyectos, truncado, ilegible := proyectosVisibles(engine, p)
+	// Y LOS PROYECTOS QUE YA NO TIENEN MÁQUINAS VIVAS. `proyectosVisibles` los descubre con
+	// `ProyectosConDevices`, que filtra `revoked = 0`: el proyecto cuya ÚLTIMA máquina se dio de
+	// baja desaparece entero, y su baja —la que más importa anunciar— no saldría por ningún lado.
+	//
+	// SE PIDE UNO MÁS QUE EL TECHO, igual que `ProyectosConDevices`, y por el mismo motivo: con
+	// `LIMIT 64`, «son exactamente 64» y «hay más de 64» vuelven como la misma respuesta y el
+	// llamador ya no puede distinguirlas ni queriendo. El de más se descarta; lo que se guarda es
+	// el HECHO de que había más.
+	conBajas, err := engine.ProyectosConBajasRecientes(ahora.Add(-ventanaDeBajaReciente), proyectosParaExportar+1)
+	switch {
+	case err != nil:
+		// ACÁ SE PIERDEN JUSTO LOS QUE ESTA CONSULTA EXISTE PARA RESCATAR. Los proyectos que
+		// todavía tienen máquinas vivas ya entraron por `proyectosVisibles`; el que se apagó
+		// entero sólo puede entrar por acá. Sin esta marca, su baja no sale y la única serie que
+		// habla del recorte afirma que no se recortó nada.
+		ilegible = true
+		logx.Error("export de flota: no se pudo listar los proyectos con bajas recientes; el proyecto que se apagó entero NO anuncia su baja",
+			"error", err, "serie", nombreExportTruncado+`{kind="unreadable"}`)
+	default:
+		if len(conBajas) > proyectosParaExportar {
+			truncado = true
+			conBajas = conBajas[:proyectosParaExportar]
+		}
+		ya := map[string]bool{}
+		for _, q := range proyectos {
+			ya[q] = true
+		}
+		for _, q := range conBajas {
+			if !ya[q] {
+				proyectos = append(proyectos, q)
+			}
+		}
+	}
+	tipoEscrito := false
+	for _, proy := range proyectos {
+		devices, err := engine.ListarDevices(proy, true) // true = incluir revocadas
+		if err != nil {
+			// EL COMENTARIO QUE HABÍA ACÁ ERA FALSO PARA LA MITAD DE ESTA LISTA. Decía «lo
+			// ilegible ya lo cuenta el barrido principal», y eso sólo vale para los proyectos que
+			// vinieron de `proyectosVisibles`. Los que agrega `ProyectosConBajasRecientes` —los
+			// que NO tienen ninguna máquina viva— el barrido principal no los visita nunca:
+			// `ProyectosConDevices` filtra `revoked = 0`, así que ese proyecto no está en su
+			// lista y `devicesVisiblesParaMetricas` jamás llama a `ListarDevices` sobre él.
+			// Nadie contaba ese ilegible.
+			ilegible = true
+			logx.Error("export de flota: no se pudieron listar las máquinas de un proyecto al buscar bajas recientes; sus bajas NO se anuncian",
+				"project", proy, "error", err, "serie", nombreExportTruncado+`{kind="unreadable"}`)
+			continue
+		}
+		for _, d := range devices {
+			if !d.Revoked || d.RevokedAt.IsZero() {
+				continue
+			}
+			edad := ahora.Sub(d.RevokedAt)
+			if edad < 0 || edad > ventanaDeBajaReciente {
+				continue
+			}
+			// LA COMPUERTA ES LA DEL HISTORIAL Y NO LA NORMAL, y no es un atajo: para una máquina
+			// revocada `PuedeSobreDevice` contesta SIEMPRE que no —el kill-switch de la revocación
+			// es absoluto, y así tiene que seguir siendo para todo lo que TOQUE la máquina—. Lo que
+			// se está publicando acá no toca nada: es el hecho de que salió del inventario, que es
+			// justamente lo que hay que poder decir. `PuedeVerHistorialDeDevice` levanta ese
+			// kill-switch y NADA MÁS: misma tenencia, misma concesión. Quien podía ver esa máquina
+			// mientras vivía se entera de su baja; nadie más.
+			if !PuedeVerHistorialDeDevice(p, d, fleet.CapMetrics) {
+				continue
+			}
+			if !tipoEscrito {
+				fmt.Fprintf(b, "# HELP %s Hace cuántos segundos se dio de baja esta máquina. Existe SÓLO durante las primeras 24 h desde la revocación, y sirve para distinguir «se arregló» de «la sacamos del inventario»: sin ella, revocar resuelve todas las alertas de la máquina y del otro lado llega el mismo [RESOLVED] que produce un arreglo.\n# TYPE %s gauge\n",
+					nombreBajaReciente, nombreBajaReciente)
+				tipoEscrito = true
+			}
+			fmt.Fprintf(b, "%s{project=%q,device=%q} %d\n", nombreBajaReciente, d.ProjectID, d.Name, int64(edad.Seconds()))
+		}
+	}
+	return truncado, ilegible
+}
+
+// nombreRotacionAbierta dice que una máquina tiene una rotación de token en curso, y cuánto le
+// queda antes de abandonarse sola.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// UNA ROTACIÓN SE ABRÍA EN LA BASE Y MORÍA EN SILENCIO. El estado estaba guardado
+// —`token_sha256_nuevo` y `rotacion_vence`— y NO LO MIRABA NADIE: ni el doctor, ni el panel, ni
+// una alerta. El barrido que las abandona devuelve un número que se escribía en un log y nada
+// más.
+//
+// El modo de falla es el de siempre acá: una operación que no terminó se ve igual que una que
+// nunca empezó. Y la consecuencia concreta es que una máquina cuyo agente nunca levantó el token
+// nuevo se queda con el viejo —lo cual está BIEN a propósito, la rotación es higiene y no
+// emergencia— pero nadie se entera de que la higiene no se hizo.
+//
+// EL VALOR ES LO QUE FALTA, y no la hora de vencimiento: un timestamp absoluto obliga a restar
+// contra el reloj de quien mira, y con eso ya se equivocó `timestamp()` una vez en este repo.
+// Negativo significa que ya venció y el barrido todavía no pasó.
+//
+// El nombre NO lleva `device_` por el mismo motivo que el de las bajas: esa familia se descarta
+// del scrape y esta serie no puede viajar por el empuje sin ensanchar la tabla por máquina.
+// ────────────────────────────────────────────────────────────────────────────────────────────
+const nombreRotacionAbierta = "musubi_fleet_rotation_expires_in_seconds"
+
+// renderRotacionesAbiertas emite una línea por rotación en curso.
+func renderRotacionesAbiertas(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time) (ilegible bool) {
+	abiertas, err := engine.RotacionesAbiertas()
+	if err != nil {
+		// EL LOG YA NOMBRABA LA SERIE Y NADIE LA ENCENDÍA. Decía «serie:
+		// musubi_fleet_export_truncated{kind="unreadable"}» y después hacía `return` sin devolver
+		// nada, así que esa serie seguía en 0: el log describía un aviso que no existía. Copiar
+		// del hermano el mensaje y no el retorno es la forma exacta de la lección aprendida de un
+		// lado y no del otro.
+		logx.Error("export de flota: no se pudieron listar las rotaciones abiertas; ninguna alerta las cubre",
+			"error", err, "serie", nombreExportTruncado+`{kind="unreadable"}`)
+		return true
+	}
+	tipoEscrito := false
+	for _, r := range abiertas {
+		if r.Vence.IsZero() {
+			// Una fila con fecha ilegible es un estado que no debería existir. Se salta y se dice,
+			// en vez de emitir un número inventado que una alerta leería como un vencimiento.
+			//
+			// Y CUENTA COMO ILEGIBLE, que es lo que le faltaba: esa rotación queda SIN SERIE, así
+			// que `RotacionDeTokenSinCompletar` no la puede ver. Su ausencia y «no hay ninguna
+			// rotación en curso» se leen igual desde Prometheus, y son cosas opuestas.
+			ilegible = true
+			logx.Warn("export de flota: una rotación abierta tiene una fecha de vencimiento ilegible; esa rotación queda sin serie y ninguna alerta la cubre",
+				"device", r.Name, "project", r.ProjectID, "serie", nombreExportTruncado+`{kind="unreadable"}`)
+			continue
+		}
+		// LA COMPUERTA ES LA MISMA QUE PARA LAS MÉTRICAS DE ESA MÁQUINA. No se filtra ningún hash
+		// —esta serie no lleva ninguno— pero saber que una máquina está rotando su credencial es
+		// información de esa máquina, y no tiene por qué verla quien no la ve a ella.
+		d, hay, err := engine.DevicePorID(r.DeviceID)
+		if err != nil {
+			// SE PARTE EL `||` PORQUE MEZCLABA TRES COSAS DISTINTAS EN UN MISMO SILENCIO: «no
+			// pude leer la máquina», «la máquina no existe» y «no tenés permiso para verla». Las
+			// dos últimas son respuestas legítimas y su `continue` mudo está bien. La primera es
+			// una medición que no se pudo hacer, y salía por el mismo lugar.
+			ilegible = true
+			logx.Error("export de flota: no se pudo leer la máquina de una rotación abierta; esa rotación queda sin serie",
+				"device_id", r.DeviceID, "error", err, "serie", nombreExportTruncado+`{kind="unreadable"}`)
+			continue
+		}
+		if !hay || !PuedeSobreDevice(p, d, fleet.CapMetrics) {
+			continue
+		}
+		if !tipoEscrito {
+			fmt.Fprintf(b, "# HELP %s Segundos que le quedan a una rotación de token de dispositivo antes de abandonarse sola. NEGATIVO = ya venció y el barrido todavía no pasó. Existe SÓLO mientras hay una rotación en curso: su ausencia significa que no hay ninguna, no que esté sana.\n# TYPE %s gauge\n",
+				nombreRotacionAbierta, nombreRotacionAbierta)
+			tipoEscrito = true
+		}
+		fmt.Fprintf(b, "%s{project=%q,device=%q} %d\n",
+			nombreRotacionAbierta, r.ProjectID, r.Name, int64(r.Vence.Sub(ahora).Seconds()))
+	}
+	return ilegible
 }
 
 func renderVidaDeRed(b *strings.Builder, vistos []fleet.Device, ahora time.Time, vidaDe vidaDeRedLookup) {
@@ -392,6 +623,95 @@ func renderTruncado(b *strings.Builder, t truncadoDeExport, techoServicios int) 
 	fmt.Fprintf(b, "%s{kind=\"unreadable\"} %s\n", nombreExportTruncado, unoSi(t.Ilegible))
 }
 
+// nombreTecho es la serie que dice CUÁNTO ENTRA, y `nombreUso` cuánto se está usando.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// LOS TRES TECHOS ESTABAN TIPEADOS EN GO Y NO LLEGABAN A PROMETHEUS.
+//
+// `musubi_fleet_export_truncated` avisa que un techo CORTÓ — o sea DESPUÉS de perder cobertura,
+// con cero antelación. Y lo que se pierde no es un gráfico: son las series de las máquinas o los
+// servicios que quedaron afuera, así que sus alertas dejan de poder dispararse. El aviso llega
+// cuando el daño ya está hecho.
+//
+// Medido el 2026-09-10: `musubi-server` declara 56 servicios contra el techo de 64 del latido.
+// Quedan OCHO. Nadie tenía forma de saberlo sin entrar a mirar, y el día que se pase, la máquina
+// manda un inventario recortado que el cerebro lee como inventario COMPLETO.
+//
+// Con estas dos series el margen es una resta, y `TechoDeExportCerca` puede avisar al 80 % —antes
+// del corte y no después—. Los techos se emiten como series y no se escriben en una alerta
+// porque dos de los tres son CONFIGURABLES: un número tipeado en la regla nombraría un techo que
+// no rige, que es el defecto exacto que `describirTechoDeServicios` vino a arreglar un piso más
+// abajo.
+// ────────────────────────────────────────────────────────────────────────────────────────────
+const (
+	nombreTecho = "musubi_fleet_export_limit"
+	nombreUso   = "musubi_fleet_export_usage"
+)
+
+// proyectosDistintos cuenta cuántos tenants entraron al barrido, que es lo que se compara contra
+// el techo de `proyectosParaExportar`.
+func proyectosDistintos(vistos []fleet.Device) int {
+	p := map[string]struct{}{}
+	for _, d := range vistos {
+		p[d.ProjectID] = struct{}{}
+	}
+	return len(p)
+}
+
+// nombreReferenciaVersion dice si el cerebro puede comparar la versión de un agente contra la
+// suya. Es UNA serie y no una por máquina: es un hecho del CEREBRO.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// `agent_stale` se OMITE cuando la comparación no se puede hacer, y una de las razones está del
+// lado del cerebro: si su propia versión no se puede parsear —una cadena vacía porque el build no
+// la selló, o una de cuatro componentes que `NucleoDeVersion` no entiende— entonces
+// `VersionDelAgenteDifiere` devuelve `comparable=false` PARA TODAS LAS MÁQUINAS. La serie
+// desaparece de la flota entera y `AgenteDesactualizado` queda imposible de disparar.
+//
+// Omitir es lo correcto: marcar a toda la flota como atrasada sería culparla de un problema del
+// build propio. Lo que faltaba es que la omisión SE PUEDA VER. Es el incidente del 2026-09-09,
+// del que se arregló la causa conocida —un argumento omitido— y no la FORMA de falla, que sigue
+// viva: cualquier versión que el parser no entienda apaga el eje en silencio, con todo en verde.
+//
+// EMITIRLA POR MÁQUINA HABRÍA SIDO EL ERROR OBVIO, y lo cazaron dos guardas apenas se intentó:
+// `TestElEmpujeNoLlevaLasMetricasDelServidor` y la que compara scrape contra empuje. No es
+// telemetría de una máquina; es una propiedad del exportador, como los techos.
+//
+// Vale 0 y no se omite: acá el 0 es un hecho que el cerebro conoce con certeza sobre SÍ MISMO
+// —«no puedo parsear mi propia versión»— y no un «no se pudo medir».
+// ────────────────────────────────────────────────────────────────────────────────────────────
+const nombreReferenciaVersion = "musubi_fleet_version_reference_usable"
+
+// renderReferenciaDeVersion emite la serie de arriba. Una sola línea, sin etiquetas.
+func renderReferenciaDeVersion(b *strings.Builder, versionCerebro string) {
+	valor := 0
+	if _, ok := fleet.NucleoDeVersion(versionCerebro); ok {
+		valor = 1
+	}
+	fmt.Fprintf(b, "# HELP %s 1 si el cerebro puede parsear SU PROPIA versión y por lo tanto comparar la de cada agente; 0 si no. Con 0, musubi_fleet_device_agent_stale se omite para la FLOTA ENTERA y AgenteDesactualizado queda imposible de disparar, sin un solo error. La versión del cerebro se sella en el build.\n# TYPE %s gauge\n", nombreReferenciaVersion, nombreReferenciaVersion)
+	fmt.Fprintf(b, "%s %d\n", nombreReferenciaVersion, valor)
+}
+
+// renderTechos emite, por dimensión recortable, el techo vigente y el uso actual.
+//
+// `usoProyectos` y `usoServiciosMax` los mide el barrido que acaba de correr: el uso que importa
+// es el del PEOR proyecto, porque el techo se aplica por proyecto y un promedio escondería
+// justamente al que está por cortar.
+func renderTechos(b *strings.Builder, techoServicios, usoProyectos, usoServiciosMax int) {
+	fmt.Fprintf(b, "# HELP %s Techo vigente por dimensión recortable del export. `kind=projects` es una constante de compilación (proyectosParaExportar); `kind=services` es la perilla `fleet.services_per_project_export`; `kind=heartbeat_services` es cuántos servicios acepta UN latido (fleet.ServiciosPorLatido). AUSENTE cuando esa dimensión no tiene techo.\n# TYPE %s gauge\n", nombreTecho, nombreTecho)
+	fmt.Fprintf(b, "%s{kind=\"projects\"} %d\n", nombreTecho, proyectosParaExportar)
+	if techoServicios > 0 {
+		// SE OMITE CUANDO NO HAY TECHO, y no se emite un 0: un 0 se leería como «no entra ni un
+		// servicio», que es lo contrario de lo que significa. Ver la regla de este archivo.
+		fmt.Fprintf(b, "%s{kind=\"services\"} %d\n", nombreTecho, techoServicios)
+	}
+	fmt.Fprintf(b, "%s{kind=\"heartbeat_services\"} %d\n", nombreTecho, fleet.ServiciosPorLatido)
+
+	fmt.Fprintf(b, "# HELP %s Uso actual de cada dimensión recortable, contra el techo de %s. `kind=services` es el PEOR proyecto y no el promedio: el techo se aplica por proyecto, así que un promedio escondería justo al que está por cortar.\n# TYPE %s gauge\n", nombreUso, nombreTecho, nombreUso)
+	fmt.Fprintf(b, "%s{kind=\"projects\"} %d\n", nombreUso, usoProyectos)
+	fmt.Fprintf(b, "%s{kind=\"services\"} %d\n", nombreUso, usoServiciosMax)
+}
+
 // describirTechoDeServicios pone en palabras el techo VIGENTE, y es la ÚNICA fuente de esa frase.
 //
 // Estaba escrita adentro del Fprintf del HELP y repetida —con otro número— en el comentario que
@@ -529,6 +849,70 @@ func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration, versionCerebro
 					return 1, true
 				}
 				return 0, true
+			}},
+		// QUÉ CONTRATO DICE HABLAR ESTA MÁQUINA.
+		//
+		// ────────────────────────────────────────────────────────────────────────────────────
+		// EXISTE PORQUE DOS EJES DE ESTE PLANO SE APAGAN SOLOS Y NADIE PODÍA DECIR POR QUÉ.
+		//
+		// `services_unknown` y `services_omitted` se OMITEN cuando el agente declara un capver
+		// por debajo de `CapverConInventarioExplicado`, y eso está bien: un agente viejo no puede
+		// distinguir «enumeré y no hubo error» de «no sé enumerar», así que afirmar 0 sería una
+		// alerta PERDIDA — silenciosa, que es peor que una falsa.
+		//
+		// Pero la ausencia quedaba MUDA. Desde Prometheus, «esta máquina tiene el eje apagado
+		// porque su agente es viejo» y «esta máquina no existe» se ven igual: las dos son una
+		// serie que no está. Las dos alertas que cerraron A116 nacieron mudas para toda la flota
+		// —el Capver subió a 2 el 2026-09-10 y los agentes se cruzan a mano— y nada lo decía.
+		//
+		// Con esta serie la ausencia tiene nombre: `AgenteSinContratoDeclarado` dice que el
+		// agente no declara capver, y `AgenteConContratoViejo` dice que declara uno por debajo
+		// del que esos ejes necesitan. Un eje apagado deja de ser silencio y pasa a ser un aviso
+		// con la máquina nombrada.
+		//
+		// SE OMITE CON 0, y no es el cero que este plano prohíbe: `Capver = 0` significa
+		// literalmente «este agente no declaró nada» —lo dice `protocolo.go`— y emitirlo como
+		// número lo convertiría en «habla la versión cero», que es una afirmación que nadie hizo.
+		// Ver la regla de este archivo: AUSENTE NO ES CERO.
+		// ────────────────────────────────────────────────────────────────────────────────────
+		{"musubi_fleet_device_capver",
+			"Versión de CAPACIDADES del protocolo que declara el agente de esta máquina. NO es la versión del producto (ésa es musubi_fleet_device_agent_stale): dos builds distintos pueden hablar el mismo contrato. AUSENTE si el agente no declara ninguna —un agente anterior a la pieza, o una máquina sin agente—, porque un 0 se leería como «habla la versión cero» y lo que pasa es que nadie afirmó nada. Los ejes services_unknown y services_omitted se apagan por debajo de 2.",
+			"", true,
+			func(d fleet.Device, m *fleet.Muestra) (float64, bool) {
+				if d.Capver <= 0 {
+					return 0, false
+				}
+				return float64(d.Capver), true
+			}},
+		// HACE CUÁNTO QUE LATE EL MISMO PROCESO.
+		//
+		// ────────────────────────────────────────────────────────────────────────────────────
+		// DOS AGENTES SOBRE UNA FILA ERAN INDISTINGUIBLES DE UNO. La credencial del latido es de
+		// la MÁQUINA y no del proceso, así que dos agentes corriendo a la vez —un servicio más
+		// una corrida a mano, una instalación duplicada, un zombi del binario renombrado—
+		// escriben los dos sobre la misma fila y el cerebro ve un único agente sano.
+		//
+		// ESTA SERIE LOS SEPARA SIN INFERIR NADA. Con UN agente, la marca se escribe al arrancar
+		// y esta serie crece sin parar. Con DOS alternándose, cada latido trae un emisor distinto
+		// del guardado, la marca vuelve a cero, y la serie se queda pegada al cero para siempre.
+		//
+		// ASÍ SE CERRÓ A92 CON EL PROBLEMA TODAVÍA PUESTO: el diagnóstico se hizo midiendo la
+		// CADENCIA —un diente de sierra de 37,8 s contra 25,8 s del vecino—, una inferencia sobre
+		// un efecto de segundo orden que sólo se puede hacer mirando a mano y sabiendo de
+		// antemano que hay que mirar.
+		//
+		// AUSENTE si el agente no declara emisor (un binario anterior a la pieza) o si nunca
+		// latió. Un 0 ahí sería idéntico a «dos agentes peleándose», que es justo lo contrario de
+		// lo que pasa: nadie afirmó nada.
+		// ────────────────────────────────────────────────────────────────────────────────────
+		{"musubi_fleet_device_emitter_stable_seconds",
+			"Hace cuántos segundos que late el MISMO proceso sobre esta fila. Crece mientras haya un solo agente; se queda cerca de CERO si hay dos alternándose, porque cada uno pisa la marca del otro. AUSENTE si el agente no declara su emisor (binario anterior a capver 3) — un 0 ahí sería indistinguible de dos agentes peleándose.",
+			"s", false,
+			func(d fleet.Device, _ *fleet.Muestra) (float64, bool) {
+				if d.Emisor == "" || d.EmisorDesde.IsZero() {
+					return 0, false
+				}
+				return ahora.Sub(d.EmisorDesde).Seconds(), true
 			}},
 		// CUÁNTOS SERVICIOS NO ENTRARON EN EL ÚLTIMO INVENTARIO (A116).
 		//

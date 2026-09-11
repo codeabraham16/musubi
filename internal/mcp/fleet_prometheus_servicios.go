@@ -343,12 +343,24 @@ func labelsDeServicio(sv fleet.Servicio, d fleet.Device) [][2]string {
 // bufferea este bloque, emite la serie de truncado en su lugar de siempre y después vuelca el
 // buffer. Mismo orden byte a byte, un barrido en vez de dos, y —lo que importa— un solo lugar
 // donde puede perderse el hecho de que un proyecto no se pudo leer.
-func renderServicios(b *strings.Builder, engine memory.StorageBackend, vistos []fleet.Device, ahora time.Time, techo int) (truncado bool, ilegible bool) {
+// renderServicios devuelve, además de los dos hechos del recorte, CUÁNTOS servicios tiene el
+// proyecto que más tiene — el peor, y no el promedio: el techo se aplica por proyecto, así que un
+// promedio escondería justamente al que está por cortar.
+func renderServicios(b *strings.Builder, engine memory.StorageBackend, vistos []fleet.Device, ahora time.Time, techo int) (truncado bool, ilegible bool, peorProyecto int) {
 	svs, truncado, ilegible := serviciosVisiblesParaMetricas(engine, vistos, techo)
+	porProyecto := map[string]int{}
+	for _, e := range svs {
+		porProyecto[e.d.ProjectID]++
+	}
+	for _, n := range porProyecto {
+		if n > peorProyecto {
+			peorProyecto = n
+		}
+	}
 	if len(svs) == 0 {
 		// Los hechos salen igual: «no exporté ni un servicio» no borra «no pude leer un
 		// proyecto». Un `return` pelado acá sería otra forma del mismo cero que miente.
-		return truncado, ilegible
+		return truncado, ilegible, peorProyecto
 	}
 	if truncado {
 		// EL COMENTARIO SE QUEDA PERO YA NO ES LA SEÑAL: Prometheus descarta las líneas `#` al
@@ -361,7 +373,7 @@ func renderServicios(b *strings.Builder, engine memory.StorageBackend, vistos []
 	for _, s := range seriesDeServicio() {
 		escribirGaugeDeServicios(b, svs, s, ahora)
 	}
-	return truncado, ilegible
+	return truncado, ilegible, peorProyecto
 }
 
 func escribirGaugeDeServicios(b *strings.Builder, svs []servicioExportable, s serieDeServicio, ahora time.Time) {

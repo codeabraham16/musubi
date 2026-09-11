@@ -298,13 +298,75 @@ groups:
       # Si el scrape pierde sus concesiones (alguien editó principals.yaml, se revocó el token),
       # TODAS las series de flota desaparecen y las alertas de arriba dejan de disparar — sin
       # que nada falle. Una alerta que se apaga sola es peor que no tenerla.
+      # --- EL TECHO AVISA ANTES DE CORTAR, Y NO DESPUÉS ---
+      #
+      # `musubi_fleet_export_truncated` dice que un techo YA cortó: llega cuando la cobertura ya
+      # se perdió, y lo que se pierde no es un gráfico — son las series de las máquinas o los
+      # servicios que quedaron afuera, así que SUS alertas dejan de poder dispararse.
+      #
+      # Los tres techos estaban tipeados en Go y no llegaban a Prometheus, así que el margen sólo
+      # se podía ver entrando a mirar. Medido el 2026-09-10: `musubi-server` declara 56 servicios
+      # contra el techo de 64 del latido. Quedaban OCHO, y nadie tenía forma de saberlo.
+      #
+      # El 80 % da margen para actuar: subir la perilla, partir un proyecto, o declarar menos
+      # servicios. Es `warning` y no `critical` porque todavía no se perdió nada.
+      # --- EL CEREBRO NO PUEDE COMPARAR VERSIONES, Y ESO APAGA UN EJE ENTERO ---
+      #
+      # `musubi_fleet_device_agent_stale` se OMITE cuando la comparación no se puede hacer. Del
+      # lado del AGENTE eso es normal (un Tier B no tiene versión que comparar). Del lado del
+      # CEREBRO es un incidente: si su propia versión no se parsea —vacía porque el build no la
+      # selló, o de cuatro componentes— la serie desaparece de la FLOTA ENTERA y
+      # `AgenteDesactualizado` queda imposible de disparar.
+      #
+      # Es el incidente del 2026-09-09, del que se arregló la causa conocida y no la forma de
+      # falla. `critical` porque no se ve: el tablero queda entero en verde y el eje apagado.
+      - alert: CerebroSinReferenciaDeVersion
+        expr: musubi_fleet_version_reference_usable == 0
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "El cerebro no puede parsear su propia versión: NADIE vigila si los agentes están atrasados."
+          nota: "`musubi_fleet_device_agent_stale` se omite para la flota entera, así que AgenteDesactualizado no puede dispararse — y el tablero queda en verde. Casi siempre es un binario construido sin los ldflags de versión (`deploy/construir.sh` los pone). Comprobalo con `musubi version` en el cerebro."
+
+      - alert: TechoDeExportCerca
+        expr: musubi_fleet_export_usage / on(kind) musubi_fleet_export_limit > 0.8
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "El export de flota va al {{ $value | humanizePercentage }} del techo de {{ $labels.kind }}."
+          nota: "Cuando llegue al 100 % el exportador RECORTA, y lo que queda afuera no tiene serie: sus alertas no pueden dispararse. `kind=projects` se sube en `proyectosParaExportar` (constante de compilación, hay que recompilar); `kind=services` con la perilla `fleet.services_per_project_export`. El techo del latido (`kind=heartbeat_services`) no tiene perilla: es `fleet.ServiciosPorLatido` y una máquina que lo pase manda un inventario recortado que el cerebro lee como completo."
+
       - alert: FlotaSinTelemetria
         expr: absent(musubi_fleet_device_up)
         for: 15m
         labels: { severity: critical }
         annotations:
-          summary: "No llega NINGUNA métrica de flota: el resto de las alertas de flota están ciegas."
-          nota: "Revisá la sección `fleet:` del principal del scrape en .musubi/principals.yaml. Ver deploy/prometheus/prometheus.yml."
+          summary: "No llega NINGUNA métrica de flota POR EL EMPUJE: el resto de las alertas de flota están ciegas."
+          nota: "`musubi_fleet_device_up` llega SÓLO por el empuje OTLP (prometheus.yml descarta esa familia del scrape a propósito). Así que esto apunta al empujador: `MusubiPushOTLPFallando`, `MusubiPushOTLPMudo` y `MusubiPushOTLPNuncaLlego` dicen por qué. La mitad del SCRAPE la vigila FlotaSinTelemetriaDelScrape."
+
+      # --- Y LA OTRA MITAD, QUE ESTA ALERTA NO PODÍA VER ---
+      #
+      # `FlotaSinTelemetria` mira `musubi_fleet_device_up`, que por decisión de `prometheus.yml`
+      # llega SÓLO por el empuje OTLP: esa familia se descarta del scrape para que no haya dos
+      # productores del mismo dato. O sea que la alerta que dice «no llega NINGUNA métrica de
+      # flota» era ciega a la mitad de las formas de no tenerla.
+      #
+      # Y SU PROPIA NOTA APUNTABA A LA MITAD QUE NO VE. Decía «revisá la sección `fleet:` del
+      # principal del scrape» — que es exactamente la causa que NO puede detectar: con esa
+      # concesión sacada, `/metrics` deja de traer las series de flota, el scrape sigue en `up==1`
+      # (así que `MusubiDown` tampoco dice nada), y `device_up` sigue llegando por el empuje.
+      # Todo verde, y la mitad del plano de flota apagada.
+      #
+      # `musubi_fleet_export_truncated` es el canario correcto: el exportador la emite SIEMPRE
+      # —0 cuando no recortó, 1 cuando sí— y es una de las cinco series que viajan sólo por el
+      # scrape, así que su ausencia no puede deberse al empujador.
+      - alert: FlotaSinTelemetriaDelScrape
+        expr: absent(musubi_fleet_export_truncated)
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "El scrape del cerebro no trae NINGUNA métrica de flota, aunque el target esté arriba."
+          nota: "Revisá la sección `fleet:` del principal del scrape en .musubi/principals.yaml. Con el target en `up==1` y esta serie ausente, la causa es de PERMISOS o de que el plano de flota no está en el binario desplegado — no del empujador. Ver deploy/prometheus/prometheus.yml."
 
       # --- EL AGENTE SE QUEDÓ ATRÁS (A68) ---
       #
@@ -412,13 +474,29 @@ groups:
       #
       # `for: 30m` sobre una ventana de 6 h: la caída tiene que sostenerse, para no disparar por un
       # hueco de un scrape.
+      # EL DELTA VA POR MÁQUINA, ANTES DEL `min by(project)`. No es una preferencia de forma: con
+      # el delta sobre la serie agregada, ESTA ALERTA DISPARABA EN CADA ENROLAMIENTO.
+      #
+      # `musubi:project_up:cobertura30d` es `min by(project)` de la cobertura de cada máquina, y
+      # la cobertura de una máquina recién enrolada arranca en CERO —no tiene historia todavía—.
+      # O sea que sumar una máquina hunde el mínimo del proyecto de golpe, el delta a 6 h da unos
+      # -0,9, y suena una alerta que dice «se perdió medición» sobre un evento que es lo contrario:
+      # entró una máquina más a medirse.
+      #
+      # Y LA PREMISA ESCRITA EN SU PROPIA NOTA ERA FALSA PARA LA SERIE QUE MIRABA. Dice «mientras
+      # el TSDB acumula historia la cobertura sólo sube, así que esto es una pérdida»: cierto POR
+      # MÁQUINA, falso para el mínimo del proyecto, que baja cada vez que aparece una nueva.
+      #
+      # Tomado por máquina, el caso se resuelve solo: la cobertura de una máquina nueva sólo SUBE
+      # desde cero, así que su delta es positivo y no dispara nunca. Y como consecuencia buena, la
+      # alerta ahora dice CUÁL máquina perdió medición, no sólo qué proyecto.
       - alert: CoberturaDelSlaSeCayo
-        expr: delta(musubi:project_up:cobertura30d[6h]) < -0.05
+        expr: delta(musubi:device_up:cobertura30d[6h]) < -0.05
         for: 30m
         labels: { severity: warning }
         annotations:
-          summary: "La cobertura del SLA de {{ $labels.project }} cayó más de 5 puntos en 6 horas."
-          nota: "Mientras el TSDB acumula historia la cobertura sólo sube, así que esto es una pérdida: revisá si Prometheus perdió datos, si el scrape del cerebro se cortó, o si las recording rules se recargaron con otra definición. Las series `:sla30d` van a DESAPARECER si la cobertura baja de 0,95, y eso es lo que evita publicar un número que no se puede sostener. Ver deploy/RUNBOOK.md#coberturadelslasecayo"
+          summary: "La cobertura del SLA de {{ $labels.device }} ({{ $labels.project }}) cayó más de 5 puntos en 6 horas."
+          nota: "Mientras el TSDB acumula historia la cobertura de UNA máquina sólo sube, así que esto es una pérdida real (el delta se toma por máquina justamente para que enrolar una nueva no dispare esto): revisá si Prometheus perdió datos, si el scrape del cerebro se cortó, o si las recording rules se recargaron con otra definición. Las series `:sla30d` van a DESAPARECER si la cobertura baja de 0,95, y eso es lo que evita publicar un número que no se puede sostener. Ver deploy/RUNBOOK.md#coberturadelslasecayo"
 
       # Y LA HERMANA, SOBRE SERVICIOS. ES LA MITAD QUE FALTABA, Y ES LA QUE SE FACTURA (A93).
       #
@@ -459,13 +537,16 @@ groups:
       # `min` hacia abajo, igual que una máquina recién enrolada arrastra el de la alerta de arriba:
       # el runbook lo pone primero en la lista para no salir a buscar una pérdida de datos que no
       # hubo.
+      # EL HERMANO EXACTO, con el mismo arreglo: el delta por servicio, antes del `min by(project)`.
+      # Un servicio declarado por primera vez arranca con cobertura cero igual que una máquina
+      # nueva, así que declarar un servicio hacía sonar «se perdió medición».
       - alert: CoberturaDelSlaDeServiciosSeCayo
-        expr: delta(musubi:project_service_up:cobertura30d[6h]) < -0.05
+        expr: delta(musubi:service_up:cobertura30d[6h]) < -0.05
         for: 30m
         labels: { severity: warning }
         annotations:
-          summary: "La cobertura del SLA de SERVICIOS de {{ $labels.project }} cayó más de 5 puntos en 6 horas."
-          nota: "Es el otro número que se le factura al cliente, y la cobertura sólo sube mientras el TSDB acumula historia: una caída es una pérdida. Antes de buscarla, descartá lo barato — un servicio recién declarado entra con cobertura 0 y arrastra el min del proyecto. Si no es eso, revisá si Prometheus perdió datos, si el scrape del cerebro se cortó, o si las recording rules se recargaron con otra definición. `musubi:service_up:sla30d` va a DESAPARECER donde la cobertura baje de 0,95. Ver deploy/RUNBOOK.md#coberturadelsladeserviciossecayo"
+          summary: "La cobertura del SLA del servicio {{ $labels.service }} en {{ $labels.device }} ({{ $labels.project }}) cayó más de 5 puntos en 6 horas."
+          nota: "Es el otro número que se le factura al cliente, y la cobertura de UN servicio sólo sube mientras el TSDB acumula historia: una caída es una pérdida. Ya NO hace falta descartar el servicio recién declarado: el delta se toma por servicio, y uno nuevo arranca en 0 y sólo sube, así que su delta es positivo. Revisá si Prometheus perdió datos, si el scrape del cerebro se cortó, o si las recording rules se recargaron con otra definición. `musubi:service_up:sla30d` va a DESAPARECER donde la cobertura baje de 0,95. Ver deploy/RUNBOOK.md#coberturadelsladeserviciossecayo"
 
       - alert: PoliticaFrenadaPorConsentimiento
         expr: increase(musubi_fleet_policy_actions_total{result=~"consentimiento_.*"}[24h]) > 0
@@ -567,6 +648,175 @@ groups:
       #
       # Lo único que se veía era `ServicioSinNoticias` a los 30 minutos, multiplicado por cada
       # servicio conocido, y sin la causa. Esta alerta es UNA, llega antes, y la nombra.
+      # --- EL EJE APAGADO TIENE NOMBRE (y antes era silencio) ---
+      #
+      # `MaquinaNoPuedeEnumerar` y `ServiciosRecortados` dependen de series que el exportador
+      # OMITE cuando el agente declara un capver por debajo de 2. La omisión es correcta —un
+      # agente viejo no puede distinguir «enumeré bien» de «no sé enumerar», y afirmar 0 sería una
+      # alerta PERDIDA— pero desde Prometheus la ausencia era muda: «el eje está apagado porque el
+      # agente es viejo» y «esta máquina no existe» se ven exactamente igual.
+      #
+      # Las dos alertas que cerraron A116 nacieron así, mudas para toda la flota: el Capver subió
+      # a 2 el 2026-09-10 y los binarios de los agentes se cruzan A MANO, máquina por máquina.
+      #
+      # Estas dos le ponen nombre a esa ausencia. No reemplazan a `AgenteDesactualizado`, que
+      # compara la VERSIÓN del producto: dos builds distintos pueden hablar el mismo contrato, y
+      # es justo lo que permite desplegar sin romper.
+      - alert: AgenteSinContratoDeclarado
+        expr: >-
+          musubi_fleet_device_up{tier="A"} == 1
+          unless on(project, device) musubi_fleet_device_capver
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "El agente de {{ $labels.device }} no declara qué contrato habla: los ejes de inventario están apagados ahí."
+          nota: "El agente es anterior a la pieza de capver. Mientras no declare, `musubi_fleet_device_services_unknown` y `services_omitted` NO se emiten para esta máquina, así que MaquinaNoPuedeEnumerar y ServiciosRecortados no pueden dispararse sobre ella — no por estar sanas, sino por ignorancia. Se arregla actualizando el agente: deploy/actualizar-agente-windows.sh."
+
+      - alert: AgenteConContratoViejo
+        expr: >-
+          musubi_fleet_device_capver < 2
+          unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "El agente de {{ $labels.device }} declara capver {{ $value }} y los ejes de inventario necesitan 2."
+          nota: "Mismo efecto que AgenteSinContratoDeclarado: los ejes que A116 cerró están apagados en esta máquina. La diferencia es que ésta SÍ declara, así que se sabe exactamente qué le falta."
+
+      # --- DOS AGENTES SOBRE UNA FILA ---
+      #
+      # La credencial del latido es de la MÁQUINA y no del proceso, así que dos agentes corriendo
+      # a la vez —un servicio más una corrida a mano, una instalación duplicada, un zombi del
+      # binario renombrado— escriben los dos sobre la misma fila. El cerebro veía un único agente
+      # sano latiendo el doble de seguido.
+      #
+      # Así se cerró A92 con el problema todavía puesto: el diagnóstico se hizo midiendo la
+      # CADENCIA —un diente de sierra de 37,8 s contra 25,8 s del vecino—, una inferencia sobre un
+      # efecto de segundo orden que sólo se puede hacer mirando a mano y sabiendo de antemano que
+      # hay que mirar.
+      #
+      # `musubi_fleet_device_emitter_stable_seconds` lo dice sin inferir nada: con UN agente
+      # crece sin parar; con dos alternándose cada uno pisa la marca del otro y se queda pegada al
+      # cero. El umbral de 10 min con `for: 30m` deja pasar los reinicios legítimos —un agente que
+      # arranca empieza en cero y a los 10 minutos ya salió de la zona— y no deja pasar dos
+      # agentes, que no salen nunca.
+      # --- LA MÁQUINA SE DIO DE BAJA (y por eso se callaron sus alertas) ---
+      #
+      # Revocar una máquina la saca del export: sus series se vuelven obsoletas y TODAS sus
+      # alertas se resuelven solas. Del otro lado del canal, «se arregló» y «la sacamos del
+      # inventario» llegaban como el MISMO `[RESOLVED]`, sin una palabra que los distinga — y
+      # quien lo lee concluye que el problema se atendió. La máquina con el disco lleno que se dio
+      # de baja sin arreglar quedaba cerrada en la cabeza de todos.
+      #
+      # ES `info` Y NO UNA ADVERTENCIA: no hay nada que arreglar. Existe para que el aviso VIAJE
+      # POR EL MISMO CANAL que las resoluciones que la baja produjo, y llegue junto con ellas.
+      #
+      # `for: 0m` a propósito: el valor de este aviso es llegar AL MISMO TIEMPO que los resolved,
+      # y cualquier espera lo deja llegando después — cuando ya nadie está mirando ese hilo.
+      # --- UNA CREDENCIAL QUE NO PUEDE ROTAR NUNCA ---
+      #
+      # `musubi_fleet_device_token_rotable` existe desde A88 y NO LA LEÍA NINGUNA REGLA. Vale 0
+      # cuando el agente recibió su credencial por VARIABLE DE ENTORNO, y eso no es una molestia:
+      # es que la rotación de esa máquina NO SE PUEDE COMPLETAR NUNCA. Un proceso no puede
+      # reescribir su propio entorno, así que el token nuevo llega, el agente no lo puede guardar,
+      # y a las 24 h la rotación se abandona sola. Para siempre, en cada intento.
+      #
+      # Y EL COSTO NO TERMINA AHÍ: con la credencial en el entorno, cualquier proceso del mismo
+      # usuario la lee, y sobrevive a que alguien arregle el archivo. Es el mecanismo exacto de
+      # A88, mirado desde el otro lado.
+      #
+      # El arreglo es del LANZADOR, no del agente: tiene que pasar `MUSUBI_DEVICE_TOKEN_FILE` con
+      # la RUTA del archivo en vez de meter el valor en el entorno.
+      #
+      # AUSENTE significa «el agente no lo reporta» (binario viejo) y ahí la alerta no dispara: un
+      # 0 inventado acusaría a la máquina de algo que nadie midió.
+      - alert: CredencialQueNoPuedeRotar
+        expr: >-
+          musubi_fleet_device_token_rotable == 0
+          unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 6h
+        labels: { severity: warning }
+        annotations:
+          summary: "La credencial de {{ $labels.device }} vino por VARIABLE de entorno: su rotación no se puede completar nunca."
+          nota: "Un proceso no puede reescribir su propio entorno, así que el token nuevo llega, el agente no lo puede guardar, y la rotación se abandona sola a las 24 h — en cada intento, para siempre. Y mientras tanto la credencial vive en el entorno del proceso, donde la lee cualquier proceso del mismo usuario. Se arregla en el LANZADOR: que pase `MUSUBI_DEVICE_TOKEN_FILE` con la RUTA del archivo. En Windows lo migra `deploy/actualizar-agente-windows.sh`."
+
+      # --- UNA ROTACIÓN DE TOKEN QUE NADIE COMPLETA ---
+      #
+      # El estado estaba guardado en la base desde siempre y NO LO MIRABA NADIE: ni el doctor, ni
+      # el panel, ni una alerta. El barrido que las abandona devuelve un número que se escribía en
+      # un log y nada más. Una operación que no terminó se veía igual que una que nunca empezó.
+      #
+      # ABANDONARLA NO ROMPE NADA —la rotación es HIGIENE y no emergencia: el agente se queda con
+      # el token viejo, que es el estado que ya había, y si un token se filtró lo que corresponde
+      # es REVOCAR, que es instantáneo y no depende de que el agente coopere—. Lo que sí pasa es
+      # que la higiene no se hizo, y hasta ahora nadie se enteraba.
+      #
+      # Dispara con 6 h de margen: da tiempo a mirar por qué el agente no levantó el token nuevo
+      # antes de que la ventana se cierre sola.
+      # LA VENTANA DE MANTENIMIENTO LA CALLA, y acá el caso es directo: reinstalar el agente es
+      # mantenimiento, y un agente que se está reinstalando no va a completar ninguna rotación.
+      # Sin la guarda, arreglar dispara la alarma.
+      # --- LA MISMA MÁQUINA LLEGANDO DOS VECES ---
+      #
+      # `prometheus.yml` descarta `musubi_fleet_(device|service)_.*` del scrape justamente para
+      # que cada dato tenga UN SOLO PRODUCTOR: esa familia llega por el empuje OTLP. Si el
+      # descarte se saca, se comenta, o se despliega un `prometheus.yml` viejo, cada máquina
+      # empieza a llegar DOS veces con `instance` distinto.
+      #
+      # Y NO SE VE COMO UN ERROR: se ve como que todo anda. Cada regla de flota matchea dos series
+      # y cada alerta sale DUPLICADA — medido acá el 2026-08-28 al encender el empuje: 5 alertas,
+      # 10 avisos. Peor todavía, el `min` del SLA se queda con el camino MUERTO: así fue como el
+      # «peor equipo» del reporte marcó 10,2 % cuando la misma máquina, por el camino vivo, estaba
+      # en 84,7 %.
+      #
+      # LAS RECORDING RULES YA LO COLAPSAN con `max by(...)`, y eso arregló el reporte — pero no
+      # DETECTA nada: la duplicación sigue ahí, invisible, y cualquier regla nueva escrita contra
+      # la familia cruda vuelve a disparar doble. Esta alerta mira la causa y no el síntoma.
+      #
+      # `for: 1h` porque durante una transición legítima —encender el empuje, cambiar el
+      # descarte— las series viejas conviven con las nuevas hasta que caducan. Una hora deja pasar
+      # eso y no deja pasar una configuración mal desplegada.
+      - alert: LaMismaMaquinaLlegaDosVeces
+        expr: >-
+          count by(project, device) (musubi_fleet_device_up) > 1
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.device }} llega {{ $value }} veces a Prometheus: cada alerta suya va a salir duplicada."
+          nota: "Revisá el `metric_relabel_configs` de `deploy/prometheus/prometheus.yml`: tiene que descartar `musubi_fleet_(device|service)_.*` en el job del cerebro, porque esa familia llega por el empuje OTLP. Sin ese descarte cada dato tiene DOS productores. Mirá los valores de `instance`: `musubi-brain` es el scrape y `musubi-otlp-push` el empuje."
+
+      - alert: RotacionDeTokenSinCompletar
+        expr: >-
+          musubi_fleet_rotation_expires_in_seconds < 21600
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "La rotación del token de {{ $labels.device }} lleva abierta demasiado: le quedan {{ $value | humanizeDuration }}."
+          nota: "El agente tiene que latir con el token NUEVO para que la rotación se cierre; mientras no lo haga, sigue valiendo el viejo. Si la máquina no está latiendo, la rotación no es el problema. Si late y no completa, revisá que su credencial venga por ARCHIVO y no por variable de entorno (`musubi_fleet_device_token_rotable`): un proceso no puede reescribir su propio entorno, así que con `variable` la rotación NO se puede completar nunca."
+
+      - alert: MaquinaRevocada
+        expr: musubi_fleet_revoked_ago_seconds >= 0
+        for: 0m
+        labels: { severity: info }
+        annotations:
+          summary: "{{ $labels.device }} se dio de BAJA del inventario: sus alertas se van a resolver solas, y no porque se hayan arreglado."
+          nota: "Este aviso existe para que las resoluciones que vas a ver de esta máquina no se lean como arreglos. Si la diste de baja con algo sin resolver —un disco lleno, un servicio caído— eso sigue igual: la máquina salió del inventario, el problema no. La serie dura 24 h y después desaparece sola."
+
+      - alert: DosAgentesSobreLaMismaMaquina
+        expr: >-
+          musubi_fleet_device_emitter_stable_seconds < 600
+          unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "El proceso que late por {{ $labels.device }} cambia todo el tiempo: hay más de un agente corriendo."
+          nota: "Media hora sin que el emisor se estabilice no es un reinicio: son dos procesos pisándose. Mirá si quedó un `musubi agent` a mano además del servicio, una segunda instalación, o un zombi de `musubi.exe.viejo` (deploy/matar-zombis-agente.sh). Dos agentes duplican los comandos que ejecuta la máquina y hacen que el inventario se pise."
+
       - alert: MaquinaNoPuedeEnumerar
         # EL `device_up == 0` NO ES OPCIONAL, y lo cazó `TestNingunaAlertaDeMuestraDisparaSobreUnaMaquinaCaida`
         # cuando esta alerta se escribió sin él: la serie se CONGELA cuando la máquina muere, así
@@ -646,9 +896,20 @@ groups:
         # Y LA VENTANA DE MANTENIMIENTO TAMBIÉN LA CALLA: reinstalar el agente es mantenimiento, y
         # un agente recién puesto late (`device_up == 1`) ANTES de haber enumerado nada — que es
         # exactamente la condición de esta regla. Sin la guarda, arreglar dispara la alarma.
+        # CUENTA `service_declared` Y NO `service_up`, y la diferencia es un falso positivo entero.
+        #
+        # `musubi_fleet_service_up` se OMITE para los servicios en estado `ocioso` (A70) y
+        # `desconocido`: son afirmaciones que no se pueden hacer. O sea que una máquina que reportó
+        # su inventario COMPLETO, con todos sus servicios ociosos o sin estado conocido, no produce
+        # ni una serie `service_up` — y esta regla la acusaba de «no decir qué corre adentro».
+        #
+        # `musubi_fleet_service_declared` vale 1 SIEMPRE que el servicio esté declarado en la
+        # máquina, y su propio HELP dice que existe justamente para que esa ausencia se pueda
+        # nombrar. Contar la que se omite para preguntar «¿reportó inventario?» es preguntarle a la
+        # serie equivocada.
         expr: >-
           (musubi_fleet_device_up{tier="A"} == 1)
-            unless on(project, device) count by(project, device) (musubi_fleet_service_up)
+            unless on(project, device) count by(project, device) (musubi_fleet_service_declared)
             unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 15m
         labels:
@@ -753,7 +1014,7 @@ groups:
         # no es el del repo». Son dos fallas distintas con el mismo arreglo, así que van juntas.
         expr: >-
           absent(sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts\\.yml;.*"}))
-          or sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts\\.yml;.*"}) != 23
+          or sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts\\.yml;.*"}) != 28
         for: 30m
         labels: { severity: warning }
         annotations:

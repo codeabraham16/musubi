@@ -1285,6 +1285,27 @@ func TestElPlazoDeCadaAlertaSobreUnaSerieGrabadaEsAlcanzable(t *testing.T) {
 // seriesSinLectorConMotivo: por qué estas series NO tienen alerta. Cada entrada es una decisión
 // tomada, con su argumento, no una excepción para que la prueba pase.
 var seriesSinLectorConMotivo = map[string]string{
+	"musubi:project_up:cobertura30d": "" +
+		"ES EL NÚMERO DEL REPORTE, Y SU CAÍDA LA VIGILA OTRA SERIE. Hasta el 2026-09-11 la leía " +
+		"`CoberturaDelSlaSeCayo` con un `delta(...[6h]) < -0.05`, y esa alerta DISPARABA EN CADA " +
+		"ENROLAMIENTO: esta serie es `min by(project)` de la cobertura de cada máquina, y una " +
+		"máquina recién enrolada entra con cobertura CERO —todavía no tiene historia—, así que " +
+		"sumar una máquina hundía el mínimo del proyecto unos 0,9 de golpe. La premisa escrita en " +
+		"la nota de esa alerta («la cobertura sólo sube mientras el TSDB acumula historia») es " +
+		"cierta POR MÁQUINA y falsa para el mínimo de un conjunto que crece. El delta se mudó a " +
+		"`musubi:device_up:cobertura30d`, donde la premisa sí vale y además se sabe CUÁL máquina " +
+		"perdió medición. Esta serie se conserva porque es la cobertura que se le informa al " +
+		"cliente —el peor equipo del proyecto—, y lo que le falta no es una alerta: es el " +
+		"CONSUMIDOR del reporte.",
+	"musubi:project_service_up:cobertura30d": "" +
+		"LA HERMANA EXACTA DE `musubi:project_up:cobertura30d`, y por el mismo motivo: la leía " +
+		"`CoberturaDelSlaDeServiciosSeCayo`, y un servicio recién declarado entra con cobertura " +
+		"cero y arrastraba el mínimo del proyecto. La nota de esa alerta llegó a documentar el " +
+		"falso positivo como un paso de diagnóstico —«descartá lo barato: un servicio recién " +
+		"declarado arrastra el min»—, o sea que estaba visto, aceptado y convertido en trabajo " +
+		"manual para quien la atendiera. El delta se mudó a `musubi:service_up:cobertura30d`. " +
+		"Esta serie queda como el número de servicios que se le factura al cliente, y le falta " +
+		"el mismo consumidor de reporte que a su hermana.",
 	"musubi:project_up:min30d": "" +
 		"EL PEOR EQUIPO DEL CLIENTE, Y NO LE CORRESPONDE ALERTA. (a) Una alerta de NIVEL sobre un " +
 		"promedio de 30 días no es accionable: ningún arreglo baja un mes de historia, la única " +

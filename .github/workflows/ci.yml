@@ -323,7 +323,26 @@ jobs:
       - name: Recall gate (R@10)
         env:
           MUSUBI_POTION_DIR: ${{ github.workspace }}/.musubi/embeddings/potion-multilingual-128M
-        run: go test ./internal/recalleval/ -run TestSemanticVsLexicalReal -count=1 -v
+        # SE EXIGE EL `--- PASS`, Y NO ALCANZA CON EL CODIGO DE SALIDA.
+        #
+        # Esta compuerta tenia DOS formas de pasar sin medir nada, y las dos devuelven 0:
+        #
+        #   1. `go test -run` con un nombre que no matchea corre CERO pruebas y sale 0. Un
+        #      renombre de rutina apagaba el gate y CI seguia verde. Eso ahora lo caza
+        #      `TestCadaCompuertaDeCINombraUnTestQueExiste`, en el job `test`.
+        #   2. El test hace `t.Skip` si `MUSUBI_POTION_DIR` no esta seteado. Si el cache miss y
+        #      la descarga fallaran dejando el directorio vacio, el test se saltea y el job pasa
+        #      igual: el piso de R@10 deja de vigilarse sin que nadie se entere.
+        #
+        # Exigir la linea `--- PASS` cierra las dos: un skip imprime `--- SKIP` y un cero-tests no
+        # imprime nada.
+        run: |
+          set -o pipefail
+          go test ./internal/recalleval/ -run TestSemanticVsLexicalReal -count=1 -v | tee recall-gate.txt
+          grep -q -- '--- PASS: TestSemanticVsLexicalReal' recall-gate.txt || {
+            echo "::error::el gate de recall NO EJECUTO TestSemanticVsLexicalReal (se salteo, o el nombre ya no existe). Un verde de este job sin esa linea no mide el piso de R@10."
+            exit 1
+          }
 
   lint:
     runs-on: ubuntu-latest

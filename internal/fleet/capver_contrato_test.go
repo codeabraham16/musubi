@@ -62,14 +62,61 @@ import (
 // existe justamente porque una afirmación que nadie midió costó una alerta. La ausencia se
 // declara acá en vez de rellenarse.
 var pinesDelCuerpoLatido = map[int]string{
-	2: "1e0f6546c2e95f8143ba0e7930fcf0297078b7634821c72a3390e71b8ba1002d",
+	// RE-FIJADO el 2026-09-11 SIN SUBIR CAPVER, y la distinción importa: el contrato NO se movió.
+	// Lo que cambió es lo que la huella MIDE — antes se quedaba en `muestra|json.RawMessage` y
+	// ahora baja adentro de `fleet.Muestra`. Subir Capver por esto habría sido declarar un cambio
+	// de contrato que no existió, y habría dejado fuera de banda a agentes que hablan exactamente
+	// lo mismo. El pin viejo era `1e0f6546…`; se reemplaza porque medía de menos, no porque haya
+	// quedado obsoleto.
+	2: "65eb52424c6bdb8d2b77ff474ca71dd1b8bdd16304ea3fd0f8d7284baff52097",
+	// 3 · 2026-09-11 · El latido lleva `emisor`, el identificador opaco del PROCESO que late.
+	3: "f718b53cd8125a572a0fc96575679d0ee3ffc0b27ab4053043026f0c05180750",
 }
 
-// huellaDelCuerpoLatido devuelve la huella del conjunto de campos QUE VIAJAN, y la lista con la
-// que se calculó — la lista va en el mensaje de error porque un sha que cambió no dice QUÉ cambió.
-func huellaDelCuerpoLatido() (string, []string) {
-	t := reflect.TypeOf(fleet.CuerpoLatido{})
-	var campos []string
+// pinesDeLaRespuesta es LA VUELTA DEL CABLE: lo que el cerebro le contesta al agente.
+//
+// No existía. `buildid.go` afirma que Capver gobierna «el contrato entre una máquina y el
+// cerebro», y sólo estaba fijada la IDA. Un campo nuevo en `RespuestaLatido` produce el mismo
+// incidente que produjo la ida: dos binarios declarando el mismo capver y entendiendo cosas
+// distintas, sin que el cerebro tenga forma de distinguirlos.
+var pinesDeLaRespuesta = map[int]string{
+	2: "75b412b4124f13ac0b2fc548e578308852ec8209bf209acf83cfac84d7056e76",
+	// 3 · La respuesta NO cambió en este bump —el campo nuevo viaja sólo de ida— y el pin se
+	// repite a propósito: sin una entrada para el capver vigente, la guarda se queda comparando
+	// contra la del capver anterior y un cambio futuro de la vuelta pasaría desapercibido.
+	3: "75b412b4124f13ac0b2fc548e578308852ec8209bf209acf83cfac84d7056e76",
+}
+
+// loQueLlevaCadaRawMessage dice qué viaja ADENTRO de un campo declarado `json.RawMessage`.
+//
+// ESTO ES LO QUE LE FALTABA AL PIN, Y ERA EL AGUJERO ENTERO. `CuerpoLatido.Muestra` está tipado
+// como `json.RawMessage` —a propósito, para poder pesarla CRUDA contra su propio techo— así que
+// la huella veía `muestra|json.RawMessage` y NADA MÁS. Agregarle un campo a `fleet.Muestra` —que
+// es telemetría que el cerebro parsea y de la que dependen reglas de alerta— no movía el sha y no
+// pedía ningún bump de Capver. El pin fijaba el SOBRE y no lo que viaja adentro.
+//
+// Y es justo el campo que más se mueve: cada dimensión nueva que se mide entra por ahí.
+var loQueLlevaCadaRawMessage = map[string]reflect.Type{
+	"muestra": reflect.TypeOf(fleet.Muestra{}),
+}
+
+// huellaDeLaForma arma la lista de campos que VIAJAN de un tipo, bajando a los tipos anidados.
+//
+// BAJA RECURSIVAMENTE porque el contrato no termina en el primer nivel: un campo nuevo adentro de
+// una estructura anidada se ve igual del otro lado que uno nuevo arriba, y el parser del cerebro
+// lo tiene que entender igual. `profundidad` corta las estructuras recursivas: sin ese tope, un
+// tipo que se referencia a sí mismo colgaría la prueba en vez de fallarla.
+func huellaDeLaForma(t reflect.Type, prefijo string, profundidad int, campos *[]string) {
+	if profundidad > 6 {
+		*campos = append(*campos, prefijo+"|...corte por profundidad")
+		return
+	}
+	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return
+	}
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
 		if f.PkgPath != "" {
@@ -82,13 +129,46 @@ func huellaDelCuerpoLatido() (string, []string) {
 		if tag == "" {
 			tag = f.Name // sin tag, encoding/json usa el nombre
 		}
-		campos = append(campos, tag+"|"+f.Type.String())
+		if coma := strings.Index(tag, ","); coma >= 0 {
+			// Las opciones del tag (`omitempty`) NO son contrato: no cambian qué entiende el otro
+			// lado, sólo si el campo aparece cuando está vacío.
+			tag = tag[:coma]
+		}
+		nombre := prefijo + tag
+		*campos = append(*campos, nombre+"|"+f.Type.String())
+
+		if adentro, hay := loQueLlevaCadaRawMessage[tag]; hay {
+			huellaDeLaForma(adentro, nombre+".", profundidad+1, campos)
+			continue
+		}
+		huellaDeLaForma(f.Type, nombre+".", profundidad+1, campos)
 	}
+}
+
+// huellaDeUnTipo devuelve la huella del conjunto de campos QUE VIAJAN, y la lista con la que se
+// calculó — la lista va en el mensaje de error porque un sha que cambió no dice QUÉ cambió.
+func huellaDeUnTipo(t reflect.Type) (string, []string) {
+	var campos []string
+	huellaDeLaForma(t, "", 0, &campos)
 	// ORDENADO: el orden de declaración no se ve del otro lado, así que mover un campo de lugar
 	// no es un cambio de contrato y no tiene por qué pedir un bump.
 	sort.Strings(campos)
 	suma := sha256.Sum256([]byte(strings.Join(campos, "\n")))
 	return hex.EncodeToString(suma[:]), campos
+}
+
+func huellaDelCuerpoLatido() (string, []string) {
+	return huellaDeUnTipo(reflect.TypeOf(fleet.CuerpoLatido{}))
+}
+
+// huellaDeLaRespuesta es LA OTRA DIRECCIÓN DEL CABLE, que no miraba nadie.
+//
+// `buildid.go` dice que Capver gobierna «el contrato entre una máquina y el cerebro», y un
+// contrato tiene dos puntas: lo que el agente manda y lo que el cerebro contesta. Sólo la ida
+// estaba fijada. Un campo nuevo en `RespuestaLatido` —o uno que cambia de tipo— es exactamente el
+// mismo modo de falla: dos binarios declarando el mismo capver y entendiendo cosas distintas.
+func huellaDeLaRespuesta() (string, []string) {
+	return huellaDeUnTipo(reflect.TypeOf(fleet.RespuestaLatido{}))
 }
 
 func TestElCapverSubeCuandoSeMueveElContratoDelLatido(t *testing.T) {
@@ -124,6 +204,36 @@ func TestElCapverSubeCuandoSeMueveElContratoDelLatido(t *testing.T) {
 			"Y OJO CON `CapverMin`: subir `Capver` NO retira soporte; retirarlo es mover `CapverMin`, "+
 			"que es otra decisión y tiene su propia bitácora.",
 			buildid.Capver, fijado, pinesDelCuerpoLatido[fijado], huella,
+			strings.Join(campos, "\n    "), buildid.Capver+1, buildid.Capver+1, huella)
+	}
+}
+
+// LA VUELTA DEL CABLE TAMBIÉN SE FIJA.
+//
+// Sabotaje que la hace fallar: agregarle un campo a `fleet.RespuestaLatido` sin subir Capver.
+func TestElCapverSubeCuandoSeMueveLaRespuestaDelCerebro(t *testing.T) {
+	huella, campos := huellaDeLaRespuesta()
+
+	fijado := 0
+	for capver := range pinesDeLaRespuesta {
+		if capver <= buildid.Capver && capver > fijado {
+			fijado = capver
+		}
+	}
+	if fijado == 0 {
+		t.Fatalf("no hay ningún pin de la RESPUESTA para un capver <= %d: esta guarda no tiene "+
+			"contra qué comparar.\nHuella actual: %s", buildid.Capver, huella)
+	}
+	if pinesDeLaRespuesta[fijado] != huella {
+		t.Errorf("LA RESPUESTA DEL CEREBRO CAMBIÓ Y `buildid.Capver` SIGUE EN %d.\n\n"+
+			"  esperado (pin del capver %d): %s\n"+
+			"  actual:                       %s\n\n"+
+			"Campos que viajan hoy (tag json | tipo):\n    %s\n\n"+
+			"Un contrato tiene DOS puntas. Lo que el agente manda ya estaba fijado; esto es lo que "+
+			"el cerebro contesta, y produce el mismo incidente: dos binarios con el mismo capver "+
+			"entendiendo cosas distintas.\n"+
+			"Subí `buildid.Capver` a %d con su línea de bitácora, y agregá `%d: \"%s\"` acá.",
+			buildid.Capver, fijado, pinesDeLaRespuesta[fijado], huella,
 			strings.Join(campos, "\n    "), buildid.Capver+1, buildid.Capver+1, huella)
 	}
 }

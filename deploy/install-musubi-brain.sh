@@ -39,7 +39,7 @@ PORT="${BRAIN_ADDR##*:}"
 # script (main no tiene branch protection), así que no verificaría nada. El pin vive acá, en el
 # archivo que el operador ya confía porque lo corre con sudo desde su clone. Si cambiás
 # deploy/musubi-backup.sh, actualizá este valor: sha256sum deploy/musubi-backup.sh
-BACKUP_SHA256="631b9bdbe55851911ec02f46724595eddcbf70a35973a6bfe692229024e44498"
+BACKUP_SHA256="e18add80c762b668c2220183afa3d50220eb75c6c2d22b9a5379c223a647dc72"
 BACKUP_SCRIPT_URL="https://raw.githubusercontent.com/$MUSUBI_REPO/main/deploy/musubi-backup.sh"
 BACKUP_BIN="/usr/local/bin/musubi-backup"
 # Las unidades del timer, en variables y no escritas en el `cat >`: así el paso 5b se puede

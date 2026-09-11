@@ -106,12 +106,14 @@ func leerDisco(m *Muestra) {
 	if err := syscall.Statfs("/", &st); err != nil {
 		return
 	}
-	tam := uint64(st.Bsize)
-	m.DiscoTotal = st.Blocks * tam
-	if st.Blocks >= st.Bfree {
-		m.DiscoUsado = (st.Blocks - st.Bfree) * tam
+	// LA REGLA DE LOS PARES VIVE EN `disco.go`, y no acá: la tenían macOS y Windows, y este
+	// colector —el que corre en el cerebro— fijaba el total sin condición y el usado con una,
+	// así que un statfs incoherente dejaba un 0 % ocupado que se lee como «disco vacío».
+	col, ok := ColumnasDeDiscoUnix(st.Blocks, st.Bfree, st.Bavail, uint64(st.Bsize))
+	if !ok {
+		return
 	}
-	m.DiscoDisponible = st.Bavail * tam
+	m.DiscoTotal, m.DiscoUsado, m.DiscoDisponible = col.Total, col.Usado, col.Disponible
 }
 
 // leerZonasTermicas devuelve una línea por zona, `<type> <miligrados>`.

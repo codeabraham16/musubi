@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"musubi/internal/config"
@@ -233,5 +234,103 @@ func mustExec(t *testing.T, db *sql.DB, query string, args ...any) {
 	t.Helper()
 	if _, err := db.Exec(query, args...); err != nil {
 		t.Fatalf("exec %q: %v", query, err)
+	}
+}
+
+// TestDosMigracionesConElMismoNumeroNoSeAplicanAMedias — el modo de falla que dos ramas abiertas
+// producen solas, y que el runner atendía con un `continue` mudo.
+//
+// CÓMO PASA, y no es hipotético: el 2026-09-11 dos PRs abiertos declaraban los dos una migración
+// 54. Cada rama estaba bien sola. Git auto-mergea las dos entradas porque se agregan AL FINAL del
+// slice y no se pisan, así que no hay conflicto que revisar. Y `applyMigrations` hacía
+// `if m.version <= current { continue }`: aplicaba la primera 54, `current` quedaba en 54, y la
+// segunda entraba al `continue`.
+//
+// LO QUE ESO DEJA NO ES UNA BASE ROTA, ES UNA BASE INCOMPLETA EN VERDE. Sin error, sin warning, y
+// `user_version` en 55 afirmando que se aplicó todo — así que el arranque siguiente tampoco
+// reintenta. La mitad que falta se descubre meses después, cuando alguien consulta una columna que
+// nunca se creó.
+//
+// Sabotaje que la pone roja: sacar el bucle de «estrictamente creciente» del principio de
+// `applyMigrations`.
+func TestDosMigracionesConElMismoNumeroNoSeAplicanAMedias(t *testing.T) {
+	nada := func(execQuerier) error { return nil }
+
+	for _, c := range []struct {
+		nombre  string
+		migs    []migration
+		enError string
+		porque  string
+	}{
+		{
+			"dos veces el mismo número",
+			[]migration{
+				{version: 1, name: "baseline", up: func(x execQuerier) error { return initSchemaOn(x) }},
+				{version: 2, name: "de-la-rama-a", up: nada},
+				{version: 2, name: "de-la-rama-b", up: nada},
+			},
+			"DOS VECES",
+			"aplicaría sólo la primera y saltearía la segunda en silencio, dejando la base incompleta con user_version diciendo que se aplicó todo",
+		},
+		{
+			"una migración fuera de orden",
+			[]migration{
+				{version: 1, name: "baseline", up: func(x execQuerier) error { return initSchemaOn(x) }},
+				{version: 3, name: "adelantada", up: nada},
+				{version: 2, name: "la-que-quedo-atras", up: nada},
+			},
+			"orden creciente",
+			"el runner saltea toda migración con versión menor o igual a la ya aplicada, así que la de atrás no correría nunca",
+		},
+	} {
+		t.Run(c.nombre, func(t *testing.T) {
+			db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "dup.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+
+			err = applyMigrations(db, c.migs)
+			if err == nil {
+				t.Fatalf("el runner aceptó la lista y no tendría que hacerlo: %s", c.porque)
+			}
+			if !strings.Contains(err.Error(), c.enError) {
+				t.Errorf("el error no dice qué pasó (%q no contiene %q). Quien lo lea a las 3 de la "+
+					"mañana tiene que saber que son DOS entradas y cuál renumerar:\n  %v", err.Error(), c.enError, err)
+			}
+			// Y NO TOCÓ LA BASE. Negarse después de haber aplicado la mitad sería el mismo
+			// problema con otro nombre.
+			var v int
+			if err := db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
+				t.Fatal(err)
+			}
+			if v != 0 {
+				t.Errorf("el runner se negó pero ya había migrado hasta user_version=%d: la revisión "+
+					"tiene que correr ANTES de tocar la base", v)
+			}
+		})
+	}
+}
+
+// TestLasMigracionesDelRepoEstanEnOrdenYSinRepetir — la misma pregunta, sobre la lista de VERDAD.
+//
+// Es la que caza el merge malo ANTES de que se construya un binario: la de arriba prueba que el
+// runner se niega, ésta prueba que no tiene por qué negarse hoy. Las dos hacen falta — un runner
+// que se niega bien sobre una lista rota deja el repo sin arrancar, y eso se descubre tarde.
+func TestLasMigracionesDelRepoEstanEnOrdenYSinRepetir(t *testing.T) {
+	migs := schemaMigrations()
+	if len(migs) < 50 {
+		t.Fatalf("sólo se leyeron %d migraciones; cambió la forma de `schemaMigrations` y esta guarda dejó de mirar", len(migs))
+	}
+	for i := 1; i < len(migs); i++ {
+		if migs[i].version > migs[i-1].version {
+			continue
+		}
+		t.Fatalf("la migración %d (%q) no es mayor que la anterior, %d (%q).\n"+
+			"  Si son iguales, casi seguro es un merge de dos ramas que agregaron una cada una al "+
+			"final del archivo: git no marca conflicto porque no se pisan.\n"+
+			"  Renumerá la que tenga menos datos atrás —un índice se renumera gratis; una que "+
+			"escribe columnas, no— y NO recicles el número libre.",
+			migs[i].version, migs[i].name, migs[i-1].version, migs[i-1].name)
 	}
 }

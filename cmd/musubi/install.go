@@ -136,8 +136,10 @@ func installGlobalWindows() {
 	// del binario) vía PowerShell. MUSUBI_BIN hace que el .mcp.json portable resuelva el
 	// binario aunque cambie la ruta o el usuario: al reinstalar se re-setea y todos los
 	// proyectos vuelven a funcionar sin tocar sus .mcp.json.
-	psDir := "'" + strings.ReplaceAll(installDir, "'", "''") + "'"
-	psBin := "'" + strings.ReplaceAll(dest, "'", "''") + "'"
+	// LA TERCERA COPIA DE LA REGLA, ahora compartida. Tenía `strings.ReplaceAll(x, "'", "''")`
+	// escrito a mano — la misma regla que `escaparPS`, sin prueba, en el camino que menos se mira.
+	psDir := "'" + escaparPS(installDir) + "'"
+	psBin := "'" + escaparPS(dest) + "'"
 	ps := fmt.Sprintf(`$d=%s; $p=[Environment]::GetEnvironmentVariable('Path','User'); if ($p -notlike "*$d*") { [Environment]::SetEnvironmentVariable('Path', "$p;$d", 'User') }; [Environment]::SetEnvironmentVariable('MUSUBI_BIN', %s, 'User'); 'PATH y MUSUBI_BIN actualizados'`, psDir, psBin)
 	out, err := exec.Command("powershell", "-NoProfile", "-Command", ps).CombinedOutput()
 	if err != nil {

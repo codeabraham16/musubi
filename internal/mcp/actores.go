@@ -69,10 +69,10 @@ func (s *McpServer) handlerActores(opt httpOptions) http.HandlerFunc {
 		}
 		var principal *Principal
 		if opt.registry != nil {
-			p, ok := opt.registry.resolve(bearerToken(r.Header.Get("Authorization")))
+			// EL CANDADO, por `autenticarPersona`: esta puerta autenticaba con el mismo registro
+			// que `/mcp` y no tenía ningún límite de intentos.
+			p, ok := autenticarPersona(opt, w, r)
 			if !ok {
-				w.Header().Set("WWW-Authenticate", "Bearer")
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
 			principal = p

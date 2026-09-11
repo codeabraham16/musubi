@@ -123,6 +123,91 @@ type httpOptions struct {
 	// la frontera es el tailnet. Es la contraparte de `musubi fetch` (canal de update por la
 	// malla). Vacío ⇒ la ruta no se registra.
 	bodyDir string
+	// candado es el limitador anti fuerza-bruta COMPARTIDO por todas las puertas.
+	//
+	// COMPARTIDO A PROPÓSITO: limitadores separados dejarían que alguien gaste su cuota en una
+	// puerta y siga entero en la otra. Lo pone `HTTPHandler`; nil significa SIN LÍMITE, que es el
+	// comportamiento que tenían siete puertas hasta hoy —`/metrics`, `/api/actores`, `/api/flota`,
+	// `/api/stream` y las tres del relay de shell— y que sólo es aceptable en una prueba que arme
+	// el handler a mano.
+	candado *authLimiter
+	// metricas y auditoria son los contadores y la bitácora de autenticación. Los tenía SÓLO
+	// `/mcp`: las otras siete puertas rechazaban credenciales sin dejar rastro en ningún lado.
+	metricas  *serverMetrics
+	auditoria *registroDeAuth
+}
+
+// autenticarPersona resuelve el principal del request y aplica el candado EN EL ORDEN CORRECTO.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// LA CREDENCIAL PRIMERO, LA IP DESPUÉS. Al revés, el candado se convierte en una negación de
+// servicio: un cliente roto que comparte IP con una persona le agota los intentos y la deja
+// afuera con su credencial válida en la mano. Pasó de verdad (A88) y costó horas de diagnóstico.
+//
+// Mirar el token primero no le regala nada a quien prueba: `resolve()` es un hash y una
+// comparación en tiempo constante, sin I/O ni escrituras, y una credencial que ACIERTA no es un
+// ataque por definición.
+//
+// EXISTE PARA QUE LAS SIETE PUERTAS QUE NO TENÍAN CANDADO LO TENGAN SIN COPIAR LA REGLA. Escribir
+// el orden ocho veces es escribirlo mal una vez: es exactamente cómo las tres puertas de flota se
+// quedaron con el orden viejo cuando `/mcp` se arregló.
+// ────────────────────────────────────────────────────────────────────────────────────────────
+func autenticarPersona(opt httpOptions, w http.ResponseWriter, r *http.Request) (*Principal, bool) {
+	bearer := bearerToken(r.Header.Get("Authorization"))
+	var p *Principal
+	ok := false
+	switch {
+	case opt.registry != nil:
+		p, ok = opt.registry.resolve(bearer)
+	case opt.token != "":
+		// Modo legacy: un único bearer, sin identidad por principal.
+		ok = validBearer(r.Header.Get("Authorization"), opt.token)
+	default:
+		return nil, true // ni registro ni token: confianza local, igual que el resto
+	}
+	ip := clientIP(r)
+	if ok {
+		if opt.candado != nil {
+			opt.candado.reset(ip)
+		}
+		return p, true
+	}
+
+	// LA ATRIBUCIÓN VA AL LOG Y NO A UNA ETIQUETA DE LA MÉTRICA: una serie por IP es cardinalidad
+	// sin techo, y encima la escribiría el atacante.
+	//
+	// Y ESTO LO TENÍA SÓLO `/mcp`. Las otras siete puertas rechazaban credenciales sin dejar
+	// rastro: un barrido contra `/metrics` o contra el relay de shell no aparecía en ninguna
+	// auditoría ni movía ningún contador. Unificarlas acá no fue sólo ponerles el candado — les
+	// dio la bitácora que `/mcp` tenía hace meses.
+	ahora := time.Now()
+	motivo := motivoCredencialDesconocida
+	if bearer == "" {
+		motivo = motivoSinCredencial
+	}
+	if opt.metricas != nil {
+		if bearer == "" {
+			opt.metricas.authSinCredencial.Add(1)
+		} else {
+			opt.metricas.authDesconocida.Add(1)
+		}
+	}
+	if opt.auditoria != nil {
+		opt.auditoria.fallo(ahora, ip, motivo, r.URL.Path, r.Header.Get("User-Agent"))
+	}
+	if opt.candado != nil {
+		opt.candado.fail(ip, ahora)
+		if opt.candado.locked(ip, ahora) {
+			if opt.metricas != nil {
+				opt.metricas.authBloqueado.Add(1)
+			}
+			http.Error(w, "too many failed auth attempts", http.StatusTooManyRequests)
+			return nil, false
+		}
+	}
+	w.Header().Set("WWW-Authenticate", "Bearer")
+	http.Error(w, "unauthorized", http.StatusUnauthorized)
+	return nil, false
 }
 
 // HTTPHandler devuelve el http.Handler que sirve MCP sobre HTTP. POST /mcp recibe un
@@ -139,6 +224,11 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 	limiter := newAuthLimiter(5, time.Minute)
 	// Quién está fallando (A88): una línea por IP por minuto, con el conteo de las calladas.
 	auditoriaAuth := nuevoRegistroDeAuth(time.Minute, 1024)
+	// LAS TRES PIEZAS VIAJAN EN `opt` para que TODAS las puertas usen las mismas. Antes vivían
+	// capturadas en la clausura de `/mcp`, así que sólo esa puerta contaba, auditaba y limitaba.
+	opt.candado = limiter
+	opt.metricas = metrics
+	opt.auditoria = auditoriaAuth
 	mux := http.NewServeMux()
 
 	// Endpoint MCP, envuelto en observabilidad (correlation ID + métricas por resultado).
@@ -169,40 +259,13 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 		// comparación en tiempo constante, sin I/O ni escrituras, y una credencial que ACIERTA no
 		// es un ataque por definición. El que falla sigue viendo 429 cuando agota sus intentos, y
 		// un 429 no distingue «token equivocado» de «IP castigada», así que tampoco aprende nada.
-		authActive := opt.registry != nil || opt.token != ""
-		ip := clientIP(r)
-		var principal *Principal
-		if authActive {
-			bearer := bearerToken(r.Header.Get("Authorization"))
-			ok := false
-			if opt.registry != nil {
-				principal, ok = opt.registry.resolve(bearer)
-			} else {
-				ok = validBearer(r.Header.Get("Authorization"), opt.token)
-			}
-			if !ok {
-				ahora := time.Now()
-				motivo := motivoCredencialDesconocida
-				if bearer == "" {
-					motivo = motivoSinCredencial
-					metrics.authSinCredencial.Add(1)
-				} else {
-					metrics.authDesconocida.Add(1)
-				}
-				limiter.fail(ip, ahora)
-				// La atribución va al LOG y no a una etiqueta de la métrica: una serie por IP es
-				// cardinalidad sin techo, y encima la escribiría el atacante.
-				auditoriaAuth.fallo(ahora, ip, motivo, r.URL.Path, r.Header.Get("User-Agent"))
-				if limiter.locked(ip, ahora) {
-					metrics.authBloqueado.Add(1)
-					http.Error(w, "too many failed auth attempts", http.StatusTooManyRequests)
-					return
-				}
-				w.Header().Set("WWW-Authenticate", "Bearer")
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
-			limiter.reset(ip)
+		// LA MISMA PUERTA QUE LAS OTRAS SIETE. Este bloque era el ÚNICO que hacía las cuatro cosas
+		// bien —resolver primero, castigar después, contar y auditar— y estaba escrito acá adentro,
+		// así que las demás puertas no tenían nada de eso. Mudarlo a `autenticarPersona` es lo que
+		// hace imposible que la próxima puerta nazca sin ellas.
+		principal, ok := autenticarPersona(opt, w, r)
+		if !ok {
+			return
 		}
 		if r.Method == http.MethodGet {
 			// SSE reservado: no hay tráfico server-initiated en esta versión.
@@ -292,9 +355,10 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 		// incluye telemetría POR MÁQUINA, y qué máquinas se ven depende de quién scrapea.
 		var quien *Principal
 		if opt.registry != nil {
-			p, ok := opt.registry.resolve(bearerToken(r.Header.Get("Authorization")))
+			// EL CANDADO VA ACÁ TAMBIÉN. `/metrics` autentica con el mismo registro que `/mcp` y
+			// no tenía ningún límite: era una superficie para probar credenciales sin castigo.
+			p, ok := autenticarPersona(opt, w, r)
 			if !ok {
-				deny()
 				return
 			}
 			quien = p
@@ -357,10 +421,10 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 		}
 		var principal *Principal
 		if opt.registry != nil {
-			p, ok := opt.registry.resolve(bearerToken(r.Header.Get("Authorization")))
+			// EL CANDADO, por `autenticarPersona`: esta puerta autenticaba con el mismo registro
+			// que `/mcp` y no tenía ningún límite de intentos.
+			p, ok := autenticarPersona(opt, w, r)
 			if !ok {
-				w.Header().Set("WWW-Authenticate", "Bearer")
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
 			principal = p

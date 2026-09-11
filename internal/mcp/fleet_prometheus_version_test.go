@@ -114,7 +114,19 @@ func TestConElCerebroSinVersionNoSeMarcaAtrasadaANadie(t *testing.T) {
 
 	var b strings.Builder
 	renderFlota(&b, s.engine, nil, time.Now(), s.sondaIntervalo, "dev", nil, serviciosPorProyectoDefault)
-	if strings.Contains(b.String(), "musubi_fleet_device_agent_stale") {
+	// SE BUSCA LA LÍNEA DE LA SERIE Y NO EL NOMBRE SUELTO. Buscar el nombre en todo el dump la
+	// satisface cualquier `# HELP` de OTRA serie que la mencione — y hay una que la menciona a
+	// propósito, para explicar que su ausencia apaga este eje. Una guarda que se dispara con la
+	// documentación de su propio tema no mide lo que dice medir.
+	hayLinea := false
+	for _, l := range strings.Split(b.String(), "\n") {
+		if strings.HasPrefix(l, "musubi_fleet_device_agent_stale{") ||
+			strings.HasPrefix(l, "musubi_fleet_device_agent_stale ") {
+			hayLinea = true
+			break
+		}
+	}
+	if hayLinea {
 		t.Errorf("con el cerebro en `dev` se exporta agent_stale igual: la flota entera quedaría "+
 			"marcada por un binario propio construido sin ldflags\n%s", b.String())
 	}

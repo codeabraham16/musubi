@@ -10,14 +10,13 @@ package mcp
 // que es exactamente lo que pasó al encender el empuje OTLP.
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
 
 func leerScrapeDeAltura(t *testing.T) string {
 	t.Helper()
-	b, err := os.ReadFile("../../deploy/prometheus/scrapes/altura-db.yml.ejemplo")
+	b, err := leerArchivoDeDespliegue("../../deploy/prometheus/scrapes/altura-db.yml.ejemplo")
 	if err != nil {
 		t.Fatalf("falta el scrape de Altura: %v", err)
 	}
@@ -33,7 +32,7 @@ func leerScrapeDeAltura(t *testing.T) string {
 //
 // Sabotaje que la hace fallar: sacar el bloque `scrape_config_files` de prometheus.yml.
 func TestElScrapeDeSitioLoCargaPrometheusDeVerdad(t *testing.T) {
-	b, err := os.ReadFile("../../deploy/prometheus/prometheus.yml")
+	b, err := leerArchivoDeDespliegue("../../deploy/prometheus/prometheus.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +135,7 @@ func TestLaCredencialDelScrapeVaPorReferencia(t *testing.T) {
 //
 // Sabotaje que la hace fallar: reemplazar la métrica del denominador por un 400 literal.
 func TestElUmbralDelPoolerNoTieneElTechoTipeado(t *testing.T) {
-	b, err := os.ReadFile("../../deploy/musubi-alerts-altura.yml")
+	b, err := leerArchivoDeDespliegue("../../deploy/musubi-alerts-altura.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
