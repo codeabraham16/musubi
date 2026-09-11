@@ -28,6 +28,61 @@ import (
 )
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
+// (0) DÓNDE MIDE CADA MODO, CLAVADO A MANO. Es el único lugar del paquete donde se escribe.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+// TestLosSistemasDondeCadaModoMideSonLosQueSeDeclaran — la guarda que las dos sondas NO pueden ser.
+//
+// EL PROBLEMA, Y ES UNA TRAMPA FINA. Las sondas de más abajo preguntan «¿salteó donde no debía?»
+// usando `ElSistemaDondeCorren` y `LosSistemasDondeElArnesSeSostiene` — LAS MISMAS constantes que
+// la compuerta usa para decidir. O sea que derivan su expectativa de su propio sujeto: si alguien
+// mueve la constante, la sonda mueve la pregunta con ella y sigue en verde.
+//
+// MEDIDO, y el agujero era mío: poniendo `LosSistemasDondeElArnesSeSostiene = []string{"windows"}`,
+// `TestLaCompuertaUnixNoSalteaDondeElArnesSeSostiene` queda VERDE en linux —cree que acá tiene que
+// saltear, y saltea— mientras las cuatro pruebas de `internal/mcp` que corren los guiones de
+// deploy empiezan a SALTEARSE de verdad. La cobertura se apaga entera y nadie se entera.
+//
+// LA SALIDA NO ES DERIVARLO MEJOR: ES CLAVARLO. «Los guiones de deploy/ corren en un servidor
+// Linux» y «el arnés de stubs se sostiene en linux y en macOS pero no en Windows» son HECHOS del
+// mundo, no valores calculados. Un hecho se escribe una vez, a mano, en el lugar donde cambiarlo
+// obliga a justificarlo — y todo lo demás se deriva de ahí. Es la otra cara de «un derivado
+// escrito a mano es una copia»: el problema no era escribir a mano, era escribir a mano lo que se
+// deduce. Esto no se deduce de nada.
+//
+// Sabotaje que la pone roja: mover cualquiera de las dos constantes.
+func TestLosSistemasDondeCadaModoMideSonLosQueSeDeclaran(t *testing.T) {
+	if ElSistemaDondeCorren != "linux" {
+		t.Errorf("ElSistemaDondeCorren es %q y tiene que ser \"linux\".\n"+
+			"  Lo que `guiones.Exigir` custodia son pruebas que CORREN los instaladores de "+
+			"deploy/, y lo que esos instaladores dejan son unidades systemd de un servidor Linux, "+
+			"con useradd y /etc. Moviendo esta constante, las sondas de abajo mueven su expectativa "+
+			"con ella y siguen en verde mientras la cobertura se apaga entera.", ElSistemaDondeCorren)
+	}
+
+	quiere := map[string]bool{"linux": true, "darwin": true}
+	visto := map[string]bool{}
+	for _, s := range LosSistemasDondeElArnesSeSostiene {
+		visto[s] = true
+	}
+	if visto["windows"] {
+		t.Error("LosSistemasDondeElArnesSeSostiene incluye \"windows\", y ahí el arnés NO se sostiene: " +
+			"está medido en CI que el `:` de `C:\\` parte el PATH, que un stub sin `.exe` no se " +
+			"ejecuta, y que por eso el guion SALIÓ A LA URL REAL del release (exit 22 de curl). " +
+			"Declararlo medible ahí pone en rojo un job por algo que no es el producto.")
+	}
+	for s := range quiere {
+		if !visto[s] {
+			t.Errorf("LosSistemasDondeElArnesSeSostiene NO incluye %q, y tiene que incluirlo.\n"+
+				"  linux es donde corren los guiones y donde gatea el merge; darwin es donde vive el "+
+				"defecto que estas pruebas cazan —el `${VAR}` pegada a un carácter no-ASCII que mata "+
+				"el guion en bash 3.2 y en Linux es INVISIBLE—. Sacar darwin de acá cierra el defecto "+
+				"y apaga a su único testigo en el mismo commit.", s)
+		}
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
 // (1) EN LINUX NO SALTEA. No se le cree al `if`: se corre.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -72,6 +127,62 @@ func TestLaCompuertaNuncaSalteaEnLinux(t *testing.T) {
 	}
 }
 
+// elArnesSeSostieneAca contesta si ESTE sistema es uno de los que `Unix` declara medibles.
+//
+// Se deriva de `LosSistemasDondeElArnesSeSostiene` y no se tipea la lista de vuelta: una copia
+// escrita a mano acá diría «darwin mide» el día que la compuerta dejara de medir en darwin, y la
+// prueba pasaría en verde sobre la contradicción.
+func elArnesSeSostieneAca() bool {
+	for _, sistema := range LosSistemasDondeElArnesSeSostiene {
+		if runtime.GOOS == sistema {
+			return true
+		}
+	}
+	return false
+}
+
+// TestLaCompuertaUnixNoSalteaDondeElArnesSeSostiene — la sonda del tercer modo, en los dos sentidos.
+//
+// LO QUE ESTÁ EN JUEGO, y es la razón de que `Unix` exista: las pruebas que corren
+// `verificar-despliegue.sh` cazan defectos que en Linux SON INVISIBLES —el `${VAR}` pegada a un
+// carácter no-ASCII que mata el guion en el bash 3.2 de macOS: había cinco y cuatro llevaban meses
+// sin verse—. Si `Unix` salteara en darwin, el defecto quedaría cerrado y su única plataforma
+// testigo apagada en el mismo commit. Por eso la sonda mide darwin con el mismo rigor que linux.
+//
+// SE PREGUNTA POR UN DATO DE LA CORRIDA, igual que la sonda de `Exigir`: `t.Skipf` hace
+// `runtime.Goexit()`, así que «¿salteó?» se contesta mirando si el cuerpo siguió — no el texto del
+// mensaje, y no `t.Skipped()`, que en `go test` cuenta como éxito.
+//
+// SABOTAJE QUE LA PONE EN ROJO (verificado): en compuerta.go, cambiar el `for` sobre
+// `LosSistemasDondeElArnesSeSostiene` por `if runtime.GOOS == ElSistemaDondeCorren`. En linux
+// sigue verde y en macOS muere — que es exactamente el defecto que este modo vino a evitar.
+func TestLaCompuertaUnixNoSalteaDondeElArnesSeSostiene(t *testing.T) {
+	siguio := false
+	t.Run("sonda", func(t *testing.T) {
+		Unix(t, "la sonda del modo Unix ejecuta bash para comprobar que no saltea ni en linux ni en macOS", "bash")
+		siguio = true
+		if err := exec.Command("bash", "-c", ":").Run(); err != nil {
+			t.Fatalf("la compuerta dejó pasar y bash no se pudo ejecutar: %v", err)
+		}
+	})
+
+	if elArnesSeSostieneAca() {
+		if !siguio {
+			t.Fatalf("guiones.Unix SALTEÓ en %s. Los sistemas donde declara medir son %s, y en ésos "+
+				"no puede saltear NUNCA: una herramienta que falta es un FALLO, porque «no pude "+
+				"medir» no puede contestar lo mismo que «medí y está bien».",
+				runtime.GOOS, strings.Join(LosSistemasDondeElArnesSeSostiene, " y "))
+		}
+		return
+	}
+	// En windows el contrato es el opuesto y también se comprueba: si un día dejara pasar ahí, el
+	// arnés saldría a internet (exit 22 de curl) en vez de saltear.
+	if siguio {
+		t.Fatalf("guiones.Unix DEJÓ PASAR en %s/%s, donde el arnés no se sostiene: el `:` de `C:\\` "+
+			"parte el PATH y el stub sin `.exe` no se ejecuta.", runtime.GOOS, runtime.GOARCH)
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // (2) LOS DOS USOS PROHIBIDOS ROMPEN DE VERDAD
 // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -88,6 +199,23 @@ func TestAyudanteDeUsoIndebido(t *testing.T) {
 		Exigir(t, "porque si", "bash")
 	case "sin-herramientas":
 		Exigir(t, "un motivo perfectamente redactado y de largo suficiente para pasar el filtro")
+	case "unix-sin-motivo":
+		Unix(t, "porque si", "bash")
+	case "unix-sin-herramientas":
+		Unix(t, "un motivo perfectamente redactado y de largo suficiente para pasar el filtro")
+	// LAS DOS PUNTAS DE LA LISTA DE HERRAMIENTAS. Los llamadores reales declaran de tres a seis
+	// (`"bash", "git", "python3", "od"`), y las sondas de arriba declaran UNA sola: con una lista
+	// de largo 1, recorrerla entera y recorrer `herramientas[1:]` son indistinguibles. Estos dos
+	// casos ponen la herramienta inexistente en cada extremo, así que saltear cualquiera de las
+	// dos puntas se ve.
+	case "falta-la-primera":
+		Exigir(t, "declara una herramienta inexistente en primer lugar para que saltearse el principio de la lista se vea", "musubi-herramienta-inexistente-zz", "bash")
+	case "falta-la-ultima":
+		Exigir(t, "declara una herramienta inexistente en último lugar para que saltearse el final de la lista se vea", "bash", "musubi-herramienta-inexistente-zz")
+	case "unix-falta-la-primera":
+		Unix(t, "declara una herramienta inexistente en primer lugar para que saltearse el principio de la lista se vea", "musubi-herramienta-inexistente-zz", "bash")
+	case "unix-falta-la-ultima":
+		Unix(t, "declara una herramienta inexistente en último lugar para que saltearse el final de la lista se vea", "bash", "musubi-herramienta-inexistente-zz")
 	default:
 		// En una corrida normal pasa por la compuerta y ejecuta una shell como cualquiera de las
 		// pruebas que ésta custodia. No es adorno: así queda del lado correcto de la guarda de
@@ -111,21 +239,80 @@ func TestAyudanteDeUsoIndebido(t *testing.T) {
 // Y CADA CASO EXIGE QUE FALLE EN CUALQUIER PLATAFORMA: el uso indebido no puede quedar en un
 // `skip` cómodo en windows.
 func TestUnUsoIndebidoDeLaCompuertaEsUnFallo(t *testing.T) {
+	// `mide` dice EN QUÉ PLATAFORMAS este caso tiene que hacer morir al hijo.
+	//
+	// LOS DOS CONTROLES DE USO —motivo pobre, cero herramientas— MUEREN EN LAS TRES, a propósito:
+	// corren antes de mirar el GOOS, para que nadie use la compuerta como un `t.Skip` cómodo en la
+	// plataforma que le molesta. Los CUATRO de la lista de herramientas, no: la comprobación de
+	// que las herramientas están sólo corre donde el modo mide, y donde no mide la compuerta
+	// SALTEA — que es salir con código 0. Afirmar que mueren en las tres es afirmar como universal
+	// algo que es condicional, y CI lo cobró: rojo en windows y en macOS.
+	//
+	// ACÁ SÍ SE DERIVA DE LAS CONSTANTES, y no contradice a
+	// `TestLosSistemasDondeCadaModoMideSonLosQueSeDeclaran`: lo que esta prueba mide es el RECORRIDO
+	// de la lista, no en qué plataformas mide cada modo. Esa segunda pregunta está clavada a mano
+	// allá, una sola vez. Derivar de un hecho ya clavado es derivar; clavarlo de nuevo acá sería la
+	// copia.
+	siempre := func() bool { return true }
+	dondeMideExigir := func() bool { return runtime.GOOS == ElSistemaDondeCorren }
+	dondeMideUnix := elArnesSeSostieneAca
+
 	casos := []struct {
 		nombre, valor, esperado, porque string
+		mide                            func() bool
 	}{
 		{"motivo vacío de contenido", "sin-motivo", "hace falta una frase",
 			"un motivo de dos palabras pasó: el salteo puede quedar sin decir por qué, y un salteo " +
-				"que nadie puede revisar se queda para siempre"},
+				"que nadie puede revisar se queda para siempre", siempre},
 		{"sin nombrar ninguna herramienta", "sin-herramientas", "NO es",
 			"la compuerta aceptó ser usada sin nombrar una sola herramienta Unix, o sea como un " +
-				"t.Skip de propósito general: es exactamente lo que no puede ser"},
+				"t.Skip de propósito general: es exactamente lo que no puede ser", siempre},
+		// EL HERMANO: los dos controles de uso valen para los TRES modos o no valen para ninguno.
+		// Un modo nuevo con los `t.Fatalf` copiados y sin prueba que los corra es la forma exacta
+		// que este repo persigue —la guarda puesta en N-1 de N caminos—, y acá el N acaba de subir.
+		{"modo Unix, motivo vacío de contenido", "unix-sin-motivo", "hace falta una frase",
+			"guiones.Unix aceptó un motivo de dos palabras: el salteo de windows puede quedar sin " +
+				"decir por qué, y un salteo que nadie puede revisar se queda para siempre", siempre},
+		{"modo Unix, sin nombrar ninguna herramienta", "unix-sin-herramientas", "NO es",
+			"guiones.Unix aceptó ser usada sin nombrar una sola herramienta, o sea como un t.Skip " +
+				"de propósito general para apagar windows: es exactamente lo que no puede ser", siempre},
+		// EL CONTROL DE QUE LA LISTA SE MIRA ENTERA. Sin estos cuatro, un `herramientas[1:]` o un
+		// `herramientas[:len(herramientas)-1]` pasan inadvertidos: las sondas declaran UNA sola
+		// herramienta y con largo 1 las tres formas de recorrer se ven iguales. Los llamadores
+		// reales declaran hasta seis, así que la ceguera sería sobre lo que de verdad se usa.
+		{"Exigir saltea el principio de la lista", "falta-la-primera", "musubi-herramienta-inexistente-zz",
+			"guiones.Exigir no miró la PRIMERA herramienta declarada. Una que falta tiene que MORIR en linux; " +
+				"si se la saltea, la prueba corre sin lo que necesita y su verde no mide el guion", dondeMideExigir},
+		{"Exigir saltea el final de la lista", "falta-la-ultima", "musubi-herramienta-inexistente-zz",
+			"guiones.Exigir no miró la ÚLTIMA herramienta declarada, y las listas reales llegan a seis", dondeMideExigir},
+		{"Unix saltea el principio de la lista", "unix-falta-la-primera", "musubi-herramienta-inexistente-zz",
+			"guiones.Unix no miró la PRIMERA herramienta declarada", dondeMideUnix},
+		{"Unix saltea el final de la lista", "unix-falta-la-ultima", "musubi-herramienta-inexistente-zz",
+			"guiones.Unix no miró la ÚLTIMA herramienta declarada", dondeMideUnix},
 	}
 	for _, c := range casos {
 		t.Run(c.nombre, func(t *testing.T) {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestAyudanteDeUsoIndebido$", "-test.v")
 			cmd.Env = append(os.Environ(), sobreUsoIndebido+"="+c.valor)
 			salida, err := cmd.CombinedOutput()
+
+			// DONDE ESTE MODO NO MIDE, EL CONTRATO ES EL OPUESTO Y TAMBIÉN SE COMPRUEBA: la
+			// compuerta tiene que SALTEAR diciéndolo, no dejar pasar. Un `err == nil` a secas acá
+			// dejaría el caso vacío en windows —«pasó», sin saber si salteó o si corrió sin las
+			// herramientas—, que es medio archivo de prueba sin medir nada.
+			if !c.mide() {
+				if err != nil {
+					t.Fatalf("en %s/%s este modo NO mide, así que la compuerta tenía que SALTEAR, y el "+
+						"hijo murió:\n%s", runtime.GOOS, runtime.GOARCH, salida)
+				}
+				if !strings.Contains(string(salida), "SALTEADA EN") {
+					t.Errorf("en %s/%s el hijo pasó sin saltear: o la compuerta dejó pasar donde el "+
+						"arnés no se sostiene, o corrió sin las herramientas que declaró.\n%s",
+						runtime.GOOS, runtime.GOARCH, salida)
+				}
+				return
+			}
+
 			if err == nil {
 				t.Fatalf("%s\n  el proceso hijo terminó con código 0\n  salida:\n%s", c.porque, salida)
 			}
@@ -150,6 +337,15 @@ var shells = map[string]bool{
 
 const rutaDeLaCompuerta = "musubi/internal/guiones"
 
+// losModosDeLaCompuerta son los nombres que cuentan como «esta prueba pasó por la compuerta».
+//
+// ESTÁ ESCRITO UNA SOLA VEZ a propósito. Cuando eran dos, la lista vivía en cuatro lados —dos
+// condiciones del detector, el comentario del campo y el mensaje de error— y agregar el tercero
+// habría dejado tres de esos cuatro mintiendo: el detector no lo reconocería y seguiría pidiendo
+// compuerta a pruebas que ya la tienen. Es la forma exacta que este repo persigue con nombre
+// propio: la regla escrita en N lugares envejece en N-1.
+var losModosDeLaCompuerta = []string{"Exigir", "Portable", "Unix"}
+
 // funcDePrueba — lo que la guarda sabe de una función de un paquete de prueba.
 type funcDePrueba struct {
 	pkg      string // directorio + paquete: el ámbito donde se resuelven las llamadas
@@ -157,7 +353,7 @@ type funcDePrueba struct {
 	pos      string
 	esTest   bool
 	shell    bool // ejecuta una shell EN SU PROPIO cuerpo
-	compuert bool // llama a guiones.Exigir o guiones.Portable en su propio cuerpo
+	compuert bool // llama a alguno de losModosDeLaCompuerta en su propio cuerpo
 	llama    []string
 }
 
@@ -295,15 +491,20 @@ func TestElSalteoEstaAcotadoALasPruebasQueCorrenUnaShell(t *testing.T) {
 	t.Logf("pruebas que ejecutan una shell, detectadas por el grafo de llamadas: %d", conShell)
 
 	for _, x := range sinCompuerta {
-		t.Errorf("EL HERMANO SIN LA COMPUERTA: %s ejecuta una shell y NO pasa por guiones.Exigir.\n"+
-			"  En windows/macOS esa prueba no mide el guion: mide el runner. El arnés escribe stubs\n"+
+		t.Errorf("EL HERMANO SIN LA COMPUERTA: %s ejecuta una shell y NO pasa por la compuerta.\n"+
+			"  En Windows esa prueba no mide el guion: mide el runner. El arnés escribe stubs\n"+
 			"  ejecutables y los antepone al PATH con `:` — medido, en windows el stub no se toma y el\n"+
 			"  guion sale a la URL real del release.\n"+
-			"  Arreglo, y son DOS casos distintos:\n"+
-			"    · sólo corre en linux  -> `guiones.Exigir(t, \"<qué guion corre y por qué es de linux>\", \"bash\", ...)`\n"+
-			"    · corre en las tres    -> `guiones.Portable(t, \"<qué guion corre y por qué vale en las tres>\", \"bash\", ...)`\n"+
+			"  Arreglo, y son TRES casos distintos. Elegí por lo que el guion NECESITA, no por dónde\n"+
+			"  te molesta que falle:\n"+
+			"    · sólo corre en linux    -> `guiones.Exigir(t, \"<qué guion corre y por qué es de linux>\", \"bash\", ...)`\n"+
+			"    · linux y macOS, no Win  -> `guiones.Unix(t, \"<qué guion corre y por qué se mide en los dos>\", \"bash\", ...)`\n"+
+			"    · corre en las tres      -> `guiones.Portable(t, \"<qué guion corre y por qué vale en las tres>\", \"bash\", ...)`\n"+
 			"      (Portable NO saltea: exige que las herramientas estén en TODAS las plataformas.)\n"+
-			"  como primera línea. En linux NO saltea nunca, así que no perdés nada donde importa.", x)
+			"  como primera línea. En linux NINGUNO saltea, así que no perdés nada donde importa.\n"+
+			"  Y OJO CON ELEGIR `Exigir` POR COMODIDAD: el defecto de `${VAR}` pegada a un carácter\n"+
+			"  no-ASCII que mata el guion en el bash 3.2 de macOS es INVISIBLE en Linux. Para una\n"+
+			"  prueba que caza eso, `Exigir` no acota el alcance: lo apaga. Ésa es `Unix`.", x)
 	}
 	for _, x := range fueraDeAlcance {
 		t.Errorf("COMPUERTA FUERA DE ALCANCE: %s llama a guiones.Exigir y NO ejecuta ninguna shell.\n"+
@@ -434,12 +635,14 @@ func analizarCuerpo(fd *ast.FuncDecl, alias string, esLaCompuerta bool, info *fu
 			}
 		}
 		// ¿llama a la compuerta?
-		if alias != "" && (esSelector(c.Fun, alias, "Exigir") || esSelector(c.Fun, alias, "Portable")) {
-			info.compuert = true
-		}
-		if esLaCompuerta {
-			if id, ok := c.Fun.(*ast.Ident); ok && (id.Name == "Exigir" || id.Name == "Portable") {
+		for _, modo := range losModosDeLaCompuerta {
+			if alias != "" && esSelector(c.Fun, alias, modo) {
 				info.compuert = true
+			}
+			if esLaCompuerta {
+				if id, ok := c.Fun.(*ast.Ident); ok && id.Name == modo {
+					info.compuert = true
+				}
 			}
 		}
 		// ¿llama a otra función del mismo paquete?

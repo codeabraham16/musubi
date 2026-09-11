@@ -14,6 +14,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"musubi/internal/buildid"
 	"strings"
 	"time"
 
@@ -279,6 +280,27 @@ func (s *McpServer) toolFleetList(ctx context.Context, raw json.RawMessage) (int
 				if rotable, seSabe := fleet.CredencialRotable(d.TokenFuente); seSabe {
 					fila["token_rotable"] = rotable
 				}
+			}
+			// POR QUÉ NO PUDO ENUMERAR SUS SERVICIOS, que es el texto al que la métrica MANDA.
+			//
+			// `musubi_fleet_device_services_unknown` dice 1/0 y su HELP delega el motivo acá con
+			// todas las letras: «POR QUÉ no pudo se mira en `musubi_fleet_list`: el motivo es texto
+			// libre de la máquina y como etiqueta sería cardinalidad sin techo». Ese texto NO
+			// estaba en esta fila. El dato viajaba (`FijarServiciosError`), se guardaba
+			// (`d.ServiciosError`) y el exportador lo usaba para decidir el 1 — y el único camino
+			// documentado para leerlo no lo mostraba.
+			//
+			// Medido el 2026-09-10 con `MaquinaNoPuedeEnumerar` DISPARANDO sobre `davantis-1`: la
+			// alerta sonaba, el runbook mandaba a `musubi_fleet_list`, y la fila no traía el
+			// motivo. Una afirmación que nadie cruzó, del lado caro: el que la lee está en medio
+			// de un incidente.
+			//
+			// LA COMPUERTA DE CAPVER ES LA MISMA QUE LA DEL EXPORTADOR, y por el mismo motivo: un
+			// agente anterior a `CapverConInventarioExplicado` NO MANDA el campo, así que su `""`
+			// es «no sé decírtelo» y no «enumeré bien». Ahí el campo va AUSENTE. Emitirlo vacío
+			// volvería a juntar los dos significados que el capver existe para separar.
+			if d.Capver >= buildid.CapverConInventarioExplicado && d.ServiciosError != "" {
+				fila["servicios_error"] = d.ServiciosError
 			}
 			if d.Consentimiento != "" {
 				fila["consentimiento"] = string(d.Consentimiento)

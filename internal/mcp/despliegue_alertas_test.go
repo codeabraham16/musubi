@@ -747,3 +747,27 @@ func TestElScriptDeCambioDeAgenteNoDependeDeQuienLoEjecuta(t *testing.T) {
 		}
 	}
 }
+
+// copiarGuionDeDespliegue deja en `destino` una copia EXACTA de un guion de `deploy/`, ejecutable,
+// para que un banco lo CORRA.
+//
+// POR QUÉ ESTA LECTURA VA CRUDA Y NO FILTRADA, que es la pregunta que hace
+// `TestNingunaGuardaLeeUnArchivoDeDespliegueSinFiltrarComentarios`: el banco EJECUTA esta copia.
+// Un texto con los comentarios blanqueados sigue siendo bash válido y correría igual, pero
+// entonces lo que la prueba mide deja de ser byte a byte el archivo que se entrega. Y el riesgo
+// que el filtro existe para tapar —que una línea de prosa satisfaga una aserción— acá NO existe:
+// nadie afirma nada sobre este texto; las aserciones son sobre la SALIDA de correrlo.
+//
+// VIVE EN UN SOLO LUGAR a propósito. Eran dos lecturas crudas idénticas en dos bancos distintos,
+// o sea dos permisos que alguien tendría que volver a justificar por separado. El techo de
+// lecturas crudas con motivo no es decoración: cuando sube, hay que ir a leer cada motivo nuevo.
+func copiarGuionDeDespliegue(t *testing.T, nombre, destino string) {
+	t.Helper()
+	crudo, err := os.ReadFile(filepath.Join("..", "..", "deploy", nombre)) // crudo: el banco lo EJECUTA, tiene que ser byte a byte el que se despliega
+	if err != nil {
+		t.Fatalf("no se pudo leer el guion real %s: %v", nombre, err)
+	}
+	if err := os.WriteFile(destino, crudo, 0o755); err != nil {
+		t.Fatalf("no se pudo dejar la copia de %s en el banco: %v", nombre, err)
+	}
+}

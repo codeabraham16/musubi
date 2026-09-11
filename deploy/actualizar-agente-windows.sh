@@ -109,7 +109,7 @@ mkdir -p "$SRV"
 VERSION="$(grep -oE '0\.[0-9]+\.[0-9]+-[A-Za-z0-9.-]+' "$TMP/build.log" | head -1)"
 SHA="$(sha256sum "$SRV/musubi.exe" | cut -d' ' -f1)"
 case "$VERSION" in
-  *-sucio) rojo "el binario salió como «$VERSION»: el árbol del worktree no estaba limpio. No se despliega un binario que no se puede reconstruir."; exit 1 ;;
+  *-sucio) rojo "el binario salió como «${VERSION}»: el árbol del worktree no estaba limpio. No se despliega un binario que no se puede reconstruir."; exit 1 ;;
   "")      rojo "no pude leer la versión de la compilación"; tail -10 "$TMP/build.log" >&2; exit 1 ;;
 esac
 cp "$REPO/deploy/cambiar-agente.cmd" "$SRV/"
