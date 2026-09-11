@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"musubi/internal/config"
+	"musubi/internal/embedding"
 	"musubi/internal/memory"
 )
 
@@ -228,4 +229,134 @@ func TestMedicionFixtureReal(t *testing.T) {
 	t.Logf("\n%s", FormatReport(scores, ks))
 	t.Log("OJO: los ABSOLUTOS están subestimados — el etiquetado por topic_key cuenta como fallo " +
 		"todo lo relevante que viva en otro topic. Lo comparable es el DELTA entre arms.")
+}
+
+// TestABLexicoVsHibridoFixtureReal produce EL NÚMERO QUE NO EXISTÍA: el A/B léxico-contra-híbrido
+// sobre el corpus REAL, con la tabla POTION real.
+//
+// Por qué hacía falta otro test y no alcanzaba con los dos que ya había:
+//   - TestSemanticVsLexicalReal corre los dos brazos, pero sobre el golden VERSIONADO: 26 docs de
+//     84-108 caracteres. Es un gate de no-regresión, no una medida de lo que pasa en un acervo de
+//     miles de observaciones en rioplatense.
+//   - TestMedicionFixtureReal corre sobre el corpus real, pero UN SOLO BRAZO (lexicalConfig). O sea
+//     que medía el piso sin nada con qué compararlo.
+//
+// El cruce de los dos —corpus real Y los dos brazos— no lo hacía nadie, y es justo el que decide si
+// encender la capa vectorial vale la pena.
+//
+// LO COMPARABLE ES EL DELTA, NO EL ABSOLUTO, por el mismo motivo que ya declara
+// TestMedicionFixtureReal: el etiquetado sale del topic_key, así que todo lo relevante que viva en
+// otro topic cuenta como fallo en LOS DOS brazos por igual. El sesgo se cancela en la resta.
+//
+// No tiene gate a propósito: es un INSTRUMENTO DE MEDICIÓN sobre la memoria de trabajo de alguien,
+// que cambia entre corridas. Poner un piso acá sería un gate que falla por lo que el usuario
+// guardó ayer. El gate vive en TestSemanticVsLexicalReal, sobre el fixture versionado.
+func TestABLexicoVsHibridoFixtureReal(t *testing.T) {
+	ruta := os.Getenv("MUSUBI_FIXTURE_DB")
+	dirPotion := os.Getenv("MUSUBI_POTION_DIR")
+	if ruta == "" || dirPotion == "" {
+		t.Skip("faltan MUSUBI_FIXTURE_DB y/o MUSUBI_POTION_DIR: se saltea el A/B sobre memoria real")
+	}
+
+	prov, err := embedding.NewStaticProvider(dirPotion)
+	if err != nil {
+		t.Fatalf("NewStaticProvider(%s): %v", dirPotion, err)
+	}
+	embed := func(texto string) ([]float32, error) {
+		return prov.Embed(context.Background(), texto)
+	}
+
+	fx, err := FixtureDesdeDB(ruta, OpcionesFixtureReal{})
+	if err != nil {
+		t.Fatalf("FixtureDesdeDB(%s): %v", ruta, err)
+	}
+	relevantes := 0
+	for _, q := range fx.Queries {
+		relevantes += len(q.Relevant)
+	}
+	t.Logf("corpus real: %d docs · %d consultas · %.1f relevantes por consulta · embedder %s (dim %d)",
+		len(fx.Docs), len(fx.Queries), float64(relevantes)/float64(len(fx.Queries)),
+		prov.Name(), prov.Dimensions())
+
+	ks := []int{1, 5, 10}
+	scores, err := Run(context.Background(), t.TempDir(), fx, embed,
+		[]Config{lexicalConfig, hybridConfig}, ks)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	t.Logf("\n%s", FormatReport(scores, ks))
+
+	var lex, hyb Scores
+	for _, s := range scores {
+		switch s.Config {
+		case lexicalConfig.Name:
+			lex = s
+		case hybridConfig.Name:
+			hyb = s
+		}
+	}
+	t.Logf("DELTA híbrido − léxico sobre el corpus real:")
+	for _, k := range ks {
+		t.Logf("  R@%-2d  %+.4f   (léxico %.4f → híbrido %.4f)",
+			k, hyb.RecallAtK[k]-lex.RecallAtK[k], lex.RecallAtK[k], hyb.RecallAtK[k])
+		t.Logf("  nDCG@%-2d %+.4f   (léxico %.4f → híbrido %.4f)",
+			k, hyb.NDCGAtK[k]-lex.NDCGAtK[k], lex.NDCGAtK[k], hyb.NDCGAtK[k])
+	}
+	t.Logf("  MRR   %+.4f   (léxico %.4f → híbrido %.4f)", hyb.MRR-lex.MRR, lex.MRR, hyb.MRR)
+}
+
+// TestBarridoVectorFloorFixtureReal barre el PISO DE COSENO sobre el corpus real.
+//
+// Existe por un resultado concreto: el A/B con hybridConfig tal como está declarado dio el híbrido
+// PEOR que el léxico en todas las métricas (MRR 0.424 → 0.370). Y hybridConfig deja VectorFloor en
+// el cero de Go, contra el 0.30 que es el default de producción (config.Default().Memory).
+//
+// Con piso 0, augmentWithVectorPool admite las 50 candidatas que devuelva el coseno sin importar
+// cuán flojas sean, y cada una entra al RRF con su 1/(60+rango) como si fuera una señal. O sea que
+// el brazo "híbrido" del banco no mide la señal vectorial: mide la señal vectorial SIN SU GUARDA.
+//
+// El barrido separa las dos hipótesis:
+//   - Si el híbrido mejora al subir el piso, el problema era la config del banco.
+//   - Si pierde a todo piso, la señal vectorial estática no se gana su lugar en ESTE corpus, y eso
+//     es un resultado que hay que saber antes de construir nada encima.
+func TestBarridoVectorFloorFixtureReal(t *testing.T) {
+	ruta := os.Getenv("MUSUBI_FIXTURE_DB")
+	dirPotion := os.Getenv("MUSUBI_POTION_DIR")
+	if ruta == "" || dirPotion == "" {
+		t.Skip("faltan MUSUBI_FIXTURE_DB y/o MUSUBI_POTION_DIR: se saltea el barrido")
+	}
+	prov, err := embedding.NewStaticProvider(dirPotion)
+	if err != nil {
+		t.Fatalf("NewStaticProvider: %v", err)
+	}
+	embed := func(texto string) ([]float32, error) { return prov.Embed(context.Background(), texto) }
+
+	fx, err := FixtureDesdeDB(ruta, OpcionesFixtureReal{})
+	if err != nil {
+		t.Fatalf("FixtureDesdeDB: %v", err)
+	}
+
+	base := memory.RecallOptions{Stemming: true, Cooccurrence: true, GraphCentrality: true}
+	configs := []Config{lexicalConfig}
+	for _, piso := range []float64{0.0, 0.20, 0.30, 0.40, 0.50, 0.60} {
+		o := base
+		o.VectorFloor = piso
+		configs = append(configs, Config{
+			Name:      fmt.Sprintf("hybrid-floor-%.2f", piso),
+			Opts:      o,
+			UseVector: true,
+		})
+	}
+	// Y el de producción de verdad: piso 0.30 CON MMR encendido en 0.75.
+	prod := base
+	prod.VectorFloor = 0.30
+	prod.MMRLambda = 0.75
+	configs = append(configs, Config{Name: "hybrid-PRODUCCION", Opts: prod, UseVector: true})
+
+	ks := []int{1, 5, 10}
+	scores, err := Run(context.Background(), t.TempDir(), fx, embed, configs, ks)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	t.Logf("barrido de VectorFloor sobre %d docs / %d consultas:\n%s", len(fx.Docs), len(fx.Queries), FormatReport(scores, ks))
 }

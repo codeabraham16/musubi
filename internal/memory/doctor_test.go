@@ -313,3 +313,54 @@ func TestCheckEmbeddingCoverageTresEstados(t *testing.T) {
 		}
 	})
 }
+
+// TestCheckEmbeddingCoverageSinEmbebedorCableado es el caso que las pruebas anteriores NO cubrían y
+// que el comando real SÍ ejercita: `musubi doctor` abre la base con NewDbEngine a secas, así que
+// nadie llama a SetVectorModelID y e.vectorModelID queda vacío.
+//
+// Medido contra la base real: con 1.948 vectores guardados, el check contestaba "no hay proveedor
+// de embeddings". Verde, tranquilizador y falso. Las pruebas no lo vieron porque seteaban el campo
+// a mano — probaban el contrato imaginado, no el que corre.
+func TestCheckEmbeddingCoverageSinEmbebedorCableado(t *testing.T) {
+	t.Run("hay vectores en la base: mide contra la procedencia dominante", func(t *testing.T) {
+		e, err := NewDbEngine(t.TempDir())
+		if err != nil {
+			t.Fatalf("NewDbEngine: %v", err)
+		}
+		defer e.Close()
+
+		// Se escribe CON procedencia, como lo hace el backfill...
+		e.vectorModelID = "potion-de-prueba"
+		if err := e.SaveObservation("a", "t", "observación con su vector", []float32{0.1, 0.2}); err != nil {
+			t.Fatalf("SaveObservation a: %v", err)
+		}
+		if err := e.SaveObservation("b", "t", "observación sin vector, queda pendiente", nil); err != nil {
+			t.Fatalf("SaveObservation b: %v", err)
+		}
+		// ...y se LEE con un engine sin embebedor cableado, que es lo que hace runDoctor.
+		e.vectorModelID = ""
+
+		r := checkEmbeddingCoverage(e)
+		if r.Unmeasured {
+			t.Error("con vectores en la base NO puede decir que no hay nada que medir")
+		}
+		if r.Status != "warning" {
+			t.Errorf("con una pendiente esperaba warning, obtuve %q (%s)", r.Status, r.Message)
+		}
+	})
+
+	t.Run("base sin vectores y sin embebedor: sí es sin medir", func(t *testing.T) {
+		e, err := NewDbEngine(t.TempDir())
+		if err != nil {
+			t.Fatalf("NewDbEngine: %v", err)
+		}
+		defer e.Close()
+		if err := e.SaveObservation("a", "t", "observación en una instalación sólo-léxica", nil); err != nil {
+			t.Fatalf("SaveObservation: %v", err)
+		}
+		r := checkEmbeddingCoverage(e)
+		if r.Status != "ok" || !r.Unmeasured {
+			t.Errorf("sin vectores ni embebedor esperaba ok+Unmeasured, obtuve %q unmeasured=%v", r.Status, r.Unmeasured)
+		}
+	})
+}

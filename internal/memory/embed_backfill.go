@@ -273,16 +273,48 @@ func (e *DbEngine) embedBackfill(embed func([]string) ([][]float32, error), toda
 
 // countStaleEmbeddings cuenta las observaciones PENDIENTES de (re)embedding (ver stalePredicate).
 func (e *DbEngine) countStaleEmbeddings() (int, error) {
+	return e.countStaleEmbeddingsFor(e.vectorModelID)
+}
+
+// countStaleEmbeddingsFor es countStaleEmbeddings contra un modelo EXPLÍCITO, para los lectores que
+// no son el engine que escribe. Comparte stalePredicate con el backfill y el auto-backfill: la
+// fuente de verdad sigue siendo una sola, sólo cambia contra qué procedencia se compara.
+func (e *DbEngine) countStaleEmbeddingsFor(modelID string) (int, error) {
 	var n int
 	err := e.db.QueryRow(`
 		SELECT COUNT(*)
 		FROM observations o
 		LEFT JOIN embeddings em ON o.id = em.observation_id
-		WHERE `+stalePredicate(), e.vectorModelID).Scan(&n)
+		WHERE `+stalePredicate(), modelID).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("error al contar observaciones pendientes de embedding: %w", err)
 	}
 	return n, nil
+}
+
+// dominantEmbeddingModel devuelve la procedencia con MÁS vectores en la base, y cuántos hay en
+// total. Existe para los procesos que abren la base SIN embebedor cableado —`musubi doctor` es el
+// caso: runDoctor hace NewDbEngine a secas y nadie llama a SetVectorModelID— donde preguntar por
+// e.vectorModelID contesta sobre el PROCESO y no sobre la MEMORIA.
+//
+// Se elige el dominante y no "el único" a propósito: una base a medio re-embeber tiene dos
+// procedencias conviviendo, y la que manda para juzgar cobertura es la mayoritaria. El caso raro
+// —empate— no importa: cualquiera de las dos da un número honesto, y la conclusión ("hay vectores
+// viejos sin migrar") es la misma.
+func (e *DbEngine) dominantEmbeddingModel() (modelID string, total int, err error) {
+	if err = e.db.QueryRow(`SELECT COUNT(*) FROM embeddings`).Scan(&total); err != nil {
+		return "", 0, fmt.Errorf("error al contar embeddings: %w", err)
+	}
+	if total == 0 {
+		return "", 0, nil
+	}
+	err = e.db.QueryRow(
+		`SELECT COALESCE(model_id,'') FROM embeddings GROUP BY model_id ORDER BY COUNT(*) DESC, model_id LIMIT 1`,
+	).Scan(&modelID)
+	if err != nil {
+		return "", total, fmt.Errorf("error al buscar la procedencia dominante: %w", err)
+	}
+	return modelID, total, nil
 }
 
 // AutoEmbedBackfill (M3) cierra SOLO el hueco de procedencia, sin intervención manual: si hay

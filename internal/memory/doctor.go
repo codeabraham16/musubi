@@ -104,11 +104,29 @@ func (e *DbEngine) doctorChecks() []doctorCheck {
 // una avería— y buildHealthContext lo inyecta en el arranque de cada sesión: fatiga de alarma por
 // construcción, que es como se enseña a ignorar un canal.
 func checkEmbeddingCoverage(e *DbEngine) CheckResult {
-	if e.vectorModelID == "" {
-		return CheckResult{Code: "embedding_coverage", Status: "ok", Unmeasured: true,
-			Message: "recall sólo-léxico por configuración: no hay proveedor de embeddings, así que no hay cobertura que medir"}
+	// LA PREGUNTA ES POR LA MEMORIA, NO POR ESTE PROCESO. `e.vectorModelID` lo inyecta el
+	// entrypoint con SetVectorModelID, y hay entrypoints que no lo hacen: runDoctor abre la base
+	// con NewDbEngine a secas. La primera versión de este check preguntaba sólo por ese campo, y
+	// el resultado fue que `musubi doctor` contestaba "no hay proveedor de embeddings" CON 1.948
+	// VECTORES EN LA BASE. Las pruebas no lo vieron porque seteaban el campo a mano: probaban el
+	// contrato que yo había imaginado, no el que el comando real ejercita.
+	//
+	// Así que cuando el engine no trae procedencia, se la pregunta a la base.
+	modelo := e.vectorModelID
+	if modelo == "" {
+		dominante, total, err := e.dominantEmbeddingModel()
+		if err != nil {
+			return CheckResult{Code: "embedding_coverage", Status: "error",
+				Message: "no se pudo medir la cobertura de embeddings: " + err.Error()}
+		}
+		if total == 0 {
+			// Ni embebedor cableado ni vectores guardados: acá sí no hay nada que medir.
+			return CheckResult{Code: "embedding_coverage", Status: "ok", Unmeasured: true,
+				Message: "recall sólo-léxico: no hay proveedor de embeddings ni vectores guardados, así que no hay cobertura que medir"}
+		}
+		modelo = dominante
 	}
-	pendientes, err := e.countStaleEmbeddings()
+	pendientes, err := e.countStaleEmbeddingsFor(modelo)
 	if err != nil {
 		return CheckResult{Code: "embedding_coverage", Status: "error",
 			Message: "no se pudo medir la cobertura de embeddings: " + err.Error()}
