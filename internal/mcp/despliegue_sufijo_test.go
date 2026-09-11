@@ -3,9 +3,10 @@ package mcp
 import (
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 // UN BINARIO QUE SE LLEVA CÓDIGO SIN COMMITEAR TIENE QUE DECIRLO EN SU PROPIA VERSIÓN.
@@ -50,20 +51,14 @@ import (
 // propósito: marcar SIEMPRE queda curado por el relink, porque el sufijo es una lectura del sello y
 // no una afirmación — dos capas, y el arnés lo deja escrito para que ese verde no se lea como hueco.
 func TestUnBinarioConCodigoSinCommitearLoDiceEnSuVersion(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skipf("el guión de construcción es de Linux y este arnés corre bash; en %s no aplica", runtime.GOOS)
-	}
-	bash, err := exec.LookPath("bash")
-	if err != nil {
-		t.Skipf("sin bash en el PATH no se puede ejercitar el guión: %v", err)
-	}
-	if _, err := exec.LookPath("go"); err != nil {
-		t.Skipf("sin go en el PATH el arnés no puede compilar: %v", err)
-	}
+	// Los dos `t.Skipf` de `exec.LookPath` que había acá salteaban TAMBIÉN EN LINUX: sin bash o sin
+	// go esta guarda no existía y `go test` contestaba `ok`. La compuerta los convierte en un fallo.
+	guiones.Exigir(t, "corre deploy/pruebas/sufijo-sucio.sh, que ejercita el guion de "+
+		"construcción de un servidor Linux y compila con go", "bash", "go", "awk", "sed", "grep")
 
 	arnes := filepath.Join("..", "..", "deploy", "pruebas", "sufijo-sucio.sh")
 	raiz := filepath.Join("..", "..")
-	salida, err := exec.Command(bash, arnes, raiz).CombinedOutput()
+	salida, err := exec.Command("bash", arnes, raiz).CombinedOutput()
 	if err != nil {
 		t.Fatalf("el arnés del sufijo falló:\n%s", salida)
 	}

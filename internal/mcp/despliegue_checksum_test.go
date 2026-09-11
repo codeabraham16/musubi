@@ -44,6 +44,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 // leerGuionDeDespliegue devuelve el texto de un guion de deploy/ (ruta relativa a deploy/).
@@ -99,6 +101,35 @@ func escribirStub(t *testing.T, dir, nombre, cuerpo string) {
 	}
 }
 
+// unameDeMentira fija la ARQUITECTURA QUE EL GUION VE, en vez de dejarla a lo que conteste la
+// máquina que corre la prueba.
+//
+// EL DEFECTO QUE CIERRA, MEDIDO: `install-rustdesk-relay.sh` hace `ARCH="$(uname -m)"` y elige el
+// paquete con un `case`. El arnés no fijaba nada, así que el resultado de esta prueba dependía del
+// HARDWARE del que la corría. En el runner macOS de CI —arm64, donde `uname -m` contesta `arm64` y
+// no `aarch64`— el guion muere en «arquitectura no soportada por los binarios oficiales» ANTES de
+// llegar al checksum, y el arnés leía ese «no se instaló» como «la verificación funcionó». Un
+// verde por el motivo equivocado es peor que un rojo. Reproducido en linux anteponiendo al PATH un
+// `uname` que contesta `arm64`: las 3 subpruebas que descargan se caen.
+//
+// Y NO SE PIERDE NADA AL FIJARLA: que la tabla de pines cubra TODAS las arquitecturas que el
+// `case` del guion ofrece lo custodia `TestElPinDelRelayCubreTodasLasArquitecturasQueElGuionOfrece`,
+// que es Go puro, deriva la lista del propio guion y corre en cualquier plataforma. Lo que se mide
+// acá es el checksum, y para eso la arquitectura tiene que ser una constante del arnés.
+//
+// NO ES UN `uname` PERMISIVO: cualquier otra llamada sale con error en vez de inventar una
+// respuesta, así que si el guion empieza a preguntarle otra cosa el arnés lo dice.
+//
+// Y DEJA CONSTANCIA DE QUE LO LLAMARON ($MARCA_UNAME). Si el guion dejara de preguntarle a `uname`
+// —por ejemplo cambiando a `dpkg --print-architecture`— este stub pasaría a no hacer nada y la
+// arquitectura volvería a ser la del que corre la prueba, en silencio y sólo visible fuera de
+// amd64. Con la marca, ese cambio de forma lo dice el arnés en vez de volver a esconderlo.
+const unameDeMentira = `
+[[ $# -eq 1 && "${1:-}" == "-m" ]] || { echo "stub uname: me llamaron con «$*» y sólo sé contestar -m" >&2; exit 92; }
+[[ -z "${MARCA_UNAME:-}" ]] || : > "$MARCA_UNAME"
+echo x86_64
+`
+
 // curlDeMentiraDelCerebro: sirve el "binario" desde $CARGA y decide qué contestar al `.sha256`
 // según $MODO_SHA. Es la ÚNICA pieza simulada del paso 1 — el `sha256sum`, el `install`, el
 // `mktemp` y el control de flujo de bash son los de verdad.
@@ -132,6 +163,8 @@ cp "$CARGA" "$destino"
 // revertido (el `if` sin `else`), los cuatro casos que no pueden verificar instalan igual y esta
 // prueba se pone roja en los cuatro.
 func TestElBinarioDelCerebroNoSeInstalaSinVerificar(t *testing.T) {
+	guiones.Exigir(t, "corre el paso 1 de deploy/install-musubi-brain.sh, que instala el binario del "+
+		"cerebro en un servidor Linux con systemd", "bash", "sha256sum", "install", "mktemp", "awk", "tr")
 	const rel = "install-musubi-brain.sh"
 	guion := leerGuionDeDespliegue(t, rel)
 	bloque := bloqueEntreMarcas(t, guion, rel, "# ── 1. Binario", "# ── 2. Workspace")
@@ -247,6 +280,9 @@ func TestElBinarioDelCerebroNoSeInstalaSinVerificar(t *testing.T) {
 // La prueba corre el bloque de binarios con `curl`/`useradd`/`chown` simulados y `unzip`,
 // `sha256sum`, `find` e `install` de verdad, y mira si `hbbs` apareció en el destino.
 func TestElRelayDeRustdeskNoSeInstalaSinVerificar(t *testing.T) {
+	guiones.Exigir(t, "corre el bloque de binarios de deploy/rustdesk/install-rustdesk-relay.sh, que "+
+		"deja hbbs/hbbr como unidades systemd de un servidor Linux",
+		"bash", "sha256sum", "unzip", "install", "mktemp", "awk", "find")
 	const rel = "rustdesk/install-rustdesk-relay.sh"
 	guion := leerGuionDeDespliegue(t, rel)
 	bloque := bloqueEntreMarcas(t, guion, rel, "# ── Binarios", "# ── systemd")
@@ -299,12 +335,14 @@ cp "$CARGA" "$destino"
 			escribirStub(t, stubs, "curl", curlDeMentiraDelRelay)
 			escribirStub(t, stubs, "useradd", "exit 0\n")
 			escribirStub(t, stubs, "chown", "exit 0\n")
+			escribirStub(t, stubs, "uname", unameDeMentira)
 
 			cargaP := filepath.Join(dir, "relay.zip")
 			if err := os.WriteFile(cargaP, zipFalso, 0o644); err != nil {
 				t.Fatal(err)
 			}
 			marca := filepath.Join(dir, "curl-llamado")
+			marcaUname := filepath.Join(dir, "uname-llamado")
 			destino := filepath.Join(dir, "opt-rustdesk")
 
 			arnes := strings.Join([]string{
@@ -323,7 +361,7 @@ cp "$CARGA" "$destino"
 			}
 
 			cmd := exec.Command("bash", arnesP)
-			cmd.Env = append(os.Environ(), "CARGA="+cargaP, "MARCA_CURL="+marca)
+			cmd.Env = append(os.Environ(), "CARGA="+cargaP, "MARCA_CURL="+marca, "MARCA_UNAME="+marcaUname)
 			if c.sha != "" {
 				cmd.Env = append(cmd.Env, "RUSTDESK_SHA256="+c.sha)
 			}
@@ -351,6 +389,17 @@ cp "$CARGA" "$destino"
 			}
 			if !c.instala && err == nil {
 				t.Errorf("%s\n  el guion salió con código 0: no frenó\n  salida:\n%s", c.porque, salida.String())
+			}
+			// EL STUB DE `uname` TIENE QUE SEGUIR SIENDO LO QUE DECIDE LA ARQUITECTURA. Si el guion
+			// dejara de preguntárselo, el stub pasaría a no hacer nada y el paquete volvería a
+			// elegirse según el hardware del que corre la prueba — en silencio, y visible sólo fuera
+			// de amd64, que es de dónde vino este defecto.
+			if _, e := os.Stat(marcaUname); e != nil {
+				t.Errorf("el guion NO consultó `uname -m` en esta corrida, así que la arquitectura ya no "+
+					"sale del stub del arnés.\n  Volvió a depender de la máquina: en un runner arm64 el "+
+					"guion muere en «arquitectura no soportada» ANTES del checksum y este arnés lee ese "+
+					"«no se instaló» como «la verificación funcionó».\n  Reapuntá el stub a lo que el guion "+
+					"pregunta ahora.\n  salida:\n%s", salida.String())
 			}
 		})
 	}
