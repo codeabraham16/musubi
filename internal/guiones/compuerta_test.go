@@ -28,6 +28,61 @@ import (
 )
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
+// (0) DÓNDE MIDE CADA MODO, CLAVADO A MANO. Es el único lugar del paquete donde se escribe.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+// TestLosSistemasDondeCadaModoMideSonLosQueSeDeclaran — la guarda que las dos sondas NO pueden ser.
+//
+// EL PROBLEMA, Y ES UNA TRAMPA FINA. Las sondas de más abajo preguntan «¿salteó donde no debía?»
+// usando `ElSistemaDondeCorren` y `LosSistemasDondeElArnesSeSostiene` — LAS MISMAS constantes que
+// la compuerta usa para decidir. O sea que derivan su expectativa de su propio sujeto: si alguien
+// mueve la constante, la sonda mueve la pregunta con ella y sigue en verde.
+//
+// MEDIDO, y el agujero era mío: poniendo `LosSistemasDondeElArnesSeSostiene = []string{"windows"}`,
+// `TestLaCompuertaUnixNoSalteaDondeElArnesSeSostiene` queda VERDE en linux —cree que acá tiene que
+// saltear, y saltea— mientras las cuatro pruebas de `internal/mcp` que corren los guiones de
+// deploy empiezan a SALTEARSE de verdad. La cobertura se apaga entera y nadie se entera.
+//
+// LA SALIDA NO ES DERIVARLO MEJOR: ES CLAVARLO. «Los guiones de deploy/ corren en un servidor
+// Linux» y «el arnés de stubs se sostiene en linux y en macOS pero no en Windows» son HECHOS del
+// mundo, no valores calculados. Un hecho se escribe una vez, a mano, en el lugar donde cambiarlo
+// obliga a justificarlo — y todo lo demás se deriva de ahí. Es la otra cara de «un derivado
+// escrito a mano es una copia»: el problema no era escribir a mano, era escribir a mano lo que se
+// deduce. Esto no se deduce de nada.
+//
+// Sabotaje que la pone roja: mover cualquiera de las dos constantes.
+func TestLosSistemasDondeCadaModoMideSonLosQueSeDeclaran(t *testing.T) {
+	if ElSistemaDondeCorren != "linux" {
+		t.Errorf("ElSistemaDondeCorren es %q y tiene que ser \"linux\".\n"+
+			"  Lo que `guiones.Exigir` custodia son pruebas que CORREN los instaladores de "+
+			"deploy/, y lo que esos instaladores dejan son unidades systemd de un servidor Linux, "+
+			"con useradd y /etc. Moviendo esta constante, las sondas de abajo mueven su expectativa "+
+			"con ella y siguen en verde mientras la cobertura se apaga entera.", ElSistemaDondeCorren)
+	}
+
+	quiere := map[string]bool{"linux": true, "darwin": true}
+	visto := map[string]bool{}
+	for _, s := range LosSistemasDondeElArnesSeSostiene {
+		visto[s] = true
+	}
+	if visto["windows"] {
+		t.Error("LosSistemasDondeElArnesSeSostiene incluye \"windows\", y ahí el arnés NO se sostiene: " +
+			"está medido en CI que el `:` de `C:\\` parte el PATH, que un stub sin `.exe` no se " +
+			"ejecuta, y que por eso el guion SALIÓ A LA URL REAL del release (exit 22 de curl). " +
+			"Declararlo medible ahí pone en rojo un job por algo que no es el producto.")
+	}
+	for s := range quiere {
+		if !visto[s] {
+			t.Errorf("LosSistemasDondeElArnesSeSostiene NO incluye %q, y tiene que incluirlo.\n"+
+				"  linux es donde corren los guiones y donde gatea el merge; darwin es donde vive el "+
+				"defecto que estas pruebas cazan —el `${VAR}` pegada a un carácter no-ASCII que mata "+
+				"el guion en bash 3.2 y en Linux es INVISIBLE—. Sacar darwin de acá cierra el defecto "+
+				"y apaga a su único testigo en el mismo commit.", s)
+		}
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
 // (1) EN LINUX NO SALTEA. No se le cree al `if`: se corre.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
