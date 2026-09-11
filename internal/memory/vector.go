@@ -50,3 +50,30 @@ func CosineSimilarity(a, b []float32) (float32, error) {
 	}
 	return float32(dotProduct / (math.Sqrt(normA) * math.Sqrt(normB))), nil
 }
+
+// VectoresDePruebas devuelve todos los vectores guardados, por id. Es para el BANCO de evaluación
+// (internal/recalleval), que necesita comparar candidatos entre sí para medir redundancia y tiene
+// que hacerlo con LOS MISMOS vectores que el ranker compara, no con unos recalculados.
+//
+// Está exportada y no es de test porque recalleval es otro paquete. Read-only.
+func (e *DbEngine) VectoresDePruebas() (map[string][]float32, error) {
+	rows, err := e.db.Query(`SELECT observation_id, vector FROM embeddings`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]float32{}
+	for rows.Next() {
+		var id string
+		var blob []byte
+		if err := rows.Scan(&id, &blob); err != nil {
+			return nil, err
+		}
+		v, err := BytesToFloat32(blob)
+		if err != nil {
+			continue
+		}
+		out[id] = v
+	}
+	return out, rows.Err()
+}
