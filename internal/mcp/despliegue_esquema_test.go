@@ -29,7 +29,7 @@ import (
 //
 // Sabotaje: volver a poner un `-ge 44` en el guion, o sacarle el `version --esquema`.
 func TestElRedespliegueNoTipeaLaVersionDeEsquema(t *testing.T) {
-	crudo, err := os.ReadFile("../../deploy/redesplegar-cerebro.sh")
+	crudo, err := leerArchivoDeDespliegue("../../deploy/redesplegar-cerebro.sh")
 	if err != nil {
 		t.Fatalf("no pude leer el guion de redespliegue: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestElBinarioDiceElEsquemaAlQueApunta(t *testing.T) {
 //
 // Sabotaje: sacar el `if` que compara GOOS/GOARCH con los del host.
 func TestConstruirNoIntentaCorrerUnBinarioDeOtraPlataforma(t *testing.T) {
-	crudo, err := os.ReadFile("../../deploy/construir.sh")
+	crudo, err := leerArchivoDeDespliegue("../../deploy/construir.sh")
 	if err != nil {
 		t.Fatalf("no pude leer construir.sh: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestConstruirNoIntentaCorrerUnBinarioDeOtraPlataforma(t *testing.T) {
 // Sabotaje: renombrar nombreVidaDeRed a `musubi_fleet_device_*`; o agregar una serie al
 // exportador sin declararla; o cambiar el regex del prometheus.yml sin mirar el exportador.
 func TestNingunaSerieDelCerebroCaeEnElDescarteDelScrape(t *testing.T) {
-	promYml, err := os.ReadFile("../../deploy/prometheus/prometheus.yml")
+	promYml, err := leerArchivoDeDespliegue("../../deploy/prometheus/prometheus.yml")
 	if err != nil {
 		t.Fatalf("no pude leer prometheus.yml: %v", err)
 	}

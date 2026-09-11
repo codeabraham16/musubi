@@ -20,7 +20,7 @@ import (
 // Sabotaje que la hace fallar: renombrar una sección del RUNBOOK sin tocar la regla que la cita.
 func TestCadaRunbookDeUnaAlertaApuntaAUnaSeccionQueExiste(t *testing.T) {
 	reglas := []byte(reglasDeAlerta(t))
-	runbook, err := os.ReadFile("../../deploy/RUNBOOK.md")
+	runbook, err := leerArchivoDeDespliegue("../../deploy/RUNBOOK.md")
 	if err != nil {
 		t.Fatalf("no se pudo leer el runbook: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestElDeadMansSwitchSigueSiendoIncondicional(t *testing.T) {
 	// A propósito lee SÓLO musubi-alerts.yml, no los tres. El latido es la única regla que se
 	// instala SIEMPRE, sin precondición: si alguien lo moviera a un archivo condicional, habría
 	// despliegues sin latido — y la falta de latido es lo único que delata que la cadena murió.
-	b, err := os.ReadFile("../../deploy/musubi-alerts.yml")
+	b, err := leerArchivoDeDespliegue("../../deploy/musubi-alerts.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestElDeadMansSwitchSigueSiendoIncondicional(t *testing.T) {
 //
 // Sabotaje que la hace fallar: borrar la ruta de MusubiSiempreViva, o apuntarla a 'default'.
 func TestElDeadMansSwitchTieneSuPropiaRutaYReceptor(t *testing.T) {
-	b, err := os.ReadFile("../../deploy/prometheus/alertmanager.yml")
+	b, err := leerArchivoDeDespliegue("../../deploy/prometheus/alertmanager.yml")
 	if err != nil {
 		t.Fatalf("no hay configuración de Alertmanager: las alertas se evalúan y no le llegan a nadie (A4): %v", err)
 	}

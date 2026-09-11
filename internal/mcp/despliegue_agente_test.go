@@ -20,7 +20,6 @@ package mcp
 // strace, y quedó anotado en el propio archivo.
 
 import (
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -28,7 +27,7 @@ import (
 
 func leerDropInDelAgente(t *testing.T) string {
 	t.Helper()
-	b, err := os.ReadFile("../../deploy/systemd/musubi-agente-contenedores.conf")
+	b, err := leerArchivoDeDespliegue("../../deploy/systemd/musubi-agente-contenedores.conf")
 	if err != nil {
 		t.Fatalf("falta el drop-in del agente: sin él el inventario de contenedores no sale: %v", err)
 	}

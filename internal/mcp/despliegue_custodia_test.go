@@ -347,13 +347,16 @@ func TestLosJobsVigiladosSonLosQueElRepoDeclara(t *testing.T) {
 // commit del MISMO autor le agregó la marca `.last_snapshot` al guion sin tocar el pin. Lo cazó
 // una persona leyendo, no una prueba. Por eso esta existe: el aviso escrito no es una guarda.
 func TestElPinDelGuionDeBackupEsElVerdadero(t *testing.T) {
-	guion, err := os.ReadFile(filepath.Join("..", "..", "deploy", "musubi-backup.sh"))
+	// crudo: el sha256 tiene que ser el del ARCHIVO ENTERO, comentarios incluidos, porque es
+	// lo que el instalador verifica contra el archivo en disco. Filtrarlo daría un pin que no
+	// coincide con nada y una guarda que pide actualizar un número que ya está bien.
+	guion, err := os.ReadFile(filepath.Join("..", "..", "deploy", "musubi-backup.sh")) // crudo: sha256 del texto entero
 	if err != nil {
 		t.Fatalf("no se pudo leer deploy/musubi-backup.sh: %v", err)
 	}
 	real := fmt.Sprintf("%x", sha256.Sum256(guion))
 
-	inst, err := os.ReadFile(filepath.Join("..", "..", "deploy", "install-musubi-brain.sh"))
+	inst, err := leerArchivoDeDespliegue(filepath.Join("..", "..", "deploy", "install-musubi-brain.sh"))
 	if err != nil {
 		t.Fatalf("no se pudo leer deploy/install-musubi-brain.sh: %v", err)
 	}
@@ -450,13 +453,16 @@ func TestLaVersionDeGoNoDiverge(t *testing.T) {
 // se corre como root, así que un `die` del instalador deja al servidor sin ninguna forma
 // verificada de actualizarse — y la salida a mano es justamente la que produjo la deriva.
 func TestElPinDelGuionDeRedespliegueEsElVerdadero(t *testing.T) {
-	guion, err := os.ReadFile(filepath.Join("..", "..", "deploy", "redesplegar-cerebro.sh"))
+	// crudo: el sha256 tiene que ser el del ARCHIVO ENTERO, comentarios incluidos, porque es
+	// lo que el instalador verifica contra el archivo en disco. Filtrarlo daría un pin que no
+	// coincide con nada y una guarda que pide actualizar un número que ya está bien.
+	guion, err := os.ReadFile(filepath.Join("..", "..", "deploy", "redesplegar-cerebro.sh")) // crudo: sha256 del texto entero
 	if err != nil {
 		t.Fatalf("no se pudo leer deploy/redesplegar-cerebro.sh: %v", err)
 	}
 	real := fmt.Sprintf("%x", sha256.Sum256(guion))
 
-	inst, err := os.ReadFile(filepath.Join("..", "..", "deploy", "install-musubi-brain.sh"))
+	inst, err := leerArchivoDeDespliegue(filepath.Join("..", "..", "deploy", "install-musubi-brain.sh"))
 	if err != nil {
 		t.Fatalf("no se pudo leer deploy/install-musubi-brain.sh: %v", err)
 	}
@@ -491,11 +497,11 @@ func TestElPinDelGuionDeRedespliegueEsElVerdadero(t *testing.T) {
 // en la tabla del verificador. El binario del cerebro es la única excepción y está nombrada abajo
 // con su razón; cualquier destino NUEVO rompe la prueba hasta que alguien decida qué hacer con él.
 func TestCadaGuionQueSeInstalaEnElServidorSeCompara(t *testing.T) {
-	inst, err := os.ReadFile(filepath.Join("..", "..", "deploy", "install-musubi-brain.sh"))
+	inst, err := leerArchivoDeDespliegue(filepath.Join("..", "..", "deploy", "install-musubi-brain.sh"))
 	if err != nil {
 		t.Fatalf("no se pudo leer deploy/install-musubi-brain.sh: %v", err)
 	}
-	verif, err := os.ReadFile(filepath.Join("..", "..", "deploy", "verificar-despliegue.sh"))
+	verif, err := leerArchivoDeDespliegue(filepath.Join("..", "..", "deploy", "verificar-despliegue.sh"))
 	if err != nil {
 		t.Fatalf("no se pudo leer deploy/verificar-despliegue.sh: %v", err)
 	}
@@ -641,11 +647,11 @@ func TestCadaGuionQueSeInstalaEnElServidorSeCompara(t *testing.T) {
 // expresión y no de las anotaciones. Es la lección dominante del 2026-09-05, y acá tenía dos
 // puertas de entrada.
 func TestElLatidoQueEmpujaElVerificadorEsElQueMiranLasAlertas(t *testing.T) {
-	guion, err := os.ReadFile(filepath.Join("..", "..", "deploy", "comparar-y-latir.sh"))
+	guion, err := leerArchivoDeDespliegue(filepath.Join("..", "..", "deploy", "comparar-y-latir.sh"))
 	if err != nil {
 		t.Fatalf("no se pudo leer deploy/comparar-y-latir.sh: %v", err)
 	}
-	alertas, err := os.ReadFile(filepath.Join("..", "..", "deploy", "musubi-alerts.yml"))
+	alertas, err := leerArchivoDeDespliegue(filepath.Join("..", "..", "deploy", "musubi-alerts.yml"))
 	if err != nil {
 		t.Fatalf("no se pudo leer deploy/musubi-alerts.yml: %v", err)
 	}
@@ -734,7 +740,7 @@ func TestElLatidoQueEmpujaElVerificadorEsElQueMiranLasAlertas(t *testing.T) {
 // latido recién empujado. Por eso esta guarda es sobre la FORMA de la expresión y no sobre su
 // sentido: el sentido ya era correcto.
 func TestLasAlertasDelLatidoLeenLaSerieConLastOverTime(t *testing.T) {
-	alertas, err := os.ReadFile(filepath.Join("..", "..", "deploy", "musubi-alerts.yml"))
+	alertas, err := leerArchivoDeDespliegue(filepath.Join("..", "..", "deploy", "musubi-alerts.yml"))
 	if err != nil {
 		t.Fatalf("no se pudo leer deploy/musubi-alerts.yml: %v", err)
 	}
