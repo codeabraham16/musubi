@@ -30,6 +30,9 @@ var alertasSinGuardaDeMantenimiento = map[string]string{
 	// `unless on(project, device)` no podría emparejar con nada. Y el sentido tampoco: que UNA
 	// máquina esté en mantenimiento no explica que la flota entera deje de reportar.
 	"FlotaSinTelemetria": "es global y sin etiqueta device: el unless no tendría con qué emparejar",
+	// Su hermana del scrape, por la misma razón exacta: `absent()` sobre una serie que no lleva
+	// `device`, así que no hay con qué emparejar el `unless`.
+	"FlotaSinTelemetriaDelScrape": "es global y sin etiqueta device: el unless no tendría con qué emparejar",
 
 	// Las tres cuentan el MOTOR de políticas, no el estado de una máquina. Y no hace falta la
 	// guarda porque la ventana ya corta la causa un nivel antes: mientras vale 1, las políticas de

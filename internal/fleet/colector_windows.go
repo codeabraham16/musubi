@@ -228,10 +228,12 @@ func leerDiscoWindows(m *Muestra) {
 		uintptr(unsafe.Pointer(&disponibleParaElUsuario)),
 		uintptr(unsafe.Pointer(&total)),
 		uintptr(unsafe.Pointer(&libreTotal)))
-	if r == 0 || total == 0 || total < libreTotal {
+	if r == 0 {
 		return
 	}
-	m.DiscoTotal = total
-	m.DiscoUsado = total - libreTotal
-	m.DiscoDisponible = disponibleParaElUsuario
+	col, ok := ColumnasDeDiscoWindows(total, libreTotal, disponibleParaElUsuario)
+	if !ok {
+		return
+	}
+	m.DiscoTotal, m.DiscoUsado, m.DiscoDisponible = col.Total, col.Usado, col.Disponible
 }

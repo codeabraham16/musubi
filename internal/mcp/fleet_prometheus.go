@@ -530,6 +530,40 @@ func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration, versionCerebro
 				}
 				return 0, true
 			}},
+		// QUÉ CONTRATO DICE HABLAR ESTA MÁQUINA.
+		//
+		// ────────────────────────────────────────────────────────────────────────────────────
+		// EXISTE PORQUE DOS EJES DE ESTE PLANO SE APAGAN SOLOS Y NADIE PODÍA DECIR POR QUÉ.
+		//
+		// `services_unknown` y `services_omitted` se OMITEN cuando el agente declara un capver
+		// por debajo de `CapverConInventarioExplicado`, y eso está bien: un agente viejo no puede
+		// distinguir «enumeré y no hubo error» de «no sé enumerar», así que afirmar 0 sería una
+		// alerta PERDIDA — silenciosa, que es peor que una falsa.
+		//
+		// Pero la ausencia quedaba MUDA. Desde Prometheus, «esta máquina tiene el eje apagado
+		// porque su agente es viejo» y «esta máquina no existe» se ven igual: las dos son una
+		// serie que no está. Las dos alertas que cerraron A116 nacieron mudas para toda la flota
+		// —el Capver subió a 2 el 2026-09-10 y los agentes se cruzan a mano— y nada lo decía.
+		//
+		// Con esta serie la ausencia tiene nombre: `AgenteSinContratoDeclarado` dice que el
+		// agente no declara capver, y `AgenteConContratoViejo` dice que declara uno por debajo
+		// del que esos ejes necesitan. Un eje apagado deja de ser silencio y pasa a ser un aviso
+		// con la máquina nombrada.
+		//
+		// SE OMITE CON 0, y no es el cero que este plano prohíbe: `Capver = 0` significa
+		// literalmente «este agente no declaró nada» —lo dice `protocolo.go`— y emitirlo como
+		// número lo convertiría en «habla la versión cero», que es una afirmación que nadie hizo.
+		// Ver la regla de este archivo: AUSENTE NO ES CERO.
+		// ────────────────────────────────────────────────────────────────────────────────────
+		{"musubi_fleet_device_capver",
+			"Versión de CAPACIDADES del protocolo que declara el agente de esta máquina. NO es la versión del producto (ésa es musubi_fleet_device_agent_stale): dos builds distintos pueden hablar el mismo contrato. AUSENTE si el agente no declara ninguna —un agente anterior a la pieza, o una máquina sin agente—, porque un 0 se leería como «habla la versión cero» y lo que pasa es que nadie afirmó nada. Los ejes services_unknown y services_omitted se apagan por debajo de 2.",
+			"", true,
+			func(d fleet.Device, m *fleet.Muestra) (float64, bool) {
+				if d.Capver <= 0 {
+					return 0, false
+				}
+				return float64(d.Capver), true
+			}},
 		// CUÁNTOS SERVICIOS NO ENTRARON EN EL ÚLTIMO INVENTARIO (A116).
 		//
 		// SIEMPRE PRESENTE, INCLUIDO EL 0, y acá el criterio es el OPUESTO al de `token_rotable`

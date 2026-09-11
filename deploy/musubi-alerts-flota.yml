@@ -303,8 +303,32 @@ groups:
         for: 15m
         labels: { severity: critical }
         annotations:
-          summary: "No llega NINGUNA métrica de flota: el resto de las alertas de flota están ciegas."
-          nota: "Revisá la sección `fleet:` del principal del scrape en .musubi/principals.yaml. Ver deploy/prometheus/prometheus.yml."
+          summary: "No llega NINGUNA métrica de flota POR EL EMPUJE: el resto de las alertas de flota están ciegas."
+          nota: "`musubi_fleet_device_up` llega SÓLO por el empuje OTLP (prometheus.yml descarta esa familia del scrape a propósito). Así que esto apunta al empujador: `MusubiPushOTLPFallando`, `MusubiPushOTLPMudo` y `MusubiPushOTLPNuncaLlego` dicen por qué. La mitad del SCRAPE la vigila FlotaSinTelemetriaDelScrape."
+
+      # --- Y LA OTRA MITAD, QUE ESTA ALERTA NO PODÍA VER ---
+      #
+      # `FlotaSinTelemetria` mira `musubi_fleet_device_up`, que por decisión de `prometheus.yml`
+      # llega SÓLO por el empuje OTLP: esa familia se descarta del scrape para que no haya dos
+      # productores del mismo dato. O sea que la alerta que dice «no llega NINGUNA métrica de
+      # flota» era ciega a la mitad de las formas de no tenerla.
+      #
+      # Y SU PROPIA NOTA APUNTABA A LA MITAD QUE NO VE. Decía «revisá la sección `fleet:` del
+      # principal del scrape» — que es exactamente la causa que NO puede detectar: con esa
+      # concesión sacada, `/metrics` deja de traer las series de flota, el scrape sigue en `up==1`
+      # (así que `MusubiDown` tampoco dice nada), y `device_up` sigue llegando por el empuje.
+      # Todo verde, y la mitad del plano de flota apagada.
+      #
+      # `musubi_fleet_export_truncated` es el canario correcto: el exportador la emite SIEMPRE
+      # —0 cuando no recortó, 1 cuando sí— y es una de las cinco series que viajan sólo por el
+      # scrape, así que su ausencia no puede deberse al empujador.
+      - alert: FlotaSinTelemetriaDelScrape
+        expr: absent(musubi_fleet_export_truncated)
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "El scrape del cerebro no trae NINGUNA métrica de flota, aunque el target esté arriba."
+          nota: "Revisá la sección `fleet:` del principal del scrape en .musubi/principals.yaml. Con el target en `up==1` y esta serie ausente, la causa es de PERMISOS o de que el plano de flota no está en el binario desplegado — no del empujador. Ver deploy/prometheus/prometheus.yml."
 
       # --- EL AGENTE SE QUEDÓ ATRÁS (A68) ---
       #
@@ -567,6 +591,42 @@ groups:
       #
       # Lo único que se veía era `ServicioSinNoticias` a los 30 minutos, multiplicado por cada
       # servicio conocido, y sin la causa. Esta alerta es UNA, llega antes, y la nombra.
+      # --- EL EJE APAGADO TIENE NOMBRE (y antes era silencio) ---
+      #
+      # `MaquinaNoPuedeEnumerar` y `ServiciosRecortados` dependen de series que el exportador
+      # OMITE cuando el agente declara un capver por debajo de 2. La omisión es correcta —un
+      # agente viejo no puede distinguir «enumeré bien» de «no sé enumerar», y afirmar 0 sería una
+      # alerta PERDIDA— pero desde Prometheus la ausencia era muda: «el eje está apagado porque el
+      # agente es viejo» y «esta máquina no existe» se ven exactamente igual.
+      #
+      # Las dos alertas que cerraron A116 nacieron así, mudas para toda la flota: el Capver subió
+      # a 2 el 2026-09-10 y los binarios de los agentes se cruzan A MANO, máquina por máquina.
+      #
+      # Estas dos le ponen nombre a esa ausencia. No reemplazan a `AgenteDesactualizado`, que
+      # compara la VERSIÓN del producto: dos builds distintos pueden hablar el mismo contrato, y
+      # es justo lo que permite desplegar sin romper.
+      - alert: AgenteSinContratoDeclarado
+        expr: >-
+          musubi_fleet_device_up{tier="A"} == 1
+          unless on(project, device) musubi_fleet_device_capver
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "El agente de {{ $labels.device }} no declara qué contrato habla: los ejes de inventario están apagados ahí."
+          nota: "El agente es anterior a la pieza de capver. Mientras no declare, `musubi_fleet_device_services_unknown` y `services_omitted` NO se emiten para esta máquina, así que MaquinaNoPuedeEnumerar y ServiciosRecortados no pueden dispararse sobre ella — no por estar sanas, sino por ignorancia. Se arregla actualizando el agente: deploy/actualizar-agente-windows.sh."
+
+      - alert: AgenteConContratoViejo
+        expr: >-
+          musubi_fleet_device_capver < 2
+          unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "El agente de {{ $labels.device }} declara capver {{ $value }} y los ejes de inventario necesitan 2."
+          nota: "Mismo efecto que AgenteSinContratoDeclarado: los ejes que A116 cerró están apagados en esta máquina. La diferencia es que ésta SÍ declara, así que se sabe exactamente qué le falta."
+
       - alert: MaquinaNoPuedeEnumerar
         # EL `device_up == 0` NO ES OPCIONAL, y lo cazó `TestNingunaAlertaDeMuestraDisparaSobreUnaMaquinaCaida`
         # cuando esta alerta se escribió sin él: la serie se CONGELA cuando la máquina muere, así

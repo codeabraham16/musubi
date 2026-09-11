@@ -25,6 +25,7 @@ package mcp
 // ────────────────────────────────────────────────────────────────────────────────────────────
 
 import (
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -44,12 +45,25 @@ var sinGuardaPorDiseno = map[string]string{
 	"AgenteCaidoConMaquinaViva": "su premisa ES `up == 0` —dice «no late PERO la red la ve»—, así que la guarda, que exige `up != 0`, la volvería imposible de disparar. Y `musubi_fleet_device_net_up` no se congela como una muestra: el cerebro sólo la emite mientras la medición está vigente, y la borra en cuanto la máquina vuelve a latir",
 	"FlotaSinTelemetria":        "es `absent(...)` sobre la propia serie de vida; no hay muestra congelada que leer",
 	"MaquinaSinInventario":      "se condiciona con `musubi_fleet_device_up{tier=\"A\"} == 1`, que ya exige que esté viva",
+	// Misma forma exacta que la de arriba: su premisa ARRANCA con `device_up{tier="A"} == 1`,
+	// así que la guarda sería redundante — y peor, sugeriría que la condición de vida no estaba.
+	"AgenteSinContratoDeclarado": "se condiciona con `musubi_fleet_device_up{tier=\"A\"} == 1`, que ya exige que esté viva",
 }
 
 // metricasQueNoSeCongelan salen de la FILA del device y no de la muestra, así que no aplican.
 var metricasQueNoSeCongelan = map[string]bool{
 	"musubi_fleet_device_up":                true,
 	"musubi_fleet_device_last_seen_seconds": true,
+	// NO SALE DE LA MUESTRA: sale de la base (`enMantenimiento[d.ID]`). Es un estado DECLARADO
+	// por una persona, no una medición, y el cerebro lo conoce con certeza aunque la máquina esté
+	// apagada — de hecho una ventana declarada sobre una máquina apagada SIGUE abierta, que es
+	// justo el caso que `MantenimientoEterno` existe para cazar. Ponerle la guarda de la máquina
+	// caída la volvería imposible de disparar exactamente donde más importa: una ventana que
+	// alguien se olvidó de cerrar sobre una máquina que ya no está.
+	//
+	// Lo encontró esta guarda al extenderse a los cuatro archivos de alertas: vive en
+	// `musubi-alerts.yml`, que antes quedaba fuera de su alcance.
+	"musubi_fleet_device_maintenance": true,
 }
 
 // TestNingunaAlertaDeMuestraDisparaSobreUnaMaquinaCaida.
@@ -57,7 +71,28 @@ var metricasQueNoSeCongelan = map[string]bool{
 // Sabotaje: quitarle el `unless on(device) (musubi_fleet_device_up == 0)` a cualquier regla de
 // flota, o agregar una regla nueva sobre una métrica `musubi_fleet_*` sin él.
 func TestNingunaAlertaDeMuestraDisparaSobreUnaMaquinaCaida(t *testing.T) {
-	texto := leerDeploy(t, "musubi-alerts-flota.yml")
+	// LOS CUATRO ARCHIVOS, NO UNO.
+	//
+	// Esta guarda leía sólo `musubi-alerts-flota.yml`, y las métricas de flota ya viven en DOS:
+	// `musubi-alerts.yml` tiene `musubi_fleet_device_maintenance` y `musubi_fleet_export_truncated`.
+	// O sea que una alerta sobre una serie que se congela, escrita en el archivo de al lado,
+	// quedaba fuera del alcance de la cautela — que es la forma exacta del defecto dominante de
+	// este repo: la lección aprendida de un lado y no del hermano.
+	//
+	// Se enumera el directorio en vez de listar nombres: un archivo de alertas nuevo entra por la
+	// puerta y no por la ventana.
+	nombres, err := filepath.Glob(filepath.Join("..", "..", "deploy", "musubi-alerts*.yml"))
+	if err != nil {
+		t.Fatalf("no pude enumerar los archivos de alertas: %v", err)
+	}
+	if len(nombres) < 4 {
+		t.Fatalf("se encontraron %d archivos de alertas y son al menos 4: cambió dónde viven y esta "+
+			"guarda estaría en verde por no haber mirado", len(nombres))
+	}
+	var texto string
+	for _, n := range nombres {
+		texto += leerDeploy(t, filepath.Base(n)) + "\n"
+	}
 
 	// Se parte por `- alert:` y se mira cada bloque hasta el siguiente, sin las líneas de
 	// comentario: un comentario que explica la guarda no puede hacer las veces de la guarda.
