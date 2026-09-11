@@ -135,6 +135,7 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 	renderVidaDeRed(&cuerpo, vistos, ahora, vidaDe)
 	// LAS BAJAS RECIENTES, que no están en `vistos` justamente por estar dadas de baja.
 	renderBajasRecientes(&cuerpo, engine, p, ahora)
+	renderRotacionesAbiertas(&cuerpo, engine, p, ahora)
 
 	renderTruncado(b, recorte, techoServicios)
 	// EL MARGEN, ANTES DEL CORTE. `export_truncated` avisa cuando un techo YA cortó, o sea
@@ -213,6 +214,8 @@ var seriesSoloDelScrape = []string{
 	// Una máquina revocada no está en el barrido del empuje —no es visible— así que su baja sólo
 	// puede llegar por el scrape.
 	nombreBajaReciente,
+	// La rotación es un estado del REGISTRO, no de la muestra: no viaja por el empuje.
+	nombreRotacionAbierta,
 }
 
 // nombreBajaReciente dice que una máquina SE DIO DE BAJA hace poco, con su antigüedad.
@@ -297,6 +300,63 @@ func renderBajasRecientes(b *strings.Builder, engine memory.StorageBackend, p *P
 			}
 			fmt.Fprintf(b, "%s{project=%q,device=%q} %d\n", nombreBajaReciente, d.ProjectID, d.Name, int64(edad.Seconds()))
 		}
+	}
+}
+
+// nombreRotacionAbierta dice que una máquina tiene una rotación de token en curso, y cuánto le
+// queda antes de abandonarse sola.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// UNA ROTACIÓN SE ABRÍA EN LA BASE Y MORÍA EN SILENCIO. El estado estaba guardado
+// —`token_sha256_nuevo` y `rotacion_vence`— y NO LO MIRABA NADIE: ni el doctor, ni el panel, ni
+// una alerta. El barrido que las abandona devuelve un número que se escribía en un log y nada
+// más.
+//
+// El modo de falla es el de siempre acá: una operación que no terminó se ve igual que una que
+// nunca empezó. Y la consecuencia concreta es que una máquina cuyo agente nunca levantó el token
+// nuevo se queda con el viejo —lo cual está BIEN a propósito, la rotación es higiene y no
+// emergencia— pero nadie se entera de que la higiene no se hizo.
+//
+// EL VALOR ES LO QUE FALTA, y no la hora de vencimiento: un timestamp absoluto obliga a restar
+// contra el reloj de quien mira, y con eso ya se equivocó `timestamp()` una vez en este repo.
+// Negativo significa que ya venció y el barrido todavía no pasó.
+//
+// El nombre NO lleva `device_` por el mismo motivo que el de las bajas: esa familia se descarta
+// del scrape y esta serie no puede viajar por el empuje sin ensanchar la tabla por máquina.
+// ────────────────────────────────────────────────────────────────────────────────────────────
+const nombreRotacionAbierta = "musubi_fleet_rotation_expires_in_seconds"
+
+// renderRotacionesAbiertas emite una línea por rotación en curso.
+func renderRotacionesAbiertas(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time) {
+	abiertas, err := engine.RotacionesAbiertas()
+	if err != nil {
+		logx.Error("export de flota: no se pudieron listar las rotaciones abiertas; ninguna alerta las cubre",
+			"error", err, "serie", nombreExportTruncado+`{kind="unreadable"}`)
+		return
+	}
+	tipoEscrito := false
+	for _, r := range abiertas {
+		if r.Vence.IsZero() {
+			// Una fila con fecha ilegible es un estado que no debería existir. Se salta y se dice,
+			// en vez de emitir un número inventado que una alerta leería como un vencimiento.
+			logx.Warn("export de flota: una rotación abierta tiene una fecha de vencimiento ilegible",
+				"device", r.Name, "project", r.ProjectID)
+			continue
+		}
+		// LA COMPUERTA ES LA MISMA QUE PARA LAS MÉTRICAS DE ESA MÁQUINA. No se filtra ningún hash
+		// —esta serie no lleva ninguno— pero saber que una máquina está rotando su credencial es
+		// información de esa máquina, y no tiene por qué verla quien no la ve a ella.
+		d, hay, err := engine.DevicePorID(r.DeviceID)
+		if err != nil || !hay || !PuedeSobreDevice(p, d, fleet.CapMetrics) {
+			continue
+		}
+		if !tipoEscrito {
+			fmt.Fprintf(b, "# HELP %s Segundos que le quedan a una rotación de token de dispositivo antes de abandonarse sola. NEGATIVO = ya venció y el barrido todavía no pasó. Existe SÓLO mientras hay una rotación en curso: su ausencia significa que no hay ninguna, no que esté sana.\n# TYPE %s gauge\n",
+				nombreRotacionAbierta, nombreRotacionAbierta)
+			tipoEscrito = true
+		}
+		fmt.Fprintf(b, "%s{project=%q,device=%q} %d\n",
+			nombreRotacionAbierta, r.ProjectID, r.Name, int64(r.Vence.Sub(ahora).Seconds()))
 	}
 }
 

@@ -407,6 +407,11 @@ type DeviceStore interface {
 	// aparte de `ProyectosConDevices` porque aquélla filtra las revocadas: un proyecto cuya última
 	// máquina se dio de baja desaparece del export, y su baja es justo la que hay que anunciar.
 	ProyectosConBajasRecientes(desde time.Time, tope int) ([]string, error)
+
+	// RotacionesAbiertas lista las rotaciones de token de dispositivo en curso. El estado ya
+	// estaba guardado y no lo miraba nadie: una rotación que nadie completa se ve igual que una
+	// que nunca empezó.
+	RotacionesAbiertas() ([]RotacionAbierta, error)
 	// ProyectosConDevices lista los tenants que tienen máquinas activas (para el export federado
 	// a Prometheus). `tope` acota el barrido; pedí uno de más para saber si hay más.
 	ProyectosConDevices(tope int) ([]string, error)

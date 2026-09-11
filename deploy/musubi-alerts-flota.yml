@@ -714,6 +714,32 @@ groups:
       #
       # `for: 0m` a propósito: el valor de este aviso es llegar AL MISMO TIEMPO que los resolved,
       # y cualquier espera lo deja llegando después — cuando ya nadie está mirando ese hilo.
+      # --- UNA ROTACIÓN DE TOKEN QUE NADIE COMPLETA ---
+      #
+      # El estado estaba guardado en la base desde siempre y NO LO MIRABA NADIE: ni el doctor, ni
+      # el panel, ni una alerta. El barrido que las abandona devuelve un número que se escribía en
+      # un log y nada más. Una operación que no terminó se veía igual que una que nunca empezó.
+      #
+      # ABANDONARLA NO ROMPE NADA —la rotación es HIGIENE y no emergencia: el agente se queda con
+      # el token viejo, que es el estado que ya había, y si un token se filtró lo que corresponde
+      # es REVOCAR, que es instantáneo y no depende de que el agente coopere—. Lo que sí pasa es
+      # que la higiene no se hizo, y hasta ahora nadie se enteraba.
+      #
+      # Dispara con 6 h de margen: da tiempo a mirar por qué el agente no levantó el token nuevo
+      # antes de que la ventana se cierre sola.
+      # LA VENTANA DE MANTENIMIENTO LA CALLA, y acá el caso es directo: reinstalar el agente es
+      # mantenimiento, y un agente que se está reinstalando no va a completar ninguna rotación.
+      # Sin la guarda, arreglar dispara la alarma.
+      - alert: RotacionDeTokenSinCompletar
+        expr: >-
+          musubi_fleet_rotation_expires_in_seconds < 21600
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "La rotación del token de {{ $labels.device }} lleva abierta demasiado: le quedan {{ $value | humanizeDuration }}."
+          nota: "El agente tiene que latir con el token NUEVO para que la rotación se cierre; mientras no lo haga, sigue valiendo el viejo. Si la máquina no está latiendo, la rotación no es el problema. Si late y no completa, revisá que su credencial venga por ARCHIVO y no por variable de entorno (`musubi_fleet_device_token_rotable`): un proceso no puede reescribir su propio entorno, así que con `variable` la rotación NO se puede completar nunca."
+
       - alert: MaquinaRevocada
         expr: musubi_fleet_revoked_ago_seconds >= 0
         for: 0m

@@ -75,6 +75,50 @@ func (e *DbEngine) CompletarRotacion(deviceID string) error {
 	return nil
 }
 
+// RotacionAbierta es una rotación de token de dispositivo que se inició y todavía no se completó.
+//
+// EXISTE PORQUE UNA ROTACIÓN SE ABRÍA EN LA BASE Y MORÍA EN SILENCIO. El estado estaba guardado
+// —`token_sha256_nuevo` y `rotacion_vence`— y NO LO MIRABA NADIE: no había forma de saber que una
+// rotación estaba en curso, ni de enterarse de que venció sin completarse. `musubi doctor` no la
+// chequea, el panel no la dibuja, y el barrido que las abandona devuelve un número que se
+// escribía en un log y nada más.
+//
+// El modo de falla es el de siempre en este track: una operación que no terminó se ve igual que
+// una que nunca empezó.
+type RotacionAbierta struct {
+	DeviceID  string
+	ProjectID string
+	Name      string
+	// Vence es cuándo se abandona sola. Cero si la fila tiene una fecha ilegible, que es un
+	// estado que no debería existir y que se reporta en vez de esconderse.
+	Vence time.Time
+}
+
+// RotacionesAbiertas lista las rotaciones en curso. No devuelve NINGÚN hash: lo que hace falta
+// saber es que hay una abierta y hasta cuándo, no cuál es el token.
+func (e *DbEngine) RotacionesAbiertas() ([]RotacionAbierta, error) {
+	rows, err := e.db.Query(
+		`SELECT id, project_id, name, rotacion_vence FROM devices
+		  WHERE token_sha256_nuevo <> '' AND revoked = 0 ORDER BY project_id, name`)
+	if err != nil {
+		return nil, fmt.Errorf("error al listar las rotaciones abiertas: %w", err)
+	}
+	defer rows.Close()
+	var out []RotacionAbierta
+	for rows.Next() {
+		var r RotacionAbierta
+		var vence string
+		if err := rows.Scan(&r.DeviceID, &r.ProjectID, &r.Name, &vence); err != nil {
+			return nil, fmt.Errorf("error al escanear una rotación abierta: %w", err)
+		}
+		if t, ok := parseObsTime(vence); ok {
+			r.Vence = t
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // AbandonarRotacionesVencidas descarta las rotaciones que nadie completó a tiempo.
 //
 // ────────────────────────────────────────────────────────────────────────────────────────────
