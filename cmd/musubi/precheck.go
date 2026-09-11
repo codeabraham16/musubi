@@ -585,9 +585,17 @@ func codeMemoryMessage(store codeStore, root, path, key string) string {
 	}
 	current, _ := memory.FileFingerprint(root, path)
 	if current != "" && current == cm.Fingerprint {
-		msg := fmt.Sprintf("[Musubi — código] Ya tenés un gist FRESCO de «%s»: %s", key, cm.Gist)
-		if cm.Symbols != "" {
-			msg += " | símbolos: " + cm.Symbols
+		// LOS DOS CAMPOS DE LA MEMORIA DE CÓDIGO, saneados. Los escribe `musubi_save_code`, o sea
+		// cualquier agente con acceso al proyecto, y este mensaje se inyecta en el contexto del
+		// turno: un salto de línea acá fabrica un renglón con la voz del sistema. Ver
+		// internal/memory/linea_ajena.go.
+		//
+		// `Symbols` va también aunque la guarda de AST no lo vea —se concatena con `+=`, no se
+		// interpola—, y es justo el límite que esa guarda declara: sólo ve la interpolación
+		// directa. Que la guarda no llegue no vuelve seguro al campo.
+		msg := fmt.Sprintf("[Musubi — código] Ya tenés un gist FRESCO de «%s»: %s", key, memory.EnUnaLinea(cm.Gist, 400))
+		if sim := memory.EnUnaLinea(cm.Symbols, 300); sim != "" {
+			msg += " | símbolos: " + sim
 		}
 		msg += ". Si solo necesitás una parte, leé el rango puntual en vez del archivo entero (evitás re-pagar la lectura)."
 		return msg
