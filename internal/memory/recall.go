@@ -371,15 +371,6 @@ func packByBudget(ranked []scoredCandidate, budget, gistMax int) RecallResult {
 	return result
 }
 
-// scoreCandidates fusiona rankings (relevancia keyword, recencia, frecuencia, importancia) vía
-// RRF. La importancia entra como un término RRF más (no como multiplicador: ver importanceRank/Q3),
-// así ninguna señal domina a las otras. Determinista, sin LLM. Los rankings por pool se pasan como mapas
-// id→posición (0 = mejor): un candidato ausente de un pool simplemente no suma ese término.
-// lexRank es el ranking keyword (FTS), vecRank el ranking vectorial (coseno), graphRank el de
-// centralidad de grafo (PPR sobre observation_relations) y coocRank el de expansión por
-// co-ocurrencia/PRF; cada uno nil ⇒ se omite ese término. Con solo lexRank (NoopProvider) el
-// resultado es idéntico al histórico; vecRank lo activa el recall híbrido (T5.7 R2), graphRank la
-// centralidad de grafo (B4) y coocRank la semántica model-free por co-ocurrencia (Track 14 #2).
 // PesosRRF es cuánto pesa cada señal en la fusión. Hasta acá las siete valían 1.0, y eso NO era
 // una decisión medida: era el default de Reciprocal Rank Fusion, que existe justamente para no
 // tener que elegir pesos.
@@ -404,6 +395,15 @@ func PesosUniformes() PesosRRF {
 	return PesosRRF{Recencia: 1, Frecuencia: 1, Lexico: 1, Vector: 1, Grafo: 1, Coocurrencia: 1, Importancia: 1}
 }
 
+// scoreCandidates fusiona rankings (relevancia keyword, recencia, frecuencia, importancia) vía
+// RRF. La importancia entra como un término RRF más (no como multiplicador: ver importanceRank/Q3),
+// así ninguna señal domina a las otras. Determinista, sin LLM. Los rankings por pool se pasan como mapas
+// id→posición (0 = mejor): un candidato ausente de un pool simplemente no suma ese término.
+// lexRank es el ranking keyword (FTS), vecRank el ranking vectorial (coseno), graphRank el de
+// centralidad de grafo (PPR sobre observation_relations) y coocRank el de expansión por
+// co-ocurrencia/PRF; cada uno nil ⇒ se omite ese término. Con solo lexRank (NoopProvider) el
+// resultado es idéntico al histórico; vecRank lo activa el recall híbrido (T5.7 R2), graphRank la
+// centralidad de grafo (B4) y coocRank la semántica model-free por co-ocurrencia (Track 14 #2).
 func scoreCandidates(cands []candidate, lexRank, vecRank, graphRank, coocRank map[string]int, pesos *PesosRRF, now time.Time) []scoredCandidate {
 	p := PesosUniformes()
 	if pesos != nil {
