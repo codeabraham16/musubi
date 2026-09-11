@@ -23,12 +23,11 @@ import (
 
 func TestExisteLaUnidadDeRespaldoDelEstadoLocal(t *testing.T) {
 	for _, n := range []string{"musubi-respaldo-local.service", "musubi-respaldo-local.timer"} {
-		b, err := os.ReadFile(filepath.Join("..", "..", "deploy", "systemd", n))
-		if err != nil {
-			t.Fatalf("falta %s: el estado local no sincroniza a ningún lado, así que sin esta unidad "+
-				"no tiene NINGUNA copia — ni acá ni afuera: %v", n, err)
-		}
-		texto := string(b)
+		// POR `leerDeploy`, que blanquea los comentarios: una unidad de systemd comenta con `#`, y
+		// estas unidades llevan bloques largos de prosa que nombran `Persistent=true` y
+		// `BACKUP_ALLOW_LOCAL_ONLY=1` para explicarlos. Sin el filtro, borrar la directiva y dejar
+		// su explicación salía en VERDE — la guarda hueca de manual.
+		texto := leerDeploy(t, "systemd", n)
 
 		// `Persistent=true` ES LA LÍNEA QUE HACE QUE ESTO SIRVA EN UNA ESTACIÓN DE TRABAJO. Sin
 		// ella, un disparo que cae con la máquina apagada simplemente NO OCURRE, y en un equipo
