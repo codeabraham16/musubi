@@ -1,0 +1,67 @@
+# musubi-tls-renovar.service — vuelve a pedirle a Tailscale el certificado del cerebro.
+#
+# CORRE EN EL SERVIDOR DEL CEREBRO, no en la máquina del operador, y ésa es la diferencia con
+# `musubi-comparar.service`. Aquélla compara el repo contra el servidor y por eso vive donde está
+# el repo; ésta escribe archivos que sólo existen allá, así que no hay forma de compartir timer.
+# Medido el 2026-09-03: el usuario `musubi` obtiene el certificado SIN sudo.
+#
+# UNIDAD DE USUARIO, por lo mismo que su hermana: corre como el dueño del cerebro y usa su
+# identidad de Tailscale. Una unidad de sistema tendría que llevar credenciales propias para algo
+# que el usuario ya puede hacer.
+#
+# INSTALACIÓN (en el servidor del cerebro, como el usuario del cerebro):
+#
+#   cp deploy/renovar-tls.sh ~/renovar-tls.sh && chmod 755 ~/renovar-tls.sh
+#   mkdir -p ~/.config/systemd/user
+#   sed "s|@GUION@|$HOME/renovar-tls.sh|" deploy/systemd/musubi-tls-renovar.service \
+#       > ~/.config/systemd/user/musubi-tls-renovar.service
+#   cp deploy/systemd/musubi-tls-renovar.timer ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now musubi-tls-renovar.timer
+#   loginctl enable-linger "$(id -un)"     # si no, se muere al cerrar sesión
+#
+# El `enable-linger` NO es opcional y su falta es SILENCIOSA, igual que en la unidad de comparación:
+# sin él la unidad de usuario se apaga al cerrar sesión y el timer deja de disparar. Acá el
+# silencio dura hasta el día 90 y después el cerebro no levanta.
+
+[Unit]
+Description=Renueva el certificado TLS del cerebro (tailscale cert)
+Documentation=file://%h/musubi/deploy/README.md
+
+[Service]
+Type=oneshot
+
+# EL NOMBRE DEL NODO NO TIENE DEFAULT, Y ESO ES A PROPÓSITO. El certificado vale para el nombre
+# que se pida y para ningún otro; adivinarlo produce uno que ningún cliente valida, que es peor
+# que no tenerlo. El guion sale con 2 si no se lo pasan.
+Environment=MUSUBI_TLS_NODO=
+
+# Dónde viven el par y quién lo lee. Tiene que ser el mismo directorio que nombran
+# `service.tls_cert_file` y `service.tls_key_file` en el config del cerebro: si no coinciden, esto
+# renueva un archivo que nadie sirve y la serie de vencimiento —que sale del certificado CARGADO,
+# no del archivo— lo va a delatar contando hacia atrás igual.
+Environment=MUSUBI_TLS_DIR=%h/musubi-brain/.musubi
+
+ExecStart=@GUION@
+
+# EL CEREBRO NO SE REINICIA ACÁ, Y NO ES UN OLVIDO. `internal/mcp/tls_recarga.go` instala un
+# `GetCertificate` que relee el par cuando cambia en disco, así que el certificado nuevo entra en
+# el siguiente apretón de manos. Un `ExecStartPost=systemctl restart` sería un corte semanal
+# innecesario — y, peor, taparía el defecto que la recarga en caliente vino a resolver: sin ella,
+# alguien podría creer que renovar el archivo alcanza.
+
+# EL CÓDIGO 1 DEJA LA UNIDAD EN `failed` A PROPÓSITO, al revés que en musubi-comparar.service.
+# Allá el 1 es un veredicto válido —«producción diverge»— que reporta una alerta. Acá el 1 es
+# «`tailscale cert` falló»: no hay veredicto que reportar, hay una renovación que no ocurrió, y el
+# certificado viejo se está gastando. Que la unidad quede en rojo es el aviso más barato que hay.
+#
+# Y NO ES EL ÚNICO AVISO, que es lo que lo hace confiable: aunque nadie mire `systemctl --user`,
+# `musubi_tls_certificate_expiry_seconds` sigue contando hacia atrás desde el certificado que el
+# cerebro tiene CARGADO, y `CertificadoTLSPorVencer` dispara sola. El dead-man de esto no es esta
+# unidad: es que el número baje.
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

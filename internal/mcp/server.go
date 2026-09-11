@@ -192,6 +192,9 @@ type McpServer struct {
 	// ilegible ("dev") ⇒ el exportador no puede comparar contra nada y apaga
 	// `musubi_fleet_device_agent_stale` para toda la flota (A68).
 	version string
+	// certTLS es el par TLS que se está sirviendo, releído cuando cambia en disco. nil = el cerebro
+	// no sirve TLS, que hoy es el caso. Lo llena `Serve` cuando la config trae las dos rutas.
+	certTLS *certificadoQueSeRelee
 
 	// degradado, cuando NO es nil, es la razón por la que este servidor no tiene memoria: la
 	// abrió alguien y falló. Un servidor así habla el protocolo completo —contesta initialize

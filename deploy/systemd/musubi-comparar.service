@@ -68,9 +68,12 @@ Environment=MUSUBI_ESPERA_RED=300
 #   3. `MUSUBI_BRAIN_TLS_NAME` en cada agente de la flota;
 #   4. esta línea a 1.
 #
-# Y LA QUINTA, QUE NO ES OPCIONAL: el certificado de `tailscale cert` VENCE CADA 90 DÍAS. Sin un
-# timer de renovación y una alerta de vencimiento, el cerebro se apaga solo a los tres meses. Es
-# la decisión abierta que bloquea todo esto, y está escrita para que nadie prenda el 1 sin verla.
+# LA QUINTA YA NO BLOQUEA, y se deja escrita porque explica por qué los pasos son cinco y no
+# cuatro: el certificado de `tailscale cert` VENCE CADA 90 DÍAS, y sin renovación el cerebro se
+# apaga solo a los tres meses. Eso ya está resuelto —`musubi-tls-renovar.timer` en el servidor del
+# cerebro, la recarga en caliente en `internal/mcp/tls_recarga.go`, y `CertificadoTLSPorVencer`
+# avisando con tres corridas de margen—, así que lo que queda es la decisión de migrar, que no es
+# de este archivo.
 Environment=MUSUBI_EXIGIR_TLS=0
 ExecStart=@REPO@/deploy/comparar-y-latir.sh
 
