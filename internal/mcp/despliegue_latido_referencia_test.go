@@ -120,6 +120,7 @@ func nombresDeMetricas(t *testing.T, sobre map[string]any) map[string]float64 {
 const serieReferencia = "musubi_verificacion_referencia_confiable"
 
 func TestElLatidoDiceContraQueReferenciaSeComparo(t *testing.T) {
+	saltarSiWindows(t)
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("hace falta bash")
 	}

@@ -86,6 +86,7 @@ func seccionDeUnidades(t *testing.T, salida string) string {
 }
 
 func TestElVerificadorComparaSusPropiasUnidadesInstaladas(t *testing.T) {
+	saltarSiWindows(t)
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("hace falta git")
 	}

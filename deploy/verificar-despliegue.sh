@@ -340,7 +340,7 @@ else
       [ "$REF_ADELANTE" != "0" ] && MOTIVO="$MOTIVO, tiene $REF_ADELANTE commits que origin/main no"
       if [ "$REF_SUCIO" = "1" ]; then MOTIVO="$MOTIVO, y 1 archivo sin commitear"
       elif [ "$REF_SUCIO" != "0" ]; then MOTIVO="$MOTIVO, y $REF_SUCIO archivos sin commitear"; fi
-      dudoso "el árbol NO es origin/main: está en «$REF_RAMA» ($REF_HEAD)${MOTIVO}. Todo lo de abajo compara contra ESE árbol, así que un «coincide» no dice que producción esté al día con main"
+      dudoso "el árbol NO es origin/main: está en «${REF_RAMA}» ($REF_HEAD)${MOTIVO}. Todo lo de abajo compara contra ESE árbol, así que un «coincide» no dice que producción esté al día con main"
     fi
 
     if [ -n "$REF_EDAD_H" ] && [ "$REF_EDAD_H" -gt "$REF_EDAD_MAX_H" ]; then
@@ -828,9 +828,9 @@ print("%s %d %d" % (raiz or "-", hijas, receptores))
         if [ "$am_raiz" = "-" ]; then
           rojo "Alertmanager responde y su config viva NO tiene ruta raíz (route:): recibe alertas y no entrega ninguna"
         elif [ "$am_recep" -eq 0 ]; then
-          rojo "Alertmanager responde, enruta a «$am_raiz» y no declara NINGÚN receptor: no hay a dónde mandar el mensaje"
+          rojo "Alertmanager responde, enruta a «${am_raiz}» y no declara NINGÚN receptor: no hay a dónde mandar el mensaje"
         else
-          verde "Alertmanager responde: raíz → «$am_raiz», $am_hijas rutas hijas, $am_recep receptores cargados"
+          verde "Alertmanager responde: raíz → «${am_raiz}», $am_hijas rutas hijas, $am_recep receptores cargados"
         fi
       fi ;;
     401|403)
@@ -1081,7 +1081,7 @@ else
   elif [ -z "$PRESTART" ]; then
     dudoso "no se pudo leer el estado de podman-restart.service del usuario"
   else
-    rojo "podman-restart del USUARIO está en «$PRESTART»: después de un reboot los contenedores rootless NO vuelven solos —ni Prometheus, ni Alertmanager, ni el watchdog externo, que vive adentro de esta misma máquina—. El unit del sistema (hoy «${PRESTART_SIS:-?}») NO los cubre: son rootless. Arreglo: systemctl --user enable podman-restart.service"
+    rojo "podman-restart del USUARIO está en «${PRESTART}»: después de un reboot los contenedores rootless NO vuelven solos —ni Prometheus, ni Alertmanager, ni el watchdog externo, que vive adentro de esta misma máquina—. El unit del sistema (hoy «${PRESTART_SIS:-?}») NO los cubre: son rootless. Arreglo: systemctl --user enable podman-restart.service"
   fi
 fi
 

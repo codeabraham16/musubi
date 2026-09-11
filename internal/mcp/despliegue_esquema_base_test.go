@@ -85,6 +85,7 @@ func correrVerificadorConEsquema(t *testing.T, raiz, bin, db string) string {
 }
 
 func TestElVerificadorComparaElEsquemaDeLaBaseContraElBinario(t *testing.T) {
+	saltarSiWindows(t)
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("hace falta git")
 	}
