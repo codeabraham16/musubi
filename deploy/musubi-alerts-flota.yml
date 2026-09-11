@@ -420,6 +420,53 @@ groups:
           summary: "La cobertura del SLA de {{ $labels.project }} cayó más de 5 puntos en 6 horas."
           nota: "Mientras el TSDB acumula historia la cobertura sólo sube, así que esto es una pérdida: revisá si Prometheus perdió datos, si el scrape del cerebro se cortó, o si las recording rules se recargaron con otra definición. Las series `:sla30d` van a DESAPARECER si la cobertura baja de 0,95, y eso es lo que evita publicar un número que no se puede sostener. Ver deploy/RUNBOOK.md#coberturadelslasecayo"
 
+      # Y LA HERMANA, SOBRE SERVICIOS. ES LA MITAD QUE FALTABA, Y ES LA QUE SE FACTURA (A93).
+      #
+      # `musubi:project_service_up:cobertura30d` estaba CONSTRUIDA Y NO LA LEÍA NADIE. La de arriba
+      # vigila la familia de MÁQUINAS, así que la cobertura del SLA de SERVICIOS podía perderse
+      # entera sin que sonara nada: el defecto dominante de este repo —una guarda presente en N-1 de
+      # N caminos— aplicado justo sobre el número que se le firma a un cliente.
+      #
+      # POR QUÉ LEE LA SERIE GRABADA Y NO `musubi_fleet_service_up`. Son dos trampas medidas, no
+      # preferencias de estilo:
+      #
+      #   · DUPLICADOS POR `instance`. La métrica cruda llega DOS VECES por máquina —el scrape y el
+      #     push— y un `min` sobre eso se queda con el camino MUERTO: así fue como el «peor equipo»
+      #     del reporte marcó 10,2 % cuando la misma máquina, por el camino vivo, estaba en 84,7 %.
+      #     `musubi:service_up:norm` colapsa los dos caminos con `max by(...)` y esta serie
+      #     desciende de ella, igual que la de máquinas.
+      #   · UN SERVICIO QUE DEJÓ DE REPORTAR CONSERVA SU ÚLTIMO ESTADO. Contar `== 0` sobre la tabla
+      #     cruda mezcla «está fallando» con «nadie está midiendo»: el 2026-09-04 los 64 servicios de
+      #     una máquina muerta publicaron `1` durante seis horas. `:norm` lleva la guarda de frescura
+      #     —`unless (musubi_fleet_device_up == 0)`—, así que lo que deja de medirse SALE de la
+      #     cuenta en vez de congelarse. Esta alerta habla de CUÁNTO SE ESTÁ MIDIENDO; que un
+      #     servicio esté fallando lo dice `ServicioCaido`, y son dos preguntas distintas.
+      #
+      # LO QUE NO SIRVE PARA PREGUNTAR FRESCURA: `timestamp(last_over_time(X[30d]))` devuelve la hora
+      # de EVALUACIÓN, no la de la última muestra, así que una serie muerta contesta «hace 0 min» y
+      # la guarda queda en verde para siempre. Medido en este repo. Acá la frescura viaja adentro del
+      # `count_over_time` de la cobertura: si dejan de entrar muestras, el conteo BAJA, y esa bajada
+      # es lo que esta alerta mira.
+      #
+      # MISMO UMBRAL Y MISMO `for:` QUE SU HERMANA, a propósito: dos definiciones de «se cayó» para
+      # el mismo reporte es exactamente cómo una de las dos se queda vieja.
+      #
+      # NO ES UNA ALARMA DE «COBERTURA BAJA», y la distinción importa más acá que arriba: el `min`
+      # por proyecto de esta familia lo domina un servicio OCIOSO POR DISEÑO —`MapsBroker`, los
+      # updaters de Google—, que no emite a propósito (A70), así que su NIVEL es bajo y no informa.
+      # Su CAÍDA sí informa, porque mientras el TSDB acumula historia la cobertura sólo sube. La
+      # contracara conocida es que un servicio recién declarado entra con cobertura 0 y arrastra el
+      # `min` hacia abajo, igual que una máquina recién enrolada arrastra el de la alerta de arriba:
+      # el runbook lo pone primero en la lista para no salir a buscar una pérdida de datos que no
+      # hubo.
+      - alert: CoberturaDelSlaDeServiciosSeCayo
+        expr: delta(musubi:project_service_up:cobertura30d[6h]) < -0.05
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "La cobertura del SLA de SERVICIOS de {{ $labels.project }} cayó más de 5 puntos en 6 horas."
+          nota: "Es el otro número que se le factura al cliente, y la cobertura sólo sube mientras el TSDB acumula historia: una caída es una pérdida. Antes de buscarla, descartá lo barato — un servicio recién declarado entra con cobertura 0 y arrastra el min del proyecto. Si no es eso, revisá si Prometheus perdió datos, si el scrape del cerebro se cortó, o si las recording rules se recargaron con otra definición. `musubi:service_up:sla30d` va a DESAPARECER donde la cobertura baje de 0,95. Ver deploy/RUNBOOK.md#coberturadelsladeserviciossecayo"
+
       - alert: PoliticaFrenadaPorConsentimiento
         expr: increase(musubi_fleet_policy_actions_total{result=~"consentimiento_.*"}[24h]) > 0
         for: 6h

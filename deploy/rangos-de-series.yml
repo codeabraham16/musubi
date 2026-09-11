@@ -1,0 +1,66 @@
+# rangos-de-series.yml — el RANGO y las UNIDADES de las métricas crudas de las que descienden las
+# recording rules del SLA.
+#
+# ESTE ARCHIVO NO SE INSTALA EN NINGÚN LADO y a propósito no lleva la línea que marca a un archivo
+# como desplegable: Prometheus no lo lee y `verificar-despliegue.sh` no tiene que compararlo contra
+# ningún servidor. Lo lee UNA GUARDA:
+#
+#   internal/mcp/alertas_umbral_alcanzable_test.go
+#     · TestElUmbralDeCadaAlertaSobreUnaSerieGrabadaEsAlcanzable
+#     · TestElPlazoDeCadaAlertaSobreUnaSerieGrabadaEsAlcanzable
+#
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# POR QUÉ EXISTE: TRES SABOTAJES QUE QUEDARON EN VERDE, Y SON LA MISMA CLASE
+#
+# La guarda vieja miraba la FORMA de la expresión —que dijera `delta(<serie>[...])` y que
+# comparara contra un número negativo—. Tres cambios de una línea la dejaron en verde con la
+# alerta apagada para siempre:
+#
+#   (1) `delta(musubi:project_service_up:cobertura30d[6h]) < -5`
+#       La cobertura es un ratio en [0,1], así que su `delta` vive en [-1,1] y `< -5` no puede
+#       disparar NUNCA. Y es la confusión más plausible que hay: el `summary` de la alerta dice
+#       «cayó más de 5 puntos», así que quien pase de ratio a porcentaje escribe exactamente eso.
+#   (2) `for: 30d` en vez de `for: 30m`
+#       La condición tendría que sostenerse treinta días sobre una ventana de seis horas. No late
+#       nunca. La guarda ni siquiera leía el campo `for`.
+#   (3) `deriv(...)` en vez de `delta(...)`, con el umbral intacto
+#       `deriv` es POR SEGUNDO: -0,05/s son -180 por hora sobre un ratio [0,1]. Inalcanzable.
+#       El regex de la guarda vieja aceptaba la alternación `delta|idelta|deriv`, o sea que la
+#       propia lista de formas buenas bendecía el defecto.
+#
+# La lección es la de siempre en este repo: una lista de formas siempre le falta la próxima. La
+# guarda nueva no mira la forma — DERIVA el rango de valores de la expresión y verifica que el
+# umbral caiga adentro y que el plazo quepa en la ventana. Para derivar necesita una cosa que del
+# repo no se puede sacar sola: el rango de las métricas CRUDAS, que las produce código Go. Eso es
+# lo que se declara acá.
+#
+# UNA MÉTRICA CRUDA SIN ENTRADA ACÁ ES ROJO, NO VERDE. Si mañana una recording rule del SLA lee
+# una métrica que este archivo no declara, la guarda falla diciendo cuál: «no pude medir» no puede
+# pasar por «está bien», que es el defecto que este archivo entero existe para no repetir.
+#
+# Y AL REVÉS: una entrada acá que no la use ninguna recording rule también es ROJO. Una
+# declaración podrida es peor que ninguna, porque se lee como si alguien la hubiera revisado.
+#
+# CUÁNDO HAY QUE TOCAR ESTE ARCHIVO: cuando cambie lo que EMITE el exportador. El rango de abajo
+# es un contrato con `internal/mcp/fleet_prometheus.go` y `fleet_prometheus_servicios.go`; si
+# alguna de esas funciones empieza a devolver algo fuera del rango declarado, hay que actualizarlo
+# acá, porque todas las cuentas de alcanzabilidad cuelgan de estos dos números.
+# ════════════════════════════════════════════════════════════════════════════════════════════
+rangos:
+  musubi_fleet_device_up:
+    min: 0
+    max: 1
+    unidad: ratio
+    porque: >-
+      Gauge binario. `fleet_prometheus.go` devuelve exactamente 1 si la máquina dio señal de vida
+      dentro de SU umbral por tier, y 0 si no; no hay tercer camino de retorno. Nunca está ausente
+      —se emite para toda máquina inscripta—, que es lo que la distingue de `service_up`.
+  musubi_fleet_service_up:
+    min: 0
+    max: 1
+    unidad: ratio
+    porque: >-
+      Gauge binario. `fleet_prometheus_servicios.go` devuelve 1 si el servicio corría según su
+      último reporte y 0 si no. Para `ocioso` y `desconocido` NO SE EMITE (A70): la ausencia no es
+      un valor, así que no ensancha el rango — se la come el `count_over_time` de la cobertura,
+      que es justamente el número que dice sobre cuánto se calculó el promedio.

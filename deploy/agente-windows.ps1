@@ -216,15 +216,28 @@ if ($LASTEXITCODE -ne 0) {
   #
   # Y las reglas de split tunneling son POR RUTA, asi que autorizar el .exe en una carpeta no
   # autoriza la copia instalada en otra. Por eso se imprime la ruta final y no una generica.
-  if ($LASTEXITCODE -ne 0 -and $error[0] -match "forbidden|10013" -or $true) {
-    Mal "SI EL ERROR DICE 'forbidden by its access permissions' (WSAEACCES):"
-    Mal "  Es un VPN o un filtro que bloquea ESTE PROGRAMA, no la red."
-    Mal "  Comprobalo:  curl.exe -sS -o NUL -w \"%{http_code}\" $BrainUrl/readyz"
-    Mal "  Si curl da 200 y esto falla, es filtrado por proceso."
-    Mal "  Arreglo en NordVPN: Settings > Split tunneling > Bypass VPN > Add app:"
-    Mal "    $destino"
-    Mal "  La regla es POR RUTA: autoriza EXACTAMENTE esa, no otra copia del .exe."
-  }
+  #
+  # ESTO SE IMPRIME SIEMPRE QUE EL LATIDO FALLE, y el texto lo dice ("SI EL ERROR DICE ...").
+  # Hasta el 2026-09-10 estaba adentro de
+  #     if ($LASTEXITCODE -ne 0 -and $error[0] -match "forbidden|10013" -or $true)
+  # que es siempre verdadera: `-and` liga mas fuerte que `-or`, asi que la condicion entera es
+  # `(...) -or $true`. Y no era una redundancia inofensiva: LEIA como un filtro y no filtraba
+  # nada. Su primera mitad ya la garantiza el `if` de arriba, y la segunda no podia funcionar
+  # -- `& $destino agent --once` es un ejecutable nativo, su stderr no entra en `$error`, asi
+  # que `$error[0]` es un error ANTERIOR y ajeno. Sacar el `-or $true` no habria dejado el
+  # filtro que aparenta: habria apagado el consejo. Se saca la condicion, no el consejo.
+  Mal "SI EL ERROR DICE 'forbidden by its access permissions' (WSAEACCES):"
+  Mal "  Es un VPN o un filtro que bloquea ESTE PROGRAMA, no la red."
+  # LAS COMILLAS DE ADENTRO VAN DOBLADAS (`""`) Y NO CON BARRA (`\"`). En una cadena de
+  # PowerShell con comillas dobles el escape es el BACKTICK; la barra no escapa nada. Con `\"`
+  # esta linea imprimia  ...-w \%{http_code}\ http://.../readyz  -- el comando que el usuario
+  # copia para distinguir "es la red" de "es un filtro por proceso" salia mal escrito, y `-w`
+  # sin su formato entre comillas no da el codigo HTTP.
+  Mal "  Comprobalo:  curl.exe -sS -o NUL -w ""%{http_code}"" $BrainUrl/readyz"
+  Mal "  Si curl da 200 y esto falla, es filtrado por proceso."
+  Mal "  Arreglo en NordVPN: Settings > Split tunneling > Bypass VPN > Add app:"
+  Mal "    $destino"
+  Mal "  La regla es POR RUTA: autoriza EXACTAMENTE esa, no otra copia del .exe."
   exit 1
 }
 Bien "el cerebro registro el latido"

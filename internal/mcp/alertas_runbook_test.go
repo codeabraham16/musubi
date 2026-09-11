@@ -66,18 +66,21 @@ func TestCadaRunbookDeUnaAlertaApuntaAUnaSeccionQueExiste(t *testing.T) {
 // canal entero. Ver deploy/docker/preparar.sh.
 //
 // Pero las GUARDAS de este archivo valen para todas por igual: un nombre repetido o una severidad
-// ausente rompen lo mismo estén donde estén. Por eso se leen juntas acá, y por eso la lista está
-// escrita a mano: si aparece un cuarto archivo de reglas y nadie lo agrega, esta función lo
-// ignora en silencio — así que la cuenta mínima de abajo es la que lo delata.
+// ausente rompen lo mismo estén donde estén. Por eso se leen juntas acá.
+//
+// LA LISTA ERA A MANO Y AHORA SALE DEL MISMO GLOB QUE USA PROMETHEUS. Decía que «la cuenta mínima
+// de abajo es la que lo delata» si aparecía un archivo nuevo, y eso no era cierto: los cuatro
+// viejos ya traen de sobra para pasar cualquier piso, así que un quinto archivo entraba sin
+// nombre único, sin severidad y sin runbook, en silencio. Es el mismo agujero que se midió del
+// lado de la alcanzabilidad —un `musubi-alerts-sla.yml` nuevo lo carga
+// `rule_files: [/etc/prometheus/rules/*.yml]` y no lo leía ninguna guarda—, y se cierra igual:
+// mirando la forma que decide en vez de una lista de nombres. El piso vive ahora en
+// `archivosDeAlertasDelRepo`, que además distingue «no hay archivos» de «no hay problemas».
 func reglasDeAlerta(t *testing.T) string {
 	t.Helper()
 	var todo strings.Builder
-	for _, f := range []string{
-		"../../deploy/musubi-alerts.yml",
-		"../../deploy/musubi-alerts-flota.yml",
-		"../../deploy/musubi-alerts-backup-offhost.yml",
-		"../../deploy/musubi-alerts-altura.yml",
-	} {
+	for _, base := range archivosDeAlertasDelRepo(t) {
+		f := "../../deploy/" + base
 		b, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatalf("falta un archivo de reglas (%s): %v", f, err)

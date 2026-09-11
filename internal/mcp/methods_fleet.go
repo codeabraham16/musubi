@@ -466,7 +466,14 @@ func (s *McpServer) proyectosParaLeer(p *Principal, declarado string) (proyectos
 	if pr := fleetReadScopeFor(p, declarado); pr != "" {
 		return []string{pr}, false
 	}
-	return proyectosVisibles(s.engine, p)
+	// EL TERCER VALOR —«no pude leer la lista de proyectos»— SE DESCARTA ACÁ Y SE DICE POR QUÉ.
+	// En el export ese hecho no tenía a nadie que lo mirara, y por eso ahora sale por
+	// `musubi_fleet_export_truncated{kind="unreadable"}`. Este camino es distinto: contesta a una
+	// PERSONA que está mirando, y `proyectosVisibles` ya deja el error en el log con el motivo.
+	// Convertirlo en un error de la tool cambia el contrato de cinco tools de lectura y es un
+	// cambio aparte; queda anotado como hermano NO cubierto por serie.
+	proyectos, truncado, _ = proyectosVisibles(s.engine, p)
+	return proyectos, truncado
 }
 
 // limpiarTags saca vacíos y espacios. Las tags son texto libre del administrador: no se validan

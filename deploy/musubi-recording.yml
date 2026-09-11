@@ -121,6 +121,12 @@ groups:
       # Por MÁQUINA. El `avg_over_time` de un gauge 0/1 es la fracción de tiempo en 1, o sea la
       # disponibilidad. Conserva las etiquetas de máquina, así que el reporte puede filtrar por
       # `project`, `tier` u `os` sin recalcular nada.
+      #
+      # `:avg7d` NO TIENE ALERTA Y ESO ESTÁ DECIDIDO, no olvidado: un promedio no tiene umbral
+      # honesto —el mismo 99 % es «una máquina rota siete días» y «siete máquinas con un hipo»—
+      # y lo accionable de las dos ya lo avisa `MaquinaCaida` por máquina. El argumento completo
+      # vive en `seriesSinLectorConMotivo`, en internal/mcp/alertas_umbral_alcanzable_test.go, y
+      # una guarda exige que TODA serie grabada tenga un lector o un motivo escrito ahí.
       - record: musubi:device_up:avg7d
         expr: avg_over_time(musubi:device_up:norm[7d])
       - record: musubi:device_up:avg30d
@@ -138,6 +144,15 @@ groups:
       # ES LA MÁS SENSIBLE A LOS DUPLICADOS, porque `min` no los promedia: se queda con el peor,
       # y el peor era siempre el camino muerto. Un `min` es un buscador de valores atípicos, así
       # que cualquier serie basura que entre a este cálculo GANA.
+      #
+      # TAMPOCO LLEVA ALERTA, Y ES LA DECISIÓN MENOS OBVIA DE ESTE ARCHIVO — es la métrica
+      # insignia—. En dos renglones: una alerta de NIVEL sobre un promedio de 30 días no se
+      # apaga actuando (sólo esperando), y una de CAÍDA sería inalcanzable —seis horas de caída
+      # mueven un `[30d]` unos 0,008—. Lo que esta serie SÍ sufrió, el 10,2 % fantasma de
+      # arriba, es una pérdida de MEDICIÓN, y ésa la vigila `CoberturaDelSlaSeCayo`: la
+      # cobertura desciende del mismo `musubi:device_up:norm`. Lo que le falta no es una
+      # alerta: es el CONSUMIDOR del reporte. Argumento completo y custodiado en
+      # `seriesSinLectorConMotivo` (internal/mcp/alertas_umbral_alcanzable_test.go).
       - record: musubi:project_up:min30d
         expr: min by(project) (avg_over_time(musubi:device_up:norm[30d]))
 
