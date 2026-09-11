@@ -54,7 +54,26 @@ type OpcionesFixtureReal struct {
 	MaxPorTopico int
 	// PrefijosExcluidos saca familias enteras de topics. 0 elementos ⇒ el default de abajo.
 	PrefijosExcluidos []string
+	// TextoDelDoc decide qué texto representa a cada documento: "content" (default) o "gist".
+	//
+	// EL DEFAULT CAMBIÓ, Y EL MOTIVO ES UNA MEDICIÓN. Antes era el gist, y eso hacía que el banco
+	// midiera un brazo vectorial QUE EN PRODUCCIÓN NO EXISTE: el backfill embebe `p.content`
+	// completo (embed_backfill.go), mientras que SeedEngine embebía lo que este campo devuelve.
+	// Medido sobre la base real: el gist promedia 82 caracteres y el content 2.790 — el gist es el
+	// 2,9% del texto. O sea que el banco vectorizaba el 3% de lo que vectoriza producción, y
+	// cualquier conclusión sobre "la señal vectorial" salía de ahí.
+	//
+	// Se conserva "gist" como opción, y no por nostalgia: es la única forma de comparar las dos
+	// representaciones en la misma corrida y ver cuánto de un delta viene de la representación y
+	// cuánto del ranker.
+	TextoDelDoc string
 }
+
+// Representaciones posibles de un documento en el fixture. Ver OpcionesFixtureReal.TextoDelDoc.
+const (
+	DocDesdeContent = "content"
+	DocDesdeGist    = "gist"
+)
 
 // prefijosExcluidosPorDefecto son familias que no son TEMAS sino registros mecánicos: no describen
 // un asunto sobre el que alguien preguntaría, así que como consulta no significan nada.
@@ -69,6 +88,9 @@ func (o OpcionesFixtureReal) conDefaults() OpcionesFixtureReal {
 	}
 	if len(o.PrefijosExcluidos) == 0 {
 		o.PrefijosExcluidos = prefijosExcluidosPorDefecto
+	}
+	if o.TextoDelDoc == "" {
+		o.TextoDelDoc = DocDesdeContent
 	}
 	return o
 }
@@ -98,10 +120,25 @@ func FixtureDesdeDB(rutaDB string, opts OpcionesFixtureReal) (*Fixture, error) {
 	}
 	defer db.Close()
 
+	// El texto del doc sale de la representación pedida. Con "gist" se cae al content cuando el
+	// gist está vacío, que es el comportamiento histórico.
+	colTexto := `content`
+	if opts.TextoDelDoc == DocDesdeGist {
+		colTexto = `COALESCE(NULLIF(gist,''), content)`
+	}
+	// EL PREDICADO DE VISIBILIDAD, COMPLETO. Acá decía `COALESCE(archived,0) = 0 AND superseded_by
+	// IS NULL` escrito a mano, y le faltaba `quarantined = 0`: el fixture metía al corpus
+	// observaciones marcadas como NO CONFIABLES, que el recall real nunca devuelve. O sea que el
+	// banco medía contra un corpus que producción no tiene.
+	//
+	// Hoy la base real tiene 0 cuarentenadas, así que el arreglo no mueve ningún número medido —
+	// y se hace igual, porque el día que haya una el banco habría empezado a mentir en silencio.
+	// Es la TERCERA vez en esta rama que aparece el mismo defecto (SampleContents, buildObsGraph,
+	// éste): el predicado no se reescribe, se interpola desde memory.
 	filas, err := db.Query(`
-		SELECT id, COALESCE(topic_key,''), COALESCE(NULLIF(gist,''), content)
+		SELECT id, COALESCE(topic_key,''), ` + colTexto + `
 		FROM observations
-		WHERE COALESCE(archived,0) = 0 AND superseded_by IS NULL
+		WHERE COALESCE(archived,0) = 0 AND superseded_by IS NULL AND COALESCE(quarantined,0) = 0
 		ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("leer observaciones: %w", err)
