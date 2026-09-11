@@ -1405,9 +1405,10 @@ func schemaMigrations() []migration {
 			// el bot de un Tier B, un puente, un contenedor en un host que no se enumera solo.
 			//
 			// O sea que el primer latido que traiga un enumerador de systemd se lleva puesto, de
-			// una y en toda la flota a la vez, TODO lo que alguien declaró a mano. Hoy no explota
-			// sólo porque el agente todavía no enumera (A42 abierto): es una mina, no un bug
-			// latente, y el día que se despache ese slice explota en todas las máquinas juntas.
+			// una y en toda la flota a la vez, TODO lo que alguien declaró a mano. Cuando esto se
+			// escribió no explotaba sólo porque el agente no enumeraba (A42 estaba abierto); A42 se
+			// cerró y hoy el agente SÍ enumera, así que lo único que separa a este esquema de esa
+			// pérdida es el `declared` que esta migración introduce.
 			//
 			// EL BACKFILL NO ES `DEFAULT 1` NI `DEFAULT 0` A CIEGAS. Las filas que ya existen se
 			// marcan declaradas si NUNCA reportaron (`last_report IS NULL`), que es la firma

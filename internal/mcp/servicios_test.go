@@ -429,9 +429,10 @@ func TestLaPodaPorAusenciaCorreDesdeElLatidoYUnLatidoMudoNoVaciaNada(t *testing.
 // poda corre. Entre la tool y el UPDATE hay tres capas y cualquiera de las tres puede volver a
 // abrir el agujero (armar `vivos` en otro lado, podar antes de guardar, «simplificar» el flag).
 //
-// Con A42 abierto el agente todavía no enumera, así que esto no explota HOY: explota entero, en
-// toda la flota a la vez, el día que se despache el slice de enumeración. Ésa es exactamente la
-// clase de bomba que una prueba de integración tiene que desactivar antes.
+// CUANDO ESTO SE ESCRIBIÓ, A42 ESTABA ABIERTO Y EL AGENTE NO ENUMERABA: la bomba era para el día
+// que se despachara el slice. ESE DÍA LLEGÓ —A42 está cerrado y el agente enumera systemd, el SCM
+// y Docker— así que esto ya no es una mina futura: es lo único que impide que cada latido se lleve
+// puesto todo lo que alguien declaró a mano. La prueba desactivó la bomba antes, que era el punto.
 //
 // Sabotaje que la hace fallar (VERIFICADO): sacarle el `AND declared = 0` al UPDATE de
 // PodarServiciosAusentes. `bot-telegram` desaparece del listado y redeclararlo... lo revive, así

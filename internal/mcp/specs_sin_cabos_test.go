@@ -1446,6 +1446,156 @@ func filasVivas(t *testing.T, texto string) (map[string]int, []string) {
 // se nota. Nadie lee las dos tablas de corrido buscando choques.
 //
 // Sabotaje que la hace fallar: duplicar cualquier fila de la tabla 2 con el número de otra.
+// NINGÚN NÚMERO DEL RANGO EN USO PUEDE DESAPARECER.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// EL PISO TIPEADO NO CUBRÍA LO QUE DECÍA CUBRIR. Cada tabla tenía un piso de filas escrito a
+// mano —20 y 15— contra 29 y 21 reales, y su argumento era «un registro con la tabla vaciada se
+// lee igual que uno donde no queda nada abierto». Cierto, y por eso mismo insuficiente: con ese
+// margen se podían borrar NUEVE filas de la tabla 1 y el piso seguía pasando. Medio archivo
+// borrado produce exactamente la misma lectura falsa que el archivo entero.
+//
+// Y el piso es, además, un número derivado escrito a mano: envejece con cada cierre legítimo, así
+// que o se actualiza (trabajo que alguien se olvida) o se queda tan flojo que deja de decir nada.
+//
+// LA PROPIEDAD QUE SÍ ES DERIVABLE Y NO ENVEJECE sale de la regla 6 del propio registro: «el
+// número es la identidad: uno solo por cosa, y para siempre». Si es para siempre, entonces cada
+// número del rango en uso tiene que estar en UNO de tres lugares:
+//
+//	· vivo en una de las dos tablas,
+//	· nombrado en la sección 3, que es donde se escribe el cierre,
+//	· o declarado nunca-usado (la regla 6 los nombra: A6-A9, A15 y A16).
+//
+// Un número que no está en ninguno se EVAPORÓ: salió de la tabla y nadie escribió su cierre. Y
+// eso no es cosmético — la regla 6 existe justamente para poder «seguir la pista desde un
+// comentario del código», y un número evaporado deja esa pista apuntando a la nada.
+//
+// ASÍ SE ENCONTRARON A74 Y A84, los dos citados desde el código y ausentes del registro entero.
+// ────────────────────────────────────────────────────────────────────────────────────────────
+func TestNingunNumeroDelRegistroSeEvapora(t *testing.T) {
+	rutaAbierto := filepath.Join("..", "..", "specs", "control-de-flota", "ABIERTO.md")
+	crudo, err := os.ReadFile(rutaAbierto)
+	if err != nil {
+		t.Fatalf("no pude leer %s: %v", rutaAbierto, err)
+	}
+	texto := string(crudo)
+	corte := strings.Index(texto, "\n## 3 · Cerrado en este track")
+	if corte < 0 {
+		t.Fatal("ABIERTO.md perdió su sección 3: ahí es donde se escribe el cierre de cada cabo, y " +
+			"sin ella no hay dónde mirar si un número que salió de la tabla se cerró o se evaporó")
+	}
+	vivoTxt, cierreTxt := texto[:corte], texto[corte:]
+
+	fila := regexp.MustCompile(`(?m)^\|\s*([AB][0-9]{1,3})\s*\|`)
+	vivos := map[string]bool{}
+	for _, m := range fila.FindAllStringSubmatch(vivoTxt, -1) {
+		vivos[m[1]] = true
+	}
+	mencion := regexp.MustCompile(`\b([AB][0-9]{1,3})\b`)
+	cerrados := map[string]bool{}
+	for _, m := range mencion.FindAllStringSubmatch(cierreTxt, -1) {
+		cerrados[m[1]] = true
+	}
+	// LOS NUNCA USADOS, que la regla 6 nombra uno por uno. Van acá y no en el archivo porque la
+	// regla dice que NO se reciclan: la lista es cerrada por definición.
+	nuncaUsados := map[string]bool{"A6": true, "A7": true, "A8": true, "A9": true, "A15": true, "A16": true}
+
+	if len(vivos) < 10 || len(cerrados) < 30 {
+		t.Fatalf("se reconocieron %d números vivos y %d en la sección 3: el parseo dejó de encontrar "+
+			"las tablas o la sección de cierres, y esta guarda estaría en verde sin mirar nada",
+			len(vivos), len(cerrados))
+	}
+
+	for _, pref := range []string{"A", "B"} {
+		max := 0
+		for id := range vivos {
+			if strings.HasPrefix(id, pref) {
+				if n, err := strconv.Atoi(id[1:]); err == nil && n > max {
+					max = n
+				}
+			}
+		}
+		for id := range cerrados {
+			if strings.HasPrefix(id, pref) {
+				if n, err := strconv.Atoi(id[1:]); err == nil && n > max {
+					max = n
+				}
+			}
+		}
+		for n := 1; n <= max; n++ {
+			id := pref + strconv.Itoa(n)
+			if vivos[id] || cerrados[id] || nuncaUsados[id] {
+				continue
+			}
+			t.Errorf("**%s** no está en ningún lado del registro: ni vivo en una tabla, ni nombrado "+
+				"en la sección 3, ni declarado nunca-usado.\n"+
+				"  Salió de la tabla y nadie escribió su cierre, así que el número se EVAPORÓ. La "+
+				"regla 6 dice que la identidad es para siempre justamente para poder seguir la pista "+
+				"desde un comentario del código — y un número evaporado deja esa pista apuntando a la "+
+				"nada.\n"+
+				"  Si se cerró, escribí su entrada en la sección 3 (se puede reconstruir con "+
+				"`git log -S \"| %s |\" -- %s`). Si nunca se usó, sumalo a la lista de la regla 6.",
+				id, id, rutaAbierto)
+		}
+	}
+}
+
+// EL MÁXIMO EN USO NO SE ESCRIBE A MANO ADENTRO DE LA REGLA QUE GOBIERNA LOS NÚMEROS.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// La regla 6 dice «un número nuevo va por encima del máximo en uso (hoy **A123** y **B21**)», y
+// ese «hoy» es un DERIVADO escrito a mano: envejece con cada número nuevo. Medido el 2026-09-11:
+// decía A123 con A124 ya en la tabla.
+//
+// NO ES COSMÉTICO, y es de los pocos casos donde un número viejo hace daño DIRECTO: quien lea la
+// regla para elegir el próximo número va a estrenar uno que ya existe, y entonces dos filas
+// distintas comparten identidad — exactamente lo que la regla 6 existe para impedir. La regla que
+// gobierna los números se saboteaba a sí misma.
+//
+// Es el mismo defecto que esta misma sesión encontró en tres lugares más: un número derivado
+// escrito a mano es una copia, y una copia se queda vieja.
+// ────────────────────────────────────────────────────────────────────────────────────────────
+func TestLaReglaDeLosNumerosNombraElMaximoQueDeVerasEstaEnUso(t *testing.T) {
+	rutaAbierto := filepath.Join("..", "..", "specs", "control-de-flota", "ABIERTO.md")
+	crudo, err := os.ReadFile(rutaAbierto)
+	if err != nil {
+		t.Fatalf("no pude leer %s: %v", rutaAbierto, err)
+	}
+	texto := string(crudo)
+
+	// EL MÁXIMO REAL sale del archivo entero —tablas y sección 3—, porque un número cerrado sigue
+	// EN USO: la regla 6 dice que la identidad es para siempre y que no se recicla.
+	mencion := regexp.MustCompile(`\b([AB])([0-9]{1,3})\b`)
+	real := map[string]int{}
+	for _, m := range mencion.FindAllStringSubmatch(texto, -1) {
+		if n, err := strconv.Atoi(m[2]); err == nil && n > real[m[1]] {
+			real[m[1]] = n
+		}
+	}
+	if real["A"] < 50 || real["B"] < 5 {
+		t.Fatalf("se reconocieron máximos A%d/B%d, sospechosamente bajos: el parseo dejó de "+
+			"encontrar los números y esta guarda estaría en verde sin mirar nada", real["A"], real["B"])
+	}
+
+	// LO QUE LA REGLA DICE. Se busca la frase de la regla 6, no cualquier número del archivo.
+	dice := regexp.MustCompile(`máximo en uso \(hoy \*\*A([0-9]{1,3})\*\* y \*\*B([0-9]{1,3})\*\*\)`).FindStringSubmatch(texto)
+	if dice == nil {
+		t.Fatal("no encuentro la frase «máximo en uso (hoy **A…** y **B…**)» de la regla 6: o cambió " +
+			"de forma —y entonces esta guarda dejó de mirar— o desapareció, y con ella la única " +
+			"indicación de qué número estrenar")
+	}
+	dA, _ := strconv.Atoi(dice[1])
+	dB, _ := strconv.Atoi(dice[2])
+	if dA != real["A"] || dB != real["B"] {
+		t.Errorf("la regla 6 dice que el máximo en uso es A%d/B%d y el archivo va por A%d/B%d.\n"+
+			"  Quien lea la regla para elegir el próximo número va a estrenar uno QUE YA EXISTE, y "+
+			"ahí dos filas distintas comparten identidad — justo lo que la regla 6 existe para "+
+			"impedir. La regla que gobierna los números se sabotea a sí misma.\n"+
+			"  Actualizá la frase, o mejor: dejá de escribir un derivado a mano.",
+			dA, dB, real["A"], real["B"])
+	}
+}
+
 func TestNingunNumeroDeRegistroSeUsaDosVeces(t *testing.T) {
 	ids, _ := filasVivas(t, registroDeAbiertos(t))
 	if len(ids) < 20 {

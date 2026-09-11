@@ -522,9 +522,10 @@ func TestElCuerpoNoLlevaIdentidadNunca(t *testing.T) {
 	//
 	// `servicios` (S12) entra por la misma puerta y con la misma pregunta contestada: un
 	// fleet.ReporteServicio no tiene NINGÚN campo de identidad —ni device, ni project, ni id— así
-	// que lo único que ese bloque puede tocar es el inventario de la máquina del token. El agente
-	// TODAVÍA no lo manda (enumerar systemd, el SCM y Docker es un slice propio, cabo A42), pero
-	// la decisión se declara acá, que es donde se piensa, y la ejercita
+	// que lo único que ese bloque puede tocar es el inventario de la máquina del token. Cuando esto
+	// se escribió el agente todavía no lo mandaba —enumerar systemd, el SCM y Docker era un slice
+	// propio, el cabo A42, que después se cerró— y la decisión se declaró igual acá, que es donde se
+	// piensa. Hoy el agente sí lo manda, y la ejercita
 	// TestUnCuerpoConServiciosSigueSinLlevarIdentidad.
 	// `puede_preguntar` y `motivo_no_preguntar` entran a la lista blanca tras el examen que el
 	// mensaje de abajo exige: NINGUNA de las dos dice QUIÉN ES esta máquina. La primera es una

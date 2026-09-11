@@ -763,6 +763,36 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
+**2026-09-11 · DOS NÚMEROS QUE SE EVAPORARON: A74 Y A84.**
+
+Salieron de la tabla 1 y NUNCA se les escribió la entrada de cierre, así que quedaron fuera del
+registro entero: ni vivos, ni cerrados, ni declarados sin usar. Los dos siguen CITADOS desde el
+código —`rotacion.go`, `methods_rotacion.go`, `rotacion_test.go` y `registry.go`— o sea que la
+regla 6 («citalo para poder seguir la pista») apuntaba a la nada. Se reconstruyeron de `git log -S`
+sobre este archivo, y los dos están efectivamente cerrados:
+
+- **A74 — la contraseña de una sesión de pantalla quedaba EN CLARO en la base.** Tenía que llegar
+  a la máquina de alguna forma, y el camino era el `argv` de `musubi:pantalla`, que
+  `device_commands` guardaba tal cual: un volcado de la base era un llavero. **CERRADO**: hoy el
+  secreto vive en un mapa en memoria del cerebro y la base guarda sólo su HASH. Lo dice
+  `internal/mcp/rotacion.go` y lo ejercita `rotacion_test.go`; `methods_rotacion.go` aplica la
+  misma regla a la rotación de tokens («misma regla que A74»).
+- **A84 — una sesión de pantalla se llevaba puesta la contraseña permanente de RustDesk del
+  dueño.** RustDesk tiene UNA sola ranura de contraseña permanente y `musubi_fleet_screen` la
+  usaba de borrador. **CERRADO DECLARÁNDOLO, que es una forma legítima de cerrar y conviene que
+  quede escrita**: no se puede restituir lo que RustDesk no devuelve, así que la herramienta AVISA
+  antes de abrir la sesión — `registry.go` dice «Musubi NO la guarda ni la puede restituir hoy
+  (A84). En una máquina ajena, decilo antes de abrir la sesión». El costo está dicho en el lugar
+  donde alguien lo va a leer antes de pagarlo.
+
+**Y LO QUE ESTO DEJÓ INSTALADO.** El piso de filas de cada tabla era un número TIPEADO —20 y 15
+contra 29 y 21 reales— así que el modo de falla que decía cubrir («alguien vació la tabla») pasaba
+con medio archivo borrado. Se reemplazó por la propiedad que sí es derivable y no envejece:
+**ningún número del rango en uso puede desaparecer**. Cada uno tiene que estar vivo en una tabla,
+nombrado en esta sección, o declarado nunca-usado. Lo custodia
+`TestNingunNumeroDelRegistroSeEvapora`, y así se encontraron estos dos.
+
+
 **2026-09-10 (segunda pasada) · LAS GUARDAS DEL DÍA ANTERIOR SE EVADÍAN CON UN ESPACIO. Once
 sabotajes en verde, y el peor era cosmético.**
 
@@ -3869,7 +3899,7 @@ cuatro eran pruebas que pasaban por el motivo equivocado, y sólo el sabotaje lo
    (A21 «habría que tocar el bundle», A13 «verificar contra el relay», A28 «no se puede sin
    instalar un servidor»). Antes de dar por bueno un «no se hizo porque X», verificá X.
 6. **El número es la identidad: uno solo por cosa, y para siempre.** Un número nuevo va por encima
-   del máximo en uso (hoy **A123** y **B21**) y NO se recicla uno libre: `A6`-`A9`, `A15` y `A16`
+   del máximo en uso (hoy **A124** y **B21**) y NO se recicla uno libre: `A6`-`A9`, `A15` y `A16`
    nunca se usaron, y estrenarlos ahora haría que un lector con el archivo viejo en la cabeza lea
    otra cosa. Si un cabo se convierte en otro —de la tabla 1 a la 2, o al revés— la fila nueva dice
    **«(era A33)»** y la vieja se borra: sin esa marca, cada cita del número anterior apunta a la
