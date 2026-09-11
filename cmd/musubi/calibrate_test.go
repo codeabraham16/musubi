@@ -104,4 +104,3 @@ func TestCountTokensRemoteErrorHTTP(t *testing.T) {
 		t.Fatal("esperaba error por status no-200")
 	}
 }
-

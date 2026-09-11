@@ -618,3 +618,76 @@ func TestBrevityDirectiveLevelsDiffer(t *testing.T) {
 		}
 	}
 }
+
+// embebedorDePrueba es un Provider real (no Noop, no nil) que devuelve un vector fijo, para poder
+// verificar que el hook por turno LO USA sin depender de una tabla de 488 MB.
+type embebedorDePrueba struct{ llamado *int }
+
+func (e embebedorDePrueba) Embed(context.Context, string) ([]float32, error) {
+	if e.llamado != nil {
+		*e.llamado++
+	}
+	return []float32{0.1, 0.2, 0.3}, nil
+}
+func (embebedorDePrueba) Dimensions() int { return 3 }
+func (embebedorDePrueba) Name() string    { return "prueba" }
+
+// TestBuildTurnRecallPasaLaConfigDeProduccion fija que la superficie MÁS CALIENTE del sistema —el
+// recall por turno, donde ocurre el 99% de los recalls— corra con la configuración que el yaml
+// declara, y no con el cero de Go.
+//
+// El defecto que cierra: esta función pasaba seis campos y ninguno de los dos que deciden calidad.
+// MMRLambda en 0 apaga MMR por completo (la diversidad calibrada sobre 94.830 pares reales quedaba
+// inerte en CADA turno) y VectorFloor en 0 deja entrar al RRF cualquier vecino vectorial.
+func TestBuildTurnRecallPasaLaConfigDeProduccion(t *testing.T) {
+	memCfg := config.Default().Memory
+	store := &fakeTurnStore{recall: memory.RecallResult{
+		Count: 1,
+		Items: []memory.RecallItem{{ID: "a", Gist: "algo", ContentHash: "h"}},
+	}}
+	llamadas := 0
+
+	buildTurnRecall(store, "s1", "el prompt del turno", 250, false, memCfg, embebedorDePrueba{&llamadas})
+
+	if store.lastOpts.VectorFloor != memCfg.VectorFloor {
+		t.Errorf("VectorFloor: el hook pasó %v y el yaml declara %v", store.lastOpts.VectorFloor, memCfg.VectorFloor)
+	}
+	if store.lastOpts.MMRLambda != memCfg.MMRLambda {
+		t.Errorf("MMRLambda: el hook pasó %v y el yaml declara %v — con 0 la diversificación no corre",
+			store.lastOpts.MMRLambda, memCfg.MMRLambda)
+	}
+	if llamadas != 1 {
+		t.Errorf("el hook tenía que embeber el prompt UNA vez, lo hizo %d", llamadas)
+	}
+	if len(store.lastOpts.QueryVector) == 0 {
+		t.Error("no se pasó QueryVector: sin él el pool vectorial no existe y el recall queda sólo-léxico")
+	}
+	// ProjectScope se deja federado A PROPÓSITO: scope.go declara el stdio local como uno de los
+	// casos sin filtro. Acotarlo acá le escondería al agente el resto del acervo.
+	if store.lastOpts.ProjectScope != "" {
+		t.Errorf("el hook por turno no debe acotar por proyecto (es federado por diseño), y acotó a %q",
+			store.lastOpts.ProjectScope)
+	}
+}
+
+// TestBuildTurnRecallDegradaSinEmbebedor: sin embebedor el turno tiene que seguir funcionando en
+// modo sólo-léxico, no panickear ni quedarse mudo. Es el caso de toda instalación que no bajó la
+// tabla — o sea, el default.
+func TestBuildTurnRecallDegradaSinEmbebedor(t *testing.T) {
+	memCfg := config.Default().Memory
+	store := &fakeTurnStore{recall: memory.RecallResult{
+		Count: 1,
+		Items: []memory.RecallItem{{ID: "a", Gist: "algo", ContentHash: "h"}},
+	}}
+	out := buildTurnRecall(store, "s1", "el prompt", 250, false, memCfg, nil)
+	if out == "" {
+		t.Error("sin embebedor el recall léxico tiene que seguir devolviendo memoria")
+	}
+	if len(store.lastOpts.QueryVector) != 0 {
+		t.Error("sin embebedor no puede haber QueryVector")
+	}
+	// Y los toggles model-free siguen puestos: degradar es perder la señal vectorial, nada más.
+	if !store.lastOpts.Stemming || !store.lastOpts.Cooccurrence {
+		t.Error("degradar a sólo-léxico no puede apagar además las señales model-free")
+	}
+}
