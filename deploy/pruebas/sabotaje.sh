@@ -83,10 +83,28 @@ MODO="$(stat -c %a -- "$ARCHIVO")"
 restaurar() { cp -- "$RESPALDO" "$ARCHIVO"; chmod -- "$MODO" "$ARCHIVO"; rm -f -- "$RESPALDO"; }
 trap restaurar EXIT INT TERM
 
-corrida() { go test "$PKG" -run "$PATRON" -count=1 2>&1; }
+# ── EL ENTORNO NO VIAJA ────────────────────────────────────────────────────────────────────────
+#
+# Este guion corre en la máquina del operador, y ahí `MUSUBI_TOKEN` y `MUSUBI_CENTRAL_URL` están
+# puestas: son el estado normal de esta terminal. Una prueba que las lea como «autorización» sale
+# a pegarle al cerebro de PRODUCCIÓN con la credencial viva, y el corredor de sabotajes —que llama
+# a `go test` con un patrón ANCHO, a propósito— es justo quien más fácil la selecciona sin querer.
+# Pasó: 209 llamadas al cerebro de producción desde una corrida de rutina.
+#
+# El arreglo de fondo va en la prueba (que ahora exige su propio permiso explícito). Esto es el
+# cinturón: el corredor no se lo pasa. Se BORRAN y no se vacían — una variable vacía y una
+# ausente son lo mismo para `os.Getenv`, pero no para todo el mundo, y acá lo que se quiere es
+# que no exista.
+sinCredenciales() {
+  env -u MUSUBI_TOKEN -u MUSUBI_CENTRAL_URL -u MUSUBI_SONDA_CONTRA_PRODUCCION \
+      -u ALTURA_MUSUBI_TOKEN -u CRM_MUSUBI_TOKEN -u MB_DESIGN_TOKEN \
+      -u MUSUBI_TOKEN_FILE -u ALTURA_MUSUBI_TOKEN_FILE "$@"
+}
+
+corrida() { sinCredenciales go test "$PKG" -run "$PATRON" -count=1 2>&1; }
 # EL CONTROL VA CON -v A PROPÓSITO: sin él `go test` no imprime los `--- PASS`, así que no se puede
 # contar CUÁNTAS pruebas pasaron — y «pasó» sobre cero pruebas es el falso verde de A100.
-controlVerboso() { go test "$PKG" -run "$PATRON" -count=1 -v 2>&1; }
+controlVerboso() { sinCredenciales go test "$PKG" -run "$PATRON" -count=1 -v 2>&1; }
 compila() { go vet "$PKG" >/dev/null 2>&1; }
 
 echo "▶ $PATRON  en  $PKG"
@@ -111,7 +129,23 @@ if grep -q 'no tests to run\|no test files' <<<"$BASE"; then
   exit 1
 fi
 N="$(grep -c '^\s*--- PASS' <<<"$BASE")"
-echo "  ✓ control: compila y pasa (${N:-?} subtest/s)"
+# EL NÚMERO SE MIRA, Y ANTES NO SE MIRABA. Se contaba, se imprimía, y se seguía igual con CERO —
+# que es el falso verde que esta herramienta entera existe para cazar, adentro de la herramienta.
+#
+# Con cero, `grep '^ok'` igual matchea: un `--- SKIP` sale con `ok` y código 0. Así que un control
+# que se saltea entero pasaba por «compila y pasa», y después el sabotaje —que también se saltea—
+# se reportaba como «EL SABOTAJE NO LA PONE EN ROJO». O sea que la herramienta acusaba a la guarda
+# de estar hueca cuando la verdad era que NADIE MIDIÓ NADA. Un diagnóstico equivocado manda a
+# reescribir una guarda que estaba bien.
+if [[ "${N:-0}" -eq 0 ]]; then
+  echo "✗ NO SE MIDIÓ NADA: el control salió en verde sin ejecutar UNA SOLA prueba."
+  echo "  Casi siempre es un \`t.Skip\`: un test salteado imprime \`--- SKIP\` y termina con \`ok\`,"
+  echo "  así que el código de salida no lo distingue de haber corrido mil. Lo que venga después"
+  echo "  no significaría nada — y el rojo ausente se leería como una guarda hueca."
+  grep -m5 -E '^\s*--- SKIP|^\s+\S+_test\.go:[0-9]+: ' <<<"$BASE" | sed 's/^/    /'
+  exit 1
+fi
+echo "  ✓ control: compila y pasa ($N subtest/s REALMENTE ejecutados)"
 
 # ── 2 · SABOTAJE ───────────────────────────────────────────────────────────────────────────────
 if ! bash -c "$SABOTAJE" -- "$ARCHIVO"; then

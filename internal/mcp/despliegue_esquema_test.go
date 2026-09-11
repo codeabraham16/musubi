@@ -131,17 +131,43 @@ func TestConstruirNoIntentaCorrerUnBinarioDeOtraPlataforma(t *testing.T) {
 			"(nombrar GOHOSTOS en el valor por defecto de DESTINO_OS no alcanza): una compilación\n" +
 			"cruzada vuelve a intentar ejecutar el binario y termina en rojo sobre algo que salió bien")
 	}
-	// El `sha256sum` tiene que quedar FUERA del condicional: es lo que el otro lado usa para
-	// verificar, y perderlo en una compilación cruzada es perder justo el dato del caso remoto.
-	i := strings.Index(guion, "GOHOSTOS")
-	j := strings.LastIndex(guion, "sha256sum")
-	if i < 0 || j < i {
-		t.Error("el sha256sum quedó antes de la comprobación de plataforma: en una compilación cruzada no se imprimiría")
+	// ────────────────────────────────────────────────────────────────────────────────────────
+	// EL ANCLA ERA LA LÍNEA QUE NOMBRA `GOHOSTOS`, NO EL `if` QUE DECIDE.
+	//
+	// Las dos comprobaciones de abajo son POSICIONALES —`version` adentro del condicional,
+	// `sha256sum` afuera— y se anclaban en `strings.Index(guion, "GOHOSTOS")`, que cae en la
+	// línea `DESTINO_OS="${GOOS:-$(go env GOHOSTOS)}"`: DOS LÍNEAS ANTES del `if`. Con ese ancla,
+	// mover `"$SALIDA" version` FUERA del condicional —el defecto exacto que estas dos líneas
+	// existen para prohibir— seguía cayendo adentro del tramo medido y la guarda quedaba verde.
+	//
+	// Ahora el ancla es el `if` mismo, y el límite es su `fi`. El orden es la propiedad.
+	codigo := codigoDe(guion)
+	pos := condicion.FindStringIndex(codigo)
+	if pos == nil {
+		return // ya lo reportó la aserción de arriba
 	}
-	// Y la comprobación tiene que envolver a `version`, no a otra cosa.
-	tramo := guion[i:]
-	if k := strings.Index(tramo, "sha256sum"); k < 0 || !strings.Contains(tramo[:k], `"$SALIDA" version`) {
-		t.Error("`$SALIDA version` no quedó adentro del condicional de plataforma")
+	finDelBloque := strings.Index(codigo[pos[0]:], "\nfi")
+	if finDelBloque < 0 {
+		t.Fatal("no encuentro el `fi` del condicional de plataforma: sin su final no se puede decir " +
+			"qué quedó adentro y qué afuera, que es toda la propiedad que estas dos líneas custodian")
+	}
+	dentro := codigo[pos[0] : pos[0]+finDelBloque]
+	despues := codigo[pos[0]+finDelBloque:]
+
+	// `version` EJECUTA el binario recién compilado, así que sólo puede correr cuando el destino
+	// es el host. Afuera del condicional, una compilación cruzada intenta correr un binario de
+	// Windows en Linux y el guion termina en rojo sobre algo que salió bien.
+	if !strings.Contains(dentro, `"$SALIDA" version`) {
+		t.Error("`\"$SALIDA\" version` no está ADENTRO del condicional de plataforma: en una " +
+			"compilación cruzada se intenta ejecutar un binario que esta máquina no puede correr, y " +
+			"el guion reporta fracaso habiendo tenido éxito")
+	}
+	// El `sha256sum` es lo ÚNICO que el otro lado necesita para comprobar que le llegó lo que se
+	// compiló, así que tiene que salir SIEMPRE — y la compilación cruzada es justo el caso donde
+	// el otro lado es otra máquina.
+	if !strings.Contains(despues, "sha256sum") {
+		t.Error("el `sha256sum` ya no queda FUERA del condicional de plataforma: en una compilación " +
+			"cruzada no se imprimiría, y es exactamente el caso en que el otro lado lo necesita")
 	}
 }
 
