@@ -85,6 +85,41 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 
 ### Fixed
+- **Las guardas que leen código miraban el DISCO y no el REPO, así que su veredicto dependía de la
+  máquina.** `archivosGo` y `archivosDeGuiones` barrían el árbol con `filepath.WalkDir` y una lista
+  de carpetas a saltear escrita a mano (`.git`, `vendor`, `node_modules`, `.claude`, `dist`). Esa
+  lista **era** el defecto, por dos motivos que se suman:
+
+  1. **Una lista de exclusiones a mano no converge.** Cada carpeta nueva que aparece en un árbol de
+     trabajo y no es código hay que acordarse de agregarla, y nadie se entera de que faltaba hasta
+     que muerde. La definición de «esto no es del repo» ya existe y se llama `.gitignore`.
+  2. **El resultado no era el mismo en dos máquinas.** Una guarda así **falla sólo en local y pasa
+     SIEMPRE en CI** — el peor de los dos mundos: el CI no la puede ver y la persona no le puede
+     creer, así que termina aprendiendo a ignorarla.
+
+  **Medido el 2026-09-11.** `TestElTopePorConteoDelOutboxNoTieneQuienLoLea` acusaba a tres lectores
+  de `Sync.MaxAttempts` fuera de `internal/config/`. Los tres vivían en
+  `.musubi/backups/rescate-worktrees-20260908/…/internal/config/config.go`: un respaldo, sin
+  trackear e **ignorado por `.gitignore`**, que el barrido leía como si fuera código del repo. La
+  guarda no se equivocaba sobre lo que veía — estaba mirando un árbol que no era el repo.
+
+  Ahora el alcance sale de `git ls-files`, o sea de lo que está versionado. Los ignorados y lo sin
+  trackear desaparecen sin lista que mantener, y `carpetasQueNoSonCodigo` se borra en vez de crecer.
+
+  **Se arreglan los DOS enumeradores de una vez**, no sólo el que dolía: `archivosDeGuiones` barría
+  `deploy/` y `scripts/` con la misma técnica y un `.sh` sin trackear ahí entraba igual. Es el
+  defecto dominante de este repo —la lección aprendida de un lado y no del hermano— y acá los dos
+  pasan a derivar del mismo `archivosDelRepo`.
+
+  Cuatro guardas nuevas y sus sabotajes en rojo: con `--cached --others` el enumerador vuelve a ver
+  lo sin trackear **y** lo ignorado (las dos aserciones disparan, con mensajes distintos), el
+  hermano de guiones también, y el alcance por carpeta cae si `deploy` matchea a `deployment` por
+  prefijo pelado o si `.` deja de significar «los archivos sueltos de la raíz». Cada guarda lleva su
+  control positivo: sin él, un enumerador que devolviera la lista vacía las pasaría todas —«no está
+  el intruso» y «no medí nada» se escriben igual.
+
+  Efecto medible: `go test ./...` vuelve a terminar en verde en una máquina que tiene respaldos en
+  `.musubi/`, sin borrarlos.
 - **El chequeo de permiso de la clave de firma no podía pasar NUNCA en Windows, así que el firmador
   abortaba antes de firmar.** `deploy/firmar-release.sh` comprobaba `stat -c %a` contra `400|600`.
   Medido sobre NTFS con git-bash: sólo se mapea el bit de sólo-lectura, así que `chmod 600` deja

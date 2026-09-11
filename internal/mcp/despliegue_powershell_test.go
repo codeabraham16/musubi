@@ -5,8 +5,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -424,38 +424,11 @@ func archivosDeGuiones(t *testing.T, raiz string) (shs, ps1s, cmds []string) {
 			cmds = append(cmds, rel)
 		}
 	}
-	for _, carpeta := range carpetasDeGuiones {
-		if carpeta == "." {
-			// La raíz NO se recorre en profundidad —abajo cuelga el repo entero— pero sí se
-			// miran sus archivos sueltos.
-			entradas, err := os.ReadDir(raiz)
-			if err != nil {
-				t.Fatalf("no pude leer la raíz %s: %v — no medí nada", raiz, err)
-			}
-			for _, e := range entradas {
-				if !e.IsDir() {
-					clasificar(e.Name())
-				}
-			}
+	for _, rel := range archivosDelRepo(t, raiz) {
+		if !enCarpetaDeGuiones(rel) {
 			continue
 		}
-		err := filepath.WalkDir(filepath.Join(raiz, carpeta), func(ruta string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				return nil
-			}
-			rel, err := filepath.Rel(raiz, ruta)
-			if err != nil {
-				return err
-			}
-			clasificar(filepath.ToSlash(rel))
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("no pude recorrer %s: %v — no medí nada", carpeta, err)
-		}
+		clasificar(rel)
 	}
 	sort.Strings(shs)
 	sort.Strings(ps1s)
@@ -463,37 +436,93 @@ func archivosDeGuiones(t *testing.T, raiz string) (shs, ps1s, cmds []string) {
 	return
 }
 
-var carpetasQueNoSonCodigo = map[string]bool{
-	".git": true, "vendor": true, "node_modules": true, ".claude": true, "dist": true,
+// enCarpetaDeGuiones aplica el alcance de carpetasDeGuiones sobre una ruta RELATIVA a la raíz.
+func enCarpetaDeGuiones(rel string) bool {
+	for _, carpeta := range carpetasDeGuiones {
+		if carpeta == "." {
+			// La raíz NO entra en profundidad —abajo cuelga el repo entero— pero sí sus archivos
+			// SUELTOS, que es donde viven los `.bat` de doble clic.
+			if !strings.Contains(rel, "/") {
+				return true
+			}
+			continue
+		}
+		if strings.HasPrefix(rel, carpeta+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// archivosDelRepo devuelve las rutas RELATIVAS A LA RAÍZ de lo que el repo TRACKEA.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// SE LE PREGUNTA A GIT Y NO AL DISCO, Y ESO NO ES ESTILO: ES DÓNDE EMPIEZA Y TERMINA «EL REPO»
+//
+// Acá había un `filepath.WalkDir` con una lista de carpetas a saltear escrita a mano (`.git`,
+// `vendor`, `node_modules`, `.claude`, `dist`). Esa lista ERA el defecto, por dos razones que se
+// suman:
+//
+//  1. UNA LISTA DE EXCLUSIONES A MANO NO CONVERGE. Cada carpeta nueva que aparece en un árbol de
+//     trabajo y no es código hay que acordarse de agregarla, y nadie se entera de que faltaba
+//     hasta que muerde. La definición de «esto no es del repo» YA EXISTE y se llama `.gitignore`.
+//  2. EL VEREDICTO DEPENDÍA DE LA MÁQUINA. Las guardas que se apoyan en este enumerador leen
+//     archivos y los parsean para decidir; barrer el disco les mete adentro lo que cada uno
+//     tenga tirado en su árbol. Una guarda así **falla sólo en local y pasa SIEMPRE en CI**, que
+//     es el peor de los dos mundos: el CI no la puede ver y la persona no le puede creer.
+//
+// MEDIDO EL 2026-09-11: `TestElTopePorConteoDelOutboxNoTieneQuienLoLea` acusaba a tres lectores de
+// `Sync.MaxAttempts` fuera de `internal/config/`. Los tres estaban en
+// `.musubi/backups/rescate-worktrees-20260908/…/internal/config/config.go` — un respaldo, sin
+// trackear, EXCLUIDO por `.gitignore`, que el barrido leía como si fuera código del repo. La
+// guarda no estaba equivocada sobre lo que veía: estaba mirando un árbol que no era el repo.
+//
+// Con `git ls-files` el alcance deja de ser una opinión: es exactamente lo que está versionado.
+// Los ignorados y lo sin trackear desaparecen sin lista que mantener, y el resultado es el MISMO
+// en la máquina de cualquiera y en el runner.
+//
+// SE FILTRA POR EXISTENCIA porque `ls-files` lee el ÍNDICE: un archivo borrado del árbol y todavía
+// no `git add`-eado sigue listado, y el llamador lo abriría para parsearlo. Un archivo que no está
+// no se puede medir; lo que no puede pasar es medir CERO sin decirlo, y de eso se ocupa el control
+// de abajo.
+func archivosDelRepo(t *testing.T, raiz string) []string {
+	t.Helper()
+	salida, err := exec.Command("git", "-C", raiz, "ls-files", "-z").Output()
+	if err != nil {
+		t.Fatalf("no pude preguntarle a git qué trackea desde %s: %v — no medí nada", raiz, err)
+	}
+	var out []string
+	for _, rel := range strings.Split(string(salida), "\x00") {
+		if rel == "" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(raiz, filepath.FromSlash(rel))); err != nil {
+			continue // trackeado pero ausente del árbol: no hay nada que leer
+		}
+		out = append(out, rel)
+	}
+	// «NO PUDE MEDIR» NO PUEDE SALIR POR LA PUERTA DE «MEDÍ Y ESTÁ BIEN». Si git contesta vacío
+	// —no es un repo, otra raíz, un checkout roto— toda guarda que cuelgue de acá daría verde sin
+	// haber mirado un solo archivo.
+	if len(out) == 0 {
+		t.Fatalf("git no listó NI UN archivo trackeado desde %s. Eso no es «el repo está vacío»: "+
+			"es que este enumerador no miró nada", raiz)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func archivosGo(t *testing.T, raiz string) []string {
 	t.Helper()
 	var out []string
-	err := filepath.WalkDir(raiz, func(ruta string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	for _, rel := range archivosDelRepo(t, raiz) {
+		if strings.HasSuffix(rel, ".go") {
+			out = append(out, rel)
 		}
-		if d.IsDir() {
-			if carpetasQueNoSonCodigo[d.Name()] {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), ".go") {
-			return nil
-		}
-		rel, err := filepath.Rel(raiz, ruta)
-		if err != nil {
-			return err
-		}
-		out = append(out, filepath.ToSlash(rel))
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("no pude recorrer los `.go` desde %s: %v — no medí nada", raiz, err)
 	}
-	sort.Strings(out)
+	if len(out) == 0 {
+		t.Fatalf("no encontré NI UN `.go` trackeado desde %s — no medí nada", raiz)
+	}
 	return out
 }
 
