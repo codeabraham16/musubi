@@ -168,3 +168,98 @@ func Exigir(t *testing.T, motivo string, herramientas ...string) {
 		"habla del runner y no del guion.",
 		runtime.GOOS, runtime.GOARCH, ElSistemaDondeCorren, motivo, strings.Join(herramientas, ", "))
 }
+
+// LosSistemasDondeElArnesSeSostiene son los GOOS en los que el arnés de stubs de estas pruebas
+// funciona de verdad: escribe un ejecutable con shebang y lo antepone al PATH separando con `:`.
+//
+// Es una lista y no una constante porque la pregunta que contesta es distinta de la de
+// `ElSistemaDondeCorren`: aquélla dice dónde corre EL PRODUCTO (un servidor Linux), ésta dice
+// dónde se puede MEDIR con este arnés. Confundirlas es lo que hace que una compuerta apague
+// cobertura que sí valía.
+var LosSistemasDondeElArnesSeSostiene = []string{"linux", "darwin"}
+
+// Unix declara que una prueba EJECUTA un guion de shell y se mide en linux Y en macOS, nunca en
+// Windows. Es el tercer modo, y existe porque los otros dos no cubren este caso.
+//
+// POR QUÉ NO ALCANZABA CON LOS DOS QUE YA ESTABAN:
+//
+//   - `Exigir` saltea en darwin. Para una prueba cuyo defecto SÓLO SE VE en darwin, eso no acota
+//     el alcance: lo apaga. El caso que trajo este modo es el `${VAR}` pegada a un carácter
+//     no-ASCII que mata el guion en el bash 3.2 de macOS y en Linux es invisible — había cinco en
+//     `verificar-despliegue.sh` y cuatro llevaban meses sin que nadie los viera. Compuertar a
+//     linux la prueba que los caza habría cerrado el defecto y apagado al mismo tiempo la única
+//     plataforma capaz de verlo.
+//   - `Portable` exige las herramientas en LAS TRES. En Windows `bash` existe (git-bash), así que
+//     no saltea: la prueba corre de verdad y muere por rutas POSIX y por el shim de `ssh` por
+//     shebang. Declarar portable algo que en Windows no puede correr es declarar una mentira que
+//     se cobra en el job de Windows.
+//
+// Y POR QUÉ WINDOWS SÍ SE SALTEA, que es lo único medido del asunto: `PATH=C:\...\stubs:"$PATH"`
+// se parte en dos por el `:` del nombre de unidad, y un archivo `curl` sin `.exe` ni bit de
+// ejecución no es un ejecutable ahí. Medido en CI: el guion salió con `exit status 22` —el código
+// de curl para «el servidor devolvió un error HTTP»— después de imprimir la URL real del release.
+// El arnés no tomó el stub y SALIÓ A INTERNET.
+//
+// EL OTRO CASO MEDIDO DE macOS NO APLICA ACÁ, y la distinción es la que justifica este modo: el
+// runner de macOS es arm64 y el guion del RELAY (`install-rustdesk-relay.sh`) muere en
+// «arquitectura no soportada» antes de llegar al checksum. Eso es cierto de las pruebas que bajan
+// binarios por arquitectura, y ésas van con `Exigir`. Las que corren `verificar-despliegue.sh` o
+// `comparar-y-latir.sh` no bajan nada: leen el repo, hablan por ssh contra un shim y comparan
+// texto. El arnés se les sostiene en darwin, y es donde su defecto vive.
+//
+// LA FIRMA ES `testing.TB` Y NO `*testing.T`, y no es gusto: un `Benchmark` o un `Fuzz` que
+// ejecute un guion no puede llamar a una compuerta que pide `*testing.T` —no compila—, así que la
+// guarda de alcance le estaría reclamando algo imposible de cumplir. `TB` cubre los tres.
+//
+// EN LOS DOS SISTEMAS DONDE MIDE, NO SALTEA NUNCA: una herramienta que falta es `t.Fatal`, igual
+// que en `Exigir`. «No pude medir» no puede contestar lo mismo que «medí y está bien».
+func Unix(t testing.TB, motivo string, herramientas ...string) {
+	t.Helper()
+
+	// Los dos controles de USO van antes que el GOOS, por lo mismo que en las otras dos: si
+	// alguien llama a esto para apagar una prueba que no corre ningún guion, tiene que romperse
+	// donde lo intentó y no quedar en un `skip` cómodo en la plataforma que le molestaba.
+	if len(strings.Fields(motivo)) < 4 {
+		t.Fatalf("guiones.Unix se llamó con el motivo %q: hace falta una frase que diga QUÉ guion "+
+			"se ejecuta y por qué se mide en linux y en macOS pero no en Windows. Un salteo sin "+
+			"motivo es un salteo que nadie revisa.", motivo)
+	}
+	if len(herramientas) == 0 {
+		t.Fatal("guiones.Unix se llamó sin nombrar una sola herramienta. Esta compuerta NO es un " +
+			"t.Skip de propósito general: existe para las pruebas que EJECUTAN un guion de shell, " +
+			"y ésas siempre necesitan por lo menos `bash`.")
+	}
+
+	for _, sistema := range LosSistemasDondeElArnesSeSostiene {
+		if runtime.GOOS != sistema {
+			continue
+		}
+		var faltan []string
+		for _, h := range herramientas {
+			if _, err := exec.LookPath(h); err != nil {
+				faltan = append(faltan, h)
+			}
+		}
+		if len(faltan) > 0 {
+			t.Fatalf("en %s/%s falta(n) %s en el PATH, así que este arnés NO PUEDE EJERCITAR el guion.\n"+
+				"  Esto es un FALLO y no un salteo a propósito: %s es uno de los sistemas donde esta "+
+				"prueba se declaró medible con guiones.Unix, y «no pude medir» no puede contestar lo "+
+				"mismo que «medí y está bien».\n"+
+				"  MOTIVO DECLARADO: %s",
+				runtime.GOOS, runtime.GOARCH, strings.Join(faltan, ", "), runtime.GOOS, motivo)
+		}
+		// Único camino de vuelta en los sistemas donde mide. No hay `t.Skip` después de acá.
+		return
+	}
+
+	t.Skipf("SALTEADA EN %s/%s — esto se mide en %s.\n"+
+		"  MOTIVO: %s\n"+
+		"  EN WINDOWS EL ARNÉS NO SE SOSTIENE, y está medido: `PATH=C:\\...\\stubs:\"$PATH\"` se "+
+		"parte en dos por el `:` del nombre de unidad, un stub sin `.exe` ni bit de ejecución no se "+
+		"ejecuta, y el guion SALIÓ A LA URL REAL del release (exit 22 de curl). Además el banco "+
+		"necesita rutas POSIX y un `ssh` ejecutable por shebang.\n"+
+		"  DÓNDE SÍ CORRE, ENTERA Y SIEMPRE: el job `test` de CI, que es ubuntu y es el que gatea el "+
+		"merge; y el job de macOS, que es donde vive el defecto que estas pruebas cazan.",
+		runtime.GOOS, runtime.GOARCH, strings.Join(LosSistemasDondeElArnesSeSostiene, " y "),
+		motivo)
+}

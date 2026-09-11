@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 // LO QUE CUSTODIA: que la referencia contra la que se comparó VIAJE en el latido.
@@ -120,10 +122,10 @@ func nombresDeMetricas(t *testing.T, sobre map[string]any) map[string]float64 {
 const serieReferencia = "musubi_verificacion_referencia_confiable"
 
 func TestElLatidoDiceContraQueReferenciaSeComparo(t *testing.T) {
-	saltarSiWindows(t)
-	if _, err := exec.LookPath("bash"); err != nil {
-		t.Skip("hace falta bash")
-	}
+	guiones.Unix(t, "corre deploy/comparar-y-latir.sh para leer el latido que emite; se mide también en "+
+		"macOS porque su bash 3.2 es donde aparecen los defectos de expansión que en Linux son "+
+		"invisibles",
+		"bash")
 
 	// Un verificador que declara la referencia. `$MUSUBI_REF_SALIDA` es el contrato entre los dos
 	// guiones y se escribe acá tal cual lo escribe el de verdad.

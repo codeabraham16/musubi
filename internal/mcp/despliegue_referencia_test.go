@@ -4,9 +4,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 // LA GUARDA ES DE COMPORTAMIENTO Y NO DE TEXTO, A PROPÓSITO.
@@ -102,13 +103,10 @@ func seccionDeLaReferencia(t *testing.T, salida string) string {
 }
 
 func TestElVerificadorDiceContraQueArbolCompara(t *testing.T) {
-	saltarSiWindows(t)
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("hace falta git")
-	}
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("el guion se corta sin python3 antes de llegar a la sección que se prueba")
-	}
+	guiones.Unix(t, "corre la sección de la referencia de deploy/verificar-despliegue.sh contra un repo de "+
+		"prueba; se mide también en macOS porque su bash 3.2 es donde aparecen los defectos de "+
+		"expansión que en Linux son invisibles",
+		"bash", "git", "python3")
 
 	t.Run("un árbol que ES origin/main y está limpio se declara como tal", func(t *testing.T) {
 		raiz := prepararRepoDePrueba(t)
@@ -162,26 +160,4 @@ func TestElVerificadorDiceContraQueArbolCompara(t *testing.T) {
 			t.Errorf("el aviso tiene que nombrar la causa —lo que falta commitear— y no sólo que difiere.\nSección:\n%s", sec)
 		}
 	})
-}
-
-// saltarSiWindows corta las pruebas que EJECUTAN los guiones de `deploy/`.
-//
-// NO ES UNA EXENCIÓN POR COMODIDAD: esos guiones son bash y corren en la máquina del operador
-// —Linux o macOS—, nunca en Windows. El banco además necesita un shim de `ssh` ejecutable por
-// shebang y rutas POSIX, que en Windows no existen. Probarlos ahí no mide nada del sistema real;
-// mide el emulador.
-//
-// SE HACE CON UN `t.Skip` Y NO CON UN `//go:build !windows`, a propósito. Este repo ya pagó esa
-// diferencia: cuatro pruebas en un `*_windows_test.go` NO COMPILABAN fuera de Windows, `go test`
-// contestaba `ok`, `go vet` pasaba, y las pruebas simplemente NO EXISTÍAN. Un `t.Skip` sale
-// impreso en `go test -v` con su motivo; una restricción de build no deja rastro.
-//
-// macOS NO se saltea, y eso importa: es donde apareció el defecto de `${VAR}` pegada a un
-// carácter no-ASCII que en Linux era invisible.
-func saltarSiWindows(t *testing.T) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("los guiones de deploy/ son bash y corren en la máquina del operador (Linux/macOS); " +
-			"el banco necesita rutas POSIX y un `ssh` ejecutable por shebang")
-	}
 }

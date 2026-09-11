@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 // LO QUE CUSTODIA: que alguien compare las unidades de systemd INSTALADAS contra las que el repo
@@ -86,13 +88,10 @@ func seccionDeUnidades(t *testing.T, salida string) string {
 }
 
 func TestElVerificadorComparaSusPropiasUnidadesInstaladas(t *testing.T) {
-	saltarSiWindows(t)
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("hace falta git")
-	}
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("el guion se corta sin python3 antes de llegar a la sección que se prueba")
-	}
+	guiones.Unix(t, "corre la sección de unidades de deploy/verificar-despliegue.sh contra unidades "+
+		"instaladas de mentira; se mide también en macOS porque su bash 3.2 es donde aparecen "+
+		"los defectos de expansión que en Linux son invisibles",
+		"bash", "git", "python3")
 
 	t.Run("la instalada es la del repo: verde aunque el repo viva en otra carpeta", func(t *testing.T) {
 		raiz := prepararRepoDePrueba(t)

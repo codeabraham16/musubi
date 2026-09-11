@@ -72,6 +72,62 @@ func TestLaCompuertaNuncaSalteaEnLinux(t *testing.T) {
 	}
 }
 
+// elArnesSeSostieneAca contesta si ESTE sistema es uno de los que `Unix` declara medibles.
+//
+// Se deriva de `LosSistemasDondeElArnesSeSostiene` y no se tipea la lista de vuelta: una copia
+// escrita a mano acá diría «darwin mide» el día que la compuerta dejara de medir en darwin, y la
+// prueba pasaría en verde sobre la contradicción.
+func elArnesSeSostieneAca() bool {
+	for _, sistema := range LosSistemasDondeElArnesSeSostiene {
+		if runtime.GOOS == sistema {
+			return true
+		}
+	}
+	return false
+}
+
+// TestLaCompuertaUnixNoSalteaDondeElArnesSeSostiene — la sonda del tercer modo, en los dos sentidos.
+//
+// LO QUE ESTÁ EN JUEGO, y es la razón de que `Unix` exista: las pruebas que corren
+// `verificar-despliegue.sh` cazan defectos que en Linux SON INVISIBLES —el `${VAR}` pegada a un
+// carácter no-ASCII que mata el guion en el bash 3.2 de macOS: había cinco y cuatro llevaban meses
+// sin verse—. Si `Unix` salteara en darwin, el defecto quedaría cerrado y su única plataforma
+// testigo apagada en el mismo commit. Por eso la sonda mide darwin con el mismo rigor que linux.
+//
+// SE PREGUNTA POR UN DATO DE LA CORRIDA, igual que la sonda de `Exigir`: `t.Skipf` hace
+// `runtime.Goexit()`, así que «¿salteó?» se contesta mirando si el cuerpo siguió — no el texto del
+// mensaje, y no `t.Skipped()`, que en `go test` cuenta como éxito.
+//
+// SABOTAJE QUE LA PONE EN ROJO (verificado): en compuerta.go, cambiar el `for` sobre
+// `LosSistemasDondeElArnesSeSostiene` por `if runtime.GOOS == ElSistemaDondeCorren`. En linux
+// sigue verde y en macOS muere — que es exactamente el defecto que este modo vino a evitar.
+func TestLaCompuertaUnixNoSalteaDondeElArnesSeSostiene(t *testing.T) {
+	siguio := false
+	t.Run("sonda", func(t *testing.T) {
+		Unix(t, "la sonda del modo Unix ejecuta bash para comprobar que no saltea ni en linux ni en macOS", "bash")
+		siguio = true
+		if err := exec.Command("bash", "-c", ":").Run(); err != nil {
+			t.Fatalf("la compuerta dejó pasar y bash no se pudo ejecutar: %v", err)
+		}
+	})
+
+	if elArnesSeSostieneAca() {
+		if !siguio {
+			t.Fatalf("guiones.Unix SALTEÓ en %s. Los sistemas donde declara medir son %s, y en ésos "+
+				"no puede saltear NUNCA: una herramienta que falta es un FALLO, porque «no pude "+
+				"medir» no puede contestar lo mismo que «medí y está bien».",
+				runtime.GOOS, strings.Join(LosSistemasDondeElArnesSeSostiene, " y "))
+		}
+		return
+	}
+	// En windows el contrato es el opuesto y también se comprueba: si un día dejara pasar ahí, el
+	// arnés saldría a internet (exit 22 de curl) en vez de saltear.
+	if siguio {
+		t.Fatalf("guiones.Unix DEJÓ PASAR en %s/%s, donde el arnés no se sostiene: el `:` de `C:\\` "+
+			"parte el PATH y el stub sin `.exe` no se ejecuta.", runtime.GOOS, runtime.GOARCH)
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // (2) LOS DOS USOS PROHIBIDOS ROMPEN DE VERDAD
 // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -88,6 +144,10 @@ func TestAyudanteDeUsoIndebido(t *testing.T) {
 		Exigir(t, "porque si", "bash")
 	case "sin-herramientas":
 		Exigir(t, "un motivo perfectamente redactado y de largo suficiente para pasar el filtro")
+	case "unix-sin-motivo":
+		Unix(t, "porque si", "bash")
+	case "unix-sin-herramientas":
+		Unix(t, "un motivo perfectamente redactado y de largo suficiente para pasar el filtro")
 	default:
 		// En una corrida normal pasa por la compuerta y ejecuta una shell como cualquiera de las
 		// pruebas que ésta custodia. No es adorno: así queda del lado correcto de la guarda de
@@ -120,6 +180,15 @@ func TestUnUsoIndebidoDeLaCompuertaEsUnFallo(t *testing.T) {
 		{"sin nombrar ninguna herramienta", "sin-herramientas", "NO es",
 			"la compuerta aceptó ser usada sin nombrar una sola herramienta Unix, o sea como un " +
 				"t.Skip de propósito general: es exactamente lo que no puede ser"},
+		// EL HERMANO: los dos controles de uso valen para los TRES modos o no valen para ninguno.
+		// Un modo nuevo con los `t.Fatalf` copiados y sin prueba que los corra es la forma exacta
+		// que este repo persigue —la guarda puesta en N-1 de N caminos—, y acá el N acaba de subir.
+		{"modo Unix, motivo vacío de contenido", "unix-sin-motivo", "hace falta una frase",
+			"guiones.Unix aceptó un motivo de dos palabras: el salteo de windows puede quedar sin " +
+				"decir por qué, y un salteo que nadie puede revisar se queda para siempre"},
+		{"modo Unix, sin nombrar ninguna herramienta", "unix-sin-herramientas", "NO es",
+			"guiones.Unix aceptó ser usada sin nombrar una sola herramienta, o sea como un t.Skip " +
+				"de propósito general para apagar windows: es exactamente lo que no puede ser"},
 	}
 	for _, c := range casos {
 		t.Run(c.nombre, func(t *testing.T) {
@@ -150,6 +219,15 @@ var shells = map[string]bool{
 
 const rutaDeLaCompuerta = "musubi/internal/guiones"
 
+// losModosDeLaCompuerta son los nombres que cuentan como «esta prueba pasó por la compuerta».
+//
+// ESTÁ ESCRITO UNA SOLA VEZ a propósito. Cuando eran dos, la lista vivía en cuatro lados —dos
+// condiciones del detector, el comentario del campo y el mensaje de error— y agregar el tercero
+// habría dejado tres de esos cuatro mintiendo: el detector no lo reconocería y seguiría pidiendo
+// compuerta a pruebas que ya la tienen. Es la forma exacta que este repo persigue con nombre
+// propio: la regla escrita en N lugares envejece en N-1.
+var losModosDeLaCompuerta = []string{"Exigir", "Portable", "Unix"}
+
 // funcDePrueba — lo que la guarda sabe de una función de un paquete de prueba.
 type funcDePrueba struct {
 	pkg      string // directorio + paquete: el ámbito donde se resuelven las llamadas
@@ -157,7 +235,7 @@ type funcDePrueba struct {
 	pos      string
 	esTest   bool
 	shell    bool // ejecuta una shell EN SU PROPIO cuerpo
-	compuert bool // llama a guiones.Exigir o guiones.Portable en su propio cuerpo
+	compuert bool // llama a alguno de losModosDeLaCompuerta en su propio cuerpo
 	llama    []string
 }
 
@@ -295,15 +373,20 @@ func TestElSalteoEstaAcotadoALasPruebasQueCorrenUnaShell(t *testing.T) {
 	t.Logf("pruebas que ejecutan una shell, detectadas por el grafo de llamadas: %d", conShell)
 
 	for _, x := range sinCompuerta {
-		t.Errorf("EL HERMANO SIN LA COMPUERTA: %s ejecuta una shell y NO pasa por guiones.Exigir.\n"+
-			"  En windows/macOS esa prueba no mide el guion: mide el runner. El arnés escribe stubs\n"+
+		t.Errorf("EL HERMANO SIN LA COMPUERTA: %s ejecuta una shell y NO pasa por la compuerta.\n"+
+			"  En Windows esa prueba no mide el guion: mide el runner. El arnés escribe stubs\n"+
 			"  ejecutables y los antepone al PATH con `:` — medido, en windows el stub no se toma y el\n"+
 			"  guion sale a la URL real del release.\n"+
-			"  Arreglo, y son DOS casos distintos:\n"+
-			"    · sólo corre en linux  -> `guiones.Exigir(t, \"<qué guion corre y por qué es de linux>\", \"bash\", ...)`\n"+
-			"    · corre en las tres    -> `guiones.Portable(t, \"<qué guion corre y por qué vale en las tres>\", \"bash\", ...)`\n"+
+			"  Arreglo, y son TRES casos distintos. Elegí por lo que el guion NECESITA, no por dónde\n"+
+			"  te molesta que falle:\n"+
+			"    · sólo corre en linux    -> `guiones.Exigir(t, \"<qué guion corre y por qué es de linux>\", \"bash\", ...)`\n"+
+			"    · linux y macOS, no Win  -> `guiones.Unix(t, \"<qué guion corre y por qué se mide en los dos>\", \"bash\", ...)`\n"+
+			"    · corre en las tres      -> `guiones.Portable(t, \"<qué guion corre y por qué vale en las tres>\", \"bash\", ...)`\n"+
 			"      (Portable NO saltea: exige que las herramientas estén en TODAS las plataformas.)\n"+
-			"  como primera línea. En linux NO saltea nunca, así que no perdés nada donde importa.", x)
+			"  como primera línea. En linux NINGUNO saltea, así que no perdés nada donde importa.\n"+
+			"  Y OJO CON ELEGIR `Exigir` POR COMODIDAD: el defecto de `${VAR}` pegada a un carácter\n"+
+			"  no-ASCII que mata el guion en el bash 3.2 de macOS es INVISIBLE en Linux. Para una\n"+
+			"  prueba que caza eso, `Exigir` no acota el alcance: lo apaga. Ésa es `Unix`.", x)
 	}
 	for _, x := range fueraDeAlcance {
 		t.Errorf("COMPUERTA FUERA DE ALCANCE: %s llama a guiones.Exigir y NO ejecuta ninguna shell.\n"+
@@ -434,12 +517,14 @@ func analizarCuerpo(fd *ast.FuncDecl, alias string, esLaCompuerta bool, info *fu
 			}
 		}
 		// ¿llama a la compuerta?
-		if alias != "" && (esSelector(c.Fun, alias, "Exigir") || esSelector(c.Fun, alias, "Portable")) {
-			info.compuert = true
-		}
-		if esLaCompuerta {
-			if id, ok := c.Fun.(*ast.Ident); ok && (id.Name == "Exigir" || id.Name == "Portable") {
+		for _, modo := range losModosDeLaCompuerta {
+			if alias != "" && esSelector(c.Fun, alias, modo) {
 				info.compuert = true
+			}
+			if esLaCompuerta {
+				if id, ok := c.Fun.(*ast.Ident); ok && id.Name == modo {
+					info.compuert = true
+				}
 			}
 		}
 		// ¿llama a otra función del mismo paquete?

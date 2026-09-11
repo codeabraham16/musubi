@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 // LO QUE CUSTODIA: que alguien compare el esquema al que apunta el binario del cerebro contra el
@@ -85,16 +87,10 @@ func correrVerificadorConEsquema(t *testing.T, raiz, bin, db string) string {
 }
 
 func TestElVerificadorComparaElEsquemaDeLaBaseContraElBinario(t *testing.T) {
-	saltarSiWindows(t)
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("hace falta git")
-	}
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("el guion se corta sin python3 antes de llegar a la sección que se prueba")
-	}
-	if _, err := exec.LookPath("od"); err != nil {
-		t.Skip("hace falta od para leer el encabezado")
-	}
+	guiones.Unix(t, "corre la sección del esquema de deploy/verificar-despliegue.sh, que compara el "+
+		"`user_version` de la base contra el binario; se mide también en macOS porque su bash "+
+		"3.2 es donde aparecen los defectos de expansión que en Linux son invisibles",
+		"bash", "git", "python3", "od")
 
 	preparar := func(t *testing.T, esquemaBin string, esquemaBase uint32) (string, string, string) {
 		t.Helper()
