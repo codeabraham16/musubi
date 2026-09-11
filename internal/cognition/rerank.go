@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"musubi/internal/memory"
 )
 
 // EL JUEZ DE PERTINENCIA, como unidad reusable.
@@ -52,7 +54,11 @@ const sistemaJuez = "Sos un juez de pertinencia. Dada una CONSULTA y MEMORIAS ca
 func PromptJuez(query string, cands []Candidato) (system, user string) {
 	var b strings.Builder
 	for _, c := range cands {
-		fmt.Fprintf(&b, "[%s] %s\n", c.ID, c.Gist)
+		// EL GIST VA SANEADO, y acá no es cosmético. Este prompt es una LISTA de candidatos, uno
+		// por línea, y el juez los ordena por id. Un gist con un salto de línea fabrica renglones
+		// nuevos: candidatos que no existen, o instrucciones con el aspecto de la lista que el
+		// servidor armó. Ver internal/memory/linea_ajena.go.
+		fmt.Fprintf(&b, "[%s] %s\n", c.ID, memory.EnUnaLinea(c.Gist, 400))
 	}
 	return sistemaJuez, "CONSULTA: " + query + "\n\nMEMORIAS:\n" + b.String()
 }

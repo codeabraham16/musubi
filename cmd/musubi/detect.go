@@ -374,7 +374,10 @@ func buildPrimingContext(store startupStore, budget int, sessionID string) strin
 	}
 	saveDeltaState(store, sessionID, seed)
 
-	header := "[Musubi — memoria] Contexto de fondo que Musubi recuerda de este proyecto. La edad va en cada línea (· hace Xd/m/a): puede estar DESACTUALIZADO — verificá contra el código/estado actual antes de darlo por cierto, sobre todo lo viejo. (gists; expandí con musubi_memory_expand):"
+	// EL MISMO ENCABEZADO QUE EL HOOK POR TURNO, y armado por la MISMA función. Acá había una
+	// copia del texto escrita a mano: las dos decían lo mismo y envejecían por separado, que es
+	// exactamente cómo una advertencia nueva entra en un camino y no en el hermano.
+	header := encabezadoDeMemoria("[Musubi — memoria] Contexto de fondo que Musubi recuerda de este proyecto.")
 	return formatGists(header, res)
 }
 

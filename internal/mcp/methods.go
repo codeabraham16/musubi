@@ -522,25 +522,18 @@ func (s *McpServer) surfaceBandNeighbors(obsID string) string {
 		" SUPERADA o CONTRADICHA por lo que acabás de guardar? Si sí, resolvelo con musubi_judge"+
 		" (relation=supersedes|conflicts_with); si no, ignorá este aviso.", len(near))
 	for _, n := range near {
-		fmt.Fprintf(&b, "\n- id=%s [%s] (coseno %.2f): %s", n.ID, n.TopicKey, n.Cosine, firstLine(n.Gist, 100))
+		// LOS DOS CAMPOS, no uno. Acá el gist pasaba por `firstLine` y el `topic_key` de al lado
+		// iba CRUDO — la regla estaba puesta en uno de los dos campos de la misma línea, que es la
+		// forma exacta del defecto dominante de este repo. Y `firstLine` cortaba en el primer
+		// `\n` pero no conocía U+2028/U+2029 ni el resto de los controles.
+		fmt.Fprintf(&b, "\n- id=%s [%s] (coseno %.2f): %s",
+			n.ID, memory.EnUnaLinea(n.TopicKey, 120), n.Cosine, memory.EnUnaLinea(n.Gist, 100))
 	}
 	if omitted > 0 {
 		// El recorte se INFORMA: un truncado silencioso diría "esto es todo" cuando no lo es.
 		fmt.Fprintf(&b, "\n  (hay %d más por debajo del techo)", omitted)
 	}
 	return b.String()
-}
-
-// firstLine recorta a la primera línea y a max runes, para que el aviso sea corto.
-func firstLine(s string, max int) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		s = s[:i]
-	}
-	r := []rune(strings.TrimSpace(s))
-	if len(r) <= max {
-		return string(r)
-	}
-	return string(r[:max]) + "…"
 }
 
 // toolDoctor diagnostica o repara la base de memoria.
