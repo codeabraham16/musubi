@@ -102,6 +102,69 @@ Gastar ~21 llamadas por día del presupuesto del motor, todos los días, para en
 relaciones accionables. Eso no lo decide una medición: la medición dice **cuánto cuesta y cuánto
 rinde**, y quién paga decide si vale.
 
+## Apéndice — Los dos dials, mapeados (2026-09-11, misma ventana)
+
+Este apéndice se agregó al ir a mirar **la taxonomía de topics** (1.166 topics, **982 con una sola
+observación**) sospechando que ella explicaba por qué la cola no se resuelve sola. **No la explica.**
+Lo que apareció al medir son los dos dials que sí gobiernan la cola, y ninguno estaba medido.
+
+### El punto de partida: la auto-resolución está muerta
+
+De las 306 relaciones resueltas, **305 las decidió un agente y 1 la heurística.**
+
+La condición automática tiene dos partes: `lex >= AutoResolveThreshold` **y** `topic_key` idéntico.
+La sospecha era el topic. **Medido, el topic no bloquea:** 57 de 299 pares (19 %) ya comparten
+`topic_key`. Lo que bloquea es el umbral léxico.
+
+### Dial 1 — `auto_resolve_threshold` (hoy **0,70**)
+
+| umbral | cruzan | % | …y mismo topic | de ésas, accionables |
+|---|---|---|---|---|
+| 0,30 | 283 | 94,6 % | 57 | 3 |
+| 0,35 | 70 | 23,4 % | 39 | 2 |
+| 0,40 | 17 | 5,7 % | 3 | 1 |
+| 0,50 | 5 | 1,7 % | 1 | 1 |
+| **0,70** | **1** | **0,3 %** | **1** | **1** |
+
+Percentiles del solape léxico observado: p50 = 0,324 · p90 = 0,384 · p95 = 0,408 · p99 = 0,561 ·
+**máximo = 0,723**.
+
+**El umbral vive más allá del p99**, y la única relación que lo cruzó es la única que la heurística
+resolvió. Visto así parece un dial mal puesto — hasta que se mira qué compra bajarlo: en 0,35
+habría **39 pares auto-elegibles de los que un agente juzgó que sólo 2 eran accionables**. O sea
+que bajarlo **auto-ocultaría 37 observaciones que un agente decidió que debían quedarse.**
+
+**Veredicto: 0,70 se queda.** Era una convención; ahora es una decisión con una tabla atrás. Y la
+asimetría manda: auto-resolver `supersedes` **oculta memoria**, y eso no se deshace solo.
+
+### Dial 2 — `similarity_floor` (hoy **0,30**), que es el que gobierna el VOLUMEN
+
+| piso | quedan | % del volumen | accionables | % de hallazgos | precisión |
+|---|---|---|---|---|---|
+| **0,30** | **283** | **94,6 %** | **9** | **100 %** | **3,2 %** |
+| 0,32 | 175 | 58,5 % | 4 | 44 % | 2,3 % |
+| 0,35 | 70 | 23,4 % | 3 | 33 % | 4,3 % |
+| 0,40 | 17 | 5,7 % | 2 | 22 % | 11,8 % |
+| 0,45 | 7 | 2,3 % | 1 | 11 % | 14,3 % |
+
+**Tampoco hay premio.** Subir el piso canjea hallazgos por volumen casi 1:1, y en 0,32 la precisión
+**empeora** (2,3 % contra 3,2 %): se pierde el 56 % de los hallazgos para ahorrar el 41 % del
+trabajo. Recién desde 0,38 la precisión mejora de verdad, y ahí ya se perdió el 78 % de lo que se
+buscaba.
+
+Es el mismo hecho que el punto 3 del cuerpo de esta propuesta, visto por otra ventana: **los
+accionables están repartidos por todo el rango léxico**, así que ningún corte por `lex` los separa.
+
+### Lo que este apéndice cambia
+
+Nada del código, y dos cosas de lo que se sabe:
+
+1. **La taxonomía de topics NO es la causa** de que la cola no se resuelva sola. Era la hipótesis
+   con la que se empezó a mirar, y el 19 % de pares con topic compartido la refuta.
+2. **Los dos dials estaban puestos por convención y resultan defendibles**, pero por razones que
+   nadie había medido. Ahora el próximo que vea «1 auto-resolución en 306» y quiera bajar el umbral
+   tiene la tabla que dice qué se lleva puesto.
+
 ## Riesgos, dichos de frente
 
 - **n=9 accionables es poco.** El punto 3 descarta un umbral evidente; no prueba que no exista
