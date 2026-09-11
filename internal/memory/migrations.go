@@ -2232,6 +2232,37 @@ func runMigrations(db *sql.DB) error {
 // avanza (la próxima apertura reintenta). Separar el runner de schemaMigrations()
 // permite testearlo con migraciones sintéticas.
 func applyMigrations(db *sql.DB, migs []migration) error {
+	// LA LISTA SE REVISA ANTES DE TOCAR LA BASE, Y ESTO NO ES PARANOIA: es el modo de falla que
+	// dos ramas abiertas producen SOLAS.
+	//
+	// El bucle de más abajo hace `if m.version <= current { continue }`. Con dos migraciones que
+	// declaran el MISMO número —lo normal cuando dos ramas agregan una cada una al final del
+	// archivo y git las auto-mergea sin marcar conflicto— aplica la primera, `current` queda en
+	// ese número, y la SEGUNDA CAE EN EL `continue`. Sin error, sin warning, y `user_version`
+	// termina afirmando que se aplicó todo. No deja la base en rojo: la deja INCOMPLETA EN VERDE,
+	// que es peor, porque el arranque siguiente no reintenta nada.
+	//
+	// POR QUÉ ACÁ Y NO SÓLO EN UNA PRUEBA. Una guarda de test protege al REPO: impide que el
+	// archivo malo se mergee. Esto protege a un BINARIO YA CONSTRUIDO desde un merge que nadie
+	// revisó —el release de ayer, el binario que alguien copió a mano, la rama de un tercero—, que
+	// es el único caso en que este defecto llega a una base de producción. Las dos hacen falta y
+	// ninguna reemplaza a la otra.
+	//
+	// SE EXIGE ESTRICTAMENTE CRECIENTE y no sólo «sin repetidos», porque el desorden tiene el mismo
+	// efecto: una migración con número menor que la anterior también entra al `continue` y se
+	// saltea. Un solo control cubre las dos formas.
+	for i := 1; i < len(migs); i++ {
+		if migs[i].version > migs[i-1].version {
+			continue
+		}
+		if migs[i].version == migs[i-1].version {
+			return fmt.Errorf("migración %d declarada DOS VECES (%q y %q): el runner aplicaría sólo la primera y saltearía la segunda EN SILENCIO, dejando la base incompleta con user_version diciendo que se aplicó todo. Casi siempre es un merge de dos ramas que agregaron una migración cada una; renumerá la que tenga menos datos atrás",
+				migs[i].version, migs[i-1].name, migs[i].name)
+		}
+		return fmt.Errorf("las migraciones no están en orden creciente: %d (%q) viene después de %d (%q). El runner saltea toda migración con versión menor o igual a la ya aplicada, así que la de atrás no correría nunca y nadie se enteraría",
+			migs[i].version, migs[i].name, migs[i-1].version, migs[i-1].name)
+	}
+
 	var current int
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&current); err != nil {
 		return fmt.Errorf("error al leer user_version: %w", err)
