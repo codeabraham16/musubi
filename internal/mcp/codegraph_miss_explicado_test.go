@@ -127,8 +127,15 @@ func TestElIndiceRegistraDeQueCommitEs(t *testing.T) {
 	}
 
 	// Y dentro de un repo git sí viaja, y el miss lo repite para que se pueda comparar.
+	// FALLO, NO SALTEO. `git` no es una dependencia opcional de este repo: sin git no se lo puede
+	// ni clonar, y CI hace el checkout con git en las tres plataformas. Saltear acá dejaba la
+	// SEGUNDA MITAD de la prueba —la que comprueba que el commit SÍ viaja dentro de un repo— sin
+	// correr, y en verde, que es como una prueba omitida se vuelve indistinguible de una que no
+	// existe.
 	if !hayGit() {
-		t.Skip("sin git en el PATH no se puede verificar la otra mitad")
+		t.Fatal("sin git en el PATH: este repo se clona con git y CI lo tiene en las tres " +
+			"plataformas, así que su ausencia es un entorno roto y no un caso donde esta prueba " +
+			"no aplique. La mitad que verifica `indexed_head` quedaría sin medir.")
 	}
 	gitInit(t, dir)
 	idx2 := decodeCG(t, mustCall(t, s, "musubi_codegraph_index", map[string]interface{}{}))
@@ -311,7 +318,11 @@ func gitInit(t *testing.T, dir string) {
 	for _, p := range pasos {
 		cmd := exec.Command("git", append([]string{"-C", dir}, p...)...)
 		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Skipf("no se pudo preparar el repo git de prueba (%v): %s", err, out)
+			// Si el andamio no se puede armar, lo que sigue no mide nada. Eso es un fallo del
+			// entorno, no un permiso para pasar en verde sin haber ejercitado el camino.
+			t.Fatalf("no se pudo preparar el repo git de prueba (%v): %s\n"+
+				"  Sin este repo el resto de la prueba no compara nada: fallar es lo correcto, "+
+				"saltear haría que un andamio roto se lea igual que un verde.", err, out)
 		}
 	}
 }
