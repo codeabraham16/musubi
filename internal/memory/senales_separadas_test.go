@@ -232,8 +232,22 @@ func TestElDetectorLlenaLasSenales(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DetectRelations: %v", err)
 	}
+	// ESTE `if` ERA UN `t.Skip`, Y EL SKIP SE DISPARABA EXACTAMENTE CUANDO FALLABA LO QUE ESTA
+	// PRUEBA VIGILA.
+	//
+	// La prueba existe para demostrar que el detector REAL llena las señales —el modo de falla
+	// «capacidad desplegada que nadie invoca»— y se salteaba cuando el detector no emparejaba
+	// nada. O sea que no podía fallar por su propio motivo: si el detector dejaba de detectar,
+	// esta prueba contestaba «salteada» y `go test` contestaba `ok`.
+	//
+	// Las dos observaciones sembradas son casi idénticas (difieren en una palabra) contra un piso
+	// de similitud de 0,3. Que el detector no las empareje NO es «esta siembra no daba»: es el
+	// detector roto, y hay que verlo.
 	if len(rels) == 0 {
-		t.Skip("el detector no emparejó nada con esta siembra; el invariante se prueba en los demás casos")
+		t.Fatal("el detector no emparejó DOS observaciones que difieren en una sola palabra, con el " +
+			"piso de similitud en 0,3.\n" +
+			"  Eso no es una siembra floja: es que el detector dejó de detectar. Antes esto era un " +
+			"`t.Skip`, así que el modo de falla que esta prueba existe para cazar la apagaba a ella.")
 	}
 	for _, r := range rels {
 		if r.Lex == nil {

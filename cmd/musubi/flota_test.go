@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -800,6 +801,137 @@ func TestNingunaCeldaDelPanelSeLlenaSola(t *testing.T) {
 	if len(vistos) < 20 {
 		t.Fatalf("se encontraron %d campos en la página; son bastantes más — ¿la regex dejó de matchear?", len(vistos))
 	}
+}
+
+// objetosDeLaPagina son las OTRAS variables que la página desestructura, además del equipo.
+//
+// EL HERMANO QUE FALTABA. La guarda de arriba mira `e.campo` y nada más: los campos del EQUIPO.
+// Pero la página dibuja cuatro objetos más —un servicio, su rendimiento, una política y la
+// respuesta entera— con 35 claves que no custodiaba nadie. Un `${s.lo_que_sea}` nuevo se dibuja
+// como vacío para siempre, en verde, sin error y sin log: exactamente el modo de falla que la
+// guarda de `e.` existe para prohibir, en los cuatro caminos donde nadie la copió.
+var objetosDeLaPagina = map[string]string{
+	"s": "un servicio o una sesión",
+	"r": "el rendimiento de un servicio",
+	"p": "una política de auto-curación",
+	"d": "la respuesta entera de /api/flota",
+}
+
+// TODA CLAVE QUE LA PÁGINA DIBUJA TIENE QUE EXISTIR DEL LADO DE GO.
+//
+// NO SE COMPARA CONTRA UNA LISTA ESCRITA A MANO, y eso es deliberado: una lista es una copia, y
+// una copia se queda vieja — la guarda pasaría mirándose al espejo mientras el productor hace
+// otra cosa. Se compara contra el CÓDIGO que arma la respuesta. Si una clave no aparece en
+// ningún lado de Go, nadie la llena y la celda se dibuja vacía para siempre.
+func TestNingunaClaveDeServicioNiDeRendimientoSeLlenaSola(t *testing.T) {
+	pagina := sinComentariosDeHTMLyJS(string(assetsFS(t, "assets/flota.html")))
+
+	// El código que puede llenar una clave: el proxy del panel y las tools del cerebro.
+	var fuente strings.Builder
+	for _, dir := range []string{".", "../../internal/mcp", "../../internal/fleet"} {
+		entradas, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("no pude listar %s: %v", dir, err)
+		}
+		for _, e := range entradas {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				continue
+			}
+			fuente.Write(b)
+		}
+	}
+	goSrc := fuente.String()
+	if len(goSrc) < 100_000 {
+		t.Fatalf("sólo se juntaron %d bytes de fuente Go: la enumeración quedó corta y un corpus "+
+			"chico hace pasar TODAS las claves sin que nadie las haya buscado", len(goSrc))
+	}
+
+	claves := regexp.MustCompile(`\b([a-z]{1,3})\.([a-z_][a-z_0-9]*)\b`)
+	vistas := map[string]bool{}
+	revisadas := 0
+	for _, m := range claves.FindAllStringSubmatch(pagina, -1) {
+		obj, campo := m[1], m[2]
+		que, esNuestro := objetosDeLaPagina[obj]
+		if !esNuestro || vistas[obj+"."+campo] {
+			continue
+		}
+		vistas[obj+"."+campo] = true
+		// Los métodos y propiedades de JavaScript no son claves de datos.
+		if propiedadDeJavaScript[campo] {
+			continue
+		}
+		revisadas++
+		// LAS DOS FORMAS. Un tag de struct puede traer opciones —`json:"equipos,omitempty"`— y
+		// buscar sólo `"equipos"` con su comilla de cierre no lo encuentra. Lo descubrió esta
+		// misma guarda al primer intento, marcando `d.equipos` como huérfano cuando la llena
+		// `flotaRespuesta.Equipos`. Una guarda que grita en falso se aprende a ignorar.
+		if strings.Contains(goSrc, `"`+campo+`"`) || strings.Contains(goSrc, `"`+campo+`,`) {
+			continue
+		}
+		t.Errorf("la página dibuja %s.%s (%s) y esa clave NO APARECE en ningún lado de Go.\n"+
+			"  Nadie la llena: la celda se va a dibujar vacía SIEMPRE, sin error y sin log, que es\n"+
+			"  el modo de falla que este panel ya tuvo durante un track entero.\n"+
+			"  Decidí de dónde sale y hacela viajar, o sacala de la página.", obj, campo, que)
+	}
+
+	// EL CONTROL. Con la regex rota, o con la página movida, esto pasaría sin haber mirado una
+	// sola clave — y ese verde diría «están todas bien» en vez de «no encontré ninguna».
+	if revisadas < 25 {
+		t.Fatalf("sólo se revisaron %d claves de servicio/rendimiento/política y son al menos 25: "+
+			"¿cambió la forma de la página o la regex dejó de matchear?", revisadas)
+	}
+}
+
+// propiedadDeJavaScript son nombres del lenguaje, no claves de datos: nadie del lado de Go los
+// tiene que llenar.
+var propiedadDeJavaScript = map[string]bool{
+	"length": true, "map": true, "filter": true, "join": true, "push": true, "forEach": true,
+	"toFixed": true, "slice": true, "split": true, "trim": true, "value": true, "checked": true,
+	"then": true, "catch": true, "json": true, "ok": true, "status": true, "textContent": true,
+	"innerHTML": true, "style": true, "classList": true, "dataset": true, "target": true,
+	"sort": true, "find": true, "some": true, "every": true, "includes": true, "indexOf": true,
+	"replace": true, "toLowerCase": true, "toUpperCase": true, "keys": true, "entries": true,
+	"reduce": true, "concat": true, "add": true, "remove": true, "toggle": true, "preventDefault": true,
+}
+
+// sinComentariosDeHTMLyJS blanquea `<!-- … -->` y las líneas `//` de los bloques de script.
+//
+// Sin esto, un `e.campo` que quedó NOMBRADO en un comentario cuenta como dibujado — y entonces la
+// guarda pide que alguien llene una clave que la página no usa. Una guarda que grita en falso se
+// aprende a ignorar, y ahí deja de servir para el caso real.
+func sinComentariosDeHTMLyJS(texto string) string {
+	var b strings.Builder
+	dentro := false
+	for i := 0; i < len(texto); {
+		if !dentro && strings.HasPrefix(texto[i:], "<!--") {
+			dentro, i = true, i+4
+			continue
+		}
+		if dentro && strings.HasPrefix(texto[i:], "-->") {
+			dentro, i = false, i+3
+			continue
+		}
+		if !dentro {
+			b.WriteByte(texto[i])
+		} else if texto[i] == '\n' {
+			b.WriteByte('\n')
+		}
+		i++
+	}
+	var limpio strings.Builder
+	for _, linea := range strings.Split(b.String(), "\n") {
+		if d := strings.TrimSpace(linea); strings.HasPrefix(d, "//") {
+			limpio.WriteByte('\n')
+			continue
+		}
+		limpio.WriteString(linea)
+		limpio.WriteByte('\n')
+	}
+	return limpio.String()
 }
 
 // leerFuente lee un archivo .go de este paquete. La prueba de arriba necesita el TEXTO de la lista
