@@ -75,3 +75,73 @@ func TestAddListRevokeRoundTrip(t *testing.T) {
 		t.Fatalf("revoke inexistente: found=%v err=%v", found, err)
 	}
 }
+
+// EL VENCIMIENTO ERA EL ÚNICO CAMPO DEL REGISTRO SIN CUSTODIO, Y SE PIERDE POR ESCRITURA AJENA.
+//
+// `AddPrincipal` y `RemovePrincipal` no editan una fila: leen el archivo entero, lo modifican en
+// memoria y lo REESCRIBEN COMPLETO. O sea que un alta o una baja de OTRO principal pasa por encima
+// de todos los campos de todos los demás. La mayoría tiene quien la mire —`read`/`write` los cubre
+// `TestAddPrincipalWithCapsGuardaYPersiste`—; `expires` no tenía a nadie.
+//
+// Y el daño no es perder un dato: es que una credencial que VENCE se convierta en una ETERNA. El
+// registro es lo único que hace vencer a un token `msb_`, así que blanquear ese campo no rompe
+// nada visible —el archivo sigue siendo válido, el token sigue autenticando— y el sistema pasa a
+// contestar «no vence» a una pregunta que nunca volvió a medir. Otra vez «no sé» con cara de «medí
+// y está bien», en el eje que decide quién puede ejecutar comandos.
+//
+// EL SABOTAJE QUE AÍSLA ESTE AGUJERO, corrido contra main en e537936 antes de escribir esto: en
+// `writePrincipalsFile`, ANTES del `yaml.Marshal`, poner
+//
+//	for i := range f.Principals { f.Principals[i].Expires = "" }
+//
+// que es literalmente «el alta o la baja de otro le borra el vencimiento a los que ya estaban»,
+// sin tocar el camino de LECTURA. Con eso, `go test ./internal/mcp/ ./cmd/musubi/` daba
+// `ok 136,651s` y `ok 50,004s`, EXIT 0 — el repo entero en VERDE sobre el defecto. Con esta prueba
+// puesta, ROJA.
+//
+// ⚠️ NO SIRVE EL SABOTAJE OBVIO, y conviene dejarlo escrito para que nadie lo repita: ponerle
+// `yaml:"-"` al campo lo agarran CINCO tests, porque rompe además la lectura. Un sabotaje que
+// rompe de más no aísla nada: prueba que algo se dio cuenta, no que ESTA guarda mira acá.
+//
+// HERMANO BUSCADO: el mismo sabotaje sobre `Read`/`Write` en vez de `Expires` sí sale rojo
+// (`TestAddPrincipalWithCapsGuardaYPersiste`). De los campos de `principalEntry` que round-trippean
+// por `writePrincipalsFile`, `expires` era el único sin custodio.
+//
+// La prueba viene de una rama huérfana (26b7253) cuyo código NO se integró a propósito: main ya
+// resolvió el vencimiento mejor —cuatro estados en vez de un bool, y la guarda en `porNombre()`,
+// el lookup que la huérfana ni miraba—. Lo único que la huérfana tenía y main no era esta guarda.
+func TestAddRevokeConservaExpires(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".musubi", "principals.yaml")
+	if _, err := AddPrincipal(path, "alice", "crm", "writer"); err != nil {
+		t.Fatalf("AddPrincipal alice: %v", err)
+	}
+	// El operador le pone el vencimiento a mano: no hay comando que lo escriba, así que el campo
+	// tiene que sobrevivir a las reescrituras del CLI o no sirve para nada.
+	f, err := readPrincipalsFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Principals[0].Expires = "2030-06-01T00:00:00Z"
+	if err := writePrincipalsFile(path, f); err != nil {
+		t.Fatal(err)
+	}
+
+	// Alta y baja de un TERCERO: las dos reescriben el archivo entero, y ninguna tiene por qué
+	// saber que alice existe.
+	if _, err := AddPrincipal(path, "bob", "crm", "reader"); err != nil {
+		t.Fatalf("AddPrincipal bob: %v", err)
+	}
+	if found, err := RemovePrincipal(path, "bob"); err != nil || !found {
+		t.Fatalf("RemovePrincipal bob: found=%v err=%v", found, err)
+	}
+
+	infos, err := ListPrincipalsInfo(path)
+	if err != nil || len(infos) != 1 || infos[0].Name != "alice" {
+		t.Fatalf("ListPrincipalsInfo: %+v err=%v", infos, err)
+	}
+	if infos[0].Expires != "2030-06-01T00:00:00Z" {
+		t.Fatalf("el expires de alice debía sobrevivir al alta y la baja de bob, quedó %q. "+
+			"Un vencimiento que se pierde en una escritura ajena convierte una credencial que VENCE "+
+			"en una ETERNA, y en silencio", infos[0].Expires)
+	}
+}
