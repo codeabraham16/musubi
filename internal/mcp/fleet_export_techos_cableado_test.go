@@ -762,7 +762,7 @@ func TestElHelpYElComentarioImprimenElTechoVigenteYNoLaConstante(t *testing.T) {
 		d := maquinaConMuestra(t, s, "casa", "pc-gio", *muestraDePrueba(), ahora)
 		serviciosDePrueba(t, s, d, techo+1, ahora)
 		var c strings.Builder
-		if _, _ = renderServicios(&c, s.engine, []fleet.Device{d}, ahora, techo); true {
+		if _, _, _ = renderServicios(&c, s.engine, []fleet.Device{d}, ahora, techo); true {
 			com := lineasDe(c.String(), "# musubi_fleet_service:")
 			if len(com) != 1 {
 				t.Fatalf("techo %d: el comentario del recorte salió %d veces", techo, len(com))

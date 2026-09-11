@@ -27,10 +27,6 @@ import (
 // Devuelve la raíz y la ruta donde va a quedar el JSON capturado.
 func armarBancoDelLatido(t *testing.T, cuerpoDelVerificador string) (string, string) {
 	t.Helper()
-	latido, err := os.ReadFile("../../deploy/comparar-y-latir.sh")
-	if err != nil {
-		t.Fatalf("no se pudo leer el guion real del latido: %v", err)
-	}
 	raiz := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(raiz, "deploy"), 0o755); err != nil {
 		t.Fatal(err)
@@ -38,9 +34,7 @@ func armarBancoDelLatido(t *testing.T, cuerpoDelVerificador string) (string, str
 	if err := os.MkdirAll(filepath.Join(raiz, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(raiz, "deploy", "comparar-y-latir.sh"), latido, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	copiarGuionDeDespliegue(t, "comparar-y-latir.sh", filepath.Join(raiz, "deploy", "comparar-y-latir.sh"))
 	if err := os.WriteFile(filepath.Join(raiz, "deploy", "verificar-despliegue.sh"),
 		[]byte(cuerpoDelVerificador), 0o755); err != nil {
 		t.Fatal(err)

@@ -31,17 +31,11 @@ import (
 // único commit. Devuelve la ruta.
 func prepararRepoDePrueba(t *testing.T) string {
 	t.Helper()
-	guion, err := os.ReadFile("../../deploy/verificar-despliegue.sh")
-	if err != nil {
-		t.Fatalf("no se pudo leer el guion real: %v", err)
-	}
 	raiz := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(raiz, "deploy"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(raiz, "deploy", "verificar-despliegue.sh"), guion, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	copiarGuionDeDespliegue(t, "verificar-despliegue.sh", filepath.Join(raiz, "deploy", "verificar-despliegue.sh"))
 	if err := os.WriteFile(filepath.Join(raiz, "VERSION"), []byte("9.9.9\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -60,7 +60,12 @@ log "Snapshot OK: $SNAPSHOT ($(du -h "$SNAPSHOT" | cut -f1))"
 #
 # Esta marca responde la pregunta de abajo —«¿se tomó un snapshot?»— sin opinar sobre el DR, que
 # es lo que responde la otra. Las dos son necesarias y ninguna reemplaza a la otra.
-date -u +%Y-%m-%dT%H:%M:%SZ > "$BACKUP_LOCAL_DIR/.last_snapshot" || log "no se pudo escribir la marca .last_snapshot"
+#
+# SE ESCRIBE DESPUÉS DEL BLOQUE DE PRINCIPALS, Y ESTABA ESCRITA ANTES. Acá arriba el snapshot ya
+# salió bien, pero todavía falta la mitad que decide si un restore devuelve una FLOTA o un
+# LADRILLO: si `principals.yaml` existe y no se puede copiar, el guion hace `die`… con la marca ya
+# fresca. Prometheus veía `musubi_backup_local_age_seconds` sano y un backup a medias se leía
+# exactamente igual que uno completo. Ver más abajo dónde quedó.
 
 # 1 bis. EL REGISTRO DE PRINCIPALS VIAJA CON LA BASE, O LA RESTAURACIÓN NO SIRVE.
 #
@@ -90,6 +95,12 @@ else
   log "AVISO: no hay $PRINCIPALS_FILE (modo legacy de un solo bearer). El backup NO lleva registro de identidades."
 fi
 
+# LA MARCA DEL SNAPSHOT, ACÁ Y NO ARRIBA. Todo lo que puede fallar y dejar el backup INCOMPLETO ya
+# pasó: el snapshot salió, existe en disco, y el registro de identidades viajó con él. La copia
+# off-host tiene su propia marca (`.last_offhost`) porque responde otra pregunta —el DR— y en modo
+# local-only se saltea a propósito.
+date -u +%Y-%m-%dT%H:%M:%SZ > "$BACKUP_LOCAL_DIR/.last_snapshot" || log "no se pudo escribir la marca .last_snapshot"
+
 # 2. Copia OFF-HOST. DR segura por default: sin destino remoto el backup NO es DR (queda en el
 #    mismo disco), así que se FALLA-CERRADO salvo que se acepte local-only EXPLÍCITAMENTE. Un exit≠0
 #    hace que systemd marque la unidad como failed → el operador lo ve en `systemctl status`, en vez
@@ -97,6 +108,12 @@ fi
 if [ -z "$BACKUP_REMOTE" ]; then
   if [ "$BACKUP_ALLOW_LOCAL_ONLY" = "1" ]; then
     log "ADVERTENCIA: BACKUP_REMOTE vacío y BACKUP_ALLOW_LOCAL_ONLY=1 — el snapshot queda SOLO en el disco local (NO es DR)."
+    # EL MODO SE DECLARA, y eso es lo que le faltaba a Prometheus. `musubi_backup_offhost_age_seconds`
+    # vale -1 tanto en local-only DECLARADO como en «falla todas las noches», y esos dos números
+    # iguales significan cosas opuestas: uno es una decisión y el otro un incidente. Sólo `musubi
+    # doctor` sabía cuál era, o sea que había que ir a preguntarle a mano — justo lo que una alerta
+    # existe para no tener que hacer.
+    echo local-only > "$BACKUP_LOCAL_DIR/.offhost_modo" || log "no se pudo escribir la marca .offhost_modo"
   else
     die_offhost "BACKUP_REMOTE vacío: un backup en el mismo disco NO protege contra la pérdida del host. Configurá BACKUP_REMOTE (rsync/rclone/cp a otra máquina o nube), o seteá BACKUP_ALLOW_LOCAL_ONLY=1 para aceptar el modo local-only a conciencia."
   fi
@@ -112,6 +129,7 @@ else
   # Marca del dead-man's-switch: registra el MOMENTO del último envío off-host EXITOSO. `musubi
   # doctor` (check offhost_backup) avisa si esta marca envejece — el timer dejó de shipear.
   date -u +%Y-%m-%dT%H:%M:%SZ > "$BACKUP_LOCAL_DIR/.last_offhost" || log "no se pudo escribir la marca .last_offhost"
+  echo remoto > "$BACKUP_LOCAL_DIR/.offhost_modo" || log "no se pudo escribir la marca .offhost_modo"
   # Envío OK ⇒ limpiar la marca de error (si venía de un fallo previo), así doctor vuelve a 'ok'.
   rm -f "$BACKUP_LOCAL_DIR/.last_offhost_error" 2>/dev/null || true
 fi

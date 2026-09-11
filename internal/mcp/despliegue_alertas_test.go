@@ -30,7 +30,38 @@ import (
 	"testing"
 )
 
+// leerDeploy devuelve el archivo SIN SUS COMENTARIOS, y ésa es la parte importante.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// POR QUÉ EL CRUDO HAY QUE PEDIRLO POR NOMBRE
+//
+// La clase de defecto dominante de estas pruebas no es que falte una guarda: es que la guarda
+// EXISTE, está en verde, y lo que la satisface es un comentario. Medido: de 46 guardas que leen
+// archivos no-Go, SIETE quedaban verdes sobre su propio sabotaje — el texto que buscaban vivía en
+// un comentario, en un mensaje de error, en un prefijo o en el vecino. Y pasó tres veces en un
+// solo día con estos mismos archivos: el comentario que EXPLICA el arreglo satisfacía la guarda
+// DEL arreglo, así que borrar el arreglo y dejar su documentación salía verde.
+//
+// Se intentó una vez con un helper opcional (`codigoDe`) y no alcanzó, porque un helper que hay
+// que acordarse de llamar se olvida: en el archivo que lo inventó, CINCO de sus siete aserciones
+// seguían leyendo el texto crudo. La única forma de cerrar la clase es invertir el default —que
+// lo cómodo sea lo correcto— y que ver comentarios haya que pedirlo con otro nombre:
+// `leerDeployCrudo`, que existe para las pocas guardas que de verdad miran la prosa (la pureza
+// ASCII del cambiador mira TODOS los bytes, comentarios incluidos).
+//
+// LOS COMENTARIOS SE BLANQUEAN, NO SE BORRAN. Sacar la línea correría la numeración, y varias de
+// estas guardas reportan «línea %d» para que alguien vaya a mirarla. Una guarda que manda al
+// número equivocado gasta la confianza que la hace útil.
+// ────────────────────────────────────────────────────────────────────────────────────────────
 func leerDeploy(t *testing.T, partes ...string) string {
+	t.Helper()
+	return codigoSegunExtension(leerDeployCrudo(t, partes...), partes[len(partes)-1])
+}
+
+// leerDeployCrudo devuelve el archivo tal cual, comentarios incluidos. Usalo SÓLO cuando la
+// propiedad que custodiás es del texto entero y no del código: la pureza ASCII, un encabezado
+// obligatorio, una licencia.
+func leerDeployCrudo(t *testing.T, partes ...string) string {
 	t.Helper()
 	ruta := filepath.Join(append([]string{"..", "..", "deploy"}, partes...)...)
 	crudo, err := os.ReadFile(ruta)
@@ -38,6 +69,90 @@ func leerDeploy(t *testing.T, partes ...string) string {
 		t.Fatalf("no se pudo leer %s: %v", ruta, err)
 	}
 	return string(crudo)
+}
+
+// codigoSegunExtension blanquea las líneas de comentario según el idioma del archivo.
+//
+// EL IDIOMA SALE DE LA EXTENSIÓN Y NO SE ADIVINA. `cambiar-agente.cmd` comenta con `REM` y `::`,
+// no con `#`: aplicarle la regla de bash lo dejaría entero, que es exactamente cómo el candado de
+// `device.token`, el matador de zombis y el `%~dp0` quedaron sostenidos por tres líneas `REM`.
+// Una extensión que no conozco cae en `#`, que es la conservadora: si me equivoco, la guarda ve
+// DE MENOS y falla pidiendo que alguien mire — nunca de más.
+//
+// El caso `#` lo resuelve `codigoDe`, que ya existía: tener dos funciones para la misma regla es
+// la forma exacta en que una se arregla y la otra no.
+func codigoSegunExtension(texto, nombre string) string {
+	switch strings.ToLower(filepath.Ext(nombre)) {
+	case ".cmd", ".bat":
+		return codigoDeCmd(texto)
+	case ".html", ".htm":
+		return codigoDeHTML(texto)
+	case ".md", ".markdown", ".txt", ".json":
+		// NO TIENEN COMENTARIOS, y el `#` de un markdown es un TÍTULO. Blanquear esas líneas
+		// destruiría justo la estructura que las guardas del RUNBOOK miran.
+		return texto
+	default:
+		return codigoDe(texto)
+	}
+}
+
+// codigoDeHTML blanquea los bloques `<!-- … -->`, que pueden abarcar varias líneas.
+//
+// Se blanquea DENTRO de cada línea en vez de borrarla entera: en `flota.html` hay comentarios al
+// final de una línea con código, y comerse la línea completa haría que la guarda vea de menos.
+func codigoDeHTML(texto string) string {
+	var b strings.Builder
+	dentro := false
+	for i := 0; i < len(texto); {
+		if !dentro && strings.HasPrefix(texto[i:], "<!--") {
+			dentro = true
+			i += 4
+			continue
+		}
+		if dentro && strings.HasPrefix(texto[i:], "-->") {
+			dentro = false
+			i += 3
+			continue
+		}
+		if !dentro {
+			b.WriteByte(texto[i])
+		} else if texto[i] == '\n' {
+			// Los saltos se conservan para no correr la numeración de líneas.
+			b.WriteByte('\n')
+		}
+		i++
+	}
+	return b.String()
+}
+
+// leerArchivoDeDespliegue tiene LA MISMA FIRMA que `os.ReadFile` y blanquea los comentarios.
+//
+// Existe porque el helper cómodo no alcanzó: 31 guardas de este paquete leían `deploy/` con
+// `os.ReadFile` directo, salteándose el filtro sin querer y sin que nada lo dijera. Una de ellas
+// era el candado de `%~dp0` del cambiador, que se satisfacía con su propia línea `REM`. Con la
+// firma idéntica la conversión es un cambio de nombre y no una reescritura, así que no hay
+// excusa para no hacerla — y `TestNingunaGuardaLeeUnArchivoDeDespliegueSinFiltrarComentarios`
+// impide que aparezca la número 32.
+func leerArchivoDeDespliegue(ruta string) ([]byte, error) {
+	crudo, err := os.ReadFile(ruta)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(codigoSegunExtension(string(crudo), ruta)), nil
+}
+
+// codigoDeCmd blanquea los comentarios de cmd.exe: `REM` (insensible a mayúsculas, y también solo
+// en su línea) y `::`, que es la etiqueta que cmd usa de comentario.
+func codigoDeCmd(texto string) string {
+	lineas := strings.Split(texto, "\n")
+	for i, linea := range lineas {
+		desnuda := strings.ToLower(strings.TrimSpace(linea))
+		if desnuda == "rem" || strings.HasPrefix(desnuda, "rem ") ||
+			strings.HasPrefix(desnuda, "rem\t") || strings.HasPrefix(desnuda, "::") {
+			lineas[i] = ""
+		}
+	}
+	return strings.Join(lineas, "\n")
 }
 
 func TestElPuertoDePrometheusEsElMismoEnTodosLados(t *testing.T) {
@@ -139,7 +254,7 @@ func TestElComposeUsaLaRedDelHost(t *testing.T) {
 // valer para todo el archivo o no vale.
 // ────────────────────────────────────────────────────────────────────────────────────────────
 func TestElInstaladorDeWindowsEsAsciiConBOM(t *testing.T) {
-	crudo, err := os.ReadFile(filepath.Join("..", "..", "deploy", "agente-windows.ps1"))
+	crudo, err := leerArchivoDeDespliegue(filepath.Join("..", "..", "deploy", "agente-windows.ps1"))
 	if err != nil {
 		t.Fatalf("no se pudo leer el instalador de Windows: %v", err)
 	}
@@ -207,17 +322,43 @@ func TestElReceptorOTLPSeHabilitaEnLosDosLugaresYLaDuplicacionEstaDeclarada(t *t
 		}
 	}
 
-	// La duplicación, DECIDIDA Y ESCRITA donde la va a leer quien encienda el push.
+	// LA RECETA, EXIGIDA DONDE CADA MITAD DECIDE DE VERDAD.
+	//
+	// ESTE BLOQUE PEDÍA LAS CUATRO COSAS EN `prometheus.yml`, Y DOS NO PODÍAN ESTAR AHÍ NUNCA.
+	// Quedó al descubierto cuando `leerDeploy` pasó a blanquear comentarios: dos de los cuatro
+	// literales vivían SÓLO en la prosa del archivo, así que la mitad de esta guarda no podía
+	// ponerse roja por ningún cambio de código. La receta existía únicamente como comentario.
 	cfg := leerDeploy(t, "prometheus", "prometheus.yml")
 	for _, quiero := range []string{
-		flag,                               // dónde se habilita
-		"musubi-otlp-push",                 // cómo se distingue lo empujado de lo scrapeado
 		"metric_relabel_configs",           // la receta concreta
 		"musubi_fleet_(device|service)_.*", // sobre qué series: las DOS familias empujadas, y sólo ésas
 	} {
 		if !strings.Contains(cfg, quiero) {
 			t.Errorf("prometheus.yml no declara la duplicación de series del empuje: falta %q.\nSin esa receta, encender el push hace que las 12 reglas de flota disparen dos veces por incidente.", quiero)
 		}
+	}
+
+	// `--web.enable-otlp-receiver` NO SE PIDE ACÁ, y no es un olvido: es una bandera de línea de
+	// comandos y no entra en un yaml de configuración, así que pedírsela a `prometheus.yml` era
+	// pedirle a un archivo algo que no puede tener. Donde sí decide —el ExecStart del instalador y
+	// la lista de argumentos del compose— ya la exigen las dos aserciones ancladas del principio de
+	// esta prueba, con un regex de posición que es más fuerte que buscar el texto suelto.
+
+	// `musubi-otlp-push` NO ES UN TEXTO DE DESPLIEGUE: es una constante de Go que viaja adentro
+	// del sobre OTLP (`service.instance.id`). Prometheus la recibe y la convierte en el label
+	// `instance`, que es lo ÚNICO que distingue lo empujado de lo scrapeado en los tableros y en
+	// el comentario que explica el descarte. Nadie estaba en el medio: el productor podía
+	// renombrarse y la documentación del despliegue seguía afirmando el nombre viejo.
+	if instanciaDelEmpuje != "musubi-otlp-push" {
+		t.Errorf("el empuje se identifica como %q y el despliegue está escrito para %q: quien mire "+
+			"un tablero o el descarte de prometheus.yml va a buscar una etiqueta que ya no llega.",
+			instanciaDelEmpuje, "musubi-otlp-push")
+	}
+	// Se lee el CRUDO a propósito: acá lo que se custodia es que el documento no mienta, y el
+	// documento es justamente el comentario.
+	if !strings.Contains(leerDeployCrudo(t, "prometheus", "prometheus.yml"), instanciaDelEmpuje) {
+		t.Errorf("prometheus.yml ya no nombra %q, que es como el empuje se identifica hoy: el archivo "+
+			"que explica por qué se descarta la mitad del scrape dejó de decir contra qué.", instanciaDelEmpuje)
 	}
 }
 
@@ -236,7 +377,7 @@ func TestElReceptorOTLPSeHabilitaEnLosDosLugaresYLaDuplicacionEstaDeclarada(t *t
 // borrar las tres alertas del empujador de musubi-alerts.yml, o —el que costó descubrir—
 // ENSANCHAR el drop de vuelta a `musubi_fleet_.*`.
 func TestElScrapeYElEmpujeNoTraenLoMismo(t *testing.T) {
-	prom, err := os.ReadFile("../../deploy/prometheus/prometheus.yml")
+	prom, err := leerArchivoDeDespliegue("../../deploy/prometheus/prometheus.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +495,7 @@ func bloqueQueEncierra(lineas []string, idx int) int {
 }
 
 func TestElAgenteDeWindowsNoCorreComoSystemSinQueAlguienLoPida(t *testing.T) {
-	b, err := os.ReadFile("../../deploy/agente-windows.ps1")
+	b, err := leerArchivoDeDespliegue("../../deploy/agente-windows.ps1")
 	if err != nil {
 		t.Fatalf("falta el instalador de Windows: %v", err)
 	}
@@ -424,7 +565,7 @@ func TestElAgenteDeWindowsNoCorreComoSystemSinQueAlguienLoPida(t *testing.T) {
 // Sabotaje que la hace fallar: sacar el job `alertmanager` de prometheus.yml, o la regla de
 // musubi-alerts.yml.
 func TestLaCadenaDeAlertasSeVigilaASiMisma(t *testing.T) {
-	cfg, err := os.ReadFile("../../deploy/prometheus/prometheus.yml")
+	cfg, err := leerArchivoDeDespliegue("../../deploy/prometheus/prometheus.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +577,7 @@ func TestLaCadenaDeAlertasSeVigilaASiMisma(t *testing.T) {
 		t.Error("el job del alertmanager no apunta al 9093, que es donde escucha y adonde lo manda `alerting:`")
 	}
 
-	reglas, err := os.ReadFile("../../deploy/musubi-alerts.yml")
+	reglas, err := leerArchivoDeDespliegue("../../deploy/musubi-alerts.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,7 +620,7 @@ func TestLaCadenaDeAlertasSeVigilaASiMisma(t *testing.T) {
 //
 // Sabotaje: borrar la regla de SYSTEM del bloque `if ($AlArranque)` → falla acá.
 func TestSiLaTareaCorreComoSystemEntoncesSystemPuedeLeerElToken(t *testing.T) {
-	b, err := os.ReadFile("../../deploy/agente-windows.ps1")
+	b, err := leerArchivoDeDespliegue("../../deploy/agente-windows.ps1")
 	if err != nil {
 		t.Fatalf("falta el instalador de Windows: %v", err)
 	}
@@ -562,7 +703,7 @@ func TestSiLaTareaCorreComoSystemEntoncesSystemPuedeLeerElToken(t *testing.T) {
 //
 // Sabotajes: volver a `%LOCALAPPDATA%`, sacar el Stop-Process, o cambiarlo por `/IM`.
 func TestElScriptDeCambioDeAgenteNoDependeDeQuienLoEjecuta(t *testing.T) {
-	b, err := os.ReadFile("../../deploy/cambiar-agente.cmd")
+	b, err := leerArchivoDeDespliegue("../../deploy/cambiar-agente.cmd")
 	if err != nil {
 		t.Fatalf("falta deploy/cambiar-agente.cmd: vive sólo en las máquinas otra vez: %v", err)
 	}
@@ -604,5 +745,29 @@ func TestElScriptDeCambioDeAgenteNoDependeDeQuienLoEjecuta(t *testing.T) {
 		if r > 127 {
 			t.Fatalf("byte no-ASCII en la posición %d (%q): cmd.exe lo va a leer mal", i, r)
 		}
+	}
+}
+
+// copiarGuionDeDespliegue deja en `destino` una copia EXACTA de un guion de `deploy/`, ejecutable,
+// para que un banco lo CORRA.
+//
+// POR QUÉ ESTA LECTURA VA CRUDA Y NO FILTRADA, que es la pregunta que hace
+// `TestNingunaGuardaLeeUnArchivoDeDespliegueSinFiltrarComentarios`: el banco EJECUTA esta copia.
+// Un texto con los comentarios blanqueados sigue siendo bash válido y correría igual, pero
+// entonces lo que la prueba mide deja de ser byte a byte el archivo que se entrega. Y el riesgo
+// que el filtro existe para tapar —que una línea de prosa satisfaga una aserción— acá NO existe:
+// nadie afirma nada sobre este texto; las aserciones son sobre la SALIDA de correrlo.
+//
+// VIVE EN UN SOLO LUGAR a propósito. Eran dos lecturas crudas idénticas en dos bancos distintos,
+// o sea dos permisos que alguien tendría que volver a justificar por separado. El techo de
+// lecturas crudas con motivo no es decoración: cuando sube, hay que ir a leer cada motivo nuevo.
+func copiarGuionDeDespliegue(t *testing.T, nombre, destino string) {
+	t.Helper()
+	crudo, err := os.ReadFile(filepath.Join("..", "..", "deploy", nombre)) // crudo: el banco lo EJECUTA, tiene que ser byte a byte el que se despliega
+	if err != nil {
+		t.Fatalf("no se pudo leer el guion real %s: %v", nombre, err)
+	}
+	if err := os.WriteFile(destino, crudo, 0o755); err != nil {
+		t.Fatalf("no se pudo dejar la copia de %s en el banco: %v", nombre, err)
 	}
 }

@@ -199,6 +199,13 @@ func TestUnNombreConComillasNoCorrompeElScrape(t *testing.T) {
 		if !strings.HasPrefix(l, "musubi_fleet_") {
 			continue
 		}
+		// UNA SERIE SIN ETIQUETAS ES VÁLIDA, y esta guarda asumía que todas las tenían. Las hay:
+		// `musubi_fleet_version_reference_usable` es un hecho del CEREBRO y no de una máquina,
+		// así que no lleva `device` ni nada. Lo que esta prueba custodia es que una comilla en un
+		// NOMBRE no rompa el formato, y una línea sin etiquetas no tiene dónde romperse.
+		if !strings.Contains(l, "{") {
+			continue
+		}
 		if strings.Count(l, "{") != 1 || strings.Count(l, "} ") != 1 {
 			t.Errorf("línea corrupta en el exposition format: %q", l)
 		}

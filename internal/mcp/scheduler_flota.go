@@ -164,6 +164,12 @@ func (s *McpServer) validarPrincipalDePolitica(pol fleet.Politica, lookup princi
 	return nil
 }
 
+// TechoDelEmpujeOTLP es la cadencia MÁS LENTA a la que el empuje sigue sirviendo para algo.
+//
+// Sale de Prometheus y no de un gusto: su ventana de obsolescencia por defecto es de 5 minutos.
+// Se deja un margen para que un empuje que llegue tarde no cruce el umbral justo.
+const TechoDelEmpujeOTLP = 4 * time.Minute
+
 // configurarEmpujeOTLP guarda la configuración del empuje y valida lo que se puede validar SIN el
 // registro delante: que haya principal nombrado, que el timeout entre en el intervalo, y que el
 // destino sea un destino (esquema, host, sin credencial en la URL).
@@ -182,6 +188,29 @@ func (s *McpServer) configurarEmpujeOTLP(cfg config.OTLPPushConfig) error {
 	}
 	if to, iv := cfg.EffectiveTimeout(), cfg.EffectiveInterval(); to >= iv {
 		return fmt.Errorf("fleet.otlp.timeout_seconds (%s) no puede ser mayor o igual que interval_seconds (%s): cada empuje lento se comería el siguiente tick y el lazo pasaría la vida salteando. Bajá el timeout o subí el intervalo", to, iv)
+	}
+	// EL INTERVALO TIENE TECHO, Y EL TECHO NO ES UNA PREFERENCIA: ES EL DE PROMETHEUS.
+	//
+	// Prometheus marca una serie como OBSOLETA a los 5 minutos de su última muestra. Toda la
+	// telemetría de flota llega POR ESTE EMPUJE —`prometheus.yml` descarta esa familia del scrape
+	// a propósito, para que no haya dos productores del mismo dato— así que un intervalo por
+	// encima de ese umbral deja las series obsoletas la mayor parte del tiempo.
+	//
+	// Y EL MODO DE FALLA ES EL PEOR QUE HAY: las reglas de flota no fallan, ENMUDECEN. Un
+	// `musubi_fleet_device_up == 0` sobre una serie obsoleta no matchea nada, así que `MaquinaCaida`
+	// y sus treinta hermanas quedan imposibles de disparar — con la configuración del cerebro
+	// perfecta, sin un error en ningún log, y el tablero entero en verde.
+	//
+	// Se falla al ARRANCAR y no se recorta en silencio: recortar dejaría corriendo una
+	// configuración distinta de la que alguien escribió, y la próxima persona que lea el YAML
+	// creería otra cosa. Es la misma decisión que la validación de arriba.
+	if iv := cfg.EffectiveInterval(); iv > TechoDelEmpujeOTLP {
+		return fmt.Errorf("fleet.otlp.interval_seconds (%s) pasa el techo de %s: Prometheus marca una "+
+			"serie como obsoleta a los 5 minutos de su última muestra, y TODA la telemetría de flota "+
+			"llega por este empuje (el scrape la descarta a propósito). Con un intervalo más largo, "+
+			"las reglas de flota no fallan: ENMUDECEN — quedan imposibles de disparar con todo en "+
+			"verde. Bajá el intervalo, o apagá el empuje con un interval_seconds negativo si lo que "+
+			"querés es no exportar", iv, TechoDelEmpujeOTLP)
 	}
 	emp, err := nuevoEmpujadorOTLP(cfg)
 	if err != nil {

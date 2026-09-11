@@ -66,19 +66,6 @@ func detectarAvisador() fleet.CapacidadDeAvisar {
 	return fleet.CapacidadDeAvisar{Puede: true, Herramienta: "powershell"}
 }
 
-// escaparPS tapa las comillas simples para interpolar en una cadena de PowerShell.
-//
-// El texto lo arma el cerebro y se interpola en un guion que se va a EJECUTAR. En PowerShell una
-// comilla simple se escapa duplicándola; sin esto, el texto cierra la cadena y lo que sigue corre
-// como código en la máquina de otra persona.
-func escaparPS(s string) string {
-	s = strings.ReplaceAll(s, "'", "''")
-	// Los saltos de línea se vuelven espacios: el guion viaja en UNA línea de -Command, y un
-	// salto lo partiría en dos sentencias.
-	s = strings.ReplaceAll(s, "\r", " ")
-	return strings.ReplaceAll(s, "\n", " ")
-}
-
 const preludioPS = "Add-Type -AssemblyName System.Windows.Forms | Out-Null; "
 
 func correrAvisador(ctx context.Context, _ fleet.CapacidadDeAvisar, texto string) error {

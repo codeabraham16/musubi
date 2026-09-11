@@ -30,6 +30,20 @@ var alertasSinGuardaDeMantenimiento = map[string]string{
 	// `unless on(project, device)` no podría emparejar con nada. Y el sentido tampoco: que UNA
 	// máquina esté en mantenimiento no explica que la flota entera deje de reportar.
 	"FlotaSinTelemetria": "es global y sin etiqueta device: el unless no tendría con qué emparejar",
+	// El techo del export es del CEREBRO, no de una máquina: sus etiquetas son `kind`, y una
+	// ventana de mantenimiento declarada sobre una máquina no tiene nada que ver con que el
+	// exportador esté por recortar. Callarla durante una ventana esconderia justo el aviso que
+	// avisa ANTES del corte.
+	// Una ventana de mantenimiento no puede callar el aviso de una BAJA: la máquina no va a
+	// volver cuando la ventana cierre. Y callarlo dejaría las resoluciones llegando solas, que
+	// es exactamente el silencio que esta alerta existe para romper.
+	"MaquinaRevocada":    "no informa un estado que el mantenimiento pueda explicar: informa que la máquina SALIÓ del inventario, y eso no se revierte al cerrar la ventana. Callarla dejaría las resoluciones de sus alertas llegando sin el aviso que las explica",
+	"TechoDeExportCerca": "es del cerebro y sus etiquetas son `kind`: no hay device con el que emparejar, y el techo del export no depende de que una máquina esté en mantenimiento",
+	// Igual: es un hecho del CEREBRO (puede o no parsear su propia versión) y no lleva device.
+	"CerebroSinReferenciaDeVersion": "es del cerebro y no lleva etiqueta device: no hay con qué emparejar el unless, y que una máquina esté en mantenimiento no cambia si el build propio selló su versión",
+	// Su hermana del scrape, por la misma razón exacta: `absent()` sobre una serie que no lleva
+	// `device`, así que no hay con qué emparejar el `unless`.
+	"FlotaSinTelemetriaDelScrape": "es global y sin etiqueta device: el unless no tendría con qué emparejar",
 
 	// Las tres cuentan el MOTOR de políticas, no el estado de una máquina. Y no hace falta la
 	// guarda porque la ventana ya corta la causa un nivel antes: mientras vale 1, las políticas de

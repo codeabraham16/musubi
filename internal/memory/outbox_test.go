@@ -212,8 +212,21 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       arreglan distinto, y un `true` obligaría a entrar a la máquina para saber cuál es — que
 	//       es el paso manual que esto elimina. readCompatible: ADD COLUMN, ninguna consulta
 	//       existente cambia de resultado.
-	if latestSchemaVersion() != 53 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 53", latestSchemaVersion())
+	//    54 · `quien_esta_latiendo_sobre_esta_fila` — `devices.emisor` y `devices.emisor_desde`.
+	//       Dos agentes latiendo sobre una fila eran indistinguibles de uno: la credencial del
+	//       latido es de la MÁQUINA y no del proceso, así que dos agentes corriendo a la vez
+	//       escriben los dos sobre la misma fila y el cerebro ve un único agente sano latiendo el
+	//       doble de seguido. Es lo que hizo que A92 se cerrara con el problema todavía puesto —el
+	//       diagnóstico se hizo midiendo la CADENCIA, una inferencia sobre un efecto de segundo
+	//       orden—. `emisor_desde` sólo se mueve cuando el emisor CAMBIA: con un agente envejece,
+	//       con dos vuelve a cero en cada latido. readCompatible: dos ADD COLUMN.
+	//    55 · `cuando_se_revoco_esta_maquina` — `devices.revoked_at`. Revocar una máquina resuelve
+	//       TODAS sus alertas en silencio: del otro lado del canal, «se arregló» y «la sacamos del
+	//       inventario» llegan como el mismo `[RESOLVED]`. Guarda el CUÁNDO y no un booleano
+	//       —`revoked` ya dice que pasó— para poder emitir una serie ACOTADA EN EL TIEMPO que
+	//       acompañe a las resoluciones y después desaparezca sola. readCompatible: ADD COLUMN.
+	if latestSchemaVersion() != 55 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 55", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

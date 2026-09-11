@@ -128,6 +128,29 @@ if [ -s "$REF_ENV" ]; then
   . "$REF_ENV" 2>/dev/null || REF_CONFIABLE=""
 fi
 
+# ── 1 bis · LA OTRA COMPROBACIÓN, QUE NO LA CORRÍA NADIE ────────────────────────────────────
+#
+# `verificar-cobertura.sh` es el hermano de `verificar-despliegue.sh` y contesta la pregunta de un
+# nivel más adentro: aquél dice «¿está la regla cargada?» y éste «¿esa regla vigila a ESTA
+# máquina?». La diferencia se midió el 2026-09-02, con las 35 reglas desplegadas y todas sus
+# métricas presentes: 13 de 19 dimensiones en las Windows.
+#
+# SU HERMANO GANÓ TIMER, LATIDO Y DEAD-MAN CON A115; ÉL QUEDÓ EN «CUANDO ALGUIEN SE ACUERDE», que
+# es exactamente la condición que A115 existió para eliminar. Y «cuando alguien se acuerde» no es
+# una cadencia baja: es CERO, porque nadie se acuerda de correr un guion que no falla.
+#
+# Corre ACÁ y no en un timer propio: la comparación ya abre las sesiones ssh y ya consulta
+# Prometheus. Un segundo timer sería una segunda cosa que puede quedar sin `enable-linger`, sin
+# `Persistent`, o simplemente sin instalar — o sea un segundo silencio posible por ninguna ventaja.
+#
+# SU CÓDIGO VIAJA APARTE Y NO SE FUSIONA CON EL DE ARRIBA. Son dos preguntas distintas y se
+# arreglan distinto: un 1 de allá es «producción diverge» y un 1 de acá es «hay máquinas con
+# dimensiones sin vigilar». Fusionarlos con un `||` daría un número que no dice cuál de las dos
+# falló, que es el defecto que este repo persigue con nombre propio.
+printf '\n'
+MUSUBI_SSH="$HOST" "$REPO/deploy/verificar-cobertura.sh"
+CODIGO_COBERTURA=$?
+
 # ── 2 · El latido ───────────────────────────────────────────────────────────────────────────
 # `service.name` → label `job` y `service.instance.id` → label `instance`, que es como el receptor
 # OTLP de Prometheus mapea los atributos de recurso. La instancia es el HOSTNAME de quien comparó:
@@ -168,7 +191,16 @@ PAYLOAD="$(cat <<JSON
    "gauge":{"dataPoints":[{"timeUnixNano":"$NANOS","asDouble":$AHORA}]}},
   {"name":"musubi_verificacion_despliegue_resultado",
    "description":"0 coincide, 1 diverge, 2 quedaron eslabones sin verificar",
-   "gauge":{"dataPoints":[{"timeUnixNano":"$NANOS","asDouble":$CODIGO}]}}$METRICA_REF]}]}]}
+   "gauge":{"dataPoints":[{"timeUnixNano":"$NANOS","asDouble":$CODIGO}]}},
+  {"name":"musubi_verificacion_cobertura_ultima_seconds",
+   "description":"Reloj de pared de la ultima verificacion de cobertura por maquina",
+   "gauge":{"dataPoints":[{"timeUnixNano":"$NANOS","asDouble":$AHORA}]}},
+  {"name":"musubi_verificacion_tls_exigido",
+   "description":"1 si esta corrida exigio TLS (MUSUBI_EXIGIR_TLS=1), 0 si acepto el transporte como este",
+   "gauge":{"dataPoints":[{"timeUnixNano":"$NANOS","asDouble":${MUSUBI_EXIGIR_TLS:-0}}]}},
+  {"name":"musubi_verificacion_cobertura_resultado",
+   "description":"0 toda dimension aplicable esta vigilada, 1 hay huecos, 2 no se pudo medir",
+   "gauge":{"dataPoints":[{"timeUnixNano":"$NANOS","asDouble":$CODIGO_COBERTURA}]}}$METRICA_REF]}]}]}
 JSON
 )"
 
@@ -179,7 +211,7 @@ HTTP="$(printf '%s' "$PAYLOAD" | ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOS
 
 case "$HTTP" in
   2*)
-    printf '\n\033[32m✔ latido empujado\033[0m — resultado=%s desde %s (%s)\n' "$CODIGO" "$QUIEN" "$(date -d "@$AHORA" '+%Y-%m-%d %H:%M:%S')"
+    printf '\n\033[32m✔ latido empujado\033[0m — despliegue=%s cobertura=%s desde %s (%s)\n' "$CODIGO" "$CODIGO_COBERTURA" "$QUIEN" "$(date -d "@$AHORA" '+%Y-%m-%d %H:%M:%S')"
     ;;
   "")
     printf '\n\033[31m✘ el latido NO se empujó: no hubo respuesta de %s\033[0m\n' "$HOST" >&2

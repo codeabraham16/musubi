@@ -474,6 +474,15 @@ func clavesPermitidasDelLatido() map[string]bool {
 		"muestra": true, "version": true, "direccion": true, "rustdesk_id": true,
 		"servicios": true, "puede_preguntar": true, "motivo_no_preguntar": true, "capver": true,
 		"servicios_omitidos": true, "token_fuente": true, "servicios_error": true,
+		// `emisor` entra tras el mismo examen, y la respuesta vuelve a ser la misma: NO dice quién
+		// es esta máquina. Dice QUÉ PROCESO está hablando — un número al azar, generado una vez
+		// por arranque, sin nada de la máquina adentro (ni hostname, ni usuario, ni ruta).
+		//
+		// LA FILA QUE PUEDE TOCAR SIGUE SIENDO LA DEL TOKEN, que es el invariante entero. Y el
+		// techo, escrito: una máquina comprometida puede mandar un emisor distinto en cada latido
+		// y hacer sonar `DosAgentesSobreLaMismaMaquina` SOBRE SÍ MISMA. Es una falsa alarma
+		// auto-infligida, no una suplantación: no hay ninguna otra fila que pueda alcanzar.
+		"emisor": true,
 	}
 }
 
@@ -513,9 +522,10 @@ func TestElCuerpoNoLlevaIdentidadNunca(t *testing.T) {
 	//
 	// `servicios` (S12) entra por la misma puerta y con la misma pregunta contestada: un
 	// fleet.ReporteServicio no tiene NINGÚN campo de identidad —ni device, ni project, ni id— así
-	// que lo único que ese bloque puede tocar es el inventario de la máquina del token. El agente
-	// TODAVÍA no lo manda (enumerar systemd, el SCM y Docker es un slice propio, cabo A42), pero
-	// la decisión se declara acá, que es donde se piensa, y la ejercita
+	// que lo único que ese bloque puede tocar es el inventario de la máquina del token. Cuando esto
+	// se escribió el agente todavía no lo mandaba —enumerar systemd, el SCM y Docker era un slice
+	// propio, el cabo A42, que después se cerró— y la decisión se declaró igual acá, que es donde se
+	// piensa. Hoy el agente sí lo manda, y la ejercita
 	// TestUnCuerpoConServiciosSigueSinLlevarIdentidad.
 	// `puede_preguntar` y `motivo_no_preguntar` entran a la lista blanca tras el examen que el
 	// mensaje de abajo exige: NINGUNA de las dos dice QUIÉN ES esta máquina. La primera es una

@@ -66,13 +66,9 @@ func (colectorDarwin) Tomar() (Muestra, error) {
 	// Disco: statfs existe en darwin igual que en Linux, y las tres columnas se calculan igual.
 	// Bavail excluye la reserva del sistema, Bfree no: mismos dos números, misma razón.
 	var st syscall.Statfs_t
-	if err := syscall.Statfs("/", &st); err == nil && st.Blocks > 0 {
-		tam := uint64(st.Bsize)
-		total := st.Blocks * tam
-		if st.Blocks >= st.Bfree {
-			m.DiscoTotal = total
-			m.DiscoUsado = (st.Blocks - st.Bfree) * tam
-			m.DiscoDisponible = st.Bavail * tam
+	if err := syscall.Statfs("/", &st); err == nil {
+		if col, ok := ColumnasDeDiscoUnix(st.Blocks, st.Bfree, st.Bavail, uint64(st.Bsize)); ok {
+			m.DiscoTotal, m.DiscoUsado, m.DiscoDisponible = col.Total, col.Usado, col.Disponible
 		}
 	}
 
