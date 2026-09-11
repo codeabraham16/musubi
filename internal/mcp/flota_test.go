@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,6 +18,7 @@ import (
 
 	"musubi/internal/config"
 	"musubi/internal/embedding"
+	"musubi/internal/fleet"
 	"musubi/internal/memory"
 )
 
@@ -385,6 +387,78 @@ func TestUnaListaDeProyectosILEGIBLENoSeContestaComoInventarioVacio(t *testing.T
 			if rpcErr == nil {
 				t.Fatalf("con la lista de proyectos ILEGIBLE %s contestó %v sin error: "+
 					"un inventario en cero que en realidad es «no sé» se lee como flota apagada", c.nombre, res)
+			}
+		})
+	}
+}
+
+// backendConListaRecortada finge más proyectos con máquinas de los que entran en un barrido, y
+// una única máquina con el nombre buscado adentro del recorte. Es el estado en que `hallados`
+// vale 1 y NO se puede probar que sea única: la segunda homónima no se descartó, se quedó afuera.
+type backendConListaRecortada struct {
+	memory.StorageBackend
+	proyectoConLaMaquina string // "" ⇒ ninguno la tiene, y el barrido igual fue parcial
+	nombre               string
+}
+
+func (b backendConListaRecortada) ProyectosConDevices(tope int) ([]string, error) {
+	// `proyectosVisibles` pide tope+1 justamente para poder DETECTAR el recorte. Devolver los
+	// tope+1 es lo que enciende `truncado`.
+	ps := make([]string, 0, tope)
+	for i := 0; i < tope; i++ {
+		ps = append(ps, fmt.Sprintf("proyecto-%02d", i))
+	}
+	return ps, nil
+}
+
+func (b backendConListaRecortada) DevicePorNombre(projectID, name string) (fleet.Device, bool, error) {
+	if projectID == b.proyectoConLaMaquina && name == b.nombre {
+		return fleet.Device{Name: name, ProjectID: projectID}, true, nil
+	}
+	return fleet.Device{}, false, nil
+}
+
+// TestUnaBusquedaPARCIALNoDesempataSolaNiDeclaraInexistente cubre el último de los cinco
+// llamadores de `proyectosParaLeer`, que era el único que TIRABA `truncado`. N-1 de N.
+//
+// Los dos daños son distintos y los dos importan:
+//
+//  1. `hallados == 0` sobre una lista recortada contestaba «no hay ninguna máquina %q en los
+//     proyectos que alcanzás» — un falso negativo que AFIRMA haber buscado en todo lo alcanzable,
+//     y manda a enrolar una máquina que ya existe.
+//
+//  2. `hallados == 1` sobre una lista recortada devolvía ese device en silencio. Es exactamente
+//     lo que esta función se extrajo para impedir —que dos homónimas en dos tenants no se
+//     desempaten solas— entrando por la otra puerta: la segunda no se descartó, se quedó afuera
+//     del barrido, y `hallados` cayó de 2 a 1.
+//
+// HOY ES LATENTE y se dice: hace falta un principal `read: all` con más de 64 proyectos con
+// máquinas (`proyectosParaExportar`). Se arregla igual porque este repo YA se comió un techo de
+// 64 que truncaba en silencio —el latido y su inventario de servicios— y la forma es idéntica.
+//
+// SABOTAJE QUE LA HACE FALLAR: volver la línea a `proyectos, _, vacioLegitimo :=` y sacar los dos
+// bloques de `truncado`. Verificado: el subtest de la homónima pasa a recibir un device sin error.
+func TestUnaBusquedaPARCIALNoDesempataSolaNiDeclaraInexistente(t *testing.T) {
+	casos := []struct {
+		nombre   string
+		proyecto string
+		espera   string
+	}{
+		{"una sola hallada no es una única", "proyecto-07", "NO puedo probar que sea la única"},
+		{"ninguna hallada no es inexistente", "", "la búsqueda fue PARCIAL"},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			s := newTestServer(t, nil)
+			s.engine = backendConListaRecortada{proyectoConLaMaquina: c.proyecto, nombre: "pc-gio"}
+
+			d, pr, rpcErr := s.resolverDeviceUnico(nil, "pc-gio", "")
+			if rpcErr == nil {
+				t.Fatalf("con la lista de proyectos RECORTADA devolvió la máquina %q del proyecto %q sin error: "+
+					"una búsqueda parcial no prueba unicidad, y contestar es elegir por el que preguntó", d.Name, pr)
+			}
+			if !strings.Contains(rpcErr.Message, c.espera) {
+				t.Errorf("el error no dice que la búsqueda fue parcial.\n  esperaba que contuviera: %q\n  obtuve: %q", c.espera, rpcErr.Message)
 			}
 		})
 	}

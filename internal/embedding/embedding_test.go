@@ -242,8 +242,7 @@ func TestEnabledConNilNoEstaHabilitado(t *testing.T) {
 		t.Error("el NoopProvider no genera embeddings reales: no puede estar habilitado")
 	}
 	// Y un proveedor de verdad sí, o la guarda apagaría la semántica entera.
-	var p Provider = staticDePrueba()
-	if !Enabled(p) {
+	if !Enabled(staticDePrueba()) {
 		t.Error("un proveedor real tiene que estar habilitado")
 	}
 }
