@@ -26,12 +26,31 @@ groups:
       # --- DR: backup off-host (el CRÍTICO del baseline) ---
       # age < 0  ⇒ nunca hubo un envío off-host exitoso (o no está configurado) — DR APAGADO.
       # age > 48h ⇒ el timer dejó de shipear (dead-man's-switch).
+      # EL `< 0` SE CONDICIONA A QUE EL DESTINO ESTÉ DECLARADO, y ésa es la mitad que faltaba.
+      #
+      # `musubi_backup_offhost_age_seconds` vale -1 en DOS situaciones opuestas: un local-only
+      # DECLARADO —una decisión, con su costo escrito— y un off-host que falla todas las noches.
+      # El mismo número para una decisión y para un incidente. Hasta hoy la única forma de saber
+      # cuál era la de ir a preguntarle a `musubi doctor` a mano, que es justo lo que una alerta
+      # existe para no tener que hacer.
+      #
+      # Este archivo se instala sólo cuando hay destino, así que en teoría el caso no se da; pero
+      # «este archivo no debería estar instalado» es exactamente la clase de premisa que se rompe
+      # en un redespliegue y deja una alarma sonando todos los días sin nada que arreglar. Con la
+      # serie del modo, la regla se defiende sola.
+      #
+      # `musubi_backup_offhost_configurado` está AUSENTE si el guion de backup nunca corrió, y ahí
+      # el `unless` no quita nada: la alerta se comporta como antes, que es lo correcto — un
+      # backup que no corrió nunca es exactamente el incidente que hay que avisar.
       - alert: MusubiBackupOffhostStale
-        expr: musubi_backup_offhost_age_seconds < 0 or musubi_backup_offhost_age_seconds > 172800
+        expr: >-
+          (musubi_backup_offhost_age_seconds < 0 or musubi_backup_offhost_age_seconds > 172800)
+          unless on() (musubi_backup_offhost_configurado == 0)
         for: 10m
         labels: { severity: warning }
         annotations:
           summary: "El backup off-host de Musubi no shipea (nunca funcionó o >48h)."
+          nota: "Si `musubi_backup_offhost_configurado` vale 0, el operador declaró local-only y esta alerta se calla sola: el -1 ahí es una decisión, no una falla. Ausente = el guion de backup no corrió ninguna vez, y eso SÍ se avisa."
           runbook: "deploy/RUNBOOK.md#musubibackupoffhoststale"
 
       # --- Sync: outbox muerto (observaciones 'shared' que agotaron reintentos) ---

@@ -164,6 +164,12 @@ func (s *McpServer) validarPrincipalDePolitica(pol fleet.Politica, lookup princi
 	return nil
 }
 
+// TechoDelEmpujeOTLP es la cadencia MÁS LENTA a la que el empuje sigue sirviendo para algo.
+//
+// Sale de Prometheus y no de un gusto: su ventana de obsolescencia por defecto es de 5 minutos.
+// Se deja un margen para que un empuje que llegue tarde no cruce el umbral justo.
+const TechoDelEmpujeOTLP = 4 * time.Minute
+
 // configurarEmpujeOTLP guarda la configuración del empuje y valida lo que se puede validar SIN el
 // registro delante: que haya principal nombrado, que el timeout entre en el intervalo, y que el
 // destino sea un destino (esquema, host, sin credencial en la URL).
@@ -171,12 +177,6 @@ func (s *McpServer) validarPrincipalDePolitica(pol fleet.Politica, lookup princi
 // Es la MISMA validación en dos tiempos que las políticas, y por la misma razón: esta mitad corre
 // en cualquier entrypoint, incluso uno sin principals.yaml. La otra —que el principal exista y
 // tenga con qué exportar— la hace validarPrincipalDeEmpuje cuando el registro ya está cargado.
-// TechoDelEmpujeOTLP es la cadencia MÁS LENTA a la que el empuje sigue sirviendo para algo.
-//
-// Sale de Prometheus y no de un gusto: su ventana de obsolescencia por defecto es de 5 minutos.
-// Se deja un margen para que un empuje que llegue tarde no cruce el umbral justo.
-const TechoDelEmpujeOTLP = 4 * time.Minute
-
 func (s *McpServer) configurarEmpujeOTLP(cfg config.OTLPPushConfig) error {
 	s.empujeCfg = cfg
 	s.empujador = nil

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -33,7 +34,16 @@ type OpStats struct {
 	OutboxDead          int   // filas que agotaron reintentos (requieren atención)
 	OutboxOldestAgeSec  int64 // antigüedad de la pendiente más vieja (0 si no hay): mide atraso del sync
 	BackupOffhostAgeSec int64 // antigüedad del último backup off-host EXITOSO; -1 si no hay marca (T18)
-	BackupLocalAgeSec   int64 // antigüedad del último SNAPSHOT local; -1 si no hay marca. Distinto del de arriba: éste dice si el timer corre, aquél si el backup sale de la máquina
+	// BackupOffhostModo es lo que el guion de backup DECLARÓ sobre el DR: "remoto", "local-only"
+	// o "" si todavía no corrió ninguna vez.
+	//
+	// EXISTE PORQUE EL -1 DE ARRIBA SIGNIFICA DOS COSAS OPUESTAS. Vale -1 tanto en un local-only
+	// DECLARADO —una decisión, con su motivo y su costo escrito— como en un off-host que falla
+	// todas las noches. Desde Prometheus los dos son el mismo número, así que la única forma de
+	// saber cuál era la de ir a preguntarle a `musubi doctor` a mano: justo lo que una alerta
+	// existe para no tener que hacer.
+	BackupOffhostModo string
+	BackupLocalAgeSec int64 // antigüedad del último SNAPSHOT local; -1 si no hay marca. Distinto del de arriba: éste dice si el timer corre, aquél si el backup sale de la máquina
 	// MaintenanceAgeSec dice hace cuánto corrió el ciclo de memoria (consolidar/olvidar/purgar);
 	// -1 si nunca. Sin esta serie, un cerebro que dejó de mantenerse se ve EXACTAMENTE igual que uno
 	// que se mantiene: la memoria sigue respondiendo, sólo deja de envejecer bien.
@@ -79,6 +89,7 @@ func (e *DbEngine) OperationalStats() (OpStats, error) {
 	// backup que nunca tuvo éxito). Expone el DR a Prometheus para que un backup que dejó de shipear
 	// (o que nunca funcionó) sea PAGINABLE, no solo visible en `musubi doctor`.
 	st.BackupOffhostAgeSec = -1
+	st.BackupOffhostModo = ""
 	// Y la del SNAPSHOT local, que es la que dice si el timer sigue corriendo. En local-only la de
 	// arriba vale -1 para siempre, así que sin ésta el único trabajo programado del servidor no
 	// tenía ninguna señal: ni al fallar (nadie recoge su exit code) ni al dejar de dispararse.
@@ -88,6 +99,11 @@ func (e *DbEngine) OperationalStats() (OpStats, error) {
 		dir := filepath.Join(filepath.Dir(e.path), "backups")
 		if fi, statErr := os.Stat(filepath.Join(dir, offhostMarkerName)); statErr == nil {
 			st.BackupOffhostAgeSec = int64(time.Since(fi.ModTime()).Seconds())
+		}
+		// El modo lo escribe QUIEN LO SABE: el guion de backup, que es el único que ve
+		// `BACKUP_REMOTE`. El cerebro no puede inferirlo, y adivinarlo sería peor que no decirlo.
+		if crudo, readErr := os.ReadFile(filepath.Join(dir, offhostModoName)); readErr == nil {
+			st.BackupOffhostModo = strings.TrimSpace(string(crudo))
 		}
 		if fi, statErr := os.Stat(filepath.Join(dir, snapshotMarkerName)); statErr == nil {
 			st.BackupLocalAgeSec = int64(time.Since(fi.ModTime()).Seconds())

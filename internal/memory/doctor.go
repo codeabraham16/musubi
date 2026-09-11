@@ -144,6 +144,14 @@ const offhostMarkerName = ".last_offhost"
 // programado del servidor no tenía UNA sola señal de que siguiera corriendo.
 const snapshotMarkerName = ".last_snapshot"
 
+// offhostModoName es la marca donde el guion de backup DECLARA su modo de DR: "remoto" o
+// "local-only". Ausente = todavía no corrió.
+//
+// La escribe el guion porque es el único que ve `BACKUP_REMOTE`. Sin ella, el -1 de
+// `musubi_backup_offhost_age_seconds` significa dos cosas opuestas —una decisión y un incidente—
+// y Prometheus no puede distinguirlas.
+const offhostModoName = ".offhost_modo"
+
 // offhostErrorMarkerName es el archivo que deploy/musubi-backup.sh escribe cuando el envío
 // off-host FALLA (o BACKUP_REMOTE está vacío sin el escape hatch), y BORRA tras un envío exitoso
 // (Track 18). Su presencia le permite a `musubi doctor` distinguir "backup configurado pero

@@ -118,6 +118,27 @@ else
 	echo "  mientras sea DECLARADA — pero que quede escrito qué cubre y qué no."
 fi
 
+# ── LAS ALERTAS DE ALTURA, QUE NO LAS INSTALABA NADIE ──────────────────────────────────────────
+#
+# `deploy/musubi-alerts-altura.yml` existe desde hace tiempo y NINGÚN guion lo copiaba: sus cuatro
+# reglas —incluida `up{job="altura-db"} == 0`, o sea la que avisa que ese scrape se cayó— vivían
+# sólo en el repo. Es el agujero de A73 un directorio más allá: la cadena estaba escrita, probada
+# e INERTE, y el registro no lo veía porque cubre código y esto es despliegue.
+#
+# LA CONDICIÓN ES QUE EXISTA EL SCRAPE, y se mira el archivo REAL y no el `.ejemplo`: el ejemplo
+# está siempre, así que condicionar sobre él instalaría las reglas en cualquier servidor — y
+# entonces `AlturaDBCaida` dispararía para siempre en todos, que es exactamente la alarma falsa
+# desde el día uno que este bloque de instalación condicional existe para evitar.
+if [ -s "$DEST/scrapes/altura-db.yml" ]; then
+	install -m 0644 "$REPO/deploy/musubi-alerts-altura.yml" "$DEST/rules/musubi-alerts-altura.yml"
+	echo "→ alertas de altura-db: INSTALADAS (hay scrapes/altura-db.yml)"
+else
+	rm -f "$DEST/rules/musubi-alerts-altura.yml"
+	install -m 0644 "$REPO/deploy/musubi-alerts-altura.yml" "$DEST/musubi-alerts-altura.yml.cuando-haya-scrape"
+	echo "→ alertas de altura-db: NO instaladas — no hay $DEST/scrapes/altura-db.yml."
+	echo "  Copiá scrapes/altura-db.yml.ejemplo, completá su token, y volvé a correr este script."
+fi
+
 BRAIN_URL="${BRAIN_URL:-http://127.0.0.1:7717}"
 if [ -s "$DEST/musubi.token" ] &&
    curl -fsS -m 10 -H "Authorization: Bearer $(cat "$DEST/musubi.token")" "$BRAIN_URL/metrics" 2>/dev/null | grep -q "^musubi_fleet_"; then

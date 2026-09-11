@@ -443,6 +443,23 @@ func (m *serverMetrics) renderDomainGauges(b *strings.Builder, engine memory.Sto
 	b.WriteString("# HELP musubi_backup_offhost_age_seconds Antigüedad del último backup off-host exitoso (-1 si nunca/no configurado).\n")
 	b.WriteString("# TYPE musubi_backup_offhost_age_seconds gauge\n")
 	fmt.Fprintf(b, "musubi_backup_offhost_age_seconds %d\n", st.BackupOffhostAgeSec)
+	// EL MODO, PARA QUE EL -1 DE ARRIBA SE PUEDA LEER. Vale -1 tanto en un local-only DECLARADO
+	// —una decisión, con su costo escrito— como en un off-host que falla todas las noches: el
+	// mismo número para una decisión y para un incidente. Con esta serie, `age == -1 and
+	// configurado == 1` es el incidente y nada más.
+	//
+	// AUSENTE SI EL GUION NUNCA CORRIÓ, y no 0: un 0 afirmaría «está declarado local-only», que
+	// es algo que nadie dijo. Es la misma regla que gobierna el plano de flota — ausente no es
+	// cero — aplicada acá.
+	if st.BackupOffhostModo != "" {
+		b.WriteString("# HELP musubi_backup_offhost_configurado 1 si el guion de backup declara un destino REMOTO, 0 si declara local-only. AUSENTE si el guion todavía no corrió. Sin esta serie, el -1 de musubi_backup_offhost_age_seconds no se puede distinguir de una decisión declarada.\n")
+		b.WriteString("# TYPE musubi_backup_offhost_configurado gauge\n")
+		valor := 0
+		if st.BackupOffhostModo == "remoto" {
+			valor = 1
+		}
+		fmt.Fprintf(b, "musubi_backup_offhost_configurado %d\n", valor)
+	}
 	b.WriteString("# HELP musubi_backup_local_age_seconds Antigüedad del último snapshot LOCAL (-1 si nunca). Dice si el timer corre; el de off-host dice si el backup sale de la máquina.\n")
 	b.WriteString("# TYPE musubi_backup_local_age_seconds gauge\n")
 	fmt.Fprintf(b, "musubi_backup_local_age_seconds %d\n", st.BackupLocalAgeSec)

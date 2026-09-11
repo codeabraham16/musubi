@@ -105,7 +105,7 @@ func huellaDeLaForma(t reflect.Type, prefijo string, profundidad int, campos *[]
 		*campos = append(*campos, prefijo+"|...corte por profundidad")
 		return
 	}
-	for t.Kind() == reflect.Ptr || t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
+	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {
