@@ -90,6 +90,16 @@ type RecallOptions struct {
 	//   λ < 1  ⇒ una candidata que repite lo que ya se eligió BAJA de posición (nunca se descarta).
 	// El cero NO se normaliza acá: el default lo pone la config, para que un valor explícito valga.
 	MMRLambda float64
+	// Pesos pondera cada señal de la fusión RRF. PUNTERO, y no un struct por valor, por la misma
+	// razón que `Rerank *bool` en la capa MCP: hay que distinguir «no opinó» de «dijo cero».
+	//
+	// Un struct por valor haría que el valor CERO —el que produce cualquier caller que no conozca
+	// el campo— significara «todas las señales pesan 0», o sea un ranker apagado que devuelve el
+	// pool en el orden en que llegó. Eso no falla: contesta, y contesta cualquier cosa. Es la misma
+	// forma del cero que significa «no sé».
+	//
+	// nil ⇒ PesosUniformes(), que es el comportamiento histórico y bit-idéntico.
+	Pesos *PesosRRF
 }
 
 // RecallItem es un resultado compacto: gist + metadatos para decidir si hidratar.
@@ -279,7 +289,7 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 	// solo existe en recall híbrido; graphRank solo con GraphCentrality on.
 	// `now` se INYECTA (no time.Now() adentro de scoreCandidates) para que el scoring siga siendo
 	// una función PURA y determinista: los tests pueden fijar el reloj y verificar la fuga (N4).
-	scored := scoreCandidates(cands, lexRank, vecRank, graphRank, coocRank, time.Now().UTC())
+	scored := scoreCandidates(cands, lexRank, vecRank, graphRank, coocRank, opts.Pesos, time.Now().UTC())
 
 	// DIVERSIDAD (MMR), entre el scoring y el empaquetado. scoreCandidates responde "¿qué tan
 	// relevante es cada item?" y packByBudget "¿cuántos entran?" — pero faltaba la pregunta del
@@ -370,7 +380,35 @@ func packByBudget(ranked []scoredCandidate, budget, gistMax int) RecallResult {
 // co-ocurrencia/PRF; cada uno nil ⇒ se omite ese término. Con solo lexRank (NoopProvider) el
 // resultado es idéntico al histórico; vecRank lo activa el recall híbrido (T5.7 R2), graphRank la
 // centralidad de grafo (B4) y coocRank la semántica model-free por co-ocurrencia (Track 14 #2).
-func scoreCandidates(cands []candidate, lexRank, vecRank, graphRank, coocRank map[string]int, now time.Time) []scoredCandidate {
+// PesosRRF es cuánto pesa cada señal en la fusión. Hasta acá las siete valían 1.0, y eso NO era
+// una decisión medida: era el default de Reciprocal Rank Fusion, que existe justamente para no
+// tener que elegir pesos.
+//
+// EXISTE PARA PODER MEDIR, y el default no cambia hasta que una medición lo mande. Ver
+// internal/recalleval: barrer pesos sobre un fixture etiquetado por `topic_key` premia a la señal
+// LÉXICA por construcción —lo relevante y lo parecido son casi lo mismo ahí—, así que un número
+// mejor en ese banco no alcanza por sí solo para mover producción.
+type PesosRRF struct {
+	Recencia     float64
+	Frecuencia   float64
+	Lexico       float64
+	Vector       float64
+	Grafo        float64
+	Coocurrencia float64
+	Importancia  float64
+}
+
+// PesosUniformes son los pesos históricos: todos en 1.0. Con ellos, scoreCandidates produce un
+// resultado BIT-IDÉNTICO al de antes de que este campo existiera, y hay una guarda que lo fija.
+func PesosUniformes() PesosRRF {
+	return PesosRRF{Recencia: 1, Frecuencia: 1, Lexico: 1, Vector: 1, Grafo: 1, Coocurrencia: 1, Importancia: 1}
+}
+
+func scoreCandidates(cands []candidate, lexRank, vecRank, graphRank, coocRank map[string]int, pesos *PesosRRF, now time.Time) []scoredCandidate {
+	p := PesosUniformes()
+	if pesos != nil {
+		p = *pesos
+	}
 	n := len(cands)
 
 	// Rangos DENSOS (empates comparten rango): a diferencia de rankBy posicional, dos candidatos
@@ -401,26 +439,26 @@ func scoreCandidates(cands []candidate, lexRank, vecRank, graphRank, coocRank ma
 
 	out := make([]scoredCandidate, n)
 	for i, c := range cands {
-		rrf := 1.0/float64(rrfK+recencyRank[c.id]) +
-			1.0/float64(rrfK+freqRank[c.id])
+		rrf := p.Recencia/float64(rrfK+recencyRank[c.id]) +
+			p.Frecuencia/float64(rrfK+freqRank[c.id])
 		if r, ok := lexRank[c.id]; ok {
-			rrf += 1.0 / float64(rrfK+r)
+			rrf += p.Lexico / float64(rrfK+r)
 		}
 		if r, ok := vecRank[c.id]; ok {
-			rrf += 1.0 / float64(rrfK+r)
+			rrf += p.Vector / float64(rrfK+r)
 		}
 		if r, ok := graphRank[c.id]; ok {
-			rrf += 1.0 / float64(rrfK+r)
+			rrf += p.Grafo / float64(rrfK+r)
 		}
 		if r, ok := coocRank[c.id]; ok {
-			rrf += 1.0 / float64(rrfK+r)
+			rrf += p.Coocurrencia / float64(rrfK+r)
 		}
 		// Q3: importancia como término RRF propio, NO como multiplicador. Antes era `rrf * imp`
 		// (imp hasta 10) → un multiplicador sin techo que ANULABA la relevancia (un importance:10
 		// apenas relevante barría matches mejores). Como término RRF acotado (1/(rrfK+rank)) la
 		// importancia queda a la misma escala que los otros pools: desempata cuando la relevancia
 		// es comparable, no la override. impRank está definido para todo candidato (no es opcional).
-		rrf += 1.0 / float64(rrfK+impRank[c.id])
+		rrf += p.Importancia / float64(rrfK+impRank[c.id])
 		// Castigo por EDAD ABSOLUTA (no ordinal): desempata a favor de lo fresco y hunde lo muy viejo
 		// sin borrarlo (nunca baja del piso). Ver recallAgeHalfLifeDays. Es lo que corta la
 		// "divagación" por memoria caduca que el rango ordinal de recencia no lograba separar.

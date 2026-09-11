@@ -250,7 +250,7 @@ func TestScoreCandidatesImportanceNoOverride(t *testing.T) {
 		{id: "c", accessCount: 0, importance: 10},
 	}
 	lexRank := map[string]int{"a": 0, "b": 1, "c": 2}
-	scored := scoreCandidates(cands, lexRank, nil, nil, nil, testNow())
+	scored := scoreCandidates(cands, lexRank, nil, nil, nil, nil, testNow())
 	if len(scored) != 3 {
 		t.Fatalf("esperaba 3 scored, obtuve %d", len(scored))
 	}
@@ -289,7 +289,7 @@ func TestScoreCandidatesImportanceTiebreak(t *testing.T) {
 		{id: "high", accessCount: 3, importance: 5},
 	}
 	// Mismo rango léxico para ambos ⇒ sólo la importancia los diferencia.
-	scored := scoreCandidates(cands, map[string]int{"low": 0, "high": 0}, nil, nil, nil, testNow())
+	scored := scoreCandidates(cands, map[string]int{"low": 0, "high": 0}, nil, nil, nil, nil, testNow())
 	if scored[0].id != "high" {
 		t.Errorf("a igual relevancia, la mayor importancia debe desempatar: esperaba 'high', obtuve %s", scored[0].id)
 	}
@@ -304,7 +304,7 @@ func TestScoreCandidatesImportanceUniform(t *testing.T) {
 		{id: "c", importance: 1},
 	}
 	// Mejor lexRank ⇒ debe rankear primero, sin que la importancia (uniforme) lo altere.
-	scored := scoreCandidates(cands, map[string]int{"a": 2, "b": 0, "c": 1}, nil, nil, nil, testNow())
+	scored := scoreCandidates(cands, map[string]int{"a": 2, "b": 0, "c": 1}, nil, nil, nil, nil, testNow())
 	if scored[0].id != "b" {
 		t.Errorf("con importancia uniforme el orden lo fija el lexRank: esperaba 'b' primero, obtuve %s", scored[0].id)
 	}
@@ -321,7 +321,7 @@ func TestScoreCandidatesLexRankEquivalence(t *testing.T) {
 	}
 	full := map[string]int{"a": 0, "b": 1, "c": 2}
 
-	withKeyword := scoreCandidates(cands, full, nil, nil, nil, testNow())
+	withKeyword := scoreCandidates(cands, full, nil, nil, nil, nil, testNow())
 	scoreOf := func(scored []scoredCandidate, id string) float64 {
 		for _, s := range scored {
 			if s.id == id {
@@ -332,7 +332,7 @@ func TestScoreCandidatesLexRankEquivalence(t *testing.T) {
 	}
 	// Con lexRank completo, cada candidato suma su término keyword: score estrictamente
 	// mayor que sin él.
-	noKeyword := scoreCandidates(cands, nil, nil, nil, nil, testNow())
+	noKeyword := scoreCandidates(cands, nil, nil, nil, nil, nil, testNow())
 	for _, id := range []string{"a", "b", "c"} {
 		if scoreOf(withKeyword, id) <= scoreOf(noKeyword, id) {
 			t.Errorf("%s: con lexRank el score debe ser mayor que sin él (%v vs %v)",
@@ -341,7 +341,7 @@ func TestScoreCandidatesLexRankEquivalence(t *testing.T) {
 	}
 	// Un id ausente del lexRank no recibe término keyword (igual que nil para ese id).
 	partial := map[string]int{"a": 0} // solo 'a' tiene rank keyword
-	mixed := scoreCandidates(cands, partial, nil, nil, nil, testNow())
+	mixed := scoreCandidates(cands, partial, nil, nil, nil, nil, testNow())
 	if scoreOf(mixed, "b") != scoreOf(noKeyword, "b") {
 		t.Errorf("'b' ausente del lexRank no debe sumar término keyword: %v vs %v",
 			scoreOf(mixed, "b"), scoreOf(noKeyword, "b"))
@@ -366,8 +366,8 @@ func TestScoreCandidatesVectorSignal(t *testing.T) {
 		}
 		return -1
 	}
-	base := scoreCandidates(cands, nil, nil, nil, nil, testNow())
-	withVec := scoreCandidates(cands, nil, map[string]int{"a": 0}, nil, nil, testNow()) // solo 'a' tiene rango vectorial
+	base := scoreCandidates(cands, nil, nil, nil, nil, nil, testNow())
+	withVec := scoreCandidates(cands, nil, map[string]int{"a": 0}, nil, nil, nil, testNow()) // solo 'a' tiene rango vectorial
 	if scoreOf(withVec, "a") <= scoreOf(base, "a") {
 		t.Errorf("'a' con rango vectorial debe sumar término RRF (%v vs %v)", scoreOf(withVec, "a"), scoreOf(base, "a"))
 	}
@@ -391,8 +391,8 @@ func TestScoreCandidatesGraphSignal(t *testing.T) {
 		}
 		return -1
 	}
-	base := scoreCandidates(cands, nil, nil, nil, nil, testNow())
-	withGraph := scoreCandidates(cands, nil, nil, map[string]int{"a": 0}, nil, testNow()) // solo 'a' tiene centralidad
+	base := scoreCandidates(cands, nil, nil, nil, nil, nil, testNow())
+	withGraph := scoreCandidates(cands, nil, nil, map[string]int{"a": 0}, nil, nil, testNow()) // solo 'a' tiene centralidad
 	if scoreOf(withGraph, "a") <= scoreOf(base, "a") {
 		t.Errorf("'a' con rango de centralidad debe sumar término RRF (%v vs %v)", scoreOf(withGraph, "a"), scoreOf(base, "a"))
 	}
@@ -400,7 +400,7 @@ func TestScoreCandidatesGraphSignal(t *testing.T) {
 		t.Errorf("'b' ausente del graphRank no debe cambiar (%v vs %v)", scoreOf(withGraph, "b"), scoreOf(base, "b"))
 	}
 	// graphRank=nil ⇒ idéntico al histórico (equivalencia R1).
-	if scoreOf(scoreCandidates(cands, nil, nil, nil, nil, testNow()), "a") != scoreOf(base, "a") {
+	if scoreOf(scoreCandidates(cands, nil, nil, nil, nil, nil, testNow()), "a") != scoreOf(base, "a") {
 		t.Error("graphRank=nil debe dar score idéntico al histórico")
 	}
 }
