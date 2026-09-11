@@ -84,11 +84,24 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 			return
 		}
 
+		// LA CREDENCIAL SE MIRA ANTES QUE LA IP, y el orden es TODO el asunto.
+		//
+		// Acá había un `limiter.locked(ip)` ANTES de resolver el token, y eso convierte al
+		// candado anti fuerza-bruta en una negación de servicio contra la flota legítima: basta
+		// UN proceso mal configurado detrás de la misma IP —un agente con el token viejo, un
+		// script olvidado— para que todas las máquinas que salen por ahí dejen de poder latir.
+		// Y una máquina que no late se ve exactamente igual que una máquina caída: el cerebro
+		// dispara `MaquinaCaida` sobre equipos encendidos y sanos.
+		//
+		// Ya pasó, con personas: dos procesos con la credencial revocada dejaron horas afuera a
+		// quien tenía el token bueno en la mano desde la misma máquina. `/mcp` se arregló
+		// entonces; estas tres puertas —latido, resultado y salud— se quedaron con el orden
+		// viejo. La lección aprendida de un lado y no del hermano, otra vez.
+		//
+		// MIRAR EL TOKEN PRIMERO NO LE REGALA NADA A QUIEN PRUEBA: resolverlo es un hash y una
+		// comparación, sin I/O que un atacante pueda amplificar, y una credencial que ACIERTA no
+		// es un ataque por definición. El que falla sigue viendo 429 al agotar sus intentos.
 		ip := clientIP(r)
-		if limiter.locked(ip, time.Now()) {
-			http.Error(w, "too many failed auth attempts", http.StatusTooManyRequests)
-			return
-		}
 
 		// La identidad sale del TOKEN y de ningún otro lado (invariante A1 de S1). No se lee el
 		// cuerpo del request: no hay ningún campo que el dispositivo pueda mandar para decir
@@ -107,7 +120,12 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 			return
 		}
 		if !ok {
-			limiter.fail(ip, time.Now())
+			ahora := time.Now()
+			limiter.fail(ip, ahora)
+			if limiter.locked(ip, ahora) {
+				http.Error(w, "too many failed auth attempts", http.StatusTooManyRequests)
+				return
+			}
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			escribirLatido(w, http.StatusUnauthorized, fleet.RespuestaLatido{OK: false, Motivo: motivoRechazo})
 			return
@@ -586,18 +604,36 @@ func (s *McpServer) handlerResultado(limiter *authLimiter) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		// LA CREDENCIAL SE MIRA ANTES QUE LA IP, y el orden es TODO el asunto.
+		//
+		// Acá había un `limiter.locked(ip)` ANTES de resolver el token, y eso convierte al
+		// candado anti fuerza-bruta en una negación de servicio contra la flota legítima: basta
+		// UN proceso mal configurado detrás de la misma IP —un agente con el token viejo, un
+		// script olvidado— para que todas las máquinas que salen por ahí dejen de poder latir.
+		// Y una máquina que no late se ve exactamente igual que una máquina caída: el cerebro
+		// dispara `MaquinaCaida` sobre equipos encendidos y sanos.
+		//
+		// Ya pasó, con personas: dos procesos con la credencial revocada dejaron horas afuera a
+		// quien tenía el token bueno en la mano desde la misma máquina. `/mcp` se arregló
+		// entonces; estas tres puertas —latido, resultado y salud— se quedaron con el orden
+		// viejo. La lección aprendida de un lado y no del hermano, otra vez.
+		//
+		// MIRAR EL TOKEN PRIMERO NO LE REGALA NADA A QUIEN PRUEBA: resolverlo es un hash y una
+		// comparación, sin I/O que un atacante pueda amplificar, y una credencial que ACIERTA no
+		// es un ataque por definición. El que falla sigue viendo 429 al agotar sus intentos.
 		ip := clientIP(r)
-		if limiter.locked(ip, time.Now()) {
-			http.Error(w, "too many failed auth attempts", http.StatusTooManyRequests)
-			return
-		}
 		d, ok, err := s.engine.DevicePorToken(bearerToken(r.Header.Get("Authorization")))
 		if err != nil {
 			http.Error(w, "device registry unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		if !ok {
-			limiter.fail(ip, time.Now())
+			ahora := time.Now()
+			limiter.fail(ip, ahora)
+			if limiter.locked(ip, ahora) {
+				http.Error(w, "too many failed auth attempts", http.StatusTooManyRequests)
+				return
+			}
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			escribirLatido(w, http.StatusUnauthorized, fleet.RespuestaLatido{OK: false, Motivo: motivoRechazo})
 			return
@@ -764,18 +800,36 @@ func (s *McpServer) handlerSaludDeServicios(limiter *authLimiter) http.HandlerFu
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		// LA CREDENCIAL SE MIRA ANTES QUE LA IP, y el orden es TODO el asunto.
+		//
+		// Acá había un `limiter.locked(ip)` ANTES de resolver el token, y eso convierte al
+		// candado anti fuerza-bruta en una negación de servicio contra la flota legítima: basta
+		// UN proceso mal configurado detrás de la misma IP —un agente con el token viejo, un
+		// script olvidado— para que todas las máquinas que salen por ahí dejen de poder latir.
+		// Y una máquina que no late se ve exactamente igual que una máquina caída: el cerebro
+		// dispara `MaquinaCaida` sobre equipos encendidos y sanos.
+		//
+		// Ya pasó, con personas: dos procesos con la credencial revocada dejaron horas afuera a
+		// quien tenía el token bueno en la mano desde la misma máquina. `/mcp` se arregló
+		// entonces; estas tres puertas —latido, resultado y salud— se quedaron con el orden
+		// viejo. La lección aprendida de un lado y no del hermano, otra vez.
+		//
+		// MIRAR EL TOKEN PRIMERO NO LE REGALA NADA A QUIEN PRUEBA: resolverlo es un hash y una
+		// comparación, sin I/O que un atacante pueda amplificar, y una credencial que ACIERTA no
+		// es un ataque por definición. El que falla sigue viendo 429 al agotar sus intentos.
 		ip := clientIP(r)
-		if limiter.locked(ip, time.Now()) {
-			http.Error(w, "too many failed auth attempts", http.StatusTooManyRequests)
-			return
-		}
 		d, ok, err := s.engine.DevicePorToken(bearerToken(r.Header.Get("Authorization")))
 		if err != nil {
 			http.Error(w, "device registry unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		if !ok {
-			limiter.fail(ip, time.Now())
+			ahora := time.Now()
+			limiter.fail(ip, ahora)
+			if limiter.locked(ip, ahora) {
+				http.Error(w, "too many failed auth attempts", http.StatusTooManyRequests)
+				return
+			}
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			escribirSalud(w, http.StatusUnauthorized, respuestaSalud{OK: false, Motivo: motivoRechazo})
 			return
