@@ -1,0 +1,251 @@
+# Ejemplo de .musubi/config.yaml — copiá este archivo a .musubi/config.yaml y ajustá lo que uses.
+#
+# NO HACE FALTA CREARLO A MANO: `musubi init` (o `musubi setup`) lo genera, y `musubi provision`
+# escribe el bloque `sync:` solo. Este ejemplo existe para DOCUMENTAR las claves, porque el
+# config.yaml real NO se versiona: es estado de TU máquina y suele llevar IPs y nombres de token.
+#
+# TODAS las claves son OPCIONALES: lo ausente toma su default. Un config vacío es válido.
+
+version: 1.0
+mode: local # local | team
+
+# Identidad del proyecto en el cerebro central. Debe coincidir con el scope del principal de sync.
+# project_id: mi-proyecto
+
+# --- Memoria -------------------------------------------------------------------------------------
+# memory:
+#   team_mode: true       # las observaciones nuevas nacen `shared` y fluyen al cerebro central
+#   recall_token_budget: 700
+#   gist_max_tokens: 24   # techo del resumen extractivo que trae el recall
+#   mmr_lambda: 0.75      # diversidad del recall: 1 = apagado (orden bit-idéntico al de antes).
+#                         # Por debajo de ~0.72 empieza a promover items sin relación con la consulta.
+
+# --- Detección de conflictos ---------------------------------------------------------------------
+# conflicts:
+#   enabled: true
+#   cosine_floor: 0.85    # piso semántico para ENCOLAR un pendiente. 0 = apaga el coseno (dedup léxico).
+#   band_floor: 0.80      # "banda ciega": vecinos que se MUESTRAN al guardar sin encolar un veredicto.
+#                         # Debe ser < cosine_floor. Ahí viven las CONTRADICCIONES: decir lo contrario
+#                         # usa OTRAS palabras, así que se parecen MENOS que un duplicado.
+
+# --- Semántica (embeddings) ----------------------------------------------------------------------
+# Sin provider, la búsqueda es léxica (FTS). La tabla estática se baja con `musubi embed pull`.
+# embedding:
+#   provider: static      # none | static | ollama | openai
+#   model: potion-multilingual-128M
+#
+#   # Portero de privacidad, igual que el de la cognición. Sólo aplica a los providers que hablan
+#   # por un socket (`ollama`, `openai`): `none` y `static` no mandan texto a ningún lado.
+#   # OJO: acá viajan también las CONSULTAS, no sólo lo que se guarda.
+#   gateway:
+#     mode: scrub   # scrub (default) | refuse | off
+#     #   scrub  reemplaza cada secreto por [REDACTED:<tipo>] antes de embeber. No hay vuelta que
+#     #          dar: un embedder devuelve un vector, y el vector del texto tapado es justo el que
+#     #          se quiere guardar.
+#     #   refuse si detecta un secreto no embebe y devuelve error. OJO: en save_observation un
+#     #          error de embedding aborta el guardado — es fail-closed a propósito.
+#     #   off    sin portero. Deja aviso en el log y `musubi doctor` en rojo.
+
+# --- Cognición (3er pilar) -----------------------------------------------------------------------
+# OPT-IN y removible: sin `provider`, el cerebro es 100% model-free y se comporta igual que siempre.
+# El LLM propone, el cerebro determinístico dispone: si el motor se cae, alucina o se lo bloquea,
+# todo degrada al camino model-free — nunca se rompe.
+# cognition:
+#   # DIAL DE POTENCIA (F5): una perilla en vez de coordinar cuatro a mano. Es un PRESET sobre las
+#   # perillas de abajo, no maquinaria nueva.
+#   #
+#   #   eco       juez del recall APAGADO, caché de 1 día. El LLM sólo cuando lo invocás.
+#   #   balanced  juez APAGADO, caché de 1 hora. Es el default del dial, y deja el camino
+#   #             caliente del recall en paz a propósito.
+#   #   turbo     juez PRENDIDO (top-K 12), caché de 15 min. Más potencia ⇒ TTL más CORTO:
+#   #             quien pide turbo quiere respuestas frescas y las paga.
+#   #
+#   # LO QUE ESCRIBAS A MANO LE GANA AL DIAL. Con `effort: turbo` y `read_time_rerank: false`, el
+#   # juez queda apagado. Sin `effort` no se aplica ningún preset y todo queda como estaba.
+#   # Un valor desconocido ROMPE EL ARRANQUE: mejor no arrancar que arrancar con otra potencia.
+#   effort: balanced                 # eco | balanced | turbo
+#
+#   provider: openai-compat          # "" | none (model-free) | openai-compat
+#   model: claude-sonnet-4-5         # se estampa como PROCEDENCIA de lo que el motor produzca
+#   endpoint: http://127.0.0.1:4000/v1
+#   auth_token_env: MUSUBI_COGNITION_TOKEN  # el NOMBRE de la env var; el secreto nunca va acá
+#
+#   # Portero de privacidad: se para entre la memoria y el motor externo.
+#   # A diferencia del resto del pilar, nace ENCENDIDO — es una guarda de seguridad, y el default
+#   # seguro es estar protegido. Sólo actúa cuando la cognición ya está encendida.
+#   gateway:
+#     mode: scrub   # scrub (default) | refuse | off
+#     #   scrub  tapa cada secreto con un marcador reversible ([[MSB:tipo:n]]), manda, y lo repone
+#     #          en la respuesta. El modelo razona igual; nunca ve el valor.
+#     #   refuse si detecta un secreto NO manda nada y devuelve error. Para motores en los que no se
+#     #          confía — p. ej. tiers gratis que ENTRENAN con lo que reciben.
+#     #   off    sin portero. Hay que escribirlo a mano y deja aviso en el log de arranque.
+#     # Un valor desconocido apaga el pilar entero (falla-cerrado), no cae a "sin protección".
+#
+#   # --- Flota (F2) ---------------------------------------------------------------------------
+#   # En vez de un motor único, una lista ORDENADA. El router prueba de arriba a abajo, saltea los
+#   # que el circuit breaker tiene abiertos, y ESCALA al siguiente cuando uno se niega por política.
+#   # Sin `fleet`, se usa el motor único de arriba y no se instancia ningún router.
+#   fleet:
+#     - name: groq
+#       provider: openai-compat
+#       endpoint: https://api.groq.com/openai/v1
+#       model: llama-3.3-70b-versatile
+#       auth_token_env: GROQ_API_KEY
+#       tier: free        # free (DEFAULT) | private
+#       # `tier: free` hace que el portero de ESTE motor nazca en `refuse`: si el texto lleva un
+#       # secreto, no se manda y el router pasa al siguiente. Es la regla dura hecha estructura —
+#       # un secreto nunca llega a un servicio que entrena con lo que recibe.
+#     - name: max
+#       provider: openai-compat
+#       endpoint: http://127.0.0.1:4000/v1
+#       model: claude-sonnet-4-5
+#       auth_token_env: MUSUBI_COGNITION_TOKEN
+#       tier: private     # de confianza (loopback) ⇒ su portero nace en `scrub`
+#
+#   # Si NO hay ningún motor `private`, un texto con secretos no se manda a ninguno: el router
+#   # devuelve agotamiento y el caller degrada a model-free. Es el "en duda, fallback local".
+#
+#   breaker:
+#     failures: 3           # fallas CONSECUTIVAS que abren el circuito (default 3)
+#     cooldown_seconds: 60  # cuánto queda fuera de la rotación (default 60); después entra UNA
+#                           # sola llamada de prueba (half-open)
+#   # Negarse por política NO cuenta como falla: un motor que rechaza un secreto está sano.
+#
+#   # --- Caché de respuestas (F3) ---------------------------------------------------------------
+#   # Responde sin llamar al motor cuando ya se preguntó EXACTAMENTE lo mismo. Nace ENCENDIDO
+#   # cuando hay motor real: ahorrarse una llamada idéntica no tiene contraindicación.
+#   #
+#   # Es un caché EXACTO, no semántico: no busca preguntas "parecidas". Un hit por similitud
+#   # devolvería la respuesta de OTRA pregunta, y eso necesita su propio umbral medido.
+#   #
+#   # Va por FUERA del portero de privacidad, así que guarda prompts y respuestas crudos EN
+#   # MEMORIA (nunca en disco). Es contenido que el proceso ya tiene en RAM porque salió de la
+#   # base local; lo que agrega es tiempo de retención.
+#   cache:
+#     enabled: true         # default true. Ponerlo en false lo saca del todo (bit-idéntico a antes)
+#     max_entries: 512      # cota DURA. Al llegar desaloja la usada hace más tiempo, UNA, no todas.
+#                           # <= 0 es error de config: un caché sin cota es una fuga de memoria
+#     ttl_seconds: 3600     # 0 = sin vencimiento. Importa menos de lo que parece: el prompt de
+#                           # musubi_ask LLEVA ADENTRO la memoria recuperada, así que si la memoria
+#                           # cambia, cambia la clave. El TTL cubre lo que eso no cubre
+
+# --- Sync con el cerebro central -----------------------------------------------------------------
+# Lo escribe `musubi provision`. El token NUNCA va acá: se nombra la variable de entorno que lo tiene.
+# sync:
+#   enabled: true
+#   central_url: http://<ip-del-cerebro>:7717
+#   auth_token_env: MUSUBI_TOKEN
+#   drain_interval_seconds: 10
+#   allow_insecure_token: true # sólo si el transporte ya cifra (p. ej. una malla WireGuard/tailnet)
+
+# --- Flota de máquinas (track «Control de flota», S10) --------------------------------------------
+# El LATIDO PROPIO del cerebro sobre la flota: sondear a los que no tienen agente, dejar caducar las
+# salidas de comandos y, si se declaran, aplicar políticas de auto-heal.
+#
+# OJO: hay otro `fleet:` en este archivo, adentro de `cognition:`, y es otra cosa completamente
+# distinta (la flota ordenada de MOTORES LLM). Éste, de nivel superior, es la flota de MÁQUINAS.
+#
+# fleet:
+#   # Cada cuánto el cerebro sale a MEDIR los dispositivos sin agente (Tier B por SSH, Tier C por
+#   # ADB). Default 5 min; negativo lo desactiva.
+#   #
+#   # Este número no gobierna sólo el gasto de red: de él SE DERIVA el umbral de «en línea» de esas
+#   # máquinas (3 × intervalo). Un dispositivo que se visita cada 5 min no puede tener datos más
+#   # frescos que 5 min, y darlo por caído a los 90 s —lo que se hacía antes de S10— pintaba de rojo
+#   # a routers perfectamente sanos hasta que alguien silenciaba la alerta.
+#   probe_minutes: 5
+#
+#   # Cuántos días vive el CONTENIDO de stdout/stderr de los comandos. Default 30; negativo = nunca
+#   # caducan. NO borra la fila: qué se ejecutó, quién y cuándo es permanente. Lo que caduca es la
+#   # salida, que es donde aparecen rutas, hostnames y a veces algo que no debería estar ahí.
+#   command_output_retention_days: 30
+#
+#   # Techo de servicios que salen a métricas POR PROYECTO en cada export (scrape y empuje OTLP).
+#   # Default 2000; negativo = sin techo. Es por proyecto y no en total para que un tenant que
+#   # crece no deje sin `musubi_fleet_service_up` —y sin ServicioCaido— a los demás. Cuando un
+#   # proyecto se pasa, el export lo dice en musubi_fleet_export_truncated{kind="services"} y la
+#   # alerta ExportacionTruncada dispara; nunca se recorta en silencio.
+#   services_export_per_project: 2000
+#
+#   # --- Empuje OTLP de la telemetría de flota (S11) --------------------------------------------
+#   # NACE APAGADO (sin `endpoint` no existe), y así tiene que ser: encender una salida de datos
+#   # HACIA AFUERA es una decisión que alguien toma, no un default que se hereda al actualizar. El
+#   # tirón de /metrics sigue funcionando igual, encendido o apagado esto: el empuje no lo
+#   # reemplaza, es la MISMA exportación por otra boca (mismas máquinas, mismas series, mismos
+#   # labels).
+#   #
+#   # EL EMPUJE EXPORTA CON LA AUTORIDAD DE ALGUIEN. Un lazo de fondo no presenta credencial, así
+#   # que `principal` es OBLIGATORIO y no tiene default posible: el default sería «todos los
+#   # tenants». Se exporta exactamente lo que ese principal puede ver, con la misma compuerta que
+#   # /metrics. Si no existe en principals.yaml, o no tiene ninguna concesión `metrics`, EL
+#   # SERVIDOR NO ARRANCA — un empuje mudo se ve, desde afuera, idéntico a todo tranquilo.
+#   #
+#   # DEL OTRO LADO HACE FALTA UN PASO: Prometheus NO acepta OTLP por defecto. Tiene que correr con
+#   # `--web.enable-otlp-receiver` (ya está en deploy/prometheus/install-musubi-prometheus.sh y en
+#   # deploy/docker/compose.yml) y el path es /api/v1/otlp/v1/metrics. Sin el flag, el POST devuelve
+#   # 404 y el empuje muere en silencio con esta configuración perfecta.
+#   #
+#   # Y SI EL MISMO PROMETHEUS SCRAPEA /metrics Y RECIBE EL PUSH, las series de flota entran por dos
+#   # caminos y las 12 reglas de alerta disparan DOBLE. La receta para evitarlo está escrita en
+#   # deploy/prometheus/prometheus.yml. Es una decisión, no un descubrimiento.
+#   otlp:
+#     endpoint: http://127.0.0.1:9099/api/v1/otlp/v1/metrics
+#     principal: prometheus         # con la autoridad de QUIÉN se exporta (obligatorio)
+#     interval_seconds: 30          # default 30 (la cadencia del scrape); negativo lo apaga
+#     timeout_seconds: 10           # default 10. Tiene que ser MENOR que el intervalo, y el
+#                                   # arranque lo exige: si no, cada empuje lento se come el
+#                                   # siguiente tick y el lazo pasa la vida salteando
+#     auth_token_env: MUSUBI_OTLP_TOKEN   # el NOMBRE de la variable con el bearer del destino. El
+#                                   # secreto entra por referencia y nunca se escribe acá; una URL
+#                                   # con usuario:clave se RECHAZA al arrancar
+#     # allow_insecure_token: true  # sólo para un destino http:// que NO sea loopback. Fail-closed
+#                                   # a propósito: ahí el bearer viajaría en texto plano
+#
+#   # --- Políticas de auto-heal ---------------------------------------------------------------
+#   # NACEN APAGADAS. Sin esta sección no existen, y así tiene que ser: sondear y podar son
+#   # mantenimiento, pero ejecutar comandos sin una persona detrás es una decisión que alguien tiene
+#   # que tomar a mano.
+#   #
+#   # UNA POLÍTICA NO TIENE AUTORIDAD PROPIA. Nombra un principal de principals.yaml y actúa con la
+#   # suya: la misma compuerta (tenencia ∧ concesión ∧ aparato), la misma allowlist, la misma
+#   # bitácora que las personas. Si ese principal no tiene `exec` sobre esa máquina, la política no
+#   # hace nada — y si lo revocás, la política se apaga sola.
+#   #
+#   # Al arrancar se valida TODO: principal inexistente, principal sin ninguna concesión `exec`,
+#   # condición mal escrita o nombres repetidos impiden servir. Una alarma muerta que nadie sabe que
+#   # está muerta es peor que no tener alarma.
+#   policies:
+#     - name: vaciar-journal
+#       principal: auto-heal        # ...y ESTE principal es el que decide qué puede hacer
+#       when: disco_libre_pct       # disco_pct | disco_libre_pct | mem_pct | cpu_pct |
+#                                   # carga_por_core | temp_c
+#       threshold: 10
+#       devices: ["nas-casa"]       # selectores, igual que en las concesiones ("*" = todas)
+#       run: ["journalctl", "--vacuum-size=200M"]
+#       cooldown_minutes: 60        # default 30. Mínimo 1: sin espera dispara en cada tick, porque
+#                                   # la métrica no baja hasta que el comando termine
+#
+#   # EL SENTIDO DE LA COMPARACIÓN LO DA LA CONDICIÓN, no una perilla aparte: `disco_libre_pct`
+#   # dispara al BAJAR de `threshold` (es lo que QUEDA escribible) y todas las demás al superarlo.
+#   # Se mira lo escribible y no lo usado porque la reserva de root (~5 %) no es ninguna de las dos
+#   # cosas: un disco «al 92 % usado» puede tener 0 bytes para una aplicación.
+#
+#   # Un dato que NO SE PUDO MEDIR nunca dispara nada. Una máquina Windows no tiene load average
+#   # —no es que valga 0.00, es que no existe—, y una sin sensor no está a 0 °C.
+#
+# El principal de la política, en .musubi/principals.yaml. `fleet_exec_allow` es lo que hace que
+# `auto-heal` pueda ejecutar en todas las máquinas y aun así SÓLO pueda correr journalctl:
+#
+#   - name: auto-heal
+#     token_sha256: "<sha256>"      # ...aunque una política no presenta token: se la nombra
+#     role: writer
+#     project_id: casa
+#     fleet:
+#       exec: ["*"]
+#     fleet_exec_allow:
+#       "*": ["journalctl"]         # la sección entera es el opt-in y, una vez presente, es
+#                                   # EXHAUSTIVA: una máquina sin entrada propia y sin "*" no
+#                                   # permite NADA. Una lista vacía significa cero comandos.
+
+skills_auto_resolve: true

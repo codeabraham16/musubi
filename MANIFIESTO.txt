@@ -1,0 +1,9 @@
+0823861cac711556e7e859e814bafef7d685cc29  wf_26aed425-f26-6/internal/mcp/carga_test.go
+31286c590671166c206475ccfd5eed5e81d87c46  wf_26aed425-f26-3/internal/mcp/scheduler_flota.go
+5fef033f51b52fc8881856f8713a98d32e2b42d5  wf_26aed425-f26-3/.musubi/config.example.yaml
+78875503ffbd07cab0aec5a55482ef229187f5b6  wf_26aed425-f26-3/internal/config/fleet_test.go
+850e1ab25b6ea956b844c50b2f3782cc257b1971  wf_26aed425-f26-3/internal/mcp/server.go
+a659ee56bb6a2250ef102accc8eee9cfe56fb0a6  wf_26aed425-f26-2/internal/memory/devices.go
+d7e9f0bb3eafbed67fb911f90b89d22de697dcc5  wf_26aed425-f26-3/internal/config/config.go
+e1ee3c6ccdb10f91940bc9db7ae51b8f1c0ed252  wf_26aed425-f26-4/cmd/musubi/agent.go
+f6eedded032de2e211565dedef9ad9454b5fc050  wf_26aed425-f26-4/cmd/musubi/agent_test.go
