@@ -35,6 +35,8 @@ var alertasSinGuardaDeMantenimiento = map[string]string{
 	// exportador esté por recortar. Callarla durante una ventana esconderia justo el aviso que
 	// avisa ANTES del corte.
 	"TechoDeExportCerca": "es del cerebro y sus etiquetas son `kind`: no hay device con el que emparejar, y el techo del export no depende de que una máquina esté en mantenimiento",
+	// Igual: es un hecho del CEREBRO (puede o no parsear su propia versión) y no lleva device.
+	"CerebroSinReferenciaDeVersion": "es del cerebro y no lleva etiqueta device: no hay con qué emparejar el unless, y que una máquina esté en mantenimiento no cambia si el build propio selló su versión",
 	// Su hermana del scrape, por la misma razón exacta: `absent()` sobre una serie que no lleva
 	// `device`, así que no hay con qué emparejar el `unless`.
 	"FlotaSinTelemetriaDelScrape": "es global y sin etiqueta device: el unless no tendría con qué emparejar",

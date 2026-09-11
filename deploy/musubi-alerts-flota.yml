@@ -310,6 +310,24 @@ groups:
       #
       # El 80 % da margen para actuar: subir la perilla, partir un proyecto, o declarar menos
       # servicios. Es `warning` y no `critical` porque todavía no se perdió nada.
+      # --- EL CEREBRO NO PUEDE COMPARAR VERSIONES, Y ESO APAGA UN EJE ENTERO ---
+      #
+      # `musubi_fleet_device_agent_stale` se OMITE cuando la comparación no se puede hacer. Del
+      # lado del AGENTE eso es normal (un Tier B no tiene versión que comparar). Del lado del
+      # CEREBRO es un incidente: si su propia versión no se parsea —vacía porque el build no la
+      # selló, o de cuatro componentes— la serie desaparece de la FLOTA ENTERA y
+      # `AgenteDesactualizado` queda imposible de disparar.
+      #
+      # Es el incidente del 2026-09-09, del que se arregló la causa conocida y no la forma de
+      # falla. `critical` porque no se ve: el tablero queda entero en verde y el eje apagado.
+      - alert: CerebroSinReferenciaDeVersion
+        expr: musubi_fleet_referencia_de_version_usable == 0
+        for: 15m
+        labels: { severity: critical }
+        annotations:
+          summary: "El cerebro no puede parsear su propia versión: NADIE vigila si los agentes están atrasados."
+          nota: "`musubi_fleet_device_agent_stale` se omite para la flota entera, así que AgenteDesactualizado no puede dispararse — y el tablero queda en verde. Casi siempre es un binario construido sin los ldflags de versión (`deploy/construir.sh` los pone). Comprobalo con `musubi version` en el cerebro."
+
       - alert: TechoDeExportCerca
         expr: musubi_fleet_export_usage / on(kind) musubi_fleet_export_limit > 0.8
         for: 1h
@@ -745,9 +763,20 @@ groups:
         # Y LA VENTANA DE MANTENIMIENTO TAMBIÉN LA CALLA: reinstalar el agente es mantenimiento, y
         # un agente recién puesto late (`device_up == 1`) ANTES de haber enumerado nada — que es
         # exactamente la condición de esta regla. Sin la guarda, arreglar dispara la alarma.
+        # CUENTA `service_declared` Y NO `service_up`, y la diferencia es un falso positivo entero.
+        #
+        # `musubi_fleet_service_up` se OMITE para los servicios en estado `ocioso` (A70) y
+        # `desconocido`: son afirmaciones que no se pueden hacer. O sea que una máquina que reportó
+        # su inventario COMPLETO, con todos sus servicios ociosos o sin estado conocido, no produce
+        # ni una serie `service_up` — y esta regla la acusaba de «no decir qué corre adentro».
+        #
+        # `musubi_fleet_service_declared` vale 1 SIEMPRE que el servicio esté declarado en la
+        # máquina, y su propio HELP dice que existe justamente para que esa ausencia se pueda
+        # nombrar. Contar la que se omite para preguntar «¿reportó inventario?» es preguntarle a la
+        # serie equivocada.
         expr: >-
           (musubi_fleet_device_up{tier="A"} == 1)
-            unless on(project, device) count by(project, device) (musubi_fleet_service_up)
+            unless on(project, device) count by(project, device) (musubi_fleet_service_declared)
             unless on(project, device) (musubi_fleet_device_maintenance == 1)
         for: 15m
         labels:

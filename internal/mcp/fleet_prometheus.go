@@ -94,6 +94,7 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 		// mismo silencio.
 		renderTruncado(b, recorte, techoServicios)
 		renderTechos(b, techoServicios, 0, 0)
+		renderReferenciaDeVersion(b, versionCerebro)
 		return
 	}
 	if recorte.Proyectos {
@@ -132,6 +133,7 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 	// EL MARGEN, ANTES DEL CORTE. `export_truncated` avisa cuando un techo YA cortó, o sea
 	// después de perder cobertura; estas dos dicen cuánto falta.
 	renderTechos(b, techoServicios, proyectosDistintos(vistos), peorProyecto)
+	renderReferenciaDeVersion(b, versionCerebro)
 	b.WriteString(cuerpo.String())
 }
 
@@ -199,6 +201,8 @@ var seriesSoloDelScrape = []string{
 	// dimensionan con ellas.
 	nombreTecho,
 	nombreUso,
+	// Es un hecho del cerebro, no telemetría de una máquina: no viaja por el empuje.
+	nombreReferenciaVersion,
 }
 
 func renderVidaDeRed(b *strings.Builder, vistos []fleet.Device, ahora time.Time, vidaDe vidaDeRedLookup) {
@@ -434,6 +438,40 @@ func proyectosDistintos(vistos []fleet.Device) int {
 		p[d.ProjectID] = struct{}{}
 	}
 	return len(p)
+}
+
+// nombreReferenciaVersion dice si el cerebro puede comparar la versión de un agente contra la
+// suya. Es UNA serie y no una por máquina: es un hecho del CEREBRO.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// `agent_stale` se OMITE cuando la comparación no se puede hacer, y una de las razones está del
+// lado del cerebro: si su propia versión no se puede parsear —una cadena vacía porque el build no
+// la selló, o una de cuatro componentes que `NucleoDeVersion` no entiende— entonces
+// `VersionDelAgenteDifiere` devuelve `comparable=false` PARA TODAS LAS MÁQUINAS. La serie
+// desaparece de la flota entera y `AgenteDesactualizado` queda imposible de disparar.
+//
+// Omitir es lo correcto: marcar a toda la flota como atrasada sería culparla de un problema del
+// build propio. Lo que faltaba es que la omisión SE PUEDA VER. Es el incidente del 2026-09-09,
+// del que se arregló la causa conocida —un argumento omitido— y no la FORMA de falla, que sigue
+// viva: cualquier versión que el parser no entienda apaga el eje en silencio, con todo en verde.
+//
+// EMITIRLA POR MÁQUINA HABRÍA SIDO EL ERROR OBVIO, y lo cazaron dos guardas apenas se intentó:
+// `TestElEmpujeNoLlevaLasMetricasDelServidor` y la que compara scrape contra empuje. No es
+// telemetría de una máquina; es una propiedad del exportador, como los techos.
+//
+// Vale 0 y no se omite: acá el 0 es un hecho que el cerebro conoce con certeza sobre SÍ MISMO
+// —«no puedo parsear mi propia versión»— y no un «no se pudo medir».
+// ────────────────────────────────────────────────────────────────────────────────────────────
+const nombreReferenciaVersion = "musubi_fleet_referencia_de_version_usable"
+
+// renderReferenciaDeVersion emite la serie de arriba. Una sola línea, sin etiquetas.
+func renderReferenciaDeVersion(b *strings.Builder, versionCerebro string) {
+	valor := 0
+	if _, ok := fleet.NucleoDeVersion(versionCerebro); ok {
+		valor = 1
+	}
+	fmt.Fprintf(b, "# HELP %s 1 si el cerebro puede parsear SU PROPIA versión y por lo tanto comparar la de cada agente; 0 si no. Con 0, musubi_fleet_device_agent_stale se omite para la FLOTA ENTERA y AgenteDesactualizado queda imposible de disparar, sin un solo error. La versión del cerebro se sella en el build.\n# TYPE %s gauge\n", nombreReferenciaVersion, nombreReferenciaVersion)
+	fmt.Fprintf(b, "%s %d\n", nombreReferenciaVersion, valor)
 }
 
 // renderTechos emite, por dimensión recortable, el techo vigente y el uso actual.
