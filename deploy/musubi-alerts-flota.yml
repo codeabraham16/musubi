@@ -714,6 +714,34 @@ groups:
       #
       # `for: 0m` a propósito: el valor de este aviso es llegar AL MISMO TIEMPO que los resolved,
       # y cualquier espera lo deja llegando después — cuando ya nadie está mirando ese hilo.
+      # --- UNA CREDENCIAL QUE NO PUEDE ROTAR NUNCA ---
+      #
+      # `musubi_fleet_device_token_rotable` existe desde A88 y NO LA LEÍA NINGUNA REGLA. Vale 0
+      # cuando el agente recibió su credencial por VARIABLE DE ENTORNO, y eso no es una molestia:
+      # es que la rotación de esa máquina NO SE PUEDE COMPLETAR NUNCA. Un proceso no puede
+      # reescribir su propio entorno, así que el token nuevo llega, el agente no lo puede guardar,
+      # y a las 24 h la rotación se abandona sola. Para siempre, en cada intento.
+      #
+      # Y EL COSTO NO TERMINA AHÍ: con la credencial en el entorno, cualquier proceso del mismo
+      # usuario la lee, y sobrevive a que alguien arregle el archivo. Es el mecanismo exacto de
+      # A88, mirado desde el otro lado.
+      #
+      # El arreglo es del LANZADOR, no del agente: tiene que pasar `MUSUBI_DEVICE_TOKEN_FILE` con
+      # la RUTA del archivo en vez de meter el valor en el entorno.
+      #
+      # AUSENTE significa «el agente no lo reporta» (binario viejo) y ahí la alerta no dispara: un
+      # 0 inventado acusaría a la máquina de algo que nadie midió.
+      - alert: CredencialQueNoPuedeRotar
+        expr: >-
+          musubi_fleet_device_token_rotable == 0
+          unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 6h
+        labels: { severity: warning }
+        annotations:
+          summary: "La credencial de {{ $labels.device }} vino por VARIABLE de entorno: su rotación no se puede completar nunca."
+          nota: "Un proceso no puede reescribir su propio entorno, así que el token nuevo llega, el agente no lo puede guardar, y la rotación se abandona sola a las 24 h — en cada intento, para siempre. Y mientras tanto la credencial vive en el entorno del proceso, donde la lee cualquier proceso del mismo usuario. Se arregla en el LANZADOR: que pase `MUSUBI_DEVICE_TOKEN_FILE` con la RUTA del archivo. En Windows lo migra `deploy/actualizar-agente-windows.sh`."
+
       # --- UNA ROTACIÓN DE TOKEN QUE NADIE COMPLETA ---
       #
       # El estado estaba guardado en la base desde siempre y NO LO MIRABA NADIE: ni el doctor, ni

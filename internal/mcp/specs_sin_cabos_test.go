@@ -417,17 +417,28 @@ type cabo struct {
 func specsDelTrack(t *testing.T) []string {
 	t.Helper()
 	raiz := filepath.Join("..", "..", "specs")
+	// EL GLOB ERA CIEGO A `control-de-flota/`, que es la carpeta del PROPIO track.
+	//
+	// `flota-*` no matchea `control-de-flota`, así que un `## Lo que queda fuera` escrito en el
+	// `proposal.md` del track quedaba fuera del barrido — y ese archivo es justamente donde se
+	// declara el alcance. Hoy no hay ninguno ahí y por eso no costaba nada: era un hueco latente,
+	// de los que se descubren el día que alguien escribe la sección.
+	//
+	// `ABIERTO.md` se excluye porque ES el registro: barrerlo sería preguntarle al registro si
+	// está registrado.
 	dirs, err := filepath.Glob(filepath.Join(raiz, "flota-*"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	dirs = append(dirs, filepath.Join(raiz, "control-de-flota"))
 	var out []string
 	for _, d := range dirs {
 		err := filepath.WalkDir(d, func(p string, e fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
-			if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
+			if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".md") &&
+				e.Name() != "ABIERTO.md" {
 				out = append(out, p)
 			}
 			return nil
