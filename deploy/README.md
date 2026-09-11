@@ -145,10 +145,28 @@ mandando `http://`, ese agente deja de latir y la máquina figura caída — con
 5 minutos, que es el aviso correcto por el motivo equivocado. Cambiar primero el servidor,
 comprobarlo con `curl`, y recién entonces los agentes de a uno.
 
-**El certificado vence cada 90 días.** `tailscale cert` lo renueva al volver a correrlo; sin
-timer, el cerebro arranca fail-closed y no sirve. Un `systemd timer` semanal más una alerta de
-vencimiento son parte de la Ola 5 y **todavía no existen**: hasta que existan, la fecha va en el
-calendario de quien opera.
+**El certificado vence cada 90 días, y la renovación YA EXISTE** (antes esto decía que no, y la
+fecha iba «en el calendario de quien opera» — un recordatorio no es un mecanismo: no falla
+ruidosamente, falla calladamente, y el día 91 el síntoma es «el cerebro no levanta» sin nada que
+nombre la causa). Son tres piezas y las tres hacen falta:
+
+- `deploy/renovar-tls.sh` + `deploy/systemd/musubi-tls-renovar.{service,timer}`: vuelven a pedir el
+  certificado todos los lunes. `Persistent=true`, porque un disparo que cae con la máquina apagada
+  no se pospone: se pierde.
+- **La recarga en caliente, que es la que hace que lo anterior sirva.** `ListenAndServeTLS` lee el
+  par UNA SOLA VEZ al arrancar, así que renovar el archivo no cambiaría lo que los clientes
+  reciben hasta el próximo reinicio. `internal/mcp/tls_recarga.go` instala un `GetCertificate` que
+  relee cuando el par cambia en disco, y tolera el estado intermedio de `tailscale cert` —que
+  escribe `.crt` y `.key` en dos operaciones— siguiendo con el anterior y reintentando.
+- `CertificadoTLSPorVencer` (21 días = **tres corridas** del timer, para que la primera falla no
+  sea una carrera), `CertificadoTLSVencido` y `CertificadoTLSSinPoderRecargarse`. Las tres leen
+  `musubi_tls_certificate_expiry_seconds`, que sale del certificado **que el proceso tiene
+  cargado** y no del archivo: un `openssl x509` sobre el archivo diría «faltan 89 días» con el
+  cerebro sirviendo uno vencido.
+
+Las series están **ausentes mientras el cerebro no sirva TLS**, que hoy es el caso, y eso es
+correcto y no un silencio: todavía no hay certificado que vencer. Aparecen solas el día que la
+migración se haga.
 
 ### Al reemplazar un archivo BIND-MONTADO: `cat >`, nunca `install`, `sed -i` ni `mv`
 

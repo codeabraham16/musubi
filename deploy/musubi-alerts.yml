@@ -223,6 +223,58 @@ groups:
           summary: "El índice vectorial no está entrenado con >10k embeddings (recall = full-scan)."
           runbook: "deploy/RUNBOOK.md#musubivectorindexuntrained"
 
+      # --- TLS: el certificado del cerebro vence cada 90 días y se renueva solo ---
+      #
+      # LAS DOS SERIES SALEN DEL CERTIFICADO QUE EL PROCESO TIENE CARGADO, no del archivo en disco,
+      # y esa distinción es la razón de ser de estas alertas. `ListenAndServeTLS` lee el par UNA
+      # VEZ al arrancar; sin la recarga en caliente de `internal/mcp/tls_recarga.go`, renovar el
+      # archivo no cambiaría lo que los clientes reciben — y un `openssl x509` sobre el archivo
+      # diría «faltan 89 días» con el cerebro sirviendo uno vencido.
+      #
+      # LAS DOS ESTÁN AUSENTES MIENTRAS EL CEREBRO NO SIRVA TLS, que hoy es el caso, y eso es
+      # correcto y no un silencio: no hay certificado que vencer. El día que la migración se haga,
+      # aparecen solas. Por eso NO llevan `absent()`: un `absent()` acá dispararía todos los días
+      # por una postura que está decidida, y así se apaga un canal.
+      - alert: CertificadoTLSPorVencer
+        # 21 DÍAS, Y EL NÚMERO SALE DE LA CADENCIA DEL TIMER, no de un gusto: la renovación corre
+        # los lunes, así que 21 días son TRES corridas por delante. La primera puede fallar y
+        # todavía quedan dos oportunidades antes de que alguien tenga que apurarse. Con 7 días el
+        # aviso llegaría con una sola corrida de margen, que es una carrera y no un aviso.
+        # `TestElUmbralDeVencimientoDejaTresCorridasDeMargen` lo custodia contra el timer.
+        expr: musubi_tls_certificate_expiry_seconds < 21 * 24 * 3600
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Al certificado TLS del cerebro le quedan menos de 21 días."
+          nota: "La renovación automática es `musubi-tls-renovar.timer` en el servidor del cerebro (semanal). Si esto dispara, esa unidad no está corriendo o `tailscale cert` viene fallando: `systemctl --user status musubi-tls-renovar`. El certificado SIGUE siendo válido hasta que el número llegue a 0; esto es el margen, no la emergencia."
+          runbook: "deploy/README.md#pasar-el-cerebro-a-https"
+
+      - alert: CertificadoTLSVencido
+        # SEPARADA DE LA DE ARRIBA Y NO UN SEGUNDO UMBRAL DE LA MISMA: «queda poco» y «ya venció»
+        # se arreglan distinto y despiertan a gente distinta. Y el negativo importa: la serie sigue
+        # contando hacia abajo después del cero, así que esto dice hace CUÁNTO que está vencido.
+        expr: musubi_tls_certificate_expiry_seconds <= 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "El certificado TLS que el cerebro está sirviendo YA VENCIÓ."
+          nota: "Todo cliente que valide lo está rechazando ahora mismo. Renovar a mano en el servidor: `MUSUBI_TLS_NODO=<nodo>.tailXXXX.ts.net ~/renovar-tls.sh`. El cerebro lo toma solo, no hace falta reiniciarlo."
+          runbook: "deploy/README.md#pasar-el-cerebro-a-https"
+
+      - alert: CertificadoTLSSinPoderRecargarse
+        # EL CAMINO SILENCIOSO. El cerebro tolera a propósito un par a medio escribir —`tailscale
+        # cert` escribe .crt y .key en dos operaciones— y sigue sirviendo el anterior. Pero si el
+        # par nuevo NUNCA carga (permisos, una key que no corresponde, un PEM truncado), esa
+        # tolerancia se convierte en «el certificado nuevo no entra jamás» y lo único que se ve es
+        # el vencimiento acercándose sin causa aparente. El contador es lo que nombra la causa.
+        expr: increase(musubi_tls_certificate_reload_failures[1h]) > 3
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "El cerebro viene rechazando el certificado TLS que encuentra en disco."
+          nota: "Sigue sirviendo el ANTERIOR, así que nada se cayó todavía — y por eso hace falta esta alerta: sin ella, el síntoma llegaría recién como CertificadoTLSPorVencer sin explicar por qué. Mirá el journal del cerebro: el error del par está logueado con la ruta."
+          runbook: "deploy/README.md#pasar-el-cerebro-a-https"
+
       # --- Seguridad/capacidad: rechazos de cuota sostenidos (principal desbocado o límite bajo) ---
       - alert: MusubiQuotaRejections
         expr: sum(rate(musubi_tool_rejections_total{reason="quota"}[5m])) > 0

@@ -384,6 +384,10 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 		// La AUTO-VIGILANCIA del empuje sale por el tirón, no por el empuje: un mecanismo de
 		// monitoreo cuya única forma de avisar de su propia muerte es él mismo no avisa nunca.
 		s.renderEmpuje(&b, ahora)
+		// EL CERTIFICADO QUE SE ESTÁ SIRVIENDO. Sale por acá y no lo mide nadie desde afuera: el
+		// proceso es el único que sabe qué par está presentando de verdad. No emite nada si el
+		// cerebro no sirve TLS.
+		s.renderCertificadoTLS(&b, ahora)
 		_, _ = w.Write([]byte(b.String()))
 	})
 
@@ -831,8 +835,19 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 		IdleTimeout:       120 * time.Second,
 	}
 	if useTLS {
+		// EL CERTIFICADO SE ENTREGA POR `GetCertificate` Y NO POR LAS RUTAS DE
+		// `ListenAndServeTLS`, y no es estilo: esas rutas se leen UNA SOLA VEZ al arrancar, así
+		// que renovar el par en disco no cambiaría nada hasta el próximo reinicio. Con un
+		// certificado de 90 días y un timer semanal de renovación, eso convertiría la renovación
+		// en teatro — y en la forma más cara del teatro, porque un `openssl x509` sobre el ARCHIVO
+		// contestaría «faltan 89 días» mientras los clientes reciben uno vencido. Ver tls_recarga.go.
+		cert, err := nuevoCertificadoQueSeRelee(cfg.TLSCertFile, cfg.TLSKeyFile)
+		if err != nil {
+			return err
+		}
+		s.certTLS = cert
 		// Pinear el piso de TLS explícitamente en vez de heredar el default del stdlib.
-		srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: cert.GetCertificate}
 	}
 
 	logx.Info("musubi: servidor HTTP escuchando", "addr", cfg.Addr, "path", mcpHTTPPath, "tls", useTLS, "auth", token != "")
@@ -854,7 +869,10 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 	serveErr := make(chan error, 1)
 	go func() {
 		if useTLS {
-			serveErr <- srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+			// LAS RUTAS VAN VACÍAS A PROPÓSITO: con `GetCertificate` puesto, pasarlas haría que
+			// el stdlib cargue el par por su cuenta y lo use, dejando el gancho de recarga sin
+			// efecto. Vacías, el único camino al certificado es el que se relee.
+			serveErr <- srv.ListenAndServeTLS("", "")
 		} else {
 			serveErr <- srv.ListenAndServe()
 		}

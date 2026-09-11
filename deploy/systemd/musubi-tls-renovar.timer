@@ -1,0 +1,34 @@
+# musubi-tls-renovar.timer — dispara la renovación del certificado del cerebro.
+#
+# SEMANAL, CONTRA UN CERTIFICADO DE 90 DÍAS, Y EL MARGEN ES EL PUNTO. Let's Encrypt permite
+# renovar desde bastante antes del vencimiento, y `tailscale cert` devuelve el que ya tiene si
+# todavía está lejos — así que disparar seguido no cuesta nada y comprar margen sí vale.
+#
+# Con una cadencia semanal hacen falta MUCHAS corridas perdidas seguidas para llegar al día 90:
+# eso convierte «falló una renovación» en un problema con semanas de aviso, en vez de en una
+# carrera contra el reloj. La alerta `CertificadoTLSPorVencer` está puesta en 21 días justamente
+# para que queden tres corridas por delante: la primera falla, todavía hay dos oportunidades de
+# arreglarlo antes de que nadie tenga que apurarse.
+#
+# NO ES DIARIO porque no hace falta —el margen ya es enorme— y cada corrida habla con la API de
+# Let's Encrypt a través de Tailscale. No es gratis y no compra nada.
+
+[Unit]
+Description=Renovación semanal del certificado TLS del cerebro
+Documentation=file://%h/musubi/deploy/README.md
+
+[Timer]
+OnCalendar=Mon *-*-* 04:17:00
+
+# DESFASADO A PROPÓSITO: a las 03:30 corre el backup del cerebro y a las 04:30/04:35 los timers de
+# extracción. Compartir minuto mezclaría la carga y haría que una renovación lenta pareciera culpa
+# de otra cosa.
+RandomizedDelaySec=20m
+
+# SIN ESTO, UN DISPARO QUE CAE CON LA MÁQUINA APAGADA NO OCURRE, y punto: no se pospone, se pierde.
+# En un servidor eso es raro, pero un reinicio largo un lunes a la madrugada alcanza para saltear
+# una semana entera, y las semanas son lo único que separa este timer del día 90.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
