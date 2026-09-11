@@ -407,7 +407,8 @@ func classifyResponse(resp *http.Response) error {
 					errPermanent, body.Error.Code, body.Error.Message)
 			}
 			// Fallo del central procesando un pedido válido (incl. -32603 SQLITE_BUSY y -32002
-			// cuota): se libera solo. Reintentar con backoff; el outbox corta a max_attempts.
+			// cuota): se libera solo. Reintentar con backoff, y SIN TOPE POR CONTEO — ver
+			// config.SyncConfig.MaxAttempts, que es donde esa regla vive escrita una sola vez.
 			return fmt.Errorf("%w: el central FALLÓ al procesar (JSON-RPC %d): %s",
 				errTransient, body.Error.Code, body.Error.Message)
 		}

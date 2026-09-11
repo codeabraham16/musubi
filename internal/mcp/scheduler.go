@@ -274,9 +274,16 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 
 // drainOutboxOnce reclama un batch del outbox y empuja cada fila al central, aplicando el
 // resultado (sent / retry con backoff / dead). Best-effort: un fallo de una fila no aborta el
-// batch. Cada item trae Attempts (intentos ya fallidos): un fallo transitorio va a dead cuando
-// se alcanzó max_attempts, si no se reprograma con backoff exponencial+jitter; un fallo
-// permanente va directo a dead (R11-R13). El ctx corta el barrido a mitad si hay shutdown.
+// batch. Quién muere lo decide el CÓDIGO DE ERROR y nada más: un fallo permanente va directo a
+// dead (R11-R13), un fallo transitorio NUNCA muere y se reprograma con backoff exponencial+jitter.
+// Cada item trae Attempts (intentos ya fallidos), que alimenta el backoff y la observabilidad y
+// NO corta nada. El ctx corta el barrido a mitad si hay shutdown.
+//
+// ESTE COMENTARIO DECÍA «un fallo transitorio va a dead cuando se alcanzó max_attempts» hasta el
+// 2026-09-11, y era falso desde que `sync-hardening` sacó el tope por conteo — o sea que la doc de
+// esta función contradecía al comentario en línea que está VEINTICINCO LÍNEAS MÁS ABAJO, adentro de
+// la misma función. La regla vive UNA sola vez, en config.SyncConfig.MaxAttempts; acá no se repite
+// a propósito, porque repetirla es lo que dejó tres copias divergiendo en silencio.
 func (s *McpServer) drainOutboxOnce(ctx context.Context) {
 	items, err := s.engine.ClaimOutboxBatch(s.syncCfg.BatchSize, s.syncCfg.LeaseSeconds)
 	if err != nil {

@@ -165,8 +165,37 @@ VERSION_CORRIENDO="$("$DESTINO" version 2>&1 | head -1)"
 # —o sea que este despliegue es un rollback silencioso—, y `applyMigrations` se niega a abrirla.
 # Que ese caso se vea acá, y no como un cerebro que no arranca, ahorra el peor diagnóstico posible.
 ESPERADO="$("$DESTINO" version --esquema 2>/dev/null || echo "")"
-ESQUEMA="$(python3 -c "import sqlite3,sys;print(sqlite3.connect(sys.argv[1]).execute('PRAGMA user_version').fetchone()[0])" "$BASE" 2>/dev/null || echo 0)"
-if [[ -z "$ESPERADO" ]]; then
+
+# «NO PUDE LEER» NO ES «LEÍ CERO», Y ACÁ LA DIFERENCIA ES DESTRUCTIVA.
+#
+# Esta línea decía `... 2>/dev/null || echo 0` hasta el 2026-09-11. Cualquier motivo por el que la
+# lectura fallara —python3 ausente, el módulo sqlite3 sin compilar, la base bloqueada, una ruta
+# equivocada— dejaba `ESQUEMA=0`, y `0 != 54` caía derecho en `volver_atras`. O sea que NO PODER
+# MEDIR el esquema tiraba abajo un despliegue que podía estar perfecto, y el mensaje acusaba la
+# causa equivocada: «la migración no llegó», cuando la migración sí había llegado y lo que falló
+# fue el instrumento.
+#
+# Y `volver_atras` no es sólo volver el binario: hace `cp -a "$RESPALDO" "$BASE"` y borra el WAL,
+# o sea que REVIERTE LA BASE. Un cero que significa «no sé» disparando una restauración de datos.
+#
+# LA REGLA CORRECTA YA ESTABA ESCRITA ACÁ ABAJO, PARA EL HERMANO: cuando el BINARIO no sabe decir
+# su esquema, se avisa y se sigue porque «no es motivo para tirar abajo un despliegue». Lo mismo
+# vale cuando el que no sabe decirlo es el disco. La regla estaba en un lado y no en el otro.
+#
+# Se exige además que lo leído sea un NÚMERO: el productor es un `python3 -c` y el consumidor una
+# comparación de shell, y sin nadie en el medio una salida rara entraría como si fuera un esquema.
+ESQUEMA=""
+if LEIDO="$(python3 -c "import sqlite3,sys;print(sqlite3.connect(sys.argv[1]).execute('PRAGMA user_version').fetchone()[0])" "$BASE" 2>/dev/null)" \
+   && [[ "$LEIDO" =~ ^[0-9]+$ ]]; then
+  ESQUEMA="$LEIDO"
+fi
+
+if [[ -z "$ESQUEMA" ]]; then
+  # NO SE VUELVE ATRÁS: no se midió nada, así que no hay nada que contradiga al despliegue. Lo que
+  # sigue —que /healthz conteste 200— es una verificación REAL y sobrevive a esto; y si la
+  # migración de verdad no hubiera corrido, `applyMigrations` falla cerrado al abrir la base.
+  aviso "no se pudo LEER el esquema de la base (¿python3 sin sqlite3, base bloqueada, ruta mala?): la migración quedó SIN verificar. Este binario apunta a: ${ESPERADO:-desconocido}"
+elif [[ -z "$ESPERADO" ]]; then
   # Un binario anterior a `--esquema` no puede decirlo. Se sigue —no es motivo para tirar abajo un
   # despliegue— pero se DECLARA, porque el resto de este bloque queda sin verificar.
   aviso "este binario no sabe decir su esquema (\`version --esquema\`): la migración quedó SIN verificar. Esquema en disco: $ESQUEMA"

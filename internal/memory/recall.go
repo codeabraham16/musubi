@@ -284,7 +284,8 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 	// DIVERSIDAD (MMR), entre el scoring y el empaquetado. scoreCandidates responde "¿qué tan
 	// relevante es cada item?" y packByBudget "¿cuántos entran?" — pero faltaba la pregunta del
 	// medio: "¿qué tan útil es el CONJUNTO?". Ahí vive la redundancia (ver mmr.go). Reordena; no
-	// descarta. MMRLambda >= 1 lo apaga y el orden queda bit-idéntico.
+	// descarta. Lo apagan los DOS extremos —`>= 1` y `<= 0`—, no un rango: ver diversify en mmr.go,
+	// que es donde esa regla vive escrita una sola vez y con el porqué del cero.
 	scored = e.diversify(scored, opts.MMRLambda)
 
 	result = packByBudget(scored, budget, gistMax)
