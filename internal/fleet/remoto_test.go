@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"musubi/internal/guiones"
 )
 
 // sshFalso instala un doble del cliente que se COMPORTA como ssh: sale con un código, escribe en
@@ -305,9 +307,12 @@ func TestElPuertoLlegaALaLineaDeComandoEnLosDosCaminos(t *testing.T) {
 // dejar de simular la mitad que importa.
 // ────────────────────────────────────────────────────────────────────────────────────────────
 func TestLoQueLlegaALaShellRemotaEsEjecutable(t *testing.T) {
-	if _, err := exec.LookPath("bash"); err != nil {
-		t.Skip("sin bash no se puede reproducir lo que hace el sshd")
-	}
+	// La shell de login que esta prueba reproduce es la del OTRO lado de ssh, y del otro lado
+	// siempre hay un Linux (o un Android). Reemplaza a un `t.Skip` que saltaba también EN LINUX:
+	// sin bash, `go test` contestaba `ok` y el `--` de más habría vuelto a pasar sin que nadie se
+	// entere, que es exactamente el defecto que esta prueba existe para cazar.
+	guiones.Exigir(t, "reproduce lo que el sshd del otro lado le entrega a la shell de login, que en "+
+		"esta flota es siempre un Linux o un Android", "bash")
 	const destino = "gio@nas"
 	casos := []struct {
 		nombre, espera string

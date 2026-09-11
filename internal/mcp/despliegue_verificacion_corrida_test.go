@@ -49,6 +49,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -232,6 +234,7 @@ func arnesDelPaso1(t *testing.T, dir, destino, stubs string) (string, string) {
 //
 // El hermano es MODO_SHA=otro: el .sha256 baja, tiene forma de sha256 y NO es el del binario.
 func TestNingunaVariableDeEntornoSalteaLaVerificacionDelBinario(t *testing.T) {
+	guiones.Exigir(t, "barre el paso 1 de deploy/install-musubi-brain.sh corriéndolo, y ese guion instala el binario del cerebro en un servidor Linux", "bash", "sha256sum", "install", "mktemp", "awk", "tr")
 	const carga = "#!/bin/sh\necho \"musubi 0.0.0-de-prueba\"\n"
 	shaCarga := fmt.Sprintf("%x", sha256.Sum256([]byte(carga)))
 
@@ -325,6 +328,8 @@ var losDosCaminosQueFrenan = []struct{ modo, porque string }{
 // forma de sha256 que no es el del zip es «medí y NO coincide», que es otra rama del guion. Barrer
 // una sola deja la otra sin nadie mirando.
 func TestNingunaVariableDeEntornoSalteaLaVerificacionDelRelay(t *testing.T) {
+	guiones.Exigir(t, "barre el bloque de binarios de deploy/rustdesk/install-rustdesk-relay.sh corriéndolo, y ese guion deja hbbs/hbbr como unidades systemd de un servidor Linux",
+		"bash", "sha256sum", "unzip", "install", "mktemp", "awk", "find")
 	const rel = "rustdesk/install-rustdesk-relay.sh"
 	guion := leerGuionDeDespliegue(t, rel)
 	bloque := bloqueEntreMarcas(t, guion, rel, "# ── Binarios", "# ── systemd")
@@ -348,6 +353,7 @@ cp `+shQuote(cargaP)+` "$destino"
 `)
 		escribirStub(t, stubs, "useradd", "exit 0\n")
 		escribirStub(t, stubs, "chown", "exit 0\n")
+		escribirStub(t, stubs, "uname", unameDeMentira)
 		destino = filepath.Join(dir, "opt-rustdesk")
 		prologo = strings.Join([]string{
 			"#!/usr/bin/env bash",
@@ -427,6 +433,7 @@ cp `+shQuote(cargaP)+` "$destino"
 // camino de «no coincide» — o sea, calculó el sha de un binario que nunca debió tocar y le contó
 // al operador la historia equivocada.
 func TestCuandoNoPudoMedirElGuionFrenaAntesDeMirarElBinario(t *testing.T) {
+	guiones.Exigir(t, "corre el paso 1 de deploy/install-musubi-brain.sh para leer el diagnóstico que imprime, y ese guion es de un servidor Linux", "bash", "sha256sum", "install", "mktemp", "awk", "tr")
 	const carga = "#!/bin/sh\necho \"musubi 0.0.0-de-prueba\"\n"
 	shaCarga := fmt.Sprintf("%x", sha256.Sum256([]byte(carga)))
 	const shaCeros = "0000000000000000000000000000000000000000000000000000000000000000"
@@ -558,6 +565,7 @@ func losGuionesDerivados() []guionDerivado {
 // Acá se corre el bloque de verdad. El archivo bueno es el del repo —cuyo sha ES el pin, y eso lo
 // custodian las otras dos pruebas—, y el malo es ese mismo archivo con un byte más.
 func TestLosGuionesDerivadosNoSeInstalanSinVerificar(t *testing.T) {
+	guiones.Exigir(t, "corre los pasos 5b y 5c de deploy/install-musubi-brain.sh, que instalan guiones y unidades systemd en un servidor Linux", "bash", "sha256sum", "mktemp", "awk", "tr")
 	const rel = "install-musubi-brain.sh"
 	guion := leerGuionDeDespliegue(t, rel)
 
@@ -706,6 +714,7 @@ func tarDePrometheus(t *testing.T, nombre string) []byte {
 // la comparación; y con el `die` borrado se instala igual. Un vacío tiene que significar «no pude
 // medir», nunca «medí y está bien».
 func TestPrometheusNoSeInstalaSinVerificar(t *testing.T) {
+	guiones.Exigir(t, "corre el paso 2 de deploy/prometheus/install-musubi-prometheus.sh, que instala prometheus/promtool como servicio de un servidor Linux", "bash", "sha256sum", "tar", "mktemp", "awk")
 	const rel = "prometheus/install-musubi-prometheus.sh"
 	guion := leerGuionDeDespliegue(t, rel)
 	bloque := bloqueEntreMarcas(t, guion, rel, "# ── 2. Binarios de Prometheus", "# ── 3. Directorios")
@@ -814,6 +823,7 @@ esac
 // exigencia de root (`[[ $EUID -eq 0 ]]`), que no se puede satisfacer en una prueba y no decide
 // nada sobre el checksum. La consecuencia que se mide es si el guion SIGUE: si sigue, despliega.
 func TestElRedespliegueNoAceptaUnShaQueSaleDelBinarioQueVerifica(t *testing.T) {
+	guiones.Exigir(t, "corre el tramo de argumentos de deploy/redesplegar-cerebro.sh, que reemplaza como root el binario del cerebro en un servidor Linux", "bash", "sha256sum", "cut")
 	const rel = "redesplegar-cerebro.sh"
 	guion := leerGuionDeDespliegue(t, rel)
 	argumentos := bloqueEntreMarcas(t, guion, rel, `NUEVO="${1:-}"`, `DESTINO=`)

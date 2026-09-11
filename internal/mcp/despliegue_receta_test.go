@@ -3,9 +3,10 @@ package mcp
 import (
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 // LA RECETA DE VUELTA ATRÁS QUE IMPRIME EL REDESPLIEGUE, EJERCITADA.
@@ -34,16 +35,14 @@ import (
 // hacer escribiendo el comando entre backticks. La prueba no podía distinguir la receta de su
 // propia advertencia — y un humano apurado con una terminal tampoco. Ahora se dice en palabras.
 func TestLaRecetaDeVueltaAtrasNoRestauraLaBaseSiNoHuboMigracion(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skipf("el guión de despliegue es de Linux y esta prueba corre bash; en %s no aplica", runtime.GOOS)
-	}
-	bash, err := exec.LookPath("bash")
-	if err != nil {
-		t.Skipf("sin bash en el PATH no se puede ejercitar el guión: %v", err)
-	}
+	// El `t.Skipf` de `exec.LookPath("bash")` que había acá salteaba TAMBIÉN EN LINUX: sin bash esta
+	// guarda no existía y `go test` contestaba `ok`. La compuerta lo convierte en un fallo.
+	guiones.Exigir(t, "corre deploy/pruebas/receta-de-vuelta-atras.sh contra el guion de "+
+		"redespliegue, que es de un servidor Linux", "bash", "awk", "sed", "grep")
+
 	arnes := filepath.Join("..", "..", "deploy", "pruebas", "receta-de-vuelta-atras.sh")
 	guion := filepath.Join("..", "..", "deploy", "redesplegar-cerebro.sh")
-	salida, err := exec.Command(bash, arnes, guion).CombinedOutput()
+	salida, err := exec.Command("bash", arnes, guion).CombinedOutput()
 	if err != nil {
 		t.Fatalf("la receta de vuelta atrás falló:\n%s", salida)
 	}

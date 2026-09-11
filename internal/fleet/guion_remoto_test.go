@@ -33,6 +33,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 // seccionesDelGuion es EL CONTRATO, escrito una sola vez: qué tiene que leer cada sección y en
@@ -107,11 +109,16 @@ func TestElOrdenDelGuionEsElOrdenDeLosIndicesDelParser(t *testing.T) {
 // sin tocar el parser. NumCPU pasa a valer la temperatura en miligrados (27800 en esta máquina),
 // MemTotal queda en 0 y Load1 en nil — que es exactamente la muestra basura que se guardaba.
 func TestElGuionRealCorridoContraEsteLinuxNoCruzaLasSecciones(t *testing.T) {
+	// La compuerta única de las pruebas que ejecutan una shell. Reemplaza a dos `t.Skip` que
+	// salteaban TAMBIÉN EN LINUX —sin `sh`, o con `/proc` ilegible, `go test` contestaba `ok` y esta
+	// guarda no existía—; acá eso es un fallo, porque «no pude medir» no puede contestar lo mismo
+	// que «medí y está bien».
+	guiones.Exigir(t, "corre el guion de lectura de /proc que viaja del otro lado de ssh y de adb, "+
+		"que siempre es un Linux o un Android", "sh")
 	if _, err := os.Stat("/proc/meminfo"); err != nil {
-		t.Skip("sin /proc no hay contra qué comparar: esta prueba mide el guion contra la máquina que la corre")
-	}
-	if _, err := exec.LookPath("sh"); err != nil {
-		t.Skip("sin sh no se puede reproducir lo que corre del otro lado")
+		t.Fatalf("estamos en linux y /proc/meminfo no se puede leer (%v): esta prueba compara el guion "+
+			"contra la máquina que la corre, así que sin /proc no mide nada — y un salteo acá se leería "+
+			"como que el guion y el parser siguen entendiéndose", err)
 	}
 	salida, err := exec.Command("sh", "-c", guionLecturaProc).Output()
 	if err != nil {
