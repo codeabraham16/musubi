@@ -341,10 +341,13 @@ func (e *DbEngine) migrateObservations() error {
 	return addObservationColumns(e.db)
 }
 
-// addObservationColumns agrega de forma idempotente las columnas de eficiencia de
-// memoria (gist, content_hash, tokens, last_accessed, access_count, importance,
-// archived, superseded_by) y el índice por content_hash, sobre cualquier ejecutor.
+// addObservationColumns agrega de forma idempotente, sobre cualquier ejecutor, las columnas que
+// `observations` fue ganando después de su CREATE TABLE original, más el índice por content_hash.
 // SQLite ADD COLUMN no reescribe la tabla.
+//
+// La lista de abajo es la enumeración; este comentario NO la repite a propósito. La repetía, se
+// quedó tres columnas atrás sin que nada fallara, y un comentario que enumera mal enseña a mirar
+// donde no se decide.
 func addObservationColumns(x execQuerier) error {
 	wanted := []struct{ name, ddl string }{
 		{"gist", "gist TEXT"},
@@ -362,6 +365,12 @@ func addObservationColumns(x execQuerier) error {
 		{"provenance", "provenance TEXT NOT NULL DEFAULT 'human'"},
 		{"confidence", "confidence REAL NOT NULL DEFAULT 1.0"},
 		{"quarantined", "quarantined INTEGER NOT NULL DEFAULT 0"},
+		// La EXPANSIÓN, separada del acceso (v57). Misma trampa que documentan la v21 y la v22 y
+		// que la v23 volvió a escribir entera: esta función arma la base NUEVA y la migración no
+		// corre sobre ella, así que una columna que sólo viva en la migración no existe en una
+		// instalación recién creada. Las dos son idempotentes.
+		{"expand_count", "expand_count INTEGER NOT NULL DEFAULT 0"},
+		{"last_expanded", "last_expanded DATETIME"},
 	}
 	existing, err := observationColumnsOn(x)
 	if err != nil {

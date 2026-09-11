@@ -43,6 +43,33 @@ import (
 // porque el sesgo es idéntico para los dos — y el delta es justamente lo que F2 vino a medir.
 const EtiquetadoPorTopico = "topic_key"
 
+// EtiquetadoPorExpansion es la OTRA fuente de etiquetas, y existe porque la de arriba no puede
+// cerrar la discusión sobre MMR.
+//
+// La etiqueta sale de `expand_count`: de los documentos de un tópico, son relevantes los que ALGÚN
+// agente pidió ENTEROS después de ver el titular. Eso no lo deriva nadie de la similitud — es una
+// elección tomada con el gist a la vista, y el ranker no la puede fabricar.
+//
+// POR QUÉ IMPORTA JUSTO ACÁ. Con `topic_key`, los relevantes de una consulta son por construcción
+// los que se parecen entre sí, y MMR separa lo que se parece: el costo de relevancia que el banco
+// le cobra a la diversificación está inflado de fábrica, y por eso el barrido de mmr_real_test.go
+// se lee como COTA SUPERIOR y no como veredicto. Esta etiqueta no tiene ese sesgo.
+//
+// ★ PERO TIENE EL SUYO, Y ES DE SUPERVIVENCIA: sólo se puede expandir lo que el ranker SIRVIÓ
+// primero. Un documento que el ranking actual nunca muestra no puede juntar expansiones, así que
+// esta etiqueta le da la derecha al ranker que la produjo. No es el mismo sesgo que el del tópico
+// —no premia el parecido— y ése es el punto; pero leerla como «la verdad» sería cambiar un sesgo
+// conocido por otro sin decirlo.
+//
+// Las dos juntas acotan: si un cambio mejora con AMBAS etiquetas, no lo está haciendo por el sesgo
+// de ninguna.
+//
+// ★★ ARRANCA VACÍA. La columna se empezó a escribir en la v57 (2026-09-11) y no se pudo rellenar:
+// las expansiones anteriores están sumadas adentro de `access_count` sin forma de restarlas, y el
+// ledger de uso no guarda argumentos a propósito. Hasta que se acumule uso real, esta fuente no
+// tiene con qué etiquetar — y lo dice fallando, no devolviendo un fixture flaco.
+const EtiquetadoPorExpansion = "expand_count"
+
 // OpcionesFixtureReal acota qué entra al fixture generado.
 type OpcionesFixtureReal struct {
 	// MinPorTopico es cuántas observaciones necesita un topic para volverse consulta. Con menos de
@@ -67,6 +94,15 @@ type OpcionesFixtureReal struct {
 	// representaciones en la misma corrida y ver cuánto de un delta viene de la representación y
 	// cuánto del ranker.
 	TextoDelDoc string
+	// Etiquetado elige de dónde salen las etiquetas de relevancia: EtiquetadoPorTopico (default,
+	// el histórico) o EtiquetadoPorExpansion. Ver las dos constantes: no son intercambiables, son
+	// dos sesgos distintos, y lo útil es correr las dos.
+	Etiquetado string
+	// MinExpandidosPorTopico es cuántos documentos EXPANDIDOS necesita un tópico para volverse
+	// consulta bajo EtiquetadoPorExpansion. 0 ⇒ 2: con un solo relevante, Recall@10 sólo puede dar
+	// 0 o 1 y nDCG deja de informar sobre el orden. No se mezcla con MinPorTopico, que cuenta el
+	// tamaño del tópico y no el de la etiqueta.
+	MinExpandidosPorTopico int
 }
 
 // Representaciones posibles de un documento en el fixture. Ver OpcionesFixtureReal.TextoDelDoc.
@@ -91,6 +127,12 @@ func (o OpcionesFixtureReal) conDefaults() OpcionesFixtureReal {
 	}
 	if o.TextoDelDoc == "" {
 		o.TextoDelDoc = DocDesdeContent
+	}
+	if o.Etiquetado == "" {
+		o.Etiquetado = EtiquetadoPorTopico
+	}
+	if o.MinExpandidosPorTopico <= 0 {
+		o.MinExpandidosPorTopico = 2
 	}
 	return o
 }
@@ -137,8 +179,27 @@ func FixtureDesdeDB(rutaDB string, opts OpcionesFixtureReal) (*Fixture, error) {
 	// se interpola. Las otras tres: SampleContents (arreglado), buildObsGraph (arreglado con
 	// visibleObsPredicateDe, que hubo que crear porque necesitaba la forma con alias) y
 	// TopicExists (arreglado). Cuatro reimplementaciones del mismo filtro, encontradas de a una.
+	// `expand_count` SE CONSULTA SÓLO SI SE LA PIDIÓ, y su ausencia es un ERROR, no un silencio.
+	//
+	// El fixture abre la base en mode=ro: no puede migrarla. Contra una base anterior a la v57 la
+	// columna no existe, y las dos salidas cómodas son trampas: caerse al etiquetado por tópico
+	// daría un informe de aspecto impecable midiendo OTRA COSA que la pedida, y un COALESCE sobre
+	// una columna inexistente ni siquiera compila en SQLite. Se falla y se dice por qué.
+	colExpand := "0"
+	if opts.Etiquetado == EtiquetadoPorExpansion {
+		tiene, err := tieneColumna(db, "observations", "expand_count")
+		if err != nil {
+			return nil, err
+		}
+		if !tiene {
+			return nil, fmt.Errorf("%s no tiene la columna expand_count (esquema anterior a la v57): "+
+				"esta base no puede etiquetar por expansión", rutaDB)
+		}
+		colExpand = "COALESCE(expand_count,0)"
+	}
+
 	filas, err := db.Query(`
-		SELECT id, COALESCE(topic_key,''), ` + colTexto + `
+		SELECT id, COALESCE(topic_key,''), ` + colTexto + `, ` + colExpand + `
 		FROM observations
 		WHERE COALESCE(archived,0) = 0 AND superseded_by IS NULL AND COALESCE(quarantined,0) = 0
 		ORDER BY id`)
@@ -149,9 +210,11 @@ func FixtureDesdeDB(rutaDB string, opts OpcionesFixtureReal) (*Fixture, error) {
 
 	fx := &Fixture{}
 	porTopico := map[string][]string{}
+	expandido := map[string]bool{}
 	for filas.Next() {
 		var id, topic, texto string
-		if err := filas.Scan(&id, &topic, &texto); err != nil {
+		var expandCount int
+		if err := filas.Scan(&id, &topic, &texto, &expandCount); err != nil {
 			return nil, err
 		}
 		if strings.TrimSpace(texto) == "" {
@@ -160,6 +223,13 @@ func FixtureDesdeDB(rutaDB string, opts OpcionesFixtureReal) (*Fixture, error) {
 		fx.Docs = append(fx.Docs, Doc{ID: id, Topic: topic, Content: texto})
 		if topic != "" {
 			porTopico[topic] = append(porTopico[topic], id)
+		}
+		// UNA VEZ ALCANZA, y el contador no se usa como peso. Que a un documento lo hayan expandido
+		// nueve veces no lo vuelve nueve veces más relevante: lo que la señal dice es que alguien lo
+		// eligió teniendo el titular delante, y eso es un sí o un no. Pesar por el contador
+		// reintroduciría por la ventana el rich-get-richer que N4 saca por la puerta.
+		if expandCount > 0 {
+			expandido[id] = true
 		}
 	}
 	if err := filas.Err(); err != nil {
@@ -210,17 +280,73 @@ func FixtureDesdeDB(rutaDB string, opts OpcionesFixtureReal) (*Fixture, error) {
 		if len(ids) < opts.MinPorTopico || len(ids) > opts.MaxPorTopico || tieneAlgunPrefijo(t, opts.PrefijosExcluidos) {
 			continue
 		}
-		fx.Queries = append(fx.Queries, Query{
+		// El TÓPICO sigue decidiendo cuáles son las CONSULTAS en los dos etiquetados; lo que cambia
+		// es cuáles de sus documentos cuentan como relevantes. Así las dos corridas preguntan lo
+		// mismo y sólo discrepan en la etiqueta, que es la única forma de atribuirle un delta a la
+		// etiqueta y no a otra cosa.
+		q := Query{
 			ID:       "topic:" + t,
 			Text:     ConsultaDesdeTopico(t),
 			Relevant: ids,
 			Note:     "etiquetas derivadas del topic_key (asignado por el autor, independiente del ranker)",
-		})
+		}
+		if opts.Etiquetado == EtiquetadoPorExpansion {
+			elegidos := make([]string, 0, len(ids))
+			for _, id := range ids {
+				if expandido[id] {
+					elegidos = append(elegidos, id)
+				}
+			}
+			if len(elegidos) < opts.MinExpandidosPorTopico {
+				continue
+			}
+			q.ID = "expand:" + t
+			q.Relevant = elegidos
+			q.Note = "etiquetas derivadas de expand_count (elegidas por un agente con el gist a la vista; " +
+				"sesgo de supervivencia: sólo se expande lo que el ranker sirvió)"
+		}
+		fx.Queries = append(fx.Queries, q)
 	}
 	if len(fx.Queries) == 0 {
+		// EL MENSAJE NOMBRA EL FILTRO QUE DE VERDAD MORDIÓ. Con etiquetado por expansión, decir
+		// «min=3, max=50» manda a tocar los umbrales del tópico cuando lo que falta es uso: la
+		// columna arrancó vacía en la v57 y se llena sola a medida que alguien expande.
+		if opts.Etiquetado == EtiquetadoPorExpansion {
+			return nil, fmt.Errorf("ningún topic de %s tiene al menos %d documentos expandidos: "+
+				"la señal de expansión se empezó a registrar en la v57 y no se pudo rellenar hacia atrás, "+
+				"así que todavía no hay con qué etiquetar", rutaDB, opts.MinExpandidosPorTopico)
+		}
 		return nil, fmt.Errorf("ningún topic de %s pasó los filtros (min=%d, max=%d)", rutaDB, opts.MinPorTopico, opts.MaxPorTopico)
 	}
 	return fx, nil
+}
+
+// tieneColumna responde si una tabla tiene una columna, sobre una base abierta en sólo lectura.
+//
+// Es el equivalente de lectura de agregarColumnaSiFalta (internal/memory/migrations.go), y existe
+// separado a propósito: acá no se puede arreglar la falta —la base se abre en mode=ro—, sólo
+// detectarla para poder fallar con un motivo.
+func tieneColumna(db *sql.DB, tabla, columna string) (bool, error) {
+	filas, err := db.Query(`PRAGMA table_info(` + tabla + `)`)
+	if err != nil {
+		return false, fmt.Errorf("leer columnas de %s: %w", tabla, err)
+	}
+	defer filas.Close()
+	for filas.Next() {
+		var (
+			cid         int
+			name, ctype string
+			notnull, pk int
+			dflt        interface{}
+		)
+		if err := filas.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, fmt.Errorf("escanear PRAGMA table_info(%s): %w", tabla, err)
+		}
+		if name == columna {
+			return true, nil
+		}
+	}
+	return false, filas.Err()
 }
 
 func tieneAlgunPrefijo(s string, prefijos []string) bool {

@@ -8,6 +8,54 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **La expansión deja de contarse como si fuera un recall: la única señal exógena de la memoria
+  tiene su propia columna.** `bumpAccess` lo llamaban dos caminos que no significan lo mismo, y los
+  dos sumaban en `access_count`:
+
+  - `recall.go` bumpea lo que **acaba de servir**. Eso lo escribe el ranker sobre su propia salida:
+    es el lazo endógeno que la invariante N4 documenta y que `accessRate` amortigua a propósito.
+  - `expand.go` bumpea lo que el agente **eligió** de entre lo servido — «de todos los gists que me
+    diste, ÉSTE lo quiero entero», decidido con el titular delante. El ranker no lo puede fabricar.
+
+  Sumadas en una columna, la segunda era irrecuperable: no hay forma de restarle a un `access_count`
+  la parte que puso el propio recall. Y es la única etiqueta de relevancia del sistema que **no
+  deriva de la similitud**, que es justo la que le falta al banco: hoy las saca del `topic_key`, o
+  sea que los documentos relevantes de una consulta son por construcción los que se parecen entre
+  sí — y MMR separa lo que se parece. Por eso el costo de relevancia que el barrido de
+  `mmr_real_test.go` le cobra a la diversificación es una **cota superior**, inflada de fábrica, y
+  se lee como medición y no como veredicto.
+
+  **Migración v57** (`expand_count`, `last_expanded`), en la migración y en la baseline, siguiendo
+  la convención de la v21. `FixtureDesdeDB` aprende a etiquetar con ella
+  (`OpcionesFixtureReal{Etiquetado: EtiquetadoPorExpansion}`).
+
+  **Esto NO cambia el ranking, y es deliberado.** `access_count` sigue recibiendo exactamente los
+  mismos incrementos que antes, de los mismos dos caminos: las columnas nuevas se suman, no
+  reemplazan. Separar la señal y usarla para rankear son dos decisiones, y la segunda necesita una
+  medición que todavía no existe — justamente la que ésta desbloquea. Hacer las dos juntas sería
+  mover el ranker basándose en lo que uno espera que la medición diga.
+
+  **Arranca en cero y no se pudo rellenar**, dicho de frente: hay 53 expansiones en el ledger de
+  uso, pero `tool_invocations` no guarda argumentos (invariante L1, y está bien que así sea), y
+  dentro de `access_count` las dos señales ya están sumadas. La historia previa está perdida; el
+  corpus de etiquetas se junta con el uso. Por eso pedir el etiquetado por expansión sobre una base
+  sin datos **falla nombrando la causa real** en vez de devolver un fixture flaco, y sobre una base
+  anterior a la v57 falla en vez de caer al etiquetado por tópico — que sería el informe más
+  peligroso posible: correcto, completo, y midiendo otra cosa que la pedida.
+
+  El sesgo de la etiqueta nueva también va escrito: sólo se puede expandir lo que el ranker sirvió,
+  así que le da la derecha al ranking que la produjo. No es el mismo sesgo que el del tópico —no
+  premia el parecido— y ése es el punto: un λ que gana con **las dos** no está ganando por el sesgo
+  de ninguna.
+
+  Nueve guardas, y los nueve sabotajes vistos en rojo con nueve motivos distintos: servir no cuenta
+  como elegir; elegir cuenta sin tocar el contador del acceso; sólo se cuenta lo que entró en el
+  presupuesto; el grounding de `musubi_ask` no cuenta; en sólo lectura no se rompe `memory_expand`;
+  la etiqueta marca sólo lo elegido; el etiquetado por defecto no cambia; sin señal suficiente hay
+  error y nombra la causa; y una base sin la columna falla en vez de medir otra cosa. Esa última
+  aserción hubo que endurecerla: pedía que el error dijera `expand_count`, y eso lo satisface
+  también el `no such column: expand_count` de SQLite — un vecino hablando el mismo idioma.
+
 - **El release empotra su clave pública, y con eso la cadena de auto-update se enciende por primera
   vez.** Estaba entera construida —manifiesto firmado, `VerificarFirma`, `ShaDeAsset`, el guion de
   firma, y tests— y el interruptor estaba en off. Medido el 2026-09-10:

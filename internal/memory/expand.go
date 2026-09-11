@@ -43,7 +43,55 @@ func (e *DbEngine) GetObservationsBudgetCtx(ctx context.Context, ids []string, b
 	if err := e.bumpAccess(ctx, found); err != nil {
 		return out, used, err
 	}
+	// Y ADEMÁS cuenta la EXPANSIÓN, en su propia columna. Ver bumpExpand: es la misma fila y el
+	// mismo momento, pero no es el mismo hecho.
+	if err := e.bumpExpand(ctx, found); err != nil {
+		return out, used, err
+	}
 	return out, used, nil
+}
+
+// bumpExpand cuenta la EXPANSIÓN: el agente leyó el gist y pidió el contenido entero.
+//
+// POR QUÉ ES UNA COLUMNA APARTE Y NO UN INCREMENTO MÁS EN access_count. `bumpAccess` lo llaman dos
+// caminos, y lo que significan es opuesto:
+//
+//   - recall.go bumpea lo que ACABA DE SERVIR. Eso lo escribe el ranker sobre su propia salida: es
+//     el lazo endógeno que la invariante N4 documenta y que accessRate amortigua a propósito.
+//   - esto bumpea lo que el agente ELIGIÓ de entre lo servido. Es información que el ranker no
+//     puede fabricar, porque llega después de que alguien leyó los titulares y decidió.
+//
+// Sumadas en la misma columna, la segunda es irrecuperable: no hay forma de restarle a un
+// access_count la parte que puso el propio recall. Y es la única etiqueta de relevancia del sistema
+// que no deriva de la similitud — la que le falta al banco de recall para dejar de medirse contra
+// sí mismo (internal/recalleval/fixture_real.go, EtiquetadoPorExpansion).
+//
+// CORRE ADEMÁS DE bumpAccess, NO EN SU LUGAR: `access_count` queda bit-idéntico a como venía. Esta
+// función sólo captura; quién usa la señal para rankear es otra decisión, y necesita la medición
+// que ésta habilita.
+//
+// Mismo trato que bumpAccess en los dos bordes: en sólo-lectura no hay refuerzo que escribir, y el
+// error nunca es motivo para que el agente se quede sin el contenido que ya está calculado.
+func (e *DbEngine) bumpExpand(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if e.soloLectura {
+		return nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	q := `UPDATE observations
+	      SET last_expanded = CURRENT_TIMESTAMP, expand_count = expand_count + 1
+	      WHERE id IN (` + strings.Join(placeholders, ",") + `)`
+	if _, err := e.db.ExecContext(ctx, q, args...); err != nil {
+		return fmt.Errorf("error al actualizar el contador de expansiones: %w", err)
+	}
+	return nil
 }
 
 // HydrateForGroundingCtx hidrata por id con presupuesto igual que GetObservationsBudgetCtx pero SIN
