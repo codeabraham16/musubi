@@ -49,8 +49,22 @@ type engineQueCuentaCierres struct {
 }
 
 func (e *engineQueCuentaCierres) CerrarSesionShell(id string, estado fleet.EstadoShell, motivo string, ahora time.Time) error {
+	// EL CONTEO VA DESPUÉS DE LA ESCRITURA, Y ESO ES LO QUE HACE QUE LA PRUEBA NO PARPADEE.
+	//
+	// `esperarCierreDelEngine` sincroniza contra este contador: en cuanto pasa de 0, el cuerpo de
+	// la prueba sigue y va a LEER LA FILA. Contando antes de delegar, esas dos cosas quedan
+	// separadas por todo el UPDATE, y la lectura cae en el medio — la fila todavía está abierta y
+	// la aserción falla. Medido acá: 1 de 5 corridas aisladas en rojo en esta máquina, 4 de 5 en
+	// otra. En la suite completa PASA siempre, porque la carga agranda la ventana entre el
+	// `Add(1)` y el `Load()` de la espera; por eso CI lo dejó pasar.
+	//
+	// La semántica no cambia: se sigue contando EL LLAMADO y no la fila —que no puede ser testigo,
+	// porque el UPDATE lleva `WHERE cerrada IS NULL`—, y un cierre que devuelve error también
+	// cuenta. Lo único que se mueve es el instante, y con él la promesa: cuando el contador sube,
+	// la escritura YA TERMINÓ.
+	err := e.StorageBackend.CerrarSesionShell(id, estado, motivo, ahora)
 	e.cierres.Add(1)
-	return e.StorageBackend.CerrarSesionShell(id, estado, motivo, ahora)
+	return err
 }
 
 // vigiasVivos cuenta los goroutines de `abrirShellConSesion` que hay AHORA en todo el proceso.
