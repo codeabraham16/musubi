@@ -1472,6 +1472,59 @@ func filasVivas(t *testing.T, texto string) (map[string]int, []string) {
 //
 // ASÍ SE ENCONTRARON A74 Y A84, los dos citados desde el código y ausentes del registro entero.
 // ────────────────────────────────────────────────────────────────────────────────────────────
+// LAS FILAS VIVAS CITAN SÍMBOLOS, NO NÚMEROS DE LÍNEA.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// Un `archivo.go:92` es un DERIVADO escrito a mano: cambia cada vez que alguien agrega una línea
+// más arriba, y nada lo actualiza. Medido el 2026-09-11: de las cinco citas con línea de las
+// filas A118 y A119, TRES apuntaban a otra cosa — `version.go:37` había pasado a ser un
+// `TrimPrefix`, `fleet_prometheus.go:521` un comentario sobre el truncado, y `ci.yml:350` un
+// `actions/checkout`. Y una fila que cita evidencia que se movió no falla: MANDA A MIRAR EL LUGAR
+// EQUIVOCADO, que es peor, porque quien llega ahí concluye que la fila está mal y no que la cita
+// envejeció.
+//
+// EL NOMBRE DE UN SÍMBOLO NO SE MUEVE cuando alguien edita el archivo, y encima se puede buscar.
+// Es la misma lección que esta sesión aplicó al objetivo de esquema de A99/A102/A116 y al «máximo
+// en uso» de la regla 6: un derivado escrito a mano es una copia, y una copia se queda vieja.
+//
+// LA SECCIÓN 3 QUEDA AFUERA A PROPÓSITO: ahí las entradas describen un estado PASADO, y el número
+// de línea es parte del relato de lo que se encontró ese día. No manda a mirar nada: cuenta.
+// ────────────────────────────────────────────────────────────────────────────────────────────
+func TestLasFilasVivasNoCitanNumerosDeLinea(t *testing.T) {
+	rutaAbierto := filepath.Join("..", "..", "specs", "control-de-flota", "ABIERTO.md")
+	crudo, err := os.ReadFile(rutaAbierto)
+	if err != nil {
+		t.Fatalf("no pude leer %s: %v", rutaAbierto, err)
+	}
+	texto := string(crudo)
+	corte := strings.Index(texto, "\n## 3 · Cerrado en este track")
+	if corte < 0 {
+		t.Fatal("ABIERTO.md perdió su sección 3, así que esta guarda no sabe dónde termina la parte viva")
+	}
+	vivo := texto[:corte]
+
+	cita := regexp.MustCompile(`[A-Za-z0-9_/.-]+\.(?:go|sh|yml|md|ps1|cmd):[0-9]+`)
+	filas := 0
+	for n, linea := range strings.Split(vivo, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(linea), "|") {
+			continue
+		}
+		filas++
+		for _, m := range cita.FindAllString(linea, -1) {
+			t.Errorf("línea %d de ABIERTO.md cita `%s`: un número de línea es un derivado escrito a "+
+				"mano y se mueve solo.\n"+
+				"  Una fila que cita evidencia movida no falla: MANDA A MIRAR EL LUGAR EQUIVOCADO, y "+
+				"quien llega ahí concluye que la fila está mal, no que la cita envejeció.\n"+
+				"  Citá el archivo y el SÍMBOLO —`fleet_http.go`, `handlerLatido`—: el nombre no se "+
+				"mueve cuando alguien edita el archivo, y encima se puede buscar.", n+1, m)
+		}
+	}
+	if filas < 30 {
+		t.Fatalf("sólo se vieron %d filas en la parte viva de ABIERTO.md: el parseo dejó de "+
+			"encontrar las tablas y esta guarda está en verde sin mirar nada", filas)
+	}
+}
+
 func TestNingunNumeroDelRegistroSeEvapora(t *testing.T) {
 	rutaAbierto := filepath.Join("..", "..", "specs", "control-de-flota", "ABIERTO.md")
 	crudo, err := os.ReadFile(rutaAbierto)

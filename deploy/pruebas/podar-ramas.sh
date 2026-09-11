@@ -31,7 +31,14 @@ set -uo pipefail
 
 BASE="${BASE:-origin/main}"
 BORRAR=0
-[ "${1:-}" = "--borrar" ] && BORRAR=1
+SOLO_RAMAS=0
+case "${1:-}" in
+  --borrar) BORRAR=1 ;;
+  # SACAR UN WORKTREE ES LO ÚNICO DE ACÁ QUE PUEDE MOLESTAR A OTRO: si una sesión está trabajando
+  # adentro, se queda sin piso a mitad de camino. Las ramas que NINGÚN worktree tiene tomadas no
+  # le pueden sacar nada a nadie, así que se pueden podar sin coordinar.
+  --borrar-solo-ramas) BORRAR=1; SOLO_RAMAS=1 ;;
+esac
 
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
@@ -117,8 +124,11 @@ fi
 [ "$n_podables" -eq 0 ] && exit 0
 
 if [ "$BORRAR" != "1" ]; then
-  printf '\nNo se borró nada. Para borrarlas, con bundle de respaldo primero:\n'
-  printf '  %s --borrar\n' "$0"
+  printf '\nNo se borró nada. Con bundle de respaldo primero:\n'
+  printf '  %s --borrar-solo-ramas   # ramas sueltas; no toca ningún worktree\n' "$0"
+  printf '  %s --borrar              # además saca los worktrees desechables\n' "$0"
+  printf '\nOJO CON EL SEGUNDO si hay otra sesión trabajando: sacarle el worktree de abajo la deja\n'
+  printf 'sin piso a mitad de camino. Las ramas sueltas no le pueden sacar nada a nadie.\n'
   exit 0
 fi
 
@@ -134,7 +144,8 @@ printf '  OJO: está en ESTE disco. Si lo que te preocupa es perder la máquina,
 
 # LOS WORKTREES PRIMERO: una rama tomada por un worktree no se puede borrar, así que al revés
 # la poda de ramas dejaría afuera justo a las que más sobran.
-while read -r ruta; do
+[ "$SOLO_RAMAS" = "1" ] && printf '  (modo --borrar-solo-ramas: no se toca ningún worktree)\n'
+[ "$SOLO_RAMAS" = "1" ] || while read -r ruta; do
   [ -z "$ruta" ] && continue
   case "$ruta" in */worktrees/*) ;; *) continue ;; esac
   rama="$(git -C "$ruta" symbolic-ref --quiet --short HEAD 2>/dev/null || echo '')"
