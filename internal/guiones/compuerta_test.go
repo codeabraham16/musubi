@@ -239,43 +239,80 @@ func TestAyudanteDeUsoIndebido(t *testing.T) {
 // Y CADA CASO EXIGE QUE FALLE EN CUALQUIER PLATAFORMA: el uso indebido no puede quedar en un
 // `skip` cómodo en windows.
 func TestUnUsoIndebidoDeLaCompuertaEsUnFallo(t *testing.T) {
+	// `mide` dice EN QUÉ PLATAFORMAS este caso tiene que hacer morir al hijo.
+	//
+	// LOS DOS CONTROLES DE USO —motivo pobre, cero herramientas— MUEREN EN LAS TRES, a propósito:
+	// corren antes de mirar el GOOS, para que nadie use la compuerta como un `t.Skip` cómodo en la
+	// plataforma que le molesta. Los CUATRO de la lista de herramientas, no: la comprobación de
+	// que las herramientas están sólo corre donde el modo mide, y donde no mide la compuerta
+	// SALTEA — que es salir con código 0. Afirmar que mueren en las tres es afirmar como universal
+	// algo que es condicional, y CI lo cobró: rojo en windows y en macOS.
+	//
+	// ACÁ SÍ SE DERIVA DE LAS CONSTANTES, y no contradice a
+	// `TestLosSistemasDondeCadaModoMideSonLosQueSeDeclaran`: lo que esta prueba mide es el RECORRIDO
+	// de la lista, no en qué plataformas mide cada modo. Esa segunda pregunta está clavada a mano
+	// allá, una sola vez. Derivar de un hecho ya clavado es derivar; clavarlo de nuevo acá sería la
+	// copia.
+	siempre := func() bool { return true }
+	dondeMideExigir := func() bool { return runtime.GOOS == ElSistemaDondeCorren }
+	dondeMideUnix := elArnesSeSostieneAca
+
 	casos := []struct {
 		nombre, valor, esperado, porque string
+		mide                            func() bool
 	}{
 		{"motivo vacío de contenido", "sin-motivo", "hace falta una frase",
 			"un motivo de dos palabras pasó: el salteo puede quedar sin decir por qué, y un salteo " +
-				"que nadie puede revisar se queda para siempre"},
+				"que nadie puede revisar se queda para siempre", siempre},
 		{"sin nombrar ninguna herramienta", "sin-herramientas", "NO es",
 			"la compuerta aceptó ser usada sin nombrar una sola herramienta Unix, o sea como un " +
-				"t.Skip de propósito general: es exactamente lo que no puede ser"},
+				"t.Skip de propósito general: es exactamente lo que no puede ser", siempre},
 		// EL HERMANO: los dos controles de uso valen para los TRES modos o no valen para ninguno.
 		// Un modo nuevo con los `t.Fatalf` copiados y sin prueba que los corra es la forma exacta
 		// que este repo persigue —la guarda puesta en N-1 de N caminos—, y acá el N acaba de subir.
 		{"modo Unix, motivo vacío de contenido", "unix-sin-motivo", "hace falta una frase",
 			"guiones.Unix aceptó un motivo de dos palabras: el salteo de windows puede quedar sin " +
-				"decir por qué, y un salteo que nadie puede revisar se queda para siempre"},
+				"decir por qué, y un salteo que nadie puede revisar se queda para siempre", siempre},
 		{"modo Unix, sin nombrar ninguna herramienta", "unix-sin-herramientas", "NO es",
 			"guiones.Unix aceptó ser usada sin nombrar una sola herramienta, o sea como un t.Skip " +
-				"de propósito general para apagar windows: es exactamente lo que no puede ser"},
+				"de propósito general para apagar windows: es exactamente lo que no puede ser", siempre},
 		// EL CONTROL DE QUE LA LISTA SE MIRA ENTERA. Sin estos cuatro, un `herramientas[1:]` o un
 		// `herramientas[:len(herramientas)-1]` pasan inadvertidos: las sondas declaran UNA sola
 		// herramienta y con largo 1 las tres formas de recorrer se ven iguales. Los llamadores
 		// reales declaran hasta seis, así que la ceguera sería sobre lo que de verdad se usa.
 		{"Exigir saltea el principio de la lista", "falta-la-primera", "musubi-herramienta-inexistente-zz",
 			"guiones.Exigir no miró la PRIMERA herramienta declarada. Una que falta tiene que MORIR en linux; " +
-				"si se la saltea, la prueba corre sin lo que necesita y su verde no mide el guion"},
+				"si se la saltea, la prueba corre sin lo que necesita y su verde no mide el guion", dondeMideExigir},
 		{"Exigir saltea el final de la lista", "falta-la-ultima", "musubi-herramienta-inexistente-zz",
-			"guiones.Exigir no miró la ÚLTIMA herramienta declarada, y las listas reales llegan a seis"},
+			"guiones.Exigir no miró la ÚLTIMA herramienta declarada, y las listas reales llegan a seis", dondeMideExigir},
 		{"Unix saltea el principio de la lista", "unix-falta-la-primera", "musubi-herramienta-inexistente-zz",
-			"guiones.Unix no miró la PRIMERA herramienta declarada"},
+			"guiones.Unix no miró la PRIMERA herramienta declarada", dondeMideUnix},
 		{"Unix saltea el final de la lista", "unix-falta-la-ultima", "musubi-herramienta-inexistente-zz",
-			"guiones.Unix no miró la ÚLTIMA herramienta declarada"},
+			"guiones.Unix no miró la ÚLTIMA herramienta declarada", dondeMideUnix},
 	}
 	for _, c := range casos {
 		t.Run(c.nombre, func(t *testing.T) {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestAyudanteDeUsoIndebido$", "-test.v")
 			cmd.Env = append(os.Environ(), sobreUsoIndebido+"="+c.valor)
 			salida, err := cmd.CombinedOutput()
+
+			// DONDE ESTE MODO NO MIDE, EL CONTRATO ES EL OPUESTO Y TAMBIÉN SE COMPRUEBA: la
+			// compuerta tiene que SALTEAR diciéndolo, no dejar pasar. Un `err == nil` a secas acá
+			// dejaría el caso vacío en windows —«pasó», sin saber si salteó o si corrió sin las
+			// herramientas—, que es medio archivo de prueba sin medir nada.
+			if !c.mide() {
+				if err != nil {
+					t.Fatalf("en %s/%s este modo NO mide, así que la compuerta tenía que SALTEAR, y el "+
+						"hijo murió:\n%s", runtime.GOOS, runtime.GOARCH, salida)
+				}
+				if !strings.Contains(string(salida), "SALTEADA EN") {
+					t.Errorf("en %s/%s el hijo pasó sin saltear: o la compuerta dejó pasar donde el "+
+						"arnés no se sostiene, o corrió sin las herramientas que declaró.\n%s",
+						runtime.GOOS, runtime.GOARCH, salida)
+				}
+				return
+			}
+
 			if err == nil {
 				t.Fatalf("%s\n  el proceso hijo terminó con código 0\n  salida:\n%s", c.porque, salida)
 			}
