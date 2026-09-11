@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"musubi/internal/config"
 	"musubi/internal/embedding"
+	"musubi/internal/memory"
 )
 
 func servidorFlota(t *testing.T) (*McpServer, *httptest.Server) {
@@ -323,6 +325,66 @@ func TestFlotaVaciaContestaInventarioVacioYNoError(t *testing.T) {
 			}
 			if res == nil {
 				t.Fatal("devolvió nil sin error")
+			}
+		})
+	}
+}
+
+// backendConListaIlegible es un almacén al que NO se le puede preguntar qué proyectos tienen
+// máquinas. Embebe StorageBackend en nil a propósito: si una tool tocara cualquier OTRO método
+// del almacén, paniquea, y así la prueba no puede pasar por un camino que no es el que mide.
+type backendConListaIlegible struct {
+	memory.StorageBackend
+}
+
+func (backendConListaIlegible) ProyectosConDevices(int) ([]string, error) {
+	return nil, errors.New("la tabla devices no se pudo leer")
+}
+
+// TestUnaListaDeProyectosILEGIBLENoSeContestaComoInventarioVacio es el hermano exacto de
+// TestFlotaVaciaContestaInventarioVacioYNoError, y existe porque el defecto que cubre NO ESTABA EN
+// NINGUNA DE LAS DOS RAMAS QUE LO CREARON — nació del merge.
+//
+// De un lado, `proyectosVisibles` aprendió a decir «no pude leer la lista» (el tercer valor
+// `ilegible`, que en el export sale por la serie `unreadable`). Del otro, esta rama convirtió
+// «cero proyectos» en «inventario vacío» para que el panel dejara de leerse como caído. Cada
+// cambio es correcto solo. Juntos con un resolve ingenuo —`return ps, tr, true`— una base
+// ILEGIBLE contesta `{"total": 0, "devices": []}`: un cero que significa «no sé» servido como si
+// fuera una medición, que es exactamente lo que el arreglo del export fue a sacar del otro lado.
+//
+// La diferencia importa porque las dos respuestas mandan a mirar lugares opuestos: «no hay
+// máquinas» manda a enrolar, «no puedo leer la lista» manda a mirar la base.
+//
+// SABOTAJE QUE LA HACE FALLAR, verificado y corrido: en `proyectosParaLeer`, descartar el valor
+// —`ps, tr, _ := proyectosVisibles(...)` y `return ps, tr, true`—, que es literalmente lo que
+// escribe un resolve ingenuo del conflicto. Los tres subtests pasan a recibir
+// `{"total": 0, "devices": []}` en verde. (Dejar el `!ilegible` por `true` a secas NO sirve de
+// sabotaje: el compilador lo ataja con «declared and not used», así que no es la forma en que
+// este defecto puede volver.)
+func TestUnaListaDeProyectosILEGIBLENoSeContestaComoInventarioVacio(t *testing.T) {
+	s := newTestServer(t, nil)
+	s.engine = backendConListaIlegible{}
+
+	casos := []struct {
+		nombre string
+		llamar func() (interface{}, *RpcError)
+	}{
+		{"fleet_list", func() (interface{}, *RpcError) {
+			return s.toolFleetList(context.Background(), json.RawMessage(`{}`))
+		}},
+		{"fleet_metrics", func() (interface{}, *RpcError) {
+			return s.toolFleetMetrics(context.Background(), json.RawMessage(`{}`))
+		}},
+		{"fleet_services", func() (interface{}, *RpcError) {
+			return s.toolFleetServices(context.Background(), json.RawMessage(`{}`))
+		}},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			res, rpcErr := c.llamar()
+			if rpcErr == nil {
+				t.Fatalf("con la lista de proyectos ILEGIBLE %s contestó %v sin error: "+
+					"un inventario en cero que en realidad es «no sé» se lee como flota apagada", c.nombre, res)
 			}
 		})
 	}
