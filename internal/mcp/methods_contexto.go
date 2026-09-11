@@ -236,8 +236,16 @@ func recortarConMarca(s string, max int) string {
 func (s *McpServer) resolverDeviceUnico(p *Principal, nombre, declarado string) (fleet.Device, string, *RpcError) {
 	// EL LAZO POR PROYECTO, no `fleetReadScopeFor` a secas: el principal del panel es `read: all`
 	// SIN proyecto propio, y el atajo devuelve vacío. Ese bug ya se pagó en cuatro tools.
-	proyectos, _ := s.proyectosParaLeer(p, declarado)
+	proyectos, _, vacioLegitimo := s.proyectosParaLeer(p, declarado)
 	if len(proyectos) == 0 {
+		// ACÁ NO SE DEVUELVE VACÍO, y es a propósito: esto busca UNA máquina concreta, así que un
+		// inventario vacío no es una respuesta — el llamador quiere un device. Pero el mensaje sí
+		// tiene que decir la verdad: con flota vacía el problema NO es que falte `project`, y
+		// mandar a declararlo hace perder el tiempo persiguiendo un parámetro que no arregla nada.
+		if vacioLegitimo {
+			return fleet.Device{}, "", rpcErrorf(codeInvalidParams,
+				"no hay ninguna máquina enrolada: enrolá una con musubi_fleet_enroll antes de pedir su contexto")
+		}
 		return fleet.Device{}, "", rpcErrorf(codeInvalidParams, "no se pudo determinar el proyecto: declaralo en `project`")
 	}
 	var (

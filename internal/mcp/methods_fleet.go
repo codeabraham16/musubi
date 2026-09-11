@@ -179,8 +179,15 @@ func (s *McpServer) toolFleetList(ctx context.Context, raw json.RawMessage) (int
 		}
 	}
 
-	proyectos, truncado := s.proyectosParaLeer(p, args.Project)
+	proyectos, truncado, vacioLegitimo := s.proyectosParaLeer(p, args.Project)
 	if len(proyectos) == 0 {
+		if vacioLegitimo {
+			// No hay NINGUNA máquina en ninguna parte: eso es un inventario vacío, no un error del
+			// llamador. Devolver -32602 acá hacía que una instalación sin flota —o con todas las
+			// máquinas revocadas— se viera igual que una llamada mal formada, y el panel volvía a
+			// decir «estado: caido» por falta de datos en vez de por una caída.
+			return jsonResult(map[string]interface{}{"total": 0, "en_linea": 0, "devices": []map[string]interface{}{}})
+		}
 		return nil, rpcErrorf(codeInvalidParams, "no se pudo determinar de qué proyecto listar la flota: declaralo en `project`")
 	}
 
@@ -484,18 +491,38 @@ func fleetReadScopeFor(p *Principal, declarado string) string {
 // WHERE intacto — que es exactamente lo que el export federado a Prometheus ya hacía desde S11.
 // Quien tiene `read: all` recibe todos porque eso es lo que su credencial concede; quien está
 // acotado sigue viendo el suyo y nada más.
-func (s *McpServer) proyectosParaLeer(p *Principal, declarado string) (proyectos []string, truncado bool) {
+// El tercer valor, `vacioLegitimo`, distingue TRES estados que la lista vacía confundía:
+//
+//	«no pude resolver de qué proyecto hablás»  ·  «no pude LEER la lista»  ·  «no hay NINGUNA máquina».
+//
+// Sólo el tercero es un vacío que se puede contestar como dato; los otros dos son errores.
+//
+// Medido: las 19 fallas de musubi_fleet_list de esta instalación (47% de 40 llamadas, y el 48% de
+// TODOS los errores del ledger) son el segundo caso. El camino: stdio local ⇒ principal vacío ⇒
+// scope sin resolver ⇒ federado ⇒ ProyectosConDevices sobre una tabla `devices` VACÍA ⇒ cero
+// proyectos ⇒ «declaralo en `project`». El mismo estado del mundo contesta ok/total:0 si nombrás
+// el proyecto y ERROR si no, cuando la respuesta honesta es la misma: no hay flota.
+//
+// Se devuelve un bool y no se resuelve acá porque los cinco callers NO quieren lo mismo: los que
+// LISTAN un inventario pueden contestar vacío, y los que buscan UNA máquina concreta no tienen
+// nada que contestar. Obligar a cada sitio a mirar el valor es lo que evita que el arreglo quede
+// puesto en cuatro de cinco caminos.
+func (s *McpServer) proyectosParaLeer(p *Principal, declarado string) (proyectos []string, truncado bool, vacioLegitimo bool) {
 	if pr := fleetReadScopeFor(p, declarado); pr != "" {
-		return []string{pr}, false
+		return []string{pr}, false, false
 	}
-	// EL TERCER VALOR —«no pude leer la lista de proyectos»— SE DESCARTA ACÁ Y SE DICE POR QUÉ.
-	// En el export ese hecho no tenía a nadie que lo mirara, y por eso ahora sale por
-	// `musubi_fleet_export_truncated{kind="unreadable"}`. Este camino es distinto: contesta a una
-	// PERSONA que está mirando, y `proyectosVisibles` ya deja el error en el log con el motivo.
-	// Convertirlo en un error de la tool cambia el contrato de cinco tools de lectura y es un
-	// cambio aparte; queda anotado como hermano NO cubierto por serie.
-	proyectos, truncado, _ = proyectosVisibles(s.engine, p)
-	return proyectos, truncado
+	// EL TERCER VALOR DE `proyectosVisibles` ES «NO PUDE LEER LA LISTA», Y ACÁ NO SE PUEDE
+	// DESCARTAR. Las dos ramas que se juntan en esta línea son, por separado, correctas: una hizo
+	// visible ese estado (export, serie `unreadable`); la otra convirtió «cero proyectos» en
+	// «inventario vacío» para que el panel deje de leerse como caído. Juntas, sin esta línea, una
+	// lista ILEGIBLE se contestaría `{"total": 0}` — un cero que significa «no sé» disfrazado de
+	// medición, que es exactamente el defecto que el arreglo del export fue a sacar del otro lado.
+	//
+	// Por eso el bool que sale de acá NO es «federado», es «este vacío es de verdad». Cuando la
+	// lista no se pudo leer vale false, los callers caen al error que ya tenían y nadie inventa un
+	// inventario. El motivo ya quedó en el log dentro de `proyectosVisibles`.
+	ps, tr, ilegible := proyectosVisibles(s.engine, p)
+	return ps, tr, !ilegible
 }
 
 // limpiarTags saca vacíos y espacios. Las tags son texto libre del administrador: no se validan
@@ -539,8 +566,15 @@ func (s *McpServer) toolFleetMetrics(ctx context.Context, raw json.RawMessage) (
 			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
 		}
 	}
-	proyectos, truncado := s.proyectosParaLeer(p, args.Project)
+	proyectos, truncado, vacioLegitimo := s.proyectosParaLeer(p, args.Project)
 	if len(proyectos) == 0 {
+		if vacioLegitimo {
+			// No hay NINGUNA máquina en ninguna parte: eso es un inventario vacío, no un error del
+			// llamador. Devolver -32602 acá hacía que una instalación sin flota —o con todas las
+			// máquinas revocadas— se viera igual que una llamada mal formada, y el panel volvía a
+			// decir «estado: caido» por falta de datos en vez de por una caída.
+			return jsonResult(map[string]interface{}{"total": 0, "devices": []map[string]interface{}{}})
+		}
 		return nil, rpcErrorf(codeInvalidParams, "no se pudo determinar de qué proyecto leer las métricas: declaralo en `project`")
 	}
 

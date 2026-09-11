@@ -74,7 +74,24 @@ func NewDbEngineSoloLectura(projectPath string) (*DbEngine, error) {
 
 	// outboxEnabled en false explícito: el cero de Go ya es false, pero acá el default histórico
 	// del engine normal es true y dejarlo implícito invitaría a que alguien "arregle" la omisión.
-	return &DbEngine{db: db, path: dbPath, outboxEnabled: false, soloLectura: true}, nil
+	engine := &DbEngine{db: db, path: dbPath, outboxEnabled: false, soloLectura: true}
+
+	// LOS DIVISORES CALIBRADOS DE **ESTA** BASE, que acá faltaban. NewDbEngine los aplica
+	// (database.go) y este camino no, así que un engine de sólo lectura estimaba tokens con los
+	// defaults de fábrica (4.0/3.4/2.6) aunque su base tuviera una calibración guardada.
+	//
+	// Y el modo degradado es justo donde más duele: a este escalón se llega cuando el esquema es
+	// más nuevo que el binario, o sea cuando el operador ya está mirando una base que no controla.
+	// Que además le mienta el presupuesto de tokens —packByBudget corta donde no corresponde—
+	// convierte un diagnóstico en dos.
+	//
+	// Es el hermano exacto del que documenta database.go, y no era latente como el otro: acá el
+	// camino REAL de producción lo ejercita.
+	if err := engine.applyCalibratedDivisors(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("error al aplicar los divisores calibrados de %s: %w", dbPath, err)
+	}
+	return engine, nil
 }
 
 // EsSoloLectura dice si este engine se abrió en el escalón de sólo lectura. Lo usa el servidor MCP

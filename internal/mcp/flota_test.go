@@ -6,6 +6,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -282,5 +283,47 @@ func TestFlotaRoundTripRemitenteContraReceptor(t *testing.T) {
 	}
 	if evs[0].Origen != origenFlota {
 		t.Fatalf("origen = %q, quiero %q", evs[0].Origen, origenFlota)
+	}
+}
+
+// TestFlotaVaciaContestaInventarioVacioYNoError fija la distinción que faltaba: «no pude resolver
+// el proyecto» y «no hay ninguna máquina» son dos estados distintos, y el segundo tiene respuesta.
+//
+// LOS NÚMEROS QUE LO ORIGINAN: musubi_fleet_list falla 19 de 40 veces en esta instalación (47%), y
+// aporta el 48% de TODOS los errores del ledger. Las 19 son este caso — stdio local sin `project`
+// contra una tabla `devices` vacía. El mismo estado del mundo contestaba ok/total:0 si nombrabas el
+// proyecto y ERROR si no.
+//
+// Y la guarda que debía cubrirlo no lo hacía: TestUnPanelSinProyectoPropioVeTodoLoQueSuCredencialConcede
+// enrola DOS máquinas antes de medir, así que sólo prueba el caso CON flota. Cero pruebas del caso
+// vacío en todo internal/mcp.
+func TestFlotaVaciaContestaInventarioVacioYNoError(t *testing.T) {
+	s := newTestServer(t, nil) // base nueva: cero devices, que es el estado bajo prueba
+
+	casos := []struct {
+		nombre string
+		llamar func() (interface{}, *RpcError)
+	}{
+		{"fleet_list", func() (interface{}, *RpcError) {
+			return s.toolFleetList(context.Background(), json.RawMessage(`{}`))
+		}},
+		{"fleet_metrics", func() (interface{}, *RpcError) {
+			return s.toolFleetMetrics(context.Background(), json.RawMessage(`{}`))
+		}},
+		{"fleet_services", func() (interface{}, *RpcError) {
+			return s.toolFleetServices(context.Background(), json.RawMessage(`{}`))
+		}},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			res, rpcErr := c.llamar()
+			if rpcErr != nil {
+				t.Fatalf("con la flota vacía %s devolvió error (%d: %s); tenía que devolver un inventario vacío",
+					c.nombre, rpcErr.Code, rpcErr.Message)
+			}
+			if res == nil {
+				t.Fatal("devolvió nil sin error")
+			}
+		})
 	}
 }
