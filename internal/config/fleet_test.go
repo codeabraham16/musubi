@@ -65,3 +65,26 @@ func TestUnConfigSinSeccionDeFlotaUsaLosMismosDefaults(t *testing.T) {
 		t.Error("las políticas tienen que nacer apagadas")
 	}
 }
+
+// EL TECHO DE SERVICIOS DEL EXPORT: 0 ⇒ default, negativo ⇒ SIN TECHO.
+//
+// Los dos extremos importan y no son simétricos: el 0 del campo es «no lo escribí» —un YAML sin
+// la clave— y tiene que caer en el default, mientras que el negativo es «lo escribí a propósito
+// para desactivarlo». Si el 0 significara «sin techo», cualquier config que no nombre la clave
+// exportaría sin ninguna cota de cardinalidad, que es justo lo que este número existe para evitar.
+func TestElTechoDeServiciosDelExportDistingueElDefaultDelApagado(t *testing.T) {
+	casos := []struct {
+		nombre  string
+		cfg     FleetConfig
+		esperar int
+	}{
+		{"sin la clave ⇒ default", FleetConfig{}, 2000},
+		{"un número ⇒ ese número", FleetConfig{ServicesPerProjectExport: 300}, 300},
+		{"negativo ⇒ sin techo (0)", FleetConfig{ServicesPerProjectExport: -1}, 0},
+	}
+	for _, c := range casos {
+		if got := c.cfg.EffectiveServicesPerProjectExport(); got != c.esperar {
+			t.Errorf("%s: techo = %d, esperaba %d", c.nombre, got, c.esperar)
+		}
+	}
+}

@@ -137,10 +137,14 @@ arreglando: está ocultando. Regla nueva: acciones repetidas sostenidas sobre la
 
 ## 2 · Lo que queda fuera (y va a `ABIERTO.md`)
 
-- **Condiciones como expresión.** El `cuando:` es un enum acotado sobre los campos de la muestra,
-  no un mini-lenguaje. Un evaluador de expresiones que decide qué comando correr como root es una
-  superficie que no se justifica todavía.
-- **Acciones que no sean un comando.** Nada de webhooks ni de «apagar la máquina» como primitiva:
-  todo lo que hace una política es *un exec que ya podrías haber hecho a mano*.
-- **Cooldown persistente.** Vive en memoria: un reinicio del cerebro rearma los cooldowns. Se
-  anota; el caso malo (reinicio justo después de un disparo) es acotado y benigno.
+- **Condiciones como expresión** (**B7**). El `cuando:` es un enum acotado sobre los campos de la
+  muestra, no un mini-lenguaje. Un evaluador de expresiones que decide qué comando correr como root
+  es una superficie que no se justifica todavía.
+- **Acciones que no sean un comando** (**B8**). Nada de webhooks ni de «apagar la máquina» como
+  primitiva: todo lo que hace una política es *un exec que ya podrías haber hecho a mano*.
+- ~~**Cooldown persistente.** Vive en memoria: un reinicio del cerebro rearma los cooldowns.~~
+  **HECHO en S9b/S10b — cierra A24 (migración 33).** Este ítem estuvo declarando faltante algo que
+  ya estaba hecho, y nadie lo vio porque esta sección era invisible para
+  `TestNingunCaboDeFlotaSeQuedaSinRegistro` por dos motivos a la vez: el barrido globeaba sólo
+  `tasks.md` y su regex de encabezado no aceptaba `## 2 · Lo que queda fuera`. Hoy el cooldown vive
+  en la base y lo ejercita `TestElCooldownSobreviveUnReinicioDelCerebro`.

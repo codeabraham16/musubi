@@ -89,6 +89,11 @@ func (s *McpServer) toolTokenList(ctx context.Context, _ json.RawMessage) (inter
 			"role":       p.Role,
 			"read":       p.Read,  // capacidad EFECTIVA (own|all), ya resuelta del rol
 			"write":      p.Write, // capacidad EFECTIVA (none|own|any)
+			// El vencimiento va acá porque ésta es la superficie donde se pregunta QUIÉN tiene
+			// acceso, y una credencial muerta que se lista igual que una viva contesta mal esa
+			// pregunta. `vencimiento` es el estado ya resuelto; nunca dice «no sé» en silencio.
+			"expires":     p.Expires, // tal cual el registro; "" ⇒ no vence
+			"vencimiento": p.Vencimiento,
 		})
 	}
 	return jsonResult(map[string]interface{}{"principals": out})

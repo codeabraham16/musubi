@@ -218,10 +218,19 @@ func (s *McpServer) actuarSiCorresponde(pol fleet.Politica, d fleet.Device, valo
 		// resto del scheduler sólo se anuncia cuando hubo trabajo. Lo destapó el e2e: 17 avisos
 		// idénticos en un minuto. La MÉTRICA sí se incrementa siempre, porque de ella vive la
 		// alerta PoliticaSinPermiso: lo que se acota es el ruido, no la señal.
+		// El MOTIVO se distingue: «revocado» y «vencido» apagan la política igual, pero mandan a
+		// dos lugares distintos a arreglarla. Decir «ya no está en principals.yaml» de alguien
+		// que está ahí escrito manda a buscar donde no está el problema — por eso el segundo
+		// lookup es el de diagnóstico, que sí ve la credencial muerta.
+		nota := "el principal ya no está en principals.yaml; la política quedó inerte"
+		if p, hay := s.buscarPrincipal.porNombreAunqueVencida(pol.Principal); hay && p.Vencida(ahoraParaVencimiento()) {
+			nota = "la credencial VENCIÓ el " + p.Expires.UTC().Format(time.RFC3339) +
+				"; sigue escrita en principals.yaml pero ya no ejecuta nada: renovále el `expires:`"
+		}
 		s.avisarUnaVez("sin_principal:"+pol.Nombre, func() {
 			logx.Warn("política sin principal: no actúa (no se repite este aviso hasta que se resuelva)",
 				"politica", pol.Nombre, "principal", pol.Principal, "device", d.Name,
-				"nota", "el principal ya no está en principals.yaml; la política quedó inerte")
+				"nota", nota)
 		})
 		s.metrics.contarPolitica(pol.Nombre, "sin_principal")
 		return false
@@ -381,6 +390,33 @@ func (s *McpServer) avisarUnaVez(clave string, emitir func()) {
 		return
 	}
 	emitir()
+}
+
+// avisoMientras es avisarUnaVez CON SU REARME PEGADO, y existe porque el rearme se puede borrar.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// EL REARME NO PUEDE VIVIR EN UNA RAMA `else`
+//
+// La forma anterior era `if condicion { avisarUnaVez(k, ...) } else { avisosDados.Delete(k) }`,
+// repetida en cinco lugares. Un saboteador borró las dos ramas `else` del empuje y TODA la suite
+// quedó en verde: un techo que se cruza y se arregla dejaba su aviso mudo para siempre, así que
+// el PRÓXIMO corte del mismo techo pasaba en silencio — y eso no se ve, porque lo que falta es
+// una línea de log que nadie está esperando.
+//
+// Acá el rearme no es una rama que se pueda borrar: es la mitad `else` de una sola función, y
+// borrarla se lleva puesto el aviso, que sí tiene guarda. Un solo lugar donde equivocarse en vez
+// de uno por condición, que además es la forma del defecto «la guarda está en N-1 de N caminos».
+//
+// `emitir` puede ser nil cuando sólo interesa el rearme (un camino que ya salió por otro lado).
+func (s *McpServer) avisoMientras(clave string, activo bool, emitir func()) {
+	if !activo {
+		s.avisosDados.Delete(clave)
+		return
+	}
+	if emitir == nil {
+		return
+	}
+	s.avisarUnaVez(clave, emitir)
 }
 
 // cargarCooldowns siembra el mapa en memoria con lo que haya en la base (A24).

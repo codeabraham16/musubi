@@ -239,6 +239,18 @@ subir el cooldown. Subir el cooldown apaga el aviso y deja el problema.
 
 ## CoberturaDelSlaSeCayo
 
+> **Si venís a TOCAR el umbral o el `for` de esta alerta o de su hermana de servicios, leé esto
+> primero.** La cobertura es un **ratio en [0,1]**: «5 puntos» se escriben `-0.05`, no `-5`. Un
+> `-5` no puede cruzarse nunca —`delta` de un ratio vive en [-1,1]— y la alerta queda muda con
+> exactamente el mismo aspecto que una sana. Lo mismo con `deriv`/`rate`, que son **por segundo**:
+> el umbral de un `delta` queda cuatro órdenes de magnitud afuera. Y el `for` tiene que ser
+> **menor que la ventana** (`30m` contra `[6h]`): un `for: 30d` sobre una ventana de seis horas no
+> late jamás. Las tres cosas las mide `TestElUmbralDeCadaAlertaSobreUnaSerieGrabadaEsAlcanzable` y
+> `TestElPlazoDeCadaAlertaSobreUnaSerieGrabadaEsAlcanzable`
+> (`internal/mcp/alertas_umbral_alcanzable_test.go`), que derivan el rango de la serie de
+> `musubi-recording.yml` y de `deploy/rangos-de-series.yml`. Las tres estuvieron puestas y en
+> verde, así que no son hipotéticas.
+
 **La cobertura del SLA cayó más de 5 puntos en 6 horas.** Mientras el TSDB acumula historia la
 cobertura **sólo sube**, así que una caída es una pérdida de datos, no una etapa.
 
@@ -286,6 +298,56 @@ Por encima de 0,95 el faltante es más chico que el propio presupuesto de error.
 **Si `:sla30d` no existe en ninguna parte**, mirá primero si las reglas están cargadas
 (`ReglasDelSlaSinDesplegar`): «ausente porque la cobertura no alcanza» y «ausente porque el archivo
 no se desplegó» se ven idénticas desde un panel y se arreglan al revés.
+
+## CoberturaDelSlaDeServiciosSeCayo
+
+**La hermana de la de arriba, un plano más adentro: la cobertura del SLA de SERVICIOS de un cliente
+cayó más de 5 puntos en 6 horas.** Es el otro número que se factura, y hasta A93 nadie lo miraba:
+`musubi:project_service_up:cobertura30d` existía y **no la leía ninguna alerta**.
+
+### Descartá lo barato PRIMERO
+
+```bash
+# 0 · ¿apareció un servicio nuevo? Entra con cobertura 0 y arrastra el `min` del proyecto hacia
+#     abajo sin que se haya perdido un solo dato. Es la causa más común y NO es una pérdida.
+curl -sG --data-urlencode 'query=bottomk(5, musubi:service_up:cobertura30d)' \
+  http://127.0.0.1:9099/api/v1/query
+# el servicio que gana ese `bottomk` es el que define el número del proyecto.
+```
+
+Si el peor servicio es uno recién declarado —o uno **ocioso por diseño**: `MapsBroker`, `whesvc`,
+los updaters de Google, que no emiten a propósito (**A70**)—, no hay nada que arreglar y la alerta
+se apaga sola cuando ese servicio acumula ventana.
+
+### Por qué `musubi:project_up:min30d` y `musubi:device_up:avg7d` NO tienen alerta
+
+No es un olvido: es una decisión, y está escrita y custodiada en `seriesSinLectorConMotivo`
+(`internal/mcp/alertas_umbral_alcanzable_test.go`), donde una guarda exige que **toda** serie
+grabada tenga un lector o un motivo escrito. En corto: un umbral de **nivel** sobre un promedio de
+30 días no se apaga actuando —sólo esperando—, y lo accionable (una máquina caída ahora) ya lo
+avisa `MaquinaCaida` en 90 segundos; y un umbral de **caída** sobre esas series sería inalcanzable,
+porque seis horas de caída mueven un `[30d]` unos 0,008. Lo que sí les puede pasar —perder la
+medición— lo avisa esta alerta, porque la cobertura desciende del mismo `musubi:device_up:norm`.
+
+### Y si no es eso, son las mismas tres de `CoberturaDelSlaSeCayo`
+
+TSDB que perdió historia, scrape cortado, o reglas recargadas con otra definición. Los tres
+comandos están en esa sección, unas líneas más arriba.
+
+### Lo que esta alerta NO dice
+
+**No dice que un servicio esté caído.** Eso es `ServicioCaido`, y son dos preguntas distintas: ésta
+mide **cuánto se está midiendo**. La diferencia no es retórica — un servicio que dejó de reportar
+**conserva su último estado** en la tabla cruda, así que contar `musubi_fleet_service_up == 0` da
+fallas fantasma, y contar `== 1` da disponibilidad inventada (el 2026-09-04, los 64 servicios de una
+máquina muerta publicaron `1` durante seis horas). Por eso la alerta lee la serie grabada, que
+desciende de `musubi:service_up:norm`: ésa lleva la guarda de frescura y **colapsa los dos caminos
+de `instance`** —scrape y push— con `max by(...)`. Sobre la métrica cruda, un `min` se queda con el
+camino muerto: así fue como el «peor equipo» del reporte marcó 10,2 % siendo 84,7 %.
+
+**Y no preguntes frescura con `timestamp(last_over_time(X[30d]))`**: devuelve la hora de EVALUACIÓN,
+no la de la última muestra, así que una serie muerta contesta «hace 0 min». Acá la frescura viaja
+adentro del `count_over_time` de la cobertura: si dejan de entrar muestras, el conteo baja.
 
 ## PoliticaFrenadaPorConsentimiento
 
@@ -1252,15 +1314,19 @@ la máquina está abajo, el aviso llega cuando vuelve, que es cuando se puede ha
 
 ## ExportacionTruncada
 
-El exportador de flota dejó afuera parte de lo que tenía que exportar, porque cruzó uno de sus
-dos techos. **Lo que queda afuera no tiene serie en Prometheus**, así que sus alertas no pueden
-dispararse: no es que esté todo bien, es que no se está mirando.
+El exportador de flota dejó afuera parte de lo que tenía que exportar. **Lo que queda afuera no
+tiene serie en Prometheus**, así que sus alertas no pueden dispararse: no es que esté todo bien,
+es que no se está mirando.
 
-La etiqueta `kind` dice cuál techo se cruzó:
+La etiqueta `kind` dice por qué, y **los tres se arreglan distinto** — dos son techos y el tercero
+no:
 
-- **`kind="services"`** → algún proyecto pasó los **2000 servicios** exportables. El techo es
-  **por proyecto** (lo era total hasta la Ola 0, y con el total un tenant grande dejaba ciego a
-  uno chico sin que ninguno se enterara). Quién lo cruzó:
+- **`kind="services"`** → algún proyecto pasó su techo de servicios exportables (**default
+  2000**). El techo es **por proyecto** (lo era total hasta la Ola 0, y con el total un tenant
+  grande dejaba ciego a uno chico sin que ninguno se enterara) y **es una perilla**:
+  `fleet.services_per_project_export` en `.musubi/config.yaml` (negativo = sin techo). El número
+  que rige lo imprime el `# HELP` de la serie en `/metrics`, así que no hace falta adivinarlo.
+  Quién lo cruzó:
 
   ```
   musubi_fleet_list                 # cuántas máquinas por proyecto
@@ -1278,10 +1344,42 @@ La etiqueta `kind` dice cuál techo se cruzó:
 - **`kind="projects"`** → hay más de **64 proyectos** con máquinas. Ese techo protege al scrape
   de convertirse en un escaneo sin fin de la base, y se cruza recién con muchos tenants.
 
-**Los dos techos están en el código** (`internal/mcp/fleet_prometheus_servicios.go` y
-`internal/mcp/fleet_prometheus.go`) y subirlos es un cambio con prueba, no una variable de
-entorno: el que los sube tiene que medir qué le hace a la cardinalidad de Prometheus. Referencia:
-2000 servicios × 7 series por servicio son 14.000 series por proyecto.
+- **`kind="unreadable"`** → **NO es un techo: parte de la flota no se pudo LEER.** Alguno de los
+  cuatro barridos del exportador (la lista de proyectos, las máquinas de un proyecto, sus
+  servicios o sus aprobaciones) devolvió error, se salteó eso y siguió con el resto. **Subir
+  cualquier perilla no cambia nada acá.** Lo importante es lo que este punto arregla: mientras
+  valga 1, **el 0 de los otros dos `kind` significa «no medí», no «no hubo corte»** — antes esos
+  errores caían en un `continue` mudo y el export afirmaba «no se recortó nada» sobre proyectos
+  que ni había mirado.
+
+  Qué mirar:
+
+  ```
+  journalctl -u musubi-brain | grep 'export de flota:'   # dice QUÉ proyecto y con QUÉ error
+  ```
+
+  Las causas típicas son de la base, no de la flota: el archivo SQLite bloqueado por un backup en
+  curso, disco lleno, o una migración a medias. Si el `grep` no devuelve nada, el aviso viene del
+  empuje OTLP y sale con el prefijo `empuje OTLP:`.
+
+**Los dos TECHOS no se suben igual, y por eso la etiqueta `kind` importa:**
+
+| kind | quién lo gobierna | avisa al cortar |
+|---|---|---|
+| `services` | `fleet.services_per_project_export` (config, recarga con reinicio del cerebro) | serie `kind="services"` + log del empuje, que nombra esta perilla y el número VIGENTE |
+| `projects` | `proyectosParaExportar`, constante en `internal/mcp/fleet_prometheus.go` | serie `kind="projects"` + log del empuje, que dice explícitamente que no hay perilla |
+| `unreadable` | nadie: es un error de lectura | serie `kind="unreadable"` + una línea `export de flota:` por proyecto en el log |
+
+Un aviso que nombra el techo equivocado es peor que no avisar: el que lo lee sube un número, no ve
+ningún cambio y concluye que la alerta miente. Por eso cada mitad avisa por separado.
+
+Subir el de servicios sigue sin ser gratis: el que lo sube tiene que medir qué le hace a la
+cardinalidad de Prometheus. Referencia: 2000 servicios × 7 series por servicio son 14.000 series
+por proyecto, y una serie que deja de recibir datos no se borra.
+
+Y hay un TERCER techo sin serie ni perilla: `topeDeAprobacionesPorProyecto` (200) acota cuántas
+solicitudes de cuatro ojos se cuentan por proyecto. Pasarse no borra ninguna serie —el conteo se
+queda corto y la espera más vieja puede no ser la más vieja— así que no dispara esta alerta.
 
 **Lo que NO es:** un problema de rendimiento del cerebro. El recorte ocurre al armar la respuesta,
 así que el scrape sigue siendo rápido — ése es justamente el motivo por el que el techo existe y

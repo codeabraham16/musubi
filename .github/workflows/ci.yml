@@ -41,41 +41,90 @@ jobs:
       - name: Build
         run: go build ./...
 
-      # `-timeout 20m` es EXPLÍCITO porque el default de Go —10 min POR PAQUETE— dejó de alcanzar.
+      # EL TECHO SALE DE UN ARCHIVO, NO DE ACÁ. presupuesto-de-pruebas.env es la única fuente:
+      # este paso lo lee y lo publica en $GITHUB_ENV, y el paso de tests lo consume. Antes el
+      # `20m` estaba tipeado en DOS comandos de este archivo (acá y en test-cross) y justificado
+      # en un comentario de veinte líneas al lado.
       #
-      # MEDICIÓN VIGENTE (2026-08-29, tras A45), corrida verde completa con -race en 8m12s:
-      #     internal/memory  454 s   internal/mcp  379 s   cmd/musubi  136 s
-      # El más lento usa el 38 % de los 1.200 s, o sea 2,6× de margen. Un runner 2× más lento
-      # —normal en infraestructura compartida— lo pasa, y el rojo que produce no diría «hay un bug»
-      # sino «hoy la máquina estaba cargada». Ese rojo es peor que no tener CI: entrena a relanzar
-      # sin leer, y el día que el fallo sea real nadie lo va a mirar.
+      # `shell: bash` explícito para que este mismo paso sirva igual en el job de Windows.
+      - name: Presupuesto de pruebas (política)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `source` y no un grep a mano: el archivo es KEY=valor y así un cambio de formato
+          # rompe acá, ruidosamente, en vez de dejar la variable vacía.
+          source ./presupuesto-de-pruebas.env
+          # UNA VARIABLE VACÍA ES ROJO, NO UN DEFAULT. Si el archivo desapareciera, seguir con
+          # `-timeout ` (vacío) haría que `go test` tomara SU default de 10m y la suite se caería
+          # con un panic ilegible, que es exactamente el defecto que esto cierra.
+          : "${RACE_TIMEOUT:?presupuesto-de-pruebas.env no definió RACE_TIMEOUT}"
+          : "${MARGEN_MINIMO:?presupuesto-de-pruebas.env no definió MARGEN_MINIMO}"
+          echo "RACE_TIMEOUT=$RACE_TIMEOUT" >> "$GITHUB_ENV"
+          echo "techo $RACE_TIMEOUT · margen mínimo ${MARGEN_MINIMO}x"
+
+      # `-timeout $RACE_TIMEOUT` es EXPLÍCITO porque el default de Go —10 min POR PAQUETE— dejó
+      # de alcanzar. El porqué y las mediciones fechadas viven en presupuesto-de-pruebas.env.
       #
-      # LA MEDICIÓN ANTERIOR (main @67f2d80, 2026-08-11) decía memory 372,9 s / mcp 246,7 s, y para
-      # el 2026-08-29 había crecido a más de 1.200 s: la suite NO TERMINABA en 30 minutos y nadie lo
-      # miraba porque `go test ./...` sin -race pasaba entero. La causa no era una carrera —cero
-      # `DATA RACE` reportados— sino que cada prueba aplicaba las 39 migraciones de cero, con
-      # modernc.org/sqlite corriendo ~10× más lento bajo el detector. Lo arregló A45: las pruebas
-      # comparten una plantilla ya migrada (internal/memory/plantilla.go).
+      # LOS SEGUNDOS DE CADA PAQUETE YA NO SE ESCRIBEN EN NINGÚN COMENTARIO, ni acá ni allá: los
+      # mide el paso de abajo, en cada corrida, de la salida real. Antes vivían justamente en
+      # este comentario y envejecieron TRES VECES sin que nadie lo notara — un número tipeado en
+      # prosa no tiene quién lo contradiga.
       #
-      # ESTOS NÚMEROS SE REMIDEN CUANDO SE TOCAN LAS MIGRACIONES. Un comentario que justifica un
-      # timeout con datos viejos es peor que ninguno: el de arriba envejeció tres veces sin que
-      # nadie lo notara, y el techo dejó de significar lo que dice.
+      # `-count=1` NO es decorativo: setup-go cachea entre corridas, y un paquete servido del
+      # caché imprime «(cached)» SIN sus segundos. El paquete más lento podría esconderse ahí y
+      # el margen saldría falsamente cómodo. (El guard lo detecta y se pone rojo igual, pero es
+      # mejor que no pase.)
       #
-      # 20 min SIGUE atrapando un deadlock de verdad (un cuelgue quema 20 min en vez de 10, y es un
-      # evento raro). Subir el techo nunca fue el arreglo; medir por qué tardaba, sí.
+      # `tee` y PIPESTATUS: la salida se guarda para juzgarla DESPUÉS sin perder el código de
+      # salida real de `go test` (mismo patrón que los bench-guards de más abajo, y por el mismo
+      # motivo — un `out=$(...)` con `bash -e` deja el log sin salida cuando falla).
       - name: Test (race + coverage)
-        run: go test -race -timeout 20m -coverprofile=coverage.out ./...
+        shell: bash
+        run: |
+          set +e
+          go test -race -count=1 -timeout "$RACE_TIMEOUT" -coverprofile=coverage.out ./... 2>&1 | tee race.txt
+          rc=${PIPESTATUS[0]}
+          set -e
+          exit "$rc"
+
+      # EL PRESUPUESTO SE MIDE SOLO. Lee los segundos que `go test` ya imprimió por paquete
+      # («ok  musubi/x  12.3s»), saca el más lento, y compara TECHO/MÁS_LENTO contra el
+      # MARGEN_MINIMO de la política. Se pone ROJO cuando el margen se come el umbral — o sea
+      # cuando un runner MARGEN_MINIMO× más lento ya no terminaría, que es el rojo que no dice
+      # «hay un bug» sino «hoy la máquina estaba cargada» y entrena a relanzar sin leer.
+      #
+      # Y se pone rojo también cuando NO PUEDE MEDIR (formato cambiado, corrida abortada, todo
+      # servido del caché): un cero no puede significar a la vez «medí y está bien» y «no sé».
+      #
+      # Corre después del paso de tests y no adentro: si la suite falla, lo que importa es el
+      # fallo, no el presupuesto. `if: success()` es el default y queda explícito por eso.
+      #
+      # ESTE PASO NO SE PUEDE BORRAR EN SILENCIO. Borrarlo dejaba todo el aparato en el repo sin
+      # que corriera nunca, y nada se ponía rojo. Ahora lo exige TestElCiEjecutaElGuardDelMargen,
+      # que no busca el NOMBRE del paso —un nombre se cambia sin cambiar nada— sino la cadena:
+      # la corrida de arriba guarda su salida con `tee`, y algún paso posterior del MISMO job le
+      # pasa ESE archivo al guard, sin `continue-on-error` ni `if: false`.
+      - name: Presupuesto de pruebas (margen medido)
+        if: success()
+        shell: bash
+        run: go run ./internal/testbudget/cmd/presupuesto -salida race.txt
 
       # El grafo de código polyglot (TS/JS/Py vía tree-sitter, Track 20 · F4) vive detrás del build
       # tag `treesitter` y NO se compila en el build por default, así que el job de arriba jamás lo
       # toca. Este paso compila el binario CON el tag (mismo set de gramáticas que shippea release.yml)
       # y corre los tests etiquetados: garantiza que el pase polyglot y su cableado al indexador no se
       # pudran. Sin -race: gotreesitter es Go puro y estos tests no ejercitan concurrencia.
+      #
+      # EL HERMANO DEL -timeout: este paso también corre ./internal/mcp/ y no tenía ninguno, así
+      # que se comía el default de 10 min. Sin -race el paquete entra holgado, pero heredar el
+      # techo de la política no cuesta nada y saca a este paso de la lista de lugares donde el
+      # número está implícito.
       - name: Build+Test (treesitter/polyglot)
+        shell: bash
         run: |
           TAGS='treesitter grammar_subset grammar_subset_typescript grammar_subset_tsx grammar_subset_javascript grammar_subset_python'
           go build -tags "$TAGS" ./cmd/musubi
-          go test -tags "$TAGS" ./internal/codeintel/ ./internal/mcp/
+          go test -tags "$TAGS" -timeout "$RACE_TIMEOUT" ./internal/codeintel/ ./internal/mcp/
 
       - name: Coverage summary
         run: go tool cover -func=coverage.out
@@ -138,12 +187,25 @@ jobs:
       - name: Build
         run: go build ./...
 
-      # Mismo `-timeout 20m` que el job `test`, y por el mismo motivo. NO es simetría cosmética:
+      # EL MISMO TECHO QUE EL JOB `test`, LEÍDO DEL MISMO ARCHIVO. NO es simetría cosmética:
       # windows-latest tarda MÁS sin -race (12m05s medidos el 2026-08-11) que ubuntu CON -race
       # (8m48s), así que es el runner que primero choca el default de 10 min por paquete. El fix
-      # anterior arregló sólo el job donde se vio el rojo; el defecto estaba en los dos.
+      # anterior arregló sólo el job donde se vio el rojo; el defecto estaba en los dos — y
+      # cuando el número estaba tipeado, subirlo en un job y olvidarse del otro era un descuido
+      # de una línea. Ahora los dos leen presupuesto-de-pruebas.env.
+      #
+      # `shell: bash` sólo en el paso que lee el archivo (bash existe en los tres runners); el
+      # `go test` queda como comando plano, que era el motivo de no usar bash acá.
+      - name: Presupuesto de pruebas (política)
+        shell: bash
+        run: |
+          set -euo pipefail
+          source ./presupuesto-de-pruebas.env
+          : "${RACE_TIMEOUT:?presupuesto-de-pruebas.env no definió RACE_TIMEOUT}"
+          echo "RACE_TIMEOUT=$RACE_TIMEOUT" >> "$GITHUB_ENV"
+
       - name: Test
-        run: go test -timeout 20m ./...
+        run: go test -timeout ${{ env.RACE_TIMEOUT }} ./...
 
   bench-guard:
     runs-on: ubuntu-latest

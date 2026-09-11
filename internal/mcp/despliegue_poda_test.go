@@ -4,9 +4,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 // LA PODA DE LOS PUNTOS DE RETORNO (A87), EJERCITADA DE VERDAD Y NO LEÍDA.
@@ -25,16 +26,14 @@ import (
 //     equivocados, y además mete el punto de retorno de la corrida actual en la lista de borrado;
 //   - quitar la guarda `[[ "$dir/$f" == "$actual" ]]`: con retención 0 se lleva la vuelta atrás.
 func TestLaPodaDePuntosDeRetornoHaceLoQueDice(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skipf("el guión de despliegue es de Linux y esta prueba corre bash; en %s no aplica", runtime.GOOS)
-	}
-	bash, err := exec.LookPath("bash")
-	if err != nil {
-		t.Skipf("sin bash en el PATH no se puede ejercitar el guión: %v", err)
-	}
+	// El `t.Skipf` de `exec.LookPath("bash")` que había acá salteaba TAMBIÉN EN LINUX: sin bash esta
+	// guarda no existía y `go test` contestaba `ok`. La compuerta lo convierte en un fallo.
+	guiones.Exigir(t, "corre deploy/pruebas/poda-puntos-de-retorno.sh contra el guion de "+
+		"redespliegue, que es de un servidor Linux", "bash", "awk", "sed", "grep", "touch")
+
 	arnes := filepath.Join("..", "..", "deploy", "pruebas", "poda-puntos-de-retorno.sh")
 	guion := filepath.Join("..", "..", "deploy", "redesplegar-cerebro.sh")
-	salida, err := exec.Command(bash, arnes, guion).CombinedOutput()
+	salida, err := exec.Command("bash", arnes, guion).CombinedOutput()
 	if err != nil {
 		t.Fatalf("la poda de puntos de retorno falló:\n%s", salida)
 	}

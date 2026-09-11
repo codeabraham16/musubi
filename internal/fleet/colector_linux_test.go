@@ -181,7 +181,11 @@ func TestElDiscoUsadoCoincideConDf(t *testing.T) {
 	// df redondea a bloques; se admite 1 % de diferencia.
 	total, usado, disponible := leerDf(t)
 	if total == 0 {
-		t.Skip("no se pudo leer df")
+		// `df` es coreutils y en linux está. Un 0 acá no dice «no aplica», dice «no pude medir», y
+		// eso no puede contestar lo mismo que un verde: la referencia contra la que se contrasta
+		// el colector desapareció.
+		t.Fatal("df no devolvió un total: sin esa referencia esta prueba no compara nada contra el " +
+			"colector, así que un verde acá sería vacío")
 	}
 	for _, c := range []struct {
 		campo       string
@@ -246,7 +250,11 @@ func leerUnaClaveDeMeminfo(t *testing.T, clave string) uint64 {
 	t.Helper()
 	b, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
-		t.Skipf("sin /proc/meminfo: %v", err)
+		// FALLO, NO SALTEO: este archivo sólo compila en linux (sufijo _linux_test.go), y en linux
+		// /proc/meminfo no puede faltar. Saltear acá haría que «no pude medir» conteste con el
+		// mismo verde que «medí y está bien», en el ÚNICO lugar donde esto se puede medir.
+		t.Fatalf("sin /proc/meminfo en linux: %v — el colector lee de ahí, así que esto no es un "+
+			"entorno donde la prueba no aplique: es un entorno roto", err)
 	}
 	for _, l := range strings.Split(string(b), "\n") {
 		campos := strings.Fields(l)
@@ -258,7 +266,10 @@ func leerUnaClaveDeMeminfo(t *testing.T, clave string) uint64 {
 			return v
 		}
 	}
-	t.Skipf("/proc/meminfo no tiene %s", clave)
+	// Misma razón: si falta MemTotal, MemAvailable o MemFree, el colector tampoco las puede leer.
+	// Eso es el defecto que esta prueba busca, no una excusa para no correrla.
+	t.Fatalf("/proc/meminfo no tiene %s — el colector lee esa misma clave, así que su ausencia es "+
+		"un fallo del entorno y no un motivo para saltear", clave)
 	return 0
 }
 
@@ -269,7 +280,8 @@ func contarPidsDeProcAMano(t *testing.T) int {
 	t.Helper()
 	entradas, err := os.ReadDir("/proc")
 	if err != nil {
-		t.Skipf("sin /proc: %v", err)
+		t.Fatalf("sin /proc en linux: %v — ContarPids cuenta de ahí, así que sin /proc esta prueba "+
+			"no es inaplicable: es la que tendría que estar gritando", err)
 	}
 	n := 0
 	for _, e := range entradas {

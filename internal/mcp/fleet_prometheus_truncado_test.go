@@ -29,7 +29,7 @@ func TestElTruncadoDelExportadorSaleComoSerieYNoComoComentario(t *testing.T) {
 	maquinaConMuestra(t, s, "casa", "pc-gio", *muestraDePrueba(), ahora)
 
 	var b strings.Builder
-	renderFlota(&b, s.engine, ptrPrincipal(principalDePrometheus()), ahora, s.sondaIntervalo, versionDePrueba, nil)
+	renderFlota(&b, s.engine, ptrPrincipal(principalDePrometheus()), ahora, s.sondaIntervalo, versionDePrueba, nil, serviciosPorProyectoDefault)
 	salida := b.String()
 
 	// SIN recorte las dos series existen y valen 0. El 0 es un hecho medido —«no se truncó»—, no
@@ -67,9 +67,12 @@ func TestElTechoDeServiciosEsPorProyectoYNoDejaCiegoAlOtroTenant(t *testing.T) {
 	dGrande, _, _ := s.engine.DevicePorNombre("aaa-grande", "server-grande")
 	dChico, _, _ := s.engine.DevicePorNombre("zzz-chico", "server-chico")
 
-	// El proyecto grande satura su propio techo; el chico reporta uno solo.
+	// El proyecto grande satura su propio techo; el chico reporta uno solo. El techo se pasa por
+	// parámetro (es configurable desde `fleet.services_per_project_export`), así que la prueba usa
+	// uno chico en vez de fabricar 2005 servicios para cruzar el default.
+	const techoDeLaPrueba = 8
 	var muchos []fleet.ReporteServicio
-	for i := 0; i < serviciosPorExportar+5; i++ {
+	for i := 0; i < techoDeLaPrueba+5; i++ {
 		muchos = append(muchos, fleet.ReporteServicio{
 			Nombre: "svc-" + string(rune('a'+i%26)) + "-" + itoaCorto(i),
 			Salud:  fleet.SaludServicio{Tomada: ahora, Estado: fleet.EstadoCorriendo},
@@ -84,7 +87,7 @@ func TestElTechoDeServiciosEsPorProyectoYNoDejaCiegoAlOtroTenant(t *testing.T) {
 		t.Fatalf("no se pudieron reportar los servicios del proyecto chico: %v", err)
 	}
 
-	svs, truncado := serviciosVisiblesParaMetricas(s.engine, devicesDeTodos(t, s))
+	svs, truncado, _ := serviciosVisiblesParaMetricas(s.engine, devicesDeTodos(t, s), techoDeLaPrueba)
 	if !truncado {
 		t.Fatal("el proyecto grande pasó su techo y el exportador no lo declaró truncado")
 	}
@@ -113,6 +116,6 @@ func itoaCorto(n int) string {
 
 func devicesDeTodos(t *testing.T, s *McpServer) []fleet.Device {
 	t.Helper()
-	vistos, _ := devicesVisiblesParaMetricas(s.engine, ptrPrincipal(principalDePrometheus()))
+	vistos, _, _ := devicesVisiblesParaMetricas(s.engine, ptrPrincipal(principalDePrometheus()))
 	return vistos
 }

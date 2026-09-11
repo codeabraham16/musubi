@@ -395,8 +395,14 @@ func TestUnArchivoDeSecretoConVariasLineasSeRechazaConSuMotivo(t *testing.T) {
 // `cmd/musubi/agent_token.go` APENDEA el token nuevo al final del archivo (`apendarToken`, y su
 // comentario explica por qué: un reemplazo atómico crea una entrada de directorio nueva que no es
 // durable sin fsync del directorio). O sea que la PRIMERA línea es el token MÁS VIEJO. Lo fija
-// `TestElTokenNuevoSePersisteAntesDeEstrenarse`, que exige `[viejo nuevo]`, y `Usar()` devuelve
-// `viejo` primero.
+// `TestElAgenteGuardaElTokenNuevoYLoEstrena` (`cmd/musubi/agent_token_test.go`), que exige
+// `[viejo nuevo]`, y `Usar()` devuelve `viejo` primero.
+//
+// CORREGIDO EL 2026-09-10: este comentario y la fila A109 del registro nombraban
+// `TestElTokenNuevoSePersisteAntesDeEstrenarse`, una función que NO EXISTE en el repo — su única
+// aparición era acá. Es la misma forma que `cerrarSesionesColgadas`: un doc que nombra código
+// inexistente hace que nadie vaya a mirar lo que sí hay, y acá el que no se miraba era el único
+// lugar donde el orden del archivo de tokens está fijado.
 //
 // Cinco comentarios y filas del registro decían lo contrario, y no es un detalle de redacción:
 // quien lea que el nuevo va primero y decida «entonces me quedo con la primera línea» —que es una

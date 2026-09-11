@@ -59,6 +59,7 @@ const podaCadaTanto = time.Hour
 func (s *McpServer) ConfigurarFlota(cfg config.FleetConfig) error {
 	s.sondaIntervalo = cfg.EffectiveProbeInterval()
 	s.retencionSalidasDias = cfg.EffectiveOutputRetentionDays()
+	s.techoServiciosPorProyecto = cfg.EffectiveServicesPerProjectExport()
 
 	politicas := make([]fleet.Politica, 0, len(cfg.Policies))
 	vistos := make(map[string]bool, len(cfg.Policies))
@@ -136,9 +137,23 @@ func (s *McpServer) validarPrincipalDePolitica(pol fleet.Politica, lookup princi
 	if lookup == nil {
 		return fmt.Errorf("política %q: hay políticas configuradas pero no hay registro de principals (principals.yaml). Una política actúa con la autoridad de alguien: sin registro no hay a quién nombrar", pol.Nombre)
 	}
-	pr, existe := lookup.porNombre(pol.Principal)
+	// LOOKUP DE DIAGNÓSTICO, A PROPÓSITO. Acá se valida la CONFIGURACIÓN, no se ejecuta nada, y
+	// las dos cosas que porNombre hace de más romperían este chequeo:
+	//   - una credencial vencida anoche haría que el cerebro ENTERO no arranque, convirtiendo una
+	//     política inerte (que ya se avisa y se cuenta en cada tick) en una caída total;
+	//   - y el error diría «no existe en principals.yaml» de alguien que está ahí escrito, que
+	//     manda a buscar el problema donde no está.
+	// La ejecución la cierra porNombre en actuarSiCorresponde/politicaPuedeActuar, no esto.
+	pr, existe := lookup.porNombreAunqueVencida(pol.Principal)
 	if !existe {
 		return fmt.Errorf("política %q: el principal %q no existe en principals.yaml", pol.Nombre, pol.Principal)
+	}
+	if pr.Vencida(ahoraParaVencimiento()) {
+		// Se dice fuerte y una sola vez, al arranque: una política que nace inerte es una alarma
+		// apagada, y ese es el modo de falla que este archivo entero existe para no tener.
+		logx.Warn("política con la credencial VENCIDA: no va a actuar hasta que se renueve el `expires:`",
+			"politica", pol.Nombre, "principal", pol.Principal,
+			"vencio", pr.Expires.UTC().Format(time.RFC3339))
 	}
 	// Un principal SIN ninguna concesión de `exec` deja a la política garantizadamente muerta: va
 	// a evaluar, va a dar positivo y no va a poder hacer nada. Descubrirlo durante un incidente es
@@ -190,9 +205,16 @@ func (s *McpServer) validarPrincipalDeEmpuje(lookup principalResolver) error {
 	if lookup == nil {
 		return fmt.Errorf("el empuje OTLP nombra al principal %q pero no hay registro de principals. %s", nombre, ejemplo)
 	}
-	pr, existe := lookup.porNombre(nombre)
+	// Lookup de DIAGNÓSTICO por el mismo motivo que en validarPrincipalDePolitica: una fecha que
+	// pasó anoche no puede impedir arrancar, y el mensaje no puede decir «no existe» de alguien
+	// que sí está. El empuje real lo cierra porNombre en principalDelEmpuje, en cada tick.
+	pr, existe := lookup.porNombreAunqueVencida(nombre)
 	if !existe {
 		return fmt.Errorf("el empuje OTLP nombra al principal %q, que no existe en principals.yaml. %s", nombre, ejemplo)
+	}
+	if pr.Vencida(ahoraParaVencimiento()) {
+		logx.Warn("el empuje OTLP nombra una credencial VENCIDA: no se va a exportar nada hasta que se renueve el `expires:`",
+			"principal", nombre, "vencio", pr.Expires.UTC().Format(time.RFC3339))
 	}
 	// Sin ninguna concesión `metrics` el empuje queda garantizadamente vacío: va a resolver, va a
 	// barrer y no va a ver una sola máquina (C1 — el rol NO otorga capacidades de flota, ni
@@ -238,6 +260,51 @@ func (s *McpServer) RunFlotaScheduler(ctx context.Context, interval time.Duratio
 	}
 }
 
+// proyectosParaVigilar acota cuántos tenants se BARREN por tick. Es el mismo número que
+// `proyectosParaExportar` y NO es el mismo techo, y por eso ahora tiene su propio nombre.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// UN TECHO DE EXPORTACIÓN NO PUEDE GOBERNAR QUÉ MÁQUINAS SE VIGILAN
+//
+// Los dos barridos de acá abajo —la SONDA y las POLÍTICAS de auto-heal— usaban literalmente
+// `proyectosParaExportar`, que existe para acotar la CARDINALIDAD de un scrape de Prometheus.
+// Son dos preguntas sin nada que ver: cuántas series aguanta el scrape, y cuántos tenants hay que
+// vigilar y reparar. Compartir la constante significaba que bajar el techo del export apagaba en
+// silencio la vigilancia de los tenants que quedaban afuera — sin serie, sin aviso y sin que el
+// que tocó el número tuviera cómo saberlo.
+//
+// EL NÚMERO NO CAMBIA EN ESTE COMMIT, A PROPÓSITO. Subirlo cambia el fan-out de un barrido que
+// abre conexiones a máquinas reales (más tenants por tick, ticks más largos, más SSH en vuelo), y
+// eso es una decisión de operación que se toma mirando la flota, no una que se cuela en un
+// arreglo de guardas. Lo que sí cambia es que ahora es un techo PROPIO —moverlo del lado del
+// export ya no mueve esto— y que cuando corta, SE DICE.
+const proyectosParaVigilar = 64
+
+// proyectosAVigilar lista los tenants del barrido y AVISA cuando el techo los recorta.
+//
+// El recorte era mudo en los dos barridos: los tenants que quedaban afuera no se sondeaban y sus
+// políticas no corrían, o sea que sus máquinas no estaban «vigiladas en amarillo», estaban sin
+// vigilar y en verde. El aviso usa avisoMientras, así que se dice una vez y se rearma solo cuando
+// la flota vuelve a entrar en el techo.
+func (s *McpServer) proyectosAVigilar(barrido string) ([]string, error) {
+	// Se pide UNO MÁS que el techo para poder distinguir «entra justo» de «hay más».
+	proyectos, err := s.engine.ProyectosConDevices(proyectosParaVigilar + 1)
+	if err != nil {
+		return nil, err
+	}
+	recorto := len(proyectos) > proyectosParaVigilar
+	if recorto {
+		proyectos = proyectos[:proyectosParaVigilar]
+	}
+	s.avisoMientras("barrido_truncado:"+barrido, recorto, func() {
+		logx.Error("flota: hay más tenants con máquinas de los que entran en un barrido; los que quedan afuera NO se vigilan y NO se reparan, y desde afuera eso se ve igual que todo bien",
+			"barrido", barrido,
+			"tenants_por_barrido", proyectosParaVigilar,
+			"perilla", "ninguna: `proyectosParaVigilar` es una constante de compilación (internal/mcp/scheduler_flota.go). NO es el techo del export.")
+	})
+	return proyectos, nil
+}
+
 // barrerFlotaUnaVez hace UN barrido completo: sondear, evaluar políticas, podar.
 func (s *McpServer) barrerFlotaUnaVez(ctx context.Context) {
 	// I5 — un barrido que sigue corriendo no arranca otro. Con 40 máquinas por SSH, dos barridos
@@ -250,7 +317,7 @@ func (s *McpServer) barrerFlotaUnaVez(ctx context.Context) {
 	defer s.flotaBusy.Store(false)
 
 	inicio := time.Now()
-	proyectos, err := s.engine.ProyectosConDevices(proyectosParaExportar)
+	proyectos, err := s.proyectosAVigilar("sonda")
 	if err != nil {
 		logx.Error("flota: no se pudieron listar los proyectos con dispositivos", "error", err)
 		return
@@ -444,7 +511,9 @@ func (s *McpServer) podarEstadoDePoliticasSiToca(ahora time.Time) {
 // ellas. Las que SÍ laten se olvidan, para que su serie desaparezca en vez de quedarse en el
 // último valor conocido.
 func (s *McpServer) medirVidaDeRedDeLosCaidos(ctx context.Context, ahora time.Time) {
-	proyectos, err := s.engine.ProyectosConDevices(proyectosParaExportar)
+	// EL HERMANO DEL DE ARRIBA, y usaba la misma constante del export por la misma razón: se
+	// copió. Los dos barridos entran por la misma función para que el próximo no se olvide.
+	proyectos, err := s.proyectosAVigilar("vida-de-red")
 	if err != nil {
 		return
 	}

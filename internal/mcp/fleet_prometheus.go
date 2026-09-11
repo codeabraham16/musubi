@@ -40,6 +40,7 @@ import (
 
 	"musubi/internal/buildid"
 	"musubi/internal/fleet"
+	"musubi/internal/logx"
 	"musubi/internal/memory"
 )
 
@@ -68,8 +69,11 @@ const proyectosParaExportar = 64
 type vidaDeRedLookup func(deviceID string, ahora time.Time) (fleet.VidaDeRed, bool)
 
 func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time,
-	intervaloSonda time.Duration, versionCerebro string, vidaDe vidaDeRedLookup) {
-	vistos, truncado := devicesVisiblesParaMetricas(engine, p)
+	intervaloSonda time.Duration, versionCerebro string, vidaDe vidaDeRedLookup, techoServicios int) {
+	vistos, truncadoProyectos, ilegible := devicesVisiblesParaMetricas(engine, p)
+	// Los tres hechos viajan JUNTOS en la misma estructura que usa el empuje. Que las dos bocas
+	// compartan el tipo es lo que impide que una empiece a reportar algo que la otra no.
+	recorte := truncadoDeExport{Proyectos: truncadoProyectos, Ilegible: ilegible}
 	// Un error leyendo las ventanas NO puede convertirse en «todas en mantenimiento» (apagaría
 	// las alertas de la flota entera) ni hacer fallar el scrape. Se sigue con el mapa vacío, que
 	// es el comportamiento de antes de que esto existiera.
@@ -84,9 +88,14 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 		b.WriteString("# musubi_fleet: ninguna máquina visible para esta credencial.\n")
 		b.WriteString("# Las capacidades de flota NO se derivan del rol: declarálas en principals.yaml\n")
 		b.WriteString("#   fleet:\n#     metrics: [\"*\"]\n")
+		// Y LA SERIE SALE IGUAL, sobre todo acá: «esta credencial no ve ninguna máquina» y «el
+		// almacén no se dejó leer» terminaban los dos en este mismo comentario que Prometheus
+		// descarta, sin una sola serie. Con `kind="unreadable"` los dos casos dejan de ser el
+		// mismo silencio.
+		renderTruncado(b, recorte, techoServicios)
 		return
 	}
-	if truncado {
+	if recorte.Proyectos {
 		fmt.Fprintf(b, "# musubi_fleet: se barrieron los primeros %d proyectos; hay más.\n", proyectosParaExportar)
 	}
 
@@ -100,18 +109,26 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 	// /metrics a mano. El resultado era el peor de los dos mundos: el sistema sabía que había
 	// recortado la cobertura y no había forma de que ese hecho llegara a una alerta.
 	//
-	// `truncadoDeProyectos` se resuelve acá porque lo de servicios lo sabe renderServicios; se le
-	// pasa para que la serie salga UNA vez con sus dos `kind`, en vez de dos series parecidas.
-	renderTruncado(b, truncado, serviciosTruncados(engine, vistos))
+	// EL RESTO DEL CUERPO SE ARMA APARTE Y SE VUELCA DESPUÉS. La serie de truncado tiene que
+	// salir en este punto exacto (el orden del exposition format ya está probado) pero sus tres
+	// hechos recién se conocen cuando terminaron los barridos de abajo. Bufferear cuesta un
+	// strings.Builder y evita lo que había antes: un SEGUNDO barrido completo de los servicios
+	// hecho sólo para recuperar un bool que el primero ya sabía.
+	var cuerpo strings.Builder
 	// QUÉ CORRE ADENTRO de esas máquinas (A43). Va DESPUÉS y con las mismas máquinas ya
 	// compuertadas: la lista `vistos` es la que pasó por PuedeSobreDevice, y reusarla es lo que
 	// evita un segundo lugar donde olvidarse la compuerta.
-	renderServicios(b, engine, vistos, ahora)
+	truncadoSvs, ilegibleSvs := renderServicios(&cuerpo, engine, vistos, ahora, techoServicios)
+	recorte.Servicios = truncadoSvs
+	recorte.Ilegible = recorte.Ilegible || ilegibleSvs
 	// QUIÉN ESTÁ ESPERANDO UN SEGUNDO PAR DE OJOS (Ola 2). Va con las mismas máquinas ya
 	// compuertadas, por lo mismo que servicios.
-	renderAprobaciones(b, engine, vistos, ahora)
+	recorte.Ilegible = renderAprobaciones(&cuerpo, engine, vistos, ahora) || recorte.Ilegible
 	// SI EL TAILNET VE A LAS QUE NO LATEN (Ola 3). Va con las mismas máquinas ya compuertadas.
-	renderVidaDeRed(b, vistos, ahora, vidaDe)
+	renderVidaDeRed(&cuerpo, vistos, ahora, vidaDe)
+
+	renderTruncado(b, recorte, techoServicios)
+	b.WriteString(cuerpo.String())
 }
 
 // nombreVidaDeRed dice si el CEREBRO alcanza a una máquina por fuera de su agente.
@@ -228,7 +245,35 @@ const (
 	nombreAprobEspera     = "musubi_fleet_approval_wait_seconds"
 )
 
-func renderAprobaciones(b *strings.Builder, engine memory.StorageBackend, vistos []fleet.Device, ahora time.Time) {
+// topeDeAprobacionesPorProyecto es el TERCER techo del exportador, y el único que sigue sin
+// perilla ni serie propia. Estaba escrito como un `200` pelado adentro de la llamada.
+//
+// SU DAÑO DEPENDE DE LA COMPUERTA, Y ESO NO ESTABA MEDIDO. Acá decía que pasarse sólo deja el
+// conteo corto y que «la espera más vieja puede no ser la más vieja de verdad». Lo segundo es
+// falso y lo primero es incompleto:
+//
+//   - `AprobacionesPendientes` pide `ORDER BY creada ASC LIMIT ?` (internal/memory/aprobaciones.go),
+//     así que la más vieja SIEMPRE entra en la página. Con una credencial que ve todo el proyecto
+//     el único daño es el conteo, que se clava en el tope.
+//
+//   - PERO EL TOPE LO APLICA EL ALMACÉN SOBRE EL PROYECTO ENTERO Y LA COMPUERTA CORRE DESPUÉS,
+//     acá abajo, con `visibles[sol.DeviceID]`. Una credencial que ve pocas máquinas de un
+//     proyecto con más de `topeDeAprobacionesPorProyecto` pendientes puede recibir una página
+//     entera de solicitudes que no ve NINGUNA, y entonces sale `musubi_fleet_approval_pending 0`
+//     y `musubi_fleet_approval_wait_seconds 0` — y el HELP de esa serie dice, con todas las
+//     letras, «0 = no hay ninguna esperando». Ahí el techo sí hace desaparecer el hecho: es un
+//     cero que significa «no sé», que es exactamente lo que este archivo existe para no emitir.
+//
+// QUEDA ASÍ EN ESTA RONDA, A PROPÓSITO Y ESCRITO: el arreglo no es una guarda, es un cuarto
+// `kind` en `musubi_fleet_export_truncated` con su aviso y su perilla —o mejor, aplicar el tope
+// después de la compuerta— y eso cambia el contrato de /metrics y del empuje OTLP, que no es algo
+// que se cuele en una ronda de guardas. Anotado en specs/control-de-flota/ABIERTO.md como A123.
+//
+// Tener nombre es la mitad barata del arreglo: un `200` adentro de una llamada no se puede ni
+// buscar.
+const topeDeAprobacionesPorProyecto = 200
+
+func renderAprobaciones(b *strings.Builder, engine memory.StorageBackend, vistos []fleet.Device, ahora time.Time) (ilegible bool) {
 	// Los proyectos salen de las máquinas YA compuertadas: preguntarle al almacén por todos los
 	// proyectos sería un segundo recorrido sin compuerta, que es como se exporta de más sin que
 	// nadie lo note.
@@ -263,11 +308,19 @@ func renderAprobaciones(b *strings.Builder, engine memory.StorageBackend, vistos
 		nombreAprobEspera, nombreAprobEspera)
 
 	for _, proy := range orden {
-		pendientes, err := engine.AprobacionesPendientes(proy, ahora, 200)
+		pendientes, err := engine.AprobacionesPendientes(proy, ahora, topeDeAprobacionesPorProyecto)
 		if err != nil {
 			// Un error leyendo esto NO puede romper el scrape entero: la telemetría de la flota
 			// vale más que este contador. Se saltea el proyecto en vez de emitir un cero, que
 			// diría «no hay nadie esperando» sin saberlo.
+			//
+			// PERO OMITIR LA LÍNEA TAMPOCO ALCANZA: una serie que falta no dispara nada, y se ve
+			// igual que «ese proyecto no existe». Se levanta la mano por la misma serie que los
+			// otros tres hermanos.
+			ilegible = true
+			logx.Error("export de flota: no se pudieron leer las aprobaciones pendientes de un proyecto; su serie de espera NO sale y nadie va a notar que alguien quedó trabado",
+				"project", proy, "error", err,
+				"serie", nombreExportTruncado+`{kind="unreadable"}`)
 			continue
 		}
 		// La lista viene ordenada por `creada ASC`, así que la primera VISIBLE es la más vieja.
@@ -286,6 +339,7 @@ func renderAprobaciones(b *strings.Builder, engine memory.StorageBackend, vistos
 		fmt.Fprintf(b, "%s{project=%q} %d\n", nombreAprobPendientes, proy, n)
 		fmt.Fprintf(b, "%s{project=%q} %.0f\n", nombreAprobEspera, proy, espera)
 	}
+	return ilegible
 }
 
 // nombreExportTruncado es la serie que dice que el exportador dejó cosas afuera. Vale 1 cuando se
@@ -294,18 +348,67 @@ func renderAprobaciones(b *strings.Builder, engine memory.StorageBackend, vistos
 // problema no se puede graficar ni distinguir de «el exportador no corrió».
 const nombreExportTruncado = "musubi_fleet_export_truncated"
 
+// truncadoDeExport dice CUÁL de los dos techos del exportador cortó, POR SEPARADO.
+//
+// Era un solo `bool` fusionado con `truncado = truncado || truncadoSvs`, y la fusión borraba
+// justo el dato accionable: los dos techos se arreglan distinto —uno es la perilla
+// `fleet.services_per_project_export`, el otro es `proyectosParaExportar`, una constante de
+// compilación— así que un aviso que no dice cuál se cortó manda a la perilla equivocada. Un aviso
+// que nombra el techo equivocado es PEOR que no avisar: el que lo lee sube un número, no ve
+// ningún cambio, y concluye que la alerta miente.
+type truncadoDeExport struct {
+	// Proyectos: se pasó de `proyectosParaExportar` tenants con máquinas en este barrido.
+	Proyectos bool
+	// Servicios: algún proyecto pasó el techo de servicios exportables.
+	Servicios bool
+	// Ilegible: parte de la flota NO SE PUDO LEER (la lista de proyectos, las máquinas de un
+	// proyecto, sus servicios o sus aprobaciones). No es un techo: es la ausencia de medición.
+	//
+	// EXISTE PORQUE «FALLÉ» Y «NO HUBO CORTE» ERAN EL MISMO VALOR. Cada uno de esos errores caía
+	// en un `continue` mudo y los dos bools de arriba seguían en false, así que el export
+	// afirmaba `kind="services"} 0` —«medí y no recorté»— sobre proyectos que no había mirado.
+	// El 0 de los otros dos `kind` sólo es una medición cuando éste vale 0.
+	Ilegible bool
+}
+
 // renderTruncado emite la serie con un punto por dimensión recortable.
-func renderTruncado(b *strings.Builder, proyectos, servicios bool) {
+//
+// `techoServicios` entra por parámetro y no se lee de una constante porque es CONFIGURABLE: el
+// HELP tiene que nombrar el techo VIGENTE. Un HELP que dice 2000 cuando
+// `fleet.services_per_project_export` vale 300 manda a quien lee la alerta a buscar 2000
+// servicios que no existen. `techoServicios <= 0` es «sin techo», y entonces `kind="services"` no
+// puede valer 1: se dice así en vez de nombrar un número que no rige.
+func renderTruncado(b *strings.Builder, t truncadoDeExport, techoServicios int) {
 	unoSi := func(v bool) string {
 		if v {
 			return "1"
 		}
 		return "0"
 	}
-	fmt.Fprintf(b, "# HELP %s 1 si el exportador dejó afuera parte de la flota por un techo. `kind=projects`: se pasó de %d proyectos por scrape. `kind=services`: algún proyecto pasó de %d servicios. Lo que queda afuera NO tiene serie, así que sus alertas no pueden dispararse.\n# TYPE %s gauge\n",
-		nombreExportTruncado, proyectosParaExportar, serviciosPorExportar, nombreExportTruncado)
-	fmt.Fprintf(b, "%s{kind=\"projects\"} %s\n", nombreExportTruncado, unoSi(proyectos))
-	fmt.Fprintf(b, "%s{kind=\"services\"} %s\n", nombreExportTruncado, unoSi(servicios))
+	fmt.Fprintf(b, "# HELP %s 1 si el exportador dejó afuera parte de la flota. `kind=projects`: se pasó de %d proyectos por scrape (techo de compilación, ver proyectosParaExportar). `kind=services`: algún proyecto pasó %s. `kind=unreadable`: NO SE PUDO LEER parte de la flota (la lista de proyectos, las máquinas de uno, sus servicios o sus aprobaciones), así que mientras valga 1 el 0 de los otros dos es «no medí» y no «no hubo corte». Lo que queda afuera NO tiene serie, así que sus alertas no pueden dispararse.\n# TYPE %s gauge\n",
+		nombreExportTruncado, proyectosParaExportar, describirTechoDeServicios(techoServicios), nombreExportTruncado)
+	fmt.Fprintf(b, "%s{kind=\"projects\"} %s\n", nombreExportTruncado, unoSi(t.Proyectos))
+	fmt.Fprintf(b, "%s{kind=\"services\"} %s\n", nombreExportTruncado, unoSi(t.Servicios))
+	fmt.Fprintf(b, "%s{kind=\"unreadable\"} %s\n", nombreExportTruncado, unoSi(t.Ilegible))
+}
+
+// describirTechoDeServicios pone en palabras el techo VIGENTE, y es la ÚNICA fuente de esa frase.
+//
+// Estaba escrita adentro del Fprintf del HELP y repetida —con otro número— en el comentario que
+// emite renderServicios. Dos lugares donde escribir un techo es un lugar de más: el defecto que
+// le dio nombre a este cabo fue justamente que un mensaje nombrara un techo que no era el que
+// cortó.
+//
+// El apagado NO nombra ningún número: decir «2000, pero desactivado» manda a alguien a buscar un
+// corte a 2000 que no puede ocurrir. Y NINGUNO quiere decir ninguno: la frase decía «este punto
+// no puede valer 1» —el 1 es el valor del gauge, no un techo— y ese dígito alcanzaba para que la
+// única regla que se puede medir sobre esta rama («acá no hay ningún número que sea un techo»)
+// tuviera una excepción, o sea para que no se pudiera medir. Se dice con palabras.
+func describirTechoDeServicios(techoServicios int) string {
+	if techoServicios <= 0 {
+		return "el techo de servicios, que está DESACTIVADO (`fleet.services_per_project_export` negativo), así que este punto no puede encenderse"
+	}
+	return fmt.Sprintf("de %d servicios (techo `fleet.services_per_project_export`)", techoServicios)
 }
 
 // devicesVisiblesParaMetricas resuelve QUÉ máquinas ve `p`, ya ordenadas por (proyecto, nombre).
@@ -313,12 +416,19 @@ func renderTruncado(b *strings.Builder, proyectos, servicios bool) {
 // Es el ÚNICO lugar donde se combinan proyectosVisibles y PuedeSobreDevice, y por eso lo comparten
 // el scrape y el empuje: un segundo recorrido de la flota es un segundo lugar donde olvidarse la
 // compuerta, y ese olvido no se ve —exporta de más, calladito— hasta que alguien audita.
-func devicesVisiblesParaMetricas(engine memory.StorageBackend, p *Principal) (vistos []fleet.Device, truncado bool) {
-	proyectos, truncado := proyectosVisibles(engine, p)
+func devicesVisiblesParaMetricas(engine memory.StorageBackend, p *Principal) (vistos []fleet.Device, truncado bool, ilegible bool) {
+	proyectos, truncado, ilegible := proyectosVisibles(engine, p)
 	for _, proy := range proyectos {
 		devices, err := engine.ListarDevices(proy, false)
 		if err != nil {
-			continue // un proyecto ilegible no puede tumbar el scrape entero
+			// HERMANO DEL DE SERVICIOS: un proyecto ilegible no puede tumbar el scrape entero,
+			// pero sus máquinas no se exportan y sin serie no hay alerta que las cubra. El
+			// `continue` mudo dejaba eso indistinguible de «ese proyecto no tiene máquinas».
+			ilegible = true
+			logx.Error("export de flota: no se pudieron listar las máquinas de un proyecto; esas máquinas NO se exportan y quedan sin serie (ninguna alerta las cubre)",
+				"project", proy, "error", err,
+				"serie", nombreExportTruncado+`{kind="unreadable"}`)
+			continue
 		}
 		for _, d := range devices {
 			if PuedeSobreDevice(p, d, fleet.CapMetrics) {
@@ -332,7 +442,7 @@ func devicesVisiblesParaMetricas(engine memory.StorageBackend, p *Principal) (vi
 		}
 		return vistos[i].Name < vistos[j].Name
 	})
-	return vistos, truncado
+	return vistos, truncado, ilegible
 }
 
 // serieDeFlota es UNA métrica exportable de una máquina.
@@ -678,7 +788,7 @@ func formatearValor(v float64) string {
 // Un principal acotado barre el suyo y nada más. Uno read=all (la cabina, la sala de mando, el
 // scraper declarado como corresponde) barre todos los que tengan máquinas. El stdio local —que
 // no llega acá por HTTP, pero el seam lo admite— también.
-func proyectosVisibles(engine memory.StorageBackend, p *Principal) (proyectos []string, truncado bool) {
+func proyectosVisibles(engine memory.StorageBackend, p *Principal) (proyectos []string, truncado bool, ilegible bool) {
 	federado := p == nil
 	if p != nil {
 		if read, _ := p.caps(); read == ReadAll {
@@ -687,18 +797,24 @@ func proyectosVisibles(engine memory.StorageBackend, p *Principal) (proyectos []
 	}
 	if !federado {
 		if p.ProjectID == "" {
-			return nil, false
+			// No es un fallo: esta credencial NO tiene proyecto, y eso está medido.
+			return nil, false, false
 		}
-		return []string{p.ProjectID}, false
+		return []string{p.ProjectID}, false, false
 	}
 	todos, err := engine.ProyectosConDevices(proyectosParaExportar + 1)
 	if err != nil {
-		return nil, false
+		// EL PEOR DE LOS TRES HERMANOS: acá no se pierde un proyecto, se pierden TODOS, y el
+		// `return nil, false` decía «no hay nada que exportar y no se recortó nada» — un export
+		// entero en cero que desde Prometheus se lee igual que una flota apagada.
+		logx.Error("export de flota: no se pudo listar NINGÚN proyecto con máquinas; este scrape no exporta ni una máquina",
+			"error", err, "serie", nombreExportTruncado+`{kind="unreadable"}`)
+		return nil, false, true
 	}
 	if len(todos) > proyectosParaExportar {
-		return todos[:proyectosParaExportar], true
+		return todos[:proyectosParaExportar], true, false
 	}
-	return todos, false
+	return todos, false, false
 }
 
 // valorDe traduce el vocabulario del «no sé» del dominio (un puntero nil) al del exportador (el

@@ -54,8 +54,12 @@ type principalResolver interface {
 	// autoridad de alguien declarado en principals.yaml pero no presentan credencial ninguna.
 	// Está en la misma interfaz que resolve a propósito — son la misma fuente de verdad, y dos
 	// interfaces separadas invitarían a que una política mire un registro más viejo que el que
-	// autentica a las personas.
+	// autentica a las personas. NIEGA LA CREDENCIAL VENCIDA, igual que resolve.
 	porNombre(nombre string) (*Principal, bool)
+	// porNombreAunqueVencida es el mismo lookup SIN la guarda de vencimiento. Es sólo para
+	// DIAGNÓSTICO (explicar por qué algo no actúa, listar, validar al arrancar sin tumbar el
+	// arranque). Nada que decida si alguien puede actuar debe llamarla: para eso está porNombre.
+	porNombreAunqueVencida(nombre string) (*Principal, bool)
 }
 
 // principalsReloadInterval es cada cuánto se chequea el mtime del registro. 10s da una revocación
@@ -108,6 +112,16 @@ func (rr *reloadableRegistry) porNombre(nombre string) (*Principal, bool) {
 		return nil, false
 	}
 	return reg.porNombre(nombre)
+}
+
+// porNombreAunqueVencida delega en el snapshot vigente, igual que las otras. Sólo diagnóstico:
+// ver porNombreAunqueVencida en principals.go.
+func (rr *reloadableRegistry) porNombreAunqueVencida(nombre string) (*Principal, bool) {
+	reg := rr.cur.Load()
+	if reg == nil {
+		return nil, false
+	}
+	return reg.porNombreAunqueVencida(nombre)
 }
 
 // watch re-lee el registro cuando cambia el mtime, hasta que ctx se cancela (shutdown del server).

@@ -90,7 +90,7 @@ func tokenList(args []string) {
 		return
 	}
 	fmt.Printf("Principals en %s:\n", path)
-	fmt.Printf("  %-20s  %-10s  %-12s  %-5s  %s\n", "NOMBRE", "ROL", "PROYECTO", "VE", "ESCRIBE")
+	fmt.Printf("  %-20s  %-10s  %-12s  %-5s  %-8s  %s\n", "NOMBRE", "ROL", "PROYECTO", "VE", "ESCRIBE", "VENCE")
 	for _, p := range infos {
 		proj := p.ProjectID
 		if proj == "" {
@@ -102,7 +102,16 @@ func tokenList(args []string) {
 		if p.Read == mcp.ReadAll {
 			ve = "TODO"
 		}
-		fmt.Printf("  %-20s  %-10s  %-12s  %-5s  %s\n", p.Name, p.Role, proj, ve, p.Write)
+		// EL VENCIMIENTO SE VE. Una credencial que venció en 2020 se listaba idéntica a una
+		// viva: éste es el listado donde alguien va a mirar quién tiene acceso, y era el que no
+		// lo decía. Se muestra el ESTADO (y la fecha cuando la hay), no la fecha sola: obligar a
+		// que quien lee haga la cuenta contra el reloj es cómo una credencial muerta pasa
+		// desapercibida en una lista de veinte.
+		vence := p.Vencimiento
+		if p.Expires != "" {
+			vence += " (" + p.Expires + ")"
+		}
+		fmt.Printf("  %-20s  %-10s  %-12s  %-5s  %-8s  %s\n", p.Name, p.Role, proj, ve, p.Write, vence)
 	}
 }
 

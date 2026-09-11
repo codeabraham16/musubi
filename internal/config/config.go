@@ -966,6 +966,19 @@ type FleetConfig struct {
 	// NO borra la fila: qué se ejecutó, quién y cuándo es PERMANENTE. Lo que caduca es la salida,
 	// que es donde aparecen rutas, hostnames y de vez en cuando algo que no debería estar ahí.
 	CommandOutputRetentionDays int `yaml:"command_output_retention_days,omitempty"`
+	// ServicesPerProjectExport es el techo de servicios que UN PROYECTO puede aportar al export
+	// de métricas. 0 ⇒ default (2000). NEGATIVO ⇒ sin techo.
+	//
+	// QUE SEA CONFIGURABLE ES LA MITAD QUE FALTABA: el techo por proyecto ya evita que un tenant
+	// grande deje ciego a uno chico, pero 2000 sigue siendo un default sensato y no una verdad.
+	// Con el número clavado en el binario, el único camino para un proyecto de 4000 servicios era
+	// recompilar el cerebro — y mientras tanto sus servicios de más no tenían serie, así que
+	// `ServicioCaido` no los cubría y eso se ve igual que todo bien.
+	//
+	// El número lo leen LAS DOS BOCAS del exportador (el tirón de /metrics y el empuje OTLP): si
+	// cada una tuviera el suyo, truncarían distinto y `musubi_fleet_export_truncated` diría cosas
+	// diferentes según por dónde se mire.
+	ServicesPerProjectExport int `yaml:"services_per_project_export,omitempty"`
 	// Policies son las reglas de auto-heal. Vacío ⇒ ninguna, que es el default.
 	Policies []PolicyConfig `yaml:"policies,omitempty"`
 	// OTLP es el EMPUJE de la telemetría de la flota a un receptor OTLP (S11). Nace APAGADO
@@ -1096,6 +1109,23 @@ func (f FleetConfig) EffectiveProbeInterval() time.Duration {
 		return 5 * time.Minute
 	}
 	return time.Duration(f.ProbeMinutes * float64(time.Minute))
+}
+
+// EffectiveServicesPerProjectExport devuelve el techo de servicios POR PROYECTO del export.
+// 0 ⇒ 2000; negativo ⇒ 0, que en el exportador significa SIN TECHO.
+//
+// El default vive acá y no en internal/mcp por el mismo motivo que EffectiveProbeInterval: el
+// número lo consultan el tirón de /metrics y el empuje OTLP, y dos defaults propios harían que
+// las dos bocas truncaran distinto — con la serie de truncado diciendo cosas diferentes según por
+// dónde se mire.
+func (f FleetConfig) EffectiveServicesPerProjectExport() int {
+	if f.ServicesPerProjectExport < 0 {
+		return 0
+	}
+	if f.ServicesPerProjectExport == 0 {
+		return 2000
+	}
+	return f.ServicesPerProjectExport
 }
 
 // EffectiveOutputRetentionDays devuelve los días de retención de las salidas. 0 ⇒ sin poda.

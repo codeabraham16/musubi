@@ -391,12 +391,6 @@ func avisosDeInterpretes(p Principal) []string {
 	return avisos
 }
 
-// porNombre busca un principal por su nombre declarado. Lo usan las POLÍTICAS de flota (S10),
-// que no presentan un token: nombran a alguien de principals.yaml y actúan con su autoridad.
-//
-// Devuelve una COPIA. Sin ella, quien la reciba tendría un puntero al snapshot vigente del
-// registro, y el registro se recarga en caliente cada 10 s: una política podría quedarse
-// evaluando contra una credencial que ya se revocó. Con copia, cada evaluación resuelve de nuevo.
 // impactoDeNombre recorre el registro buscando quién NOMBRA esta máquina (A64).
 //
 // NO cuenta el comodín `*`: una concesión sobre todas las máquinas sobrevive a cualquier rename y
@@ -425,7 +419,48 @@ func (r *PrincipalRegistry) impactoDeNombre(device string) ImpactoDeNombre {
 	return imp
 }
 
+// porNombre resuelve un principal por su nombre declarado PARA ACTUAR CON SU AUTORIDAD. Lo usan
+// las POLÍTICAS de flota (S10) y el empuje OTLP, que no presentan un token: nombran a alguien de
+// principals.yaml y ejecutan/exportan en su nombre.
+//
+// NIEGA LA CREDENCIAL VENCIDA, Y ACÁ ES DONDE VA ESA GUARDA. El vencimiento ya se miraba en
+// resolve() y NO acá, y eso dejaba abierto el agujero exacto que el vencimiento existe para
+// cerrar: al contratista vencido se le cerraba el bearer y las políticas le seguían corriendo
+// comandos en su nombre, para siempre, sin que nadie tuviera que acordarse de nada.
+//
+// Va en el LOOKUP y no en cada llamador a propósito, por el mismo motivo que en resolve: acá es
+// donde una credencial deja de ser una identidad. Repartida entre los llamadores, el que se
+// olvide no falla — pasa. Y este bug ES ese olvido, ya cometido una vez: había cinco sitios de
+// llamada y ninguno miraba el vencimiento.
+//
+// Quien necesite VER una credencial vencida (para listarla, o para explicar por qué algo no anda)
+// tiene porNombreAunqueVencida, con ese nombre y no con éste.
+//
+// Devuelve una COPIA. Sin ella, quien la reciba tendría un puntero al snapshot vigente del
+// registro, y el registro se recarga en caliente cada 10 s: una política podría quedarse
+// evaluando contra una credencial que ya se revocó. Con copia, cada evaluación resuelve de nuevo.
 func (r *PrincipalRegistry) porNombre(nombre string) (*Principal, bool) {
+	p, existe := r.porNombreAunqueVencida(nombre)
+	if !existe || p.Vencida(ahoraParaVencimiento()) {
+		return nil, false
+	}
+	return p, true
+}
+
+// porNombreAunqueVencida es el mismo lookup SIN la guarda de vencimiento, y su nombre lo dice
+// para que usarlo sea una decisión y no un descuido.
+//
+// Existe porque hay dos usos legítimos de una credencial muerta, y los dos son de DIAGNÓSTICO,
+// nunca de acción:
+//
+//   - EXPLICAR: una política que dejó de actuar tiene que poder decir «venció el 1-6» en vez de
+//     «no está en principals.yaml», que es mentira y manda a buscar donde no está el problema.
+//   - VALIDAR AL ARRANCAR: que una fecha que pasó anoche impida ARRANCAR al cerebro entero
+//     convertiría una degradación (una política inerte, ya avisada y contada) en una caída total.
+//
+// Ninguno de los dos ejecuta nada. Si estás por usar esto para decidir si algo puede actuar,
+// el que querés es porNombre.
+func (r *PrincipalRegistry) porNombreAunqueVencida(nombre string) (*Principal, bool) {
 	for i := range r.principals {
 		if r.principals[i].Name == nombre {
 			cp := r.principals[i]

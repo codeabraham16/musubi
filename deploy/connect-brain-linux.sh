@@ -25,8 +25,30 @@ ok(){  printf '\033[32m✓ %s\033[0m\n' "$*"; }
 die(){ printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
 # ── 1. Tailscale (instalar + unir a la malla) ───────────────────────────────
+#
+# EXCEPCIÓN DECLARADA: ESTE `curl | sh` FALLA ABIERTO, A SABIENDAS.
+#
+# Todo lo demás que este repo baja y ejecuta falla CERRADO: el binario del cerebro, el guion de
+# backup, el de redespliegue y el paquete del relay mueren si el sha256 no está o no coincide.
+# Éste no, y no por olvido: el instalador de Tailscale se genera por request (cambia entre dos
+# corridas del mismo día), así que no admite pin; y va por un pipe a `sh`, así que no queda
+# archivo que comparar. Un sha256 acá sería una comprobación vacuamente cierta —la forma que este
+# repo ya pagó seis veces—, o sea peor que no tenerla: parecería verificado.
+#
+# LO QUE SE CONFÍA: TLS a tailscale.com y el CA del sistema. Nada más. Quien controle esa
+# respuesta ejecuta como root en el cerebro.
+#
+# LO QUE LO CERRARÍA DE VERDAD (no está hecho): instalar desde el repo APT/YUM de Tailscale, que
+# sí está firmado con GPG y cuya clave se pinnea una vez. Cambia este bloque por un `apt-add` /
+# `dnf config-manager` con la clave pinneada, y hay que probarlo en una máquina de cada familia
+# antes de confiarle el arranque del cerebro. Es trabajo de despliegue, no un arreglo de una línea.
+#
+# Mientras tanto esto queda ESCRITO acá y no sólo sabido, porque una excepción que no está
+# declarada es indistinguible de un descuido — y la próxima auditoría la vuelve a descubrir de
+# cero, que es exactamente lo que pasó el 2026-09-10.
 if ! command -v tailscale &>/dev/null; then
   log "Instalando Tailscale"
+  # NO se verifica: ver la excepción declarada arriba. Si movés esta línea, movela con su porqué.
   curl -fsSL https://tailscale.com/install.sh | sh
 fi
 if ! tailscale status &>/dev/null; then

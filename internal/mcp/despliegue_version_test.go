@@ -3,9 +3,10 @@ package mcp
 import (
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 // TODA VERSIÓN QUE `construir.sh` PUEDA EMITIR TIENE QUE PARSEARLA NUESTRO PROPIO PARSER.
@@ -89,20 +90,16 @@ import (
 // mirando `ok` en la variable del núcleo: el sabotaje salía rojo POR CASUALIDAD y el mensaje
 // informaba un campo que no era. Se cambió el separador a `|`, que no colapsa.
 func TestLaVersionQueEmiteConstruirEsSiempreParseable(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skipf("el guión de construcción es de Linux y este arnés corre bash; en %s no aplica", runtime.GOOS)
-	}
-	bash, err := exec.LookPath("bash")
-	if err != nil {
-		t.Skipf("sin bash en el PATH no se puede ejercitar el guión: %v", err)
-	}
-	if _, err := exec.LookPath("go"); err != nil {
-		t.Skipf("sin go en el PATH el arnés no puede compilar: %v", err)
-	}
+	// El salteo de fuera de linux vive en UN solo lugar (internal/guiones) y en linux no puede
+	// activarse. Acá había tres `t.Skipf` propios, y los dos de `exec.LookPath` salteaban TAMBIÉN
+	// EN LINUX: sin bash o sin go, esta guarda no existía y `go test` contestaba `ok`. Ahora eso
+	// muere, que es lo que corresponde cuando no se pudo medir.
+	guiones.Exigir(t, "corre deploy/pruebas/version-parseable.sh, que ejercita el guion de "+
+		"construcción de un servidor Linux y compila con go", "bash", "go", "awk", "sed", "grep")
 
 	arnes := filepath.Join("..", "..", "deploy", "pruebas", "version-parseable.sh")
 	raiz := filepath.Join("..", "..")
-	salida, err := exec.Command(bash, arnes, raiz).CombinedOutput()
+	salida, err := exec.Command("bash", arnes, raiz).CombinedOutput()
 	if err != nil {
 		t.Fatalf("el arnés de la versión falló:\n%s", salida)
 	}
