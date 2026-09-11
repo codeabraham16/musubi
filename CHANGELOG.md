@@ -7,6 +7,62 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **Las siete señales del RRF se pueden pesar, y la primera medición dice que el banco sólo puede
+  juzgar cuatro.** Hasta acá todas valían 1.0, y eso no era una decisión medida: es el default de
+  Reciprocal Rank Fusion, que existe justamente para no tener que elegir pesos.
+
+  **`RecallOptions.Pesos` es un PUNTERO**, y eso decide algo real. Con un struct por valor, el valor
+  cero de cualquier llamador que no conozca el campo significaría «las siete señales pesan 0» — un
+  ranker apagado que **no falla: contesta cualquier cosa**. Con puntero, `nil` es «no opinó» (⇒
+  uniformes, bit-idéntico al histórico) y un struct con ceros es «lo dije», que es lo que el barrido
+  necesita para poder apagar una señal y medir su aporte.
+
+  **Ningún default cambió**, y el barrido está escrito para poder contestar que no.
+
+  **★ EL BARRIDO ESTABA MIDIENDO MMR, NO LA FUSIÓN.** Primera corrida, con el λ de producción:
+  apagar `recencia`, `frecuencia` o `importancia` daba las tres **exactamente** +0.0200 de nDCG.
+  Tres señales distintas no coinciden así. La causa son dos hechos que por separado están bien:
+
+  1. **Las tres están planas en el fixture.** `SeedEngine` fija `created_at` a una constante (para
+     que la evaluación no flakee), guarda sin importancia y el harness no bumpea. Con los valores
+     empatados, `denseRankBy` les da rango 0 a todas: su término es una **constante** idéntica para
+     cada candidato, o sea cero información.
+  2. **`normalizeScores` divide por el máximo**, no min-max — y eso **no es invariante a restar una
+     constante**: no desplaza, *estira*. Con la relevancia normalizada más separada, MMR diversifica
+     menos.
+
+  Juntos: apagar una señal plana no mejoraba el ranking, **apagaba un poco de MMR** — que en este
+  fixture cuesta relevancia. Un número bien calculado contestando otra pregunta, la forma que este
+  repo ya tiene nombrada. Con λ=0 las tres dan Δ **exactamente 0.0000**, que es el control que
+  prueba el diagnóstico y quedó adentro del test.
+
+  **Lo medido, con MMR apagado** (1.975 docs · 43 consultas train / 43 test):
+
+  | señal | peso 0 | 0,5 | 2,0 |
+  |---|---|---|---|
+  | léxico | −0,1617 | −0,0645 | **+0,0910** |
+  | vector | −0,0264 | **+0,0278** | −0,0727 |
+  | grafo | **+0,0380** | +0,0321 | −0,1511 |
+  | co-ocurrencia | −0,0998 | −0,0068 | −0,0067 |
+
+  **Por qué el +0,0910 del léxico NO mueve el default**, aunque sobreviva el cruce train/test
+  (+0,1214 en TEST): las etiquetas salen del `topic_key`, así que «relevante» y «léxicamente
+  parecido» son casi lo mismo. Subir el léxico es exactamente el número que este fixture sabe dar.
+  La partición descarta el **sobreajuste**; no descarta el **sesgo**, porque las dos mitades lo
+  comparten. Eso lo descartaría `EtiquetadoPorExpansion`, que empezó a registrarse en la v57 y
+  arranca vacío.
+
+  **El resultado del grafo es el que más vale mirar después**: apagarlo mejora y doblarlo hunde
+  (−0,1511). La centralidad es query-independiente, así que el sesgo del etiquetado no la favorece
+  ni la castiga — es el único de los cuatro donde el argumento del sesgo no aplica de la misma
+  forma. No se toca nada con una sola medición, pero queda anotado.
+
+  Seis guardas, seis sabotajes en rojo: la identidad histórica al bit (contra la fórmula calculada a
+  mano, no contra otra llamada a la misma función), `nil` == uniformes, el cero apaga de verdad,
+  cada peso gobierna sólo su señal, y las dos que fijan la no-invarianza de MMR para que el próximo
+  que mida no la descubra a los 24 minutos de corrida.
+
 ### Security
 - **La memoria recuperada se inyectaba como estructura, y es dato.** Musubi le mete memoria al
   prompt de CADA turno (`musubi turn --hook-mode`). El bloque es una cabecera con la voz del sistema

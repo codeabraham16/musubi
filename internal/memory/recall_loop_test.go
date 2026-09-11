@@ -32,7 +32,7 @@ func TestRecencyRanksByCreationNotByAccess(t *testing.T) {
 		createdAt: iso(now.AddDate(0, 0, -1)), // escrita ayer, nunca mostrada
 	}
 
-	scored := scoreCandidates([]candidate{vieja, nueva}, nil, nil, nil, nil, now)
+	scored := scoreCandidates([]candidate{vieja, nueva}, nil, nil, nil, nil, nil, now)
 	if scored[0].id != "nueva" {
 		t.Errorf("una memoria vieja recién MOSTRADA no es 'reciente': debe ganar la escrita ayer. Obtuve %s primero", scored[0].id)
 	}
@@ -182,7 +182,7 @@ func TestScoreCandidatesAgePenaltyBreaksNearTie(t *testing.T) {
 	fresca := candidate{id: "fresca", createdAt: iso(now.AddDate(0, 0, -2))}
 	lex := map[string]int{"vieja": 0, "fresca": 1} // la vieja matchea un poco mejor el keyword
 
-	scored := scoreCandidates([]candidate{vieja, fresca}, lex, nil, nil, nil, now)
+	scored := scoreCandidates([]candidate{vieja, fresca}, lex, nil, nil, nil, nil, now)
 	if scored[0].id != "fresca" {
 		t.Errorf("en un casi-empate de contenido, la edad debe desempatar a favor de la fresca; obtuve %s primero", scored[0].id)
 	}
