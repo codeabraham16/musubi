@@ -56,7 +56,18 @@ case "$(uname -s)" in
       exit 2; }
     ;;
   *)
-    MODO=$(stat -c %a "$CLAVE")
+    # `stat -c` es de GNU. En macOS/BSD la misma pregunta se hace con `-f %Lp`, y el `-c` devuelve
+    # `stat: illegal option -- c`: medido en el runner de macOS el 2026-09-10, o sea que este
+    # chequeo NUNCA corrió fuera de Linux. Y fallaba de la peor manera — bajo `set -euo pipefail`
+    # la asignación mataba el guion mostrando la ayuda de `stat`, sin una línea que dijera qué
+    # estaba intentando hacer. Tercera guarda del mismo archivo que no podía informar.
+    MODO=$(stat -c %a "$CLAVE" 2>/dev/null || stat -f %Lp "$CLAVE" 2>/dev/null || true)
+    # No poder leer el modo NO es «seguí»: se aborta diciéndolo. Firmar sin saber cómo está
+    # protegida la clave es justamente lo que esta guarda existe para impedir.
+    [ -n "$MODO" ] || {
+      echo "no pude leer el modo de $CLAVE: ni \`stat -c\` (GNU) ni \`stat -f\` (BSD) contestaron." >&2
+      echo "No firmo sin saber cómo está protegida la clave." >&2
+      exit 2; }
     case "$MODO" in 400|600) ;; *) echo "la clave privada tiene modo $MODO: ponela en 600 antes de firmar" >&2; exit 2;; esac
     ;;
 esac

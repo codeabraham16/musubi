@@ -21,6 +21,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   `Usuarios`) y un grep por el nombre inglés daría verde sobre una clave abierta. Un SID que no se
   puede traducir cuenta como amplio: falla en cerrado.
 
+  **Y en macOS tampoco corría, por otro motivo, que apareció cuando el test nuevo lo ejecutó ahí
+  por primera vez:** `stat -c` es de GNU, y BSD contesta `stat: illegal option -- c`. Bajo
+  `set -euo pipefail` la asignación mataba el guion mostrando la ayuda de `stat`, sin una línea que
+  dijera qué estaba intentando hacer. O sea que el chequeo **sólo había funcionado en Linux**. Ahora
+  prueba `stat -c` y cae a `stat -f %Lp`, y —la parte que importa— **no poder leer el modo aborta
+  diciéndolo** en vez de morir mudo: firmar sin saber cómo está protegida la clave es justo lo que
+  esta guarda existe para impedir.
+
   Verificado de las dos formas: con una clave sana el guion firma, y dándole lectura a `Todos`
   —por SID, `icacls /grant "*S-1-1-0:(R)"`— sale 2 y nombra el SID. ⚠️ El primer intento de ese
   sabotaje **no se aplicó**: git-bash convirtió `/grant` en la ruta `C:/Program Files/Git/grant`,
