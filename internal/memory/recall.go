@@ -494,7 +494,19 @@ func isFTSCorruption(err error) bool {
 
 // candidatesByIDs trae los candidatos vivos (no archivados ni superseded) para los ids
 // dados, con las mismas columnas que scanCandidates. Trocea el IN(...) por el tope de
-// parámetros de SQLite. El orden del slice no importa: el ranking va por mapas.
+// parámetros de SQLite.
+//
+// ACÁ DECÍA «el orden del slice no importa: el ranking va por mapas», Y ES FALSO. Por los mapas
+// van los RANGOS de cada pool, sí; pero el orden FINAL lo decide `sort.SliceStable` sobre los
+// puntajes, y estable significa que los EMPATES conservan el orden de llegada del slice. O sea
+// que este orden es exactamente el criterio de desempate del recall, sin que nadie lo haya
+// elegido: sale de un `IN (...)` sin `ORDER BY`, que SQLite resuelve por su plan.
+//
+// No es un defecto vivo —para una base dada el plan es estable, y está medido: con el refuerzo
+// apagado, 25 de 25 consultas del corpus real dan el mismo orden en 12 corridas—. Es un
+// comentario que enseñaba a no mirar acá, que es peor que no decir nada: el día que alguien meta
+// concurrencia en la hidratación o cambie el pool, esto reordena empates sin tocar un puntaje.
+// La guarda que lo vigila es TestElRecallEsDeterministaSinRefuerzo (internal/recalleval).
 func (e *DbEngine) candidatesByIDs(ctx context.Context, ids []string) ([]candidate, error) {
 	var out []candidate
 	for _, chunk := range chunkStrings(ids, maxSQLParams) {
