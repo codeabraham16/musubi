@@ -2115,6 +2115,39 @@ func schemaMigrations() []migration {
 					"revoked_at TEXT NOT NULL DEFAULT ''")
 			},
 		},
+		{
+			version:        56,
+			name:           "indices_observation_relations",
+			readCompatible: true,
+			// LA TABLA DE SINAPSIS NO TENÍA NI UN ÍNDICE PROPIO.
+			//
+			// `observation_relations` traía sólo los dos autoindex que SQLite crea solo: el de la
+			// PRIMARY KEY y el del UNIQUE. Los dos arrancan por `source_id`, así que sirven para
+			// «¿qué sale de esta observación?» y para nada más. Toda lectura por el OTRO extremo
+			// —`target_id`— y toda lectura por `status` son scan completo de la tabla.
+			//
+			// Y son lecturas del camino caliente, no de un reporte: la cola de conflictos busca
+			// por status ('pending'), y la corroboración y el supersede entran por el target.
+			//
+			// Hoy son 252 filas y no se nota. Esa es exactamente la razón de ponerlo ahora: el
+			// costo de crear los índices con la tabla chica es de milisegundos, y la tasa de
+			// llegada medida de la cola de conflictos es de ~10 por día. El scan se vuelve visible
+			// cuando ya molesta.
+			//
+			// Es readCompatible: un índice no cambia el RESULTADO de ninguna consulta, sólo el
+			// plan. Un lector viejo sobre esta base devuelve exactamente lo mismo que antes.
+			up: func(x execQuerier) error {
+				for _, ddl := range []string{
+					`CREATE INDEX IF NOT EXISTS idx_obs_rel_target ON observation_relations(target_id)`,
+					`CREATE INDEX IF NOT EXISTS idx_obs_rel_status ON observation_relations(status)`,
+				} {
+					if _, err := x.Exec(ddl); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		},
 	}
 }
 

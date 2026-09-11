@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
 )
@@ -251,4 +252,96 @@ func TestSearchFTSOrdersByRelevance(t *testing.T) {
 	if res[0].ID != "rel" {
 		t.Errorf("ORDER BY rank: esperaba el doc más relevante primero (rel), obtuve %s", res[0].ID)
 	}
+}
+
+// TestDedupRevivelaArchivadaYRespetaLosOtrosEstados fija el arreglo del dedup ciego a la
+// visibilidad: casar por content_hash contra una fila que el recall NO puede devolver convertía un
+// "ya la tengo" en memoria perdida para siempre.
+func TestDedupRevivelaArchivadaYRespetaLosOtrosEstados(t *testing.T) {
+	const texto = "la observacion que se archiva y despues se vuelve a guardar textual"
+
+	t.Run("archivada: revive y vuelve al recall", func(t *testing.T) {
+		e, err := NewDbEngine(t.TempDir())
+		if err != nil {
+			t.Fatalf("NewDbEngine: %v", err)
+		}
+		defer e.Close()
+
+		id, deduped, err := e.SaveObservationDeduped("t/revive", texto, 1.0, nil)
+		if err != nil || deduped {
+			t.Fatalf("primer save: id=%s deduped=%v err=%v", id, deduped, err)
+		}
+		if _, err := e.db.Exec(`UPDATE observations SET archived = 1, archived_at = datetime('now') WHERE id = ?`, id); err != nil {
+			t.Fatalf("archivar: %v", err)
+		}
+
+		id2, deduped2, err := e.SaveObservationDeduped("t/revive", texto, 1.0, nil)
+		if err != nil {
+			t.Fatalf("segundo save: %v", err)
+		}
+		if id2 != id {
+			t.Errorf("el id tiene que conservarse (ya viajó por el sync): era %s, volvió %s", id, id2)
+		}
+		if !deduped2 {
+			t.Errorf("esperaba deduped=true: el contenido ya existía")
+		}
+		// LO QUE IMPORTA: que haya vuelto a ser visible para el recall.
+		var visible int
+		if err := e.db.QueryRow(
+			`SELECT COUNT(*) FROM observations WHERE id = ? AND `+visibleObsPredicate, id).Scan(&visible); err != nil {
+			t.Fatalf("consultar visibilidad: %v", err)
+		}
+		if visible != 1 {
+			t.Error("la observación siguió oculta: el que guardó recibió 'ya la tengo' y se quedó sin ella")
+		}
+	})
+
+	t.Run("cuarentena: NO se lava por la puerta de atras", func(t *testing.T) {
+		e, err := NewDbEngine(t.TempDir())
+		if err != nil {
+			t.Fatalf("NewDbEngine: %v", err)
+		}
+		defer e.Close()
+
+		id, _, err := e.SaveObservationDeduped("t/quar", texto, 1.0, nil)
+		if err != nil {
+			t.Fatalf("primer save: %v", err)
+		}
+		if _, err := e.db.Exec(`UPDATE observations SET archived = 1, quarantined = 1 WHERE id = ?`, id); err != nil {
+			t.Fatalf("cuarentenar: %v", err)
+		}
+		if _, _, err := e.SaveObservationDeduped("t/quar", texto, 1.0, nil); err != nil {
+			t.Fatalf("segundo save: %v", err)
+		}
+		var quar int
+		e.db.QueryRow(`SELECT quarantined FROM observations WHERE id = ?`, id).Scan(&quar)
+		if quar != 1 {
+			t.Error("re-guardar el texto sacó la cuarentena sin pasar por CorroborateObservation")
+		}
+	})
+
+	t.Run("superseded: no se deshace la cadena", func(t *testing.T) {
+		e, err := NewDbEngine(t.TempDir())
+		if err != nil {
+			t.Fatalf("NewDbEngine: %v", err)
+		}
+		defer e.Close()
+
+		id, _, err := e.SaveObservationDeduped("t/sup", texto, 1.0, nil)
+		if err != nil {
+			t.Fatalf("primer save: %v", err)
+		}
+		if _, err := e.db.Exec(
+			`UPDATE observations SET archived = 1, superseded_by = 'otra-mas-nueva' WHERE id = ?`, id); err != nil {
+			t.Fatalf("supersede: %v", err)
+		}
+		if _, _, err := e.SaveObservationDeduped("t/sup", texto, 1.0, nil); err != nil {
+			t.Fatalf("segundo save: %v", err)
+		}
+		var sup sql.NullString
+		e.db.QueryRow(`SELECT superseded_by FROM observations WHERE id = ?`, id).Scan(&sup)
+		if !sup.Valid || sup.String != "otra-mas-nueva" {
+			t.Error("re-guardar el texto deshizo un supersede que alguien decidió")
+		}
+	})
 }

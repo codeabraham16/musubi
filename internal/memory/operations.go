@@ -191,11 +191,16 @@ func (e *DbEngine) SaveObservationTypedWithOrigins(originProjectID, author, id, 
 // es la de antes y anclarla ahora reescribiría el origen de una memoria que no acabamos de
 // crear, con el fingerprint de hoy en vez del de su guardado real.
 func (e *DbEngine) SaveObservationDedupedTypedFromWithOrigins(originProjectID, author, topicKey, content string, importance float64, memType, scope string, originPaths []string, embedding []float32) (string, bool, error) {
-	existing, found, err := e.findByContentHashIn(e.effectiveProjectID(originProjectID), ContentHash(content))
+	existing, found, archivada, err := e.findByContentHashState(e.effectiveProjectID(originProjectID), ContentHash(content))
 	if err != nil {
 		return "", false, err
 	}
 	if found {
+		// Si la coincidencia estaba archivada, se revive: si no, el que guarda recibe
+		// deduped=true sobre un id que el recall no puede devolver. Ver reviveSiArchivada.
+		if err := e.reviveSiArchivada(existing, archivada); err != nil {
+			return "", false, err
+		}
 		return existing, true, nil
 	}
 	id := uuid.NewString()
@@ -226,11 +231,14 @@ func (e *DbEngine) SaveObservationDedupedTypedFrom(originProjectID, author, topi
 	// OTRO proyecto recibe el id ajeno con deduped=true y su observación NO se guarda — pérdida
 	// silenciosa de memoria (y fuga de un id ajeno). Con tenant vacío (admin/federado/stdio local)
 	// el dedup sigue siendo global, como siempre.
-	existing, found, err := e.findByContentHashIn(e.effectiveProjectID(originProjectID), ContentHash(content))
+	existing, found, archivada, err := e.findByContentHashState(e.effectiveProjectID(originProjectID), ContentHash(content))
 	if err != nil {
 		return "", false, err
 	}
 	if found {
+		if err := e.reviveSiArchivada(existing, archivada); err != nil {
+			return "", false, err
+		}
 		return existing, true, nil
 	}
 	id := uuid.NewString()
@@ -261,24 +269,74 @@ func (e *DbEngine) FindByContentHash(hash string) (string, bool, error) {
 // observaciones del proyecto que escribe (o las sin atribuir, para no romper el dedup de las filas
 // legacy anteriores a Track 16, que tienen project_id vacío). projectID == "" ⇒ sin filtro.
 func (e *DbEngine) findByContentHashIn(projectID, hash string) (string, bool, error) {
-	q := `SELECT id FROM observations WHERE content_hash = ? LIMIT 1`
+	id, found, _, err := e.findByContentHashState(projectID, hash)
+	return id, found, err
+}
+
+// findByContentHashState es findByContentHashIn más el ESTADO de visibilidad de la fila hallada.
+// El dedup lo necesita: una coincidencia con una fila que el recall no puede devolver no es un
+// duplicado útil, es memoria perdida. Ver reviveSiArchivada.
+func (e *DbEngine) findByContentHashState(projectID, hash string) (id string, found bool, archivada bool, err error) {
+	// Se leen los tres flags de visibilidad, no sólo `archived`: el que decide si hay que revivir
+	// es `archived`, pero los otros dos tienen que poder DISTINGUIRSE de él (ver reviveSiArchivada).
+	q := `SELECT id, archived, superseded_by IS NOT NULL, quarantined
+		FROM observations WHERE content_hash = ? LIMIT 1`
 	args := []any{hash}
 	if projectID != "" {
-		q = `SELECT id FROM observations
+		q = `SELECT id, archived, superseded_by IS NOT NULL, quarantined
+			FROM observations
 			WHERE content_hash = ? AND COALESCE(project_id,'') IN (?, '')
 			ORDER BY CASE WHEN COALESCE(project_id,'') = ? THEN 0 ELSE 1 END
 			LIMIT 1`
 		args = []any{hash, projectID, projectID}
 	}
-	var id string
-	err := e.db.QueryRow(q, args...).Scan(&id)
+	var arch, superseded, quar int
+	err = e.db.QueryRow(q, args...).Scan(&id, &arch, &superseded, &quar)
 	if err == sql.ErrNoRows {
-		return "", false, nil
+		return "", false, false, nil
 	}
 	if err != nil {
-		return "", false, fmt.Errorf("error al buscar content_hash: %w", err)
+		return "", false, false, fmt.Errorf("error al buscar content_hash: %w", err)
 	}
-	return id, true, nil
+	// Sólo es "archivada revivible" si NO está además superseded ni en cuarentena: esos dos
+	// estados mandan sobre el archivado, y su tratamiento se decide en reviveSiArchivada.
+	return id, true, arch == 1 && superseded == 0 && quar == 0, nil
+}
+
+// reviveSiArchivada devuelve al recall una observación que el dedup acaba de reconocer pero que
+// estaba ARCHIVADA. Devuelve true si la revivió.
+//
+// EL DEFECTO QUE CIERRA: el dedup casaba por content_hash sin mirar visibilidad, así que
+// re-guardar un texto archivado devolvía `deduped=true` sobre un id que el recall NO puede
+// devolver —visibleObsPredicate excluye archived— y la memoria no volvía NUNCA. El que guarda
+// recibe "ya la tengo" y se queda sin ella. Medido: 211 archivadas en la base real, con la purga
+// desactivada, o sea 211 trampas activas.
+//
+// SE REVIVE EN VEZ DE INSERTAR UNA FILA NUEVA porque el id ya viajó por el sync: un id nuevo con
+// el mismo content_hash le deja al otro lado dos filas para el mismo contenido, y `idx_obs_hash`
+// no es UNIQUE, así que nada lo impediría. Revivir conserva la identidad que el resto del sistema
+// ya conoce.
+//
+// LO QUE NO SE TOCA, Y ES UNA DECISIÓN, NO UN OLVIDO: superseded y cuarentena NO se revive.
+//   - `superseded_by` significa que alguien decidió que otra observación la reemplaza. Revivirla
+//     por un re-guardado deshace esa decisión en silencio y rompe la cadena de supersede.
+//   - `quarantined` significa "no confiable hasta corroborar". Revivirla por dedup sería lavar la
+//     cuarentena por la puerta de atrás, sin pasar por CorroborateObservation.
+//
+// En esos dos casos se conserva el comportamiento de hoy (deduped sobre el id oculto). Es
+// imperfecto y se deja a propósito: son estados con flujo propio, y cambiarlos es una decisión de
+// producto aparte, no un efecto colateral del arreglo del dedup.
+func (e *DbEngine) reviveSiArchivada(id string, archivada bool) error {
+	if !archivada {
+		return nil
+	}
+	_, err := e.db.Exec(
+		`UPDATE observations SET archived = 0, archived_at = NULL WHERE id = ? AND archived = 1`, id)
+	if err != nil {
+		return fmt.Errorf("error al revivir la observación deduplicada %s: %w", id, err)
+	}
+	logx.Info("dedup: el contenido ya existía pero estaba archivado; se revive en vez de perderlo", "id", id)
+	return nil
 }
 
 // effectiveProjectID resuelve el tenant de una escritura: el origen explícito que estampó el

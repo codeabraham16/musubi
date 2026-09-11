@@ -254,3 +254,62 @@ func TestRegenGistsEsSeguroEIdempotente(t *testing.T) {
 		t.Errorf("la reparación debe ser IDEMPOTENTE: la 2ª corrida tocó %d gist(s)", n2)
 	}
 }
+
+// TestCheckEmbeddingCoverageTresEstados fija el contrato del check de cobertura. El estado que
+// importa defender es el PRIMERO: sin proveedor configurado tiene que dar ok+Unmeasured y NO
+// warning, porque un warning ahí nace amarillo permanente e irreparable en toda instalación
+// default, y buildHealthContext lo inyecta en el arranque de cada sesión.
+func TestCheckEmbeddingCoverageTresEstados(t *testing.T) {
+	t.Run("sin proveedor: ok y sin medir", func(t *testing.T) {
+		e, err := NewDbEngine(t.TempDir())
+		if err != nil {
+			t.Fatalf("NewDbEngine: %v", err)
+		}
+		defer e.Close()
+		if err := e.SaveObservation("a", "t", "una observación cualquiera sin vector", nil); err != nil {
+			t.Fatalf("SaveObservation: %v", err)
+		}
+		r := checkEmbeddingCoverage(e)
+		if r.Status != "ok" {
+			t.Errorf("sin proveedor esperaba ok, obtuve %q (%s)", r.Status, r.Message)
+		}
+		if !r.Unmeasured {
+			t.Error("sin proveedor el ok tiene que venir marcado Unmeasured: no midió, no es un verde medido")
+		}
+	})
+
+	t.Run("con proveedor y pendientes: warning", func(t *testing.T) {
+		e, err := NewDbEngine(t.TempDir())
+		if err != nil {
+			t.Fatalf("NewDbEngine: %v", err)
+		}
+		defer e.Close()
+		e.vectorModelID = "modelo-de-prueba"
+		if err := e.SaveObservation("a", "t", "observación visible y sin vector del modelo actual", nil); err != nil {
+			t.Fatalf("SaveObservation: %v", err)
+		}
+		r := checkEmbeddingCoverage(e)
+		if r.Status != "warning" {
+			t.Errorf("con pendientes esperaba warning, obtuve %q (%s)", r.Status, r.Message)
+		}
+	})
+
+	t.Run("con proveedor y cobertura completa: ok medido", func(t *testing.T) {
+		e, err := NewDbEngine(t.TempDir())
+		if err != nil {
+			t.Fatalf("NewDbEngine: %v", err)
+		}
+		defer e.Close()
+		e.vectorModelID = "modelo-de-prueba"
+		if err := e.SaveObservation("a", "t", "observación con su vector puesto", []float32{0.1, 0.2, 0.3}); err != nil {
+			t.Fatalf("SaveObservation: %v", err)
+		}
+		r := checkEmbeddingCoverage(e)
+		if r.Status != "ok" {
+			t.Errorf("con cobertura completa esperaba ok, obtuve %q (%s)", r.Status, r.Message)
+		}
+		if r.Unmeasured {
+			t.Error("acá SÍ midió: no puede venir marcado Unmeasured")
+		}
+	})
+}

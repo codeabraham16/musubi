@@ -334,3 +334,70 @@ func TestLasMigracionesDelRepoEstanEnOrdenYSinRepetir(t *testing.T) {
 			migs[i].version, migs[i].name, migs[i-1].version, migs[i-1].name)
 	}
 }
+
+// TestIndicesObservationRelationsEnLosDosCaminos fija que los índices de sinapsis existan tanto en
+// una base NUEVA (que se crea por la baseline de initSchemaOn y NO re-ejecuta migraciones) como en
+// una base VIEJA que llega por la migración 54.
+//
+// Los dos caminos, y no uno: agregar el DDL sólo en la migración deja a toda instalación nueva sin
+// el índice; agregarlo sólo en la baseline deja afuera a todas las que ya existen. Es el defecto
+// que este repo ya tiene documentado —la regla puesta en N-1 de N caminos— y la migración 21 lo
+// dice con todas las letras para el caso simétrico.
+func TestIndicesObservationRelationsEnLosDosCaminos(t *testing.T) {
+	quiero := []string{"idx_obs_rel_target", "idx_obs_rel_status"}
+
+	// OJO CON ESTE SUBTEST: la primera versión abría un NewDbEngine, y quedaba VERDE aunque se
+	// sacara el índice de la baseline — porque una base nueva TAMBIÉN corre las migraciones
+	// (verificado: queda en user_version 54), así que el índice llegaba por la 54 y el subtest no
+	// probaba la baseline en absoluto. Se descubrió corriendo el sabotaje. Por eso acá se llama a
+	// initSchemaOn sobre una conexión pelada: es la única forma de que este subtest hable de la
+	// baseline y no de otra cosa.
+	t.Run("baseline (initSchemaOn sola)", func(t *testing.T) {
+		db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "baseline.db"))
+		if err != nil {
+			t.Fatalf("sql.Open: %v", err)
+		}
+		defer db.Close()
+		if err := initSchemaOn(db); err != nil {
+			t.Fatalf("initSchemaOn: %v", err)
+		}
+		exigirIndicesEn(t, db, quiero)
+	})
+
+	t.Run("base vieja (migracion 54)", func(t *testing.T) {
+		e, err := NewDbEngine(t.TempDir())
+		if err != nil {
+			t.Fatalf("NewDbEngine: %v", err)
+		}
+		defer e.Close()
+		// Simular la base pre-54: borrar los índices y bajar user_version.
+		for _, ix := range quiero {
+			if _, err := e.db.Exec(`DROP INDEX IF EXISTS ` + ix); err != nil {
+				t.Fatalf("DROP INDEX %s: %v", ix, err)
+			}
+		}
+		if _, err := e.db.Exec(`PRAGMA user_version = 53`); err != nil {
+			t.Fatalf("bajar user_version: %v", err)
+		}
+		if err := runMigrations(e.db); err != nil {
+			t.Fatalf("runMigrations: %v", err)
+		}
+		exigirIndicesEn(t, e.db, quiero)
+	})
+}
+
+func exigirIndicesEn(t *testing.T, db *sql.DB, quiero []string) {
+	t.Helper()
+	for _, ix := range quiero {
+		var n int
+		err := db.QueryRow(
+			`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=? AND tbl_name='observation_relations'`,
+			ix).Scan(&n)
+		if err != nil {
+			t.Fatalf("consultar sqlite_master: %v", err)
+		}
+		if n != 1 {
+			t.Errorf("falta el índice %s sobre observation_relations", ix)
+		}
+	}
+}

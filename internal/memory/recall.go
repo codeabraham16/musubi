@@ -306,7 +306,16 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 		chosen = append(chosen, it.ID)
 	}
 	if err := e.bumpAccess(ctx, chosen); err != nil {
-		return result, err
+		// EL BUMP ES UN EFECTO, NO EL RESULTADO. Acá se devolvía (result, err), y el caller
+		// —toolRecall en methods.go— hace `if err != nil { return nil, ... }`: o sea que un UPDATE
+		// trabado (base ocupada, lock, disco lleno) le BORRA al agente una memoria que ya estaba
+		// calculada y correcta. El costo de perder el bump es que dos filas queden con la tasa de
+		// acceso un punto más baja; el costo de perder el resultado es que el agente no recuerde.
+		//
+		// Mismo criterio, y misma forma, que las otras dos degradaciones de esta función: el FTS
+		// corrupto y el pool vectorial caído avisan por logx.Warn y siguen. Ésta era la tercera
+		// hermana y era la única que abortaba.
+		logx.Warn("recall: no se pudo registrar el acceso, devuelvo el resultado igual", "error", err)
 	}
 	return result, nil
 }

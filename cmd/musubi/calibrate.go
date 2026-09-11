@@ -126,6 +126,8 @@ func gatherCalibrationTexts(engine *memory.DbEngine, limit int) []string {
 	texts := append([]string{}, builtinCalibrationCorpus...)
 	if contents, err := engine.SampleContents(limit); err == nil {
 		for _, c := range contents {
+			// El portero NO va acá: vive en SampleContents, que es el punto de egreso y el único
+			// lugar donde se puede probar contra una fila cruda. Ver el comentario de esa función.
 			if len(strings.TrimSpace(c)) >= 40 { // descartar muestras muy cortas (overhead domina)
 				texts = append(texts, c)
 			}
