@@ -62,6 +62,55 @@ import (
 // el único en el que estas pruebas miden lo que dicen medir.
 const ElSistemaDondeCorren = "linux"
 
+// Portable declara que una prueba EJECUTA un guion de shell y aun así corre en las tres
+// plataformas A PROPÓSITO. No saltea nada y no apaga nada: existe para que la guarda de alcance
+// distinga «este hermano se olvidó» de «este hermano es portable y alguien lo pensó».
+//
+// LA PUERTA DE ATRÁS QUE ESTO NO ES. Lo obvio sería dejar que la guarda ignore a quien no llame a
+// Exigir, o llevar una lista central de excepciones. Las dos se pudren igual: la primera no
+// distingue el olvido de la decisión, y la segunda envejece lejos del código que describe. Acá la
+// declaración vive PEGADA a la prueba, exige una frase que diga por qué, y —esto es lo que la hace
+// cara de usar mal— COMPRUEBA EN ESTA PLATAFORMA que la shell existe de verdad. Si alguien la usa
+// para callar la guarda en una prueba que en Windows no puede correr, se entera ahí, en Windows.
+//
+// El caso que la trajo: TestElFirmadorCorreDePuntaAPunta corre `deploy/firmar-release.sh`, y dos
+// de los tres defectos que ese test vino a cazar el 2026-09-10 SÓLO SE VEN EN WINDOWS (el
+// `python3` que allá es el alias de la Microsoft Store y contesta 0 sin ejecutar nada, y el
+// `chmod 600` que deja 644). Compuertarlo a linux habría borrado justo la cobertura que #435
+// acababa de agregar — o sea, la guarda habría apagado a su propio hermano.
+func Portable(t *testing.T, motivo string, herramientas ...string) {
+	t.Helper()
+
+	if len(strings.Fields(motivo)) < 4 {
+		t.Fatalf("guiones.Portable se llamó con el motivo %q: hace falta una frase que diga QUÉ "+
+			"guion ejecuta y por qué vale la pena correrlo en las tres plataformas. Una excepción "+
+			"sin motivo es una excepción que nadie revisa.", motivo)
+	}
+	if len(herramientas) == 0 {
+		t.Fatal("guiones.Portable se llamó sin nombrar una sola herramienta. Declarar que una prueba " +
+			"es portable sin decir QUÉ tiene que existir para que corra es declarar nada: nombrá al " +
+			"menos `bash`.")
+	}
+
+	// Acá NO hay rama por GOOS a propósito: portable quiere decir portable, así que la exigencia
+	// es la misma en las tres. Si falta algo, es un FALLO en la plataforma donde falta — nunca un
+	// salteo —, porque «no pude medir» no puede contestar lo mismo que «medí y está bien».
+	var faltan []string
+	for _, h := range herramientas {
+		if _, err := exec.LookPath(h); err != nil {
+			faltan = append(faltan, h)
+		}
+	}
+	if len(faltan) > 0 {
+		t.Fatalf("en %s/%s falta(n) %s en el PATH, y esta prueba se declaró PORTABLE con "+
+			"guiones.Portable.\n"+
+			"  MOTIVO DECLARADO: %s\n"+
+			"  O la declaración está mal y esto no es portable —entonces va guiones.Exigir—, o el "+
+			"entorno le debe esa herramienta. Lo que no puede pasar es que quede verde sin medir.",
+			runtime.GOOS, runtime.GOARCH, strings.Join(faltan, ", "), motivo)
+	}
+}
+
 // Exigir frena la prueba si esta máquina no es donde corren los guiones, y comprueba que las
 // herramientas Unix que el arnés va a usar estén.
 //

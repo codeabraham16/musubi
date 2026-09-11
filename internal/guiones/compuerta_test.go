@@ -157,7 +157,7 @@ type funcDePrueba struct {
 	pos      string
 	esTest   bool
 	shell    bool // ejecuta una shell EN SU PROPIO cuerpo
-	compuert bool // llama a guiones.Exigir en su propio cuerpo
+	compuert bool // llama a guiones.Exigir o guiones.Portable en su propio cuerpo
 	llama    []string
 }
 
@@ -299,7 +299,10 @@ func TestElSalteoEstaAcotadoALasPruebasQueCorrenUnaShell(t *testing.T) {
 			"  En windows/macOS esa prueba no mide el guion: mide el runner. El arnés escribe stubs\n"+
 			"  ejecutables y los antepone al PATH con `:` — medido, en windows el stub no se toma y el\n"+
 			"  guion sale a la URL real del release.\n"+
-			"  Arreglo: `guiones.Exigir(t, \"<qué guion corre y por qué es de linux>\", \"bash\", ...)`\n"+
+			"  Arreglo, y son DOS casos distintos:\n"+
+			"    · sólo corre en linux  -> `guiones.Exigir(t, \"<qué guion corre y por qué es de linux>\", \"bash\", ...)`\n"+
+			"    · corre en las tres    -> `guiones.Portable(t, \"<qué guion corre y por qué vale en las tres>\", \"bash\", ...)`\n"+
+			"      (Portable NO saltea: exige que las herramientas estén en TODAS las plataformas.)\n"+
 			"  como primera línea. En linux NO saltea nunca, así que no perdés nada donde importa.", x)
 	}
 	for _, x := range fueraDeAlcance {
@@ -431,11 +434,11 @@ func analizarCuerpo(fd *ast.FuncDecl, alias string, esLaCompuerta bool, info *fu
 			}
 		}
 		// ¿llama a la compuerta?
-		if alias != "" && esSelector(c.Fun, alias, "Exigir") {
+		if alias != "" && (esSelector(c.Fun, alias, "Exigir") || esSelector(c.Fun, alias, "Portable")) {
 			info.compuert = true
 		}
 		if esLaCompuerta {
-			if id, ok := c.Fun.(*ast.Ident); ok && id.Name == "Exigir" {
+			if id, ok := c.Fun.(*ast.Ident); ok && (id.Name == "Exigir" || id.Name == "Portable") {
 				info.compuert = true
 			}
 		}

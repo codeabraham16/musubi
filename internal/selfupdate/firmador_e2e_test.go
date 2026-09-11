@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 // Corre el firmador DE VERDAD. No lee su texto ni reimplementa su lógica: lo ejecuta contra un
@@ -30,9 +32,12 @@ func TestElFirmadorCorreDePuntaAPunta(t *testing.T) {
 	if _, err := os.Stat(guion); err != nil {
 		t.Fatalf("no encuentro %s: %v", guion, err)
 	}
-	if _, err := exec.LookPath("bash"); err != nil {
-		t.Skipf("sin bash en el PATH no se puede ejercitar el guión: %v", err)
-	}
+	// PORTABLE A PROPÓSITO, y declarado para que la guarda de alcance lo sepa: dos de los tres
+	// defectos que este test vino a cazar SÓLO SE VEN EN WINDOWS, así que compuertarlo a linux
+	// borraría justo la cobertura que lo justifica. Portable no saltea: si falta bash, MUERE —
+	// el `t.Skip` que había acá contestaba «no pude medir» con el mismo verde que «medí y está
+	// bien», que es el defecto que este repo viene pagando.
+	guiones.Portable(t, "corre deploy/firmar-release.sh de punta a punta, y dos de sus tres defectos sólo aparecen en Windows", "bash")
 	if !hayPythonQueEjecuta(t) {
 		t.Skipf("no hay un python que ejecute (probé python3 y python): el guión no puede correr acá")
 	}
