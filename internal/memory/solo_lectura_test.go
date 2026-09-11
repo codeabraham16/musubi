@@ -145,3 +145,45 @@ func TestR4ElEngineNormalNoEsDeSoloLectura(t *testing.T) {
 		t.Error("el refuerzo de acceso no ocurrió en un engine normal: la omisión del escalón se está aplicando siempre")
 	}
 }
+
+// TestSoloLecturaAplicaLosDivisoresDeSuBase fija el hermano que faltaba: el engine de sólo lectura
+// tiene que estimar tokens con la calibración guardada en SU base, igual que NewDbEngine.
+//
+// Sin esto, un engine degradado usaba los divisores de fábrica (4.0/3.4/2.6) aunque la base
+// tuviera otros — y el modo degradado es justo donde más duele, porque se llega ahí cuando el
+// esquema es más nuevo que el binario y el operador ya está diagnosticando a ciegas.
+func TestSoloLecturaAplicaLosDivisoresDeSuBase(t *testing.T) {
+	defer ResetDivisors()
+	dir := t.TempDir()
+
+	// Base con una calibración propia, bien distinta del default.
+	eng, err := NewDbEngine(dir)
+	if err != nil {
+		t.Fatalf("NewDbEngine: %v", err)
+	}
+	const calProse, calCode, calJSON = 8.0, 7.0, 6.0
+	if err := eng.SaveDivisors(calProse, calCode, calJSON); err != nil {
+		t.Fatalf("SaveDivisors: %v", err)
+	}
+	ruta := dir // NewDbEngineSoloLectura recibe el projectPath, no la ruta del archivo
+	eng.Close()
+
+	// Se ensucian los divisores del proceso, para que abrir en sólo lectura TENGA que corregirlos.
+	ResetDivisors()
+	p0, _, _ := CurrentDivisors()
+	if p0 == calProse {
+		t.Fatalf("el default coincide con la calibración (%v): la prueba no podría distinguir", p0)
+	}
+
+	ro, err := NewDbEngineSoloLectura(ruta)
+	if err != nil {
+		t.Fatalf("NewDbEngineSoloLectura: %v", err)
+	}
+	defer ro.Close()
+
+	prose, code, jsn := CurrentDivisors()
+	if prose != calProse || code != calCode || jsn != calJSON {
+		t.Errorf("el engine de sólo lectura no aplicó la calibración de su base: %v/%v/%v, esperaba %v/%v/%v",
+			prose, code, jsn, calProse, calCode, calJSON)
+	}
+}

@@ -60,3 +60,62 @@ func TestResolveEmbedderExplicitBadDegrades(t *testing.T) {
 		t.Error("static con path vacío debería degradar a léxico")
 	}
 }
+
+// TestEmbedderCaroDeConstruirProtegeElHookPorTurno fija la guarda que impide que el hook por turno
+// vuelva a cargar la tabla estática en cada prompt.
+//
+// LA REGRESIÓN QUE FIJA, con sus números: al cablear el embebedor en el hook, `musubi turn
+// --hook-mode` pasó de 0,29 s a 11-23 s con picos de 1,0-1,3 GB de RSS, porque NewStaticProvider
+// hace os.ReadFile de 512 MB en CADA construcción y el hook es un proceso efímero. Con el
+// `"timeout": 10` de .claude/settings.json eso no es lentitud: es el hook MATADO y el turno sin
+// memoria — peor que el léxico que tenía antes.
+//
+// La guarda de 2 s que vive adentro de buildTurnRecall NO cubría esto: el costo está en la
+// CONSTRUCCIÓN, antes de que exista un ctx al que ponerle timeout.
+func TestEmbedderCaroDeConstruirProtegeElHookPorTurno(t *testing.T) {
+	root := t.TempDir()
+
+	t.Run("static declarado es caro", func(t *testing.T) {
+		cfg := config.Config{}
+		cfg.Embedding.Provider = "static"
+		if !embedderCaroDeConstruir(cfg, root) {
+			t.Error("el provider static carga la tabla entera: tiene que declararse caro")
+		}
+	})
+
+	t.Run("sin tabla bajada NO es caro", func(t *testing.T) {
+		cfg := config.Config{} // provider vacío, sin tabla en disco
+		if embedderCaroDeConstruir(cfg, root) {
+			t.Error("sin tabla no hay nada que cargar: no puede declararse caro")
+		}
+	})
+
+	t.Run("auto-deteccion de la tabla es cara", func(t *testing.T) {
+		// El caso REAL de esta máquina: provider vacío pero la tabla bajada, así que
+		// resolveEmbedder la auto-detecta y construye el static.
+		dir := filepath.Join(root, ".musubi", "embeddings", defaultEmbedModel)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range []string{"model.safetensors", "tokenizer.json"} {
+			if err := os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if !hasStaticTable(dir) {
+			t.Skip("hasStaticTable no reconoce esta tabla de juguete; el caso se cubre en el de arriba")
+		}
+		cfg := config.Config{} // vacío: dispara la auto-detección
+		if !embedderCaroDeConstruir(cfg, root) {
+			t.Error("con la tabla bajada la auto-detección construye el static: tiene que declararse caro")
+		}
+	})
+
+	t.Run("un provider por red NO es caro de construir", func(t *testing.T) {
+		cfg := config.Config{}
+		cfg.Embedding.Provider = "ollama"
+		if embedderCaroDeConstruir(cfg, root) {
+			t.Error("construir un cliente HTTP no lee 512 MB: no puede declararse caro")
+		}
+	})
+}

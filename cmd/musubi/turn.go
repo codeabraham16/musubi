@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"musubi/internal/config"
+	"musubi/internal/embedding"
+	"musubi/internal/logx"
 	"musubi/internal/memory"
 )
 
@@ -75,7 +77,7 @@ type turnInput struct {
 // captura. Devuelve "" (hook silencioso) cuando no hay store, el prompt está
 // vacío o ningún bloque tiene contenido.
 func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.PipelineConfig, maCfg config.MultiAgentConfig, memCfg config.MemoryConfig, stdin io.Reader) string {
-	return turnOutputWith(store, loopCfg, pipeCfg, maCfg, memCfg, nil, stdin)
+	return turnOutputWith(store, loopCfg, pipeCfg, maCfg, memCfg, nil, stdin, nil)
 }
 
 // turnOutputWith es turnOutput con la sonda de git EXPLÍCITA, para el gate de
@@ -87,7 +89,7 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 // que cambia mientras los tests corren — y un banco cuyo resultado depende de si
 // guardaste un archivo hace diez segundos no mide nada. Con la sonda afuera, la
 // política se prueba con entradas fijas y el resto del loop no se entera.
-func turnOutputWith(store turnStore, loopCfg config.LoopConfig, pipeCfg config.PipelineConfig, maCfg config.MultiAgentConfig, memCfg config.MemoryConfig, probe gateProbe, stdin io.Reader) string {
+func turnOutputWith(store turnStore, loopCfg config.LoopConfig, pipeCfg config.PipelineConfig, maCfg config.MultiAgentConfig, memCfg config.MemoryConfig, probe gateProbe, stdin io.Reader, embedder embedding.Provider) string {
 	if store == nil {
 		return ""
 	}
@@ -120,7 +122,7 @@ func turnOutputWith(store turnStore, loopCfg config.LoopConfig, pipeCfg config.P
 		blocks = append(blocks, accountedBlock{"turn_batch", buildTurnBatch(store, in.SessionID)})
 	}
 	if loopCfg.PerTurnRecall {
-		blocks = append(blocks, accountedBlock{"turn_recall", buildTurnRecall(store, in.SessionID, prompt, loopCfg.RecallBudget, loopCfg.DeltaInjection, memCfg)})
+		blocks = append(blocks, accountedBlock{"turn_recall", buildTurnRecall(store, in.SessionID, prompt, loopCfg.RecallBudget, loopCfg.DeltaInjection, memCfg, embedder)})
 	}
 	// SurfaceConflicts es independiente del recall: si hay relaciones sin resolver,
 	// conviene avisarlas aunque el recall por turno esté apagado.
@@ -381,23 +383,66 @@ const (
 	metaDeltaInjected = "loop_delta_injected" // JSON {id -> content_hash} ya inyectado
 )
 
+// turnEmbedTimeout es el techo de latencia para embeber el prompt en el hook por turno. Ver el
+// comentario en buildTurnRecall: acá el costo se paga en CADA interacción, así que la guarda es
+// mucho más dura que los 30 s que se da la tool musubi_recall.
+const turnEmbedTimeout = 2 * time.Second
+
 // buildTurnRecall hace un recall read-only acotado al prompt y formatea los gists.
 // Con deltaEnabled, inyecta SOLO la memoria nueva o modificada respecto de lo ya
 // inyectado en la sesión (cache-considerate): si no hay nada nuevo, devuelve ""
 // (bloque silencioso). Contabiliza en el ledger solo lo que realmente inyecta.
-func buildTurnRecall(store turnStore, sessionID, prompt string, budget int, deltaEnabled bool, memCfg config.MemoryConfig) string {
+func buildTurnRecall(store turnStore, sessionID, prompt string, budget int, deltaEnabled bool, memCfg config.MemoryConfig, embedder embedding.Provider) string {
 	// Propagar los toggles semánticos model-free (Stemming/Cooccurrence/GraphCentrality)
 	// que la tool musubi_recall ya usa: sin esto, la superficie MÁS caliente (recall por
 	// turno) corría léxico puro, ignorando los puentes deploy↔despliegue / morfología /
 	// centralidad que el proyecto construyó. Mismos tokens, más relevancia.
-	res, err := store.Recall(context.Background(), prompt, memory.RecallOptions{
+	opts := memory.RecallOptions{
 		TokenBudget:     budget,
 		NoBump:          true,
 		RankedFTS:       true, // filtrar stopwords: es la superficie más caliente, evita ruido
 		Stemming:        memCfg.RecallStemming,
 		Cooccurrence:    memCfg.RecallCooccurrence,
 		GraphCentrality: memCfg.RecallGraphCentrality,
-	})
+		// LOS DOS QUE FALTABAN, Y NO ERAN UN OLVIDO MENOR. Esta función pasaba seis campos y
+		// ninguno de los dos que deciden calidad, así que quedaban en el CERO DE GO: MMRLambda 0
+		// apaga MMR por completo (diversify retorna sin tocar nada) y VectorFloor 0 deja entrar al
+		// RRF cualquier vecino vectorial sin importar su coseno. O sea que la diversidad calibrada
+		// sobre 94.830 pares reales estaba apagada en CADA turno, y el yaml no aplicaba donde
+		// ocurre el 99% de los recalls del sistema.
+		VectorFloor: memCfg.VectorFloor,
+		MMRLambda:   memCfg.MMRLambda,
+	}
+	// ProjectScope NO se setea acá, y es una decisión, no un descuido. scope.go declara que el
+	// stdio local es uno de los casos FEDERADOS por diseño ("Federate o ProjectID vacío ⇒ sin
+	// filtro: stdio local, bearer legacy, admin"). Acotar el hook por turno a un proyecto le
+	// escondería al agente la memoria del resto del acervo, que es justo lo que un workspace local
+	// quiere ver. El aislamiento multi-tenant es del borde MCP con credencial, no de este hook.
+
+	// LA SEÑAL VECTORIAL, con el techo de latencia puesto. El backfill embebe el content completo,
+	// así que la consulta tiene con qué compararse. Medido sobre el corpus real (1953 docs, 85
+	// consultas, POTION multilingüe): con los docs embebidos desde `content`, el híbrido al piso
+	// 0.30 le gana al léxico — MRR 0.450→0.493, nDCG@1 0.294→0.353, R@1 +21%.
+	//
+	// EL TIMEOUT ES CORTO A PROPÓSITO, y es la diferencia con las otras superficies. La tool
+	// musubi_recall se da 30 s porque la llama una persona que está esperando; ESTO corre en CADA
+	// turno, así que un embebedor por red lento no puede convertirse en el costo fijo de cada
+	// interacción. Con la tabla estática la llamada es lookup + mean-pool en proceso y ni se nota;
+	// con ollama u openai, si no contesta en 2 s el turno sigue SIN la señal vectorial en vez de
+	// esperarla. Degradar es la respuesta correcta acá: el recall léxico solo ya es útil.
+	if embedding.Enabled(embedder) {
+		embCtx, cancel := context.WithTimeout(context.Background(), turnEmbedTimeout)
+		vec, eerr := embedder.Embed(embCtx, prompt)
+		cancel()
+		if eerr != nil {
+			// Info y no Warn: con un embebedor por red, un timeout ocasional es el
+			// comportamiento DISEÑADO de esta guarda, no una avería que haya que mirar.
+			logx.Info("recall por turno: sigo sólo con léxico (no se pudo embeber el prompt a tiempo)", "error", eerr)
+		} else {
+			opts.QueryVector = vec
+		}
+	}
+	res, err := store.Recall(context.Background(), prompt, opts)
 	if err != nil || res.Count == 0 {
 		return ""
 	}
@@ -569,7 +614,28 @@ func runTurn() {
 	}
 	defer engine.Close()
 
-	out := turnOutputWith(engine, cfg.Loop, cfg.Pipeline, cfg.MultiAgent, cfg.Memory, gitGateProbe{root: root}, os.Stdin)
+	// EL EMBEBEDOR DEL HOOK, CON DOS GUARDAS QUE SON CONSECUENCIA DE MEDIR.
+	//
+	// (1) SÓLO SI EL RECALL POR TURNO ESTÁ ENCENDIDO. Antes se construía siempre, así que una
+	//     instalación con per_turn_recall en false pagaba igual el costo de construirlo para
+	//     después no usarlo nunca.
+	//
+	// (2) SÓLO SI CONSTRUIRLO ES BARATO. Ver embedderCaroDeConstruir: con la tabla estática, cada
+	//     invocación del hook leía 512 MB de disco. Medido acá: el hook pasó de 0,29 s a 11-23 s
+	//     con picos de 1,3 GB, contra un timeout de 10 s en .claude/settings.json — o sea que el
+	//     turno se quedaba SIN memoria inyectada, que es peor que el léxico que tenía antes.
+	//     Degradar acá es estrictamente mejor que morir: el recall léxico funciona.
+	var embedder embedding.Provider
+	if cfg.Loop.PerTurnRecall && !embedderCaroDeConstruir(cfg, root) {
+		embedder = resolveEmbedder(cfg, root)
+		if embedding.Enabled(embedder) {
+			// La MISMA procedencia que estampa cualquier save: sin esto SearchObservations no
+			// puede aplicar la regla de homogeneidad y el pool vectorial sale vacío.
+			engine.SetVectorModelID(embedder.Name())
+		}
+	}
+
+	out := turnOutputWith(engine, cfg.Loop, cfg.Pipeline, cfg.MultiAgent, cfg.Memory, gitGateProbe{root: root}, os.Stdin, embedder)
 	if out != "" {
 		fmt.Println(out)
 	}

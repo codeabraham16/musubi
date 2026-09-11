@@ -313,7 +313,7 @@ func TestG10TurnOutputConSondaTraeElGate(t *testing.T) {
 	probe := &fakeGateProbe{trabajo: sobreElUmbral(), fp: "huella-de-hoy"}
 	in := `{"prompt":"seguimos","session_id":"g1"}`
 
-	out := turnOutputWith(store, defaultLoop(), pipeOff(), maOff(), config.MemoryConfig{}, probe, strings.NewReader(in))
+	out := turnOutputWith(store, defaultLoop(), pipeOff(), maOff(), config.MemoryConfig{}, probe, strings.NewReader(in), nil)
 	_, ctx := hookAdditionalContext(t, out)
 	if !strings.Contains(ctx, "[Musubi — revisión]") {
 		t.Errorf("el gate tiene que llegar dentro del additionalContext; obtuve:\n%s", ctx)

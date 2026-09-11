@@ -79,7 +79,19 @@ func (NoopProvider) Dimensions() int { return 0 }
 func (NoopProvider) Name() string { return "none" }
 
 // Enabled indica si el proveedor genera embeddings reales.
+//
+// NIL NO ESTÁ HABILITADO, y hay que decirlo explícito porque la versión anterior contestaba que
+// SÍ: `p.(NoopProvider)` sobre un nil falla la aserción, así que `isNoop` quedaba en false y
+// Enabled devolvía true para un proveedor que no existe. El caller hacía lo único razonable —
+// `if Enabled(p) { p.Embed(...) }` — y se comía un nil pointer dereference.
+//
+// El arreglo va acá y no en el caller que lo destapó: son diez los que preguntan por esta función
+// antes de usar el embebedor, y cada uno que reciba un nil tiene el mismo pánico esperándolo. Una
+// guarda que hay que acordarse de poner en diez lugares es una guarda que falta en uno.
 func Enabled(p Provider) bool {
+	if p == nil {
+		return false
+	}
 	_, isNoop := p.(NoopProvider)
 	return !isNoop
 }

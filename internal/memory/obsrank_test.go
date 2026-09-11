@@ -179,3 +179,52 @@ func TestPPRPowerIterationConservesMass(t *testing.T) {
 		t.Errorf("la masa debe conservarse (~1.0), obtuve %v", sum)
 	}
 }
+
+// TestBuildObsGraphExcluyeCuarentena fija que la quinta señal RRF —la centralidad de grafo— se
+// calcule sobre el MISMO universo que el recall puede devolver.
+//
+// El defecto que cierra: buildObsGraph filtraba con un `s.archived = 0 AND s.superseded_by IS
+// NULL` escrito a mano, sin `quarantined = 0`. Una observación en cuarentena no puede aparecer en
+// los resultados —el recall la excluye por todos sus otros caminos— pero sí podía empujar a sus
+// vecinas hacia arriba desde adentro del grafo. La muralla de la cuarentena tenía una puerta que
+// no daba a la sala pero movía los muebles.
+func TestBuildObsGraphExcluyeCuarentena(t *testing.T) {
+	e, err := NewDbEngine(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewDbEngine: %v", err)
+	}
+	defer e.Close()
+
+	for _, id := range []string{"viva", "vecina", "sucia"} {
+		if err := e.SaveObservation(id, "t/grafo", "contenido de "+id, nil); err != nil {
+			t.Fatalf("SaveObservation %s: %v", id, err)
+		}
+	}
+	// Dos aristas: una entre observaciones sanas y otra que toca la cuarentenada.
+	for i, par := range [][2]string{{"viva", "vecina"}, {"viva", "sucia"}} {
+		if _, err := e.db.Exec(
+			`INSERT INTO observation_relations (id, source_id, target_id, relation, status)
+			 VALUES (?, ?, ?, 'related', 'resolved')`,
+			"rel"+string(rune('a'+i)), par[0], par[1]); err != nil {
+			t.Fatalf("insertar arista %v: %v", par, err)
+		}
+	}
+	if _, err := e.db.Exec(`UPDATE observations SET quarantined = 1 WHERE id = 'sucia'`); err != nil {
+		t.Fatalf("cuarentenar: %v", err)
+	}
+
+	g, err := e.buildObsGraph()
+	if err != nil {
+		t.Fatalf("buildObsGraph: %v", err)
+	}
+	if _, presente := g.index["sucia"]; presente {
+		t.Error("una observación en cuarentena entró al grafo: puede empujar a sus vecinas aunque el recall nunca la devuelva")
+	}
+	// Y la arista sana tiene que seguir estando: excluir la cuarentena no puede vaciar el grafo.
+	if _, ok := g.index["viva"]; !ok {
+		t.Error("la observación sana desapareció del grafo")
+	}
+	if _, ok := g.index["vecina"]; !ok {
+		t.Error("la vecina sana desapareció del grafo")
+	}
+}

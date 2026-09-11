@@ -554,6 +554,18 @@ func initSchemaOn(x execQuerier) error {
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(source_id, target_id)
 		);`,
+		// Los dos autoindex que SQLite crea solo (PK y UNIQUE) arrancan por source_id, así que
+		// cubren «¿qué sale de esta observación?» y nada más. La lectura por el otro extremo y la
+		// de la cola de conflictos por status quedaban en scan.
+		//
+		// Está acá Y en la migración 54, siguiendo la convención de la v21. Y que quede dicho con
+		// precisión, porque lo verifiqué y mi primera versión de este comentario estaba mal: una
+		// base nueva SÍ corre las migraciones (queda en user_version 54), así que la migración
+		// sola bastaría. La baseline se mantiene igual porque es la que declara el esquema
+		// COMPLETO que una instalación nueva debe tener, sin obligar a leer 54 migraciones para
+		// saber cuál es.
+		`CREATE INDEX IF NOT EXISTS idx_obs_rel_target ON observation_relations(target_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_obs_rel_status ON observation_relations(status);`,
 
 		// Anclas de una observación al ESTADO DEL PROYECTO del que habla: por cada
 		// archivo declarado, el fingerprint de su contenido AL MOMENTO DE GUARDAR. En el

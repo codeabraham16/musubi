@@ -48,8 +48,13 @@ func (s *McpServer) toolFleetServices(ctx context.Context, raw json.RawMessage) 
 			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
 		}
 	}
-	proyectos, truncado := s.proyectosParaLeer(p, args.Project)
+	proyectos, truncado, vacioLegitimo := s.proyectosParaLeer(p, args.Project)
 	if len(proyectos) == 0 {
+		if vacioLegitimo {
+			// Sin ninguna máquina enrolada no hay servicios que listar, y eso es un inventario
+			// vacío, no un error del llamador. Ver proyectosParaLeer.
+			return jsonResult(map[string]interface{}{"total": 0, "servicios": []map[string]interface{}{}})
+		}
 		return nil, rpcErrorf(codeInvalidParams, "no se pudo determinar de qué proyecto listar los servicios: declaralo en `project`")
 	}
 

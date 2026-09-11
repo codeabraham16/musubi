@@ -54,7 +54,26 @@ type OpcionesFixtureReal struct {
 	MaxPorTopico int
 	// PrefijosExcluidos saca familias enteras de topics. 0 elementos ⇒ el default de abajo.
 	PrefijosExcluidos []string
+	// TextoDelDoc decide qué texto representa a cada documento: "content" (default) o "gist".
+	//
+	// EL DEFAULT CAMBIÓ, Y EL MOTIVO ES UNA MEDICIÓN. Antes era el gist, y eso hacía que el banco
+	// midiera un brazo vectorial QUE EN PRODUCCIÓN NO EXISTE: el backfill embebe `p.content`
+	// completo (embed_backfill.go), mientras que SeedEngine embebía lo que este campo devuelve.
+	// Medido sobre la base real: el gist promedia 82 caracteres y el content 2.790 — el gist es el
+	// 2,9% del texto. O sea que el banco vectorizaba el 3% de lo que vectoriza producción, y
+	// cualquier conclusión sobre "la señal vectorial" salía de ahí.
+	//
+	// Se conserva "gist" como opción, y no por nostalgia: es la única forma de comparar las dos
+	// representaciones en la misma corrida y ver cuánto de un delta viene de la representación y
+	// cuánto del ranker.
+	TextoDelDoc string
 }
+
+// Representaciones posibles de un documento en el fixture. Ver OpcionesFixtureReal.TextoDelDoc.
+const (
+	DocDesdeContent = "content"
+	DocDesdeGist    = "gist"
+)
 
 // prefijosExcluidosPorDefecto son familias que no son TEMAS sino registros mecánicos: no describen
 // un asunto sobre el que alguien preguntaría, así que como consulta no significan nada.
@@ -69,6 +88,9 @@ func (o OpcionesFixtureReal) conDefaults() OpcionesFixtureReal {
 	}
 	if len(o.PrefijosExcluidos) == 0 {
 		o.PrefijosExcluidos = prefijosExcluidosPorDefecto
+	}
+	if o.TextoDelDoc == "" {
+		o.TextoDelDoc = DocDesdeContent
 	}
 	return o
 }
@@ -98,10 +120,27 @@ func FixtureDesdeDB(rutaDB string, opts OpcionesFixtureReal) (*Fixture, error) {
 	}
 	defer db.Close()
 
+	// El texto del doc sale de la representación pedida. Con "gist" se cae al content cuando el
+	// gist está vacío, que es el comportamiento histórico.
+	colTexto := `content`
+	if opts.TextoDelDoc == DocDesdeGist {
+		colTexto = `COALESCE(NULLIF(gist,''), content)`
+	}
+	// EL PREDICADO DE VISIBILIDAD, COMPLETO. Acá decía `COALESCE(archived,0) = 0 AND superseded_by
+	// IS NULL` escrito a mano, y le faltaba `quarantined = 0`: el fixture metía al corpus
+	// observaciones marcadas como NO CONFIABLES, que el recall real nunca devuelve. O sea que el
+	// banco medía contra un corpus que producción no tiene.
+	//
+	// Hoy la base real tiene 0 cuarentenadas, así que el arreglo no mueve ningún número medido —
+	// y se hace igual, porque el día que haya una el banco habría empezado a mentir en silencio.
+	// Es la TERCERA vez en esta rama que aparece el mismo defecto: el predicado no se reescribe,
+	// se interpola. Las otras tres: SampleContents (arreglado), buildObsGraph (arreglado con
+	// visibleObsPredicateDe, que hubo que crear porque necesitaba la forma con alias) y
+	// TopicExists (arreglado). Cuatro reimplementaciones del mismo filtro, encontradas de a una.
 	filas, err := db.Query(`
-		SELECT id, COALESCE(topic_key,''), COALESCE(NULLIF(gist,''), content)
+		SELECT id, COALESCE(topic_key,''), ` + colTexto + `
 		FROM observations
-		WHERE COALESCE(archived,0) = 0 AND superseded_by IS NULL
+		WHERE COALESCE(archived,0) = 0 AND superseded_by IS NULL AND COALESCE(quarantined,0) = 0
 		ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("leer observaciones: %w", err)
@@ -128,6 +167,36 @@ func FixtureDesdeDB(rutaDB string, opts OpcionesFixtureReal) (*Fixture, error) {
 	}
 	if len(fx.Docs) == 0 {
 		return nil, fmt.Errorf("%s no tiene observaciones vivas", rutaDB)
+	}
+
+	// LAS ARISTAS DEL GRAFO, que son lo que hace que la quinta señal RRF exista en el banco.
+	// Sin esto graphRank sale vacío en toda medición y una config con GraphCentrality:true queda
+	// bit-idéntica a una con false — o sea que el gate defendía una señal que nunca ejercitaba.
+	//
+	// Se leen SÓLO las aristas cuyas dos puntas estén en el corpus, con el mismo criterio de
+	// visibilidad de arriba: una arista hacia una observación que el fixture no incluye es una
+	// relación huérfana, que es exactamente lo que el check orphan_relations del doctor busca.
+	vivos := make(map[string]bool, len(fx.Docs))
+	for _, d := range fx.Docs {
+		vivos[d.ID] = true
+	}
+	aristas, err := db.Query(`SELECT source_id, target_id FROM observation_relations ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("leer relaciones: %w", err)
+	}
+	defer aristas.Close()
+	for aristas.Next() {
+		var src, tgt string
+		if err := aristas.Scan(&src, &tgt); err != nil {
+			return nil, err
+		}
+		if src == tgt || !vivos[src] || !vivos[tgt] {
+			continue
+		}
+		fx.Relaciones = append(fx.Relaciones, Relacion{Source: src, Target: tgt})
+	}
+	if err := aristas.Err(); err != nil {
+		return nil, err
 	}
 
 	topics := make([]string, 0, len(porTopico))

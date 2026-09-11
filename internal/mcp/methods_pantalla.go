@@ -329,8 +329,12 @@ func (s *McpServer) toolFleetSessions(ctx context.Context, raw json.RawMessage) 
 			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
 		}
 	}
-	proyectos, truncado := s.proyectosParaLeer(p, args.Project)
+	proyectos, truncado, vacioLegitimo := s.proyectosParaLeer(p, args.Project)
 	if len(proyectos) == 0 {
+		if vacioLegitimo {
+			// Sin flota no hay bitácora que mostrar: lista vacía, no error. Ver proyectosParaLeer.
+			return jsonResult(map[string]interface{}{"total": 0, "sesiones": []map[string]interface{}{}})
+		}
 		return nil, rpcErrorf(codeInvalidParams, "no se pudo determinar el proyecto: declaralo en `project`")
 	}
 	tope := bitacoraTopeDefault

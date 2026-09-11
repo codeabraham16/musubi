@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+
+	"musubi/internal/redact"
 )
 
 // calibrate.go implementa la calibración OPT-IN del estimador de tokens contra
@@ -130,14 +132,30 @@ func BuildCalibrationReport(counts []TextCount) CalibrationReport {
 	return rep
 }
 
-// SampleContents devuelve hasta limit contenidos de observaciones (no archivadas)
-// para usar como muestras de calibración. Determinista (orden por id).
+// SampleContents devuelve hasta limit contenidos de observaciones para usar como muestras de
+// calibración. Determinista (orden por id).
+//
+// LO QUE SALE DE ACÁ CRUZA LA RED. Su único consumidor es `musubi calibrate`, que manda cada
+// muestra al endpoint count_tokens de Anthropic. Por eso el filtro NO es "no archivadas": es el
+// predicado canónico de visibilidad MÁS la exclusión del scope local.
+//
+// Acá había un `archived = 0` escrito a mano, y es el defecto que este repo ya conoce: cada vez
+// que alguien reimplementa el predicado en vez de interpolar visibleObsPredicate, nace un bug.
+// Medido sobre la base real antes del fix: de las primeras 20 filas que este SELECT devolvía, 3
+// no tenían que salir de la máquina (superseded o scope local). Una observación en cuarentena
+// —o sea, marcada como no confiable— también calificaba.
+//
+// El scope local no es visibilidad, es DESTINO: `local` significa "no sale de esta máquina", y
+// una muestra de calibración que cruza a un tercero es precisamente salir. Los 70 locales de la
+// base real no aportan nada al estimador que no aporten los shared, así que el costo es cero.
 func (e *DbEngine) SampleContents(limit int) ([]string, error) {
 	if limit <= 0 {
 		limit = 20
 	}
 	rows, err := e.db.Query(
-		`SELECT content FROM observations WHERE archived = 0 ORDER BY id LIMIT ?`, limit)
+		`SELECT content FROM observations
+		 WHERE `+visibleObsPredicate+` AND COALESCE(scope, '') <> 'local'
+		 ORDER BY id LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("error al muestrear contenidos: %w", err)
 	}
@@ -148,7 +166,23 @@ func (e *DbEngine) SampleContents(limit int) ([]string, error) {
 		if err := rows.Scan(&c); err != nil {
 			return nil, err
 		}
-		out = append(out, c)
+		// EL PORTERO, SEGUNDA LÍNEA. Medido: hoy el filtro de arriba ya es suficiente, porque
+		// SaveObservation tapa el contenido al guardar cuando el scope es 'shared'
+		// (operations.go, guarda C2) y las dos formas que quedan crudas —'local' y el scope
+		// vacío, que normaliza a local— las excluye el WHERE. O sea que por las vías públicas
+		// de escritura de HOY no hay fila alcanzable con un secreto crudo que pase por acá.
+		//
+		// Se pone igual, y el motivo es concreto, no ceremonial: la guarda C2 no existió siempre,
+		// y una fila 'shared' escrita antes de ella conserva su texto crudo. El repo ya tiene
+		// evidencia de contenido que entró sin pasar por donde debía (las 66-73 filas con marcado
+		// MCP adentro del content). Un punto de egreso no puede depender de una invariante que
+		// mantiene otra capa tres archivos más allá.
+		//
+		// Va ACÁ y no en el caller: éste es el borde por el que el texto cruza a un tercero, es
+		// el único lugar donde se puede probar contra una fila cruda, y tener la misma regla en
+		// dos sitios la deja sin dueño.
+		clean, _ := redact.Redact(c)
+		out = append(out, clean)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("error al iterar contenidos para calibración: %w", err)

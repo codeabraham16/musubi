@@ -226,3 +226,34 @@ func TestOpenAIProviderAPIError(t *testing.T) {
 		t.Errorf("esperaba el mensaje de la API en el error, obtuve %v", err)
 	}
 }
+
+// TestEnabledConNilNoEstaHabilitado fija el contrato que faltaba: un proveedor nil NO está
+// habilitado.
+//
+// La versión anterior devolvía TRUE para nil —la aserción de tipo sobre un nil falla, así que
+// isNoop quedaba en false— y el caller hacía lo único razonable, `if Enabled(p) { p.Embed(...) }`,
+// y se comía un nil pointer dereference. Lo destapó el hook por turno al recibir un embebedor nil
+// desde un test, pero el pánico estaba disponible para los diez callers de esta función.
+func TestEnabledConNilNoEstaHabilitado(t *testing.T) {
+	if Enabled(nil) {
+		t.Error("Enabled(nil) dice que sí: el caller va a llamar Embed sobre una interfaz nil y panickear")
+	}
+	if Enabled(NoopProvider{}) {
+		t.Error("el NoopProvider no genera embeddings reales: no puede estar habilitado")
+	}
+	// Y un proveedor de verdad sí, o la guarda apagaría la semántica entera.
+	if !Enabled(staticDePrueba()) {
+		t.Error("un proveedor real tiene que estar habilitado")
+	}
+}
+
+// staticDePrueba devuelve un Provider cualquiera que NO sea Noop ni nil.
+func staticDePrueba() Provider { return proveedorDePruebaEnabled{} }
+
+type proveedorDePruebaEnabled struct{}
+
+func (proveedorDePruebaEnabled) Embed(context.Context, string) ([]float32, error) {
+	return []float32{1}, nil
+}
+func (proveedorDePruebaEnabled) Dimensions() int { return 1 }
+func (proveedorDePruebaEnabled) Name() string    { return "prueba" }

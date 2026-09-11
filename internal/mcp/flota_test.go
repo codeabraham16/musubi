@@ -6,7 +6,10 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +18,8 @@ import (
 
 	"musubi/internal/config"
 	"musubi/internal/embedding"
+	"musubi/internal/fleet"
+	"musubi/internal/memory"
 )
 
 func servidorFlota(t *testing.T) (*McpServer, *httptest.Server) {
@@ -282,5 +287,179 @@ func TestFlotaRoundTripRemitenteContraReceptor(t *testing.T) {
 	}
 	if evs[0].Origen != origenFlota {
 		t.Fatalf("origen = %q, quiero %q", evs[0].Origen, origenFlota)
+	}
+}
+
+// TestFlotaVaciaContestaInventarioVacioYNoError fija la distinción que faltaba: «no pude resolver
+// el proyecto» y «no hay ninguna máquina» son dos estados distintos, y el segundo tiene respuesta.
+//
+// LOS NÚMEROS QUE LO ORIGINAN: musubi_fleet_list falla 19 de 40 veces en esta instalación (47%), y
+// aporta el 48% de TODOS los errores del ledger. Las 19 son este caso — stdio local sin `project`
+// contra una tabla `devices` vacía. El mismo estado del mundo contestaba ok/total:0 si nombrabas el
+// proyecto y ERROR si no.
+//
+// Y la guarda que debía cubrirlo no lo hacía: TestUnPanelSinProyectoPropioVeTodoLoQueSuCredencialConcede
+// enrola DOS máquinas antes de medir, así que sólo prueba el caso CON flota. Cero pruebas del caso
+// vacío en todo internal/mcp.
+func TestFlotaVaciaContestaInventarioVacioYNoError(t *testing.T) {
+	s := newTestServer(t, nil) // base nueva: cero devices, que es el estado bajo prueba
+
+	casos := []struct {
+		nombre string
+		llamar func() (interface{}, *RpcError)
+	}{
+		{"fleet_list", func() (interface{}, *RpcError) {
+			return s.toolFleetList(context.Background(), json.RawMessage(`{}`))
+		}},
+		{"fleet_metrics", func() (interface{}, *RpcError) {
+			return s.toolFleetMetrics(context.Background(), json.RawMessage(`{}`))
+		}},
+		{"fleet_services", func() (interface{}, *RpcError) {
+			return s.toolFleetServices(context.Background(), json.RawMessage(`{}`))
+		}},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			res, rpcErr := c.llamar()
+			if rpcErr != nil {
+				t.Fatalf("con la flota vacía %s devolvió error (%d: %s); tenía que devolver un inventario vacío",
+					c.nombre, rpcErr.Code, rpcErr.Message)
+			}
+			if res == nil {
+				t.Fatal("devolvió nil sin error")
+			}
+		})
+	}
+}
+
+// backendConListaIlegible es un almacén al que NO se le puede preguntar qué proyectos tienen
+// máquinas. Embebe StorageBackend en nil a propósito: si una tool tocara cualquier OTRO método
+// del almacén, paniquea, y así la prueba no puede pasar por un camino que no es el que mide.
+type backendConListaIlegible struct {
+	memory.StorageBackend
+}
+
+func (backendConListaIlegible) ProyectosConDevices(int) ([]string, error) {
+	return nil, errors.New("la tabla devices no se pudo leer")
+}
+
+// TestUnaListaDeProyectosILEGIBLENoSeContestaComoInventarioVacio es el hermano exacto de
+// TestFlotaVaciaContestaInventarioVacioYNoError, y existe porque el defecto que cubre NO ESTABA EN
+// NINGUNA DE LAS DOS RAMAS QUE LO CREARON — nació del merge.
+//
+// De un lado, `proyectosVisibles` aprendió a decir «no pude leer la lista» (el tercer valor
+// `ilegible`, que en el export sale por la serie `unreadable`). Del otro, esta rama convirtió
+// «cero proyectos» en «inventario vacío» para que el panel dejara de leerse como caído. Cada
+// cambio es correcto solo. Juntos con un resolve ingenuo —`return ps, tr, true`— una base
+// ILEGIBLE contesta `{"total": 0, "devices": []}`: un cero que significa «no sé» servido como si
+// fuera una medición, que es exactamente lo que el arreglo del export fue a sacar del otro lado.
+//
+// La diferencia importa porque las dos respuestas mandan a mirar lugares opuestos: «no hay
+// máquinas» manda a enrolar, «no puedo leer la lista» manda a mirar la base.
+//
+// SABOTAJE QUE LA HACE FALLAR, verificado y corrido: en `proyectosParaLeer`, descartar el valor
+// —`ps, tr, _ := proyectosVisibles(...)` y `return ps, tr, true`—, que es literalmente lo que
+// escribe un resolve ingenuo del conflicto. Los tres subtests pasan a recibir
+// `{"total": 0, "devices": []}` en verde. (Dejar el `!ilegible` por `true` a secas NO sirve de
+// sabotaje: el compilador lo ataja con «declared and not used», así que no es la forma en que
+// este defecto puede volver.)
+func TestUnaListaDeProyectosILEGIBLENoSeContestaComoInventarioVacio(t *testing.T) {
+	s := newTestServer(t, nil)
+	s.engine = backendConListaIlegible{}
+
+	casos := []struct {
+		nombre string
+		llamar func() (interface{}, *RpcError)
+	}{
+		{"fleet_list", func() (interface{}, *RpcError) {
+			return s.toolFleetList(context.Background(), json.RawMessage(`{}`))
+		}},
+		{"fleet_metrics", func() (interface{}, *RpcError) {
+			return s.toolFleetMetrics(context.Background(), json.RawMessage(`{}`))
+		}},
+		{"fleet_services", func() (interface{}, *RpcError) {
+			return s.toolFleetServices(context.Background(), json.RawMessage(`{}`))
+		}},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			res, rpcErr := c.llamar()
+			if rpcErr == nil {
+				t.Fatalf("con la lista de proyectos ILEGIBLE %s contestó %v sin error: "+
+					"un inventario en cero que en realidad es «no sé» se lee como flota apagada", c.nombre, res)
+			}
+		})
+	}
+}
+
+// backendConListaRecortada finge más proyectos con máquinas de los que entran en un barrido, y
+// una única máquina con el nombre buscado adentro del recorte. Es el estado en que `hallados`
+// vale 1 y NO se puede probar que sea única: la segunda homónima no se descartó, se quedó afuera.
+type backendConListaRecortada struct {
+	memory.StorageBackend
+	proyectoConLaMaquina string // "" ⇒ ninguno la tiene, y el barrido igual fue parcial
+	nombre               string
+}
+
+func (b backendConListaRecortada) ProyectosConDevices(tope int) ([]string, error) {
+	// `proyectosVisibles` pide tope+1 justamente para poder DETECTAR el recorte. Devolver los
+	// tope+1 es lo que enciende `truncado`.
+	ps := make([]string, 0, tope)
+	for i := 0; i < tope; i++ {
+		ps = append(ps, fmt.Sprintf("proyecto-%02d", i))
+	}
+	return ps, nil
+}
+
+func (b backendConListaRecortada) DevicePorNombre(projectID, name string) (fleet.Device, bool, error) {
+	if projectID == b.proyectoConLaMaquina && name == b.nombre {
+		return fleet.Device{Name: name, ProjectID: projectID}, true, nil
+	}
+	return fleet.Device{}, false, nil
+}
+
+// TestUnaBusquedaPARCIALNoDesempataSolaNiDeclaraInexistente cubre el último de los cinco
+// llamadores de `proyectosParaLeer`, que era el único que TIRABA `truncado`. N-1 de N.
+//
+// Los dos daños son distintos y los dos importan:
+//
+//  1. `hallados == 0` sobre una lista recortada contestaba «no hay ninguna máquina %q en los
+//     proyectos que alcanzás» — un falso negativo que AFIRMA haber buscado en todo lo alcanzable,
+//     y manda a enrolar una máquina que ya existe.
+//
+//  2. `hallados == 1` sobre una lista recortada devolvía ese device en silencio. Es exactamente
+//     lo que esta función se extrajo para impedir —que dos homónimas en dos tenants no se
+//     desempaten solas— entrando por la otra puerta: la segunda no se descartó, se quedó afuera
+//     del barrido, y `hallados` cayó de 2 a 1.
+//
+// HOY ES LATENTE y se dice: hace falta un principal `read: all` con más de 64 proyectos con
+// máquinas (`proyectosParaExportar`). Se arregla igual porque este repo YA se comió un techo de
+// 64 que truncaba en silencio —el latido y su inventario de servicios— y la forma es idéntica.
+//
+// SABOTAJE QUE LA HACE FALLAR: volver la línea a `proyectos, _, vacioLegitimo :=` y sacar los dos
+// bloques de `truncado`. Verificado: el subtest de la homónima pasa a recibir un device sin error.
+func TestUnaBusquedaPARCIALNoDesempataSolaNiDeclaraInexistente(t *testing.T) {
+	casos := []struct {
+		nombre   string
+		proyecto string
+		espera   string
+	}{
+		{"una sola hallada no es una única", "proyecto-07", "NO puedo probar que sea la única"},
+		{"ninguna hallada no es inexistente", "", "la búsqueda fue PARCIAL"},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			s := newTestServer(t, nil)
+			s.engine = backendConListaRecortada{proyectoConLaMaquina: c.proyecto, nombre: "pc-gio"}
+
+			d, pr, rpcErr := s.resolverDeviceUnico(nil, "pc-gio", "")
+			if rpcErr == nil {
+				t.Fatalf("con la lista de proyectos RECORTADA devolvió la máquina %q del proyecto %q sin error: "+
+					"una búsqueda parcial no prueba unicidad, y contestar es elegir por el que preguntó", d.Name, pr)
+			}
+			if !strings.Contains(rpcErr.Message, c.espera) {
+				t.Errorf("el error no dice que la búsqueda fue parcial.\n  esperaba que contuviera: %q\n  obtuve: %q", c.espera, rpcErr.Message)
+			}
+		})
 	}
 }

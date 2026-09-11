@@ -3,7 +3,9 @@ package recalleval
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"musubi/internal/logx"
 	"os"
 	"sort"
 	"strings"
@@ -36,6 +38,22 @@ type Query struct {
 type Fixture struct {
 	Docs    []Doc   `json:"docs"`
 	Queries []Query `json:"queries"`
+	// Relaciones son las aristas del grafo de observaciones (las "sinapsis" que DetectRelations
+	// va tejiendo). Sin ellas la QUINTA SEÑAL RRF —la centralidad de grafo— es un NO-OP en toda
+	// medición: buildObsGraph carga un grafo vacío, graphRank sale vacío, y una config con
+	// GraphCentrality:true queda bit-idéntica a una con false.
+	//
+	// O sea que el banco defendía una señal que nunca ejercitaba. Peor: cualquier cambio que
+	// rompiera la centralidad habría pasado el gate en verde, porque el gate no la tocaba.
+	Relaciones []Relacion `json:"relaciones,omitempty"`
+}
+
+// Relacion es una arista entre dos observaciones del fixture. Es no dirigida a los efectos de la
+// centralidad (buildObsGraph agrega las dos direcciones), pero se guarda con su origen y destino
+// porque así vive en la base.
+type Relacion struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
 }
 
 // EmbedFunc genera el vector de un texto (el StaticProvider real, o uno sintético en
@@ -80,6 +98,21 @@ type Scores struct {
 	MRR       float64         `json:"mrr"`
 	RecallAtK map[int]float64 `json:"recall_at_k"`
 	NDCGAtK   map[int]float64 `json:"ndcg_at_k"`
+	// PorConsulta guarda el resultado de CADA consulta, no sólo el promedio.
+	//
+	// POR QUÉ HACE FALTA: dos configuraciones pueden tener el mismo MRR promedio y haber cambiado
+	// de lugar la mitad del corpus. El promedio no distingue "mejoró parejo" de "mejoró mucho en
+	// tres consultas y empeoró en veinte", y esas dos cosas se deciden distinto. Sin el detalle por
+	// consulta no se puede comparar de a pares, que es la única forma de ver si un cambio mueve el
+	// sistema o mueve el ruido.
+	PorConsulta map[string]MetricasConsulta `json:"por_consulta,omitempty"`
+}
+
+// MetricasConsulta es el resultado de UNA consulta bajo UNA configuración.
+type MetricasConsulta struct {
+	RR        float64         `json:"rr"`
+	RecallAtK map[int]float64 `json:"recall_at_k"`
+	NDCGAtK   map[int]float64 `json:"ndcg_at_k"`
 }
 
 // LoadFixture lee un fixture JSON del disco.
@@ -106,6 +139,7 @@ func SeedEngine(dir string, fx *Fixture, embed EmbedFunc) (*memory.DbEngine, err
 	if err != nil {
 		return nil, err
 	}
+	var omitidos []string
 	for _, d := range fx.Docs {
 		var vec []float32
 		if embed != nil {
@@ -116,6 +150,22 @@ func SeedEngine(dir string, fx *Fixture, embed EmbedFunc) (*memory.DbEngine, err
 			}
 		}
 		if err := eng.SaveObservation(d.ID, d.Topic, d.Content, vec); err != nil {
+			// UNA GUARDA DE ESCRITURA NO PUEDE VOLVER INSEMBRABLE AL HISTÓRICO. saveObservation
+			// rechaza el contenido que se comió el cierre de su propia llamada (`</content>` con el
+			// sobre adentro), y hace bien: existe para que no entre MÁS de eso. Pero acá no está
+			// entrando nada nuevo — se está re-sembrando en una base descartable lo que YA vive en
+			// la memoria real. Medido: 66 observaciones del acervo están en ese estado y son
+			// irreparables (reescribir el texto cambiaría el content_hash, que es la clave del
+			// dedup y viaja en el sync), así que abortar acá dejaría el fixture por `content`
+			// permanentemente inconstruible.
+			//
+			// Se saltean y SE CUENTAN. El conteo va al log al final: un banco que recorta su corpus
+			// en silencio informa "medí todo" cuando midió menos, que es la falla que este repo ya
+			// tiene nombrada. Cualquier OTRO error sí aborta: un disco lleno no es un dato sucio.
+			if errors.Is(err, memory.ErrPayloadInvalido) {
+				omitidos = append(omitidos, d.ID)
+				continue
+			}
 			eng.Close()
 			return nil, fmt.Errorf("guardar doc %s: %w", d.ID, err)
 		}
@@ -126,6 +176,44 @@ func SeedEngine(dir string, fx *Fixture, embed EmbedFunc) (*memory.DbEngine, err
 			eng.Close()
 			return nil, fmt.Errorf("fijar created_at doc %s: %w", d.ID, err)
 		}
+	}
+	// LAS ARISTAS, DESPUÉS DE LOS DOCS. Van al final a propósito: observation_relations referencia
+	// observations, y sembrar una arista hacia un doc que el motor rechazó (ver omitidos) dejaría
+	// una relación huérfana — justo lo que el check orphan_relations del doctor existe para
+	// encontrar. Se saltean las aristas cuyas puntas no hayan entrado.
+	sembrados := make(map[string]bool, len(fx.Docs))
+	for _, d := range fx.Docs {
+		sembrados[d.ID] = true
+	}
+	for _, o := range omitidos {
+		delete(sembrados, o)
+	}
+	var aristasOmitidas int
+	for i, r := range fx.Relaciones {
+		if !sembrados[r.Source] || !sembrados[r.Target] {
+			aristasOmitidas++
+			continue
+		}
+		if _, err := eng.UpsertObsRelation(memory.ObsRelation{
+			ID:       fmt.Sprintf("rel-eval-%d", i),
+			SourceID: r.Source,
+			TargetID: r.Target,
+			Relation: "related",
+			Status:   "resolved",
+		}); err != nil {
+			eng.Close()
+			return nil, fmt.Errorf("sembrar relación %s->%s: %w", r.Source, r.Target, err)
+		}
+	}
+	if aristasOmitidas > 0 {
+		logx.Warn("el banco sembró menos aristas de las que pidió: alguna punta no entró al corpus",
+			"omitidas", aristasOmitidas, "de", len(fx.Relaciones))
+	}
+
+	if len(omitidos) > 0 {
+		logx.Warn("el banco sembró MENOS corpus del que pidió: hay observaciones que el motor no acepta re-guardar",
+			"omitidas", len(omitidos), "de", len(fx.Docs), "primera", omitidos[0],
+			"motivo", "content con el sobre de su propia llamada adentro (irreparable: reescribirlo cambia el content_hash)")
 	}
 	return eng, nil
 }
@@ -196,6 +284,7 @@ func Evaluate(ctx context.Context, eng *memory.DbEngine, fx *Fixture, cfg Config
 	pool := len(fx.Docs) // pool = corpus entero: el recorte lo hacen las métricas @k, no el pool
 	recallByK := make(map[int][]float64, len(ks))
 	ndcgByK := make(map[int][]float64, len(ks))
+	porConsulta := make(map[string]MetricasConsulta, len(fx.Queries))
 	var rr []float64
 	for _, q := range fx.Queries {
 		if len(q.Relevant) == 0 {
@@ -210,17 +299,28 @@ func Evaluate(ctx context.Context, eng *memory.DbEngine, fx *Fixture, cfg Config
 			return Scores{}, fmt.Errorf("query %s: %w", q.ID, err)
 		}
 		rr = append(rr, ReciprocalRank(ranked, relevant))
-		for _, k := range ks {
-			recallByK[k] = append(recallByK[k], RecallAtK(ranked, relevant, k))
-			ndcgByK[k] = append(ndcgByK[k], NDCGAtK(ranked, relevant, k))
+		mc := MetricasConsulta{
+			RR:        ReciprocalRank(ranked, relevant),
+			RecallAtK: make(map[int]float64, len(ks)),
+			NDCGAtK:   make(map[int]float64, len(ks)),
 		}
+		for _, k := range ks {
+			r := RecallAtK(ranked, relevant, k)
+			n := NDCGAtK(ranked, relevant, k)
+			recallByK[k] = append(recallByK[k], r)
+			ndcgByK[k] = append(ndcgByK[k], n)
+			mc.RecallAtK[k] = r
+			mc.NDCGAtK[k] = n
+		}
+		porConsulta[q.ID] = mc
 	}
 	s := Scores{
-		Config:    cfg.Name,
-		Queries:   len(rr),
-		MRR:       mean(rr),
-		RecallAtK: make(map[int]float64, len(ks)),
-		NDCGAtK:   make(map[int]float64, len(ks)),
+		Config:      cfg.Name,
+		Queries:     len(rr),
+		MRR:         mean(rr),
+		RecallAtK:   make(map[int]float64, len(ks)),
+		NDCGAtK:     make(map[int]float64, len(ks)),
+		PorConsulta: porConsulta,
 	}
 	for _, k := range ks {
 		s.RecallAtK[k] = mean(recallByK[k])

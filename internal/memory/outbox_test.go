@@ -225,8 +225,15 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       inventario» llegan como el mismo `[RESOLVED]`. Guarda el CUÁNDO y no un booleano
 	//       —`revoked` ya dice que pasó— para poder emitir una serie ACOTADA EN EL TIEMPO que
 	//       acompañe a las resoluciones y después desaparezca sola. readCompatible: ADD COLUMN.
-	if latestSchemaVersion() != 55 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 55", latestSchemaVersion())
+	//    56 · `indices_observation_relations`. La tabla de sinapsis no tenía NI UN índice propio:
+	//       los dos autoindex de SQLite (PK y UNIQUE) arrancan por source_id, así que la lectura
+	//       por target_id y la de la cola de conflictos por status eran scan completo. Se agrega
+	//       en la migración Y en la baseline, siguiendo la convención de la v21. Se pone ahora,
+	//       con 252 filas, porque crear el índice con la tabla chica cuesta milisegundos y la cola
+	//       crece ~10/día: el scan se vuelve visible recién cuando ya molesta. readCompatible: un
+	//       índice cambia el PLAN, nunca el RESULTADO de una consulta.
+	if latestSchemaVersion() != 56 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 56", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

@@ -81,7 +81,62 @@ func (e *DbEngine) doctorChecks() []doctorCheck {
 		// deep: recorre el content de las observaciones que matchean el LIKE y decide en Go.
 		{code: "swallowed_envelope", deep: true, run: checkSwallowedEnvelope,
 			count: countSwallowedImportance, apply: applySwallowedImportance},
+		// No es deep: es un COUNT con LEFT JOIN sobre un índice, no recorre content.
+		{code: "embedding_coverage", run: checkEmbeddingCoverage},
 	}
+}
+
+// checkEmbeddingCoverage avisa cuando hay memoria que la búsqueda semántica NO puede encontrar.
+//
+// POR QUÉ EXISTE: el recall degrada a sólo-léxico en silencio y por diseño. Eso es correcto como
+// comportamiento y pésimo como diagnóstico: medido el 2026-09-10 sobre la base real, 1.946
+// observaciones visibles y CERO filas en `embeddings` — y con eso apagados el pool vectorial del
+// recall, MMR, el AND-gate del coseno, la banda ciega y el afilador. Ni un solo log lo decía.
+//
+// NO ESCRIBE SU PROPIO SQL: llama a countStaleEmbeddings, que comparte stalePredicate con el
+// backfill y el auto-backfill. Si este check preguntara "¿hay filas en embeddings?" por su cuenta,
+// una base re-embebida a medias con vectores de OTRO modelo daría verde mientras el recall los
+// excluye por la regla de homogeneidad — verde sobre el defecto que dice cubrir.
+//
+// TRES ESTADOS, NO DOS, y esto es lo que lo hace usable: sin modelo de vectores configurado el
+// resultado es `ok` con Unmeasured, no warning. Un warning ahí nacería en amarillo PERMANENTE e
+// IRREPARABLE en toda instalación default —el recall sólo-léxico es una configuración válida, no
+// una avería— y buildHealthContext lo inyecta en el arranque de cada sesión: fatiga de alarma por
+// construcción, que es como se enseña a ignorar un canal.
+func checkEmbeddingCoverage(e *DbEngine) CheckResult {
+	// LA PREGUNTA ES POR LA MEMORIA, NO POR ESTE PROCESO. `e.vectorModelID` lo inyecta el
+	// entrypoint con SetVectorModelID, y hay entrypoints que no lo hacen: runDoctor abre la base
+	// con NewDbEngine a secas. La primera versión de este check preguntaba sólo por ese campo, y
+	// el resultado fue que `musubi doctor` contestaba "no hay proveedor de embeddings" CON 1.948
+	// VECTORES EN LA BASE. Las pruebas no lo vieron porque seteaban el campo a mano: probaban el
+	// contrato que yo había imaginado, no el que el comando real ejercita.
+	//
+	// Así que cuando el engine no trae procedencia, se la pregunta a la base.
+	modelo := e.vectorModelID
+	if modelo == "" {
+		dominante, total, err := e.dominantEmbeddingModel()
+		if err != nil {
+			return CheckResult{Code: "embedding_coverage", Status: "error",
+				Message: "no se pudo medir la cobertura de embeddings: " + err.Error()}
+		}
+		if total == 0 {
+			// Ni embebedor cableado ni vectores guardados: acá sí no hay nada que medir.
+			return CheckResult{Code: "embedding_coverage", Status: "ok", Unmeasured: true,
+				Message: "recall sólo-léxico: no hay proveedor de embeddings ni vectores guardados, así que no hay cobertura que medir"}
+		}
+		modelo = dominante
+	}
+	pendientes, err := e.countStaleEmbeddingsFor(modelo)
+	if err != nil {
+		return CheckResult{Code: "embedding_coverage", Status: "error",
+			Message: "no se pudo medir la cobertura de embeddings: " + err.Error()}
+	}
+	if pendientes == 0 {
+		return CheckResult{Code: "embedding_coverage", Status: "ok",
+			Message: "toda la memoria visible tiene vector del modelo actual"}
+	}
+	return CheckResult{Code: "embedding_coverage", Status: "warning",
+		Message: fmt.Sprintf("%d observación(es) visibles sin vector del modelo actual: la búsqueda semántica no las encuentra. Corré 'musubi embed backfill'", pendientes)}
 }
 
 // runAbandonedAfter es cuánto puede pasar un run 'running' sin que nadie lo toque antes de que el

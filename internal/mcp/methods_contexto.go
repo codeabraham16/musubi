@@ -236,8 +236,19 @@ func recortarConMarca(s string, max int) string {
 func (s *McpServer) resolverDeviceUnico(p *Principal, nombre, declarado string) (fleet.Device, string, *RpcError) {
 	// EL LAZO POR PROYECTO, no `fleetReadScopeFor` a secas: el principal del panel es `read: all`
 	// SIN proyecto propio, y el atajo devuelve vacío. Ese bug ya se pagó en cuatro tools.
-	proyectos, _ := s.proyectosParaLeer(p, declarado)
+	// `truncado` NO SE DESCARTA, y este era el ÚNICO de los cinco llamadores que lo tiraba —la
+	// forma dominante de defecto de este repo: la regla puesta en N-1 de N caminos. Los otros
+	// cuatro (fleet_list, fleet_metrics, servicios, pantalla) lo conservan.
+	proyectos, truncado, vacioLegitimo := s.proyectosParaLeer(p, declarado)
 	if len(proyectos) == 0 {
+		// ACÁ NO SE DEVUELVE VACÍO, y es a propósito: esto busca UNA máquina concreta, así que un
+		// inventario vacío no es una respuesta — el llamador quiere un device. Pero el mensaje sí
+		// tiene que decir la verdad: con flota vacía el problema NO es que falte `project`, y
+		// mandar a declararlo hace perder el tiempo persiguiendo un parámetro que no arregla nada.
+		if vacioLegitimo {
+			return fleet.Device{}, "", rpcErrorf(codeInvalidParams,
+				"no hay ninguna máquina enrolada: enrolá una con musubi_fleet_enroll antes de pedir su contexto")
+		}
 		return fleet.Device{}, "", rpcErrorf(codeInvalidParams, "no se pudo determinar el proyecto: declaralo en `project`")
 	}
 	var (
@@ -259,7 +270,27 @@ func (s *McpServer) resolverDeviceUnico(p *Principal, nombre, declarado string) 
 		return fleet.Device{}, "", rpcErrorf(codeInvalidParams,
 			"hay %d máquinas llamadas %q en los proyectos que alcanzás: declará `project` para elegir cuál", hallados, nombre)
 	}
+	// UNA SOLA HALLADA SOBRE UNA LISTA RECORTADA NO ES UNA ÚNICA: ES LA PRIMERA QUE ENTRÓ.
+	//
+	// Ésta es la razón de existir de esta función, entrando por la otra puerta. El desempate
+	// automático entre homónimas está prohibido porque devolvería la historia de una máquina que
+	// no es la que preguntaron, sin decirlo; con la lista recortada pasa igual, sólo que la
+	// segunda homónima no se descartó, se quedó afuera del barrido. `hallados` cae de 2 a 1 y la
+	// unicidad no está probada: está no-refutada, que no es lo mismo.
+	//
+	// Va al MISMO camino que `> 1` a propósito. Contestar sería elegir, y acá no se elige.
+	if hallados == 1 && truncado {
+		return fleet.Device{}, "", rpcErrorf(codeInvalidParams,
+			"hay más proyectos con máquinas de los que entran en un barrido, así que encontré %q pero NO puedo probar que sea la única con ese nombre: declará `project` para que la búsqueda sea exacta", nombre)
+	}
 	if hallados == 0 {
+		// EL MENSAJE NO PUEDE AFIRMAR QUE BUSCÓ EN TODO LO ALCANZABLE SI LA LISTA VINO RECORTADA.
+		// Un «no existe» sobre una búsqueda parcial es un falso negativo que manda a enrolar una
+		// máquina que ya existe — miente en rojo, que se persigue igual que una mentira en verde.
+		if truncado {
+			return fleet.Device{}, "", rpcErrorf(codeUnauthorized,
+				"no encontré ninguna máquina %q, pero la búsqueda fue PARCIAL: hay más proyectos con máquinas de los que entran en un barrido. Declará `project` antes de darla por inexistente", nombre)
+		}
 		return fleet.Device{}, "", rpcErrorf(codeUnauthorized,
 			"no hay ninguna máquina %q en los proyectos que alcanzás", nombre)
 	}

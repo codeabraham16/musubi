@@ -1468,7 +1468,15 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 	var res memory.RecallResult
 	var err error
 	s.withReadLock(func() {
-		res, err = s.engine.Recall(ctx, args.Query, opts)
+		// scopedCtx, NO el ctx crudo. El aislamiento por proyecto se aplicaba recién en Go, con
+		// filterCandidatesByProject, DESPUÉS de que SearchObservations ya hubiera cortado en
+		// limit=50 sobre TODOS los tenants: los cupos del pool vectorial se los gastaban
+		// observaciones de otros proyectos que después se tiraban, y las propias quedaban afuera
+		// por no entrar en el corte. Es el mismo mecanismo que ya usan detect y codegraph.
+		//
+		// Con scope vacío o Federate el comportamiento es bit-idéntico al de antes (sin filtro),
+		// que es el caso del stdio local y del bearer legacy.
+		res, err = s.engine.Recall(s.scopedCtx(ctx), args.Query, opts)
 	})
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error en recall: %v", err)

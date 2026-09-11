@@ -15,7 +15,13 @@ import (
 func (e *DbEngine) TopicExists(topicKey string) (bool, error) {
 	var x int
 	err := e.db.QueryRow(
-		`SELECT 1 FROM observations WHERE topic_key = ? AND archived = 0 LIMIT 1`,
+		// El predicado CANÓNICO, no un `archived = 0` propio. Era el cuarto sitio de este repo que
+		// lo reescribía a mano —y el cuarto de este MISMO archivo que no lo hacía, mientras las
+		// otras consultas de topics.go sí lo interpolan. Sin `quarantined = 0` ni el filtro de
+		// superseded, una observación marcada como NO confiable alcanzaba para declarar el topic
+		// "existente", y el hook deja de inyectar las skills cognitivas creyendo que el proyecto
+		// ya está perfilado. No hay fuga de contenido: se filtra la EXISTENCIA, no el texto.
+		`SELECT 1 FROM observations WHERE topic_key = ? AND `+visibleObsPredicate+` LIMIT 1`,
 		topicKey,
 	).Scan(&x)
 	if err == sql.ErrNoRows {
