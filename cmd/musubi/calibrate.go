@@ -35,10 +35,34 @@ func runCalibrate(args []string) {
 	apply := false
 	model := defaultCalibrateModel
 	limit := 12
+	// A DÓNDE SE PREGUNTA Y DE DÓNDE SALE LA CREDENCIAL, los dos configurables.
+	//
+	// Estaban clavados en `api.anthropic.com` + `ANTHROPIC_API_KEY`, y eso obligaba a conseguir una
+	// API key de consola aunque la instalación YA tuviera por dónde contar tokens. Medido en el
+	// cerebro central: su pilar de cognición habla con un proxy LiteLLM
+	// (`cognition.endpoint: http://127.0.0.1:4000/v1`, credencial en `LITELLM_MASTER_KEY`), ese
+	// proxy EXPONE `/v1/messages/count_tokens` —contesta 401 y no 404— y acepta la credencial tanto
+	// en `x-api-key` como en `Authorization: Bearer`, que es la cabecera que esto ya manda. O sea
+	// que lo único que faltaba era poder apuntar a otra URL.
+	//
+	// No se cablea LiteLLM acá: se parametriza. Cualquier pasarela que hable el mismo endpoint
+	// sirve, y la de Anthropic sigue siendo el default.
+	endpoint := countTokensURL
+	varClave := "ANTHROPIC_API_KEY"
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--apply":
 			apply = true
+		case "--endpoint":
+			if i+1 < len(args) {
+				endpoint = args[i+1]
+				i++
+			}
+		case "--key-env":
+			if i+1 < len(args) {
+				varClave = args[i+1]
+				i++
+			}
 		case "--model":
 			if i+1 < len(args) {
 				model = args[i+1]
@@ -59,15 +83,21 @@ func runCalibrate(args []string) {
 	// «requiere ANTHROPIC_API_KEY» teniendo la credencial ahí al lado, sin leer. Es una
 	// herramienta a mano y no rompe nada en producción, pero una regla que se aplica en unos
 	// caminos y no en otros vuelve por el que quedó afuera.
-	apiKey, err := config.SecretoDeEnv("ANTHROPIC_API_KEY")
+	apiKey, err := config.SecretoDeEnv(varClave)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "musubi calibrate: %v\n", err)
 		os.Exit(1)
 	}
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "musubi calibrate es OPT-IN: requiere ANTHROPIC_API_KEY (o ANTHROPIC_API_KEY_FILE).")
-		fmt.Fprintln(os.Stderr, "Usa el endpoint count_tokens de Anthropic para medir la precisión del estimador.")
+		// EL MENSAJE NOMBRA LA VARIABLE QUE DE VERDAD SE MIRÓ, no una fija. Con `--key-env` puesto,
+		// decir «requiere ANTHROPIC_API_KEY» mandaba a poner la credencial equivocada.
+		fmt.Fprintf(os.Stderr, "musubi calibrate es OPT-IN: requiere %s (o %s_FILE).\n", varClave, varClave)
+		fmt.Fprintln(os.Stderr, "Usa el endpoint count_tokens para medir la precisión del estimador.")
+		fmt.Fprintln(os.Stderr, "Si tu instalación ya tiene una pasarela que lo expone (p. ej. un proxy LiteLLM),")
+		fmt.Fprintln(os.Stderr, "apuntá ahí en vez de conseguir una API key nueva:")
+		fmt.Fprintln(os.Stderr, "  musubi calibrate --endpoint http://127.0.0.1:4000/v1/messages/count_tokens \\")
+		fmt.Fprintln(os.Stderr, "                   --key-env LITELLM_MASTER_KEY --model <alias-del-proxy>")
 		fmt.Fprintln(os.Stderr, "El server MCP sigue offline/model-free; esto es solo una herramienta manual.")
 		os.Exit(1)
 	}
@@ -81,12 +111,21 @@ func runCalibrate(args []string) {
 	defer engine.Close()
 
 	texts := gatherCalibrationTexts(engine, limit)
-	fmt.Printf("Calibrando con %d muestras contra count_tokens (model=%s)...\n", len(texts), model)
+	// SE DICE CONTRA QUÉ SE MIDIÓ, endpoint incluido. EL CONTEO DE TOKENS ES ESPECÍFICO DEL MODELO:
+	// desde Claude Opus 4.7 el tokenizador da ~30% más tokens que en los modelos anteriores.
+	// Calibrar contra un alias de proxy que resuelve a otra familia deja los divisores mal por ese
+	// margen, y el informe se vería igual de sano. Por eso el destino va impreso: sin él,
+	// «calibrado» no dice contra qué.
+	fmt.Printf("Calibrando con %d muestras contra %s (model=%s)...\n", len(texts), endpoint, model)
+	if endpoint != countTokensURL {
+		fmt.Printf("  OJO: el conteo sale del tokenizador que resuelva %q en esa pasarela.\n", model)
+		fmt.Println("  Tiene que ser el MISMO modelo que consume esta memoria, o los divisores quedan sesgados.")
+	}
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	var counts []memory.TextCount
 	for _, txt := range texts {
-		n, err := countTokensRemote(client, apiKey, model, txt)
+		n, err := countTokensRemote(client, endpoint, apiKey, model, txt)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  ! muestra omitida: %v\n", err)
 			continue
@@ -179,7 +218,7 @@ func printCalibrationReport(rep memory.CalibrationReport) {
 // countTokensRemote llama al endpoint count_tokens de Anthropic (raw net/http,
 // sin SDK: respeta el invariante de no agregar dependencias) y devuelve el conteo
 // real de tokens del texto.
-func countTokensRemote(client *http.Client, apiKey, model, text string) (int, error) {
+func countTokensRemote(client *http.Client, endpoint, apiKey, model, text string) (int, error) {
 	body, err := json.Marshal(map[string]interface{}{
 		"model":    model,
 		"messages": []map[string]string{{"role": "user", "content": text}},
@@ -187,7 +226,7 @@ func countTokensRemote(client *http.Client, apiKey, model, text string) (int, er
 	if err != nil {
 		return 0, err
 	}
-	req, err := http.NewRequest(http.MethodPost, countTokensURL, bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return 0, err
 	}
