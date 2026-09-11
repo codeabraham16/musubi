@@ -34,9 +34,18 @@ import (
 // Politica es lo que se le exige al runner. Sale del archivo presupuesto-de-pruebas.env, que es
 // la ÚNICA fuente del número: el ci.yml lo lee para armar el `-timeout` y este paquete lo lee
 // para juzgar el margen, así que no hay forma de que las dos mitades se desincronicen.
+//
+// DOS TECHOS PORQUE SON DOS ENTORNOS. Timeout es un PRESUPUESTO (el de CI: tiene que quedar
+// corto, si no el guard del margen no se puede poner rojo nunca) y TimeoutLocal es un PISO (el
+// que se le exige a quien corre en su máquina: tiene que quedar largo, si no la corrida muere
+// con un panic ilegible). Un solo número no podía ser los dos: con el runner midiendo 333,3 s y
+// la peor máquina fechada 1059 s, el presupuesto tope da ~33m y el piso da ~35m. Ver el bloque
+// «DOS TECHOS» de presupuesto-de-pruebas.env.
 type Politica struct {
-	Timeout          time.Duration // RACE_TIMEOUT: lo que se le pasa a `go test -timeout`.
-	MargenMinimo     float64       // MARGEN_MINIMO: TECHO/MÁS_LENTO mínimo aceptable.
+	Timeout          time.Duration // RACE_TIMEOUT: lo que se le pasa a `go test -timeout` EN CI.
+	TimeoutLocal     time.Duration // TIMEOUT_LOCAL: el -timeout que se le pide a quien corre -race en su máquina.
+	MedicionLocal    time.Duration // MEDICION_LOCAL_SEGUNDOS: el paquete más lento en la peor máquina fechada.
+	MargenMinimo     float64       // MARGEN_MINIMO: TECHO/MÁS_LENTO mínimo aceptable, para los dos techos.
 	UmbralLineasTest int           // UMBRAL_GUARDA_LINEAS_TEST: desde cuántas líneas de test un paquete tiene que llevar el guard.
 }
 
@@ -67,6 +76,11 @@ const (
 	// o sea que el guard del margen queda VERDE POR AMPLITUD DEL RANGO y no por estar bien: la
 	// suite podría triplicarse sin que nada dijera nada. El tope de verdad es FactorTechoMaximo,
 	// más abajo, que se mide contra la corrida en vez de tipearse.
+	//
+	// Y DESDE QUE HAY DOS TECHOS, ESTE RANGO APRIETA MÁS QUE LO QUE DICE. CargarPolitica exige
+	// RACE_TIMEOUT ≤ TIMEOUT_LOCAL ≤ FactorTechoMaximo × MARGEN_MINIMO × MEDICION_LOCAL_SEGUNDOS,
+	// o sea que hoy el tope efectivo de RACE_TIMEOUT no es 2h sino 6,00 × 1059 s ≈ 105m — atado a
+	// una medición, no a un número tipeado. `RACE_TIMEOUT=2h` ya no entra.
 	TimeoutTecho = 2 * time.Hour
 	// FactorTechoMaximo — cuántas veces el margen MEDIDO puede pasar al margen EXIGIDO antes de
 	// que el techo deje de ser un techo.
@@ -75,8 +89,13 @@ const (
 	// dirección también apaga el aparato, sólo que en silencio — un techo enorme hace que
 	// TECHO/MÁS_LENTO sea siempre cómodo y el rojo se vuelve inalcanzable. Con 3 el techo puede
 	// sobrar hasta el triple de lo que la política pide (hoy: hasta 6,0× cuando se exige 2,0×,
-	// y el medido es 2,27×), que es holgura de sobra para el ruido de un runner compartido, y
-	// deja de tapar el caso en que alguien «arregla» un rojo subiendo el número.
+	// y los medidos son 3,60× en CI y 2,27× en la peor máquina fechada), que es holgura de sobra
+	// para el ruido de un runner compartido, y deja de tapar el caso en que alguien «arregla» un
+	// rojo subiendo el número.
+	//
+	// RIGE PARA LOS DOS TECHOS. Contra la corrida, para el presupuesto de CI; y contra
+	// MEDICION_LOCAL_SEGUNDOS, para el piso local — ahí lo comprueba CargarPolitica, porque no
+	// hay ninguna corrida que pueda medir la laptop de nadie.
 	FactorTechoMaximo = 3.0
 	// UmbralLineasPiso / UmbralLineasTecho — el umbral que decide QUÉ paquetes tienen que llevar
 	// el guard. Subirlo es la forma barata de sacar paquetes de la lista sin tocarlos: con
@@ -125,7 +144,7 @@ func CargarPolitica(ruta string) (Politica, error) {
 		return Politica{}, fmt.Errorf("no se pudo leer la política de presupuesto en %q: %w", ruta, err)
 	}
 	var p Politica
-	var vistoTimeout, vistoMargen, vistoUmbral bool
+	var vistoTimeout, vistoLocal, vistoMedicion, vistoMargen, vistoUmbral bool
 	for _, linea := range strings.Split(string(b), "\n") {
 		linea = strings.TrimSpace(linea)
 		if linea == "" || strings.HasPrefix(linea, "#") {
@@ -151,6 +170,30 @@ func CargarPolitica(ruta string) (Politica, error) {
 					"cualquier medición", ruta, d, TimeoutPiso, TimeoutTecho, TimeoutTecho)
 			}
 			p.Timeout, vistoTimeout = d, true
+		case "TIMEOUT_LOCAL":
+			d, err := time.ParseDuration(valor)
+			if err != nil {
+				return Politica{}, fmt.Errorf("%s: TIMEOUT_LOCAL=%q no es una duración de Go: %w", ruta, valor, err)
+			}
+			if d < TimeoutPiso || d > TimeoutTecho {
+				return Politica{}, fmt.Errorf("%s: TIMEOUT_LOCAL=%v está fuera del rango honesto "+
+					"[%v, %v]. Es el -timeout que se le pide a quien corre -race en su máquina: "+
+					"por debajo del default de Go no pide nada, y por arriba de %v ya no es un "+
+					"piso sino no tener techo", ruta, d, TimeoutPiso, TimeoutTecho, TimeoutTecho)
+			}
+			p.TimeoutLocal, vistoLocal = d, true
+		case "MEDICION_LOCAL_SEGUNDOS":
+			f, err := strconv.ParseFloat(valor, 64)
+			if err != nil {
+				return Politica{}, fmt.Errorf("%s: MEDICION_LOCAL_SEGUNDOS=%q no es un número: %w", ruta, valor, err)
+			}
+			if f <= 0 {
+				return Politica{}, fmt.Errorf("%s: MEDICION_LOCAL_SEGUNDOS=%v no es una medición: "+
+					"un cero o un negativo acá significan «no medí», y «no medí» no puede "+
+					"presupuestar nada", ruta, f)
+			}
+			p.MedicionLocal = time.Duration(f * float64(time.Second))
+			vistoMedicion = true
 		case "MARGEN_MINIMO":
 			f, err := strconv.ParseFloat(valor, 64)
 			if err != nil {
@@ -188,7 +231,67 @@ func CargarPolitica(ruta string) (Politica, error) {
 	if !vistoUmbral {
 		return Politica{}, fmt.Errorf("%s: falta UMBRAL_GUARDA_LINEAS_TEST", ruta)
 	}
+	if !vistoLocal {
+		return Politica{}, fmt.Errorf("%s: falta TIMEOUT_LOCAL", ruta)
+	}
+	if !vistoMedicion {
+		return Politica{}, fmt.Errorf("%s: falta MEDICION_LOCAL_SEGUNDOS", ruta)
+	}
+	if err := verificarCoherencia(ruta, p); err != nil {
+		return Politica{}, err
+	}
 	return p, nil
+}
+
+// verificarCoherencia es lo que impide que los dos techos vuelvan a pisarse.
+//
+// LA HISTORIA, EN UNA LÍNEA: había UN número sirviendo a dos consumidores con presiones
+// opuestas —el presupuesto de CI, que tiene que quedar corto, y el piso del que corre en su
+// máquina, que tiene que quedar largo— y llegó un día en que ningún valor satisfacía a los dos.
+// Las dos guardas tenían razón; lo que estaba mal era que juzgaran la misma variable.
+//
+// Ahora son dos, y lo que las ata es esto:
+//
+//   - TIMEOUT_LOCAL ≥ RACE_TIMEOUT. El piso local nunca puede quedar por DEBAJO del presupuesto
+//     con el que corre CI. Si pudiera, la rama roja del guard (la que atrapa el default de Go de
+//     10 min) quedaría gobernada por el número más chico y el tramo de aviso sería código muerto.
+//     Es también lo que acota el daño de una MEDICION_LOCAL_SEGUNDOS mentida a la baja.
+//
+//   - TIMEOUT_LOCAL/MEDICION_LOCAL_SEGUNDOS dentro de la MISMA banda de dos lados que CI le
+//     aplica a su propio techo: ≥ MARGEN_MINIMO (si no, el piso local no alcanza para la peor
+//     máquina fechada y el guard estaría recomendando el panic ilegible que vino a cerrar) y
+//     ≤ MARGEN_MINIMO × FactorTechoMaximo (si no, el piso local es tan grande que no pide nada).
+//
+// VA ACÁ Y NO EN UN TEST a propósito: así lo comprueban TODOS los que leen la política —el
+// binario del presupuesto en CI, y el ExigirTimeoutSuficiente de cada paquete caro—, no sólo el
+// que corra `go test ./internal/testbudget/...`. Un archivo de política incoherente no llega a
+// gobernar nada.
+func verificarCoherencia(ruta string, p Politica) error {
+	if p.TimeoutLocal < p.Timeout {
+		return fmt.Errorf("%s: TIMEOUT_LOCAL=%v es menor que RACE_TIMEOUT=%v. El piso que se le "+
+			"pide a quien corre -race en su máquina no puede quedar por debajo del presupuesto "+
+			"con el que corre CI: el runner es el entorno RÁPIDO, no el lento",
+			ruta, p.TimeoutLocal, p.Timeout)
+	}
+	margen := float64(p.TimeoutLocal) / float64(p.MedicionLocal)
+	if margen < p.MargenMinimo {
+		return fmt.Errorf("%s: TIMEOUT_LOCAL=%v da %.2f× sobre la peor medición fechada "+
+			"(MEDICION_LOCAL_SEGUNDOS=%.1fs) y la política exige %.2f×. Así, el guard le "+
+			"recomendaría a quien corre en esa máquina un -timeout que NO alcanza, y la corrida "+
+			"volvería a morir con «panic: test timed out» culpando a un test inocente — que es "+
+			"el defecto que este aparato cierra. Arreglo: subir TIMEOUT_LOCAL, o actualizar la "+
+			"medición si el paquete se abarató (con fecha y máquina, en el comentario)",
+			ruta, p.TimeoutLocal, margen, p.MedicionLocal.Seconds(), p.MargenMinimo)
+	}
+	if tope := p.MargenMinimo * FactorTechoMaximo; margen > tope {
+		return fmt.Errorf("%s: TIMEOUT_LOCAL=%v da %.2f× sobre la peor medición fechada "+
+			"(MEDICION_LOCAL_SEGUNDOS=%.1fs) y el tope es %.2f×: un piso que sobra tanto no pide "+
+			"nada, y de paso legaliza un RACE_TIMEOUT igual de grande. Arreglo: bajar "+
+			"TIMEOUT_LOCAL a la medición × %.2f (≈%v)",
+			ruta, p.TimeoutLocal, margen, p.MedicionLocal.Seconds(), tope, p.MargenMinimo,
+			time.Duration(float64(p.MedicionLocal)*p.MargenMinimo).Round(time.Minute))
+	}
+	return nil
 }
 
 // RaizDelRepo sube desde dir hasta encontrar el go.mod del módulo. Sirve para que un test

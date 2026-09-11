@@ -3,6 +3,7 @@ package testbudget
 import (
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -215,19 +216,42 @@ func TestPoliticaDelRepoSeLee(t *testing.T) {
 // guarda sin la guarda.
 func TestUnaPoliticaDegradadaNoPasa(t *testing.T) {
 	dir := t.TempDir()
-	casos := map[string]string{
-		"margen apenas mayor que 1":     "RACE_TIMEOUT=40m\nMARGEN_MINIMO=1.01\nUMBRAL_GUARDA_LINEAS_TEST=10000\n",
-		"margen de 1,4":                 "RACE_TIMEOUT=40m\nMARGEN_MINIMO=1.4\nUMBRAL_GUARDA_LINEAS_TEST=10000\n",
-		"margen inalcanzable":           "RACE_TIMEOUT=40m\nMARGEN_MINIMO=50\nUMBRAL_GUARDA_LINEAS_TEST=10000\n",
-		"techo de 500h":                 "RACE_TIMEOUT=500h\nMARGEN_MINIMO=2.0\nUMBRAL_GUARDA_LINEAS_TEST=10000\n",
-		"techo por debajo del de Go":    "RACE_TIMEOUT=5m\nMARGEN_MINIMO=2.0\nUMBRAL_GUARDA_LINEAS_TEST=10000\n",
-		"umbral que no alcanza a nadie": "RACE_TIMEOUT=40m\nMARGEN_MINIMO=2.0\nUMBRAL_GUARDA_LINEAS_TEST=1000000\n",
-		"sin umbral":                    "RACE_TIMEOUT=40m\nMARGEN_MINIMO=2.0\n",
+	casos := map[string]map[string]string{
+		"margen apenas mayor que 1":           {"MARGEN_MINIMO": "1.01"},
+		"margen de 1,4":                       {"MARGEN_MINIMO": "1.4"},
+		"margen inalcanzable":                 {"MARGEN_MINIMO": "50"},
+		"techo de CI de 500h":                 {"RACE_TIMEOUT": "500h"},
+		"techo de CI por debajo del de Go":    {"RACE_TIMEOUT": "5m"},
+		"umbral que no alcanza a nadie":       {"UMBRAL_GUARDA_LINEAS_TEST": "1000000"},
+		"sin umbral":                          {"UMBRAL_GUARDA_LINEAS_TEST": ""},
+		"piso local de 500h":                  {"TIMEOUT_LOCAL": "500h"},
+		"piso local por debajo del de Go":     {"TIMEOUT_LOCAL": "5m"},
+		"sin piso local":                      {"TIMEOUT_LOCAL": ""},
+		"sin la medición que lo presupuesta":  {"MEDICION_LOCAL_SEGUNDOS": ""},
+		"una medición de cero no es medición": {"MEDICION_LOCAL_SEGUNDOS": "0"},
+		"una medición negativa tampoco":       {"MEDICION_LOCAL_SEGUNDOS": "-1"},
+		"medición no parseable":               {"MEDICION_LOCAL_SEGUNDOS": "un_rato"},
+		"piso local no parseable":             {"TIMEOUT_LOCAL": "cuarenta"},
+
+		// LAS DOS QUE CIERRAN EL DEFECTO DE ESTE COMMIT.
+		//
+		// El piso local por debajo del presupuesto de CI: ahí el tramo de aviso es código
+		// muerto y el runner —el entorno RÁPIDO— pasaría a gobernar lo que se le exige a la
+		// máquina lenta. Es la forma exacta que tenía el repo cuando las dos guardas se
+		// contradecían.
+		"el piso local por debajo del techo de CI": {"RACE_TIMEOUT": "30m", "TIMEOUT_LOCAL": "20m"},
+		// Y el piso local que no alcanza para la peor medición fechada: el guard le
+		// recomendaría a quien corre en esa máquina un -timeout con el que la corrida muere.
+		// 2100 s / 1059 s = 1,98×, apenas por debajo de los 2,00× que exige la política.
+		"el piso local no alcanza para la peor medición fechada": {"TIMEOUT_LOCAL": "35m"},
+		// Y del otro lado: un piso local que sobra tanto que no pide nada (6420 s / 1059 s =
+		// 6,06×, apenas por encima del tope de 6,00×).
+		"el piso local sobra tanto que no pide nada": {"TIMEOUT_LOCAL": "107m"},
 	}
-	for nombre, contenido := range casos {
+	for nombre, cambios := range casos {
 		t.Run(nombre, func(t *testing.T) {
 			ruta := dir + "/" + strings.ReplaceAll(nombre, " ", "_") + ".env"
-			escribir(t, ruta, contenido)
+			escribir(t, ruta, politicaEnv(cambios))
 			p, err := CargarPolitica(ruta)
 			if err == nil {
 				t.Fatalf("CargarPolitica aceptó una política que apaga el guard: %+v", p)
@@ -237,14 +261,31 @@ func TestUnaPoliticaDegradadaNoPasa(t *testing.T) {
 	}
 }
 
+// EL CONTROL POSITIVO DE LA TABLA DE ARRIBA, Y NO ES CEREMONIA.
+//
+// Cada caso de TestUnaPoliticaDegradadaNoPasa afirma «esto da error». Si la base sobre la que se
+// aplican los cambios diera error POR SÍ SOLA —una clave nueva que nadie agregó a la base, un
+// rango que se movió—, los quince casos quedarían verdes sin haber ejercitado su sabotaje. Es el
+// modo de falla que este repo ya se comió: la guarda satisfecha por la razón equivocada.
+func TestLaBaseDeLaTablaDePoliticasEsValida(t *testing.T) {
+	ruta := t.TempDir() + "/base.env"
+	escribir(t, ruta, politicaEnv(nil))
+	p, err := CargarPolitica(ruta)
+	if err != nil {
+		t.Fatalf("la política base de las tablas no carga, así que cada caso de sabotaje estaría "+
+			"verde por la razón equivocada: %v", err)
+	}
+	t.Logf("base válida: %+v", p)
+}
+
 // Una clave que falta es un error, no un cero silencioso.
 func TestPoliticaIncompletaEsError(t *testing.T) {
 	dir := t.TempDir()
 	casos := map[string]string{
-		"sin RACE_TIMEOUT":         "MARGEN_MINIMO=2.0\nUMBRAL_GUARDA_LINEAS_TEST=10000\n",
-		"sin MARGEN_MINIMO":        "RACE_TIMEOUT=30m\nUMBRAL_GUARDA_LINEAS_TEST=10000\n",
-		"timeout no parseable":     "RACE_TIMEOUT=veinte\nMARGEN_MINIMO=2.0\nUMBRAL_GUARDA_LINEAS_TEST=10000\n",
-		"margen de 1 no es margen": "RACE_TIMEOUT=30m\nMARGEN_MINIMO=1.0\nUMBRAL_GUARDA_LINEAS_TEST=10000\n",
+		"sin RACE_TIMEOUT":         politicaEnv(map[string]string{"RACE_TIMEOUT": ""}),
+		"sin MARGEN_MINIMO":        politicaEnv(map[string]string{"MARGEN_MINIMO": ""}),
+		"timeout no parseable":     politicaEnv(map[string]string{"RACE_TIMEOUT": "veinte"}),
+		"margen de 1 no es margen": politicaEnv(map[string]string{"MARGEN_MINIMO": "1.0"}),
 		"todo comentado":           "# RACE_TIMEOUT=30m\n# MARGEN_MINIMO=2.0\n",
 	}
 	for nombre, contenido := range casos {
@@ -270,13 +311,18 @@ func TestPoliticaIncompletaEsError(t *testing.T) {
 // Los casos van pegados al umbral de los DOS lados con la misma medición, así que un juez que
 // contestara siempre lo mismo falla en uno.
 func TestUnTechoQueSobraTantoQueNoPuedePonerseRojo(t *testing.T) {
-	const masLento = "1059.0" // internal/mcp bajo -race en `./...`, 2026-09-10
+	// Una medición de ejemplo, no la declaración del repo: la del repo es
+	// MEDICION_LOCAL_SEGUNDOS y quien la juzga es
+	// TestElPisoLocalDelRepoAlcanzaParaLaPeorMaquinaFechada. Acá lo que se prueba es el JUEZ, con
+	// casos pegados al umbral; por eso los segundos van fijos y no salen de la política —si
+	// salieran, mover la medición movería los bordes y la prueba dejaría de probar el borde.
+	const masLento = "1059.0"
 	casos := []struct {
 		nombre      string
 		techo       string
 		quieroDeMas bool
 	}{
-		{"el techo de hoy (40m) tiene margen y no sobra", "40m", false},
+		{"40m sobre esta medicion tiene margen y no sobra", "40m", false},
 		{"2h es legal en el rango y sobra 6,8x contra el 2,0x exigido", "2h", true},
 		{"justo en el tope (3x el margen exigido) todavia pasa", "105m", false},
 		{"apenas por encima del tope ya no", "110m", true},
@@ -309,26 +355,81 @@ func TestUnTechoQueSobraTantoQueNoPuedePonerseRojo(t *testing.T) {
 	}
 }
 
-// El techo que HOY tiene el repo tiene que estar de los dos lados del rango medido: ni comido
-// ni sobredimensionado contra la peor medición fechada en la política.
-func TestElTechoDelRepoNoSobraContraLaPeorMedicion(t *testing.T) {
+// EL PISO LOCAL DEL REPO, CONTRA LA PEOR MÁQUINA FECHADA — Y CONTRA QUÉ VARIABLE SE JUZGA.
+//
+// Esta prueba existía y estaba EN LO CIERTO; lo que estaba mal era a qué número se la aplicaba.
+// Juzgaba RACE_TIMEOUT —el presupuesto con el que corre CI— contra los 1059 s de una laptop de
+// 12 núcleos con loadavg 9,1. Con eso quedó insatisfacible: el binario del presupuesto, que mide
+// el runner (333,3 s), exige que RACE_TIMEOUT no pase de ~33m, y esta exigía que llegara a ~35m.
+// Las dos guardas tenían razón sobre consumidores DISTINTOS del mismo número.
+//
+// Ahora juzga TIMEOUT_LOCAL, que es el número que ese consumidor usa: el piso que
+// ExigirTimeoutSuficiente le pide a quien corre `go test -race` en su máquina. La afirmación no
+// se aflojó —sigue siendo «el techo tiene que alcanzar para la peor medición fechada, y no
+// sobrar»— y el umbral es el mismo: [2,00× · 6,00×].
+//
+// Y la medición ya no está tipeada acá: sale de MEDICION_LOCAL_SEGUNDOS, que es la única
+// declaración del archivo de política, con su fecha y su máquina al lado. Antes ese 1059,0
+// estaba escrito en TRES lugares —el comentario del .env, este test y el comentario de
+// FactorTechoMaximo— y el tercero ya había envejecido.
+//
+// ES EL HERMANO DE verificarCoherencia, NO SU DUPLICADO: aquel rechaza el archivo al leerlo, y
+// lo prueba una tabla de dos lados sobre archivos sintéticos. Éste mira el archivo DE VERDAD del
+// repo y nombra sus números en el mensaje. Si alguien saca el chequeo del cargador, esto sigue
+// acá.
+func TestElPisoLocalDelRepoAlcanzaParaLaPeorMaquinaFechada(t *testing.T) {
 	p, err := CargarPoliticaDelRepo(".")
 	if err != nil {
 		t.Fatal(err)
 	}
-	v, err := Analizar(salidaCon("musubi/internal/mcp", "1059.0"), p)
+	// Se juzga con la MISMA maquinaria que juzga a CI, sólo que con el techo local y la medición
+	// local: si el juez fuera otro, las dos mitades de la política podrían divergir.
+	local := p
+	local.Timeout = p.TimeoutLocal
+	v, err := Analizar(salidaCon("musubi/internal/mcp", strconv.FormatFloat(p.MedicionLocal.Seconds(), 'f', 1, 64)), local)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if v.Rojo() {
-		t.Errorf("el techo del repo no alcanza para la peor medición fechada: %s", v.Informe())
+		t.Errorf("TIMEOUT_LOCAL no alcanza para la peor medición fechada: %s", v.Informe())
 	}
 	if v.TechoDeMas() {
-		t.Errorf("el techo del repo sobra tanto que el guard del margen no se puede poner rojo: %s",
-			v.Informe())
+		t.Errorf("TIMEOUT_LOCAL sobra tanto que no le pide nada a nadie: %s", v.Informe())
 	}
-	t.Logf("margen %.2f× (mínimo %.2f×, tope %.2f×)", v.Margen, p.MargenMinimo,
-		p.MargenMinimo*FactorTechoMaximo)
+	t.Logf("piso local %v sobre %.1fs: margen %.2f× (mínimo %.2f×, tope %.2f×); techo de CI %v",
+		p.TimeoutLocal, p.MedicionLocal.Seconds(), v.Margen, p.MargenMinimo,
+		p.MargenMinimo*FactorTechoMaximo, p.Timeout)
+}
+
+// politicaEnv arma el contenido de un presupuesto-de-pruebas.env VÁLIDO y le aplica los cambios
+// que se le pidan: un valor vacío BORRA la clave.
+//
+// Se genera en vez de tipearse entero en cada caso por lo mismo de siempre: cuando cada caso
+// traía su propio archivo completo, agregar una clave obligatoria a la política dejaba los quince
+// casos dando error por la clave que faltaba y no por el sabotaje que cada uno decía probar —y
+// todos seguían en verde, porque todos afirman «esto tiene que dar error»—. Ahora cada caso dice
+// exactamente lo que rompe, y TestLaBaseDeLaTablaDePoliticasEsValida sostiene que lo demás está
+// sano.
+func politicaEnv(cambios map[string]string) string {
+	base := []struct{ clave, valor string }{
+		{"RACE_TIMEOUT", "20m"},
+		{"TIMEOUT_LOCAL", "40m"},
+		{"MEDICION_LOCAL_SEGUNDOS", "1059.0"},
+		{"MARGEN_MINIMO", "2.0"},
+		{"UMBRAL_GUARDA_LINEAS_TEST", "10000"},
+	}
+	var b strings.Builder
+	for _, kv := range base {
+		valor := kv.valor
+		if nuevo, hay := cambios[kv.clave]; hay {
+			if nuevo == "" {
+				continue // borrada
+			}
+			valor = nuevo
+		}
+		b.WriteString(kv.clave + "=" + valor + "\n")
+	}
+	return b.String()
 }
 
 func escribir(t *testing.T, ruta, contenido string) {
