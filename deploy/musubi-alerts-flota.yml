@@ -683,6 +683,7 @@ groups:
         annotations:
           summary: "El agente de {{ $labels.device }} declara capver {{ $value }} y los ejes de inventario necesitan 2."
           nota: "Mismo efecto que AgenteSinContratoDeclarado: los ejes que A116 cerró están apagados en esta máquina. La diferencia es que ésta SÍ declara, así que se sabe exactamente qué le falta."
+          ausente_en: "tier=B — un Tier B no corre nuestro agente, así que no declara ninguna `capver`: la serie no existe y no hay contrato que comparar. Es el hermano exacto de AgenteDesactualizado, que declara lo mismo por el mismo motivo."
 
       # --- DOS AGENTES SOBRE UNA FILA ---
       #
@@ -741,6 +742,7 @@ groups:
         annotations:
           summary: "La credencial de {{ $labels.device }} vino por VARIABLE de entorno: su rotación no se puede completar nunca."
           nota: "Un proceso no puede reescribir su propio entorno, así que el token nuevo llega, el agente no lo puede guardar, y la rotación se abandona sola a las 24 h — en cada intento, para siempre. Y mientras tanto la credencial vive en el entorno del proceso, donde la lee cualquier proceso del mismo usuario. Se arregla en el LANZADOR: que pase `MUSUBI_DEVICE_TOKEN_FILE` con la RUTA del archivo. En Windows lo migra `deploy/actualizar-agente-windows.sh`."
+          ausente_en: "tier=B — la fuente de la credencial la reporta el agente en su latido, y un Tier B no corre agente: lo sondea el cerebro por SSH. Sin emisor no hay `token_rotable` que leer, y un 0 inventado diría «no puede rotar» cuando lo cierto es que no hay nada que rote."
 
       # --- UNA ROTACIÓN DE TOKEN QUE NADIE COMPLETA ---
       #
@@ -816,6 +818,7 @@ groups:
         annotations:
           summary: "El proceso que late por {{ $labels.device }} cambia todo el tiempo: hay más de un agente corriendo."
           nota: "Media hora sin que el emisor se estabilice no es un reinicio: son dos procesos pisándose. Mirá si quedó un `musubi agent` a mano además del servicio, una segunda instalación, o un zombi de `musubi.exe.viejo` (deploy/matar-zombis-agente.sh). Dos agentes duplican los comandos que ejecuta la máquina y hacen que el inventario se pise."
+          ausente_en: "tier=B — la serie mide qué proceso late por la máquina, y un Tier B no late: lo sondea el cerebro. No puede haber dos agentes pisándose donde no corre ninguno."
 
       - alert: MaquinaNoPuedeEnumerar
         # EL `device_up == 0` NO ES OPCIONAL, y lo cazó `TestNingunaAlertaDeMuestraDisparaSobreUnaMaquinaCaida`
