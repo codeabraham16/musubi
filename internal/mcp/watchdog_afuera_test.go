@@ -1,7 +1,9 @@
 package mcp
 
 import (
+	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -68,10 +70,17 @@ func bloqueDelWatchdog(t *testing.T) string {
 		t.Fatalf("no se pudo aislar el bloque del watchdog (i=%d, j=%d): o se renombró el título o "+
 			"el bloque se movió, y esta guarda dejó de mirar lo que dice mirar", i, j)
 	}
+	// LAS LÍNEAS QUE HABLAN CON EL SERVIDOR SE SACAN POR LO QUE HACEN —llamar a `corre_alla`— y
+	// NO POR EL NOMBRE DE LA VARIABLE QUE ASIGNAN. Antes decía `WD_HOST=` y `WD_YO=` a mano, y el
+	// día que se agregó una tercera pregunta (`WD_DIR=`, la que averigua DÓNDE vive el archivo) el
+	// extractor la dejó pasar: el bloque corría con `corre_alla` sin definir y la guarda medía un
+	// error de bash en vez de la decisión. Derivado, una pregunta nueva se saca sola.
+	//
+	// De ahí que cada pregunta al servidor tenga que ser UNA asignación completa en una línea: un
+	// `if` de tres líneas dejaría acá un `then` con el cuerpo borrado.
 	var util []string
 	for _, l := range strings.Split(guion[i:j], "\n") {
-		// Las dos que hablan con el servidor por ssh: la prueba pone esos valores a mano.
-		if strings.HasPrefix(l, "WD_HOST=") || strings.HasPrefix(l, "WD_YO=") {
+		if strings.Contains(l, "corre_alla") {
 			continue
 		}
 		util = append(util, l)
@@ -108,9 +117,9 @@ func TestElBloqueDelWatchdogDecideCorriendo(t *testing.T) {
 			"la comparación tiene que ser contra TODO lo que la máquina dice de sí misma, no sólo contra su nombre corto"},
 		{"el destino es localhost", "localhost", "musubi-server 100.64.1.1", "ROJO",
 			"el `case` de los nombres de bucle tiene que seguir decidiendo sin preguntarle el nombre a nadie"},
-		{"el destino es otra máquina", "healthchecks.io", "musubi-server 100.64.1.1", "OK",
+		{"el destino es otra máquina", "healthchecks.io", "musubi-server 100.64.1.1", "VERDE",
 			"sin el camino verde la comprobación no puede confirmar nada y sólo sabe acusar"},
-		{"un vecino que EMPIEZA IGUAL no cuenta", "musubi-server2", "musubi-server 100.64.1.1", "OK",
+		{"un vecino que EMPIEZA IGUAL no cuenta", "musubi-server2", "musubi-server 100.64.1.1", "VERDE",
 			"la comparación es palabra por palabra a propósito: si fuera por prefijo o por `case` con `*`, un host ajeno con nombre parecido se reportaría como propio y el dead-man bueno se declararía malo"},
 		{"no se supo cómo se llama esta máquina", "healthchecks.io", "", "DUDOSO",
 			"«no pude comparar» no es «está afuera». Con `WD_YO` vacío esto contestaba `ok`: el ssh caído convertía la comprobación en un sello de aprobación"},
@@ -118,19 +127,61 @@ func TestElBloqueDelWatchdogDecideCorriendo(t *testing.T) {
 			"el archivo puede no existir, y entonces el dead-man ni siquiera está armado: eso no es «está bien»"},
 	} {
 		t.Run(c.nombre, func(t *testing.T) {
-			// Los tres veredictos se reemplazan por stubs que imprimen su nombre: así se mide CUÁL
-			// se tomó, y no si la palabra aparece en algún lado del archivo.
-			guion := "rojo(){ echo ROJO; }\nok(){ echo OK; }\ndudoso(){ echo DUDOSO; }\ntitulo(){ :; }\n" +
+			// LOS STUBS SE DERIVAN DEL GUION, NO SE ESCRIBEN A MANO, Y ESO ES LA MITAD DE ESTA
+			// GUARDA. Acá decía `ok(){ echo OK; }` — y `ok` NO EXISTE en verificar-despliegue.sh.
+			// El arnés FABRICABA la función que al guion le faltaba, así que el único camino que
+			// contesta «está afuera» pasaba verde acá y moría con `ok: command not found` en
+			// producción. Nadie lo vio durante semanas porque ese camino además era inalcanzable
+			// por otro motivo (la ruta del watchdog estaba escrita a mano y nunca daba un host).
+			//
+			// Derivados, un stub no puede existir para una función que el guion no define: si el
+			// bloque llama a algo inventado, bash lo dice y el `not found` de abajo lo caza.
+			guion := stubsDeLosVeredictos(t) +
 				"WD_HOST=" + shQuote(c.host) + "\nWD_YO=" + shQuote(c.yo) + "\n" + bloque
 			salida, err := exec.Command("bash", "-c", guion).CombinedOutput()
 			if err != nil {
 				t.Fatalf("el bloque del watchdog no corrió: %v\n%s", err, salida)
 			}
-			dicho := strings.TrimSpace(string(salida))
+			if strings.Contains(string(salida), "command not found") {
+				t.Fatalf("el bloque llamó a algo que el guion NO DEFINE — eso en el servidor es una "+
+					"línea que no hace nada, y en el camino verde significa que la comprobación no "+
+					"puede contestar «está bien»:\n%s", salida)
+			}
+			// El VEREDICTO es la última línea: `titulo` también imprime, porque se stubbea junto
+			// con el resto en vez de silenciarlo a mano.
+			lineas := strings.Fields(strings.TrimSpace(string(salida)))
+			dicho := ""
+			if len(lineas) > 0 {
+				dicho = lineas[len(lineas)-1]
+			}
 			if dicho != c.espera {
-				t.Errorf("con WD_HOST=%q y WD_YO=%q el bloque contestó %q y tiene que contestar %q.\n  %s",
-					c.host, c.yo, dicho, c.espera, c.porque)
+				t.Errorf("con WD_HOST=%q y WD_YO=%q el bloque contestó %q y tiene que contestar %q.\n  %s\n  salida completa: %s",
+					c.host, c.yo, dicho, c.espera, c.porque, salida)
 			}
 		})
 	}
+}
+
+// stubsDeLosVeredictos arma un stub por CADA función que `verificar-despliegue.sh` define, cada uno
+// imprimiendo su nombre en mayúsculas. Así la prueba mide CUÁL veredicto tomó el bloque, y —lo que
+// importa más— NO puede darle al bloque una función que el guion no tenga: si el bloque llama a
+// algo inventado, no hay stub que lo tape y bash lo delata.
+//
+// Es la diferencia entre un doble y un invento. Un doble reemplaza algo que existe; un invento
+// completa lo que falta, y ahí el arnés deja de medir el guion y empieza a medirse a sí mismo.
+func stubsDeLosVeredictos(t *testing.T) string {
+	t.Helper()
+	guion := leerDeploy(t, "verificar-despliegue.sh")
+	def := regexp.MustCompile(`(?m)^([a-z_]+)\(\)`)
+	nombres := def.FindAllStringSubmatch(guion, -1)
+	if len(nombres) < 4 {
+		t.Fatalf("se derivaron %d funciones de verificar-despliegue.sh y el bloque del watchdog usa "+
+			"al menos cuatro (titulo, rojo, verde, dudoso): o cambió la forma de declararlas, o esta "+
+			"guarda dejó de encontrarlas y estaría por inventarlas", len(nombres))
+	}
+	var b strings.Builder
+	for _, m := range nombres {
+		fmt.Fprintf(&b, "%s(){ echo %s; }\n", m[1], strings.ToUpper(m[1]))
+	}
+	return b.String()
 }

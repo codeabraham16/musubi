@@ -1133,14 +1133,39 @@ fi
 # ════════════════════════════════════════════════════════════════════════════════════════════
 titulo "el watchdog externo, ¿está afuera?"
 
+# DE DÓNDE SALE LA RUTA, Y POR QUÉ YA NO ESTÁ ESCRITA ACÁ.
+#
+# `/etc/musubi/watchdog_url` es la ruta que ve ALERTMANAGER, y Alertmanager corre en un contenedor:
+# en el HOST ese archivo vive en el directorio que se le monta ahí. Escrita a mano, esta
+# comprobación miraba una ruta que en el host no existe NUNCA — ni siquiera cuando todo anda.
+#
+# Medido el 2026-09-11: `/home/musubi/musubi-prometheus/secretos/watchdog_url` existía desde el
+# 3/9, el destino era `hc-ping.com`, y Alertmanager llevaba **1689 webhooks entregados con 0
+# fallos**. O sea: el dead-man estaba armado, andando y afuera, y este guion contestaba «no pude
+# preguntar» y dejaba la corrida en salida 2. Eso no es un detalle cosmético: la salida 2 enciende
+# `DespliegueConEslabonesSinVerificar`, que por leer el MISMO escalar con `== 2` deja a
+# `ProduccionDivergeDelRepo` (`== 1`) sin poder dispararse. Un «no pude mirar» falso apagaba la
+# alerta de divergencia entera.
+#
+# Así que la ruta se DERIVA de quien la define —el montaje del contenedor cuyo destino es
+# `/etc/musubi`— y sólo si eso no contesta se cae a la lista de candidatos, con el mismo idioma que
+# usa el directorio de reglas más abajo. `/etc/musubi` queda de último: es la ruta correcta para un
+# despliegue sin contenedores.
+# UNA SOLA LÍNEA, Y ESO TAMBIÉN ES A PROPÓSITO: el fallback va ADENTRO del comando remoto, no en
+# un `if` de este lado. Así cada pregunta al servidor es UNA asignación completa, que es lo que la
+# guarda de `internal/mcp/watchdog_afuera_test.go` necesita para poder sacarlas y correr el bloque
+# con valores propios. Un `if` partido en tres líneas la dejaría con un `then` sin cuerpo.
+WD_DIR="$(corre_alla 'd=$(podman inspect musubi-alertmanager --format "{{range .Mounts}}{{.Destination}} {{.Source}};{{end}}" 2>/dev/null | tr ";" "\n" | awk "\$1==\"/etc/musubi\"{print \$2}" | head -1); [ -n "$d" ] || for c in "$HOME/musubi-prometheus/secretos" /etc/musubi; do [ -f "$c/watchdog_url" ] && { d=$c; break; }; done; printf %s "$d"')"
+WD_DONDE="${WD_DIR:-<ninguna de las candidatas>}"
+
 # El host del destino, sin el resto de la URL. `cut` en vez de un regex para que no haya forma de
 # que el uuid caiga en un grupo de captura por accidente.
-WD_HOST="$(corre_alla "sed -e 's|^[a-z]*://||' -e 's|/.*||' -e 's|:.*||' /etc/musubi/watchdog_url 2>/dev/null | head -1")"
+WD_HOST="$(corre_alla "sed -e 's|^[a-z]*://||' -e 's|/.*||' -e 's|:.*||' '$WD_DIR/watchdog_url' 2>/dev/null | head -1")"
 # El hostname y las IPs de la máquina del cerebro, para poder decir si el destino es ella misma.
 WD_YO="$(corre_alla 'hostname -s 2>/dev/null; hostname -f 2>/dev/null; hostname -I 2>/dev/null')"
 
 if [ -z "$WD_HOST" ]; then
-  dudoso 'no se pudo leer el destino del watchdog (/etc/musubi/watchdog_url): puede no existir —y entonces el dead-man NO está armado— o no ser legible desde acá. Las dos se arreglan distinto y ninguna es «está bien»'
+  dudoso "no se pudo leer el destino del watchdog (busqué el montaje de \`/etc/musubi\` del contenedor de Alertmanager, después \$HOME/musubi-prometheus/secretos y /etc/musubi; quedó en «${WD_DONDE}»): puede no existir —y entonces el dead-man NO está armado— o no ser legible desde acá. Las dos se arreglan distinto y ninguna es «está bien»"
 else
   WD_ADENTRO=0
   case "$WD_HOST" in
@@ -1168,7 +1193,11 @@ else
   if [ "$WD_ADENTRO" = "1" ]; then
     rojo "el watchdog le late a «${WD_HOST}», que es ESTA MISMA MÁQUINA: un corte de luz se lleva al vigilado y al vigilante juntos, así que nadie late y nadie nota que nadie late. El dead-man tiene que vivir afuera (healthchecks.io, cronitor, o cualquier host que no sea éste)"
   else
-    ok "el watchdog le late a «${WD_HOST}», que no es esta máquina"
+    # `verde`, y no `ok`: ACÁ DECÍA `ok`, QUE NO EXISTE EN ESTE GUION. Nadie lo vio nunca porque
+    # esta rama era INALCANZABLE: con la ruta del watchdog escrita a mano, `WD_HOST` salía siempre
+    # vacío y el `if` se iba por el `dudoso`. Un defecto tapando al otro — y el único camino que
+    # podía contestar «está bien» era justo el que estaba roto.
+    verde "el watchdog le late a «${WD_HOST}», que no es esta máquina"
   fi
   fi
 fi
