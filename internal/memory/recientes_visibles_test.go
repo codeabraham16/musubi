@@ -25,6 +25,24 @@ import (
 // tiene cómo saber cuál de los dos números creer.
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════
+// NO ERA LATENTE: MEDIDO CONTRA LA BASE REAL, EN SÓLO LECTURA (2026-09-11)
+//
+// Corriendo la query vieja contra `.musubi/memory.db` (1.971 observaciones sin archivar), el
+// top-20 que sirven `dashboard.go:260` y `export.go:125` traía CUATRO filas que no debían estar:
+// tres en cuarentena y una superada. Las tres de cuarentena eran las TRES PRIMERAS, creadas ese
+// mismo día.
+//
+// Y ACÁ ESTÁ EL AGRAVANTE, QUE NO SE VE LEYENDO EL CÓDIGO: la query ordena por `created_at DESC`,
+// y la cuarentena se llena de contenido NUEVO —cada `propose_observation` entra ahí—. O sea que lo
+// cuarentenado no aparece disperso en el corpus: SE CONCENTRA ARRIBA, que es justo lo que el panel
+// muestra. Medido: 8 filas invisibles sobre 1.971 es el 0,4% del corpus, y 4 sobre 20 es el 20%
+// del panel. Casi cincuenta veces más denso en la única ventana que alguien mira.
+//
+// Cuanto más se usa `propose_observation`, más alto sale — y el aparato empuja a usarlo, porque el
+// hook por sesión pide bajar lo durable cada varios turnos. El defecto se agrava solo con el uso
+// normal del sistema.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
 // POR QUÉ ESTA PRUEBA NO USA UN `UPDATE` CRUDO
 //
 // Sembrar el estado con SQL directo deja la puerta abierta al descarte más común —«ese estado no
