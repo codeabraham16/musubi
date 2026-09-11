@@ -51,7 +51,7 @@ BACKUP_TIMER="/etc/systemd/system/musubi-backup.timer"
 # una razón MÁS fuerte: este guion reemplaza el binario del cerebro y se corre como root, así que
 # es el peor archivo del despliegue para instalar sin verificar. Si lo cambiás, actualizá esto:
 # sha256sum deploy/redesplegar-cerebro.sh
-REDESPLIEGUE_SHA256="e988c1d8cc2c4759b558ae48b106d2289450834c6d9340320e51be0f35a92f3a"
+REDESPLIEGUE_SHA256="d2f8d1c2357bab8e42fc513e2a5fac51bbcd762cb48379b626d563027f5f2e03"
 REDESPLIEGUE_SCRIPT_URL="https://raw.githubusercontent.com/$MUSUBI_REPO/main/deploy/redesplegar-cerebro.sh"
 # /usr/local/sbin y no el home de $BRAIN_USER: lo corre root, así que no puede vivir donde escribe
 # un usuario sin privilegios. El porqué largo está en el paso 5c.
