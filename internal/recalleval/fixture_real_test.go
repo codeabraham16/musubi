@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -359,4 +360,128 @@ func TestBarridoVectorFloorFixtureReal(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	t.Logf("barrido de VectorFloor sobre %d docs / %d consultas:\n%s", len(fx.Docs), len(fx.Queries), FormatReport(scores, ks))
+}
+
+// TestDistribucionDelPisoFixtureReal muestra QUÉ FRACCIÓN del pool vectorial deja pasar cada piso
+// de coseno, preguntándole al MOTOR (SearchObservations), que es lo único que decide de verdad.
+//
+// SE LE PREGUNTA AL MOTOR Y NO SE RECALCULA POR FUERA, y no es un detalle de estilo: la primera
+// versión de este test embebía y comparaba por su cuenta, y dio un máximo de 0.4866 cuando el motor
+// devuelve 0.7602. Con el número de afuera la conclusión se daba vuelta —"con piso 0.60 el pool
+// tiene que estar vacío"— y era falsa. Cualquier medición sobre el ranking tiene que salir del
+// mismo camino que el ranking usa.
+func TestDistribucionDelPisoFixtureReal(t *testing.T) {
+	ruta := os.Getenv("MUSUBI_FIXTURE_DB")
+	dirPotion := os.Getenv("MUSUBI_POTION_DIR")
+	if ruta == "" || dirPotion == "" {
+		t.Skip("faltan MUSUBI_FIXTURE_DB y/o MUSUBI_POTION_DIR")
+	}
+	prov, err := embedding.NewStaticProvider(dirPotion)
+	if err != nil {
+		t.Fatalf("NewStaticProvider: %v", err)
+	}
+	embed := func(s string) ([]float32, error) { return prov.Embed(context.Background(), s) }
+	fx, err := FixtureDesdeDB(ruta, OpcionesFixtureReal{})
+	if err != nil {
+		t.Fatalf("FixtureDesdeDB: %v", err)
+	}
+	eng, err := SeedEngine(t.TempDir(), fx, embed)
+	if err != nil {
+		t.Fatalf("SeedEngine: %v", err)
+	}
+	defer eng.Close()
+
+	var sims []float64
+	for _, q := range fx.Queries {
+		qv, err := embed(q.Text)
+		if err != nil {
+			t.Fatalf("embed consulta: %v", err)
+		}
+		res, err := eng.SearchObservations(context.Background(), qv, 50)
+		if err != nil {
+			t.Fatalf("SearchObservations: %v", err)
+		}
+		for _, r := range res {
+			sims = append(sims, float64(r.Similarity))
+		}
+	}
+	sort.Float64s(sims)
+	n := len(sims)
+	if n == 0 {
+		t.Fatal("el pool vectorial vino vacío: el fixture no tiene vectores")
+	}
+	pct := func(q float64) float64 {
+		i := int(q * float64(n))
+		if i >= n {
+			i = n - 1
+		}
+		return sims[i]
+	}
+	t.Logf("similitud del pool vectorial (top-50 por consulta, n=%d): min %.4f · p50 %.4f · p90 %.4f · p99 %.4f · max %.4f",
+		n, sims[0], pct(0.50), pct(0.90), pct(0.99), sims[n-1])
+	for _, piso := range []float64{0.30, 0.40, 0.50, 0.60, 0.70} {
+		pasan := 0
+		for _, x := range sims {
+			if x >= piso {
+				pasan++
+			}
+		}
+		t.Logf("  piso %.2f -> %4d de %d candidatas entran al RRF (%.1f%%)",
+			piso, pasan, n, float64(pasan)/float64(n)*100)
+	}
+}
+
+// TestPisoImposibleDebeIgualarAlLexico es un CONTROL DE INSTRUMENTO, no una medición de calidad.
+//
+// Con un piso por encima del coseno máximo observado, augmentWithVectorPool descarta todos los
+// vecinos, vecRank queda vacío y la función devuelve (cands, nil, nil): el ranking tiene que ser
+// BIT-IDÉNTICO al del brazo léxico. Si no lo es, entonces el brazo "híbrido" del banco difiere del
+// léxico por algo MÁS que la señal vectorial, y todo delta que se le atribuya a los vectores está
+// contaminado por esa otra cosa.
+//
+// Se agrega porque el barrido dio hybrid-floor-0.60 con MRR 0.438 contra 0.424 del léxico, mientras
+// que el máximo coseno consulta-documento medido sobre 165.835 pares fue 0.4866. Los dos números no
+// pueden ser ciertos a la vez.
+func TestPisoImposibleDebeIgualarAlLexico(t *testing.T) {
+	ruta := os.Getenv("MUSUBI_FIXTURE_DB")
+	dirPotion := os.Getenv("MUSUBI_POTION_DIR")
+	if ruta == "" || dirPotion == "" {
+		t.Skip("faltan MUSUBI_FIXTURE_DB y/o MUSUBI_POTION_DIR")
+	}
+	prov, err := embedding.NewStaticProvider(dirPotion)
+	if err != nil {
+		t.Fatalf("NewStaticProvider: %v", err)
+	}
+	embed := func(texto string) ([]float32, error) { return prov.Embed(context.Background(), texto) }
+	fx, err := FixtureDesdeDB(ruta, OpcionesFixtureReal{})
+	if err != nil {
+		t.Fatalf("FixtureDesdeDB: %v", err)
+	}
+
+	imposible := memory.RecallOptions{Stemming: true, Cooccurrence: true, GraphCentrality: true}
+	imposible.VectorFloor = 0.99 // por encima de cualquier coseno consulta-documento observado
+
+	ks := []int{1, 5, 10}
+	scores, err := Run(context.Background(), t.TempDir(), fx, embed, []Config{
+		lexicalConfig,
+		{Name: "hybrid-floor-0.99", Opts: imposible, UseVector: true},
+	}, ks)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	t.Logf("\n%s", FormatReport(scores, ks))
+
+	var lex, hyb Scores
+	for _, s := range scores {
+		if s.Config == lexicalConfig.Name {
+			lex = s
+		} else {
+			hyb = s
+		}
+	}
+	if lex.MRR != hyb.MRR || lex.RecallAtK[10] != hyb.RecallAtK[10] {
+		t.Errorf("EL BRAZO HÍBRIDO DIFIERE DEL LÉXICO CON EL POOL VECTORIAL VACÍO: "+
+			"MRR %.6f vs %.6f · R@10 %.6f vs %.6f. El delta que el banco le atribuye a los vectores "+
+			"incluye algo más que los vectores.", lex.MRR, hyb.MRR, lex.RecallAtK[10], hyb.RecallAtK[10])
+	}
 }
