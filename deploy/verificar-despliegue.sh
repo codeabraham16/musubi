@@ -915,6 +915,19 @@ else
   case "$WD_HOST" in
     localhost|127.*|0.0.0.0|::1|"[::1]") WD_ADENTRO=1 ;;
   esac
+  # SI NO SE SUPO CÓMO SE LLAMA ESTA MÁQUINA, NO SE PUEDE CONTESTAR, Y ANTES CONTESTABA `ok`.
+  #
+  # `WD_YO` sale de tres `hostname` corridos allá. Si el ssh no anduvo, o `hostname` no está, o la
+  # máquina no sabe su nombre, `WD_YO` viene VACÍO: el `for` de abajo daba cero vueltas, `WD_ADENTRO`
+  # se quedaba en 0 y el `else` afirmaba «no es esta máquina» sin haber comparado con nada. O sea
+  # el modo de falla exacto contra el que existe este bloque —un dead-man adentro del cajón— se
+  # reportaba en verde justamente cuando menos se sabía.
+  #
+  # El `case` de arriba SÍ decide con lo que ya tiene: un `localhost` es «adentro» sin preguntarle
+  # el nombre a nadie. Por eso este control va acá y no antes: primero lo que se puede afirmar.
+  if [ "$WD_ADENTRO" != "1" ] && [ -z "$WD_YO" ]; then
+    dudoso "no se pudo averiguar el hostname ni las IPs del cerebro, así que no puedo decir si «${WD_HOST}» es esta misma máquina. «No pude comparar» no es «el watchdog está afuera»: si lo fuera, un dead-man adentro del cajón pasaría por bueno cada vez que falle el ssh"
+  else
   # Y el caso que de verdad pasa: un nombre o una IP de ESTA misma máquina. Se compara contra lo
   # que la máquina dice de sí misma, palabra por palabra, para que un `musubi-server2` no cuente
   # como `musubi-server`.
@@ -925,6 +938,7 @@ else
     rojo "el watchdog le late a «${WD_HOST}», que es ESTA MISMA MÁQUINA: un corte de luz se lleva al vigilado y al vigilante juntos, así que nadie late y nadie nota que nadie late. El dead-man tiene que vivir afuera (healthchecks.io, cronitor, o cualquier host que no sea éste)"
   else
     ok "el watchdog le late a «${WD_HOST}», que no es esta máquina"
+  fi
   fi
 fi
 

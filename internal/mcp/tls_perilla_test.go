@@ -1,8 +1,11 @@
 package mcp
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 // LA PERILLA QUE CIERRA LA MIGRACIÓN A TLS NO VIVÍA EN NINGÚN LADO.
@@ -72,13 +75,66 @@ func TestElVerificadorDistingueExigirTLSDeAceptarElTransporte(t *testing.T) {
 	if j := strings.Index(bloque, "\n  fi"); j > 0 {
 		bloque = bloque[:j]
 	}
-	if !strings.Contains(bloque, "rojo ") {
-		t.Error("con `MUSUBI_EXIGIR_TLS=1` el transporte en claro no se reporta como ROJO: la perilla " +
-			"existiría sin cambiar nada, y la migración a TLS se podría declarar cerrada sin estarlo")
+	// LAS DOS RAMAS NO SE CUENTAN ACÁ, SE EJERCITAN. Lo que había era pedir los literales «rojo »
+	// y «tibio » adentro del bloque, y eso deja sin custodiar lo único que importa: CUÁL va con
+	// CUÁL. Sabotaje medido: intercambiando los dos veredictos —de modo que con la perilla en 1 el
+	// transporte en claro pase a `tibio` y sin exigirla pase a `rojo`, o sea exactamente al revés
+	// de lo que la perilla significa— esta guarda quedaba VERDE. Quien lo comprueba es
+	// TestLaPerillaDeTLSDecideCorriendo.
+	_ = bloque
+}
+
+// TestLaPerillaDeTLSDecideCorriendo — las cinco posturas, corriendo el bloque de verdad.
+//
+// POR QUÉ NO ALCANZA CON PREGUNTAR SI LOS VEREDICTOS ESTÁN. Una guarda que pide que «rojo» y
+// «tibio» aparezcan en el bloque se satisface con los dos veredictos intercambiados, que es el
+// único error que alguien va a cometer acá: nadie borra una rama, la gente invierte una condición.
+// Y el costo de esa inversión es el peor de los dos lados a la vez — la migración a TLS se podría
+// declarar cerrada sin estarlo, y mientras tanto la unidad quedaría en rojo todos los días por una
+// postura que está decidida, que es cómo se apaga un canal.
+func TestLaPerillaDeTLSDecideCorriendo(t *testing.T) {
+	guiones.Exigir(t, "corre el bloque de postura TLS de deploy/verificar-despliegue.sh contra configuraciones de prueba, y ese guion es de un servidor Linux", "bash", "grep")
+
+	guion := leerDeploy(t, "verificar-despliegue.sh")
+	i := strings.Index(guion, `if [ -z "$POSTURA_TLS" ]; then`)
+	if i < 0 {
+		t.Fatal("no se encontró el arranque del bloque de postura TLS: o se renombró la variable o " +
+			"el bloque se movió, y esta guarda dejó de mirar lo que dice mirar")
 	}
-	if !strings.Contains(bloque, "tibio ") {
-		t.Error("sin la rama `tibio`, el estado de HOY —transporte en claro, decidido y aceptado— se " +
-			"reportaría como divergencia: la unidad quedaría en rojo todos los días por una postura " +
-			"que nadie va a cambiar hoy, y eso es cómo se apaga un canal")
+	resto := guion[i:]
+	j := strings.Index(resto, "\nfi\n")
+	if j < 0 {
+		t.Fatal("no se encontró el `fi` que cierra el bloque de postura TLS")
+	}
+	bloque := resto[:j+4]
+
+	for _, c := range []struct {
+		nombre, postura, perilla, espera, porque string
+	}{
+		{"no se pudo leer la config", "", "0", "DUDOSO",
+			"no saber qué sirve el cerebro no es «sirve TLS» ni «no sirve»: es no saber, y se arregla mirando"},
+		{"hay certificado configurado", "tls_cert_file:/etc/musubi/cert.pem", "0", "VERDE",
+			"con certificado el bearer viaja cifrado de extremo a extremo, y eso es el objetivo de la migración"},
+		{"claro, con la perilla APAGADA", "allow_insecure_token:true", "0", "TIBIO",
+			"el estado de HOY está decidido y aceptado: reportarlo como divergencia dejaría la unidad en rojo todos los días por algo que nadie va a cambiar hoy"},
+		{"claro, con la perilla PRENDIDA", "allow_insecure_token:true", "1", "ROJO",
+			"ésta es la razón de ser de la perilla: prenderla convierte «el bearer viaja en claro» de salvedad de postura en DIVERGENCIA. Si acá no sale rojo, la perilla no cambia nada y la migración se puede declarar cerrada sin estarlo"},
+		{"claro desactivado sin certificado", "allow_insecure_token:false", "1", "VERDE",
+			"la rama de cierre tiene que seguir existiendo: sin ella el bloque sólo sabría acusar"},
+	} {
+		t.Run(c.nombre, func(t *testing.T) {
+			completo := "rojo(){ echo ROJO; }\nverde(){ echo VERDE; }\ntibio(){ echo TIBIO; }\ndudoso(){ echo DUDOSO; }\n" +
+				"POSTURA_TLS=" + shQuote(c.postura) + "\nCFG_REMOTO=/etc/musubi/config.yaml\n" +
+				"MUSUBI_EXIGIR_TLS=" + shQuote(c.perilla) + "\n" + bloque
+			salida, err := exec.Command("bash", "-c", completo).CombinedOutput()
+			if err != nil {
+				t.Fatalf("el bloque de postura TLS no corrió: %v\n%s", err, salida)
+			}
+			dicho := strings.TrimSpace(string(salida))
+			if dicho != c.espera {
+				t.Errorf("con POSTURA_TLS=%q y MUSUBI_EXIGIR_TLS=%q el bloque contestó %q y tiene que contestar %q.\n  %s",
+					c.postura, c.perilla, dicho, c.espera, c.porque)
+			}
+		})
 	}
 }
