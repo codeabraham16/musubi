@@ -95,6 +95,11 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 		renderTruncado(b, recorte, techoServicios)
 		renderTechos(b, techoServicios, 0, 0)
 		renderReferenciaDeVersion(b, versionCerebro)
+		// Y LAS BAJAS, PRECISAMENTE ACÁ. Este `return` se toma cuando no queda NINGUNA máquina
+		// visible — que es exactamente lo que pasa cuando se revocó la última. Saltearlo dejaba el
+		// aviso de la baja sin salir justo en el caso en que más importa: el proyecto entero se
+		// apagó y sus alertas se van a resolver todas juntas, en silencio.
+		renderBajasRecientes(b, engine, p, ahora)
 		return
 	}
 	if recorte.Proyectos {
@@ -128,6 +133,8 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 	recorte.Ilegible = renderAprobaciones(&cuerpo, engine, vistos, ahora) || recorte.Ilegible
 	// SI EL TAILNET VE A LAS QUE NO LATEN (Ola 3). Va con las mismas máquinas ya compuertadas.
 	renderVidaDeRed(&cuerpo, vistos, ahora, vidaDe)
+	// LAS BAJAS RECIENTES, que no están en `vistos` justamente por estar dadas de baja.
+	renderBajasRecientes(&cuerpo, engine, p, ahora)
 
 	renderTruncado(b, recorte, techoServicios)
 	// EL MARGEN, ANTES DEL CORTE. `export_truncated` avisa cuando un techo YA cortó, o sea
@@ -203,6 +210,94 @@ var seriesSoloDelScrape = []string{
 	nombreUso,
 	// Es un hecho del cerebro, no telemetría de una máquina: no viaja por el empuje.
 	nombreReferenciaVersion,
+	// Una máquina revocada no está en el barrido del empuje —no es visible— así que su baja sólo
+	// puede llegar por el scrape.
+	nombreBajaReciente,
+}
+
+// nombreBajaReciente dice que una máquina SE DIO DE BAJA hace poco, con su antigüedad.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// REVOCAR UNA MÁQUINA RESOLVÍA SUS ALERTAS EN SILENCIO.
+//
+// `revoked` es una BANDERA y no un DELETE, así que la fila queda — pero la máquina sale del
+// export, sus series se vuelven obsoletas, y TODAS sus alertas se resuelven solas. Del otro lado
+// del canal, «se arregló» y «la sacamos del inventario» llegan como el MISMO `[RESOLVED]`, sin
+// una palabra que los distinga. Quien lo lee concluye que el problema se atendió — y la máquina
+// con el disco lleno que se dio de baja sin arreglar queda cerrada en la cabeza de todos.
+//
+// ES UNA SERIE ACOTADA EN EL TIEMPO y no una bandera permanente: acompaña a las resoluciones y
+// después desaparece sola. Una serie que viviera para siempre convertiría el aviso en parte del
+// paisaje, que es otra forma de no decir nada.
+//
+// EL NOMBRE NO LLEVA `device_` A PROPÓSITO, y no es estilo: `prometheus.yml` descarta
+// `musubi_fleet_(device|service)_.*` del scrape porque esa familia llega por el empuje OTLP. Esta
+// serie NO puede viajar por el empuje —el empuje recorre las máquinas VISIBLES, y una máquina
+// revocada no lo es— así que con ese prefijo se descartaría en el scrape y no llegaría por
+// ningún lado. Es el mismo criterio que `musubi_fleet_net_up` y `musubi_fleet_approval_pending`.
+// ────────────────────────────────────────────────────────────────────────────────────────────
+const nombreBajaReciente = "musubi_fleet_revoked_ago_seconds"
+
+// ventanaDeBajaReciente es cuánto tiempo se sigue anunciando una baja.
+//
+// Sale de la vida de una alerta, no de un gusto: tiene que cubrir con margen el `for:` de la
+// alerta que la lee más el tiempo que el canal tarda en entregar, para que el aviso de la baja y
+// las resoluciones que produjo lleguen juntos.
+const ventanaDeBajaReciente = 24 * time.Hour
+
+// renderBajasRecientes emite una línea por máquina dada de baja adentro de la ventana.
+//
+// LEE LAS REVOCADAS APARTE, y no puede hacerse metiéndolas en `vistos`: ahí adentro emitirían
+// TODAS sus series —cpu, disco, servicios— y volverían a la flota como si estuvieran vivas, que
+// es exactamente lo contrario de lo que esto quiere decir.
+func renderBajasRecientes(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time) {
+	proyectos, _, _ := proyectosVisibles(engine, p)
+	// Y LOS PROYECTOS QUE YA NO TIENEN MÁQUINAS VIVAS. `proyectosVisibles` los descubre con
+	// `ProyectosConDevices`, que filtra `revoked = 0`: el proyecto cuya ÚLTIMA máquina se dio de
+	// baja desaparece entero, y su baja —la que más importa anunciar— no saldría por ningún lado.
+	if conBajas, err := engine.ProyectosConBajasRecientes(ahora.Add(-ventanaDeBajaReciente), proyectosParaExportar); err == nil {
+		ya := map[string]bool{}
+		for _, q := range proyectos {
+			ya[q] = true
+		}
+		for _, q := range conBajas {
+			if !ya[q] {
+				proyectos = append(proyectos, q)
+			}
+		}
+	}
+	tipoEscrito := false
+	for _, proy := range proyectos {
+		devices, err := engine.ListarDevices(proy, true) // true = incluir revocadas
+		if err != nil {
+			continue // lo ilegible ya lo cuenta el barrido principal
+		}
+		for _, d := range devices {
+			if !d.Revoked || d.RevokedAt.IsZero() {
+				continue
+			}
+			edad := ahora.Sub(d.RevokedAt)
+			if edad < 0 || edad > ventanaDeBajaReciente {
+				continue
+			}
+			// LA COMPUERTA ES LA DEL HISTORIAL Y NO LA NORMAL, y no es un atajo: para una máquina
+			// revocada `PuedeSobreDevice` contesta SIEMPRE que no —el kill-switch de la revocación
+			// es absoluto, y así tiene que seguir siendo para todo lo que TOQUE la máquina—. Lo que
+			// se está publicando acá no toca nada: es el hecho de que salió del inventario, que es
+			// justamente lo que hay que poder decir. `PuedeVerHistorialDeDevice` levanta ese
+			// kill-switch y NADA MÁS: misma tenencia, misma concesión. Quien podía ver esa máquina
+			// mientras vivía se entera de su baja; nadie más.
+			if !PuedeVerHistorialDeDevice(p, d, fleet.CapMetrics) {
+				continue
+			}
+			if !tipoEscrito {
+				fmt.Fprintf(b, "# HELP %s Hace cuántos segundos se dio de baja esta máquina. Existe SÓLO durante las primeras 24 h desde la revocación, y sirve para distinguir «se arregló» de «la sacamos del inventario»: sin ella, revocar resuelve todas las alertas de la máquina y del otro lado llega el mismo [RESOLVED] que produce un arreglo.\n# TYPE %s gauge\n",
+					nombreBajaReciente, nombreBajaReciente)
+				tipoEscrito = true
+			}
+			fmt.Fprintf(b, "%s{project=%q,device=%q} %d\n", nombreBajaReciente, d.ProjectID, d.Name, int64(edad.Seconds()))
+		}
+	}
 }
 
 func renderVidaDeRed(b *strings.Builder, vistos []fleet.Device, ahora time.Time, vidaDe vidaDeRedLookup) {

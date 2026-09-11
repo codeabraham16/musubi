@@ -2082,6 +2082,38 @@ func schemaMigrations() []migration {
 					"emisor_desde TEXT NOT NULL DEFAULT ''")
 			},
 		},
+		{
+			version:        55,
+			name:           "cuando_se_revoco_esta_maquina",
+			readCompatible: true,
+			// REVOCAR UNA MÁQUINA RESUELVE SUS ALERTAS EN SILENCIO.
+			//
+			// `revoked` es una BANDERA y no un DELETE, así que la fila queda — pero la máquina sale
+			// del export, sus series se vuelven obsoletas, y TODAS sus alertas se resuelven solas.
+			// Del otro lado del canal, «se arregló» y «la sacamos del inventario» llegan como el
+			// MISMO mensaje: un `[RESOLVED]` sin una palabra que los distinga.
+			//
+			// No es cosmético. Quien lee ese resolved concluye que el problema se atendió, y la
+			// máquina con el disco lleno que se dio de baja sin arreglar queda cerrada en la cabeza
+			// de todos. Es el mismo defecto que este track ya arregló dos veces con otros nombres:
+			// dos causas distintas produciendo la misma señal.
+			//
+			// GUARDA EL CUÁNDO Y NO UN BOOLEANO: `revoked` ya dice que pasó. Lo que faltaba es
+			// poder emitir una serie ACOTADA EN EL TIEMPO —«esta máquina se dio de baja recién»—
+			// para que el aviso acompañe a las resoluciones y después desaparezca solo. Con un
+			// booleano, la serie viviría para siempre y el aviso se volvería permanente, que es
+			// otra forma de no decir nada.
+			//
+			// Arranca VACÍA en las máquinas ya revocadas, y el vacío significa «se revocó antes de
+			// que esto existiera»: la serie no se emite para ellas, que es lo correcto — su baja ya
+			// pasó y nadie está esperando un aviso.
+			//
+			// ES readCompatible: ADD COLUMN sobre `devices` con default.
+			up: func(x execQuerier) error {
+				return agregarColumnaSiFalta(x, "devices", "revoked_at",
+					"revoked_at TEXT NOT NULL DEFAULT ''")
+			},
+		},
 	}
 }
 

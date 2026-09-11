@@ -402,6 +402,11 @@ type DeviceStore interface {
 	// marca cuando el emisor CAMBIA: con un agente envejece, con dos alternándose vuelve a cero
 	// en cada latido, y eso es lo que los distingue sin inferirlo de la cadencia.
 	ActualizarEmisor(id, emisor string, ahora time.Time) error
+
+	// ProyectosConBajasRecientes lista los proyectos con una revocación desde `desde`. Hace falta
+	// aparte de `ProyectosConDevices` porque aquélla filtra las revocadas: un proyecto cuya última
+	// máquina se dio de baja desaparece del export, y su baja es justo la que hay que anunciar.
+	ProyectosConBajasRecientes(desde time.Time, tope int) ([]string, error)
 	// ProyectosConDevices lista los tenants que tienen máquinas activas (para el export federado
 	// a Prometheus). `tope` acota el barrido; pedí uno de más para saber si hay más.
 	ProyectosConDevices(tope int) ([]string, error)

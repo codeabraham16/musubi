@@ -31,7 +31,7 @@ var ErrDeviceDuplicado = errors.New("ya existe un dispositivo con ese nombre en 
 // los dos lados: `motivo_no_preguntar`/`token_fuente` (A99, A102) y `servicios_omitidos` (A116) de
 // la rama de flota, y `capver` (#419) de main. Van todas, y `capver` va ÚLTIMA para que el orden
 // del Scan siga el mismo criterio que trae main.
-const columnasDevice = `id, name, project_id, tier, caps, os, arch, address, agent_version, tags, enrolled_at, last_seen, revoked, last_sample, rustdesk_id, rustdesk_id_previo, rustdesk_id_cambiado, consentimiento, puede_preguntar, requiere_aprobacion, motivo_no_preguntar, token_fuente, servicios_omitidos, servicios_error, capver, emisor, emisor_desde`
+const columnasDevice = `id, name, project_id, tier, caps, os, arch, address, agent_version, tags, enrolled_at, last_seen, revoked, last_sample, rustdesk_id, rustdesk_id_previo, rustdesk_id_cambiado, consentimiento, puede_preguntar, requiere_aprobacion, motivo_no_preguntar, token_fuente, servicios_omitidos, servicios_error, capver, emisor, emisor_desde, revoked_at`
 
 // AltaDevice registra un dispositivo y devuelve la fila creada, con el id que asignó el CEREBRO.
 //
@@ -321,8 +321,12 @@ func (e *DbEngine) RevocarDevice(projectID, name string) (bool, error) {
 		return false, fmt.Errorf("error al buscar el dispositivo %q para revocarlo: %w", name, err)
 	}
 
+	// LA HORA DE LA BAJA SE GUARDA, y no es contabilidad: es lo que permite AVISAR que esta
+	// máquina se fue. Sin ella, revocar resuelve todas sus alertas en silencio y del otro lado
+	// del canal «se arregló» y «la sacamos del inventario» llegan como el mismo `[RESOLVED]`.
 	if _, err := tx.Exec(
-		`UPDATE devices SET revoked = 1, token_sha256 = '' WHERE id = ?`, id); err != nil {
+		`UPDATE devices SET revoked = 1, token_sha256 = '', revoked_at = ? WHERE id = ?`,
+		time.Now().UTC().Format(time.RFC3339), id); err != nil {
 		return false, fmt.Errorf("error al revocar el dispositivo %q: %w", name, err)
 	}
 	if _, err := tx.Exec(
@@ -414,6 +418,37 @@ func (e *DbEngine) ActualizarCapver(id string, capver int) error {
 	return nil
 }
 
+// ProyectosConBajasRecientes lista los proyectos que tuvieron una revocación desde `desde`.
+//
+// EXISTE PORQUE `ProyectosConDevices` FILTRA `revoked = 0`, y eso esconde exactamente el caso que
+// más importa: el proyecto cuya ÚLTIMA máquina se dio de baja desaparece entero del export, así
+// que su baja no se puede anunciar — y sus alertas se resuelven en el silencio más completo de
+// todos. El aviso de una baja tiene que poder salir de un proyecto que ya no tiene máquinas
+// vivas.
+func (e *DbEngine) ProyectosConBajasRecientes(desde time.Time, tope int) ([]string, error) {
+	if tope <= 0 {
+		return nil, nil
+	}
+	rows, err := e.db.Query(
+		`SELECT DISTINCT project_id FROM devices
+		  WHERE revoked = 1 AND revoked_at >= ? AND project_id <> ''
+		  ORDER BY project_id LIMIT ?`,
+		desde.UTC().Format(time.RFC3339), tope)
+	if err != nil {
+		return nil, fmt.Errorf("error al listar los proyectos con bajas recientes: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, fmt.Errorf("error al escanear un proyecto con bajas recientes: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // ProyectosConDevices lista los proyectos que tienen al menos una máquina ACTIVA, ordenados.
 //
 // La usa el export a Prometheus de un principal federado (read=all), que no tiene un proyecto
@@ -487,12 +522,13 @@ func escanearDevice(row escaneable) (fleet.Device, error) {
 		svsError         string
 		emisor           string
 		emisorDesde      string
+		revocadoEn       string
 	)
 	if err := row.Scan(
 		&d.ID, &d.Name, &d.ProjectID, &tier, &caps,
 		&d.OS, &d.Arch, &d.Address, &d.AgentVer, &tags,
 		&enrolled, &lastSeen, &revoked, &muestra, &d.RustdeskID, &d.RustdeskIDPrevio, &cambiado,
-		&consent, &puedePreguntar, &requiereAprob, &motivoNoPreg, &tokenFuente, &svsOmitidos, &svsError, &d.Capver, &emisor, &emisorDesde,
+		&consent, &puedePreguntar, &requiereAprob, &motivoNoPreg, &tokenFuente, &svsOmitidos, &svsError, &d.Capver, &emisor, &emisorDesde, &revocadoEn,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fleet.Device{}, err // lo traduce escanearUnDevice
@@ -518,6 +554,11 @@ func escanearDevice(row escaneable) (fleet.Device, error) {
 	// recién»: la serie se omite en ese caso, que es la regla de este plano.
 	if t, ok := parseObsTime(emisorDesde); ok {
 		d.EmisorDesde = t
+	}
+	// El cero significa «se revocó antes de que esto se guardara», no «se revocó en el año cero»:
+	// la serie de la baja simplemente no se emite para esas máquinas.
+	if t, ok := parseObsTime(revocadoEn); ok {
+		d.RevokedAt = t
 	}
 	if tags != "" {
 		d.Tags = strings.Split(tags, ",")

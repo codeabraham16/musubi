@@ -701,6 +701,27 @@ groups:
       # cero. El umbral de 10 min con `for: 30m` deja pasar los reinicios legítimos —un agente que
       # arranca empieza en cero y a los 10 minutos ya salió de la zona— y no deja pasar dos
       # agentes, que no salen nunca.
+      # --- LA MÁQUINA SE DIO DE BAJA (y por eso se callaron sus alertas) ---
+      #
+      # Revocar una máquina la saca del export: sus series se vuelven obsoletas y TODAS sus
+      # alertas se resuelven solas. Del otro lado del canal, «se arregló» y «la sacamos del
+      # inventario» llegaban como el MISMO `[RESOLVED]`, sin una palabra que los distinga — y
+      # quien lo lee concluye que el problema se atendió. La máquina con el disco lleno que se dio
+      # de baja sin arreglar quedaba cerrada en la cabeza de todos.
+      #
+      # ES `info` Y NO UNA ADVERTENCIA: no hay nada que arreglar. Existe para que el aviso VIAJE
+      # POR EL MISMO CANAL que las resoluciones que la baja produjo, y llegue junto con ellas.
+      #
+      # `for: 0m` a propósito: el valor de este aviso es llegar AL MISMO TIEMPO que los resolved,
+      # y cualquier espera lo deja llegando después — cuando ya nadie está mirando ese hilo.
+      - alert: MaquinaRevocada
+        expr: musubi_fleet_revoked_ago_seconds >= 0
+        for: 0m
+        labels: { severity: info }
+        annotations:
+          summary: "{{ $labels.device }} se dio de BAJA del inventario: sus alertas se van a resolver solas, y no porque se hayan arreglado."
+          nota: "Este aviso existe para que las resoluciones que vas a ver de esta máquina no se lean como arreglos. Si la diste de baja con algo sin resolver —un disco lleno, un servicio caído— eso sigue igual: la máquina salió del inventario, el problema no. La serie dura 24 h y después desaparece sola."
+
       - alert: DosAgentesSobreLaMismaMaquina
         expr: >-
           musubi_fleet_device_emitter_stable_seconds < 600

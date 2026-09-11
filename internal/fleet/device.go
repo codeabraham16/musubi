@@ -222,6 +222,14 @@ type Device struct {
 	EnrolledAt time.Time
 	LastSeen   time.Time // cero = nunca latió
 	Revoked    bool
+	// RevokedAt es CUÁNDO se dio de baja. Cero = no está revocada, o se revocó antes de que esto
+	// se guardara.
+	//
+	// EXISTE PARA PODER AVISAR QUE LA MÁQUINA SE FUE. Revocar la saca del export, sus series se
+	// vuelven obsoletas, y TODAS sus alertas se resuelven solas: del otro lado del canal «se
+	// arregló» y «la sacamos del inventario» llegan como el mismo `[RESOLVED]`, sin una palabra
+	// que los distinga. Quien lo lee concluye que el problema se atendió.
+	RevokedAt time.Time
 
 	// RustdeskID es el identificador PÚBLICO del cliente RustDesk de esta máquina (S6). Lo
 	// reporta el agente. No es un secreto: sin la contraseña de sesión no sirve para entrar.

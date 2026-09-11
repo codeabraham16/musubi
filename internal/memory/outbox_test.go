@@ -220,8 +220,13 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       diagnóstico se hizo midiendo la CADENCIA, una inferencia sobre un efecto de segundo
 	//       orden—. `emisor_desde` sólo se mueve cuando el emisor CAMBIA: con un agente envejece,
 	//       con dos vuelve a cero en cada latido. readCompatible: dos ADD COLUMN.
-	if latestSchemaVersion() != 54 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 54", latestSchemaVersion())
+	//    55 · `cuando_se_revoco_esta_maquina` — `devices.revoked_at`. Revocar una máquina resuelve
+	//       TODAS sus alertas en silencio: del otro lado del canal, «se arregló» y «la sacamos del
+	//       inventario» llegan como el mismo `[RESOLVED]`. Guarda el CUÁNDO y no un booleano
+	//       —`revoked` ya dice que pasó— para poder emitir una serie ACOTADA EN EL TIEMPO que
+	//       acompañe a las resoluciones y después desaparezca sola. readCompatible: ADD COLUMN.
+	if latestSchemaVersion() != 55 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 55", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.
