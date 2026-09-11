@@ -8,6 +8,50 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **«Un vector por trozo» queda medido y NO se construye: dos hipótesis propias, las dos
+  refutadas.** El item venía del plan con una motivación razonable, y el trabajo consistió en
+  intentar demostrarla. No se pudo.
+
+  **El mecanismo es real.** `StaticProvider.Embed` es una **media simple** de los vectores de todos
+  los tokens, sin atención ni peso posicional. El corpus lo invita: p50 = 2.464 caracteres, p90 =
+  4.725, máximo 57.996, con el 65 % por encima de 2.000. Y el coseno al centroide del corpus sube
+  **monótono en los seis tramos** (0,6263 → 0,8721): los documentos largos convergen al centro.
+
+  **Hipótesis 1, refutada:** «el documento largo pierde su información interna». Medido
+  doc-contra-doc, la separación entre mismo-tema y ajenos **no se achica** con el largo: 0,1288 /
+  0,1325 / 0,1260 / 0,1463 / 0,1544. Todo sube junto y la resta sobrevive.
+
+  **Hipótesis 2, también refutada** — y esta parecía contundente: una consulta corta no separa
+  documentos largos (por encima de 1.000 caracteres la separación cae a ~0, y entre 1.000 y 3.000 es
+  **negativa**). Si la causa fuera el largo, embeber sólo el **primer trozo de 1.000** debería
+  recuperarla. **No la recupera:**
+
+  | banda | doc entero | primer trozo |
+  |---|---|---|
+  | 1.000–3.000 | −0,0145 | −0,0157 |
+  | 3.000+ | +0,0175 | +0,0237 |
+
+  El remedio, aplicado directo, no mueve nada. **Correr el remedio antes de construirlo cuesta una
+  tarde; construirlo cuesta un track.**
+
+  **Lo que sí explica los datos** es incómodo: los documentos naturalmente cortos separan porque su
+  texto se parece a su propia etiqueta. La consulta sale de `ConsultaDesdeTopico`, o sea de las
+  palabras del `topic_key`. Eso mide **solapamiento etiqueta-texto**, no calidad de recuperación.
+
+  **★ Y ahí aparece el patrón que vale más que el item:** es el **tercer** punto del plan bloqueado
+  por lo mismo. El veredicto sobre MMR, el peso de la señal léxica y ahora el troceo — los tres
+  chocan con que en este banco **las consultas Y las etiquetas salen las dos del `topic_key`**. La
+  mitad de la relevancia ya se empezó a registrar (`EtiquetadoPorExpansion`, v57); la mitad de las
+  consultas no existe, y guardarlas es una decisión de privacidad, no de ingeniería.
+
+  **Lo que sí quedó en pie, por dos caminos independientes:** la señal vectorial aporta poco. El
+  barrido de pesos dice que `vector=0.5` rinde más que `vector=1.0`, y que apagarla cuesta −0,0264
+  mientras apagar el léxico cuesta −0,1617. Las mediciones de acá muestran el otro lado del mismo
+  hecho. Dos caminos distintos coincidiendo es la única razón para creerle a uno.
+
+  Las tres mediciones quedan reproducibles en `internal/recalleval/dilucion_real_test.go` (detrás
+  del skip por env, como el resto del banco), con las refutaciones escritas adentro: el resultado
+  **es** la refutación.
 - **Las siete señales del RRF se pueden pesar, y la primera medición dice que el banco sólo puede
   juzgar cuatro.** Hasta acá todas valían 1.0, y eso no era una decisión medida: es el default de
   Reciprocal Rank Fusion, que existe justamente para no tener que elegir pesos.
