@@ -75,7 +75,7 @@ func TestCountTokensRemoteParseaInputTokens(t *testing.T) {
 	countTokensURL = srv.URL
 	defer func() { countTokensURL = old }()
 
-	n, err := countTokensRemote(srv.Client(), "sk-test", "claude-opus-4-8", "hola")
+	n, err := countTokensRemote(srv.Client(), srv.URL, "sk-test", "claude-opus-4-8", "hola")
 	if err != nil {
 		t.Fatalf("countTokensRemote error: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestCountTokensRemoteErrorHTTP(t *testing.T) {
 	countTokensURL = srv.URL
 	defer func() { countTokensURL = old }()
 
-	if _, err := countTokensRemote(srv.Client(), "x", "m", "y"); err == nil {
+	if _, err := countTokensRemote(srv.Client(), srv.URL, "x", "m", "y"); err == nil {
 		t.Fatal("esperaba error por status no-200")
 	}
 }
