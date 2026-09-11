@@ -749,7 +749,18 @@ func TestLasAlertasDelLatidoLeenLaSerieConLastOverTime(t *testing.T) {
 	// esta misma medición las cita— y ahí no deciden nada.
 	reCorte := regexp.MustCompile(`^(for|labels|annotations|keep_firing_for)\s*:|^- alert:`)
 	// La forma buena: la métrica va DENTRO de last_over_time( o absent_over_time( y con rango.
-	reEnvuelta := regexp.MustCompile(`(last_over_time|absent_over_time)\(\s*musubi_verificacion_[a-z0-9_]+\s*\[`)
+	// CUALQUIER FUNCIÓN `*_over_time` VALE, y la lista de dos nombres era demasiado estrecha.
+	//
+	// La propiedad que esta guarda custodia es que la serie se lea sobre un RANGO y no en el
+	// vector instantáneo — porque una serie empujada se pone rancia a los ~5 minutos y el latido
+	// es cada 6 horas. Todas las `*_over_time` de PromQL leen un rango por construcción: exigir
+	// dos nombres concretos rechaza expresiones correctas, y una guarda que grita en falso se
+	// aprende a ignorar.
+	//
+	// Lo encontró un `max_over_time(...[30d])` legítimo: el trinquete que detecta que alguien
+	// APAGÓ la exigencia de TLS después de haberla prendido necesita mirar treinta días atrás, y
+	// `last_over_time` no puede contestar «¿alguna vez estuvo en 1?».
+	reEnvuelta := regexp.MustCompile(`[a-z_]+_over_time\(\s*musubi_verificacion_[a-z0-9_]+\s*\[`)
 	reCruda := regexp.MustCompile(`musubi_verificacion_[a-z0-9_]+`)
 
 	dentro, vistas := false, 0

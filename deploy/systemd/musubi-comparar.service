@@ -50,6 +50,28 @@ Environment=MUSUBI_SSH=musubi-server
 #
 # `Restart=` NO es la respuesta acá: systemd no lo admite con `Type=oneshot`.
 Environment=MUSUBI_ESPERA_RED=300
+# LA PERILLA DEL TLS VIVE ACÁ, Y ANTES NO VIVÍA EN NINGÚN LADO.
+#
+# `MUSUBI_EXIGIR_TLS=1` es el paso que CIERRA la migración a TLS: convierte «el bearer viaja en
+# texto plano» de una salvedad de postura en una DIVERGENCIA, o sea en algo que pone la corrida en
+# rojo. Y sólo existía en el README y en una invocación a mano — así que la exigencia no corría
+# sola nunca, y el día que alguien migrara el transporte nada iba a comprobar que la migración
+# quedó completa.
+#
+# ARRANCA EN 0 A PROPÓSITO Y NO ES UN OLVIDO: hoy el cerebro sirve HTTP en claro (lo cifra el
+# tailnet, no el transporte) y ponerla en 1 dejaría la unidad en rojo todos los días por una
+# postura que está decidida. La decisión de migrar no es de este archivo.
+#
+# CUÁNDO SE PONE EN 1 — las cuatro cosas, en este orden, y la última es ésta:
+#   1. `tailscale cert <nodo>` en el servidor del cerebro;
+#   2. `tls_cert_file` / `tls_key_file` en su config, y `allow_insecure_token` afuera;
+#   3. `MUSUBI_BRAIN_TLS_NAME` en cada agente de la flota;
+#   4. esta línea a 1.
+#
+# Y LA QUINTA, QUE NO ES OPCIONAL: el certificado de `tailscale cert` VENCE CADA 90 DÍAS. Sin un
+# timer de renovación y una alerta de vencimiento, el cerebro se apaga solo a los tres meses. Es
+# la decisión abierta que bloquea todo esto, y está escrita para que nadie prenda el 1 sin verla.
+Environment=MUSUBI_EXIGIR_TLS=0
 ExecStart=@REPO@/deploy/comparar-y-latir.sh
 
 # EL CÓDIGO DE SALIDA 1 NO ES UN FALLO DE LA UNIDAD, Y ESTO IMPORTA.

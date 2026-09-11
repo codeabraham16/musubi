@@ -462,6 +462,71 @@ groups:
           nota: "La comparación repo↔producción es lo único que caza «arreglado en el repo, nunca llegado a la máquina». Corré `MUSUBI_SSH=musubi-server ./deploy/comparar-y-latir.sh` desde el árbol del repo, y mirá por qué dejó de correr sola. Ver deploy/RUNBOOK.md#comparacionreposervidorsincorrer"
           runbook: "deploy/RUNBOOK.md#comparacionreposervidorsincorrer"
 
+      # --- LA COBERTURA POR MÁQUINA, QUE AHORA TAMBIÉN LATE ---
+      #
+      # `verificar-cobertura.sh` contesta la pregunta de un nivel más adentro que su hermano: aquél
+      # dice «¿está la regla cargada?» y éste «¿esa regla vigila a ESTA máquina?». La diferencia se
+      # midió el 2026-09-02, con las 35 reglas desplegadas y todas sus métricas presentes: 13 de 19
+      # dimensiones en las Windows.
+      #
+      # SU HERMANO GANÓ TIMER, LATIDO Y DEAD-MAN CON A115; ÉL QUEDÓ EN «CUANDO ALGUIEN SE
+      # ACUERDE» — que no es una cadencia baja, es CERO: nadie se acuerda de correr un guion que
+      # no falla. Ahora corre en la misma corrida que su hermano y su resultado viaja aparte.
+      #
+      # `last_over_time` por lo medido en el bloque de arriba: una serie empujada se pone rancia a
+      # los ~5 minutos y esto late cada 6 horas, así que escrita pelada esta alerta no podría
+      # dispararse NUNCA.
+      # --- LA EXIGENCIA DE TLS NO SE APAGA DESPUÉS DE PRENDIDA ---
+      #
+      # `MUSUBI_EXIGIR_TLS=1` es el paso que CIERRA la migración a TLS: convierte «el bearer viaja
+      # en texto plano» de una salvedad de postura en una divergencia. Hoy vale 0, y eso está
+      # DECIDIDO — el cerebro sirve HTTP en claro y lo cifra el tailnet.
+      #
+      # ESTA ALERTA ES UN TRINQUETE Y NO UN JUICIO SOBRE LA POSTURA. No puede disparar mientras la
+      # perilla nunca haya estado en 1: sólo suena si alguien la APAGA después de haberla prendido
+      # — o sea, si se migró a TLS y después se dejó de comprobar que la migración sigue completa.
+      #
+      # Sin ella, esa vuelta atrás es invisible: el verificador deja de mirar el transporte y sale
+      # verde igual, porque «no lo miré» y «lo miré y está bien» son el mismo 0 en el resultado.
+      # Es la forma exacta del defecto que este track persigue, aplicada a su propia perilla.
+      #
+      # `last_over_time` por lo medido más arriba: la serie se empuja cada 6 h y se pone rancia a
+      # los ~5 minutos, así que escrita pelada no podría dispararse nunca.
+      - alert: ExigenciaDeTLSApagada
+        expr: >-
+          max(last_over_time(musubi_verificacion_tls_exigido[7d])) == 0
+          and on() (max_over_time(musubi_verificacion_tls_exigido[30d]) == 1)
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "Se apagó `MUSUBI_EXIGIR_TLS` después de haberlo prendido: nadie comprueba ya que el transporte siga cifrado."
+          nota: "La perilla vive en `deploy/systemd/musubi-comparar.service`. Con ella en 0, el verificador reporta el transporte en claro como una salvedad de postura en vez de una divergencia — así que un cerebro que volvió a HTTP sale VERDE. Si la bajaste a propósito porque se revirtió la migración, decilo en el registro; si no, volvé a ponerla en 1."
+
+      - alert: CoberturaPorMaquinaSinVerificar
+        expr: >-
+          absent_over_time(musubi_verificacion_cobertura_ultima_seconds[7d])
+          or (time() - max(last_over_time(musubi_verificacion_cobertura_ultima_seconds[7d]))) > 93600
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "Hace más de 26 h que nadie verifica QUÉ vigila realmente cada máquina."
+          nota: "Que una regla esté cargada no significa que vigile a una máquina concreta: hace falta que esa máquina exporte la serie que la regla mira. Corré `MUSUBI_SSH=musubi-server ./deploy/comparar-y-latir.sh`, que ahora corre las dos comprobaciones. Ver deploy/RUNBOOK.md#comparacionreposervidorsincorrer"
+
+      - alert: MaquinasConDimensionesSinVigilar
+        # EL RESULTADO, APARTE DEL DEAD-MAN. Si «hay huecos» y «no corrió» compartieran señal se
+        # leerían igual, y se arreglan distinto — la misma razón por la que `ProduccionDivergeDelRepo`
+        # está separada de `ComparacionRepoServidorSinCorrer`.
+        #
+        # `== 1` Y NO `> 0`: el 2 significa «no se pudo medir», que es otra cosa y la dice el
+        # dead-man de arriba al quedarse sin latidos frescos. Tratarlos igual mandaría a buscar
+        # huecos de cobertura cuando el problema fue que no se pudo consultar Prometheus.
+        expr: max(last_over_time(musubi_verificacion_cobertura_resultado[7d])) == 1
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Hay máquinas con dimensiones declaradas que NINGUNA regla vigila."
+          nota: "Una dimensión sin vigilar no falla: enmudece. Corré `MUSUBI_SSH=musubi-server ./deploy/verificar-cobertura.sh` y mirá el mapa — dice máquina por máquina qué dimensión no tiene quién la mire, y por qué (la regla no está, o la máquina no exporta esa serie)."
+
       - alert: ProduccionDivergeDelRepo
         # El resultado viaja EN el latido y no en un canal aparte: si «divergió» y «no corrió»
         # compartieran señal, se leerían igual y se arreglan distinto.
