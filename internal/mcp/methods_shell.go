@@ -198,8 +198,34 @@ func (s *McpServer) abrirShellConSesion(d fleet.Device, ses fleet.SesionShell,
 	// Si la shell remota muere sola (alguien teclea `exit`, se cae la red), la fila se cierra sin
 	// que nadie tenga que preguntar. Sin esto, la bitácora quedaría con sesiones «activas» que
 	// terminaron hace horas.
+	//
+	// PERO SÓLO SI LA MATÓ EL OTRO LADO, Y ESA DISTINCIÓN ES TODO EL PUNTO DE LA CONSULTA AL
+	// REGISTRO. `Terminado()` se cierra por DOS motivos que no se parecen en nada: porque la
+	// shell remota se murió (lo que este goroutine existe para atender) o porque `cerrarShell`
+	// llamó a `canal.Cerrar()` (que es alguien de ACÁ que ya decidió, ya eligió su estado y su
+	// motivo, y ya escribió la fila). El canal no distingue los dos: avisa igual.
+	//
+	// El registro sí los distingue, porque `cerrarShell` hace `quitar` ANTES de `Cerrar`. Así
+	// que un despertar con el id ya desregistrado significa exactamente «esto lo cerró alguien
+	// de este lado»: no hay nada que escribir.
+	//
+	// LO QUE COSTABA NO PREGUNTAR. La segunda escritura no corrompía nada —el UPDATE lleva
+	// `WHERE cerrada IS NULL` y quedaba en no-op— pero era un llamado al engine disparado por
+	// un goroutine que no le rinde cuentas a nadie, corriendo DESPUÉS de que su llamador volvió.
+	// En un apagado ordenado eso llega tarde: el engine ya está cerrado, el UPDATE falla y
+	// `cerrarShell` loguea «no se pudo cerrar la fila de la sesión» — un WARN de auditoría que
+	// manda a investigar una fila que en realidad se cerró perfecto. Y en CI (macOS, 2026-09-10)
+	// la carrera se veía de la otra punta: el UPDATE abría una conexión SQLite NUEVA justo
+	// mientras el TempDir del test se estaba borrando, recreaba `memory.db-wal`/`-shm` adentro
+	// de `.musubi`, y el `RemoveAll` moría con «directory not empty».
+	//
+	// Se compara la IDENTIDAD del canal y no sólo la presencia del id: si el id volviera a
+	// registrarse con OTRO canal, cerrar la fila sería matarle la bitácora a una sesión viva.
 	go func() {
 		<-canal.Terminado()
+		if vigente, sigue := s.shells.buscar(ses.ID); !sigue || vigente != canal {
+			return
+		}
 		s.cerrarShell(ses.ID, fleet.ShellCerrada, "la shell remota terminó", time.Now())
 	}()
 

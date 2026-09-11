@@ -594,6 +594,35 @@ groups:
           nota: "La última comparación encontró divergencia. Corré `MUSUBI_SSH=musubi-server ./deploy/verificar-despliegue.sh` para ver QUÉ y en qué dirección: dice cada eslabón por separado. Ver deploy/RUNBOOK.md#producciondivergedelrepo"
           runbook: "deploy/RUNBOOK.md#producciondivergedelrepo"
 
+      - alert: VerificacionSinReferenciaConfiable
+        # LA COMPARACION SALIO 0 CONTRA UN ARBOL QUE NO ERA `origin/main`.
+        #
+        # Sin esto, «coincide» valia lo mismo parado en main que parado en una rama de hace un mes.
+        # Medido el 2026-09-10: el cerebro corria 0.139.7, `origin/main` habia cortado 0.140.1 tres
+        # horas antes, y la corrida de las 08:12 dijo «mismo release que el repo» y salio 0 — porque
+        # el checkout estaba en una rama con el VERSION viejo.
+        #
+        # LA SERIE PUEDE ESTAR AUSENTE Y ESO NO ES UN 0: un verificador viejo no la emite, y el
+        # latido NO inventa un cero en su lugar. La ausencia no dispara —`max()` sobre un vector
+        # vacio no da resultado, asi que ni `== 0` ni `!= 1` se cumplen—, y eso es lo que se quiere:
+        # «no se» no es «esta mal». Se elige `== 0` igual porque nombra el estado MEDIDO; con
+        # `!= 1` un tercer valor futuro se leeria como esta alerta sin que nadie lo decida.
+        #
+        # LO QUE ESTO NO CUBRE, dicho para que no se descubra el dia que pase: si el verificador
+        # sigue corriendo pero deja de declarar la referencia, la serie desaparece y esto se calla.
+        # Ese hueco lo tapa `TestElLatidoQueEmpujaElVerificadorEsElQueMiranLasAlertas`, que no deja
+        # que el latido empuje una metrica que ninguna alerta mire — pero lo tapa en el repo, no en
+        # produccion.
+        #
+        # `last_over_time` por lo mismo que sus dos vecinas: esto late cada 6 h y una serie empujada
+        # se pone rancia a los ~5 min, asi que escrita pelada no podria dispararse nunca.
+        expr: max(last_over_time(musubi_verificacion_referencia_confiable[7d])) == 0
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "La comparacion corrio contra un arbol que no es origin/main: su resultado no dice si produccion esta al dia."
+          nota: "No es que produccion diverja: es que la corrida no lo puede contestar. La salida del verificador dice en que rama esta el arbol, cuantos commits le faltan o le sobran y cuantos archivos hay sin commitear. Poner el checkout en origin/main limpio y volver a correr."
+
       - alert: DespliegueConEslabonesSinVerificar
         # Salida 2 del verificador: «no pude preguntar». NO comparte alerta con la divergencia, por
         # el mismo motivo por el que no comparte código de salida — «vi algo mal» y «no vi» se

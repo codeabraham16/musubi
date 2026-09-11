@@ -133,8 +133,16 @@ type MemoryConfig struct {
 	// CONJUNTO. Medido en la memoria real, una consulta gastaba un TERCIO del presupuesto en 3
 	// cambios contados SIETE VECES cada uno (las 7 fases SDD), enterrando memoria más útil.
 	//
-	// 1 (o menos) APAGA MMR: sólo relevancia, orden bit-idéntico al histórico. El default sale de
-	// MEDIR contra el recall-gate (R@10), no de estimar.
+	// LO APAGAN LOS DOS EXTREMOS, NO UN RANGO: `lambda >= 1` Y `lambda <= 0` devuelven el orden
+	// bit-idéntico al histórico (mmr.go, diversify). En el medio se diversifica MÁS cuanto MÁS BAJO
+	// el valor. Esta línea decía «1 (o menos) APAGA MMR» hasta el 2026-09-11, que se lee como el
+	// rango ≤1 —o sea que 0,75, el default, también apagaría— y manda a poner 0 a quien quiere
+	// diversidad máxima, que es justo el valor con MÁS redundancia medida (0,7453 @10 contra 0,6313
+	// del default). El porqué del cero está en mmr.go y no se repite acá: el cero es el valor por
+	// defecto de Go, así que un caller que arme RecallOptions{} sin pensar tiene que recibir el
+	// ranking intacto y no «diversidad pura, relevancia cero».
+	//
+	// El default sale de MEDIR contra el recall-gate (R@10), no de estimar.
 	MMRLambda float64 `yaml:"mmr_lambda"`
 }
 

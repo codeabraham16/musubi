@@ -17,8 +17,11 @@ mode: local # local | team
 #   team_mode: true       # las observaciones nuevas nacen `shared` y fluyen al cerebro central
 #   recall_token_budget: 700
 #   gist_max_tokens: 24   # techo del resumen extractivo que trae el recall
-#   mmr_lambda: 0.75      # diversidad del recall: 1 = apagado (orden bit-idéntico al de antes).
-#                         # Por debajo de ~0.72 empieza a promover items sin relación con la consulta.
+#   mmr_lambda: 0.75      # diversidad del recall. LO APAGAN LOS DOS EXTREMOS: 1 (o más) Y 0 (o menos)
+#                         # devuelven el orden bit-idéntico al de antes. Entre medio se diversifica MÁS
+#                         # cuanto MÁS BAJO. O sea que poner 0 buscando diversidad máxima APAGA MMR y te
+#                         # deja con la MAYOR redundancia medida (0,7453 @10, contra 0,6313 del default).
+#                         # Y por debajo de ~0.72 empieza a promover items sin relación con la consulta.
 
 # --- Detección de conflictos ---------------------------------------------------------------------
 # conflicts:
@@ -27,6 +30,19 @@ mode: local # local | team
 #   band_floor: 0.80      # "banda ciega": vecinos que se MUESTRAN al guardar sin encolar un veredicto.
 #                         # Debe ser < cosine_floor. Ahí viven las CONTRADICCIONES: decir lo contrario
 #                         # usa OTRAS palabras, así que se parecen MENOS que un duplicado.
+#   ledger_prefixes:      # prefijos de topic_key que ESTE despliegue declara LIBRO MAYOR: correspondencia
+#     - "terminales/"     # entre agentes, actas, bitácoras. Comparten con un commit la única propiedad
+#                         # que acá importa —no se pueden DES-HACER—, así que ningún veredicto los
+#                         # alcanza y no entran a la cola como destino.
+#                         # POR QUÉ CONFIGURADO Y NO HARDCODEADO: el motor no puede saber qué géneros
+#                         # inventa cada despliegue. Sin declararlos, dos despachos entre agentes se
+#                         # aparean por la PLANTILLA que comparten —misma estructura, mismo vocabulario—
+#                         # aunque hablen de cosas distintas, y la cola se llena de pendientes que nadie
+#                         # va a juzgar. El daño no es el ruido sino la EROSIÓN: una cola con falsos
+#                         # positivos DEJA DE LEERSE, y el día que aparezca la contradicción real se
+#                         # pierde entre las demás.
+#                         # FALLA SEGURA: el peor caso de un prefijo mal declarado es una relación DE
+#                         # MENOS en la cola, NUNCA una observación de menos en el recall.
 
 # --- Semántica (embeddings) ----------------------------------------------------------------------
 # Sin provider, la búsqueda es léxica (FTS). La tabla estática se baja con `musubi embed pull`.

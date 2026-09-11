@@ -159,9 +159,22 @@ principals:
     token_sha256: "<sha256-del-token>"   # el servidor solo ve el hash
     project_id: crm-musubi               # aísla su recall a este proyecto (con 16.1c-3)
     role: writer                         # reader (solo lectura) | writer (lee+escribe) | admin
+    expires: "2026-12-31T23:59:59Z"      # OPCIONAL (RFC3339): pasada esa fecha el token deja de
+                                         # autenticar. Se escribe A MANO: no hay comando que lo ponga.
 ```
 
 - **Roles:** `reader` solo puede tools de lectura; `writer` lee y escribe; `admin` todo.
+- **Vencimiento (`expires`):** es lo ÚNICO que hace caducar a un token `msb_` — sin ese campo, el
+  token vale para siempre. Formato RFC3339; ausente significa «no vence». Pasada la fecha la
+  credencial deja de autenticar por los DOS caminos que la resuelven, no sólo por el del bearer:
+  **tampoco puede ejecutar comandos por las políticas de flota.**
+- **`musubi token list` muestra cuatro estados**, y son cuatro y no un sí/no a propósito:
+  `no vence` · `vigente` · `VENCIDA` · `ilegible`. Con un booleano, una fecha que no parsea saldría
+  como «no vencida» — o sea «no pude medir» disfrazado de «medí y está bien», que en el eje que
+  decide quién ejecuta comandos es el peor error posible.
+  `ilegible` **no deja pasar nada**: el cerebro se niega a cargar un registro con un `expires` que
+  no sea RFC3339 y no arranca, diciendo qué principal y qué valor. O sea que ese estado lo vas a
+  ver en el CLI —que lee el archivo directo— y no en un cerebro corriendo. Falla cerrado.
 - **Backward-compat:** sin archivo de registro, sigue el modo de un único token. El
   `MUSUBI_TOKEN` legacy sigue válido (como `admin`) aun con registro presente.
 

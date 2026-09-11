@@ -86,9 +86,21 @@ type ObsCard struct {
 	Importance float64 `json:"importance"`
 }
 
-// RecentObservations devuelve las últimas observaciones NO archivadas (más nuevas
-// primero) en forma legible, para los paneles "lo que Musubi recuerda" y "actividad
-// reciente". Si una no tiene gist, cae a un recorte del contenido. limit<=0 usa 12.
+// RecentObservations devuelve las últimas observaciones VISIBLES (más nuevas primero) en forma
+// legible, para los paneles "lo que Musubi recuerda" y "actividad reciente". Si una no tiene gist,
+// cae a un recorte del contenido. limit<=0 usa 12.
+//
+// USA EL PREDICADO CANÓNICO, Y HASTA EL 2026-09-11 NO. Decía `WHERE archived = 0` escrito a mano
+// —el QUINTO predicado de visibilidad a mano de este repo— y le faltaban las otras dos mitades:
+// `superseded_by IS NULL` y `quarantined = 0`. Los dos consumidores son superficies que SALEN:
+// `cmd/musubi/dashboard.go` lo sirve por HTTP y `cmd/musubi/export.go` lo mete en el snapshot.
+//
+// LO QUE SE ESCAPABA NO ERA COSMÉTICO. Una observación en CUARENTENA es contenido de LLM sin
+// corroborar, y su contrato dice con todas las letras que «NO aparece en ningún recall»: la
+// cuarentena existe para que lo que propuso un modelo no se lea como memoria hasta que alguien lo
+// confirme. Con el predicado a mano, el panel la dibujaba igual. Medido con caminos PÚBLICOS de
+// producción —`ProposeObservation` y un veredicto `supersedes`, nada de UPDATE crudo—: el panel
+// devolvía 3 tarjetas al lado de su propio contador diciendo `visible=1`, y el recall devolvía 1.
 func (e *DbEngine) RecentObservations(limit int) ([]ObsCard, error) {
 	if limit <= 0 {
 		limit = 12
@@ -99,7 +111,7 @@ func (e *DbEngine) RecentObservations(limit int) ([]ObsCard, error) {
 		       COALESCE(created_at, ''),
 		       COALESCE(importance, 1.0)
 		FROM observations
-		WHERE archived = 0
+		WHERE `+visibleObsPredicate+`
 		ORDER BY created_at DESC, rowid DESC
 		LIMIT ?`, limit)
 	if err != nil {

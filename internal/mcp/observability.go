@@ -290,6 +290,24 @@ func (m *serverMetrics) renderRejections(b *strings.Builder) {
 	m.renderPoliticas(b)
 }
 
+// resultadosDePolitica es LA ÚNICA COPIA del conjunto de resultados que `contarPolitica` puede
+// anotar. La siembra la recorre entera, y `TestSeSiembranTodosLosResultadosQueSeEmiten` la
+// contrasta contra los literales que el código REALMENTE le pasa a `contarPolitica`, leídos del
+// AST — así que agregar un resultado nuevo sin sembrarlo pone rojo, y sembrar uno que nadie emite
+// también.
+//
+// POR QUÉ EXISTE COMO VARIABLE Y NO COMO UNA LISTA ADENTRO DE LA SIEMBRA: porque ahí estaba, y
+// quedó vieja. Ver el comentario de `sembrarPoliticas`.
+var resultadosDePolitica = []string{
+	"ok",
+	"rechazada",
+	"sin_principal",
+	"error",
+	"mantenimiento",
+	"consentimiento_prohibido",
+	"consentimiento_pide",
+}
+
 // contarPolitica anota una acción de auto-heal.
 // resultado: "ok" | "rechazada" | "sin_principal" | "error" | "mantenimiento" |
 // "consentimiento_prohibido" | "consentimiento_pide".
@@ -331,15 +349,30 @@ func (m *serverMetrics) contarPolitica(politica, resultado string) {
 // que existe el comentario. Se vio al reiniciar el cerebro después de configurar la primera
 // política real: la serie que acababa de aparecer desapareció, y ningún log lo dijo.
 //
-// Se siembran los CUATRO resultados posibles y no sólo los que hoy miran las alertas: una alerta
-// nueva sobre `error` se encontraría con el mismo agujero, y sembrar de menos lo dejaría abierto
-// para la próxima.
+// Se siembran TODOS los resultados posibles y no sólo los que hoy miran las alertas: una alerta
+// nueva sobre un resultado sin sembrar se encontraría con el mismo agujero.
+//
+// «SEMBRAR DE MENOS LO DEJARÍA ABIERTO PARA LA PRÓXIMA» — ESO DECÍA ACÁ, Y LA PRÓXIMA LLEGÓ.
+// Este comentario decía «los CUATRO resultados posibles», el código sembraba CINCO y
+// `contarPolitica` ya emitía SIETE: `consentimiento_prohibido` y `consentimiento_pide`, los dos de
+// A91, nacieron después y nadie volvió a esta línea. Tres lugares, dos equivocados.
+//
+// EL COSTO ES UNA ALERTA PERDIDA, NO UNA FALSA. `PoliticaFrenadaPorConsentimiento` es
+// `increase(...{result=~"consentimiento_.*"}[24h]) > 0`, y `increase()` NO PUEDE VER la subida de
+// AUSENTE a 1: necesita dos muestras de una serie que ya exista. Sin sembrar, el primer bloqueo por
+// consentimiento —que puede ser el único— no levanta la alerta, y encima lleva `for: 6h`. O sea que
+// el eje que existe para que «alguien lo note» no lo notaba nadie.
+//
+// LA LISTA SE DERIVA, NO SE VUELVE A ESCRIBIR. `resultadosDePolitica` es la única copia, y
+// `TestSeSiembranTodosLosResultadosQueSeEmiten` la contrasta contra los literales que el código
+// REALMENTE le pasa a `contarPolitica`, leídos del AST. Una lista a mano acá sería el mismo
+// derivado tipeado que este defecto es.
 func (m *serverMetrics) sembrarPoliticas(nombres []string) {
 	if m == nil {
 		return
 	}
 	for _, n := range nombres {
-		for _, r := range []string{"ok", "rechazada", "sin_principal", "error", "mantenimiento"} {
+		for _, r := range resultadosDePolitica {
 			// LoadOrStore y no Store: sembrar NUNCA puede pisar un contador que ya viene
 			// contando, o una recarga de configuración borraría la historia de la ventana.
 			m.politicaStats.LoadOrStore(n+"\x00"+r, new(atomic.Int64))
