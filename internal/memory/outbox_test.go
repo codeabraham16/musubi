@@ -232,8 +232,19 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       con 252 filas, porque crear el índice con la tabla chica cuesta milisegundos y la cola
 	//       crece ~10/día: el scan se vuelve visible recién cuando ya molesta. readCompatible: un
 	//       índice cambia el PLAN, nunca el RESULTADO de una consulta.
-	if latestSchemaVersion() != 56 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 56", latestSchemaVersion())
+	//    57 · `expansion_como_relevancia_elegida`. `bumpAccess` lo llamaban DOS caminos que no
+	//       significan lo mismo: recall.go bumpea lo que acaba de SERVIR —el ranker escribiendo
+	//       sobre su propia salida, el lazo endógeno de N4— y expand.go bumpea lo que el agente
+	//       ELIGIÓ de entre lo servido, con el titular delante. Sumadas en `access_count`, la
+	//       segunda era irrecuperable, y es la única etiqueta de relevancia del sistema que no
+	//       deriva de la similitud —la que le falta al banco de recall para poder juzgar a MMR sin
+	//       el sesgo que infla su costo. Se separan en `expand_count` / `last_expanded`. NO cambia
+	//       el ranking: access_count sigue recibiendo los mismos incrementos, las columnas nuevas
+	//       se suman. Arranca en cero y no se pudo rellenar (el ledger no guarda argumentos, y
+	//       dentro de access_count las dos señales ya están sumadas). readCompatible: dos ADD
+	//       COLUMN con default.
+	if latestSchemaVersion() != 57 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 57", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

@@ -2148,6 +2148,49 @@ func schemaMigrations() []migration {
 				return nil
 			},
 		},
+		{
+			version:        57,
+			name:           "expansion_como_relevancia_elegida",
+			readCompatible: true,
+			// LA ÚNICA SEÑAL EXÓGENA QUE TIENE EL RECALL SE ESTABA GUARDANDO EN LA COLUMNA DE LA
+			// ENDÓGENA.
+			//
+			// `bumpAccess` lo llaman DOS caminos que no significan lo mismo:
+			//   - recall.go: «te serví estos gists». Lo escribe el ranker sobre su propia salida.
+			//     Es el lazo endógeno que la invariante N4 existe para amortiguar.
+			//   - expand.go: «de todos los gists que me diste, ÉSTE lo quiero entero». Eso lo
+			//     decidió el agente DESPUÉS de leer los titulares; el ranker no lo puede fabricar.
+			//     Es relevancia ELEGIDA, no derivada.
+			//
+			// Las dos sumaban en `access_count`, así que la segunda quedaba indistinguible de la
+			// primera y heredaba su descuento. Y sin poder separarlas, el banco de recall no tiene
+			// una etiqueta de relevancia que no derive de la similitud: hoy las saca del
+			// `topic_key`, o sea que los documentos relevantes de una consulta SON los que se
+			// parecen entre sí. Por eso el costo de relevancia que el banco le cobra a MMR es una
+			// COTA SUPERIOR, inflada por construcción (ver internal/recalleval/mmr_real_test.go).
+			//
+			// ESTO NO CAMBIA EL RANKING, y es deliberado. `access_count` sigue recibiendo
+			// exactamente los mismos incrementos que antes, de los mismos dos caminos: las columnas
+			// nuevas SE SUMAN, no reemplazan. Separar la señal y usarla para rankear son dos
+			// decisiones distintas, y la segunda necesita una medición que todavía no existe —
+			// justamente la que ésta desbloquea. Hacer las dos juntas sería cambiar el ranker
+			// basándose en lo que uno espera que la medición diga.
+			//
+			// ARRANCA EN CERO Y NO SE PUEDE RELLENAR. Hay 53 expansiones en el ledger de uso, pero
+			// `tool_invocations` no guarda argumentos (invariante L1, y está bien que así sea), y
+			// dentro de `access_count` las dos señales ya están sumadas sin forma de restarlas. La
+			// historia previa está perdida: esto empieza a medir desde acá, no desde antes.
+			//
+			// Es readCompatible: dos ADD COLUMN con default sobre `observations`. Ningún lector
+			// viejo consulta estas columnas, así que ninguna respuesta existente cambia.
+			up: func(x execQuerier) error {
+				if err := agregarColumnaSiFalta(x, "observations", "expand_count",
+					"expand_count INTEGER NOT NULL DEFAULT 0"); err != nil {
+					return err
+				}
+				return agregarColumnaSiFalta(x, "observations", "last_expanded", "last_expanded DATETIME")
+			},
+		},
 	}
 }
 

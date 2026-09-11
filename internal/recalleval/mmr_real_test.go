@@ -34,11 +34,23 @@ import (
 // construcción. Lo mismo pasa del otro lado: parte de la "redundancia" que MMR saca es
 // material relevante.
 //
-// LO QUE DESBLOQUEA LA DECISIÓN es una etiqueta de relevancia que NO derive de la similitud, y ya
-// existe sin usarse: cada `musubi_memory_expand` es el agente diciendo «de todos los gists que me
-// diste, ESTE lo quiero entero» — relevancia elegida, no derivada. Hay 53 en la bitácora y
-// `tool_invocations` no guarda el observation_id. Ése es el item que convierte esta medición en un
-// veredicto.
+// LO QUE DESBLOQUEA LA DECISIÓN es una etiqueta de relevancia que NO derive de la similitud: cada
+// `musubi_memory_expand` es el agente diciendo «de todos los gists que me diste, ÉSTE lo quiero
+// entero» — relevancia elegida, no derivada.
+//
+// ESA ETIQUETA YA SE REGISTRA (v57, 2026-09-11): `observations.expand_count`, y el fixture la sabe
+// leer con `OpcionesFixtureReal{Etiquetado: EtiquetadoPorExpansion}`. Antes no se podía: expandir y
+// ser servido sumaban los dos en `access_count`, así que la elección del agente quedaba
+// indistinguible del refuerzo que el propio ranker se escribe.
+//
+// LO QUE FALTA AHORA ES USO, Y NO HAY ATAJO. La columna arrancó en cero y no se pudo rellenar —las
+// expansiones viejas están sumadas adentro de `access_count` sin forma de restarlas, y el ledger no
+// guarda argumentos a propósito—, así que el corpus de etiquetas se junta a medida que alguien
+// trabaja. Cuando haya tópicos con ≥2 documentos expandidos, este mismo barrido corrido con las DOS
+// etiquetas es el veredicto: si un λ gana con las dos, no está ganando por el sesgo de ninguna.
+//
+// Ojo con el sesgo de la etiqueta nueva, que es distinto pero existe: sólo se puede expandir lo que
+// el ranker sirvió, así que le da la derecha al ranking que la produjo. Ver EtiquetadoPorExpansion.
 func TestBarridoMMREnLosDosEjes(t *testing.T) {
 	ruta := os.Getenv("MUSUBI_FIXTURE_DB")
 	dirP := os.Getenv("MUSUBI_POTION_DIR")
