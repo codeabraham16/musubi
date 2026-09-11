@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -463,35 +464,63 @@ func archivosDeGuiones(t *testing.T, raiz string) (shs, ps1s, cmds []string) {
 	return
 }
 
-var carpetasQueNoSonCodigo = map[string]bool{
-	".git": true, "vendor": true, "node_modules": true, ".claude": true, "dist": true,
-}
-
+// archivosGo enumera los `.go` DEL REPO — y le pregunta a git, no al disco.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// POR QUÉ NO CAMINA EL DIRECTORIO, Y ES UN DEFECTO MEDIDO (2026-09-11)
+//
+// Esto recorría el árbol con `filepath.WalkDir` y salteaba una lista de carpetas ESCRITA A MANO:
+// `.git`, `vendor`, `node_modules`, `.claude`, `dist`. `.musubi/backups/` no estaba en esa lista
+// —el `.gitignore` sí la tiene, línea 36— así que el barrido entraba a los respaldos de worktrees
+// y los medía como si fueran el repo.
+//
+// LO QUE COSTÓ, MEDIDO SIETE MINUTOS DESPUÉS DE MERGEAR: `TestElTopePorConteoDelOutboxNoTieneQuienLoLea`
+// salió ROJA en el árbol de otra sesión acusando a tres «lectores» de `Sync.MaxAttempts`. Los tres
+// eran el MISMO archivo: una copia de `internal/config/config.go` dentro de
+// `.musubi/backups/rescate-worktrees-20260908/`. Lectores reales fuera de `internal/config`: CERO.
+// O sea que la guarda se acusaba A SÍ MISMA, vista a través de un respaldo — el archivo que delataba
+// es justo el único lugar donde ella permite el lector.
+//
+// Y LA COMBINACIÓN ERA LA PEOR POSIBLE: el CI corre sobre un checkout limpio, que no tiene
+// `.musubi/backups/`, así que allá siempre iba a estar VERDE. El rojo le aparecía sólo a quien
+// trabaja en un árbol real con respaldos. Una guarda que falla local y pasa en CI entrena a correr
+// la suite con el rojo puesto, que es cómo se deja de leer la suite entera.
+//
+// UNA LISTA DE EXCLUSIONES ESCRITA A MANO ES UN DERIVADO ESCRITO A MANO. Lo que define «el repo» ya
+// existe y se llama `.gitignore`; mantener una segunda copia al lado es garantizar que se separen.
+// Se usa `--cached --others --exclude-standard`, o sea lo trackeado MÁS lo nuevo todavía sin
+// agregar, MENOS lo ignorado: exactamente lo que el repo ES, incluido un archivo recién escrito
+// que aún no pasó por `git add`.
+//
+// SI GIT NO CONTESTA, ESTO MUERE. No hay fallback al recorrido del disco: «no pude preguntar» y
+// «no hay nada que mirar» son cosas distintas, y un barrido que se degrada en silencio devuelve un
+// cero que significa «no sé» — que es la familia de defectos que estas guardas existen para cazar.
 func archivosGo(t *testing.T, raiz string) []string {
 	t.Helper()
-	var out []string
-	err := filepath.WalkDir(raiz, func(ruta string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if carpetasQueNoSonCodigo[d.Name()] {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), ".go") {
-			return nil
-		}
-		rel, err := filepath.Rel(raiz, ruta)
-		if err != nil {
-			return err
-		}
-		out = append(out, filepath.ToSlash(rel))
-		return nil
-	})
+
+	salida, err := exec.Command("git", "-C", raiz, "ls-files", "--cached", "--others", "--exclude-standard", "-z").Output()
 	if err != nil {
-		t.Fatalf("no pude recorrer los `.go` desde %s: %v — no medí nada", raiz, err)
+		t.Fatalf("no pude preguntarle a git qué archivos son del repo (raíz %s): %v.\n"+
+			"  Esta guarda define «el repo» como lo que git trackea, no como lo que hay en el disco, "+
+			"y sin git no puede distinguir un archivo del proyecto de una copia en un respaldo. NO se "+
+			"cae al recorrido del directorio a propósito: eso sería medir otra cosa y llamarlo lo mismo",
+			raiz, err)
+	}
+
+	var out []string
+	for _, rel := range strings.Split(string(salida), "\x00") {
+		if strings.HasSuffix(rel, ".go") {
+			out = append(out, filepath.ToSlash(rel))
+		}
+	}
+
+	// CONTROL DE «MIRÓ ALGO». Cero archivos no es «el repo no tiene código Go»: es que la pregunta
+	// se hizo mal o se hizo en el lugar equivocado. Un barrido vacío deja en verde a TODA guarda
+	// que se apoye en él, y se ve idéntico a un barrido que no encontró nada malo.
+	if len(out) == 0 {
+		t.Fatalf("git no devolvió NI UN archivo `.go` bajo %s. Un cero acá es «no pude medir», no "+
+			"«no hay código»: las guardas que se apoyan en este barrido quedarían todas en verde "+
+			"sin haber mirado una línea", raiz)
 	}
 	sort.Strings(out)
 	return out
