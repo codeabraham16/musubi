@@ -8,6 +8,40 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **El chequeo de permiso de la clave de firma no podía pasar NUNCA en Windows, así que el firmador
+  abortaba antes de firmar.** `deploy/firmar-release.sh` comprobaba `stat -c %a` contra `400|600`.
+  Medido sobre NTFS con git-bash: sólo se mapea el bit de sólo-lectura, así que `chmod 600` deja
+  **644** y `chmod 400` deja **444**. La clave de la prueba estaba perfectamente protegida por su
+  ACL —sólo SYSTEM, Administrators y el dueño— y el guion la rechazaba igual.
+
+  **Una guarda que no puede pasar nunca no protege: se saltea a mano**, con prisa y con la clave
+  montada, que es exactamente cuando se pierde. Ahora la pregunta se hace distinto según el
+  sistema: modo POSIX donde eso significa algo, y en Windows la ACL, resuelta a **SID** antes de
+  comparar porque los nombres de los grupos están traducidos (`Everyone` es `Todos`, `Users` es
+  `Usuarios`) y un grep por el nombre inglés daría verde sobre una clave abierta. Un SID que no se
+  puede traducir cuenta como amplio: falla en cerrado.
+
+  **Y en macOS tampoco corría, por otro motivo, que apareció cuando el test nuevo lo ejecutó ahí
+  por primera vez:** `stat -c` es de GNU, y BSD contesta `stat: illegal option -- c`. Bajo
+  `set -euo pipefail` la asignación mataba el guion mostrando la ayuda de `stat`, sin una línea que
+  dijera qué estaba intentando hacer. O sea que el chequeo **sólo había funcionado en Linux**. Ahora
+  prueba `stat -c` y cae a `stat -f %Lp`, y —la parte que importa— **no poder leer el modo aborta
+  diciéndolo** en vez de morir mudo: firmar sin saber cómo está protegida la clave es justo lo que
+  esta guarda existe para impedir.
+
+  Verificado de las dos formas: con una clave sana el guion firma, y dándole lectura a `Todos`
+  —por SID, `icacls /grant "*S-1-1-0:(R)"`— sale 2 y nombra el SID. ⚠️ El primer intento de ese
+  sabotaje **no se aplicó**: git-bash convirtió `/grant` en la ruta `C:/Program Files/Git/grant`,
+  así que el «pasó» no era un resultado sino una medición que no ocurrió. Rehecho con
+  `MSYS_NO_PATHCONV=1`.
+
+- **Y el firmador pasa a tener un test que lo EJECUTA.** `TestElFirmadorCorreDePuntaAPunta` corre
+  el guion real contra un directorio con un asset y una clave, y exige el manifiesto. Habría
+  cazado los tres defectos que este archivo acumuló sin un solo test —`python3` que no ejecuta, la
+  lista blanca sin los binarios de Windows, y el chequeo de modo— y ninguno de los tres se ve
+  leyendo el archivo. Tolera que falte el paquete `cryptography` porque no está en todas las
+  máquinas, y **sólo ese motivo**: cualquier otro fallo del guion es una falla del test.
+
 - **El firmador de releases no veía a Windows, así que firmar no habría arreglado `musubi update`
   en esta plataforma.** `deploy/firmar-release.sh` decide qué archivo del directorio es un asset con
   una lista blanca, y esa lista era el patrón `^musubi(-[a-z0-9]+)+(\.exe)?$` — sensible a

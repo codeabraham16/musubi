@@ -29,10 +29,48 @@ VERSION="${1:-}"; CLAVE="${2:-}"; DIR="${3:-}"
 [ -f "$CLAVE" ] || { echo "no encuentro la clave privada en $CLAVE" >&2; exit 2; }
 [ -d "$DIR" ]   || { echo "no encuentro el directorio $DIR" >&2; exit 2; }
 
-# El modo de la clave se COMPRUEBA, no se asume: una clave de firma legible por todo el mundo es
+# El permiso de la clave se COMPRUEBA, no se asume: una clave de firma legible por todo el mundo es
 # una clave que ya no vale. Es barato y es exactamente el descuido que se comete con prisa.
-MODO=$(stat -c %a "$CLAVE")
-case "$MODO" in 400|600) ;; *) echo "la clave privada tiene modo $MODO: ponela en 600 antes de firmar" >&2; exit 2;; esac
+#
+# PERO LA PREGUNTA NO SE HACE IGUAL EN LOS DOS SISTEMAS, y hasta el 2026-09-10 se hacía con un modo
+# POSIX en los dos. Medido en Windows, sobre NTFS: git-bash sólo mapea el bit de sólo-lectura, así
+# que `chmod 600` deja **644** y `chmod 400` deja **444**. Un `case` de `400|600` ABORTA SIEMPRE —
+# sobre una clave que puede estar perfectamente protegida por su ACL, como estaba la de la prueba
+# (sólo SYSTEM, Administrators y el dueño). Una guarda que no puede pasar nunca no protege nada:
+# se saltea a mano, con prisa y con la clave montada, que es exactamente cuando se pierde.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    # El equivalente en Windows es si algún principal AMPLIO tiene entrada en la ACL. Se traduce a
+    # SID antes de comparar porque los nombres de los grupos están TRADUCIDOS: en un Windows en
+    # español `Everyone` es `Todos` y `Users` es `Usuarios`, así que un grep por el nombre inglés
+    # daría verde sobre una clave abierta de par en par.
+    RUTA_WIN=$(cygpath -w "$CLAVE")
+    # S-1-1-0 Todos · S-1-5-32-545 Usuarios · S-1-5-11 Usuarios autenticados · S-1-5-4 Interactivo.
+    # Un SID que no se pudo traducir cuenta como amplio: falla en cerrado, no lo pasa por alto.
+    AMPLIOS=$(powershell -NoProfile -NonInteractive -Command \
+      "(Get-Acl -LiteralPath '$RUTA_WIN').Access | ForEach-Object { try { \$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { 'SIN-TRADUCIR' } }" \
+      2>/dev/null | tr -d '\r' | grep -E '^(S-1-1-0|S-1-5-32-545|S-1-5-11|S-1-5-4|SIN-TRADUCIR)$' || true)
+    [ -z "$AMPLIOS" ] || {
+      echo "la clave privada es alcanzable por $(echo "$AMPLIOS" | tr '\n' ' ')(Todos / Usuarios / Usuarios autenticados)." >&2
+      echo "Quitales el acceso antes de firmar:  icacls \"$RUTA_WIN\" /inheritance:r /grant:r \"%USERNAME%:R\"" >&2
+      exit 2; }
+    ;;
+  *)
+    # `stat -c` es de GNU. En macOS/BSD la misma pregunta se hace con `-f %Lp`, y el `-c` devuelve
+    # `stat: illegal option -- c`: medido en el runner de macOS el 2026-09-10, o sea que este
+    # chequeo NUNCA corrió fuera de Linux. Y fallaba de la peor manera — bajo `set -euo pipefail`
+    # la asignación mataba el guion mostrando la ayuda de `stat`, sin una línea que dijera qué
+    # estaba intentando hacer. Tercera guarda del mismo archivo que no podía informar.
+    MODO=$(stat -c %a "$CLAVE" 2>/dev/null || stat -f %Lp "$CLAVE" 2>/dev/null || true)
+    # No poder leer el modo NO es «seguí»: se aborta diciéndolo. Firmar sin saber cómo está
+    # protegida la clave es justamente lo que esta guarda existe para impedir.
+    [ -n "$MODO" ] || {
+      echo "no pude leer el modo de $CLAVE: ni \`stat -c\` (GNU) ni \`stat -f\` (BSD) contestaron." >&2
+      echo "No firmo sin saber cómo está protegida la clave." >&2
+      exit 2; }
+    case "$MODO" in 400|600) ;; *) echo "la clave privada tiene modo $MODO: ponela en 600 antes de firmar" >&2; exit 2;; esac
+    ;;
+esac
 
 # EL INTÉRPRETE SE ELIGE PROBÁNDOLO, NO PREGUNTANDO SI EXISTE. En Windows, `python3` existe como
 # un alias de ejecución de la Microsoft Store: `command -v python3` lo encuentra y `command -v`
