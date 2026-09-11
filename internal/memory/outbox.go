@@ -31,8 +31,10 @@ const (
 // OutboxItem es una unidad de entrega ya lista para empujar al central: el obs_id (que
 // también es el id JSON-RPC, para idempotencia end-to-end) más el payload reconstruido
 // desde observations al reclamar el batch. Attempts es el contador de intentos de entrega
-// YA fallidos de esta fila (no viaja en el payload): lo usa el drain para decidir el backoff
-// y el corte a dead-letter (attempts+1 >= max_attempts) sin un round-trip extra a la DB.
+// YA fallidos de esta fila (no viaja en el payload): lo usa el drain para decidir el backoff y
+// para la observabilidad, SIN UN ROUND-TRIP EXTRA a la DB. No corta nada: una fila muere sólo por
+// un fallo PERMANENTE, y eso lo decide el código de error. La regla está escrita una sola vez, en
+// config.SyncConfig.MaxAttempts.
 type OutboxItem struct {
 	ObsID      string
 	TopicKey   string
