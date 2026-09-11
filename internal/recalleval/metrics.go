@@ -86,3 +86,46 @@ func mean(xs []float64) float64 {
 	}
 	return s / float64(len(xs))
 }
+
+// RedundanciaAtK mide cuánta REPETICIÓN hay en el tope de un ranking: el promedio de la similitud
+// entre todos los pares de los primeros k resultados. 0 = todos distintos entre sí; 1 = todos lo
+// mismo. Con menos de 2 resultados devuelve 0 (no hay par que comparar).
+//
+// POR QUÉ HACE FALTA, Y POR QUÉ NINGUNA DE LAS OTRAS MÉTRICAS SIRVE PARA ESTO. Recall@k, MRR y
+// nDCG@k miden si lo relevante APARECE y en qué puesto. Ninguna penaliza que aparezca CINCO VECES:
+// para ellas, devolver el mismo hecho repetido cinco veces con etiquetas distintas es un resultado
+// perfecto. Y evitar exactamente eso es el único trabajo de MMR.
+//
+// La consecuencia es que el banco, tal como estaba, no podía evaluar la diversificación ni a favor
+// ni en contra — y peor: el fixture real etiqueta la relevancia por topic_key, o sea que los
+// documentos relevantes de una consulta son justo los que se parecen entre sí. MMR los separa, así
+// que en ese fixture MMR sale CASTIGADO POR CONSTRUCCIÓN. Medido: `produccion` (MMR 0.75) pierde
+// contra `hybrid` (MMR apagado) en 51 de 85 consultas por R@10 y en 59 por nDCG@10, siendo
+// MMRLambda su única diferencia. Leer eso como "MMR es malo" sería leer el sesgo del instrumento.
+//
+// Con esta métrica el contraste se puede hacer bien: MMR tiene que SUBIR la diversidad (bajar la
+// redundancia) y se acepta que baje algo de relevancia — cuánto es aceptable es una decisión de
+// producto, pero ahora se puede poner un número de los dos lados en vez de sólo de uno.
+//
+// sim recibe dos ids y devuelve su similitud. El caller decide con qué comparar: coseno de sus
+// vectores, Jaccard de trigramas, o lo que corresponda a lo que está evaluando.
+func RedundanciaAtK(ranked []string, k int, sim func(a, b string) float64) float64 {
+	if k > len(ranked) {
+		k = len(ranked)
+	}
+	if k < 2 || sim == nil {
+		return 0
+	}
+	var suma float64
+	var pares int
+	for i := 0; i < k; i++ {
+		for j := i + 1; j < k; j++ {
+			suma += sim(ranked[i], ranked[j])
+			pares++
+		}
+	}
+	if pares == 0 {
+		return 0
+	}
+	return suma / float64(pares)
+}
