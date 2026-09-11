@@ -87,7 +87,21 @@ jobs:
         # 100% Go, así que sigue con CGO_ENABLED=0 y cross-compila igual; suma ~8MB de gramáticas
         # embebidas. Sin esto, el binario distribuido sólo indexa .go y los repos JS/TS ven un grafo
         # de código vacío.
-        run: go build -trimpath -tags 'treesitter grammar_subset grammar_subset_typescript grammar_subset_tsx grammar_subset_javascript grammar_subset_python' -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o "${{ matrix.asset }}" ./cmd/musubi
+        #
+        # -X main.clavePublicaDeReleaseHex EMPOTRA LA CLAVE PÚBLICA DE RELEASE, y sin esto toda la
+        # cadena de auto-update es decorativa. Medido el 2026-09-10: ninguno de los releases
+        # publicados la traía, así que `clavePublicaDeRelease()` devolvía nil y `musubi update`
+        # fallaba con «este binario no trae una clave pública de release válida» — pasara lo que
+        # pasara con el manifiesto. Y ninguno de los seis releases revisados tenía manifiesto
+        # tampoco: la firma, el manifiesto, `ShaDeAsset` y la verificación estaban construidos, con
+        # tests, y nunca se habían encendido.
+        #
+        # VA EN CLARO Y ESTÁ BIEN: es la mitad PÚBLICA. Su par privado vive fuera de línea y no
+        # está ni acá ni en el repo, que es exactamente lo que hace que la firma valga algo — quien
+        # comprometa el pipeline puede reemplazar el binario y su sha256, y no puede firmar.
+        # El default de `clave_release.go` sigue VACÍO a propósito: un `go build` cualquiera no
+        # puede auto-actualizarse, y eso también está fijado por un test.
+        run: go build -trimpath -tags 'treesitter grammar_subset grammar_subset_typescript grammar_subset_tsx grammar_subset_javascript grammar_subset_python' -ldflags "-s -w -X main.version=${{ github.ref_name }} -X main.clavePublicaDeReleaseHex=c0ced6314433e735395f9efe5c20ffea2fe315a9b1ac02d463d4d1a69fff0ac8" -o "${{ matrix.asset }}" ./cmd/musubi
 
       - name: Checksum (SHA-256)
         run: sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"

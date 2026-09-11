@@ -7,6 +7,35 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El release empotra su clave pública, y con eso la cadena de auto-update se enciende por primera
+  vez.** Estaba entera construida —manifiesto firmado, `VerificarFirma`, `ShaDeAsset`, el guion de
+  firma, y tests— y el interruptor estaba en off. Medido el 2026-09-10:
+
+  - `release.yml` **no** pasaba `-X main.clavePublicaDeReleaseHex`, así que
+    `clavePublicaDeRelease()` devolvía `nil` en **todo binario publicado** y `musubi update` fallaba
+    con «este binario no trae una clave pública de release válida», pasara lo que pasara con el
+    manifiesto;
+  - y **ninguno de los seis releases revisados** (v0.131.0, v0.130.0, v0.106.0, v0.105.0, v0.104.0,
+    v0.103.0) tenía manifiesto: **nunca se firmó uno**.
+
+  O sea que firmar sin esto era un ritual. El par ed25519 se generó con
+  `go run ./deploy/cmd/clave-release`, se verificó con un round-trip real —firmar con la privada y
+  comprobar con la pública, más el control de que contra otra clave NO verifica— y la privada queda
+  fuera del repo y fuera del CI, que es lo que hace que la firma valga: quien comprometa el
+  pipeline puede reemplazar el binario y su `.sha256`, y no puede firmar.
+
+  **Dos guardas, porque el invariante tiene dos mitades y no son simétricas.**
+  `TestElReleaseEmpotraLaClavePublica` exige que `release.yml` la empotre y que mida 64 hex —una
+  clave corta decodifica a `nil` por el mismo camino que no tenerla, y el síntoma sería idéntico—.
+  `TestUnBuildCualquieraNoTraeClave` exige que el default de `clave_release.go` siga **vacío**: si
+  alguien "arregla" lo anterior poniendo la clave por omisión, cualquier `go build` a mano pasaría
+  a afirmar que verifica releases. Ese comentario estaba escrito en el archivo desde siempre y nada
+  lo sostenía.
+
+  Los tres sabotajes vistos en rojo: sacar la clave del workflow, acortarla, y ponerla como default.
+
+
 ### Fixed
 - **El chequeo de permiso de la clave de firma no podía pasar NUNCA en Windows, así que el firmador
   abortaba antes de firmar.** `deploy/firmar-release.sh` comprobaba `stat -c %a` contra `400|600`.
