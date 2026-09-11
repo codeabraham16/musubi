@@ -730,6 +730,36 @@ groups:
       # LA VENTANA DE MANTENIMIENTO LA CALLA, y acá el caso es directo: reinstalar el agente es
       # mantenimiento, y un agente que se está reinstalando no va a completar ninguna rotación.
       # Sin la guarda, arreglar dispara la alarma.
+      # --- LA MISMA MÁQUINA LLEGANDO DOS VECES ---
+      #
+      # `prometheus.yml` descarta `musubi_fleet_(device|service)_.*` del scrape justamente para
+      # que cada dato tenga UN SOLO PRODUCTOR: esa familia llega por el empuje OTLP. Si el
+      # descarte se saca, se comenta, o se despliega un `prometheus.yml` viejo, cada máquina
+      # empieza a llegar DOS veces con `instance` distinto.
+      #
+      # Y NO SE VE COMO UN ERROR: se ve como que todo anda. Cada regla de flota matchea dos series
+      # y cada alerta sale DUPLICADA — medido acá el 2026-08-28 al encender el empuje: 5 alertas,
+      # 10 avisos. Peor todavía, el `min` del SLA se queda con el camino MUERTO: así fue como el
+      # «peor equipo» del reporte marcó 10,2 % cuando la misma máquina, por el camino vivo, estaba
+      # en 84,7 %.
+      #
+      # LAS RECORDING RULES YA LO COLAPSAN con `max by(...)`, y eso arregló el reporte — pero no
+      # DETECTA nada: la duplicación sigue ahí, invisible, y cualquier regla nueva escrita contra
+      # la familia cruda vuelve a disparar doble. Esta alerta mira la causa y no el síntoma.
+      #
+      # `for: 1h` porque durante una transición legítima —encender el empuje, cambiar el
+      # descarte— las series viejas conviven con las nuevas hasta que caducan. Una hora deja pasar
+      # eso y no deja pasar una configuración mal desplegada.
+      - alert: LaMismaMaquinaLlegaDosVeces
+        expr: >-
+          count by(project, device) (musubi_fleet_device_up) > 1
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $labels.device }} llega {{ $value }} veces a Prometheus: cada alerta suya va a salir duplicada."
+          nota: "Revisá el `metric_relabel_configs` de `deploy/prometheus/prometheus.yml`: tiene que descartar `musubi_fleet_(device|service)_.*` en el job del cerebro, porque esa familia llega por el empuje OTLP. Sin ese descarte cada dato tiene DOS productores. Mirá los valores de `instance`: `musubi-brain` es el scrape y `musubi-otlp-push` el empuje."
+
       - alert: RotacionDeTokenSinCompletar
         expr: >-
           musubi_fleet_rotation_expires_in_seconds < 21600

@@ -1,0 +1,59 @@
+# musubi-respaldo-local.service — el snapshot del estado que NO SINCRONIZA a ningún lado.
+#
+# ────────────────────────────────────────────────────────────────────────────────────────────
+# LO QUE VIAJA Y LO QUE NO
+#
+# La memoria de equipo se sincroniza al central, y ahí sí hay snapshot diario con copia off-host.
+# Lo que NO VIAJA vive sólo en el disco de esta máquina:
+#
+#   · el grafo de código (nodos, aristas, la ceguera declarada),
+#   · las entidades y sus relaciones,
+#   · los proyectos LOCALES, que nunca se compartieron,
+#   · y las observaciones con scope `local`, que por definición no salen de acá.
+#
+# Si se pierde este disco, se pierden. No hay una segunda copia en ningún lado.
+#
+# Y ESTA MÁQUINA NO LA SCRAPEA PROMETHEUS. Todo el plano de monitoreo del track de flota vigila al
+# CEREBRO; una instalación local no exporta a ningún lado. Así que la única señal que queda es
+# `musubi doctor` y su chequeo `snapshot_local`, que mira la marca que este servicio deja.
+#
+# ES UNIDAD DE USUARIO, igual que `musubi-comparar`: corre sobre el `~/.musubi` de una persona y
+# no tiene por qué existir a nivel de sistema. Una unidad de sistema necesitaría permisos sobre el
+# home de otro, que es más superficie por ninguna ventaja.
+#
+# INSTALACIÓN:
+#
+#   mkdir -p ~/.config/systemd/user
+#   sed "s|@REPO@|$PWD|" deploy/systemd/musubi-respaldo-local.service > ~/.config/systemd/user/musubi-respaldo-local.service
+#   cp deploy/systemd/musubi-respaldo-local.timer ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now musubi-respaldo-local.timer
+#   loginctl enable-linger "$(id -un)"     # si no, se muere al cerrar sesión
+#
+# EL `enable-linger` NO ES OPCIONAL Y SU FALTA ES SILENCIOSA: sin él la unidad de usuario se apaga
+# al cerrar sesión, el timer deja de disparar, y lo único que se ve es que no hay snapshots — que
+# es indistinguible de «todavía no tocaba». Por eso el chequeo del doctor mira la EDAD de la marca
+# y no su existencia.
+# ────────────────────────────────────────────────────────────────────────────────────────────
+
+[Unit]
+Description=Snapshot del estado local de Musubi (lo que no sincroniza a ningún lado)
+Documentation=file://%h/musubi/deploy/RUNBOOK.md
+
+[Service]
+Type=oneshot
+# EL MISMO GUION QUE EL CEREBRO, en modo local-only DECLARADO. No se escribe un segundo guion:
+# dos copias de «cómo se toma un snapshot» divergen, y la que se queda vieja es siempre la del
+# camino que se mira menos — que acá sería justamente ésta.
+Environment=BACKUP_ALLOW_LOCAL_ONLY=1
+# LOCAL-ONLY ES LA DECISIÓN Y ESTÁ DECLARADA: el snapshot queda en el MISMO disco. Protege contra
+# un borrado accidental, una corrupción de la base y un `rm` desafortunado; NO protege contra
+# perder la máquina. Para eso hace falta un `BACKUP_REMOTE`, y ponerlo acá es una decisión de
+# quien tenga dónde.
+ExecStart=@REPO@/deploy/musubi-backup.sh
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

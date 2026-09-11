@@ -75,6 +75,7 @@ func (e *DbEngine) doctorChecks() []doctorCheck {
 		{code: "orphan_origins", run: checkOrphanOrigins, count: countOrphanOrigins, apply: applyDeleteOrphanOrigins},
 		{code: "stale_conflicts", run: checkStaleConflicts, count: countStaleConflicts, apply: applyDeleteStaleConflicts},
 		{code: "offhost_backup", run: checkOffhostBackup},
+		{code: "snapshot_local", run: checkSnapshotLocal},
 		{code: "outbox_stall", run: checkOutboxStall},
 		{code: "abandoned_runs", run: checkAbandonedRuns},
 		// deep: recorre el content de las observaciones que matchean el LIKE y decide en Go.
@@ -434,6 +435,49 @@ func checkOffhostBackup(e *DbEngine) CheckResult {
 	}
 	return CheckResult{Code: "offhost_backup", Status: "ok",
 		Message: fmt.Sprintf("último backup off-host hace %s", time.Since(okInfo.ModTime()).Round(time.Hour))}
+}
+
+// snapshotLocalStaleAfter es cuánto puede pasar sin snapshot local antes de decirlo.
+//
+// El timer corre a diario, así que 48 h dejan pasar una corrida saltada —un reinicio, una máquina
+// apagada una noche— y no dejan pasar un timer que dejó de dispararse.
+const snapshotLocalStaleAfter = 48 * time.Hour
+
+// checkSnapshotLocal es la ÚNICA superficie que le queda al estado local que NO SINCRONIZA.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// LO QUE VIAJA Y LO QUE NO. La memoria de equipo se sincroniza al central y ahí sí hay snapshot
+// diario. El grafo de código, las entidades y los proyectos locales NO VIAJAN: viven sólo en el
+// disco de esta máquina. Si se pierde el disco, se pierden.
+//
+// Y ESTA MÁQUINA NO LA SCRAPEA PROMETHEUS. Todo el plano de monitoreo que este track construyó
+// —las alertas, el empuje, el SLA— vigila al CEREBRO. Una instalación local no exporta a ningún
+// lado, así que `musubi doctor` es literalmente lo único que puede decir que su respaldo dejó de
+// correr.
+//
+// SU HERMANO `offhost_backup` EXISTE DESDE HACE TIEMPO Y ÉSTE NO, y la asimetría es la de
+// siempre: la cautela escrita para el cerebro y no para la máquina de al lado.
+//
+// NO ES UN FALLO NO TENERLO. Una máquina de desarrollo puede no tener timer de respaldo a
+// propósito; por eso el estado es `ok` con `Unmeasured`, igual que su hermano: la honestidad va
+// en «no hay dato», no en un rojo que se aprende a ignorar.
+func checkSnapshotLocal(e *DbEngine) CheckResult {
+	if e.path == "" {
+		return CheckResult{Code: "snapshot_local", Status: "ok", Message: "ruta de la base desconocida; no aplica"}
+	}
+	dir := filepath.Join(filepath.Dir(e.path), "backups")
+	info, err := os.Stat(filepath.Join(dir, snapshotMarkerName))
+	if err != nil {
+		return CheckResult{Code: "snapshot_local", Status: "ok", Unmeasured: true,
+			Message: "sin registro de snapshot local (no hay timer de respaldo en esta máquina, o nunca corrió). El grafo de código, las entidades y los proyectos locales NO se sincronizan a ningún lado: si se pierde este disco, se pierden"}
+	}
+	if age := time.Since(info.ModTime()); age > snapshotLocalStaleAfter {
+		return CheckResult{Code: "snapshot_local", Status: "warning",
+			Message: fmt.Sprintf("el último snapshot local fue hace %s (> %s): el timer dejó de correr, y un timer que NO DISPARA no falla — nadie recoge su código de salida",
+				age.Round(time.Hour), snapshotLocalStaleAfter)}
+	}
+	return CheckResult{Code: "snapshot_local", Status: "ok",
+		Message: fmt.Sprintf("último snapshot local hace %s", time.Since(info.ModTime()).Round(time.Hour))}
 }
 
 // checkOutboxStall es el detector del STALL SILENCIOSO del sync saliente (F2). Un nodo sano drena el

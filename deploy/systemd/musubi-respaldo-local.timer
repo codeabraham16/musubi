@@ -1,0 +1,29 @@
+# musubi-respaldo-local.timer — dispara el snapshot del estado local.
+#
+# DIARIO Y NO CADA SEIS HORAS: lo que respalda cambia en la escala de un día de trabajo, y un
+# snapshot cuesta un VACUUM INTO de la base entera. Su hermano `musubi-comparar` corre cuatro
+# veces al día porque mide DRIFT, que es otra cosa.
+#
+# EL UMBRAL DEL DOCTOR ES DE 48 h CONTRA UN DISPARO DIARIO, y ese margen es a propósito: con un
+# umbral de 26 h, una sola corrida perdida —la máquina apagada esa noche— encendería el aviso, y
+# un aviso que suena por un caso normal es cómo se enseña a ignorar un canal. Con 48 h hacen falta
+# DOS días seguidos sin snapshot, que ya es una afirmación que vale la pena hacer.
+
+[Unit]
+Description=Snapshot diario del estado local de Musubi
+Documentation=file://%h/musubi/deploy/RUNBOOK.md
+
+[Timer]
+# A las 03:15, desfasado de los 03:30 del backup del cerebro: compartir minuto mezclaría la carga
+# y haría que una corrida lenta pareciera culpa de la otra.
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=10m
+
+# LA LÍNEA QUE HACE QUE ESTO SIRVA EN UNA ESTACIÓN DE TRABAJO. Sin `Persistent`, un disparo que
+# cae con la máquina apagada simplemente NO OCURRE — y en un equipo que se apaga de noche eso
+# significa no tener NUNCA un snapshot, sin que nada lo diga. Con `Persistent`, al encender se
+# ejecuta el que se perdió.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
