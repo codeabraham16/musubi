@@ -181,18 +181,34 @@ func TestUnPedazoDeLaFlotaQueNoSePudoLeerNoSeInformaComoSinRecorte(t *testing.T)
 // principal` que había — el comentario que era falso justo para estos proyectos.
 func TestElProyectoQueSeApagoEnteroYNoSeDejaLeerLoDeclara(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
-	ahora := time.Now()
+	montaje := time.Now()
 
 	// «casa» queda VIVA para que el scrape tome el camino normal y no el del bloque vacío: así
 	// el barrido principal corre entero y sano, y lo único que puede encender la serie es el
 	// barrido de bajas.
-	maquinaConMuestra(t, s, "casa", "pc-gio", *muestraDePrueba(), ahora)
+	maquinaConMuestra(t, s, "casa", "pc-gio", *muestraDePrueba(), montaje)
 
 	// «sola» se apaga entera: su única máquina se revoca.
-	maquinaConMuestra(t, s, "sola", "pc-sola", *muestraDePrueba(), ahora)
+	maquinaConMuestra(t, s, "sola", "pc-sola", *muestraDePrueba(), montaje)
 	if ok, err := s.engine.RevocarDevice("sola", "pc-sola"); err != nil || !ok {
 		t.Fatalf("no se pudo revocar la única máquina de «sola»: ok=%v err=%v", ok, err)
 	}
+
+	// LA HORA DEL SCRAPE SE TOMA DESPUÉS DE LA BAJA, Y EL ORDEN ES LA PRUEBA, NO UN DETALLE.
+	//
+	// `RevocarDevice` estampa `revoked_at` con SU PROPIO reloj y lo guarda en RFC3339, que
+	// TRUNCA AL SEGUNDO. `renderBajasRecientes` descarta la baja si `edad := ahora.Sub(RevokedAt)`
+	// da negativa. Con `ahora` tomada ANTES del montaje, en una máquina lenta el montaje cruza el
+	// segundo, la baja queda estampada en un segundo POSTERIOR a `ahora`, y la serie no sale.
+	//
+	// Eso pasó de verdad: verde en linux y en macOS, ROJA en `test-cross (windows-latest)` sobre
+	// `main` —donde el paquete tarda 663 s y cruzar el segundo es la norma, no el borde—. El
+	// control positivo de abajo la agarró, que es exactamente para lo que está.
+	//
+	// Con la hora tomada acá el signo queda garantizado por construcción y no por velocidad: el
+	// truncado a segundo sólo puede mover el sello HACIA ATRÁS, así que `edad` es siempre >= 0.
+	// Si alguien mueve esta línea arriba del montaje, esta prueba vuelve a depender de la máquina.
+	ahora := time.Now()
 
 	// CONTROL POSITIVO, y no es adorno: sin él, un montaje que no produjera la baja dejaría el
 	// resto de la prueba midiendo el vacío y pasando en verde por el motivo equivocado.
