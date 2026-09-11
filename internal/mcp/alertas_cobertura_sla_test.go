@@ -169,27 +169,49 @@ func TestCadaCoberturaDeSlaPorProyectoTieneUnaAlertaQueLaLee(t *testing.T) {
 		t.Fatalf("sólo se parsearon %d alertas de %v; el barrido dejó de mirar", len(alertas), archivosDeAlertasDelRepo(t))
 	}
 
+	// EL LECTOR VA SOBRE LA SERIE POR ENTIDAD, NO SOBRE EL RESUMEN, Y ESO ES UN ARREGLO.
+	//
+	// Esta prueba exigía una alerta sobre `musubi:project*:cobertura30d`, y eso era justamente el
+	// defecto: ese resumen es `min by(project)` de la cobertura de cada máquina (o servicio), y
+	// una máquina recién enrolada entra con cobertura CERO. Así que un `delta` sobre el resumen
+	// DISPARABA EN CADA ENROLAMIENTO, diciendo «se perdió medición» sobre el evento contrario.
+	//
+	// La propiedad que hay que custodiar no es «el resumen tiene lector»: es que UNA PÉRDIDA DE
+	// MEDICIÓN SUENE, y eso sólo se distingue de un alta en la serie por entidad — donde la
+	// cobertura de una nueva sólo sube desde cero. El resumen se conserva como el número que se
+	// le informa al cliente, con su motivo escrito en `seriesSinLectorConMotivo`.
+	//
+	// La serie por entidad se DERIVA del `min by(project) (...)` del propio archivo de grabación,
+	// y no de un mapa escrito acá: un mapa sería una copia, y una copia se queda vieja.
 	for _, serie := range resumenes {
+		porEntidad := serieInternaDelResumen(grabadas[serie])
+		if porEntidad == "" {
+			t.Errorf("no pude derivar de qué serie por entidad desciende %s (expr: %q): sin eso esta "+
+				"guarda no sabe dónde exigir el lector", serie, grabadas[serie])
+			continue
+		}
 		var lectoras []string
 		for nombre, expr := range alertas {
-			if nombraLaSerie(expr, serie) {
+			if nombraLaSerie(expr, porEntidad) {
 				lectoras = append(lectoras, nombre)
 			}
 		}
 		sort.Strings(lectoras)
 		if len(lectoras) == 0 {
-			t.Errorf("NADIE LEE %s.\n"+
-				"  Es el resumen por proyecto que se le factura a un cliente y su medición puede "+
-				"perderse entera en silencio.\n"+
+			t.Errorf("NADIE LEE %s, de la que desciende %s.\n"+
+				"  Es la cobertura que se le factura a un cliente y su medición puede perderse entera "+
+				"en silencio.\n"+
 				"  La hermana es `CoberturaDelSlaSeCayo` en deploy/musubi-alerts-flota.yml: calcá su "+
-				"forma —`delta(<serie>[6h]) < -0.05`, `for: 30m`— y no inventes otra.\n"+
-				"  Y OJO CON LAS UNIDADES al calcarla: la cobertura es un RATIO en [0,1] («5 puntos» "+
-				"son 0,05) y el `for` tiene que caber en la ventana; las dos cosas las mide "+
-				"TestElUmbralDeCadaAlertaSobreUnaSerieGrabadaEsAlcanzable.", serie)
+				"forma —`delta(<serie por entidad>[6h]) < -0.05`, `for: 30m`— y no inventes otra.\n"+
+				"  Y NO la pongas sobre el resumen `%s`: ése es un `min by(project)` y una máquina "+
+				"recién enrolada entra con cobertura 0, así que la alerta sonaría en cada alta.\n"+
+				"  OJO CON LAS UNIDADES: la cobertura es un RATIO en [0,1] («5 puntos» son 0,05) y el "+
+				"`for` tiene que caber en la ventana; las dos cosas las mide "+
+				"TestElUmbralDeCadaAlertaSobreUnaSerieGrabadaEsAlcanzable.", porEntidad, serie, serie)
 			continue
 		}
 		for _, nombre := range lectoras {
-			verificarFormaDeLaAlertaDeCobertura(t, nombre, alertas[nombre], serie)
+			verificarFormaDeLaAlertaDeCobertura(t, nombre, alertas[nombre], porEntidad)
 		}
 	}
 }
@@ -278,4 +300,17 @@ func TestNingunaAlertaLeeUnaSerieDeSlaQueNadieGraba(t *testing.T) {
 			"  Eran dos desde que existe `CoberturaDelSlaDeServiciosSeCayo`: o alguien borró una "+
 			"alerta de cobertura, o este detector dejó de mirar.", vistas)
 	}
+}
+
+// serieInternaDelResumen saca la serie por entidad de un `min by(project) (X)`.
+//
+// Se lee del archivo de grabación en vez de escribirse acá: un mapa `resumen -> serie interna`
+// sería una copia, y el día que alguien cambie de qué desciende el resumen, la copia diría otra
+// cosa y esta guarda exigiría el lector sobre la serie equivocada.
+func serieInternaDelResumen(expr string) string {
+	m := regexp.MustCompile(`min\s+by\s*\(\s*project\s*\)\s*\(\s*(musubi:[A-Za-z0-9_:]+)`).FindStringSubmatch(expr)
+	if m == nil {
+		return ""
+	}
+	return m[1]
 }

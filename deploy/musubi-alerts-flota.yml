@@ -298,6 +298,26 @@ groups:
       # Si el scrape pierde sus concesiones (alguien editó principals.yaml, se revocó el token),
       # TODAS las series de flota desaparecen y las alertas de arriba dejan de disparar — sin
       # que nada falle. Una alerta que se apaga sola es peor que no tenerla.
+      # --- EL TECHO AVISA ANTES DE CORTAR, Y NO DESPUÉS ---
+      #
+      # `musubi_fleet_export_truncated` dice que un techo YA cortó: llega cuando la cobertura ya
+      # se perdió, y lo que se pierde no es un gráfico — son las series de las máquinas o los
+      # servicios que quedaron afuera, así que SUS alertas dejan de poder dispararse.
+      #
+      # Los tres techos estaban tipeados en Go y no llegaban a Prometheus, así que el margen sólo
+      # se podía ver entrando a mirar. Medido el 2026-09-10: `musubi-server` declara 56 servicios
+      # contra el techo de 64 del latido. Quedaban OCHO, y nadie tenía forma de saberlo.
+      #
+      # El 80 % da margen para actuar: subir la perilla, partir un proyecto, o declarar menos
+      # servicios. Es `warning` y no `critical` porque todavía no se perdió nada.
+      - alert: TechoDeExportCerca
+        expr: musubi_fleet_export_usage / on(kind) musubi_fleet_export_limit > 0.8
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "El export de flota va al {{ $value | humanizePercentage }} del techo de {{ $labels.kind }}."
+          nota: "Cuando llegue al 100 % el exportador RECORTA, y lo que queda afuera no tiene serie: sus alertas no pueden dispararse. `kind=projects` se sube en `proyectosParaExportar` (constante de compilación, hay que recompilar); `kind=services` con la perilla `fleet.services_per_project_export`. El techo del latido (`kind=heartbeat_services`) no tiene perilla: es `fleet.ServiciosPorLatido` y una máquina que lo pase manda un inventario recortado que el cerebro lee como completo."
+
       - alert: FlotaSinTelemetria
         expr: absent(musubi_fleet_device_up)
         for: 15m
@@ -436,13 +456,29 @@ groups:
       #
       # `for: 30m` sobre una ventana de 6 h: la caída tiene que sostenerse, para no disparar por un
       # hueco de un scrape.
+      # EL DELTA VA POR MÁQUINA, ANTES DEL `min by(project)`. No es una preferencia de forma: con
+      # el delta sobre la serie agregada, ESTA ALERTA DISPARABA EN CADA ENROLAMIENTO.
+      #
+      # `musubi:project_up:cobertura30d` es `min by(project)` de la cobertura de cada máquina, y
+      # la cobertura de una máquina recién enrolada arranca en CERO —no tiene historia todavía—.
+      # O sea que sumar una máquina hunde el mínimo del proyecto de golpe, el delta a 6 h da unos
+      # -0,9, y suena una alerta que dice «se perdió medición» sobre un evento que es lo contrario:
+      # entró una máquina más a medirse.
+      #
+      # Y LA PREMISA ESCRITA EN SU PROPIA NOTA ERA FALSA PARA LA SERIE QUE MIRABA. Dice «mientras
+      # el TSDB acumula historia la cobertura sólo sube, así que esto es una pérdida»: cierto POR
+      # MÁQUINA, falso para el mínimo del proyecto, que baja cada vez que aparece una nueva.
+      #
+      # Tomado por máquina, el caso se resuelve solo: la cobertura de una máquina nueva sólo SUBE
+      # desde cero, así que su delta es positivo y no dispara nunca. Y como consecuencia buena, la
+      # alerta ahora dice CUÁL máquina perdió medición, no sólo qué proyecto.
       - alert: CoberturaDelSlaSeCayo
-        expr: delta(musubi:project_up:cobertura30d[6h]) < -0.05
+        expr: delta(musubi:device_up:cobertura30d[6h]) < -0.05
         for: 30m
         labels: { severity: warning }
         annotations:
-          summary: "La cobertura del SLA de {{ $labels.project }} cayó más de 5 puntos en 6 horas."
-          nota: "Mientras el TSDB acumula historia la cobertura sólo sube, así que esto es una pérdida: revisá si Prometheus perdió datos, si el scrape del cerebro se cortó, o si las recording rules se recargaron con otra definición. Las series `:sla30d` van a DESAPARECER si la cobertura baja de 0,95, y eso es lo que evita publicar un número que no se puede sostener. Ver deploy/RUNBOOK.md#coberturadelslasecayo"
+          summary: "La cobertura del SLA de {{ $labels.device }} ({{ $labels.project }}) cayó más de 5 puntos en 6 horas."
+          nota: "Mientras el TSDB acumula historia la cobertura de UNA máquina sólo sube, así que esto es una pérdida real (el delta se toma por máquina justamente para que enrolar una nueva no dispare esto): revisá si Prometheus perdió datos, si el scrape del cerebro se cortó, o si las recording rules se recargaron con otra definición. Las series `:sla30d` van a DESAPARECER si la cobertura baja de 0,95, y eso es lo que evita publicar un número que no se puede sostener. Ver deploy/RUNBOOK.md#coberturadelslasecayo"
 
       # Y LA HERMANA, SOBRE SERVICIOS. ES LA MITAD QUE FALTABA, Y ES LA QUE SE FACTURA (A93).
       #
@@ -483,13 +519,16 @@ groups:
       # `min` hacia abajo, igual que una máquina recién enrolada arrastra el de la alerta de arriba:
       # el runbook lo pone primero en la lista para no salir a buscar una pérdida de datos que no
       # hubo.
+      # EL HERMANO EXACTO, con el mismo arreglo: el delta por servicio, antes del `min by(project)`.
+      # Un servicio declarado por primera vez arranca con cobertura cero igual que una máquina
+      # nueva, así que declarar un servicio hacía sonar «se perdió medición».
       - alert: CoberturaDelSlaDeServiciosSeCayo
-        expr: delta(musubi:project_service_up:cobertura30d[6h]) < -0.05
+        expr: delta(musubi:service_up:cobertura30d[6h]) < -0.05
         for: 30m
         labels: { severity: warning }
         annotations:
-          summary: "La cobertura del SLA de SERVICIOS de {{ $labels.project }} cayó más de 5 puntos en 6 horas."
-          nota: "Es el otro número que se le factura al cliente, y la cobertura sólo sube mientras el TSDB acumula historia: una caída es una pérdida. Antes de buscarla, descartá lo barato — un servicio recién declarado entra con cobertura 0 y arrastra el min del proyecto. Si no es eso, revisá si Prometheus perdió datos, si el scrape del cerebro se cortó, o si las recording rules se recargaron con otra definición. `musubi:service_up:sla30d` va a DESAPARECER donde la cobertura baje de 0,95. Ver deploy/RUNBOOK.md#coberturadelsladeserviciossecayo"
+          summary: "La cobertura del SLA del servicio {{ $labels.service }} en {{ $labels.device }} ({{ $labels.project }}) cayó más de 5 puntos en 6 horas."
+          nota: "Es el otro número que se le factura al cliente, y la cobertura de UN servicio sólo sube mientras el TSDB acumula historia: una caída es una pérdida. Ya NO hace falta descartar el servicio recién declarado: el delta se toma por servicio, y uno nuevo arranca en 0 y sólo sube, así que su delta es positivo. Revisá si Prometheus perdió datos, si el scrape del cerebro se cortó, o si las recording rules se recargaron con otra definición. `musubi:service_up:sla30d` va a DESAPARECER donde la cobertura baje de 0,95. Ver deploy/RUNBOOK.md#coberturadelsladeserviciossecayo"
 
       - alert: PoliticaFrenadaPorConsentimiento
         expr: increase(musubi_fleet_policy_actions_total{result=~"consentimiento_.*"}[24h]) > 0
@@ -813,7 +852,7 @@ groups:
         # no es el del repo». Son dos fallas distintas con el mismo arreglo, así que van juntas.
         expr: >-
           absent(sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts\\.yml;.*"}))
-          or sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts\\.yml;.*"}) != 23
+          or sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts\\.yml;.*"}) != 25
         for: 30m
         labels: { severity: warning }
         annotations:

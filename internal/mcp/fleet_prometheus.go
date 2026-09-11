@@ -93,6 +93,7 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 		// descarta, sin una sola serie. Con `kind="unreadable"` los dos casos dejan de ser el
 		// mismo silencio.
 		renderTruncado(b, recorte, techoServicios)
+		renderTechos(b, techoServicios, 0, 0)
 		return
 	}
 	if recorte.Proyectos {
@@ -118,7 +119,7 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 	// QUÉ CORRE ADENTRO de esas máquinas (A43). Va DESPUÉS y con las mismas máquinas ya
 	// compuertadas: la lista `vistos` es la que pasó por PuedeSobreDevice, y reusarla es lo que
 	// evita un segundo lugar donde olvidarse la compuerta.
-	truncadoSvs, ilegibleSvs := renderServicios(&cuerpo, engine, vistos, ahora, techoServicios)
+	truncadoSvs, ilegibleSvs, peorProyecto := renderServicios(&cuerpo, engine, vistos, ahora, techoServicios)
 	recorte.Servicios = truncadoSvs
 	recorte.Ilegible = recorte.Ilegible || ilegibleSvs
 	// QUIÉN ESTÁ ESPERANDO UN SEGUNDO PAR DE OJOS (Ola 2). Va con las mismas máquinas ya
@@ -128,6 +129,9 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 	renderVidaDeRed(&cuerpo, vistos, ahora, vidaDe)
 
 	renderTruncado(b, recorte, techoServicios)
+	// EL MARGEN, ANTES DEL CORTE. `export_truncated` avisa cuando un techo YA cortó, o sea
+	// después de perder cobertura; estas dos dicen cuánto falta.
+	renderTechos(b, techoServicios, proyectosDistintos(vistos), peorProyecto)
 	b.WriteString(cuerpo.String())
 }
 
@@ -190,6 +194,11 @@ var seriesSoloDelScrape = []string{
 	// durante meses: la custodia leía UN archivo y esta serie vive en otro. Es la de mayor
 	// consecuencia de las cinco —tres alertas cuelgan de ella y no tiene copia por OTLP—.
 	nombrePoliticaAcciones,
+	// Los techos y el uso: dicen CUÁNTO FALTA para que un recorte empiece, así que tienen que
+	// llegar aunque el empuje esté apagado — de hecho el empuje es una de las cosas que se
+	// dimensionan con ellas.
+	nombreTecho,
+	nombreUso,
 }
 
 func renderVidaDeRed(b *strings.Builder, vistos []fleet.Device, ahora time.Time, vidaDe vidaDeRedLookup) {
@@ -390,6 +399,61 @@ func renderTruncado(b *strings.Builder, t truncadoDeExport, techoServicios int) 
 	fmt.Fprintf(b, "%s{kind=\"projects\"} %s\n", nombreExportTruncado, unoSi(t.Proyectos))
 	fmt.Fprintf(b, "%s{kind=\"services\"} %s\n", nombreExportTruncado, unoSi(t.Servicios))
 	fmt.Fprintf(b, "%s{kind=\"unreadable\"} %s\n", nombreExportTruncado, unoSi(t.Ilegible))
+}
+
+// nombreTecho es la serie que dice CUÁNTO ENTRA, y `nombreUso` cuánto se está usando.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// LOS TRES TECHOS ESTABAN TIPEADOS EN GO Y NO LLEGABAN A PROMETHEUS.
+//
+// `musubi_fleet_export_truncated` avisa que un techo CORTÓ — o sea DESPUÉS de perder cobertura,
+// con cero antelación. Y lo que se pierde no es un gráfico: son las series de las máquinas o los
+// servicios que quedaron afuera, así que sus alertas dejan de poder dispararse. El aviso llega
+// cuando el daño ya está hecho.
+//
+// Medido el 2026-09-10: `musubi-server` declara 56 servicios contra el techo de 64 del latido.
+// Quedan OCHO. Nadie tenía forma de saberlo sin entrar a mirar, y el día que se pase, la máquina
+// manda un inventario recortado que el cerebro lee como inventario COMPLETO.
+//
+// Con estas dos series el margen es una resta, y `TechoDeExportCerca` puede avisar al 80 % —antes
+// del corte y no después—. Los techos se emiten como series y no se escriben en una alerta
+// porque dos de los tres son CONFIGURABLES: un número tipeado en la regla nombraría un techo que
+// no rige, que es el defecto exacto que `describirTechoDeServicios` vino a arreglar un piso más
+// abajo.
+// ────────────────────────────────────────────────────────────────────────────────────────────
+const (
+	nombreTecho = "musubi_fleet_export_limit"
+	nombreUso   = "musubi_fleet_export_usage"
+)
+
+// proyectosDistintos cuenta cuántos tenants entraron al barrido, que es lo que se compara contra
+// el techo de `proyectosParaExportar`.
+func proyectosDistintos(vistos []fleet.Device) int {
+	p := map[string]struct{}{}
+	for _, d := range vistos {
+		p[d.ProjectID] = struct{}{}
+	}
+	return len(p)
+}
+
+// renderTechos emite, por dimensión recortable, el techo vigente y el uso actual.
+//
+// `usoProyectos` y `usoServiciosMax` los mide el barrido que acaba de correr: el uso que importa
+// es el del PEOR proyecto, porque el techo se aplica por proyecto y un promedio escondería
+// justamente al que está por cortar.
+func renderTechos(b *strings.Builder, techoServicios, usoProyectos, usoServiciosMax int) {
+	fmt.Fprintf(b, "# HELP %s Techo vigente por dimensión recortable del export. `kind=projects` es una constante de compilación (proyectosParaExportar); `kind=services` es la perilla `fleet.services_per_project_export`; `kind=heartbeat_services` es cuántos servicios acepta UN latido (fleet.ServiciosPorLatido). AUSENTE cuando esa dimensión no tiene techo.\n# TYPE %s gauge\n", nombreTecho, nombreTecho)
+	fmt.Fprintf(b, "%s{kind=\"projects\"} %d\n", nombreTecho, proyectosParaExportar)
+	if techoServicios > 0 {
+		// SE OMITE CUANDO NO HAY TECHO, y no se emite un 0: un 0 se leería como «no entra ni un
+		// servicio», que es lo contrario de lo que significa. Ver la regla de este archivo.
+		fmt.Fprintf(b, "%s{kind=\"services\"} %d\n", nombreTecho, techoServicios)
+	}
+	fmt.Fprintf(b, "%s{kind=\"heartbeat_services\"} %d\n", nombreTecho, fleet.ServiciosPorLatido)
+
+	fmt.Fprintf(b, "# HELP %s Uso actual de cada dimensión recortable, contra el techo de %s. `kind=services` es el PEOR proyecto y no el promedio: el techo se aplica por proyecto, así que un promedio escondería justo al que está por cortar.\n# TYPE %s gauge\n", nombreUso, nombreTecho, nombreUso)
+	fmt.Fprintf(b, "%s{kind=\"projects\"} %d\n", nombreUso, usoProyectos)
+	fmt.Fprintf(b, "%s{kind=\"services\"} %d\n", nombreUso, usoServiciosMax)
 }
 
 // describirTechoDeServicios pone en palabras el techo VIGENTE, y es la ÚNICA fuente de esa frase.

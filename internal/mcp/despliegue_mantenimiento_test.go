@@ -30,6 +30,11 @@ var alertasSinGuardaDeMantenimiento = map[string]string{
 	// `unless on(project, device)` no podría emparejar con nada. Y el sentido tampoco: que UNA
 	// máquina esté en mantenimiento no explica que la flota entera deje de reportar.
 	"FlotaSinTelemetria": "es global y sin etiqueta device: el unless no tendría con qué emparejar",
+	// El techo del export es del CEREBRO, no de una máquina: sus etiquetas son `kind`, y una
+	// ventana de mantenimiento declarada sobre una máquina no tiene nada que ver con que el
+	// exportador esté por recortar. Callarla durante una ventana esconderia justo el aviso que
+	// avisa ANTES del corte.
+	"TechoDeExportCerca": "es del cerebro y sus etiquetas son `kind`: no hay device con el que emparejar, y el techo del export no depende de que una máquina esté en mantenimiento",
 	// Su hermana del scrape, por la misma razón exacta: `absent()` sobre una serie que no lleva
 	// `device`, así que no hay con qué emparejar el `unless`.
 	"FlotaSinTelemetriaDelScrape": "es global y sin etiqueta device: el unless no tendría con qué emparejar",

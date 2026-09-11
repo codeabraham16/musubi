@@ -22,6 +22,37 @@
 groups:
   - name: musubi-brain
     rules:
+      # --- EL MANTENIMIENTO DE LA MEMORIA DEJÓ DE CORRER ---
+      #
+      # `musubi_maintenance_age_seconds` existe desde hace tiempo y NO LA LEÍA NINGUNA REGLA. Su
+      # propio HELP dice por qué hace falta: «un cerebro que dejó de mantenerse responde igual que
+      # uno sano: sin esta serie no hay forma de notarlo». La serie estaba; el lector no.
+      #
+      # Sin consolidar, olvidar ni purgar, la memoria no se cae: se degrada. Las observaciones se
+      # acumulan sin fusionarse, el decay no corre, y la base crece — todo con el cerebro
+      # contestando normalmente.
+      #
+      # SON DOS ALERTAS Y NO UNA, porque son dos problemas con dos arreglos distintos: «venía
+      # corriendo y se detuvo» manda a mirar el scheduler y los logs; «nunca corrió» manda a
+      # mirar la configuración (`maintenance.auto_interval_hours: 0` lo desactiva, y es un valor
+      # legítimo que alguien puede haber puesto sin querer). Un solo aviso con un `or` mandaría al
+      # lugar equivocado la mitad de las veces.
+      - alert: MantenimientoDeLaMemoriaDetenido
+        expr: musubi_maintenance_age_seconds > 172800
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "Hace más de 48 h que no corre el ciclo de mantenimiento de la memoria."
+          nota: "Consolidar, olvidar y purgar dejaron de correr. No se cae nada: se degrada — las observaciones se acumulan sin fusionarse y la base crece, con el cerebro contestando normal. Revisá el scheduler en el journal del cerebro. Se puede forzar con `musubi_maintain` (force=true)."
+
+      - alert: MantenimientoDeLaMemoriaNuncaCorrio
+        expr: musubi_maintenance_age_seconds == -1
+        for: 24h
+        labels: { severity: warning }
+        annotations:
+          summary: "El cerebro lleva 24 h arriba y el mantenimiento de la memoria no corrió NUNCA."
+          nota: "El -1 es el «nunca» declarado, no un error de medición. Lo más probable es `maintenance.auto_interval_hours: 0` en la configuración, que es el apagado explícito y un valor que se puede haber puesto sin querer. Si está en 0 a propósito, el mantenimiento hay que correrlo a mano."
+
       # --- Disponibilidad ---
       - alert: MusubiDown
         expr: up{job="musubi"} == 0
@@ -362,7 +393,7 @@ groups:
       # queda apagado y sólo se comprueba el conteo si el archivo está.
       - alert: ReglasDeFlotaSinDesplegar
         expr: >-
-          sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts-flota\\.yml;.*"}) != 33
+          sum(prometheus_rule_group_rules{rule_group=~".*musubi-alerts-flota\\.yml;.*"}) != 34
           or (absent(prometheus_rule_group_rules{rule_group=~".*musubi-alerts-flota\\.yml;.*"})
           and on() (count(musubi_fleet_device_up) > 0))
         for: 30m
