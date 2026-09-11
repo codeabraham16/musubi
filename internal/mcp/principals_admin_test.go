@@ -103,6 +103,13 @@ func TestAddListRevokeRoundTrip(t *testing.T) {
 // `yaml:"-"` al campo lo agarran CINCO tests, porque rompe además la lectura. Un sabotaje que
 // rompe de más no aísla nada: prueba que algo se dio cuenta, no que ESTA guarda mira acá.
 //
+// ¿ES `writePrincipalsFile` EL ÚNICO CAMINO? SÍ, MEDIDO — porque si hubiera otro escritor del
+// archivo (una rotación, un `token new` que reescriba), tendría el mismo agujero y esta guarda no
+// lo alcanzaría. Hay UN solo `os.WriteFile` del registro (principals_admin.go:109, adentro de esta
+// función), DOS llamadores (`AddPrincipalWithCaps` y `RemovePrincipal`), y `AddPrincipal` delega en
+// el primero. La rotación de flota nombra `principals.yaml` sólo en comentarios y no lo escribe.
+// Es un embudo, así que custodiarlo acá los cubre a los tres.
+//
 // HERMANO BUSCADO: el mismo sabotaje sobre `Read`/`Write` en vez de `Expires` sí sale rojo
 // (`TestAddPrincipalWithCapsGuardaYPersiste`). De los campos de `principalEntry` que round-trippean
 // por `writePrincipalsFile`, `expires` era el único sin custodio.
