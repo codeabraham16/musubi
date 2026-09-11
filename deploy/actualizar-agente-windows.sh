@@ -64,7 +64,15 @@ paso(){ printf '\n\033[36m▶ %s\033[0m\n' "$*"; }
 # ESTE GUION CORRE EN LA MÁQUINA DE DESARROLLO, NO EN musubi-server, y el error de correrlo en
 # el lugar equivocado no se parecía a eso: era un `No such file or directory` del shell, que manda
 # a mirar la ruta. Acá se dice.
-[[ -d "$REPO/.git" ]] || {
+#
+# SE PREGUNTA CON `rev-parse` Y NO CON `-d .git`, y la diferencia no es de estilo: EN UN WORKTREE
+# `.git` ES UN ARCHIVO, no un directorio. Con `-d` este guion se negaba a correr desde cualquier
+# worktree diciendo «no es el repo de Musubi» —medido el 2026-09-11, y este repo tiene 70 y pico de
+# worktrees, así que era el caso NORMAL y no el raro—. Peor: el mensaje manda a mirar la máquina
+# equivocada, o sea que el error apunta al lugar donde NO está el problema.
+#
+# El idioma correcto ya vivía en `verificar-despliegue.sh`; acá estaba escrito de otra forma.
+git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || {
   rojo "$REPO no es el repo de Musubi."
   echo "  Este guion COMPILA el agente y lo SIRVE por el tailnet, así que corre en la máquina que" >&2
   echo "  tiene el repo y el compilador de Go —la de desarrollo—, NO en musubi-server." >&2
