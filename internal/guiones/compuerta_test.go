@@ -203,6 +203,19 @@ func TestAyudanteDeUsoIndebido(t *testing.T) {
 		Unix(t, "porque si", "bash")
 	case "unix-sin-herramientas":
 		Unix(t, "un motivo perfectamente redactado y de largo suficiente para pasar el filtro")
+	// LAS DOS PUNTAS DE LA LISTA DE HERRAMIENTAS. Los llamadores reales declaran de tres a seis
+	// (`"bash", "git", "python3", "od"`), y las sondas de arriba declaran UNA sola: con una lista
+	// de largo 1, recorrerla entera y recorrer `herramientas[1:]` son indistinguibles. Estos dos
+	// casos ponen la herramienta inexistente en cada extremo, así que saltear cualquiera de las
+	// dos puntas se ve.
+	case "falta-la-primera":
+		Exigir(t, "declara una herramienta inexistente en primer lugar para que saltearse el principio de la lista se vea", "musubi-herramienta-inexistente-zz", "bash")
+	case "falta-la-ultima":
+		Exigir(t, "declara una herramienta inexistente en último lugar para que saltearse el final de la lista se vea", "bash", "musubi-herramienta-inexistente-zz")
+	case "unix-falta-la-primera":
+		Unix(t, "declara una herramienta inexistente en primer lugar para que saltearse el principio de la lista se vea", "musubi-herramienta-inexistente-zz", "bash")
+	case "unix-falta-la-ultima":
+		Unix(t, "declara una herramienta inexistente en último lugar para que saltearse el final de la lista se vea", "bash", "musubi-herramienta-inexistente-zz")
 	default:
 		// En una corrida normal pasa por la compuerta y ejecuta una shell como cualquiera de las
 		// pruebas que ésta custodia. No es adorno: así queda del lado correcto de la guarda de
@@ -244,6 +257,19 @@ func TestUnUsoIndebidoDeLaCompuertaEsUnFallo(t *testing.T) {
 		{"modo Unix, sin nombrar ninguna herramienta", "unix-sin-herramientas", "NO es",
 			"guiones.Unix aceptó ser usada sin nombrar una sola herramienta, o sea como un t.Skip " +
 				"de propósito general para apagar windows: es exactamente lo que no puede ser"},
+		// EL CONTROL DE QUE LA LISTA SE MIRA ENTERA. Sin estos cuatro, un `herramientas[1:]` o un
+		// `herramientas[:len(herramientas)-1]` pasan inadvertidos: las sondas declaran UNA sola
+		// herramienta y con largo 1 las tres formas de recorrer se ven iguales. Los llamadores
+		// reales declaran hasta seis, así que la ceguera sería sobre lo que de verdad se usa.
+		{"Exigir saltea el principio de la lista", "falta-la-primera", "musubi-herramienta-inexistente-zz",
+			"guiones.Exigir no miró la PRIMERA herramienta declarada. Una que falta tiene que MORIR en linux; " +
+				"si se la saltea, la prueba corre sin lo que necesita y su verde no mide el guion"},
+		{"Exigir saltea el final de la lista", "falta-la-ultima", "musubi-herramienta-inexistente-zz",
+			"guiones.Exigir no miró la ÚLTIMA herramienta declarada, y las listas reales llegan a seis"},
+		{"Unix saltea el principio de la lista", "unix-falta-la-primera", "musubi-herramienta-inexistente-zz",
+			"guiones.Unix no miró la PRIMERA herramienta declarada"},
+		{"Unix saltea el final de la lista", "unix-falta-la-ultima", "musubi-herramienta-inexistente-zz",
+			"guiones.Unix no miró la ÚLTIMA herramienta declarada"},
 	}
 	for _, c := range casos {
 		t.Run(c.nombre, func(t *testing.T) {
