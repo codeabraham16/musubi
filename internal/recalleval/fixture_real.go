@@ -133,8 +133,10 @@ func FixtureDesdeDB(rutaDB string, opts OpcionesFixtureReal) (*Fixture, error) {
 	//
 	// Hoy la base real tiene 0 cuarentenadas, así que el arreglo no mueve ningún número medido —
 	// y se hace igual, porque el día que haya una el banco habría empezado a mentir en silencio.
-	// Es la TERCERA vez en esta rama que aparece el mismo defecto (SampleContents, buildObsGraph,
-	// éste): el predicado no se reescribe, se interpola desde memory.
+	// Es la TERCERA vez en esta rama que aparece el mismo defecto: el predicado no se reescribe,
+	// se interpola. Las otras tres: SampleContents (arreglado), buildObsGraph (arreglado con
+	// visibleObsPredicateDe, que hubo que crear porque necesitaba la forma con alias) y
+	// TopicExists (arreglado). Cuatro reimplementaciones del mismo filtro, encontradas de a una.
 	filas, err := db.Query(`
 		SELECT id, COALESCE(topic_key,''), ` + colTexto + `
 		FROM observations
@@ -165,6 +167,36 @@ func FixtureDesdeDB(rutaDB string, opts OpcionesFixtureReal) (*Fixture, error) {
 	}
 	if len(fx.Docs) == 0 {
 		return nil, fmt.Errorf("%s no tiene observaciones vivas", rutaDB)
+	}
+
+	// LAS ARISTAS DEL GRAFO, que son lo que hace que la quinta señal RRF exista en el banco.
+	// Sin esto graphRank sale vacío en toda medición y una config con GraphCentrality:true queda
+	// bit-idéntica a una con false — o sea que el gate defendía una señal que nunca ejercitaba.
+	//
+	// Se leen SÓLO las aristas cuyas dos puntas estén en el corpus, con el mismo criterio de
+	// visibilidad de arriba: una arista hacia una observación que el fixture no incluye es una
+	// relación huérfana, que es exactamente lo que el check orphan_relations del doctor busca.
+	vivos := make(map[string]bool, len(fx.Docs))
+	for _, d := range fx.Docs {
+		vivos[d.ID] = true
+	}
+	aristas, err := db.Query(`SELECT source_id, target_id FROM observation_relations ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("leer relaciones: %w", err)
+	}
+	defer aristas.Close()
+	for aristas.Next() {
+		var src, tgt string
+		if err := aristas.Scan(&src, &tgt); err != nil {
+			return nil, err
+		}
+		if src == tgt || !vivos[src] || !vivos[tgt] {
+			continue
+		}
+		fx.Relaciones = append(fx.Relaciones, Relacion{Source: src, Target: tgt})
+	}
+	if err := aristas.Err(); err != nil {
+		return nil, err
 	}
 
 	topics := make([]string, 0, len(porTopico))

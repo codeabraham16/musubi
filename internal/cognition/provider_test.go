@@ -34,3 +34,18 @@ func TestFactoryDefaultsToNoop(t *testing.T) {
 		t.Error("un motor desconocido debería devolver error (fail-closed), no Noop")
 	}
 }
+
+// TestEnabledConNilNoEstaHabilitado es el gemelo del test de embedding.Enabled, y existe por el
+// mismo motivo: la versión anterior contestaba TRUE para un nil, y el primer uso reventaba
+// (newGuarded(nil, ...) llama p.Name() en gateway.go → nil pointer dereference).
+//
+// El defecto se arregló primero en el pilar de embeddings y este hermano quedó vivo. Los dos
+// pilares con portero tienen que contestar lo mismo a la misma pregunta.
+func TestEnabledConNilNoEstaHabilitado(t *testing.T) {
+	if Enabled(nil) {
+		t.Error("Enabled(nil) dice que sí: el caller va a usar un motor que no existe y panickear")
+	}
+	if Enabled(NoopProvider{}) {
+		t.Error("el NoopProvider es el null-object: no puede estar habilitado")
+	}
+}

@@ -614,14 +614,25 @@ func runTurn() {
 	}
 	defer engine.Close()
 
-	// El embebedor del hook por turno. resolveEmbedder auto-detecta la tabla estática si está
-	// bajada, así que una instalación con `musubi embed pull` hecho enciende la señal vectorial
-	// sola, y una sin ella sigue siendo léxica pura sin tocar config.
-	embedder := resolveEmbedder(cfg, root)
-	if embedding.Enabled(embedder) {
-		// La MISMA procedencia que estampa cualquier save: sin esto SearchObservations no puede
-		// aplicar la regla de homogeneidad y el pool vectorial sale vacío.
-		engine.SetVectorModelID(embedder.Name())
+	// EL EMBEBEDOR DEL HOOK, CON DOS GUARDAS QUE SON CONSECUENCIA DE MEDIR.
+	//
+	// (1) SÓLO SI EL RECALL POR TURNO ESTÁ ENCENDIDO. Antes se construía siempre, así que una
+	//     instalación con per_turn_recall en false pagaba igual el costo de construirlo para
+	//     después no usarlo nunca.
+	//
+	// (2) SÓLO SI CONSTRUIRLO ES BARATO. Ver embedderCaroDeConstruir: con la tabla estática, cada
+	//     invocación del hook leía 512 MB de disco. Medido acá: el hook pasó de 0,29 s a 11-23 s
+	//     con picos de 1,3 GB, contra un timeout de 10 s en .claude/settings.json — o sea que el
+	//     turno se quedaba SIN memoria inyectada, que es peor que el léxico que tenía antes.
+	//     Degradar acá es estrictamente mejor que morir: el recall léxico funciona.
+	var embedder embedding.Provider
+	if cfg.Loop.PerTurnRecall && !embedderCaroDeConstruir(cfg, root) {
+		embedder = resolveEmbedder(cfg, root)
+		if embedding.Enabled(embedder) {
+			// La MISMA procedencia que estampa cualquier save: sin esto SearchObservations no
+			// puede aplicar la regla de homogeneidad y el pool vectorial sale vacío.
+			engine.SetVectorModelID(embedder.Name())
+		}
 	}
 
 	out := turnOutputWith(engine, cfg.Loop, cfg.Pipeline, cfg.MultiAgent, cfg.Memory, gitGateProbe{root: root}, os.Stdin, embedder)

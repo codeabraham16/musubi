@@ -3,6 +3,7 @@ package recalleval
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -483,5 +484,144 @@ func TestPisoImposibleDebeIgualarAlLexico(t *testing.T) {
 		t.Errorf("EL BRAZO HÍBRIDO DIFIERE DEL LÉXICO CON EL POOL VECTORIAL VACÍO: "+
 			"MRR %.6f vs %.6f · R@10 %.6f vs %.6f. El delta que el banco le atribuye a los vectores "+
 			"incluye algo más que los vectores.", lex.MRR, hyb.MRR, lex.RecallAtK[10], hyb.RecallAtK[10])
+	}
+}
+
+// TestFixtureTraeLasAristasDelGrafo fija que el banco ejercite la QUINTA señal RRF.
+//
+// El defecto que cierra: SeedEngine nunca creaba observation_relations, así que buildObsGraph
+// cargaba un grafo vacío, graphRank salía vacío en TODA medición, y una config con
+// GraphCentrality:true era bit-idéntica a una con false. El gate de CI defendía una señal que no
+// ejercitaba nunca — cualquier cambio que rompiera la centralidad habría pasado en verde.
+func TestFixtureTraeLasAristasDelGrafo(t *testing.T) {
+	ruta := os.Getenv("MUSUBI_FIXTURE_DB")
+	if ruta == "" {
+		t.Skip("falta MUSUBI_FIXTURE_DB")
+	}
+	fx, err := FixtureDesdeDB(ruta, OpcionesFixtureReal{})
+	if err != nil {
+		t.Fatalf("FixtureDesdeDB: %v", err)
+	}
+	if len(fx.Relaciones) == 0 {
+		t.Fatal("el fixture no trajo ni una arista: la quinta señal RRF sigue siendo un no-op en el banco")
+	}
+	t.Logf("aristas en el fixture: %d (sobre %d docs)", len(fx.Relaciones), len(fx.Docs))
+
+	// Las dos puntas de cada arista tienen que estar en el corpus, o se siembra una relación
+	// huérfana — justo lo que el check orphan_relations del doctor existe para encontrar.
+	vivos := make(map[string]bool, len(fx.Docs))
+	for _, d := range fx.Docs {
+		vivos[d.ID] = true
+	}
+	for _, r := range fx.Relaciones {
+		if !vivos[r.Source] || !vivos[r.Target] {
+			t.Errorf("arista huérfana en el fixture: %s -> %s", r.Source, r.Target)
+			break
+		}
+		if r.Source == r.Target {
+			t.Errorf("self-loop en el fixture: %s", r.Source)
+			break
+		}
+	}
+
+	// Y que al sembrarlas el grafo REALMENTE tenga nodos: sin esto el arreglo sería cosmético.
+	eng, err := SeedEngine(t.TempDir(), fx, nil)
+	if err != nil {
+		t.Fatalf("SeedEngine: %v", err)
+	}
+	defer eng.Close()
+	rels, err := eng.AllObsRelations()
+	if err != nil {
+		t.Fatalf("AllObsRelations: %v", err)
+	}
+	if len(rels) == 0 {
+		t.Error("SeedEngine no sembró ninguna arista: el grafo del banco sigue vacío")
+	}
+	t.Logf("aristas sembradas en el motor: %d", len(rels))
+}
+
+// baseConTextoLargoYCuarentena siembra una base donde el gist SÍ recorta (texto largo) y donde hay
+// una observación en cuarentena, que son las dos cosas que baseDePrueba no puede producir.
+//
+// POR QUÉ NO ALCANZA baseDePrueba, medido: su texto de semilla da un gist IDÉNTICO al content
+// (Gist con tope de 24 tokens no recorta 84 caracteres). Una prueba de "content vs gist" escrita
+// con esa semilla queda VERDE con el arreglo sacado, porque las dos ramas devuelven lo mismo. Es
+// exactamente el modo de falla que esta rama ya cometió dos veces: el fixture llega arreglado por
+// otra capa y la prueba no prueba nada.
+func baseConTextoLargoYCuarentena(t *testing.T) (ruta string, idCuarentenada string) {
+	t.Helper()
+	dir := t.TempDir()
+	eng, err := memory.NewDbEngine(dir)
+	if err != nil {
+		t.Fatalf("NewDbEngine: %v", err)
+	}
+	largo := strings.Repeat("una oración larga que obliga al gist a recortar de verdad y no a copiar. ", 40)
+	for i := 0; i < 4; i++ {
+		id := fmt.Sprintf("t/largo#%d", i)
+		if err := eng.SaveObservation(id, "t/largo", fmt.Sprintf("nota %d: %s", i, largo), nil); err != nil {
+			t.Fatalf("SaveObservation: %v", err)
+		}
+	}
+	idCuarentenada = "t/largo#3"
+	eng.Close() // cerrar antes de tocarla por fuera: single-writer
+
+	ruta = filepath.Join(dir, ".musubi", "memory.db")
+	// Se cuarentena por SQL directo porque no hay API pública para hacerlo, y porque el caso REAL
+	// que esto representa —una fila marcada como no confiable— llega por el camino de cuarentena
+	// del motor, no por un save.
+	db, err := sql.Open("sqlite", "file:"+ruta)
+	if err != nil {
+		t.Fatalf("abrir para cuarentenar: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE observations SET quarantined = 1 WHERE id = ?`, idCuarentenada); err != nil {
+		t.Fatalf("cuarentenar: %v", err)
+	}
+	return ruta, idCuarentenada
+}
+
+// TestFixtureUsaContentYNoGist fija que el default del fixture sea el texto COMPLETO.
+//
+// El defecto que cierra: los docs salían del gist (82 caracteres de promedio en la base real)
+// mientras el backfill embebe el content (2.790). El banco vectorizaba el 2,9% del texto de
+// producción, y eso dio vuelta la conclusión entera sobre la capa vectorial cuando se corrigió.
+func TestFixtureUsaContentYNoGist(t *testing.T) {
+	ruta, _ := baseConTextoLargoYCuarentena(t)
+
+	porDefecto, err := FixtureDesdeDB(ruta, OpcionesFixtureReal{MinPorTopico: 2})
+	if err != nil {
+		t.Fatalf("FixtureDesdeDB: %v", err)
+	}
+	conGist, err := FixtureDesdeDB(ruta, OpcionesFixtureReal{MinPorTopico: 2, TextoDelDoc: DocDesdeGist})
+	if err != nil {
+		t.Fatalf("FixtureDesdeDB(gist): %v", err)
+	}
+	if len(porDefecto.Docs) == 0 || len(conGist.Docs) == 0 {
+		t.Fatal("el fixture salió vacío: la semilla no sirve para esta prueba")
+	}
+	// LA GUARDA DE LA GUARDA: si la semilla no hace que el gist recorte, esta prueba no puede
+	// distinguir nada y hay que decirlo en vez de pasar en verde por el motivo equivocado.
+	if len(conGist.Docs[0].Content) >= len(porDefecto.Docs[0].Content) {
+		t.Fatalf("la semilla no hace recortar al gist (gist %d chars, content %d): la prueba sería vacua",
+			len(conGist.Docs[0].Content), len(porDefecto.Docs[0].Content))
+	}
+	t.Logf("gist %d chars vs content %d chars", len(conGist.Docs[0].Content), len(porDefecto.Docs[0].Content))
+}
+
+// TestFixtureExcluyeCuarentena fija que el corpus del banco sea el MISMO universo que el recall
+// puede devolver. Sin esto el banco mide contra un corpus que producción no tiene.
+func TestFixtureExcluyeCuarentena(t *testing.T) {
+	ruta, idQuar := baseConTextoLargoYCuarentena(t)
+	fx, err := FixtureDesdeDB(ruta, OpcionesFixtureReal{MinPorTopico: 2})
+	if err != nil {
+		t.Fatalf("FixtureDesdeDB: %v", err)
+	}
+	for _, d := range fx.Docs {
+		if d.ID == idQuar {
+			t.Fatalf("la observación en cuarentena %s entró al corpus del banco: el recall nunca la devuelve", idQuar)
+		}
+	}
+	if len(fx.Docs) != 3 {
+		t.Errorf("esperaba 3 docs visibles (4 menos la cuarentenada), obtuve %d", len(fx.Docs))
 	}
 }

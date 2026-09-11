@@ -51,7 +51,21 @@ func (NoopProvider) Ask(context.Context, string, string) (string, error) {
 }
 
 // Enabled indica si p es un motor de cognición real (no el null-object).
+//
+// NIL NO ESTÁ HABILITADO. Esta función era el GEMELO EXACTO de embedding.Enabled, con el mismo
+// defecto: `p.(NoopProvider)` sobre un nil falla la aserción, así que isNoop quedaba en false y
+// Enabled contestaba TRUE para un motor que no existe. El caller hace lo único razonable —
+// `if !Enabled(p) { ... }` y sigue— y el primer uso revienta: medido, newGuarded(nil, ...) llama
+// p.Name() en gateway.go y da nil pointer dereference.
+//
+// Se arregló primero en el pilar de embeddings, y el hermano quedó vivo. Es la forma dominante de
+// defecto de este repo: la regla puesta en N-1 de N caminos. Los dos pilares con portero tienen
+// que contestar lo mismo a la misma pregunta, o el próximo que copie el patrón copia el que está
+// roto.
 func Enabled(p Provider) bool {
+	if p == nil {
+		return false
+	}
 	_, isNoop := p.(NoopProvider)
 	return !isNoop
 }

@@ -45,6 +45,25 @@ const (
 // PromoteObservationCtx, y tiene test propio.
 const visibleObsPredicate = "archived = 0 AND superseded_by IS NULL AND quarantined = 0"
 
+// visibleObsPredicateDe es visibleObsPredicate CALIFICADO con un alias de tabla, para las
+// consultas que hacen JOIN contra observations más de una vez y no pueden usar la forma pelada.
+//
+// EXISTE PORQUE EL ÚNICO SITIO QUE NECESITABA ESTA FORMA SE ESCRIBIÓ EL PREDICADO A MANO, y salió
+// mal: buildObsGraph (obsrank.go) filtraba `s.archived = 0 AND s.superseded_by IS NULL` para las
+// dos puntas de cada arista, sin `quarantined = 0`. O sea que la centralidad que entra al recall
+// como quinta señal RRF se calculaba sobre un grafo que incluía observaciones en cuarentena —
+// memoria marcada como NO confiable— mientras el recall las excluye de todos sus otros caminos.
+// Una nota en cuarentena no podía salir en los resultados, pero sí podía empujar a sus vecinas.
+//
+// La lección ya la tiene escrita la const de arriba: «la única forma de que una consulta nueva se
+// saltee la cuarentena es NO usar el predicado canónico». Faltaba que el predicado canónico
+// viniera en la forma que esa consulta necesitaba, porque mientras no exista, escribirlo a mano es
+// la única salida y el defecto se repite. Es la misma familia que SampleContents y FixtureDesdeDB:
+// tres reimplementaciones del mismo filtro en la misma rama.
+func visibleObsPredicateDe(alias string) string {
+	return alias + ".archived = 0 AND " + alias + ".superseded_by IS NULL AND " + alias + ".quarantined = 0"
+}
+
 // ProjectScope acota una lectura a un proyecto para el AISLAMIENTO multi-tenant (Track 17).
 // Federate (o ProjectID vacío) ⇒ SIN filtro: comportamiento federado histórico (stdio local,
 // bearer legacy, admin). Deriva de la CREDENCIAL en el MCP (recallScopeFor), nunca del cliente.

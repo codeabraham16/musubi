@@ -274,6 +274,15 @@ func TestDedupRevivelaArchivadaYRespetaLosOtrosEstados(t *testing.T) {
 		if _, err := e.db.Exec(`UPDATE observations SET archived = 1, archived_at = datetime('now') WHERE id = ?`, id); err != nil {
 			t.Fatalf("archivar: %v", err)
 		}
+		var seqAntes int64
+		if err := e.db.QueryRow(`SELECT sync_seq FROM observations WHERE id = ?`, id).Scan(&seqAntes); err != nil {
+			t.Fatalf("leer sync_seq previo: %v", err)
+		}
+		// Otra escritura mueve el MAX, para que el cursor de un espejo pueda haber pasado por
+		// encima de la fila archivada — que es exactamente el caso que deja la memoria sin entregar.
+		if err := e.SaveObservation("ruido", "t/otro", "otra observacion que mueve el maximo", nil); err != nil {
+			t.Fatalf("mover el maximo: %v", err)
+		}
 
 		id2, deduped2, err := e.SaveObservationDeduped("t/revive", texto, 1.0, nil)
 		if err != nil {
@@ -293,6 +302,16 @@ func TestDedupRevivelaArchivadaYRespetaLosOtrosEstados(t *testing.T) {
 		}
 		if visible != 1 {
 			t.Error("la observación siguió oculta: el que guardó recibió 'ya la tengo' y se quedó sin ella")
+		}
+		// Y TIENE QUE MOVER EL CURSOR DEL SYNC. El pull entrante pagina por sync_seq: si revivir
+		// no lo bumpea, la fila queda detrás del cursor de todo espejo que ya pasó por ese número
+		// y para ese cliente la observación no vuelve a existir nunca.
+		var seq int64
+		if err := e.db.QueryRow(`SELECT sync_seq FROM observations WHERE id = ?`, id).Scan(&seq); err != nil {
+			t.Fatalf("leer sync_seq: %v", err)
+		}
+		if seq <= seqAntes {
+			t.Errorf("revivir no bumpeó sync_seq (%d -> %d): un espejo cuyo cursor ya pasó no la recibe nunca", seqAntes, seq)
 		}
 	})
 

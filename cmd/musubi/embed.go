@@ -258,3 +258,28 @@ func embedPullProgress() func(string, int64, int64) {
 		}
 	}
 }
+
+// embedderCaroDeConstruir dice si construir el embebedor de esta config es una operación PESADA,
+// sin construirlo.
+//
+// EXISTE POR UNA REGRESIÓN MEDIDA, y el número es el argumento entero. El provider "static" carga
+// la tabla completa con os.ReadFile (static.go:55): son 512 MB de model.safetensors más 18 MB de
+// tokenizer.json, EN CADA CONSTRUCCIÓN. En un servidor eso se paga una vez y no se nota. En el
+// hook por turno —que es un PROCESO EFÍMERO, uno nuevo por prompt— se paga siempre: medido en esta
+// máquina, `musubi turn --hook-mode` pasó de 0,29 s a 11-23 s con picos de 1,0-1,3 GB de RSS.
+//
+// Y el hook tiene `"timeout": 10` en .claude/settings.json. O sea que no es «lento»: es MATADO, y
+// el turno queda sin memoria inyectada. La guarda de 2 s que puse adentro de buildTurnRecall no lo
+// cubría porque el costo está ANTES, en la construcción, no en el Embed.
+//
+// La señal vectorial en el turno sigue valiendo la pena —medido: nDCG@1 0.294→0.353— pero no se
+// puede entregar cargando la tabla por prompt. El camino correcto es pedirle el vector a un
+// proceso que YA la tenga cargada (el daemon), o mapear la tabla en memoria en vez de leerla. Las
+// dos son obra aparte; hasta entonces el hook va léxico, que es lo que hacía antes y funciona.
+func embedderCaroDeConstruir(cfg config.Config, root string) bool {
+	ec := cfg.Embedding
+	if ec.Provider == "" || ec.Provider == "none" {
+		return hasStaticTable(filepath.Join(root, ".musubi", "embeddings", defaultEmbedModel))
+	}
+	return ec.Provider == "static"
+}

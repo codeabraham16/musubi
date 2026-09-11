@@ -38,6 +38,22 @@ type Query struct {
 type Fixture struct {
 	Docs    []Doc   `json:"docs"`
 	Queries []Query `json:"queries"`
+	// Relaciones son las aristas del grafo de observaciones (las "sinapsis" que DetectRelations
+	// va tejiendo). Sin ellas la QUINTA SEÑAL RRF —la centralidad de grafo— es un NO-OP en toda
+	// medición: buildObsGraph carga un grafo vacío, graphRank sale vacío, y una config con
+	// GraphCentrality:true queda bit-idéntica a una con false.
+	//
+	// O sea que el banco defendía una señal que nunca ejercitaba. Peor: cualquier cambio que
+	// rompiera la centralidad habría pasado el gate en verde, porque el gate no la tocaba.
+	Relaciones []Relacion `json:"relaciones,omitempty"`
+}
+
+// Relacion es una arista entre dos observaciones del fixture. Es no dirigida a los efectos de la
+// centralidad (buildObsGraph agrega las dos direcciones), pero se guarda con su origen y destino
+// porque así vive en la base.
+type Relacion struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
 }
 
 // EmbedFunc genera el vector de un texto (el StaticProvider real, o uno sintético en
@@ -161,6 +177,39 @@ func SeedEngine(dir string, fx *Fixture, embed EmbedFunc) (*memory.DbEngine, err
 			return nil, fmt.Errorf("fijar created_at doc %s: %w", d.ID, err)
 		}
 	}
+	// LAS ARISTAS, DESPUÉS DE LOS DOCS. Van al final a propósito: observation_relations referencia
+	// observations, y sembrar una arista hacia un doc que el motor rechazó (ver omitidos) dejaría
+	// una relación huérfana — justo lo que el check orphan_relations del doctor existe para
+	// encontrar. Se saltean las aristas cuyas puntas no hayan entrado.
+	sembrados := make(map[string]bool, len(fx.Docs))
+	for _, d := range fx.Docs {
+		sembrados[d.ID] = true
+	}
+	for _, o := range omitidos {
+		delete(sembrados, o)
+	}
+	var aristasOmitidas int
+	for i, r := range fx.Relaciones {
+		if !sembrados[r.Source] || !sembrados[r.Target] {
+			aristasOmitidas++
+			continue
+		}
+		if _, err := eng.UpsertObsRelation(memory.ObsRelation{
+			ID:       fmt.Sprintf("rel-eval-%d", i),
+			SourceID: r.Source,
+			TargetID: r.Target,
+			Relation: "related",
+			Status:   "resolved",
+		}); err != nil {
+			eng.Close()
+			return nil, fmt.Errorf("sembrar relación %s->%s: %w", r.Source, r.Target, err)
+		}
+	}
+	if aristasOmitidas > 0 {
+		logx.Warn("el banco sembró menos aristas de las que pidió: alguna punta no entró al corpus",
+			"omitidas", aristasOmitidas, "de", len(fx.Relaciones))
+	}
+
 	if len(omitidos) > 0 {
 		logx.Warn("el banco sembró MENOS corpus del que pidió: hay observaciones que el motor no acepta re-guardar",
 			"omitidas", len(omitidos), "de", len(fx.Docs), "primera", omitidos[0],

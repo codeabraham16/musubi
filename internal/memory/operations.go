@@ -330,8 +330,26 @@ func (e *DbEngine) reviveSiArchivada(id string, archivada bool) error {
 	if !archivada {
 		return nil
 	}
+	// EL BUMP DE sync_seq VA EN EL MISMO UPDATE, y no es un detalle.
+	//
+	// El pull entrante pagina por sync_seq, no por rowid (ver el bump del UPSERT más arriba). Una
+	// fila que se archiva y después revive sin tocar su sync_seq queda DETRÁS del cursor de
+	// cualquier espejo que ya pasó por ese número: para ese cliente la observación sigue sin
+	// existir, y no hay nada que la vuelva a entregar nunca.
+	//
+	// La víctima concreta no es el nodo que la tiene —acá ya volvió al recall— sino el que nunca
+	// la bajó, porque su cursor avanzó por OTRAS filas mientras ésta estaba archivada. Es el mismo
+	// razonamiento que justifica el bump en toda EDICIÓN, aplicado al caso que faltaba.
+	//
+	// EL OUTBOX NO HACE FALTA y meterlo sería un error: el content_hash no cambió, así que
+	// enqueueOutboxTx sería un no-op por diseño. Lo que hay que mover es el cursor del pull, no
+	// re-empujar un payload idéntico.
 	_, err := e.db.Exec(
-		`UPDATE observations SET archived = 0, archived_at = NULL WHERE id = ? AND archived = 1`, id)
+		`UPDATE observations
+		 SET archived = 0,
+		     archived_at = NULL,
+		     sync_seq = (SELECT IFNULL(MAX(sync_seq),0) FROM observations) + 1
+		 WHERE id = ? AND archived = 1`, id)
 	if err != nil {
 		return fmt.Errorf("error al revivir la observación deduplicada %s: %w", id, err)
 	}

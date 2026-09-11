@@ -49,13 +49,18 @@ func (e *DbEngine) buildObsGraph() (*obsGraph, error) {
 		return pos
 	}
 
+	// EL PREDICADO CANÓNICO, EN LAS DOS PUNTAS. Acá estaba escrito a mano y le faltaba
+	// `quarantined = 0`: la centralidad que entra al recall como quinta señal RRF se calculaba
+	// sobre un grafo que incluía observaciones en CUARENTENA. Una nota marcada como no confiable
+	// no podía aparecer en los resultados —el recall la excluye por todos sus otros caminos— pero
+	// sí podía empujar a sus vecinas hacia arriba. Ver visibleObsPredicateDe.
 	rows, err := e.db.Query(`
 		SELECT r.source_id, r.target_id
 		FROM observation_relations r
 		JOIN observations s ON r.source_id = s.id
 		JOIN observations t ON r.target_id = t.id
-		WHERE s.archived = 0 AND s.superseded_by IS NULL
-		  AND t.archived = 0 AND t.superseded_by IS NULL
+		WHERE ` + visibleObsPredicateDe("s") + `
+		  AND ` + visibleObsPredicateDe("t") + `
 		ORDER BY r.id
 	`)
 	if err != nil {
