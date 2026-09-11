@@ -522,11 +522,10 @@ type guionDerivado struct {
 	archivo    string // el archivo del repo (deploy/<archivo>)
 	desde      string // marca de inicio del bloque
 	hasta      string
-	pin        string   // nombre de la variable del pin
-	urlVar     string   // nombre de la variable de la URL de fallback
-	destinoVar string   // nombre de la variable del destino
-	extras     []string // otras declaraciones que el bloque necesita del guion
-	porque     string   // qué se pierde si esto se instala sin verificar
+	pin        string // nombre de la variable del pin
+	urlVar     string // nombre de la variable de la URL de fallback
+	destinoVar string // nombre de la variable del destino
+	porque     string // qué se pierde si esto se instala sin verificar
 }
 
 func losGuionesDerivados() []guionDerivado {

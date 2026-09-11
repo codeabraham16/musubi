@@ -263,7 +263,8 @@ func clasificarAtomo(a, evento string) tri {
 			if der != "github.event_name" {
 				return triNoSe
 			}
-			izq, der = der, izq
+			// De acá en más sólo se mira `der`: es el lado del literal.
+			der = izq
 		}
 		valor := strings.Trim(der, `'"`)
 		if valor == der { // no era un literal de texto

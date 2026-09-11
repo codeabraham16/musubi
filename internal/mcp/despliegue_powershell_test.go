@@ -1302,7 +1302,7 @@ func helpersDeBashQueTerminanEnPowerShell(shs []string, fuentes map[string]strin
 	var defs []definicion
 	for _, ruta := range shs {
 		for _, d := range definicionesDeBash(fuentes[ruta]) {
-			defs = append(defs, definicion{d.nombre, d.cuerpo})
+			defs = append(defs, definicion(d))
 		}
 	}
 	out := map[string]bool{}

@@ -869,16 +869,6 @@ func tieneNumero(xs []int, n int) bool {
 	return false
 }
 
-func numerosComunes(a, b []int) []int {
-	var out []int
-	for _, x := range a {
-		if tieneNumero(b, x) {
-			out = append(out, x)
-		}
-	}
-	return out
-}
-
 var soloDigitos = regexp.MustCompile(`\d+`)
 
 func numerosDe(linea string) []int {
