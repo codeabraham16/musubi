@@ -65,6 +65,12 @@ func TestLosCabosDeLasCarpetasVecinasEstanContados(t *testing.T) {
 			if h.IsDir() || !strings.HasSuffix(strings.ToLower(h.Name()), ".md") {
 				continue
 			}
+			// EL PROPIO REGISTRO NO ES UNA FUENTE DE CABOS SIN REGISTRAR, y esto NO es la
+			// excepción cómoda que este repo persigue: estar en `ABIERTO.md` ES estar registrado,
+			// por definición. Un cabo no puede esconderse ahí — ahí es donde va.
+			if strings.EqualFold(h.Name(), "ABIERTO.md") {
+				continue
+			}
 			crudo, err := os.ReadFile(filepath.Join(raiz, e.Name(), h.Name()))
 			if err != nil {
 				continue
@@ -92,22 +98,61 @@ func TestLosCabosDeLasCarpetasVecinasEstanContados(t *testing.T) {
 	}
 
 	total := 0
-	var nombres []string
 	for _, v := range vecinas {
 		total += v.items
-		nombres = append(nombres, v.carpeta+"/"+v.archivo)
-		t.Logf("cabo vecino SIN REGISTRO: specs/%s/%s — %d ítem(s)", v.carpeta, v.archivo, v.items)
+		t.Logf("carpeta vecina con cabos declarados: specs/%s/%s — %d ítem(s)", v.carpeta, v.archivo, v.items)
 	}
-	t.Logf("%d carpeta(s) vecina(s) con cabos declarados fuera de alcance y sin registro propio, %d ítem(s) en total",
+	t.Logf("%d carpeta(s) vecina(s) con cabos declarados fuera de alcance, %d ítem(s) en total; cada una tiene que tener su ABIERTO.md",
 		len(vecinas), total)
 
-	// EL TECHO. Hoy son dos carpetas; que aparezca una tercera cambia la pregunta —de «dos
-	// pendientes de una decisión» a «esto se acumula»— y eso sí merece parar a alguien.
-	if len(vecinas) > 2 {
-		t.Errorf("hay %d carpetas vecinas con cabos sin registro (%v), y eran 2.\n"+
-			"  Dónde vive su registro es una decisión de alcance —uno por track, o uno solo para "+
-			"todo— y mientras no se tome, cada carpeta nueva es otro conjunto de cabos sin dueño.\n"+
-			"  La primera línea de ABIERTO.md dice «nada queda abierto sin dueño»; esto lo contradice "+
-			"una carpeta a la vez.", len(vecinas), nombres)
+	// LA DECISIÓN DE ALCANCE SE TOMÓ EL 2026-09-11: UN REGISTRO POR TRACK.
+	//
+	// Antes esto tenía un TECHO —«no más de dos carpetas sin registro»— porque la pregunta estaba
+	// pendiente y lo único que se podía hacer era avisar si se acumulaban. Con la decisión tomada,
+	// el techo sobra y la guarda cambia de forma: en vez de contar cuántas faltan, se le pide a
+	// CADA UNA lo mismo. Eso es lo que la hace escalar — una carpeta nueva con cabos entra al
+	// barrido sola, sin que nadie suba un número.
+	//
+	// SE PIDEN DOS COSAS Y NO UNA. Que el archivo exista es barato de satisfacer con un archivo
+	// vacío; lo que cierra el hueco es que tenga AL MENOS tantas filas como cabos declara la
+	// carpeta. Adoptar tres cabos con un registro de una fila deja dos sin dueño, que es
+	// exactamente el estado que esto vino a terminar.
+	filasDeRegistro := func(carpeta string) (int, bool) {
+		crudo, err := os.ReadFile(filepath.Join(raiz, carpeta, "ABIERTO.md"))
+		if err != nil {
+			return 0, false
+		}
+		n := 0
+		for _, linea := range strings.Split(string(crudo), "\n") {
+			l := strings.TrimSpace(linea)
+			// Una fila de datos: empieza con `|`, no es el separador `|---|`, y su primera celda
+			// tiene contenido. El encabezado se descarta por el separador que lo sigue.
+			if !strings.HasPrefix(l, "|") || strings.Contains(l, "---") {
+				continue
+			}
+			celdas := strings.Split(strings.Trim(l, "|"), "|")
+			if len(celdas) >= 3 && strings.TrimSpace(celdas[0]) != "" && !strings.EqualFold(strings.TrimSpace(celdas[0]), "#") {
+				n++
+			}
+		}
+		return n, true
+	}
+
+	for _, v := range vecinas {
+		filas, hay := filasDeRegistro(v.carpeta)
+		if !hay {
+			t.Errorf("specs/%s declara %d cabo(s) en %s y NO tiene `ABIERTO.md`.\n"+
+				"  La decisión de alcance es UN REGISTRO POR TRACK (2026-09-11): el de flota cubre "+
+				"`specs/control-de-flota/` y no adopta a nadie más.\n"+
+				"  Sin registro propio, esos cabos son lo que la primera línea de todo ABIERTO.md "+
+				"prohíbe: algo abierto sin dueño.", v.carpeta, v.items, v.archivo)
+			continue
+		}
+		if filas < v.items {
+			t.Errorf("specs/%s/ABIERTO.md tiene %d fila(s) y la carpeta declara %d cabo(s) en %s.\n"+
+				"  Un registro con menos filas que cabos deja a los que faltan sin dueño, que es el "+
+				"estado que el registro vino a terminar. Un archivo que existe no alcanza: tiene que "+
+				"NOMBRARLOS.", v.carpeta, filas, v.items, v.archivo)
+		}
 	}
 }
