@@ -868,6 +868,20 @@ func TestNingunaFilaDeLaTabla1SeDeclaraCerrada(t *testing.T) {
 		// que la celda nombra; los otros son de dónde se viene. Y mirar sólo la palabra «esquema»
 		// tampoco servía: `(migración **49**)` es el mismo defecto con la palabra hermana, y
 		// pasaba en VERDE.
+		// LA FORMA QUE NO PUEDE ENVEJECER: decir «el esquema VIGENTE del repo» en vez de un número.
+		//
+		// Esta guarda existe porque un objetivo escrito a mano envejece hacia el lado
+		// tranquilizador. La respuesta completa a eso no es mantener el número al día —eso es
+		// trabajo que alguien se va a olvidar, y es justo lo que pasó tres veces— sino NO
+		// ESCRIBIRLO: el destino de un redespliegue siempre es el esquema vigente del repo, que
+		// sale de `migrations.go`.
+		//
+		// Con esa forma, los números que quedan en la celda son PROCEDENCIA («la columna es de la
+		// migración 50»), que es un hecho histórico y no caduca. El modo de falla que esta guarda
+		// persigue no puede existir si no hay ningún objetivo escrito a mano.
+		if strings.Contains(celda, "esquema VIGENTE del repo") {
+			continue
+		}
 		objetivo, hayObjetivo := 0, false
 		for _, m := range esquemaObjetivo.FindAllStringSubmatch(celda, -1) {
 			n, err := strconv.Atoi(m[1])

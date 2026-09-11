@@ -274,6 +274,16 @@ func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, 
 	if cuerpo.Capver != d.Capver {
 		_ = s.engine.ActualizarCapver(d.ID, cuerpo.Capver)
 	}
+	// QUIÉN ESTÁ LATIENDO. El UPDATE se saltea solo cuando el emisor no cambió (lo hace el `WHERE`
+	// de `ActualizarEmisor`), así que en el camino caliente esto es una comparación de strings y
+	// nada más — la escritura pasa una vez por arranque de agente.
+	//
+	// Se compara acá ADEMÁS del `WHERE` por el mismo criterio que el autorreporte y el capver: la
+	// enorme mayoría de los latidos no cambian nada, y un Exec por latido en una flota de 2000
+	// máquinas es el fsync que la Ola 0 sacó del camino caliente.
+	if emisor := strings.TrimSpace(recortar(cuerpo.Emisor, 64)); emisor != "" && emisor != d.Emisor {
+		_ = s.engine.ActualizarEmisor(d.ID, emisor, time.Now())
+	}
 	// Y SE LE CONTESTA, aunque el latido se acepte igual. Rechazarlo haría desaparecer a la
 	// máquina de la flota, y desaparecer se lee igual que «apagada»: el problema quedaría
 	// invisible justo para quien puede arreglarlo. Queda viva y con su problema escrito, que es

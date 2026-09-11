@@ -321,7 +321,7 @@ groups:
       # Es el incidente del 2026-09-09, del que se arregló la causa conocida y no la forma de
       # falla. `critical` porque no se ve: el tablero queda entero en verde y el eje apagado.
       - alert: CerebroSinReferenciaDeVersion
-        expr: musubi_fleet_referencia_de_version_usable == 0
+        expr: musubi_fleet_version_reference_usable == 0
         for: 15m
         labels: { severity: critical }
         annotations:
@@ -683,6 +683,34 @@ groups:
         annotations:
           summary: "El agente de {{ $labels.device }} declara capver {{ $value }} y los ejes de inventario necesitan 2."
           nota: "Mismo efecto que AgenteSinContratoDeclarado: los ejes que A116 cerró están apagados en esta máquina. La diferencia es que ésta SÍ declara, así que se sabe exactamente qué le falta."
+
+      # --- DOS AGENTES SOBRE UNA FILA ---
+      #
+      # La credencial del latido es de la MÁQUINA y no del proceso, así que dos agentes corriendo
+      # a la vez —un servicio más una corrida a mano, una instalación duplicada, un zombi del
+      # binario renombrado— escriben los dos sobre la misma fila. El cerebro veía un único agente
+      # sano latiendo el doble de seguido.
+      #
+      # Así se cerró A92 con el problema todavía puesto: el diagnóstico se hizo midiendo la
+      # CADENCIA —un diente de sierra de 37,8 s contra 25,8 s del vecino—, una inferencia sobre un
+      # efecto de segundo orden que sólo se puede hacer mirando a mano y sabiendo de antemano que
+      # hay que mirar.
+      #
+      # `musubi_fleet_device_emitter_stable_seconds` lo dice sin inferir nada: con UN agente
+      # crece sin parar; con dos alternándose cada uno pisa la marca del otro y se queda pegada al
+      # cero. El umbral de 10 min con `for: 30m` deja pasar los reinicios legítimos —un agente que
+      # arranca empieza en cero y a los 10 minutos ya salió de la zona— y no deja pasar dos
+      # agentes, que no salen nunca.
+      - alert: DosAgentesSobreLaMismaMaquina
+        expr: >-
+          musubi_fleet_device_emitter_stable_seconds < 600
+          unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "El proceso que late por {{ $labels.device }} cambia todo el tiempo: hay más de un agente corriendo."
+          nota: "Media hora sin que el emisor se estabilice no es un reinicio: son dos procesos pisándose. Mirá si quedó un `musubi agent` a mano además del servicio, una segunda instalación, o un zombi de `musubi.exe.viejo` (deploy/matar-zombis-agente.sh). Dos agentes duplican los comandos que ejecuta la máquina y hacen que el inventario se pise."
 
       - alert: MaquinaNoPuedeEnumerar
         # EL `device_up == 0` NO ES OPCIONAL, y lo cazó `TestNingunaAlertaDeMuestraDisparaSobreUnaMaquinaCaida`

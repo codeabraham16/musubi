@@ -462,7 +462,7 @@ func proyectosDistintos(vistos []fleet.Device) int {
 // Vale 0 y no se omite: acá el 0 es un hecho que el cerebro conoce con certeza sobre SÍ MISMO
 // —«no puedo parsear mi propia versión»— y no un «no se pudo medir».
 // ────────────────────────────────────────────────────────────────────────────────────────────
-const nombreReferenciaVersion = "musubi_fleet_referencia_de_version_usable"
+const nombreReferenciaVersion = "musubi_fleet_version_reference_usable"
 
 // renderReferenciaDeVersion emite la serie de arriba. Una sola línea, sin etiquetas.
 func renderReferenciaDeVersion(b *strings.Builder, versionCerebro string) {
@@ -665,6 +665,36 @@ func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration, versionCerebro
 					return 0, false
 				}
 				return float64(d.Capver), true
+			}},
+		// HACE CUÁNTO QUE LATE EL MISMO PROCESO.
+		//
+		// ────────────────────────────────────────────────────────────────────────────────────
+		// DOS AGENTES SOBRE UNA FILA ERAN INDISTINGUIBLES DE UNO. La credencial del latido es de
+		// la MÁQUINA y no del proceso, así que dos agentes corriendo a la vez —un servicio más
+		// una corrida a mano, una instalación duplicada, un zombi del binario renombrado—
+		// escriben los dos sobre la misma fila y el cerebro ve un único agente sano.
+		//
+		// ESTA SERIE LOS SEPARA SIN INFERIR NADA. Con UN agente, la marca se escribe al arrancar
+		// y esta serie crece sin parar. Con DOS alternándose, cada latido trae un emisor distinto
+		// del guardado, la marca vuelve a cero, y la serie se queda pegada al cero para siempre.
+		//
+		// ASÍ SE CERRÓ A92 CON EL PROBLEMA TODAVÍA PUESTO: el diagnóstico se hizo midiendo la
+		// CADENCIA —un diente de sierra de 37,8 s contra 25,8 s del vecino—, una inferencia sobre
+		// un efecto de segundo orden que sólo se puede hacer mirando a mano y sabiendo de
+		// antemano que hay que mirar.
+		//
+		// AUSENTE si el agente no declara emisor (un binario anterior a la pieza) o si nunca
+		// latió. Un 0 ahí sería idéntico a «dos agentes peleándose», que es justo lo contrario de
+		// lo que pasa: nadie afirmó nada.
+		// ────────────────────────────────────────────────────────────────────────────────────
+		{"musubi_fleet_device_emitter_stable_seconds",
+			"Hace cuántos segundos que late el MISMO proceso sobre esta fila. Crece mientras haya un solo agente; se queda cerca de CERO si hay dos alternándose, porque cada uno pisa la marca del otro. AUSENTE si el agente no declara su emisor (binario anterior a capver 3) — un 0 ahí sería indistinguible de dos agentes peleándose.",
+			"s", false,
+			func(d fleet.Device, _ *fleet.Muestra) (float64, bool) {
+				if d.Emisor == "" || d.EmisorDesde.IsZero() {
+					return 0, false
+				}
+				return ahora.Sub(d.EmisorDesde).Seconds(), true
 			}},
 		// CUÁNTOS SERVICIOS NO ENTRARON EN EL ÚLTIMO INVENTARIO (A116).
 		//

@@ -168,7 +168,17 @@ type CuerpoLatido struct {
 	// sin romper—. Un agente anterior a esta pieza no manda el campo y queda en 0, que significa
 	// «no declara» y NO «versión cero»: el cerebro lo trata como fuera de banda porque nadie
 	// afirmó nada, no porque haya afirmado algo viejo.
-	Capver    int    `json:"capver,omitempty"`
+	Capver int `json:"capver,omitempty"`
+	// Emisor identifica al PROCESO que manda este latido. Lo genera el agente UNA VEZ al
+	// arrancar, y no viaja ninguna otra vez.
+	//
+	// NO ROMPE B4/D5 por la misma razón que `version` y `direccion`: no dice QUIÉN ES la máquina
+	// —eso sale del token, y no hay forma de afirmarlo desde el cuerpo— sino QUÉ PROCESO está
+	// hablando. Sirve para una sola cosa: distinguir un agente de dos.
+	//
+	// ES OPACO Y NO ES EL PID. Un PID se repite entre reinicios y entre máquinas; lo que hay que
+	// poder contestar es «¿el que late ahora es el mismo de recién?».
+	Emisor    string `json:"emisor,omitempty"`
 	Direccion string `json:"direccion"`
 	// RustdeskID es el identificador PÚBLICO del cliente de pantalla (S6). No es un secreto: sin
 	// la contraseña de sesión no sirve para entrar, y sin él quien mira no sabe a qué conectarse.

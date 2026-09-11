@@ -31,7 +31,7 @@ var ErrDeviceDuplicado = errors.New("ya existe un dispositivo con ese nombre en 
 // los dos lados: `motivo_no_preguntar`/`token_fuente` (A99, A102) y `servicios_omitidos` (A116) de
 // la rama de flota, y `capver` (#419) de main. Van todas, y `capver` va ÚLTIMA para que el orden
 // del Scan siga el mismo criterio que trae main.
-const columnasDevice = `id, name, project_id, tier, caps, os, arch, address, agent_version, tags, enrolled_at, last_seen, revoked, last_sample, rustdesk_id, rustdesk_id_previo, rustdesk_id_cambiado, consentimiento, puede_preguntar, requiere_aprobacion, motivo_no_preguntar, token_fuente, servicios_omitidos, servicios_error, capver`
+const columnasDevice = `id, name, project_id, tier, caps, os, arch, address, agent_version, tags, enrolled_at, last_seen, revoked, last_sample, rustdesk_id, rustdesk_id_previo, rustdesk_id_cambiado, consentimiento, puede_preguntar, requiere_aprobacion, motivo_no_preguntar, token_fuente, servicios_omitidos, servicios_error, capver, emisor, emisor_desde`
 
 // AltaDevice registra un dispositivo y devuelve la fila creada, con el id que asignó el CEREBRO.
 //
@@ -364,6 +364,35 @@ func (e *DbEngine) ActualizarAutoreporte(id, version, direccion string) error {
 	return nil
 }
 
+// ActualizarEmisor guarda QUÉ PROCESO está latiendo sobre esta fila, y desde cuándo.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// LA MARCA SÓLO SE MUEVE CUANDO EL EMISOR CAMBIA, y ahí está todo el valor de la pieza.
+//
+// Con un solo agente, `emisor_desde` se escribe una vez —al arrancar— y después envejece: la
+// serie derivada crece y crece. Con DOS agentes alternándose, cada latido trae un emisor distinto
+// del guardado, así que la marca vuelve a cero en cada uno y se queda pegada al cero para siempre.
+// Eso es lo que distingue «un agente» de «dos» sin tener que inferirlo de la cadencia.
+//
+// El `WHERE emisor <> ?` hace las dos cosas a la vez: evita un UPDATE por latido en el camino
+// caliente —el fsync que la Ola 0 sacó de ahí— y garantiza que la marca no se pise cuando no
+// cambió nada. Sin esa condición, `emisor_desde` se reescribiría en CADA latido y la serie
+// derivada marcaría cero siempre: exactamente lo que un agente duplicado produce, o sea que un
+// solo agente se vería como dos. La optimización y la corrección apuntan para el mismo lado.
+func (e *DbEngine) ActualizarEmisor(id, emisor string, ahora time.Time) error {
+	id, emisor = strings.TrimSpace(id), strings.TrimSpace(emisor)
+	if id == "" || emisor == "" {
+		return nil // un agente que no lo declara no borra lo que había
+	}
+	_, err := e.db.Exec(
+		`UPDATE devices SET emisor = ?, emisor_desde = ? WHERE id = ? AND emisor <> ?`,
+		emisor, ahora.UTC().Format(time.RFC3339), id, emisor)
+	if err != nil {
+		return fmt.Errorf("error al guardar el emisor de %q: %w", id, err)
+	}
+	return nil
+}
+
 // ActualizarCapver guarda el CONTRATO que declara una máquina.
 //
 // Va aparte de ActualizarAutoreporte y no como un tercer parámetro suyo porque son dos hechos
@@ -456,12 +485,14 @@ func escanearDevice(row escaneable) (fleet.Device, error) {
 		tokenFuente      string
 		svsOmitidos      int
 		svsError         string
+		emisor           string
+		emisorDesde      string
 	)
 	if err := row.Scan(
 		&d.ID, &d.Name, &d.ProjectID, &tier, &caps,
 		&d.OS, &d.Arch, &d.Address, &d.AgentVer, &tags,
 		&enrolled, &lastSeen, &revoked, &muestra, &d.RustdeskID, &d.RustdeskIDPrevio, &cambiado,
-		&consent, &puedePreguntar, &requiereAprob, &motivoNoPreg, &tokenFuente, &svsOmitidos, &svsError, &d.Capver,
+		&consent, &puedePreguntar, &requiereAprob, &motivoNoPreg, &tokenFuente, &svsOmitidos, &svsError, &d.Capver, &emisor, &emisorDesde,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fleet.Device{}, err // lo traduce escanearUnDevice
@@ -482,6 +513,12 @@ func escanearDevice(row escaneable) (fleet.Device, error) {
 	d.TokenFuente = tokenFuente
 	d.ServiciosOmitidos = svsOmitidos
 	d.ServiciosError = svsError
+	d.Emisor = emisor
+	// El cero de time.Time significa «no lo declara» —un agente anterior a la pieza— y no «cambió
+	// recién»: la serie se omite en ese caso, que es la regla de este plano.
+	if t, ok := parseObsTime(emisorDesde); ok {
+		d.EmisorDesde = t
+	}
 	if tags != "" {
 		d.Tags = strings.Split(tags, ",")
 	}

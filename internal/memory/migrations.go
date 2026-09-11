@@ -2040,6 +2040,48 @@ func schemaMigrations() []migration {
 					"servicios_error TEXT NOT NULL DEFAULT ''")
 			},
 		},
+		{
+			version:        54,
+			name:           "quien_esta_latiendo_sobre_esta_fila",
+			readCompatible: true,
+			// DOS AGENTES LATIENDO SOBRE UNA FILA SON INDISTINGUIBLES DE UNO.
+			//
+			// El latido no manda NADA que identifique al proceso emisor: sólo la credencial, que es
+			// de la MÁQUINA y no del proceso. Así que dos agentes corriendo a la vez —un servicio
+			// más una corrida a mano, una instalación duplicada, un zombi del binario renombrado—
+			// escriben los dos sobre la misma fila y el cerebro ve un único agente sano latiendo el
+			// doble de seguido.
+			//
+			// NO ES HIPOTÉTICO: es lo que hizo que A92 se cerrara con el problema todavía puesto. El
+			// diagnóstico se hizo midiendo la CADENCIA (un diente de sierra de 37,8 s contra 25,8 s
+			// del vecino), que es una inferencia estadística sobre un efecto de segundo orden — y
+			// eso sólo se puede hacer mirando a mano, sabiendo que hay que mirar.
+			//
+			// `emisor` es un identificador OPACO que el agente genera UNA VEZ por proceso. No es el
+			// PID: un PID se repite entre reinicios y entre máquinas, y lo que hay que distinguir no
+			// es «qué número de proceso» sino «¿el que late ahora es el mismo de recién?».
+			//
+			// `emisor_desde` es CUÁNDO empezó a latir el emisor actual, y es lo que convierte esto
+			// en una serie útil: con un solo agente esa marca envejece; con dos alternándose vuelve
+			// a cero en cada latido y se queda cerca de cero para siempre. Guardar un contador de
+			// cambios habría dado lo mismo sin poder decir «desde cuándo», que es lo que un operador
+			// necesita para saber si ya lo arregló.
+			//
+			// Las dos arrancan VACÍAS, y el vacío significa «este agente no lo declara» —un binario
+			// anterior a la pieza—: no «cambió recién». La serie se OMITE en ese caso, que es la
+			// regla de este plano.
+			//
+			// ES readCompatible: dos ADD COLUMN sobre `devices` con default, y ninguna consulta
+			// existente cambia de resultado.
+			up: func(x execQuerier) error {
+				if err := agregarColumnaSiFalta(x, "devices", "emisor",
+					"emisor TEXT NOT NULL DEFAULT ''"); err != nil {
+					return err
+				}
+				return agregarColumnaSiFalta(x, "devices", "emisor_desde",
+					"emisor_desde TEXT NOT NULL DEFAULT ''")
+			},
+		},
 	}
 }
 

@@ -397,6 +397,11 @@ type DeviceStore interface {
 	// ActualizarCapver guarda el CONTRATO que declara la máquina, aparte de su versión de
 	// producto: dos builds distintos pueden hablar el mismo capver.
 	ActualizarCapver(id string, capver int) error
+
+	// ActualizarEmisor guarda QUÉ PROCESO late sobre esta fila y desde cuándo. Sólo mueve la
+	// marca cuando el emisor CAMBIA: con un agente envejece, con dos alternándose vuelve a cero
+	// en cada latido, y eso es lo que los distingue sin inferirlo de la cadencia.
+	ActualizarEmisor(id, emisor string, ahora time.Time) error
 	// ProyectosConDevices lista los tenants que tienen máquinas activas (para el export federado
 	// a Prometheus). `tope` acota el barrido; pedí uno de más para saber si hay más.
 	ProyectosConDevices(tope int) ([]string, error)

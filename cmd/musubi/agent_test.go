@@ -474,6 +474,15 @@ func clavesPermitidasDelLatido() map[string]bool {
 		"muestra": true, "version": true, "direccion": true, "rustdesk_id": true,
 		"servicios": true, "puede_preguntar": true, "motivo_no_preguntar": true, "capver": true,
 		"servicios_omitidos": true, "token_fuente": true, "servicios_error": true,
+		// `emisor` entra tras el mismo examen, y la respuesta vuelve a ser la misma: NO dice quién
+		// es esta máquina. Dice QUÉ PROCESO está hablando — un número al azar, generado una vez
+		// por arranque, sin nada de la máquina adentro (ni hostname, ni usuario, ni ruta).
+		//
+		// LA FILA QUE PUEDE TOCAR SIGUE SIENDO LA DEL TOKEN, que es el invariante entero. Y el
+		// techo, escrito: una máquina comprometida puede mandar un emisor distinto en cada latido
+		// y hacer sonar `DosAgentesSobreLaMismaMaquina` SOBRE SÍ MISMA. Es una falsa alarma
+		// auto-infligida, no una suplantación: no hay ninguna otra fila que pueda alcanzar.
+		"emisor": true,
 	}
 }
 
