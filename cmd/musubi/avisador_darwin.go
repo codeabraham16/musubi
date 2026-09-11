@@ -36,16 +36,6 @@ func detectarAvisador() fleet.CapacidadDeAvisar {
 	return fleet.CapacidadDeAvisar{Puede: true, Herramienta: "osascript"}
 }
 
-// escaparAppleScript tapa las comillas y las barras del texto.
-//
-// NO ES COSMÉTICO: el texto lo arma el cerebro y se INTERPOLA en un programa que osascript va a
-// ejecutar. Una comilla sin escapar cierra la cadena y lo que sigue se ejecuta como AppleScript
-// — inyección de código en la máquina de otro, por el camino que existe para pedirle permiso.
-func escaparAppleScript(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	return strings.ReplaceAll(s, `"`, `\"`)
-}
-
 func correrAvisador(ctx context.Context, _ fleet.CapacidadDeAvisar, texto string) error {
 	guion := `display notification "` + escaparAppleScript(texto) + `" with title "Musubi"`
 	return exec.CommandContext(ctx, "osascript", "-e", guion).Run()

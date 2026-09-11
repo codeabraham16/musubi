@@ -19,7 +19,6 @@ package mcp
 // `CommonLabels` que él calcula (las etiquetas que TODAS las alertas del grupo comparten).
 
 import (
-	"os"
 	"strings"
 	"testing"
 	"text/template"
@@ -65,7 +64,7 @@ func comunes(as []alertaDePrueba) map[string]string {
 
 func plantillaDeTelegram(t *testing.T) *template.Template {
 	t.Helper()
-	b, err := os.ReadFile("../../deploy/prometheus/alertmanager.yml")
+	b, err := leerArchivoDeDespliegue("../../deploy/prometheus/alertmanager.yml")
 	if err != nil {
 		t.Fatalf("falta alertmanager.yml: %v", err)
 	}

@@ -89,6 +89,19 @@ func transporte(t *testing.T, url, token string) func([]byte) ([]byte, error) {
 }
 
 func TestSondaDiseno(t *testing.T) {
+	// EL PERMISO ES PROPIO Y EXPLÍCITO, Y NO SE INFIERE DE TENER CREDENCIALES.
+	//
+	// El opt-in estaba INVERTIDO: la condición de disparo era «hay `MUSUBI_CENTRAL_URL` y
+	// `MUSUBI_TOKEN` en el entorno», que es el ESTADO NORMAL de la máquina del operador. O sea
+	// que cualquier `go test ./internal/mcp` de rutina —o el corredor de sabotajes, que hereda el
+	// entorno de la sesión— le pegaba 209 veces al cerebro de PRODUCCIÓN con la credencial viva,
+	// sin que nadie lo hubiera pedido. «Tengo con qué» no es «me autorizaron».
+	//
+	// Ahora hace falta decirlo aparte. La variable no lleva credencial ninguna, así que ponerla
+	// es gratis y equivocarse es imposible: o está, o la sonda no corre.
+	if motivo, hay := laSondaTienePermiso(); !hay {
+		t.Skip(motivo)
+	}
 	url := strings.TrimSuffix(strings.TrimSpace(os.Getenv("MUSUBI_CENTRAL_URL")), "/")
 	token := strings.TrimSpace(os.Getenv("MUSUBI_TOKEN"))
 	if url == "" || token == "" {

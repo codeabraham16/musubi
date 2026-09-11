@@ -42,16 +42,17 @@ import (
 // satisface sin que la cautela exista. Pasó dos veces el 2026-09-05. `codigoDe` deja fuera las
 // líneas de comentario —`#` sirve para bash Y para el PowerShell embebido— para que lo único que
 // pueda satisfacer una guarda sea código.
+// LAS LÍNEAS SE BLANQUEAN, NO SE BORRAN. La primera versión las salteaba, y eso CORRÍA la
+// numeración: varias de estas guardas reportan «línea %d» para que alguien vaya a mirarla, y una
+// guarda que manda al número equivocado gasta la confianza que la hace útil.
 func codigoDe(g string) string {
-	var b strings.Builder
-	for _, linea := range strings.Split(g, "\n") {
+	lineas := strings.Split(g, "\n")
+	for i, linea := range lineas {
 		if strings.HasPrefix(strings.TrimSpace(linea), "#") {
-			continue
+			lineas[i] = ""
 		}
-		b.WriteString(linea)
-		b.WriteByte('\n')
 	}
-	return b.String()
+	return strings.Join(lineas, "\n")
 }
 
 // Los bloques de PowerShell compartidos viven en `deploy/lib-agente-windows.sh` desde que

@@ -1405,9 +1405,10 @@ func schemaMigrations() []migration {
 			// el bot de un Tier B, un puente, un contenedor en un host que no se enumera solo.
 			//
 			// O sea que el primer latido que traiga un enumerador de systemd se lleva puesto, de
-			// una y en toda la flota a la vez, TODO lo que alguien declaró a mano. Hoy no explota
-			// sólo porque el agente todavía no enumera (A42 abierto): es una mina, no un bug
-			// latente, y el día que se despache ese slice explota en todas las máquinas juntas.
+			// una y en toda la flota a la vez, TODO lo que alguien declaró a mano. Cuando esto se
+			// escribió no explotaba sólo porque el agente no enumeraba (A42 estaba abierto); A42 se
+			// cerró y hoy el agente SÍ enumera, así que lo único que separa a este esquema de esa
+			// pérdida es el `declared` que esta migración introduce.
 			//
 			// EL BACKFILL NO ES `DEFAULT 1` NI `DEFAULT 0` A CIEGAS. Las filas que ya existen se
 			// marcan declaradas si NUNCA reportaron (`last_report IS NULL`), que es la firma
@@ -2040,6 +2041,80 @@ func schemaMigrations() []migration {
 					"servicios_error TEXT NOT NULL DEFAULT ''")
 			},
 		},
+		{
+			version:        54,
+			name:           "quien_esta_latiendo_sobre_esta_fila",
+			readCompatible: true,
+			// DOS AGENTES LATIENDO SOBRE UNA FILA SON INDISTINGUIBLES DE UNO.
+			//
+			// El latido no manda NADA que identifique al proceso emisor: sólo la credencial, que es
+			// de la MÁQUINA y no del proceso. Así que dos agentes corriendo a la vez —un servicio
+			// más una corrida a mano, una instalación duplicada, un zombi del binario renombrado—
+			// escriben los dos sobre la misma fila y el cerebro ve un único agente sano latiendo el
+			// doble de seguido.
+			//
+			// NO ES HIPOTÉTICO: es lo que hizo que A92 se cerrara con el problema todavía puesto. El
+			// diagnóstico se hizo midiendo la CADENCIA (un diente de sierra de 37,8 s contra 25,8 s
+			// del vecino), que es una inferencia estadística sobre un efecto de segundo orden — y
+			// eso sólo se puede hacer mirando a mano, sabiendo que hay que mirar.
+			//
+			// `emisor` es un identificador OPACO que el agente genera UNA VEZ por proceso. No es el
+			// PID: un PID se repite entre reinicios y entre máquinas, y lo que hay que distinguir no
+			// es «qué número de proceso» sino «¿el que late ahora es el mismo de recién?».
+			//
+			// `emisor_desde` es CUÁNDO empezó a latir el emisor actual, y es lo que convierte esto
+			// en una serie útil: con un solo agente esa marca envejece; con dos alternándose vuelve
+			// a cero en cada latido y se queda cerca de cero para siempre. Guardar un contador de
+			// cambios habría dado lo mismo sin poder decir «desde cuándo», que es lo que un operador
+			// necesita para saber si ya lo arregló.
+			//
+			// Las dos arrancan VACÍAS, y el vacío significa «este agente no lo declara» —un binario
+			// anterior a la pieza—: no «cambió recién». La serie se OMITE en ese caso, que es la
+			// regla de este plano.
+			//
+			// ES readCompatible: dos ADD COLUMN sobre `devices` con default, y ninguna consulta
+			// existente cambia de resultado.
+			up: func(x execQuerier) error {
+				if err := agregarColumnaSiFalta(x, "devices", "emisor",
+					"emisor TEXT NOT NULL DEFAULT ''"); err != nil {
+					return err
+				}
+				return agregarColumnaSiFalta(x, "devices", "emisor_desde",
+					"emisor_desde TEXT NOT NULL DEFAULT ''")
+			},
+		},
+		{
+			version:        55,
+			name:           "cuando_se_revoco_esta_maquina",
+			readCompatible: true,
+			// REVOCAR UNA MÁQUINA RESUELVE SUS ALERTAS EN SILENCIO.
+			//
+			// `revoked` es una BANDERA y no un DELETE, así que la fila queda — pero la máquina sale
+			// del export, sus series se vuelven obsoletas, y TODAS sus alertas se resuelven solas.
+			// Del otro lado del canal, «se arregló» y «la sacamos del inventario» llegan como el
+			// MISMO mensaje: un `[RESOLVED]` sin una palabra que los distinga.
+			//
+			// No es cosmético. Quien lee ese resolved concluye que el problema se atendió, y la
+			// máquina con el disco lleno que se dio de baja sin arreglar queda cerrada en la cabeza
+			// de todos. Es el mismo defecto que este track ya arregló dos veces con otros nombres:
+			// dos causas distintas produciendo la misma señal.
+			//
+			// GUARDA EL CUÁNDO Y NO UN BOOLEANO: `revoked` ya dice que pasó. Lo que faltaba es
+			// poder emitir una serie ACOTADA EN EL TIEMPO —«esta máquina se dio de baja recién»—
+			// para que el aviso acompañe a las resoluciones y después desaparezca solo. Con un
+			// booleano, la serie viviría para siempre y el aviso se volvería permanente, que es
+			// otra forma de no decir nada.
+			//
+			// Arranca VACÍA en las máquinas ya revocadas, y el vacío significa «se revocó antes de
+			// que esto existiera»: la serie no se emite para ellas, que es lo correcto — su baja ya
+			// pasó y nadie está esperando un aviso.
+			//
+			// ES readCompatible: ADD COLUMN sobre `devices` con default.
+			up: func(x execQuerier) error {
+				return agregarColumnaSiFalta(x, "devices", "revoked_at",
+					"revoked_at TEXT NOT NULL DEFAULT ''")
+			},
+		},
 	}
 }
 
@@ -2157,6 +2232,37 @@ func runMigrations(db *sql.DB) error {
 // avanza (la próxima apertura reintenta). Separar el runner de schemaMigrations()
 // permite testearlo con migraciones sintéticas.
 func applyMigrations(db *sql.DB, migs []migration) error {
+	// LA LISTA SE REVISA ANTES DE TOCAR LA BASE, Y ESTO NO ES PARANOIA: es el modo de falla que
+	// dos ramas abiertas producen SOLAS.
+	//
+	// El bucle de más abajo hace `if m.version <= current { continue }`. Con dos migraciones que
+	// declaran el MISMO número —lo normal cuando dos ramas agregan una cada una al final del
+	// archivo y git las auto-mergea sin marcar conflicto— aplica la primera, `current` queda en
+	// ese número, y la SEGUNDA CAE EN EL `continue`. Sin error, sin warning, y `user_version`
+	// termina afirmando que se aplicó todo. No deja la base en rojo: la deja INCOMPLETA EN VERDE,
+	// que es peor, porque el arranque siguiente no reintenta nada.
+	//
+	// POR QUÉ ACÁ Y NO SÓLO EN UNA PRUEBA. Una guarda de test protege al REPO: impide que el
+	// archivo malo se mergee. Esto protege a un BINARIO YA CONSTRUIDO desde un merge que nadie
+	// revisó —el release de ayer, el binario que alguien copió a mano, la rama de un tercero—, que
+	// es el único caso en que este defecto llega a una base de producción. Las dos hacen falta y
+	// ninguna reemplaza a la otra.
+	//
+	// SE EXIGE ESTRICTAMENTE CRECIENTE y no sólo «sin repetidos», porque el desorden tiene el mismo
+	// efecto: una migración con número menor que la anterior también entra al `continue` y se
+	// saltea. Un solo control cubre las dos formas.
+	for i := 1; i < len(migs); i++ {
+		if migs[i].version > migs[i-1].version {
+			continue
+		}
+		if migs[i].version == migs[i-1].version {
+			return fmt.Errorf("migración %d declarada DOS VECES (%q y %q): el runner aplicaría sólo la primera y saltearía la segunda EN SILENCIO, dejando la base incompleta con user_version diciendo que se aplicó todo. Casi siempre es un merge de dos ramas que agregaron una migración cada una; renumerá la que tenga menos datos atrás",
+				migs[i].version, migs[i-1].name, migs[i].name)
+		}
+		return fmt.Errorf("las migraciones no están en orden creciente: %d (%q) viene después de %d (%q). El runner saltea toda migración con versión menor o igual a la ya aplicada, así que la de atrás no correría nunca y nadie se enteraría",
+			migs[i].version, migs[i].name, migs[i-1].version, migs[i-1].name)
+	}
+
 	var current int
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&current); err != nil {
 		return fmt.Errorf("error al leer user_version: %w", err)

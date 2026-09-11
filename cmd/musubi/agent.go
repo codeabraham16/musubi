@@ -30,6 +30,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -265,6 +266,37 @@ var azarDelAgente = rand.Float64
 // conJitter desparrama una espera en ±jitterDeEspera de su largo. La base (`espera`) queda
 // intacta en el llamador: el jitter se aplica a lo que se duerme, no a lo que se duplica, o el
 // azar se acumularía escalón a escalón y el techo dejaría de ser un techo.
+// emisorDeEsteProceso devuelve un identificador OPACO de ESTE proceso, estable mientras viva y
+// distinto en cualquier otro.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// NO ES EL PID, Y LA DIFERENCIA IMPORTA. Un PID se repite entre reinicios y entre máquinas, así
+// que dos procesos distintos pueden presentar el mismo número y el cerebro los leería como uno.
+// La pregunta que esto contesta es más chica y más útil: «¿el que late ahora es el mismo de
+// recién?».
+//
+// SE GENERA UNA VEZ Y NO EN CADA LATIDO. Generarlo por latido haría que un agente solo se viera
+// como infinitos agentes — el defecto que esto viene a detectar, producido por la detección misma.
+//
+// NO LLEVA NADA DE LA MÁQUINA —ni hostname, ni usuario, ni ruta—: es un número al azar. Viaja en
+// cada latido y lo único que tiene que poder hacer es diferenciarse de otro.
+// ────────────────────────────────────────────────────────────────────────────────────────────
+var (
+	emisorUnaVez sync.Once
+	emisorValor  string
+)
+
+func emisorDeEsteProceso() string {
+	emisorUnaVez.Do(func() {
+		// `math/rand/v2` se auto-siembra con entropía del sistema en cada proceso, así que dos
+		// agentes que arrancan en el mismo segundo no colisionan. No hace falta `crypto/rand`:
+		// esto no es un secreto ni una credencial, es una etiqueta que sólo tiene que
+		// diferenciarse de otra.
+		emisorValor = fmt.Sprintf("%016x%016x", rand.Uint64(), rand.Uint64())
+	})
+	return emisorValor
+}
+
 func conJitter(espera time.Duration) time.Duration {
 	factor := 1 - jitterDeEspera + 2*jitterDeEspera*azarDelAgente()
 	return time.Duration(float64(espera) * factor)
@@ -432,7 +464,7 @@ func latir(base, token, fuenteDelToken string, m *fleet.Muestra) resultadoLatido
 	// las ate— y peor: un map no tiene ni nombres de campo que el compilador pueda mirar, así que
 	// un typo en la clave compila, arranca y responde 200 con el campo perdido. El porqué largo
 	// está en internal/fleet/protocolo.go.
-	carga := fleet.CuerpoLatido{Version: version, Capver: buildid.Capver}
+	carga := fleet.CuerpoLatido{Version: version, Capver: buildid.Capver, Emisor: emisorDeEsteProceso()}
 	if rid := idRustdeskLocal(); rid != "" {
 		carga.RustdeskID = rid
 	}

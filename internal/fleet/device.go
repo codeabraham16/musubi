@@ -197,9 +197,39 @@ type Device struct {
 	// servicio— sin que ninguna nombrara la causa.
 	ServiciosError string
 
+	// Emisor identifica al PROCESO que está latiendo sobre esta fila, y EmisorDesde desde cuándo.
+	//
+	// ────────────────────────────────────────────────────────────────────────────────────────
+	// DOS AGENTES LATIENDO SOBRE UNA FILA SON INDISTINGUIBLES DE UNO. La credencial del latido es
+	// de la MÁQUINA, no del proceso, así que dos agentes corriendo a la vez —un servicio más una
+	// corrida a mano, una instalación duplicada, un zombi del binario renombrado— escriben los dos
+	// sobre la misma fila y el cerebro ve un único agente sano latiendo el doble de seguido.
+	//
+	// Es lo que hizo que A92 se cerrara con el problema todavía puesto: el diagnóstico se hizo
+	// midiendo la CADENCIA —un diente de sierra de 37,8 s contra 25,8 s del vecino—, que es una
+	// inferencia sobre un efecto de segundo orden y sólo se puede hacer mirando a mano, sabiendo
+	// de antemano que hay que mirar.
+	//
+	// ES OPACO Y NO ES EL PID: un PID se repite entre reinicios y entre máquinas, y la pregunta no
+	// es «qué número de proceso» sino «¿el que late ahora es el mismo de recién?».
+	//
+	// VACÍO significa «este agente no lo declara» (un binario anterior a la pieza), NO «cambió
+	// recién»: la serie se omite en ese caso.
+	// ────────────────────────────────────────────────────────────────────────────────────────
+	Emisor      string
+	EmisorDesde time.Time
+
 	EnrolledAt time.Time
 	LastSeen   time.Time // cero = nunca latió
 	Revoked    bool
+	// RevokedAt es CUÁNDO se dio de baja. Cero = no está revocada, o se revocó antes de que esto
+	// se guardara.
+	//
+	// EXISTE PARA PODER AVISAR QUE LA MÁQUINA SE FUE. Revocar la saca del export, sus series se
+	// vuelven obsoletas, y TODAS sus alertas se resuelven solas: del otro lado del canal «se
+	// arregló» y «la sacamos del inventario» llegan como el mismo `[RESOLVED]`, sin una palabra
+	// que los distinga. Quien lo lee concluye que el problema se atendió.
+	RevokedAt time.Time
 
 	// RustdeskID es el identificador PÚBLICO del cliente RustDesk de esta máquina (S6). Lo
 	// reporta el agente. No es un secreto: sin la contraseña de sesión no sirve para entrar.

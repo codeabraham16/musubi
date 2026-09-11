@@ -16,7 +16,8 @@
 #   ServicioLento          1 serie                  → cubre 1 servicio de 184
 #
 # Cada uno de esos huecos tiene una razón buena —Windows no tiene load, el SCM no expone
-# reinicios, A2 sigue abierto— y ninguna se podía leer desde ningún lado. La regla está cargada,
+# reinicios, y en su momento A2 (la temperatura en Windows) estaba abierto; ya no lo está— y
+# ninguna se podía leer desde ningún lado. La regla está cargada,
 # su métrica existe, y aun así esa dimensión de esa máquina está a ciegas. Es «verde por el motivo
 # equivocado» una vez más, sólo que esta vez no es un bug: es que no había dónde mirarlo.
 #

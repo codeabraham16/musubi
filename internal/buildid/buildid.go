@@ -50,7 +50,19 @@ import (
 //	    `== 1`, el falso 0 es una alerta perdida y no una falsa.
 //	    `CapverMin` NO se mueve: un agente que declare 1 sigue siendo atendido, que es para lo que
 //	    existe la banda. Lo custodia `TestElCapverSubeCuandoSeMueveElContratoDelLatido`.
-const Capver = 2
+//	3 · 2026-09-11 · El latido lleva `emisor`: un identificador OPACO del PROCESO que está
+//	    latiendo, generado una vez al arrancar el agente. Hasta ahora el latido no mandaba NADA
+//	    que distinguiera al proceso —la credencial es de la MÁQUINA— así que dos agentes
+//	    corriendo a la vez sobre la misma fila se veían como uno solo latiendo el doble de
+//	    seguido. Es lo que hizo que A92 se cerrara con el problema todavía puesto: el diagnóstico
+//	    se hizo midiendo la CADENCIA (un diente de sierra de 37,8 s contra 25,8 s del vecino), una
+//	    inferencia sobre un efecto de segundo orden que sólo se puede hacer mirando a mano.
+//	    ESTA VEZ LA CONSTANTE SUBIÓ CON EL CAMPO, y no después: lo exigió la guarda del bump, que
+//	    se puso roja en el mismo commit que agregó el campo. Es exactamente para lo que se
+//	    escribió después del incidente de la línea anterior.
+//	    `CapverMin` NO se mueve: un agente en 1 o en 2 sigue siendo atendido y su serie de emisor
+//	    simplemente se omite — ausente no es cero.
+const Capver = 3
 
 // CapverConInventarioExplicado es el capver desde el cual un agente SABE contar lo que no mandó y
 // SABE decir por qué no pudo enumerar — o sea desde el cual `servicios_omitidos` y

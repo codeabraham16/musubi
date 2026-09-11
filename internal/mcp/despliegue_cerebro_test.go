@@ -12,14 +12,13 @@ package mcp
 // despliegue y dejan al operador sin salida el día que algo sale mal.
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
 
 func leerRedespliegue(t *testing.T) string {
 	t.Helper()
-	b, err := os.ReadFile("../../deploy/redesplegar-cerebro.sh")
+	b, err := leerArchivoDeDespliegue("../../deploy/redesplegar-cerebro.sh")
 	if err != nil {
 		t.Fatalf("falta el script de redespliegue del cerebro: %v", err)
 	}

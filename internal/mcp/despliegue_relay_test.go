@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"math"
 	"musubi/internal/fleet"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -29,7 +28,7 @@ import (
 
 func leerDespliegueRelay(t *testing.T, archivo string) string {
 	t.Helper()
-	b, err := os.ReadFile("../../deploy/rustdesk/" + archivo)
+	b, err := leerArchivoDeDespliegue("../../deploy/rustdesk/" + archivo)
 	if err != nil {
 		t.Fatalf("falta %s: el relay de pantalla no se puede desplegar: %v", archivo, err)
 	}
@@ -234,7 +233,7 @@ func TestPrepararGuardaLaIdentidadDelRelayYNoMienteSobreLoQueProtege(t *testing.
 //
 // Sabotaje que la hace fallar: volver a contar `atendidas` sólo sobre los puertos que contestaron.
 func TestElColectorDelRelayCuentaLasSondasIntentadasYNoLasQueContestaron(t *testing.T) {
-	b, err := os.ReadFile("../../deploy/colectores/reportar-relay.py")
+	b, err := leerArchivoDeDespliegue("../../deploy/colectores/reportar-relay.py")
 	if err != nil {
 		t.Fatalf("no se pudo leer el colector del relay: %v", err)
 	}

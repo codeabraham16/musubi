@@ -879,6 +879,69 @@ fi
 # de cuatro maneras distintas, y las últimas dos son las que un verificador tiende a confundir con
 # un verde. `corre_alla` se traga los errores con `|| true`, así que una respuesta VACÍA acá
 # significa «no pude preguntar» y sale por `dudoso`, nunca por verde.
+# ── 6 bis · ¿EL WATCHDOG VIVE AFUERA DEL CAJÓN? ─────────────────────────────────────────────
+#
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# UN DEAD-MAN QUE CORRE EN LA MÁQUINA QUE VIGILA NO ES UN DEAD-MAN.
+#
+# `MusubiSiempreViva` late cada 5 minutos hacia un receptor externo, y su valor entero está en el
+# SILENCIO: si deja de llegar, lo que se rompió es el sistema de alertas y todo lo demás está
+# ciego. Eso sólo funciona si quien ESCUCHA está afuera de la máquina que puede morirse.
+#
+# Con el receptor adentro del mismo host, un corte de luz se lleva puestos al vigilado y al
+# vigilante juntos: nadie late y nadie nota que nadie late. Es el patrón que el propio
+# `prometheus.yml` de este repo nombra dos veces —«el watchdog vive adentro de la misma máquina
+# que se apagó»— y que hasta hoy no comprobaba nadie.
+#
+# SE MIRA EL HOST Y NUNCA LA URL. `/etc/musubi/watchdog_url` contiene un uuid que ES la credencial
+# del ping: quien lo tenga puede fingir el latido y apagar el dead-man. El host se extrae del
+# lado del servidor y lo único que cruza es eso.
+#
+# TRES RESPUESTAS Y NO DOS. «afuera», «adentro» y «no pude preguntar» se arreglan distinto, y la
+# última es la que un verificador tiende a confundir con un verde.
+# ════════════════════════════════════════════════════════════════════════════════════════════
+titulo "el watchdog externo, ¿está afuera?"
+
+# El host del destino, sin el resto de la URL. `cut` en vez de un regex para que no haya forma de
+# que el uuid caiga en un grupo de captura por accidente.
+WD_HOST="$(corre_alla "sed -e 's|^[a-z]*://||' -e 's|/.*||' -e 's|:.*||' /etc/musubi/watchdog_url 2>/dev/null | head -1")"
+# El hostname y las IPs de la máquina del cerebro, para poder decir si el destino es ella misma.
+WD_YO="$(corre_alla 'hostname -s 2>/dev/null; hostname -f 2>/dev/null; hostname -I 2>/dev/null')"
+
+if [ -z "$WD_HOST" ]; then
+  dudoso 'no se pudo leer el destino del watchdog (/etc/musubi/watchdog_url): puede no existir —y entonces el dead-man NO está armado— o no ser legible desde acá. Las dos se arreglan distinto y ninguna es «está bien»'
+else
+  WD_ADENTRO=0
+  case "$WD_HOST" in
+    localhost|127.*|0.0.0.0|::1|"[::1]") WD_ADENTRO=1 ;;
+  esac
+  # SI NO SE SUPO CÓMO SE LLAMA ESTA MÁQUINA, NO SE PUEDE CONTESTAR, Y ANTES CONTESTABA `ok`.
+  #
+  # `WD_YO` sale de tres `hostname` corridos allá. Si el ssh no anduvo, o `hostname` no está, o la
+  # máquina no sabe su nombre, `WD_YO` viene VACÍO: el `for` de abajo daba cero vueltas, `WD_ADENTRO`
+  # se quedaba en 0 y el `else` afirmaba «no es esta máquina» sin haber comparado con nada. O sea
+  # el modo de falla exacto contra el que existe este bloque —un dead-man adentro del cajón— se
+  # reportaba en verde justamente cuando menos se sabía.
+  #
+  # El `case` de arriba SÍ decide con lo que ya tiene: un `localhost` es «adentro» sin preguntarle
+  # el nombre a nadie. Por eso este control va acá y no antes: primero lo que se puede afirmar.
+  if [ "$WD_ADENTRO" != "1" ] && [ -z "$WD_YO" ]; then
+    dudoso "no se pudo averiguar el hostname ni las IPs del cerebro, así que no puedo decir si «${WD_HOST}» es esta misma máquina. «No pude comparar» no es «el watchdog está afuera»: si lo fuera, un dead-man adentro del cajón pasaría por bueno cada vez que falle el ssh"
+  else
+  # Y el caso que de verdad pasa: un nombre o una IP de ESTA misma máquina. Se compara contra lo
+  # que la máquina dice de sí misma, palabra por palabra, para que un `musubi-server2` no cuente
+  # como `musubi-server`.
+  for palabra in $WD_YO; do
+    [ "$palabra" = "$WD_HOST" ] && WD_ADENTRO=1
+  done
+  if [ "$WD_ADENTRO" = "1" ]; then
+    rojo "el watchdog le late a «${WD_HOST}», que es ESTA MISMA MÁQUINA: un corte de luz se lleva al vigilado y al vigilante juntos, así que nadie late y nadie nota que nadie late. El dead-man tiene que vivir afuera (healthchecks.io, cronitor, o cualquier host que no sea éste)"
+  else
+    ok "el watchdog le late a «${WD_HOST}», que no es esta máquina"
+  fi
+  fi
+fi
+
 titulo "guiones derivados (el repo contra el archivo que se corre)"
 
 # sha_alla <ruta> — el sha256 del archivo en el servidor, o AUSENTE, o ILEGIBLE, o vacío si no se

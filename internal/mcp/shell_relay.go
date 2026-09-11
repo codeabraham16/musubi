@@ -349,15 +349,14 @@ func (s *McpServer) cerrarShellsVencidas(ahora time.Time) int {
 }
 
 // principalDeRequest resuelve el bearer con la MISMA regla que /mcp y /metrics.
+//
+// «LA MISMA REGLA» ERA UNA AFIRMACIÓN Y NO UN HECHO: esto reimplementaba la resolución sin el
+// candado anti fuerza-bruta, así que las tres puertas del relay de shell —por donde viaja todo lo
+// que una persona teclea adentro de una máquina— eran las únicas donde se podían probar
+// credenciales sin límite. Ahora delega en `autenticarPersona`, que es donde vive la regla.
 func (s *McpServer) principalDeRequest(opt httpOptions, w http.ResponseWriter, r *http.Request) (*Principal, bool) {
 	if opt.registry != nil {
-		p, ok := opt.registry.resolve(bearerToken(r.Header.Get("Authorization")))
-		if !ok {
-			w.Header().Set("WWW-Authenticate", "Bearer")
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return nil, false
-		}
-		return p, true
+		return autenticarPersona(opt, w, r)
 	}
 	if opt.token != "" && !validBearer(r.Header.Get("Authorization"), opt.token) {
 		w.Header().Set("WWW-Authenticate", "Bearer")
