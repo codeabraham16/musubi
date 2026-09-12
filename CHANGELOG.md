@@ -8,6 +8,37 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El arranque del embebedor estático, medido — y «mapear la tabla» solo lo deja PEOR.** El hook
+  por turno corre hoy sin señal vectorial porque construir el proveedor estático cuesta segundos y
+  gigabytes, y el hook tiene techo de 10 s. El camino de salida que estaba escrito en
+  `cmd/musubi/embed.go` era «pedirle el vector al daemon, **o mapear la tabla en memoria en vez de
+  leerla**». **La segunda mitad, medida, está incompleta de una forma que invierte el resultado.**
+
+  El mmap vuelve la tabla prácticamente gratis (**1553 ms → 0,6 ms**), pero entonces
+  `staticTableChecksum` —que recorre las 488 MB para derivar la identidad (N1)— pasa de **86 ms**
+  sobre un buffer residente a **2-3 segundos** sobre el mapeo, porque obliga a traer cada página:
+  el checksum se come solo toda la ganancia. **El mmap sólo rinde si la identidad deja de tocar la
+  tabla entera** (una identidad muestreada, 256 ventanas de 4 KB, cuesta 18-29 ms).
+
+  **Con las dos cosas, el piso queda en ~1013 ms y ~188 MB de RSS** (hoy: ~3298 ms y ~1325 MB), o
+  sea que **entra bajo el techo de 10 s** — eso antes no se sabía. Y ahí el que manda pasa a ser el
+  **tokenizer**: ~1009 ms de ese piso, el **97 %**, armando un mapa de 500.353 entradas. **Quien
+  retome esto empieza por el tokenizer, no por la tabla.**
+
+  **Una hipótesis propia, refutada:** `loadTokenizerBytes` deserializa el `tokenizer.json` entero
+  dos veces, lo que se lee como desperdicio evidente. El «arreglo» (tomar `model` como
+  `json.RawMessage`) es **34-38 % más lento** en tres procesos frescos, y coincide con contar el
+  trabajo: hoy son 2 recorridos y 0 copias de 17 MB; con `RawMessage` son 3 recorridos y 1 copia.
+
+  **Y el recurso escaso no es el CPU, es la memoria:** el arranque de hoy pide 1325 MB de RSS
+  porque la tabla entra **dos veces** (los bytes crudos **más** la copia a `[]float32`). La
+  ganancia que importa no es 3298 ms → 1013 ms, es **1325 MB → 188 MB**.
+
+  Queda en el repo el instrumento (`internal/embedding/arranque_real_test.go` y
+  `arranque_mmap_unix_test.go`, los dos se saltean sin `MUSUBI_POTION_DIR`) y la propuesta con el
+  orden recomendado en `specs/vector-en-el-turno/proposal.md`. Ninguna prueba aserta tiempos —los
+  tiempos son de la máquina—; la única aserción es de corrección: que aliasar el blob como
+  `[]float32` da valores **idénticos bit a bit** a convertirlo elemento por elemento.
 - **La taxonomía de topics no era el problema, y los dos dials de la cola de conflictos quedan
   mapeados.** Se fue a mirar la taxonomía (1.166 topics, **982 con una sola observación**)
   sospechando que explicaba por qué la cola no se resuelve sola. **No la explica** — y lo que
