@@ -8,6 +8,33 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **La taxonomía de topics no era el problema, y los dos dials de la cola de conflictos quedan
+  mapeados.** Se fue a mirar la taxonomía (1.166 topics, **982 con una sola observación**)
+  sospechando que explicaba por qué la cola no se resuelve sola. **No la explica** — y lo que
+  apareció al medir son dos dials que estaban puestos por convención.
+
+  **El punto de partida:** de 306 relaciones resueltas, **305 las decidió un agente y 1 la
+  heurística**. La condición automática tiene dos partes —`lex >= auto_resolve_threshold` **y**
+  `topic_key` idéntico— y la sospecha era el topic. **Medido, el topic no bloquea:** 57 de 299
+  pares (19 %) ya lo comparten.
+
+  **`auto_resolve_threshold` = 0,70 vive más allá del p99** del solape léxico observado (p95 =
+  0,408, p99 = 0,561, **máximo = 0,723**), y la única relación que lo cruzó es la única que la
+  heurística resolvió. Parece un dial mal puesto hasta que se mira qué compra bajarlo: en 0,35
+  habría 39 pares auto-elegibles de los que un agente juzgó que **sólo 2 eran accionables** —
+  bajarlo auto-ocultaría **37 observaciones que un agente decidió que debían quedarse**. Se queda,
+  ahora por una razón medida y no por convención; la asimetría manda, porque auto-resolver
+  `supersedes` **oculta memoria** y eso no se deshace solo.
+
+  **`similarity_floor` = 0,30 gobierna el volumen, y tampoco tiene premio.** Subirlo canjea
+  hallazgos por volumen casi 1:1, y en 0,32 la precisión **empeora** (2,3 % contra 3,2 %): se pierde
+  el 56 % de los hallazgos para ahorrar el 41 % del trabajo. Es el mismo hecho que ya estaba en la
+  propuesta visto por otra ventana — los accionables están repartidos por todo el rango léxico, así
+  que ningún corte por `lex` los separa.
+
+  Sin cambios de código. Las dos tablas quedan en `specs/juez-de-escritura/proposal.md` para que el
+  próximo que vea «1 auto-resolución en 306» y quiera bajar el umbral tenga a mano qué se lleva
+  puesto.
 - **«Un vector por trozo» queda medido y NO se construye: dos hipótesis propias, las dos
   refutadas.** El item venía del plan con una motivación razonable, y el trabajo consistió en
   intentar demostrarla. No se pudo.
