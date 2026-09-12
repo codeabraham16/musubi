@@ -203,6 +203,13 @@ func TestLaDeudaDeSabotajesNoCreceYElCorpusNoSePodre(t *testing.T) {
 			"o declararla `no_mecanizable=\"<motivo>\"` si el sabotaje literal no puede compilar "+
 			"(el caso típico: la guarda es el único lector de un import o de una variable, así que "+
 			"borrarla deja `imported and not used` y el rojo sería por build roto).\n"+
+			"\nY SI ESTÁS EN CI Y NO AGREGASTE NINGUNA PROMESA, ESTO NO ES TUYO. Este techo es un "+
+			"derivado del ÁRBOL ENTERO clavado en un archivo, así que dos ramas que agregan una "+
+			"promesa cada una pasan verdes por separado y la SEGUNDA en mergear rompe sin haber "+
+			"cambiado nada. Pasó la primera vez que esta guarda entró: dos PRs en 9/9 con 48 "+
+			"segundos entre un merge y el otro. Bajá el log entero, mirá QUÉ archivo trae las "+
+			"anclas nuevas —`go run ./deploy/cmd/arnes -detalle`— y si no es tuyo, avisale a quien "+
+			"lo trajo en vez de tocar la constante.\n"+
 			"Correlo con: go run ./deploy/cmd/arnes -detalle",
 			pendientes, anclasEnProsaAlDia, pendientes-anclasEnProsaAlDia)
 	case anclasEnProsaAlDia-pendientes > holguraDelTecho:
