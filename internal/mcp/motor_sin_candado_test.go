@@ -287,33 +287,27 @@ func exigeQueUnEscritorSinEmbedderResponda(t *testing.T, s *McpServer, motivo st
 // H1 · Los dos ejes se separan
 // ---------------------------------------------------------------------------
 
-// G1 — La clase por default reproduce EXACTAMENTE la de hoy: toda tool que no declara clase
-// conserva el candado que tenía antes del refactor. Sin esto, el cambio puede mover el candado de
-// una tool cualquiera y nadie se entera hasta que se pierde una escritura.
-func TestG1ClasePorDefaultEsLaDeHoy(t *testing.T) {
-	s := newTestServer(t, embedding.NoopProvider{})
-
-	// musubi_distill y musubi_sharpen se suman al conjunto lockSelf: el destilador y el afilador hacen
-	// I/O externa (motor LLM + embedder / juez LLM) por cada blob o par, así que NO pueden correr bajo el
-	// candado exclusivo del despacho (congelaría el servidor durante minutos). Acotan su propia sección
-	// crítica con withReadLock/withWriteLock.
-	declaradas := map[string]bool{"musubi_recall": true, "musubi_ask": true, "musubi_distill": true, "musubi_sharpen": true}
-	for _, e := range s.tools {
-		clase, hayClase := s.toolLock[e.Name]
-		if declaradas[e.Name] {
-			if !hayClase || clase != lockSelf {
-				t.Errorf("%s: esperaba lockSelf declarado, obtuve clase=%v presente=%v", e.Name, clase, hayClase)
-			}
-			continue
-		}
-		if hayClase {
-			t.Errorf("%s: no debería declarar clase de candado (el cero es el comportamiento histórico), obtuve %v", e.Name, clase)
-		}
-	}
-	if len(s.toolLock) != len(declaradas) {
-		t.Errorf("toolLock tiene %d entradas y sólo %d tools declaran clase: alguna se coló", len(s.toolLock), len(declaradas))
-	}
-}
+// G1 — RETIRADA EL 2026-09-12, Y POR QUÉ IMPORTA QUE ESTÉ ESCRITO ACÁ.
+//
+// Decía «la clase por default reproduce EXACTAMENTE la de hoy» y lo hacía con una LISTA BLANCA de
+// cuatro nombres, más un `if hayClase { t.Errorf(...) }` que fallaba si CUALQUIER OTRA tool
+// declaraba `lockSelf`. En su momento era correcto: custodiaba que un refactor no moviera el
+// candado de una tool por accidente.
+//
+// Después el árbol cambió y la guarda no. Seis tools pasaron a poder llegar al embebedor o al
+// motor con el candado del despacho tomado —el defecto que `server.go` prohíbe por escrito— y esta
+// prueba PROHIBÍA ARREGLARLAS: ponerles `lock: lockSelf` la dejaba roja. Una guarda que convierte
+// el arreglo en una regresión aparente es peor que no tener guarda, porque le enseña al próximo a
+// aflojarla. Y su hermana lo confesaba: la sonda de G5 fue elegida para no pasar por el embebedor
+// «porque la sonda quedaría atrapada en el mismo cuelgue que se está midiendo».
+//
+// La reemplaza `TestNingunCandadoDelDespachoCruzaUnaLlamadaDeRed`, que no enumera: deriva del AST
+// qué handlers alcanzan una llamada de red y exige `lockSelf` en los dos sentidos. Cubre lo que
+// ésta cubría —si una de las cuatro dejara de declararlo mientras sigue embebiendo, sale roja;
+// sabotaje corrido— y además lo que ésta impedía ver.
+//
+// NO SE BORRA EL RASTRO A PROPÓSITO: una guarda que se retira sin decir por qué se vuelve a
+// escribir igual en seis meses.
 
 // G2 — Las escrituras siguen serializadas. Es el invariante que el candado exclusivo existe para
 // sostener: no alcanza con "no lo toqué", hay que probar que sobrevive.
