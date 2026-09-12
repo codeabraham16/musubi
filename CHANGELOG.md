@@ -7,6 +7,36 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **CORRECCIÓN: los `musubi daemon` SÍ tenían la tabla cargada, y son ~2 GB que se están pagando
+  hoy.** La entrada anterior afirmaba que ninguno de los cinco daemons vivos tenía la tabla, con sus
+  RSS de 6-11 MB como prueba. **`VmRSS` no cuenta lo que está swapeado.** Mirados bien, cada uno
+  tiene **82 MB residentes + 594 MB en swap = 664 MB de memoria anónima** — que es exactamente
+  488 MB de tabla `[]float32` + ~178 MB del mapa del tokenizer, los dos artefactos. Y `safetensors`
+  no aparece en `/proc/PID/maps`: está leída a heap, no mapeada.
+
+  Confirmado en directo: un daemon nuevo va de **10 MB a 1353 MB de memoria anónima en menos de
+  8 segundos**, y se estabiliza en ~664 MB cuando el GC libera los bytes crudos.
+
+  **Lo que cambia:** los `N × 1,3 GB` no eran un escenario futuro, **ya se pagan** — tres daemons ×
+  664 MB ≈ 2 GB, casi todo en **zram** (o sea RAM real comprimida, con 341 MB libres en la máquina).
+
+  **Y hay una guarda que ya existe y que estos caminos no consultan:** `cmd/musubi/turn.go:666`
+  pregunta `embedderCaroDeConstruir` antes de construir; `runDaemon` (`main.go:466`) y `runServe`
+  (`main.go:343`) llaman a `resolveEmbedder` **sin guarda**. Es la lección aprendida en N-1 de N
+  caminos.
+
+  **La salida más barata no era ninguna de las dos que se compararon:** construcción **perezosa** del
+  embebedor en `daemon`/`serve`. Nada necesita un vector hasta que se llama una tool semántica, y lo
+  único que hoy ata la construcción al arranque es `engine.SetVectorModelID(embedder.Name())` — cuya
+  identidad **ya está persistida** en `MetaEmbedModel` (`internal/memory/meta.go:118`). Borraría los
+  ~2 GB sin IPC nueva, sin mmap y sin mitad Windows.
+
+  Se corrigen además dos encuadres de la propuesta: que el techo de 10 s es el umbral de **matar** y
+  no el presupuesto de experiencia (el hook cuesta 0,29 s hoy; el mmap lo llevaría a ~1,3 s, **4,5×**
+  por prompt), y que los números de mmap se midieron con **cache caliente** — en estado estacionario
+  `mincore` da **0 de 125.089 páginas residentes**.
+
 ### Added
 - **El arranque del embebedor estático, medido — y «mapear la tabla» solo lo deja PEOR.** El hook
   por turno corre hoy sin señal vectorial porque construir el proveedor estático cuesta segundos y
