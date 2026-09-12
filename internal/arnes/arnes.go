@@ -827,6 +827,61 @@ func Validar(c Censo) []string {
 	return males
 }
 
+// Colisiones busca los sabotajes que SE PISAN ENTRE SÍ, que es un falso ROJO y no un falso verde.
+//
+// LO ENCONTRÓ UN REFUTADOR AJENO Y LO PAGUÉ YO. La guarda del censo —`TestLaDeudaDeSabotajes…`—
+// declaraba un sabotaje contra la unicidad de `Aplicar`, y esa guarda NO LLAMA a `Aplicar`: sólo
+// llama a `Censar` y a `Validar`. Aun así daba ROJO en cada corrida, y por eso pasó siete veces sin
+// que nadie mirara: al aplicarse, el sabotaje cambiaba la línea que OTRAS DOS directivas usan como
+// su `de`, esas dos dejaban de apuntar, y `Validar` denunciaba eso. La prueba caía por el daño al
+// corpus, no por el defecto declarado. Un rojo real por el motivo equivocado — y el archivo, la
+// prueba y la línea del fallo eran todos los correctos, así que ninguna de las comprobaciones de
+// `revisarElRojo` lo podía ver.
+//
+// Es la forma más cara de «la guarda se detecta a sí misma», porque el falso ROJO no se busca: un
+// verde inesperado hace preguntar, un rojo esperado no.
+//
+// LA COMPROBACIÓN NO ENUMERA FORMAS: simula el reemplazo y pregunta a quién le rompe el ancla. Es
+// exacta por construcción, y no hay una lista de casos que se pueda quedar corta.
+func Colisiones(c Censo) []string {
+	var males []string
+	porArchivo := map[string][]Ancla{}
+	for _, a := range c.Mecanizadas() {
+		porArchivo[a.Directiva.Archivo] = append(porArchivo[a.Directiva.Archivo], a)
+	}
+	for archivo, anclas := range porArchivo {
+		if len(anclas) < 2 {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(c.Raiz, filepath.FromSlash(archivo)))
+		if err != nil {
+			continue // `Validar` ya denuncia el archivo ilegible; acá no se duplica
+		}
+		for _, x := range anclas {
+			if strings.Count(string(b), x.Directiva.De) != 1 {
+				continue // idem: eso es de `Validar`
+			}
+			despues := strings.Replace(string(b), x.Directiva.De, x.Directiva.A, 1)
+			for _, y := range anclas {
+				if y.Archivo == x.Archivo && y.Linea == x.Linea {
+					continue
+				}
+				if strings.Count(despues, y.Directiva.De) != 1 {
+					males = append(males, fmt.Sprintf(
+						"%s:%d pisa a %s:%d — al aplicarse rompe el `de` del otro en %s. A lo sumo UNA de "+
+							"las dos es sobre el comportamiento de esa línea; la otra, si cae, puede "+
+							"estar cayendo por el daño al corpus. Andá a leer los dos motivos: si son "+
+							"distintos son dos guardas cubriendo la línea, si son el mismo es una sola "+
+							"contada dos veces.",
+						x.Archivo, x.Linea, y.Archivo, y.Linea, archivo))
+				}
+			}
+		}
+	}
+	sort.Strings(males)
+	return males
+}
+
 // Aplicar hace el reemplazo en el lugar, exigiendo unicidad.
 //
 // Es la mitad que el corredor le pasa a `sabotaje.sh` como «comando que sabotea». El archivo se

@@ -186,6 +186,17 @@ func main() {
 	}
 
 	if *validar || *correr {
+		// LAS COLISIONES SE INFORMAN PERO NO FALLAN. Dos directivas sobre la misma línea pueden ser
+		// dos guardas cubriéndola desde ángulos distintos —medido: el par de `internal/fleet` cae con
+		// dos motivos distintos, así que las dos miden— o pueden ser un rojo falso. Lo que sí es
+		// seguro es que a lo sumo UNA de las dos es sobre el comportamiento de esa línea. Falla si
+		// grita en el caso legítimo; calla si no lo dice. Así que lo dice y no falla.
+		if choques := arnes.Colisiones(censo); len(choques) > 0 {
+			fmt.Printf("\n! %d sabotaje/s se pisan entre sí:\n", len(choques))
+			for _, ch := range choques {
+				fmt.Println("   · " + ch)
+			}
+		}
 		males := arnes.Validar(censo)
 		if len(males) > 0 {
 			fmt.Printf("\n✗ %d directiva/s dejaron de apuntar a donde dicen:\n", len(males))

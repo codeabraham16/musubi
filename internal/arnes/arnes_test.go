@@ -487,3 +487,97 @@ func TestElLectorNoPuedeDevolverCeroSobreElArbolDeVerdad(t *testing.T) {
 			len(c.SinUbicar), c.SinUbicar)
 	}
 }
+
+// ── 9 · LOS SABOTAJES QUE SE PISAN ENTRE SÍ ────────────────────────────────────────────────────
+//
+// POR QUÉ EXISTE, Y CÓMO APARECIÓ. La guarda del censo declaraba un sabotaje contra la unicidad de
+// `Aplicar`, y esa guarda NO LLAMA a `Aplicar`. Daba ROJO igual en las siete corridas que se
+// hicieron: al aplicarse, el sabotaje cambiaba una línea que OTRAS DOS directivas usan como su
+// `de`, esas dos dejaban de apuntar, y `Validar` —que la guarda SÍ llama— denunciaba eso. La prueba
+// caía por el daño al corpus y no por el defecto declarado.
+//
+// Fue un rojo real por el motivo equivocado, con el archivo correcto, la prueba correcta y una
+// línea de fallo correcta: ninguna de las comprobaciones de `revisarElRojo` lo podía ver. Y
+// sobrevivió porque un verde inesperado hace preguntar y un rojo esperado no — lo encontró un
+// refutador ajeno que estaba midiendo otra cosa.
+//
+// LA COMPROBACIÓN NO ENUMERA FORMAS: simula el reemplazo y pregunta a quién le rompió el ancla.
+//
+// Sabotaje que la hace fallar: en `Colisiones`, cambiar `if len(anclas) < 2 {` por `if true {` →
+// nunca compara ningún par y devuelve la lista vacía siempre, que es un cero que significa «no
+// miré».
+// arnes: archivo="internal/arnes/arnes.go"
+// arnes: de="\t\tif len(anclas) < 2 {"
+// arnes: a="\t\tif true {"
+// arnes: prueba="TestSeDenuncianLosSabotajesQueSePisanEntreSi"
+func TestSeDenuncianLosSabotajesQueSePisanEntreSi(t *testing.T) {
+	raiz := t.TempDir()
+	escribir := func(rel, cuerpo string) {
+		ruta := filepath.Join(raiz, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(ruta), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(ruta, []byte(cuerpo), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	escribir("prod.go", "package p\n\nfunc f() {\n\tif n != 1 {\n\t\treturn\n\t}\n}\n")
+
+	censo := func(anclas ...Ancla) Censo {
+		c := Censo{Raiz: raiz}
+		c.Anclas = append(c.Anclas, anclas...)
+		return c
+	}
+	ancla := func(arch string, lin int, de, a string) Ancla {
+		return Ancla{Archivo: arch, Linea: lin, Directiva: &Directiva{Archivo: "prod.go", De: de, A: a}}
+	}
+
+	t.Run("dos directivas sobre la MISMA línea se denuncian, en los dos sentidos", func(t *testing.T) {
+		c := censo(
+			ancla("uno_test.go", 10, "\tif n != 1 {", "\tif n != 2 {"),
+			ancla("otro_test.go", 20, "\tif n != 1 {", "\tif false {"),
+		)
+		males := Colisiones(c)
+		if len(males) != 2 {
+			t.Fatalf("esperaba 2 denuncias (una por sentido), vinieron %d:\n  %s",
+				len(males), strings.Join(males, "\n  "))
+		}
+		junto := strings.Join(males, "\n")
+		for _, quiero := range []string{"uno_test.go:10", "otro_test.go:20"} {
+			if !strings.Contains(junto, quiero) {
+				t.Errorf("la denuncia no nombra a %s, así que no se puede ir a mirar:\n%s", quiero, junto)
+			}
+		}
+	})
+
+	t.Run("una directiva cuyo `a` CONTIENE al `de` no pisa a nadie", func(t *testing.T) {
+		// Es el caso de «agregar una línea»: el ancla del otro sigue estando entera.
+		c := censo(
+			ancla("uno_test.go", 10, "\tif n != 1 {", "\tif n != 1 {\n\t\t_ = 0"),
+			ancla("otro_test.go", 20, "\tif n != 1 {", "\tif false {"),
+		)
+		if males := Colisiones(c); len(males) != 1 {
+			t.Errorf("esperaba 1 (sólo el sentido que SÍ pisa), vinieron %d:\n  %s",
+				len(males), strings.Join(males, "\n  "))
+		}
+	})
+
+	t.Run("directivas sobre archivos distintos nunca se pisan", func(t *testing.T) {
+		escribir("otro.go", "package p\n\nfunc g() {\n\tif n != 1 {\n\t}\n}\n")
+		c := censo(ancla("uno_test.go", 10, "\tif n != 1 {", "\tif n != 2 {"))
+		c.Anclas[0].Directiva.Archivo = "prod.go"
+		c.Anclas = append(c.Anclas, Ancla{Archivo: "otro_test.go", Linea: 20,
+			Directiva: &Directiva{Archivo: "otro.go", De: "\tif n != 1 {", A: "\tif false {"}})
+		if males := Colisiones(c); len(males) != 0 {
+			t.Errorf("dos archivos distintos no se pisan, vinieron %d:\n  %s",
+				len(males), strings.Join(males, "\n  "))
+		}
+	})
+
+	t.Run("una sola directiva en el archivo no puede pisar a nadie", func(t *testing.T) {
+		c := censo(ancla("uno_test.go", 10, "\tif n != 1 {", "\tif n != 2 {"))
+		if males := Colisiones(c); len(males) != 0 {
+			t.Errorf("con una sola no hay par: %v", males)
+		}
+	})
+}

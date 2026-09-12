@@ -68,10 +68,38 @@ import (
 // `prueba=` VA DECLARADO PORQUE ESTA ANCLA FLOTA: vive en la cabecera del archivo y no pegada al
 // `func Test…`, así que el lector no la puede derivar del AST. Y no la saltea en silencio — la
 // denunció en su primera corrida, que es cómo apareció esta línea.
+//
+// LA PRIMERA DIRECTIVA DE ESTA ANCLA ERA UN ROJO FALSO, y sobrevivió siete corridas porque daba
+// ROJO. Saboteaba la unicidad de `arnes.Aplicar`, y ESTA GUARDA NO LLAMA A `Aplicar`: sólo llama a
+// `Censar` y a `Validar`. Se ponía roja igual porque el sabotaje cambiaba una línea que OTRAS DOS
+// directivas usan como su `de`, las dos dejaban de apuntar, y `Validar` denunciaba eso. O sea que
+// la prueba caía por el daño al corpus, no por el defecto declarado — un rojo real por el motivo
+// equivocado, con el archivo, la prueba y la línea del fallo todos correctos.
+//
+// Un verde inesperado hace preguntar; un rojo esperado no. Por eso la encontró un refutador ajeno
+// que estaba midiendo otra cosa, y no yo. La comprobación que ahora la habría cazado al escribirla
+// es `arnes.Colisiones`.
+//
+// Y LA SEGUNDA DIRECTIVA TAMBIÉN ERA UN ROJO FALSO, por la misma razón estructural y por eso vale
+// escribirla: esta guarda llama a `Validar`, y `Validar` LEE `internal/arnes/arnes.go` DEL DISCO en
+// tiempo de ejecución. O sea que CUALQUIER sabotaje a ese archivo que caiga sobre el `de` de otra
+// directiva la hace autodetectarse, y `arnes_test.go` cubre ese archivo tan densamente que casi
+// toda línea interesante es el ancla de alguien. No es que elegí mal dos veces: este archivo no se
+// puede sabotear honestamente para ESTA guarda.
+//
+// La salida es la que la prosa de arriba ya decía y yo no había leído bien: el sabotaje que ejercita
+// a esta guarda NO es tocar el lector, es AGREGARLE DEUDA AL CORPUS. Una línea `// Sabotaje:` nueva
+// en un `_test.go` sin su `arnes:` sube la deuda de 712 a 713 y el techo se pone rojo — que es
+// exactamente la primera de las dos formas que el párrafo de arriba nombra, textual.
+//
+// Saborear un `_test.go` es la excepción justificada a «no saboteés un archivo de prueba»: esa regla
+// existe para que una guarda no se mida contra sí misma, y acá el SUJETO de la guarda es el corpus
+// de archivos de prueba. El archivo elegido no es el suyo ni el del lector, y como `a` contiene a
+// `de` entero, no le rompe el ancla a nadie: `Colisiones` da 0.
 // arnes: prueba="TestLaDeudaDeSabotajesNoCreceYElCorpusNoSePodre"
-// arnes: archivo="internal/arnes/arnes.go"
-// arnes: de="\tif n := strings.Count(string(b), de); n != 1 {"
-// arnes: a="\tif n := strings.Count(string(b), de); n != 1 && false {"
+// arnes: archivo="internal/mcp/sonda_permiso_test.go"
+// arnes: de="package mcp"
+// arnes: a="package mcp\n\n// Sabotaje: un ancla nueva SIN su directiva, puesta a propósito para que suba la deuda."
 
 // anclasEnProsaAlDia es LA DEUDA MEDIDA, con su fecha. Es un hecho del mundo —cuántas promesas sin
 // ejecutar tenía el árbol ese día— así que va clavado: derivarlo del árbol dejaría a esta guarda
@@ -139,6 +167,20 @@ func TestLaDeudaDeSabotajesNoCreceYElCorpusNoSePodre(t *testing.T) {
 		t.Errorf("%d directiva/s `arnes:` no se pueden leer. NO cuentan como mecanizadas a propósito: "+
 			"una directiva ilegible que se cuenta como cubierta hace subir la cobertura con sabotajes "+
 			"que nadie puede correr.\n  %s", len(rotas), strings.Join(lineas, "\n  "))
+	}
+
+	// LOS SABOTAJES QUE SE PISAN SE INFORMAN Y NO FALLAN, y la distinción la enseñó la medición.
+	//
+	// Dos directivas sobre la misma línea de producción pueden ser dos guardas cubriéndola desde
+	// ángulos distintos: el par de `internal/fleet` cae con dos motivos DISTINTOS, así que las dos
+	// miden y sería un error prohibirlo. Pero también pueden ser un rojo falso, como lo fue la
+	// directiva de esta misma ancla durante siete corridas. Lo único cierto en los dos casos es que
+	// a lo sumo UNA de las dos es sobre el COMPORTAMIENTO de esa línea; la otra, si cae, cae por el
+	// daño al corpus. Una guarda que grita en el caso legítimo enseña a ignorarla, así que esto
+	// queda como aviso con nombre y línea, para ir a mirar.
+	if choques := arnes.Colisiones(c); len(choques) > 0 {
+		t.Logf("%d sabotaje/s se pisan entre sí (a lo sumo uno de cada par mide comportamiento):\n  %s",
+			len(choques), strings.Join(choques, "\n  "))
 	}
 
 	// ESTA ES LA QUE IMPIDE QUE EL CORPUS SE PODRA, Y ES LA RAZÓN DE QUE ESTA GUARDA VIVA EN CI.
