@@ -60,6 +60,27 @@ func TestGraphDeriverVersionAcusaElMotorDeTreeSitter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no pude leer go.mod en %s: %v", raiz, err)
 	}
+	// EL go.work TIENE PRECEDENCIA SOBRE EL go.mod Y ES LA FORMA MÁS COMÚN DE APUNTAR A UN FORK.
+	// Medido el 2026-09-12: con un `replace` en go.work, `go list -m` contesta
+	// `gotreesitter v0.52.0 => /tmp/.../forkts`, el build compila ESE código, y esta guarda —que
+	// sólo leía go.mod— daba VERDE. El sello afirmaba acusar el motor y el motor era un directorio
+	// local que nadie cruzó contra nada.
+	//
+	// No se intenta resolver qué versión es el fork: no hay forma honesta de saberlo desde un
+	// archivo. Se FALLA CERRADA, que es la única respuesta correcta cuando la pregunta que la
+	// guarda existe para contestar dejó de tener respuesta.
+	if ruta, hay := trabajoQueDesviaElModulo(raiz, moduloMotorTreeSitter); hay {
+		t.Fatalf(`HAY UN go.work QUE DESVÍA %s Y ESTA GUARDA NO PUEDE ACUSAR NADA.
+  archivo: %s
+
+El `+"`replace`"+` de un go.work tiene precedencia sobre el go.mod, así que el motor que se compila no es
+el que declara el `+"`require`"+`, y el sello del derivador estaría mintiendo sobre qué derivó el grafo.
+
+Si es un fork de trabajo local: sacá el go.work antes de indexar o de correr la suite. Si el fork
+tiene que ser permanente, el sello tiene que llevar su identidad y no la del require.`,
+			moduloMotorTreeSitter, ruta)
+	}
+
 	enElMundo, err := versionRequerida(string(datos), moduloMotorTreeSitter)
 	if err != nil {
 		// «No sé» NO es verde. Si el módulo desapareció, o hay un replace, la constante ya no puede
@@ -132,6 +153,15 @@ func versionRequerida(goMod, modulo string) (string, error) {
 			continue
 		}
 		campos := strings.Fields(linea)
+		// GO ACEPTA LA RUTA DEL MÓDULO ENTRE COMILLAS, y sin esto la guarda no la reconoce.
+		// Medido el 2026-09-12: `replace "github.com/odvcencio/gotreesitter" => …` es un go.mod
+		// VÁLIDO (`go mod edit -json` lo parsea, `go build` sale 0) y el `campos[0] == modulo` de
+		// abajo daba falso, así que el `replace` se colaba por el `continue` y la función devolvía
+		// tranquila la versión del `require` — la guarda en VERDE con el motor apuntando a un fork.
+		// Vale igual para `require "…" v1.2.3`, que daba un errAusente con diagnóstico falso.
+		for i := range campos {
+			campos[i] = strings.Trim(campos[i], `"`)
+		}
 		switch {
 		case campos[0] == "require" && len(campos) == 2 && campos[1] == "(":
 			enRequire = true
@@ -192,6 +222,14 @@ func TestVersionRequeridaParsea(t *testing.T) {
 		{"replace suelto", "require (\n\t" + m + " v0.51.0\n)\n\nreplace " + m + " => ../local\n", "", errReplace.Error()},
 		{"replace en bloque", "require (\n\t" + m + " v0.51.0\n)\n\nreplace (\n\t" + m + " => ../local\n)\n", "", errReplace.Error()},
 		{"exclude no confunde", "exclude " + m + " v0.49.0\n\nrequire (\n\t" + m + " v0.51.0\n)\n", "v0.51.0", ""},
+		// GO ACEPTA LA RUTA ENTRE COMILLAS EN LAS TRES POSICIONES, y las tres se colaban.
+		// Medido el 2026-09-12: `replace "…" => …` es un go.mod válido que `go build` compila, y el
+		// parser lo dejaba pasar porque comparaba el token CON las comillas puestas. El de `require`
+		// era menos grave —fallaba cerrada— pero con un diagnóstico falso: decía «el módulo no
+		// aparece en ningún require» sobre un go.mod donde aparece.
+		{"require entrecomillado", "require (\n\t\"" + m + "\" v0.51.0\n)\n", "v0.51.0", ""},
+		{"replace entrecomillado suelto", "require (\n\t" + m + " v0.51.0\n)\n\nreplace \"" + m + "\" => ../local\n", "", errReplace.Error()},
+		{"replace entrecomillado en bloque", "require (\n\t" + m + " v0.51.0\n)\n\nreplace (\n\t\"" + m + "\" => ../local\n)\n", "", errReplace.Error()},
 	}
 	for _, c := range casos {
 		t.Run(c.nombre, func(t *testing.T) {
@@ -209,5 +247,29 @@ func TestVersionRequeridaParsea(t *testing.T) {
 				t.Errorf("quería %q, obtuve %q", c.quiero, v)
 			}
 		})
+	}
+}
+
+// trabajoQueDesviaElModulo busca un `go.work` desde la raíz del módulo hacia arriba y dice si tiene
+// un `replace` para el módulo dado. Devuelve la ruta del archivo para poder nombrarlo en el error.
+//
+// Se busca HACIA ARRIBA porque así lo resuelve Go: un go.work en un directorio padre gobierna todos
+// los módulos de abajo. Y se lee el archivo en vez de preguntarle a `go env GOWORK` para no atar
+// esta guarda a que haya toolchain disponible — el mismo motivo por el que el resto de esta prueba
+// lee go.mod a mano.
+func trabajoQueDesviaElModulo(raiz, modulo string) (string, bool) {
+	dir := raiz
+	for {
+		ruta := filepath.Join(dir, "go.work")
+		if datos, err := os.ReadFile(ruta); err == nil {
+			if _, errV := versionRequerida(string(datos), modulo); errV == errReplace {
+				return ruta, true
+			}
+		}
+		padre := filepath.Dir(dir)
+		if padre == dir {
+			return "", false
+		}
+		dir = padre
 	}
 }
