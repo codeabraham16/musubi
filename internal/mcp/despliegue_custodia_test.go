@@ -25,6 +25,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -628,14 +629,60 @@ func TestCadaGuionQueSeInstalaEnElServidorSeCompara(t *testing.T) {
 	//
 	// Esto es una REGLA que elegimos, no un hecho del mundo, y por eso va clavada acá con su razón
 	// en vez de derivada de algún lado: derivarla del propio guion la volvería un espejo.
+	// SE PREGUNTA POR LA RUTA NORMALIZADA Y POR EL ARCHIVO REAL, NO POR EL TEXTO.
+	// `strings.HasPrefix(f.rel, "deploy/")` a secas se evade de dos formas, las dos medidas el
+	// 2026-09-12 con `scripts/install.sh`, que existe:
+	//
+	//	scripts/install.sh|…                    ROJO   ← lo único que cazaba
+	//	deploy/../scripts/install.sh|…          VERDE  ← y contada como «fila con archivo presente»
+	//	deploy/./../scripts/install.sh|…        VERDE
+	//	deploy/colado.sh -> ../scripts/install.sh   VERDE  (symlink, con la fila escrita «bien»)
+	//
+	// Y del otro lado el verificador las lee felizmente: `sha256sum "$REPO/deploy/../scripts/install.sh"`
+	// devuelve el sha. O sea que la superficie de lectura se ensanchaba de verdad, en silencio, que
+	// es exactamente lo que el párrafo de arriba declara inaceptable.
+	//
+	// DOS REDES CON VOCABULARIOS DISTINTOS, porque ninguna sola alcanza: la primera normaliza el
+	// TEXTO de la ruta y caza los `..`; la segunda resuelve el ARCHIVO en el disco y caza el
+	// symlink, que es una ruta impecable apuntando afuera. Un `Clean` no ve un enlace y un
+	// `EvalSymlinks` no opina sobre `..` en una ruta que igual termina adentro.
+	raizRepo, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("no pude resolver la raíz del repo: %v", err)
+	}
+	deployReal, err := filepath.EvalSymlinks(filepath.Join(raizRepo, "deploy"))
+	if err != nil {
+		t.Fatalf("no pude resolver deploy/: %v", err)
+	}
 	for _, f := range filas {
-		if !strings.HasPrefix(f.rel, "deploy/") {
-			t.Errorf("GUIONES_DERIVADOS declara %q, que NO cuelga de `deploy/`.\n"+
+		fuera := func(motivo string) {
+			t.Errorf("GUIONES_DERIVADOS declara %q, que NO cuelga de `deploy/` (%s).\n"+
 				"El lado izquierdo es lo que `verificar-despliegue.sh` abre, así que agregar una fila "+
 				"fuera de `deploy/` ENSANCHA la superficie de lectura del verificador — y de esa "+
 				"superficie depende si el latido considera creíble su propio veredicto.\n"+
 				"Arreglo: movelo bajo `deploy/`, o si de verdad tiene que vivir afuera, ensanchá la "+
-				"superficie A PROPÓSITO y actualizá lo que dependa de ella.", f.rel)
+				"superficie A PROPÓSITO y actualizá lo que dependa de ella.", f.rel, motivo)
+		}
+		limpia := path.Clean(f.rel)
+		if !strings.HasPrefix(limpia, "deploy/") {
+			if limpia == f.rel {
+				fuera("no arranca con `deploy/`")
+			} else {
+				fuera("normalizada es " + limpia)
+			}
+			continue
+		}
+
+		// La segunda red. Un archivo que no existe NO se reporta acá: eso lo dice la comprobación
+		// de existencia de más abajo, con su propio mensaje, y duplicarlo mandaría a arreglar la
+		// ruta cuando lo que falta es el archivo.
+		real, err := filepath.EvalSymlinks(filepath.Join(raizRepo, filepath.FromSlash(limpia)))
+		if err != nil {
+			continue
+		}
+		dentro, err := filepath.Rel(deployReal, real)
+		if err != nil || dentro == ".." || strings.HasPrefix(dentro, ".."+string(filepath.Separator)) {
+			fuera("resuelto en el disco cae en " + real)
 		}
 	}
 
