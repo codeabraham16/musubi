@@ -68,7 +68,41 @@ type defSpan struct {
 // (CONTAINS), imports (IMPORTS, external = import bare), y CALLS INTRA-archivo (callee resuelto a
 // un def del mismo archivo con match único; cross-archivo diferido, como el cross-paquete de Go en
 // F1). Degrada a vacío sin pánico si no parsea. DerivePackage deduplica al mergear.
-func derivePolyglotFile(path, content string) ([]Node, []Edge) {
+//
+// «SIN PÁNICO» ERA UNA PROMESA DEL COMENTARIO Y NO DEL CÓDIGO. Hasta el 2026-09-12 esta función no
+// tenía ninguna red: un pánico adentro de la gramática o del motor subía por `DerivePackage` →
+// `toolCodegraphIndex` → `reindexCodeGraphOnce` hasta `RunCodeGraphScheduler`, que corre en una
+// goroutine PELADA (`go server.RunCodeGraphScheduler(...)`, cmd/musubi/main.go:558). Un pánico ahí
+// no degrada un archivo: se lleva el proceso entero —la memoria, el MCP, todo— por un `.js`
+// cualquiera de un repo indexado.
+//
+// La red va ACÁ, en el grano del archivo, y no arriba en el scheduler, por dos razones. Una: es
+// donde está la promesa escrita, y una promesa que el código no cumple es peor que no hacerla.
+// Dos: acá se sabe QUÉ degradar —este archivo, a vacío— mientras que un recover en el scheduler
+// sólo sabe que algo explotó y tiene que abandonar la corrida entera.
+//
+// Ojo con leer esto como «ya está cubierto»: las OTRAS ocho goroutines que larga `main` siguen sin
+// red, y esta función es la única que se la puso. Eso es una decisión de diseño (¿un pánico debe
+// matar el daemon para que systemd lo levante limpio, o debe contenerse?) que no se toma acá.
+func derivePolyglotFile(path, content string) (nodes []Node, edges []Edge) {
+	defer func() {
+		if r := recover(); r != nil {
+			// Se devuelve VACÍO y no parcial: `nodes`/`edges` pueden tener a medias el trabajo del
+			// archivo, y un grafo a medias es peor que ninguno —reemplaza al anterior y BORRA
+			// símbolos que sí existían—. El archivo queda como no derivable, que es lo mismo que
+			// contesta un `languageFor` nil.
+			nodes, edges = nil, nil
+		}
+	}()
+	return derivarPolyglotSinRed(path, content)
+}
+
+// derivarPolyglotSinRed es el cuerpo, separado para que la guarda pueda inyectarle un pánico: no
+// hay forma de hacer entrar en pánico al parser REAL a pedido, y una guarda que no puede provocar
+// el defecto no distingue «hay red» de «no la probé». La indirección es por la prueba y se dice.
+var derivarPolyglotSinRed = derivarPolyglotDeVerdad
+
+func derivarPolyglotDeVerdad(path, content string) ([]Node, []Edge) {
 	lang := languageFor(path)
 	if lang == nil {
 		return nil, nil
