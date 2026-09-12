@@ -344,6 +344,34 @@ jobs:
             exit 1
           }
 
+      - name: Tokenizador bit-exacto contra el asset real
+        env:
+          MUSUBI_SPM_TESTDATA: ${{ github.workspace }}/.musubi/embeddings/potion-multilingual-128M
+        # LA GUARDA FUERTE DEL TOKENIZER YA ESTABA ESCRITA, Y ESTABA APAGADA.
+        #
+        # `TestUnigramRealBitExact` compara los IDs que devuelve el tokenizer REAL contra una
+        # referencia clavada en `testdata/spm_potion_ids.json`. Es lo único que ve un cambio de
+        # tokenización venga de donde venga: un bump de `golang.org/x/text` (la normalización
+        # Unicode), un cambio de tabla del toolchain, o un refactor propio del Unigram. Ninguna
+        # de esas tres cosas mueve el `model_id`, que se deriva de los BYTES del asset y no del
+        # CÓDIGO que los lee — así que los vectores viejos y los nuevos se comparan entre sí como
+        # si fueran de la misma procedencia. Es corrupción silenciosa de ranking, sin error.
+        #
+        # No corría por una sola razón: el `t.Skip` sin `MUSUBI_SPM_TESTDATA`, escrito cuando se
+        # pensó que hacía falta bajar un asset de 18 MB aparte. Este job YA baja y cachea el
+        # directorio POTION entero —que contiene ese mismo `tokenizer.json`— para el gate de
+        # recall. Prenderla cuesta ~1 s sobre un archivo que ya está en disco: medido acá abajo.
+        #
+        # El `grep -- '--- PASS'` es por lo mismo que su hermano de arriba: si alguien saca esta
+        # env var, el test se saltea y el job pasa igual. `--- SKIP` no es `--- PASS`.
+        run: |
+          set -o pipefail
+          go test ./internal/embedding/ -run TestUnigramRealBitExact -count=1 -v | tee tokenizer-bitexact.txt
+          grep -q -- '--- PASS: TestUnigramRealBitExact' tokenizer-bitexact.txt || {
+            echo "::error::la guarda bit-exacta del tokenizer NO EJECUTO TestUnigramRealBitExact (se salteo, o el nombre ya no existe). Un verde de este job sin esa linea no vigila la tokenizacion."
+            exit 1
+          }
+
   lint:
     runs-on: ubuntu-latest
     steps:

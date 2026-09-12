@@ -26,11 +26,16 @@ import (
 // N1 no mira: N1 vigila que cambie la TABLA, no que cambie el CODIGO que la consulta.
 //
 // POR QUE NO ALCANZABA CON LO QUE YA HABIA. `TestUnigramRealBitExact` valida bit-exacto contra el
-// tokenizer real, y es la guarda fuerte — pero SE SALTEA SIN `MUSUBI_SPM_TESTDATA`, o sea que en CI
-// no corre (el asset son 18 MB y no se commitea). De las que si corren, `TestUnigram` no tiene NI UN
-// caso con acentos, y `TestStaticWordPiece` tiene uno solo ("Cafe" con tilde). Medido: subir x/text
-// de 0.41.0 a 0.42.0 NO cambia nada — la huella de tokenizar 32 frases dificiles con la tabla real
-// da identica en las dos. El problema no es ese bump: es que el proximo no tendria quien lo vea.
+// tokenizer real y es la guarda FUERTE, pero corre en OTRO job: necesita el asset de 18 MB, que
+// `go test ./...` no tiene. Vive en `recall-gate`, que ya baja y cachea el directorio POTION (ver
+// ci.yml, paso "Tokenizador bit-exacto contra el asset real"). Esta guarda es la que corre SIN
+// ASSET, en el job `test`, en todas las plataformas y en el minuto cero: de las que corrian ahi,
+// `TestUnigram` no tiene NI UN caso con acentos y `TestStaticWordPiece` tiene uno solo ("Cafe" con
+// tilde). Las dos son necesarias y ninguna sustituye a la otra — la fuerte mide la salida real
+// sobre un corpus chico ya normalizado; esta clava el COMPORTAMIENTO de norm sobre los casos
+// dificiles, que ese corpus no tiene. Medido: subir x/text de 0.41.0 a 0.42.0 NO cambia nada — la
+// huella de tokenizar 32 frases dificiles con la tabla real da identica en las dos. El problema no
+// es ese bump: es que el proximo no tendria quien lo vea.
 //
 // LOS VALORES ESPERADOS SON HECHOS DEL MUNDO, NO DERIVADOS NUESTROS, y por eso van clavados a mano:
 // que U+00FF descomponga en "y" + dieresis combinante lo dice Unicode, no este repo. Derivarlos
