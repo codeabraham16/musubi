@@ -276,11 +276,26 @@ func TestAplicarExigeQueElTextoSeaUnico(t *testing.T) {
 	// que un reemplazo que REESCRIBE el archivo le deja el modo del umask. Pasó en este repo: el
 	// guion quedó sin bit de ejecución y la corrida siguiente murió con `Permission denied`, que
 	// manda a mirar cualquier cosa menos acá.
+	//
+	// SE COMPARA EL MODO CONTRA SÍ MISMO, NO CONTRA 0755, y eso lo enseñó el CI de Windows. La
+	// primera versión clavaba el `0o755` y allá se puso roja: en Windows `Chmod` sólo mueve el bit
+	// de sólo-lectura y `Stat` contesta 0666, así que la prueba acusaba a `Aplicar` de un defecto
+	// que era un HECHO DEL SISTEMA OPERATIVO. Escribir a mano el valor esperado en vez de medir la
+	// línea de base es la misma familia que «un derivado escrito a mano es una copia», dada vuelta.
+	//
+	// Lo que `Aplicar` promete no es «el archivo queda en 0755»: es «el modo que tenía es el modo
+	// que queda». Ése es el invariante y es cierto en los tres sistemas.
 	t.Run("conserva el modo del archivo", func(t *testing.T) {
 		ruta := escribir("ejecutable.sh", "#!/bin/sh\necho uno\n")
 		if err := os.Chmod(ruta, 0o755); err != nil {
 			t.Fatal(err)
 		}
+		previo, err := os.Stat(ruta)
+		if err != nil {
+			t.Fatal(err)
+		}
+		antes := previo.Mode().Perm()
+
 		if err := Aplicar(ruta, "uno", "dos"); err != nil {
 			t.Fatal(err)
 		}
@@ -288,9 +303,16 @@ func TestAplicarExigeQueElTextoSeaUnico(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := info.Mode().Perm(); got != 0o755 {
-			t.Errorf("el modo pasó de 0755 a %04o: un sabotaje que le saca el bit de ejecución a "+
-				"un guion rompe la corrida SIGUIENTE, y el síntoma no apunta acá", got)
+		if got := info.Mode().Perm(); got != antes {
+			t.Errorf("el modo pasó de %04o a %04o: un sabotaje que le saca el bit de ejecución a "+
+				"un guion rompe la corrida SIGUIENTE, y el síntoma no apunta acá", antes, got)
+		}
+		// Y SE DICE CUÁNDO EL CASO QUEDÓ DÉBIL. Si el sistema no llevó el bit de ejecución, este
+		// subtest comparó 0666 contra 0666: comprobó que el modo no cambia, pero NO el bit que
+		// motivó la guarda. Un verde que no midió lo que dice tiene que decirlo en vez de callarse.
+		if antes&0o111 == 0 {
+			t.Logf("este sistema no lleva bit de ejecución (tras Chmod 0755 el archivo quedó en %04o): "+
+				"acá se comprobó que el modo no cambia, NO que sobreviva el bit de ejecución", antes)
 		}
 	})
 }

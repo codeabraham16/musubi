@@ -435,6 +435,110 @@ func imprimirCenso(c arnes.Censo, detalle bool) {
 	}
 }
 
+// revisarElRojo LEE LA LÍNEA DEL FALLO, QUE ES LO QUE EL EXIT CODE NO DICE.
+//
+// `sabotaje.sh` sale con 0 cuando la prueba se puso en rojo, y eso NO ES LO MISMO que «la guarda
+// cazó el defecto declarado». Este repo ya lo tiene escrito con nombre: un rojo también miente —por
+// build roto, o porque el sabotaje hizo fallar OTRA aserción de la misma prueba— y por eso la regla
+// es leer la LÍNEA y no el código de salida. Contar `err == nil` era cometer, adentro del arnés,
+// exactamente el atajo que el arnés existe para no dejar pasar.
+//
+// El guion ya imprime el motivo y dice para qué: «la primera línea de cada fallo, para poder
+// compararlos». Lo que no puede hacer es compararlos, porque ve UNA corrida por vez. Quien ve las
+// setenta es este comando, así que la comparación va acá.
+//
+// Devuelve el motivo canónico —`archivo_test.go:línea: mensaje`, SIN el nombre de la prueba, para
+// que dos pruebas distintas que caen en la MISMA aserción den la misma clave— y una queja cuando lo
+// que se puso en rojo no es lo que el ancla declaraba. Una queja no invalida el rojo: lo manda a
+// leer a mano, que es lo que hoy no pasaba nunca.
+func revisarElRojo(salida, archivoAncla, pruebaDeclarada string) (motivo, queja string) {
+	var fallos, crudos []string
+	seccion := ""
+	for _, l := range strings.Split(salida, "\n") {
+		t := strings.TrimSpace(l)
+		switch {
+		case strings.Contains(t, "ROJO, y falla en:"):
+			seccion = "fallos"
+			continue
+		case strings.HasPrefix(t, "── motivo"):
+			seccion = "motivos"
+			continue
+		case t == "", strings.HasPrefix(t, "✓"), strings.HasPrefix(t, "✗"), strings.HasPrefix(t, "▶"):
+			seccion = ""
+			continue
+		}
+		switch seccion {
+		case "fallos":
+			fallos = append(fallos, t)
+		case "motivos":
+			crudos = append(crudos, t)
+		}
+	}
+
+	if len(fallos) == 0 {
+		return "", "salió con 0 y no imprimió NINGUNA prueba fallando: no sé qué se puso en rojo"
+	}
+	// El `-run` filtra a la prueba declarada, así que una raíz distinta significa que el patrón no
+	// es el que creo. Los subtests (`TestX/caso`) cuelgan de su raíz y no son un desvío.
+	if pruebaDeclarada != "" {
+		for _, f := range fallos {
+			if raiz, _, _ := strings.Cut(f, "/"); raiz != pruebaDeclarada {
+				return "", "cayó `" + raiz + "` y el ancla declara `" + pruebaDeclarada + "`"
+			}
+		}
+	}
+	if len(crudos) == 0 {
+		return "", "se puso en rojo sin una línea de `_test.go` que ubique la aserción"
+	}
+
+	// La PRIMERA es la que el guion eligió como motivo; se le saca el nombre de la prueba de
+	// adelante para que la clave sea la ASERCIÓN y no quién la ejercitó.
+	primera := crudos[0]
+	if _, resto, ok := strings.Cut(primera, " · "); ok {
+		primera = resto
+	}
+	arch, ok := archivoDelMotivo(primera)
+	if !ok {
+		return "", "el motivo no nombra un `_test.go:línea`: " + primerasRunas(primera, 80)
+	}
+	if base := archivoAncla[strings.LastIndex(archivoAncla, "/")+1:]; arch != base {
+		queja = "la aserción que cayó vive en " + arch + " y el ancla está en " + base
+	}
+	return primera, queja
+}
+
+// archivoDelMotivo saca el `foo_test.go` de una línea `foo_test.go:123: mensaje`.
+//
+// A mano y no con una expresión regular porque la condición es exacta y corta —`_test.go:` seguido
+// de al menos un dígito— y `regexp` sería un import nuevo que el primer sabotaje sobre esta función
+// dejaría huérfano, que es la clase que ya dejó una guarda de este paquete sin poder medirse.
+func archivoDelMotivo(l string) (string, bool) {
+	const marca = "_test.go:"
+	i := strings.Index(l, marca)
+	if i < 0 {
+		return "", false
+	}
+	digitos := 0
+	for j := i + len(marca); j < len(l) && l[j] >= '0' && l[j] <= '9'; j++ {
+		digitos++
+	}
+	if digitos == 0 {
+		return "", false
+	}
+	return l[strings.LastIndexAny(l[:i], " \t")+1 : i+len(marca)-1], true
+}
+
+// primerasRunas recorta POR RUNA y no por byte. Cortar por byte una prosa con acentos parte el
+// carácter, y este repo ya pagó ese corte: la salida quedó UTF-8 inválido, `grep` la llamó «binary
+// file matches» y la comparación que seguía inventó cinco anclas perdidas.
+func primerasRunas(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
 // correrTodos pasa cada directiva por `sabotaje.sh` y cuenta los veredictos.
 //
 // EL VEREDICTO QUE IMPORTA ES EL VERDE: una guarda que queda en verde sobre su propio defecto
@@ -468,6 +572,10 @@ func correrTodos(raiz string, c arnes.Censo, soloPaquete string, limite int) int
 	}
 
 	var corridas, rojos, verdes, errores int
+	// EL MOTIVO DE CADA ROJO, PARA PODER COMPARARLOS. Ver `revisarElRojo`: el exit code dice que
+	// la prueba cayó, no POR QUÉ, y dos sabotajes que caen por lo mismo son uno contado dos veces.
+	motivos := map[string][]string{}
+	var sospechas []string
 	var huecas []string
 	for _, a := range c.Mecanizadas() {
 		d := a.Directiva
@@ -506,6 +614,15 @@ func correrTodos(raiz string, c arnes.Censo, soloPaquete string, limite int) int
 		switch {
 		case err == nil:
 			rojos++
+			// NO ALCANZA CON QUE `sabotaje.sh` HAYA SALIDO CON 0. Ver `revisarElRojo`.
+			motivo, queja := revisarElRojo(string(salida), a.Archivo, d.Prueba)
+			if queja != "" {
+				fmt.Println("   ! " + queja)
+				sospechas = append(sospechas, fmt.Sprintf("%s:%d %s — %s", a.Archivo, a.Linea, d.Prueba, queja))
+			}
+			if motivo != "" {
+				motivos[motivo] = append(motivos[motivo], fmt.Sprintf("%s:%d %s", a.Archivo, a.Linea, d.Prueba))
+			}
 		case strings.Contains(string(salida), "EL SABOTAJE NO LA PONE EN ROJO"):
 			// LA GUARDA QUEDÓ VERDE SOBRE SU PROPIO DEFECTO. Es el desenlace que hay que contar
 			// aparte: no es un error de la herramienta, es un hallazgo.
@@ -542,6 +659,28 @@ func correrTodos(raiz string, c arnes.Censo, soloPaquete string, limite int) int
 			fmt.Println("   ", h)
 		}
 	}
+	// ── LOS ROJOS, LEÍDOS ─────────────────────────────────────────────────────────────────────
+	//
+	// Dos sabotajes distintos que hacen fallar la MISMA aserción con el MISMO mensaje son un
+	// sabotaje solo contado dos veces: la cobertura sube y lo cubierto no. Lo dice `sabotaje.sh`
+	// en su propia salida —imprime el motivo «para poder compararlos»— pero no tiene con qué
+	// compararlo, porque ve una corrida por vez. Este arnés ve las setenta.
+	var repes int
+	for motivo, quienes := range motivos {
+		if len(quienes) > 1 {
+			repes++
+			fmt.Printf("\n! MISMO MOTIVO en %d directivas — o es un sabotaje contado de más:\n", len(quienes))
+			fmt.Println("   " + motivo)
+			for _, q := range quienes {
+				fmt.Println("     · " + q)
+			}
+		}
+	}
+	fmt.Printf("motivos repetidos : %d   (dos sabotajes que fallan igual son uno solo)\n", repes)
+	fmt.Printf("rojos sospechosos : %d   (cayó otra prueba, u otro archivo, o sin línea)\n", len(sospechas))
+	for _, s := range sospechas {
+		fmt.Println("   " + s)
+	}
 	// ── EL ÁRBOL TIENE QUE QUEDAR LIMPIO, Y SE COMPRUEBA ─────────────────────────────────────
 	//
 	// `sabotaje.sh` restaura con `cp` desde un respaldo y lo hace en un `trap EXIT INT TERM`, así
@@ -572,8 +711,22 @@ func correrTodos(raiz string, c arnes.Censo, soloPaquete string, limite int) int
 		fmt.Println(sangrar(antes))
 		fmt.Println("  ── después ──")
 		fmt.Println(sangrar(despues))
-		fmt.Println("  Es un SABOTAJE PUESTO: restauralo antes de correr nada más. Pasa cuando el proceso")
-		fmt.Println("  muere por SIGKILL (un OOM, la red), que se saltea el trap de sabotaje.sh.")
+		// LO QUE SE SABE ES QUE EL ÁRBOL CAMBIÓ. Por qué cambió NO se sabe, y decirlo como si se
+		// supiera manda a mirar el lugar equivocado. La primera versión afirmaba «es un sabotaje
+		// puesto» y la primera vez que saltó de verdad la causa era otra: alguien —yo— editando un
+		// `_test.go` mientras la corrida iba por la 56 de 73. Diagnóstico correcto, causa inventada.
+		// Es la misma forma que ya se corrigió un piso más abajo con «NO SELECCIONA NINGUNA PRUEBA»,
+		// que también acertaba y también sonaba a otra cosa.
+		fmt.Println("  QUÉ SE SABE: el árbol no quedó como estaba. Las causas, de más grave a más común:")
+		fmt.Println("   · UN SABOTAJE QUE QUEDÓ PUESTO. `sabotaje.sh` restaura en un `trap EXIT INT TERM`,")
+		fmt.Println("     así que esto pasa cuando el proceso muere por SIGKILL —un OOM, la red— que se")
+		fmt.Println("     saltea el trap. Es el peor desenlace: el próximo que corra las pruebas las va a")
+		fmt.Println("     ver fallar por algo que nadie sabe que está puesto, o peor, en verde sobre código")
+		fmt.Println("     saboteado. Si el archivo de arriba es de PRODUCCIÓN, es casi seguro esto.")
+		fmt.Println("   · ALGUIEN EDITÓ EL ÁRBOL MIENTRAS ESTO CORRÍA —otra sesión, o vos en otra ventana.")
+		fmt.Println("     Esta corrida tarda minutos y no toma el árbol para sí. Si el archivo de arriba es")
+		fmt.Println("     uno que estabas tocando, es esto, y la corrida ya no es homogénea: re-corré.")
+		fmt.Println("  Mirá el diff antes de restaurar nada: `git diff` te dice cuál de las dos es.")
 		return 1
 	}
 	fmt.Println("\n✓ el árbol quedó como estaba: ningún sabotaje se quedó puesto")
