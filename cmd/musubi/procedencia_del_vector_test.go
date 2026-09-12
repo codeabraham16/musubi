@@ -119,8 +119,18 @@ func TestTodoServidorMcpEstampaLaProcedenciaDelVector(t *testing.T) {
 	// CONTROL POSITIVO. Si la enumeración se rompe (se renombra el constructor, se mueve a otro
 	// paquete, cambia la forma de la llamada), esta guarda pasaría a verde vigilando un conjunto
 	// VACÍO — verde por no mirar nada, que es el modo de falla clásico de una guarda así.
+	//
+	// VA CON `Errorf` Y NO CON `Fatalf`, Y NO ES ESTILO. Con `Fatalf` este control CORTA el test
+	// antes del bucle de abajo, así que cuando las dos cosas pasan a la vez —la enumeración cayó
+	// Y hay un servidor sin cablear— el único rojo habla del CONTEO y el servidor defectuoso no
+	// se nombra nunca. Medido el 2026-09-12 disfrazando un constructor (`nuevo := mcp.NewMcpServer`)
+	// y descableando otro: salió «encontré 2» y `runServe` —el que había quedado sin estampar— no
+	// apareció en ninguna línea. Quien lea ese fallo va a buscar un constructor renombrado, que es
+	// el defecto equivocado.
+	//
+	// Los dos hallazgos son independientes y los dos tienen que salir.
 	if len(servidores) < 3 {
-		t.Fatalf("esperaba al menos 3 constructores de %s en este paquete y encontré %d (%v): "+
+		t.Errorf("esperaba al menos 3 constructores de %s en este paquete y encontré %d (%v): "+
 			"si el constructor se renombró o se movió, esta guarda dejó de ver el código que dice vigilar",
 			constructor, len(servidores), servidores)
 	}
