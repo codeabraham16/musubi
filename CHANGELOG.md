@@ -7,6 +7,39 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **La normalización Unicode queda CLAVADA, porque el `model_id` no cubre el código que produce el
+  vector.** Un embedding lleva `static:<carpeta>@<checksum de model.safetensors + tokenizer.json>`:
+  ese checksum vigila que cambie **la tabla** —es la regla N1 y funciona— pero el vector no sale
+  sólo de la tabla, sale de la tabla **más el tokenizer**, y el tokenizer normaliza con
+  `golang.org/x/text` (NFD para el strip-accents del WordPiece, NFC antes del charsmap del Unigram).
+
+  Si una versión nueva de `x/text` cambiara sus tablas Unicode: **otros tokens → otro vector → con
+  el MISMO `model_id`**. Y la regla de homogeneidad, que filtra justamente por `model_id`, seguiría
+  comparando por coseno los vectores viejos contra los nuevos como si fueran de la misma
+  procedencia. Es la corrupción silenciosa que N1 vino a cerrar, entrando por la puerta que N1 no
+  mira: N1 vigila que cambie la **tabla**, no que cambie el **código** que la consulta.
+
+  **Lo que ya había no alcanzaba.** `TestUnigramRealBitExact` es la guarda fuerte y **se saltea en
+  CI** (necesita un asset de 18 MB que no se commitea). De las que sí corren, `TestUnigram` no tenía
+  **ni un caso** con acentos y `TestStaticWordPiece` tenía uno solo.
+
+  **El bump que motivó esto es seguro, y está medido:** subir `golang.org/x/text` de 0.41.0 a 0.42.0
+  **no cambia la tokenización** — la huella de tokenizar 32 frases difíciles con la tabla real da
+  idéntica en las dos (mismos 183 tokens, mismo sha256). El problema no era ese bump: era que el
+  próximo no tendría quién lo vea.
+
+  Los valores esperados van clavados a mano porque son **hechos del mundo**, no derivados nuestros
+  —que U+00FF descomponga en `y` + diéresis combinante lo dice Unicode, no este repo—, y fueron
+  **medidos** contra v0.41.0, no escritos de memoria. Un caso tiene historia: ese `ÿ → y` es el byte
+  `0xFF` que una auditoría de agosto dejó escrito como no-hallazgo; dejó de ser una nota y pasó a
+  ser un caso que se corre.
+
+  Y uno agarró a quien la escribía: el hangul precompuesto sale **descompuesto en jamo** y las dos
+  formas **se ven idénticas en pantalla**, así que el valor esperado se copió mal de la propia sonda
+  y la guarda nació roja. Ese caso se queda justamente por eso.
+
+
 ### Performance
 - **La tabla de embeddings entraba DOS VECES en memoria, y el pico bajó de 1321 MB a 833 MB.**
   `NewStaticProvider` hacía `os.ReadFile` de `model.safetensors` (488 MB de bytes crudos) y después
