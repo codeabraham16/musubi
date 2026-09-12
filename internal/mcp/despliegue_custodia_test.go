@@ -582,6 +582,21 @@ func rutasAsignadasEn(crudo []byte, soloLiterales bool) map[string]string {
 	return fuera
 }
 
+// MECANIZADA. El sabotaje es sacar una fila de GUIONES_DERIVADOS: un guion que el instalador
+// deposita en el servidor deja de compararse contra el repo, que es el defecto A111 original.
+// Medido: la prueba nombra al culpable con archivo y linea («install-musubi-brain.sh instala
+// /usr/local/sbin/redesplegar-cerebro.sh (linea 376) y verificar-despliegue.sh NO lo compara»).
+// El arreglo es reordenar las dos filas: la tabla no tiene orden semantico y alfabetizarla es un
+// cambio legitimo que la guarda tiene que aceptar. Las dos, medidas el 2026-09-12.
+//
+// El blanco no es un `.go`, asi que el contraste por -overlay no la alcanza; el sabotaje al
+// disco si.
+// Sabotaje que la pone roja: sacar una fila de GUIONES_DERIVADOS.
+// arnes: archivo="deploy/verificar-despliegue.sh"
+// arnes: de="deploy/musubi-backup.sh|/usr/local/bin/musubi-backup\ndeploy/redesplegar-cerebro.sh|/usr/local/sbin/redesplegar-cerebro.sh\""
+// arnes: a="deploy/musubi-backup.sh|/usr/local/bin/musubi-backup\""
+// arnes: arreglo_de="GUIONES_DERIVADOS=\"deploy/musubi-backup.sh|/usr/local/bin/musubi-backup\ndeploy/redesplegar-cerebro.sh|/usr/local/sbin/redesplegar-cerebro.sh\""
+// arnes: arreglo_a="GUIONES_DERIVADOS=\"deploy/redesplegar-cerebro.sh|/usr/local/sbin/redesplegar-cerebro.sh\ndeploy/musubi-backup.sh|/usr/local/bin/musubi-backup\""
 func TestCadaGuionQueSeInstalaEnElServidorSeCompara(t *testing.T) {
 	verif, err := leerArchivoDeDespliegue(filepath.Join("..", "..", "deploy", "verificar-despliegue.sh"))
 	if err != nil {

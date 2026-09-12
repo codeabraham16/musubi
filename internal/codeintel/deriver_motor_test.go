@@ -58,6 +58,17 @@ const moduloMotorTreeSitter = "github.com/odvcencio/gotreesitter"
 
 // TestGraphDeriverVersionAcusaElMotorDeTreeSitter es la guarda. Roja cuando go.mod trae un motor que
 // la constante no declara.
+//
+// MECANIZADA. El sabotaje es que la constante deje de acusar al go.mod. El arreglo es subir el
+// número de revisión del sello, que es LITERALMENTE lo que el mensaje de error de esta prueba
+// manda hacer: si la guarda castigara su propia instrucción, estaría premiando el defecto.
+// Medidas las dos el 2026-09-12.
+// Sabotaje que la pone roja: que `motorTreeSitterDeclarado` deje de acusar al `require` del go.mod.
+// arnes: archivo="internal/codeintel/crosspkg.go"
+// arnes: de="const motorTreeSitterDeclarado = \"v0.52.0\""
+// arnes: a="const motorTreeSitterDeclarado = \"v0.51.0\""
+// arnes: arreglo_de="const GraphDeriverVersion = \"5-crosspkg+ts-\""
+// arnes: arreglo_a="const GraphDeriverVersion = \"6-crosspkg+ts-\""
 func TestGraphDeriverVersionAcusaElMotorDeTreeSitter(t *testing.T) {
 	raiz := raizDelModulo(t)
 	datos, err := os.ReadFile(filepath.Join(raiz, "go.mod"))

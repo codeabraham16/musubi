@@ -36,6 +36,23 @@ import (
 // los BYTES del asset y no del CÓDIGO que los lee, así que un bump de `golang.org/x/text`, un
 // cambio de tabla del toolchain o un refactor propio mueven los vectores SIN mover la procedencia,
 // y los viejos se comparan por coseno contra los nuevos como si fueran del mismo modelo.
+//
+// MECANIZADA. El sabotaje es el typo de UN BIT que la parió. El arreglo es la MISMA línea
+// reescrita de forma equivalente —extraer el bit 8 con máscara en vez de con corrimiento—: una
+// huella que se pusiera roja ahí estaría fijando la FORMA del decodificador y no su salida, que
+// es justo lo que esta guarda no debe hacer. Las dos direcciones, medidas el 2026-09-12:
+// con (u>>9)&1 la huella pasa a c7bf6e144231ada3 y la prueba falla; con (u&0x100)>>8 sigue
+// dando 7126b392b5d20d14 y pasa.
+//
+// OJO, Y ES CONDICIÓN PARA QUE ESTE VEREDICTO VALGA: sin MUSUBI_SPM_TESTDATA esta prueba hace
+// t.Skip y el paquete contesta `ok` con exit 0. Un arnés que lea el rojo por «--- FAIL» cuenta
+// eso como VERDE, o sea como guarda hueca, que es un hallazgo FALSO. Medido acá mismo.
+// Sabotaje que la pone roja: dar vuelta un bit en `dartsHasLeaf`, de `(u>>8)&1` a `(u>>9)&1`.
+// arnes: archivo="internal/embedding/spm.go"
+// arnes: de="return (u>>8)&1 == 1"
+// arnes: a="return (u>>9)&1 == 1"
+// arnes: arreglo_de="return (u>>8)&1 == 1"
+// arnes: arreglo_a="return (u&0x100)>>8 == 1"
 func TestLaTokenizacionDelCharsmapEstaFijada(t *testing.T) {
 	dir := os.Getenv("MUSUBI_SPM_TESTDATA")
 	if dir == "" {

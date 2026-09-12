@@ -25,6 +25,17 @@ import (
 // que el camino malo dejó de ser escribible, y esta prueba lo mide DONDE SE DECIDE: construye el
 // servidor y pregunta si el motor quedó con la procedencia. No le importa cómo se escribió la
 // llamada, porque no mira el fuente.
+//
+// MECANIZADA. El sabotaje es sacar la llamada del constructor, que es el defecto original. El
+// arreglo es renombrar la variable del type-assert: un cambio que no toca comportamiento y que
+// la guarda tiene que aceptar, porque lo que mide es que se ESTAMPE, no cómo se llama el local.
+// Medidas las dos el 2026-09-12.
+// Sabotaje que la pone roja: sacar la llamada a `estamparProcedenciaDelVector` del constructor.
+// arnes: archivo="internal/mcp/server.go"
+// arnes: de="\testamparProcedenciaDelVector(engine, embedder)\n"
+// arnes: a=""
+// arnes: arreglo_de="\tif eng, ok := engine.(interface{ SetVectorModelID(string) }); ok {\n\t\teng.SetVectorModelID(embedder.Name())\n"
+// arnes: arreglo_a="\tif motor, ok := engine.(interface{ SetVectorModelID(string) }); ok {\n\t\tmotor.SetVectorModelID(embedder.Name())\n"
 func TestElConstructorEstampaLaProcedenciaVengaLaLlamadaComoVenga(t *testing.T) {
 	// EL CONTROL, PRIMERO: un embebedor Noop NO debe estampar nada. Sin esto, una implementación
 	// que estampe SIEMPRE —incluso la cadena vacía del Noop— pasaría la prueba de abajo y estaría
