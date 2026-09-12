@@ -337,10 +337,18 @@ func parseStaticTable(raw []byte) ([]float32, int, int, error) {
 		return nil, 0, 0, fmt.Errorf("safetensors demasiado corto")
 	}
 	hlen := binary.LittleEndian.Uint64(raw[:8])
-	hdrEnd := 8 + int(hlen)
-	if hlen == 0 || hdrEnd > len(raw) {
-		return nil, 0, 0, fmt.Errorf("header safetensors inválido")
+	// LA COTA SE COMPARA EN uint64, ANTES DE CONVERTIR. Con `hdrEnd := 8 + int(hlen)` un `hlen` de
+	// 2^63 o más se da VUELTA al convertir —`int(0xFFFFFFFFFFFFFFFF)` es -1—, `hdrEnd` queda
+	// negativo o chico, la comparación contra `len(raw)` lo deja pasar, y el `raw[8:hdrEnd]` de
+	// abajo larga `slice bounds out of range`. Medido el 2026-09-12 con tres valores.
+	//
+	// El largo declarado es un número que viene del ARCHIVO, o sea de afuera: un safetensors
+	// corrupto o fabricado lo elige. Esto es la misma amenaza que `topeDeHeader` cubre en el
+	// camino de streaming, y acá no estaba cubierta.
+	if hlen == 0 || hlen > uint64(len(raw)-8) {
+		return nil, 0, 0, fmt.Errorf("header safetensors inválido: declara %d bytes y el archivo tiene %d", hlen, len(raw))
 	}
+	hdrEnd := 8 + int(hlen)
 	var hdr map[string]json.RawMessage
 	if err := json.Unmarshal(raw[8:hdrEnd], &hdr); err != nil {
 		return nil, 0, 0, fmt.Errorf("header JSON: %w", err)
