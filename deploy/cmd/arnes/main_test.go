@@ -217,6 +217,12 @@ func TestElOverlayNoPuedeTocarLoQueGoNoCompila(t *testing.T) {
 		// No alcanza con que la ruta CONTENGA «.go»: lo que decide es cómo TERMINA.
 		{"deploy/go.mod", false},
 		{"internal/algo.golden", false},
+		// EL CASO QUE DESARMA LA RAZÓN FÁCIL. `assets/dashboard.html` ENTRA AL BUILD: viaja adentro
+		// del binario por `//go:embed` en cmd/musubi/dashboard.go:24. Y el overlay igual no lo toca,
+		// medido con control en el mismo overlay.json. Si la regla fuera «entra al build» esta fila
+		// diría `true` y estaría mal; la regla es «el compilador lo lee como FUENTE».
+		// El árbol declara un sabotaje sobre este archivo en cmd/musubi/flota_test.go:244.
+		{"cmd/musubi/assets/dashboard.html", false},
 	}
 	for _, c := range casos {
 		if got := elOverlayPuedeTocar(c.archivo); got != c.puede {

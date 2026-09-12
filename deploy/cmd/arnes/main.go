@@ -456,13 +456,27 @@ func imprimirCenso(c arnes.Censo, detalle bool) {
 
 // elOverlayPuedeTocar dice si `go test -overlay` puede siquiera aplicar un sabotaje a este archivo.
 //
-// `-overlay` reemplaza archivos PARA EL BUILD DE GO. Si el blanco no entra al build —un `.yml`, un
-// `.sh`, un `.conf` que la prueba lee en runtime— la entrada del overlay es inerte: el sabotaje no
-// se aplica NUNCA y la prueba pasa. El verde queda garantizado sin importar si la guarda es buena.
+// LA REGLA ES «EL COMPILADOR LO LEE COMO FUENTE», Y NO «ENTRA AL BUILD», y la diferencia importa.
+// La primera redacción de este comentario decía lo segundo: es cierta para los cinco casos que
+// motivaron la función —`.yml`, `.sh`, `.conf` leídos en runtime— pero es la razón equivocada, y
+// quien la lea frente a un archivo EMBEBIDO va a razonar al revés. Un `//go:embed` entra al build y
+// viaja adentro del binario, y el overlay TAMPOCO lo toca.
+//
+// Medido acá, con el control adentro del MISMO overlay.json —un `.go` y el `.txt` que ese `.go`
+// embebe— porque «el overlay no alcanza al embebido» y «mi overlay.json no se aplicó» se ven
+// idénticos sin control:
+//
+//	sin overlay : EMBEBIDO="SANO"  MARCA="MARCA-SANA"
+//	con overlay : EMBEBIDO="SANO"  MARCA="MARCA-SABOTEADA"   ← el .go cambió, el embebido no
+//
+// EL ÁRBOL TIENE UN CASO QUE CAE JUSTO AHÍ: `cmd/musubi/flota_test.go:244` declara «sacar el enlace
+// de dashboard.html», y `dashboard.html` es un `//go:embed`. Hoy está en prosa, así que ninguna de
+// las directivas corridas lo toca. El día que se mecanice, este arnés la mide bien —escribe al
+// disco— pero un refutador que verifique con `-overlay` va a ver VERDE, concluir «el sabotaje no
+// hace fallar nada» y RECHAZAR una mecanización buena.
 //
 // Vale una función con nombre y no un `HasSuffix` suelto porque su ausencia costó 5 falsos
-// positivos sobre 6 resultados en la primera corrida completa, y porque la condición es sutil: lo
-// que decide no es «es texto» ni «está en deploy/», es «¿el compilador de Go lo abre?».
+// positivos sobre 6 resultados en la primera corrida completa.
 func elOverlayPuedeTocar(archivo string) bool {
 	return strings.HasSuffix(archivo, ".go")
 }
