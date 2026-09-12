@@ -516,6 +516,25 @@ func TestElPinDelGuionDeRedespliegueEsElVerdadero(t *testing.T) {
 // aciertos mira hacia otro lado y se queda en verde. Acá cada línea de CÓDIGO que diga `install -m`
 // tiene que resolverse a un destino; una que no se pueda parsear es un ROJO que pide enseñarle la
 // forma nueva, no un silencio.
+// filaDerivada es una fila de GUIONES_DERIVADOS ya partida: el archivo del repo y su destino en el
+// servidor.
+type filaDerivada struct{ rel, destino string }
+
+// laTablaDeclaraElDestino contesta si ALGUNA fila declara EXACTAMENTE ese destino.
+//
+// Existe como función y no como expresión adentro del bucle porque la decisión que hay que poder
+// probar es «¿este destino está declarado?», y probarla sólo por el camino del instalador mide el
+// caso fácil: un destino que no se parece a ninguna fila. El caso que importa —uno que es PREFIJO
+// de una fila— no se alcanza sin fabricar un instalador, y acá sí.
+func laTablaDeclaraElDestino(filas []filaDerivada, destino string) bool {
+	for _, f := range filas {
+		if f.destino == destino {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCadaGuionQueSeInstalaEnElServidorSeCompara(t *testing.T) {
 	verif, err := leerArchivoDeDespliegue(filepath.Join("..", "..", "deploy", "verificar-despliegue.sh"))
 	if err != nil {
@@ -535,7 +554,6 @@ func TestCadaGuionQueSeInstalaEnElServidorSeCompara(t *testing.T) {
 
 	// La tabla, parseada una vez: se usa para tres cosas distintas (derivar los instaladores,
 	// preguntar membresía, y comprobar que cada archivo declarado exista).
-	type filaDerivada struct{ rel, destino string }
 	var filas []filaDerivada
 	for _, fila := range strings.Split(tabla[1], "\n") {
 		fila = strings.TrimSpace(fila)
@@ -684,9 +702,18 @@ func TestCadaGuionQueSeInstalaEnElServidorSeCompara(t *testing.T) {
 				continue
 			}
 
-			// Se busca `|<ruta>` y dentro de `tabla[1]`: así es como la tabla la escribe —después del
-			// archivo del repo— y ahí es donde la ruta DECIDE que se compare algo.
-			if !strings.Contains(tabla[1], "|"+destino) {
+			// LA PERTENENCIA SE PREGUNTA CONTRA LAS FILAS PARSEADAS, NO CONTRA EL TEXTO DE LA TABLA.
+			// La versión anterior preguntaba `strings.Contains(tabla[1], "|"+destino)`, y un
+			// `Contains` sobre `|<ruta>` acepta cualquier destino que sea PREFIJO de una fila.
+			// Medido el 2026-09-12: un instalador que deposite en `/usr/local/sbin/redesplegar-cerebro`
+			// —el mismo guion sin la extensión, que es un archivo distinto y que nadie compara— pasaba
+			// en VERDE, porque la tabla trae `|/usr/local/sbin/redesplegar-cerebro.sh`. Y el contador
+			// lo daba por bueno: `comprobados` subía igual.
+			//
+			// Es la cara «EL PREFIJO» del defecto del 2026-09-05, en la guarda escrita para cerrarlo.
+			// La tabla ya estaba parseada quince líneas más arriba —`filas`, con su `destino`— y aun
+			// así la pregunta se hizo sobre el texto. Tener la estructura no alcanza: hay que usarla.
+			if !laTablaDeclaraElDestino(filas, destino) {
 				t.Errorf("`%s` instala %s (línea %d) y `verificar-despliegue.sh` NO lo compara contra el "+
 					"repo.\nEs A111 otra vez con otro archivo: un guion que llega al servidor y que nada "+
 					"cruza contra su fuente se queda viejo en silencio, y no hay daemon que lo relea —el "+
@@ -1142,4 +1169,57 @@ func esCopiaEntreRutasDelSistema(codigo string, prefijoDe map[string]string) boo
 		}
 	}
 	return false
+}
+
+// TestLaPertenenciaALaTablaNoSeSatisfaceConUnPrefijo — el control de `laTablaDeclaraElDestino`, y
+// está escrito para medir LA DIFERENCIA con la pregunta anterior.
+//
+// La versión anterior era `strings.Contains(tabla, "|"+destino)`. Cada subcaso afirma las DOS
+// cosas —qué contestaba aquélla y qué contesta ésta— porque afirmar sólo la segunda no mostraría
+// cuál era el instrumento ciego. Los casos de prefijo no son inventados: salen de la tabla real.
+func TestLaPertenenciaALaTablaNoSeSatisfaceConUnPrefijo(t *testing.T) {
+	filas := []filaDerivada{
+		{rel: "deploy/musubi-backup.sh", destino: "/usr/local/bin/musubi-backup"},
+		{rel: "deploy/redesplegar-cerebro.sh", destino: "/usr/local/sbin/redesplegar-cerebro.sh"},
+	}
+	// El texto que veía la pregunta vieja, derivado de las mismas filas y no escrito a mano.
+	var texto strings.Builder
+	for i, f := range filas {
+		if i > 0 {
+			texto.WriteString("\n")
+		}
+		texto.WriteString(f.rel + "|" + f.destino)
+	}
+
+	casos := []struct {
+		nombre    string
+		destino   string
+		declarado bool
+	}{
+		{"declarado tal cual", "/usr/local/bin/musubi-backup", true},
+		{"declarado tal cual, el otro", "/usr/local/sbin/redesplegar-cerebro.sh", true},
+		{"PREFIJO: el mismo guion sin la extensión", "/usr/local/sbin/redesplegar-cerebro", false},
+		{"PREFIJO: el binario recortado", "/usr/local/bin/musubi-back", false},
+		{"PREFIJO: hasta el directorio", "/usr/local/bin/", false},
+		{"ajeno", "/usr/local/bin/musubi-nuevo", false},
+	}
+
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			if got := laTablaDeclaraElDestino(filas, c.destino); got != c.declarado {
+				t.Errorf("laTablaDeclaraElDestino(%q) = %v y tendría que ser %v", c.destino, got, c.declarado)
+			}
+
+			// Y LO QUE HACÍA LA PREGUNTA VIEJA. Para los tres prefijos contesta que SÍ, que es el
+			// defecto: un archivo distinto, que nada cruza contra el repo, contado como comparado.
+			viejo := strings.Contains(texto.String(), "|"+c.destino)
+			if !c.declarado && !viejo && strings.HasPrefix(c.nombre, "PREFIJO") {
+				t.Fatalf("este subcaso ya no sirve de contraste: `Contains` también dice que no para %q, "+
+					"así que no demuestra la ceguera que motivó el cambio", c.destino)
+			}
+			if c.declarado && !viejo {
+				t.Errorf("regresión al revés: %q está declarado y la pregunta vieja decía que no", c.destino)
+			}
+		})
+	}
 }
