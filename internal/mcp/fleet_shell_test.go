@@ -49,6 +49,9 @@ func conShell(proyecto string) *Principal {
 // a ser decoración en la que alguien confía.
 //
 // Sabotaje que la hace fallar: cambiar fleet.CapShell por fleet.CapExec en toolFleetShell.
+// arnes: archivo="internal/mcp/methods_shell.go"
+// arnes: de="!existe || !PuedeSobreDevice(p, d, fleet.CapShell)"
+// arnes: a="!existe || !PuedeSobreDevice(p, d, fleet.CapExec)"
 func TestExecNoOtorgaShellNiSiquieraConAccesoTotal(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConShell(t, s, "casa", "nas")
@@ -96,6 +99,9 @@ func TestUnaAllowlistDeUnComandoNoSeSalteaPidiendoUnaShell(t *testing.T) {
 // prometer al dar de alta.
 //
 // Sabotaje que la hace fallar: agregar CapShell a TierMovil.
+// arnes: archivo="internal/fleet/device.go"
+// arnes: de="\tTierMovil:     {CapMetrics, CapScreen, CapScreenView},"
+// arnes: a="\tTierMovil:     {CapMetrics, CapScreen, CapScreenView, CapShell},"
 func TestTierCNoAdmiteShellYElAltaLoRechaza(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	_, e := call(t, s, "musubi_fleet_enroll", map[string]any{
