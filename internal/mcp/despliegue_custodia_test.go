@@ -535,6 +535,52 @@ func laTablaDeclaraElDestino(filas []filaDerivada, destino string) bool {
 	return false
 }
 
+// asignacionDeRuta reconoce una asignación de shell a una ruta absoluta, en las formas que
+// realmente se escriben: con `readonly`/`export`/`declare -r` adelante, indentada, y con comillas
+// dobles, simples o ninguna.
+//
+// POR QUÉ NO ES «LA FORMA N+1». La versión anterior era `(?m)^([A-Z_]+)="(/[^"]*)"` —columna 0,
+// mayúsculas, comillas dobles— y medido el 2026-09-12 dejaba pasar CUATRO formas: `readonly X=`,
+// `export X=`, la indentada y la de comillas simples. Con cualquiera de ellas, un
+// `cp -a "$AQUI/x" "$DESTINO"` que deposita en /usr/local/bin se descontaba como «staging a
+// temporales» y pasaba en VERDE.
+//
+// Enumerar formas de DEPOSITAR no converge —eso ya lo dice el `verbo` de más abajo—, pero esto no
+// es eso: una asignación de shell es UNA producción de una gramática chica y cerrada, y leerla
+// entera sí converge. La diferencia importa: lo primero es adivinar qué va a escribir alguien; lo
+// segundo es parsear lo que el lenguaje permite.
+var asignacionDeRuta = regexp.MustCompile(`(?m)^[ \t]*(?:readonly[ \t]+|export[ \t]+|declare[ \t]+-[a-zA-Z]+[ \t]+)*([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^ \t\r\n"'#]+))[ \t]*(?:#.*)?$`)
+
+// rutasAsignadasEn devuelve las variables del archivo asignadas a una ruta ABSOLUTA.
+//
+// `soloLiterales` elige entre las dos preguntas que este archivo hace, que son distintas y no se
+// deben mezclar:
+//   - true  → «¿CUÁL es exactamente la ruta?». Una `$VAR` adentro del valor lo vuelve irresoluble,
+//     así que se descarta y arriba eso es un rojo.
+//   - false → «¿esto cuelga de una raíz del sistema?». Ahí alcanza el PREFIJO:
+//     `BIN_VIEJO="/usr/local/bin/musubi.antes-de-$SELLO"` no se resuelve y sin embargo se sabe
+//     dónde vive.
+func rutasAsignadasEn(crudo []byte, soloLiterales bool) map[string]string {
+	fuera := map[string]string{}
+	for _, m := range asignacionDeRuta.FindAllSubmatch(crudo, -1) {
+		valor := ""
+		for _, g := range m[2:] {
+			if len(g) > 0 {
+				valor = string(g)
+				break
+			}
+		}
+		if !strings.HasPrefix(valor, "/") {
+			continue
+		}
+		if soloLiterales && strings.Contains(valor, "$") {
+			continue
+		}
+		fuera[string(m[1])] = valor
+	}
+	return fuera
+}
+
 func TestCadaGuionQueSeInstalaEnElServidorSeCompara(t *testing.T) {
 	verif, err := leerArchivoDeDespliegue(filepath.Join("..", "..", "deploy", "verificar-despliegue.sh"))
 	if err != nil {
@@ -624,10 +670,7 @@ func TestCadaGuionQueSeInstalaEnElServidorSeCompara(t *testing.T) {
 			continue
 		}
 		// Las asignaciones literales DE ESE ARCHIVO, para resolver "$BACKUP_BIN" → la ruta.
-		rutaDe := map[string]string{}
-		for _, m := range regexp.MustCompile(`(?m)^([A-Z_]+)="(/[^"$]*)"`).FindAllSubmatch(crudo, -1) {
-			rutaDe[string(m[1])] = string(m[2])
-		}
+		rutaDe := rutasAsignadasEn(crudo, true)
 
 		vistos := 0
 		for n, linea := range strings.Split(string(crudo), "\n") {
@@ -768,19 +811,17 @@ func TestCadaGuionQueSeInstalaEnElServidorSeCompara(t *testing.T) {
 		if err != nil {
 			continue // ya se reportó arriba
 		}
-		rutaDe := map[string]string{}
-		for _, m := range regexp.MustCompile(`(?m)^([A-Z_]+)="(/[^"$]*)"`).FindAllSubmatch(crudo, -1) {
-			rutaDe[string(m[1])] = string(m[2])
-		}
-		// SEGUNDO MAPA, A PROPÓSITO MÁS LAXO QUE EL DE ARRIBA. Para preguntar «¿esto cuelga de una
+		// EL MAPA DE ESTA RED ES UNO SOLO, Y ES EL LAXO. Antes se construía acá también el mapa
+		// estricto y NO SE LEÍA NUNCA: el `rutaDe[k] = v` de adentro del bucle alcanza para que Go
+		// lo cuente como usado, así que el compilador no decía nada y el código se leía como si
+		// esta red resolviera variables exactas. No las resuelve, y no las necesita.
+		//
+		// EL MAPA LAXO, A PROPÓSITO MÁS ANCHO QUE EL DE ARRIBA. Para preguntar «¿esto cuelga de una
 		// raíz del sistema?» alcanza con el PREFIJO: `BIN_VIEJO="/usr/local/bin/musubi.antes-de-$SELLO"`
 		// no se puede resolver a una ruta exacta —lleva una variable adentro— pero sí se sabe que
 		// vive en /usr/local. El mapa estricto de arriba NO se afloja: allá una `$VAR` sin resolver
 		// tiene que seguir siendo un rojo, porque allá la pregunta es CUÁL es la ruta.
-		prefijoDe := map[string]string{}
-		for _, m := range regexp.MustCompile(`(?m)^([A-Z_]+)="(/[^"]*)"`).FindAllSubmatch(crudo, -1) {
-			prefijoDe[string(m[1])] = string(m[2])
-		}
+		prefijoDe := rutasAsignadasEn(crudo, false)
 		for n, linea := range strings.Split(string(crudo), "\n") {
 			codigo := strings.TrimSpace(linea)
 			if strings.HasPrefix(codigo, "#") || codigo == "" {
@@ -1221,5 +1262,82 @@ func TestLaPertenenciaALaTablaNoSeSatisfaceConUnPrefijo(t *testing.T) {
 				t.Errorf("regresión al revés: %q está declarado y la pregunta vieja decía que no", c.destino)
 			}
 		})
+	}
+}
+
+// TestElLectorDeAsignacionesNoSeQuedaEnLaColumna0 — el control de `rutasAsignadasEn`.
+//
+// LO QUE SE MIDIÓ. Hasta el 2026-09-12 el lector era `(?m)^([A-Z_]+)="(/[^"]*)"`, y con un
+// `cp -a "$AQUI/x.sh" "$DESTINO"` agregado a `install-musubi-brain.sh` la guarda entera decía:
+//
+//	DESTINO="/usr/local/bin/colado"            ROJO   ← la única forma que veía
+//	readonly DESTINO="/usr/local/bin/colado"   VERDE
+//	export DESTINO="/usr/local/bin/colado"     VERDE
+//	  DESTINO="/usr/local/bin/colado"          VERDE  (indentada)
+//	DESTINO='/usr/local/bin/colado'            VERDE  (comillas simples)
+//
+// Los cuatro verdes se descontaban como «staging a temporales: no llega al servidor», o sea que un
+// depósito en /usr/local/bin pasaba SIN que nadie lo cruzara contra el repo. Falla ABIERTA, que es
+// la peor dirección para una guarda de despliegue.
+//
+// La tabla lleva las dos direcciones: las formas que TIENE que leer y las que NO son asignaciones
+// de ruta. Sin las segundas, «leer más formas» y «leer cualquier cosa» se ven idénticos.
+func TestElLectorDeAsignacionesNoSeQuedaEnLaColumna0(t *testing.T) {
+	casos := []struct {
+		nombre string
+		linea  string
+		quiero string // "" = no es una asignación de ruta absoluta
+	}{
+		{"columna 0, comillas dobles", `DESTINO="/usr/local/bin/x"`, "/usr/local/bin/x"},
+		{"readonly", `readonly DESTINO="/usr/local/bin/x"`, "/usr/local/bin/x"},
+		{"export", `export DESTINO="/usr/local/bin/x"`, "/usr/local/bin/x"},
+		{"indentada con espacios", `    DESTINO="/usr/local/bin/x"`, "/usr/local/bin/x"},
+		{"indentada con tab", "\tDESTINO=\"/usr/local/bin/x\"", "/usr/local/bin/x"},
+		{"comillas simples", `DESTINO='/usr/local/bin/x'`, "/usr/local/bin/x"},
+		{"sin comillas", `DESTINO=/usr/local/bin/x`, "/usr/local/bin/x"},
+		{"declare -r", `declare -r DESTINO="/usr/local/bin/x"`, "/usr/local/bin/x"},
+		{"readonly indentado", `  readonly DESTINO="/usr/local/bin/x"`, "/usr/local/bin/x"},
+		{"minúsculas", `destino="/usr/local/bin/x"`, "/usr/local/bin/x"},
+		{"con comentario al final", `DESTINO="/usr/local/bin/x"  # el binario`, "/usr/local/bin/x"},
+
+		// LA OTRA DIRECCIÓN: cosas que se PARECEN y no son una asignación de ruta.
+		{"ruta relativa", `DESTINO="etc/musubi"`, ""},
+		{"comentado", `# DESTINO="/usr/local/bin/x"`, ""},
+		{"una bandera con =", `musubi --config=/etc/musubi.toml`, ""},
+		{"una comparación", `if [ "$X" = /usr/local/bin ]; then`, ""},
+		{"asignación a comando", `DESTINO="$(which musubi)"`, ""},
+	}
+
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			got := rutasAsignadasEn([]byte(c.linea+"\n"), false)
+			if c.quiero == "" {
+				if len(got) != 0 {
+					t.Errorf("%q no es una asignación de ruta y el lector devolvió %v", c.linea, got)
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("%q dio %d asignaciones y esperaba 1: %v", c.linea, len(got), got)
+			}
+			for _, v := range got {
+				if v != c.quiero {
+					t.Errorf("%q → %q y esperaba %q", c.linea, v, c.quiero)
+				}
+			}
+		})
+	}
+
+	// `soloLiterales` es la diferencia entre las DOS preguntas del archivo, y se prueba acá porque
+	// mezclarlas es el modo de falla: la red estricta pregunta CUÁL ruta es —y una `$VAR` adentro
+	// del valor la vuelve irresoluble— mientras que la laxa sólo pregunta de qué raíz cuelga.
+	conVariable := []byte(`BIN_VIEJO="/usr/local/bin/musubi.antes-de-$SELLO"` + "\n")
+	if v := rutasAsignadasEn(conVariable, true); len(v) != 0 {
+		t.Errorf("con soloLiterales=true una ruta que lleva $VAR adentro se resolvió a %v, y no se "+
+			"puede saber cuál es: ahí arriba eso tiene que ser un rojo, no una respuesta inventada", v)
+	}
+	if v := rutasAsignadasEn(conVariable, false); len(v) != 1 {
+		t.Errorf("con soloLiterales=false la misma línea dio %v: el prefijo SÍ se conoce "+
+			"(/usr/local/bin) y descartarla apaga la única red que mira los `cp`", v)
 	}
 }
