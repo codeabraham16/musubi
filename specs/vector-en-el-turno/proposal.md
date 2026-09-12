@@ -123,8 +123,16 @@ holgada y 3356 ms con ella cargada.
 1. **El tokenizer primero** — caché binario del tokenizer ya construido. Es el 97 % del piso, y es
    el único de los tres que hoy no tiene camino conocido.
 2. **La identidad después** — muestreada, o cacheada en sidecar. Sin esto el paso 3 no rinde.
-3. **El mmap al final** — es el más vistoso y el que menos decide. Necesita además una mitad
-   Windows (`CreateFileMapping`), porque `syscall.Mmap` no existe ahí.
+3. **El mmap al final en el orden, pero no es el que menos importa** — ver «La alternativa del
+   daemon» más abajo: es el único de los tres que resuelve el caso de **N procesos**, que es el que
+   esta máquina tiene de verdad (cinco daemons vivos). Necesita además una mitad Windows
+   (`CreateFileMapping`), porque `syscall.Mmap` no existe ahí.
+
+**Y los dos se juntan mejor de lo que parece:** si el caché binario del tokenizer (paso 1) se
+escribe en un formato **mapeable**, deja de ser heap anónimo y pasa a compartirse igual que la
+tabla. Hoy el tokenizer son ~178 MB de mapa por proceso —×5 daemons, ~890 MB que no se comparten
+con nadie—. Con los dos artefactos respaldados por archivo, N procesos cuestan casi lo mismo que
+uno, y ése es el único diseño que escala con la forma real de esta máquina.
 
 **Dos precondiciones del atajo, que `unsafe.Slice` no te pregunta.** Aliasar el blob como
 `[]float32` en vez de convertirlo elemento por elemento es de donde salen los 534 ms, y vale sólo
@@ -140,11 +148,30 @@ si:
 La implementación tiene que **chequear las dos y caer al camino de copia** si alguna no da. Las dos
 están asertadas en `arranque_mmap_unix_test.go`.
 
-**Y la alternativa que puede ganarle a las tres:** pedirle el vector a un proceso que **ya** tenga la
-tabla cargada. Cuesta un ida y vuelta por socket —milisegundos, cero memoria— contra los 1013 ms del
-mejor caso local. No está medida acá y no debería empezarse nada de lo de arriba sin medirla: si hay
-un daemon local disponible, todo este documento describe el camino largo a un lugar al que se llega
-por el corto.
+### La alternativa del daemon, mirada de cerca — y no gana tan fácil
+
+«Pedirle el vector a un proceso que **ya** tenga la tabla cargada» cuesta un ida y vuelta por socket
+—milisegundos, cero memoria— contra los 1013 ms del mejor caso local. Suena a que gana solo. Al
+mirar la máquina, **no**:
+
+**Hoy no hay tal proceso.** Hay **cinco `musubi daemon` vivos** (uno por sesión de editor), y sus RSS
+son **6, 6, 11, 6 y 8 MB**: ninguno tiene la tabla. Con la tabla cargada cada uno pesaría ~1,3 GB.
+
+Y ahí está el problema de forma: **la alternativa no es «un» daemon, es N**. Darle la tabla a cada
+uno son **5 × 1,3 GB = 6,5 GB** en una máquina de 7,6 GB que ya tiene 8,5 GB en swap. El camino
+«corto» resulta el más caro de todos.
+
+Lo que **sí** lo arregla es justamente la propiedad del mmap que no se ve en los milisegundos: una
+tabla mapeada es memoria **respaldada por archivo**, así que los cinco procesos comparten **las
+mismas** 488 MB de page cache — una copia, descartable, sin competir por swap. Con `ReadFile` cada
+proceso paga su propia copia anónima; con mmap, N procesos cuestan casi lo mismo que uno.
+
+**O sea que el hallazgo se da vuelta:** el mmap no era el paso menos importante de los tres, es el
+único que resuelve el caso de N procesos, que es el que esta máquina tiene de verdad.
+
+Queda todavía en pie una variante del daemon: **un único proceso dedicado** que tenga la tabla y le
+sirva vectores a los cinco. Es defendible, y cuesta infraestructura nueva —ciclo de vida, socket,
+degradado cuando no está— contra la nada que cuesta mapear un archivo. **Eso sí sigue sin medirse.**
 
 ## Lo que hay en el repo por esto
 

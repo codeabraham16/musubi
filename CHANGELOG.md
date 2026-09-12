@@ -34,6 +34,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   porque la tabla entra **dos veces** (los bytes crudos **más** la copia a `[]float32`). La
   ganancia que importa no es 3298 ms → 1013 ms, es **1325 MB → 188 MB**.
 
+  **Y la alternativa «pedirle el vector al daemon» no gana tan fácil:** hoy no hay tal proceso —hay
+  **cinco `musubi daemon` vivos**, uno por sesión de editor, con RSS de 6 a 11 MB, o sea ninguno con
+  la tabla—. Darle la tabla a cada uno serían **5 × 1,3 GB**. Lo que arregla eso es justamente la
+  propiedad del mmap que no se ve en los milisegundos: una tabla mapeada está **respaldada por
+  archivo**, así que los cinco comparten **las mismas** 488 MB. **El mmap no es el paso menos
+  importante de los tres: es el único que resuelve el caso de N procesos**, que es el que la máquina
+  tiene de verdad.
+
   Queda en el repo el instrumento (`internal/embedding/arranque_real_test.go` y
   `arranque_mmap_unix_test.go`, los dos se saltean sin `MUSUBI_POTION_DIR`) y la propuesta con el
   orden recomendado en `specs/vector-en-el-turno/proposal.md`. Ninguna prueba aserta tiempos —los
