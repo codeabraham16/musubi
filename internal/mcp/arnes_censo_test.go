@@ -13,16 +13,28 @@ import (
 // LA DEUDA DE SABOTAJES SE MIDE EN CI, Y NO PUEDE CRECER EN SILENCIO
 //
 // El árbol promete un sabotaje por guarda y lo escribe en prosa. Medido el 2026-09-12 sobre
-// `git ls-files`: **774 anclas en 163 archivos de prueba**, y el único veredicto que existió alguna
-// vez fue a mano —A107 y A120 cubrieron 38, el 4,9 %— con **6 de esos 38 que NO rompían lo que
-// decían romper**. O sea que la tasa medida de sabotajes que mienten es del 16 %, aplicada a menos
-// de la veinteava parte del árbol.
+// `git ls-files` en la base 00728f1, y cada número con su definición al lado porque son preguntas
+// distintas:
 //
-// EL CABO A123 LLEVA LA CUENTA Y TAMBIÉN ENUMERA UNA FORMA: cuenta la frase canónica «Sabotaje que
-// la hace fallar» y por eso declara 396 en 93 archivos. El árbol la escribe de 30 formas —incluidas
-// 42 anclas EN MAYÚSCULAS que ningún grep del registro ve— así que la deuda real es **1,95× la
-// registrada**, y hay **70 archivos de prueba que el registro no ve enteros**. Es el defecto
-// dominante del repo aplicado a la contabilidad de su propia deuda.
+//	774 anclas en 163 archivos  ← promesas declaradas en un comentario (go/ast, 30 formas)
+//	396 anclas en  93 archivos  ← las que usan la frase canónica: lo que cuenta el cabo A123
+//	3.219 funciones Test        ← el denominador: las 774 son el 24 %
+//	 38 con veredicto alguna vez (A107 y A120, a mano) — el 4,9 % de 774
+//	  6 de esas 38 NO rompían lo que decían romper — el 15,8 % de lo auditado MIENTE
+//
+// A123 NO CUENTA MAL, CUENTA INCOMPLETO, y la distinción no es cortesía: su 396/93 se reprodujo al
+// dígito. Lo que pasa es que enumera UNA frase y el árbol escribe la promesa de 30 formas, así que
+// quedan 378 anclas afuera y 70 archivos de prueba en los que NINGUNA ancla usa la canónica. De
+// esas formas, 39 anclas llevan el encabezado en MAYÚSCULAS y sólo 3 son la frase canónica: la
+// dominante en mayúsculas es `SABOTAJE:`, con 30.
+//
+// Es el defecto dominante del repo —una guarda que enumera formas no converge— aplicado a la
+// contabilidad de su propia deuda.
+//
+// Y LO QUE ESTE CENSO NO VE, que lo levantó otra sesión: hay guardas saboteadas de verdad cuya
+// evidencia vive en el MENSAJE DEL COMMIT y no en el fuente (`normalizacion_fijada_test.go` y
+// `carga_streaming_test.go`: cero menciones de la palabra, las dos verificadas). Un sabotaje
+// declarado en un commit no se vuelve a correr: se cumplió una vez y después no es auditable.
 //
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // LO QUE ESTA GUARDA EXIGE, Y POR QUÉ CADA COSA
@@ -128,7 +140,12 @@ func TestLaDeudaDeSabotajesNoCreceYElCorpusNoSePodre(t *testing.T) {
 			pendientes, anclasEnProsaAlDia, anclasEnProsaAlDia-pendientes, pendientes)
 	}
 
-	t.Logf("%d archivos · %d anclas · %d mecanizadas · %d exentas · %d en prosa (techo %d) · cobertura %.1f %%",
-		c.Archivos, len(c.Anclas), len(c.Mecanizadas()), len(c.Exentas()), pendientes, anclasEnProsaAlDia,
+	// EL LOG PUBLICA LAS DOS FRACCIONES, Y NO UNA. «Cobertura 1,4 %» sobre las anclas dice cuánto
+	// de lo DECLARADO es ejecutable; «774 de 3.219» dice cuánto del árbol declara algo. Publicar
+	// sólo la primera hace que 774 se lea como el universo, y es el 24 %.
+	t.Logf("%d archivos · %d anclas en %d pruebas de %d (%.0f %% del árbol declara) · %d mecanizadas · %d exentas · %d en prosa (techo %d) · ejecutable %.1f %% de lo declarado",
+		c.Archivos, len(c.Anclas), c.PruebasConAncla, c.FuncionesTest,
+		100*float64(c.PruebasConAncla)/float64(c.FuncionesTest),
+		len(c.Mecanizadas()), len(c.Exentas()), pendientes, anclasEnProsaAlDia,
 		100*float64(len(c.Mecanizadas()))/float64(len(c.Anclas)))
 }

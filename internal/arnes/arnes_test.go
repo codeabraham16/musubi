@@ -334,10 +334,11 @@ func TestElCensoPartaLasAnclasEnMecanizadaExentaOPendiente(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	anclas, quejas, sinUbicar, err := censarArchivo(dir, "algo_test.go")
+	r, err := censarArchivo(dir, "algo_test.go")
 	if err != nil {
 		t.Fatal(err)
 	}
+	anclas, quejas, sinUbicar := r.anclas, r.quejas, r.sinUbicar
 	if len(sinUbicar) != 0 {
 		t.Errorf("el lector no pudo colocar %d ancla/s que vio en el texto: %v", len(sinUbicar), sinUbicar)
 	}
@@ -346,6 +347,13 @@ func TestElCensoPartaLasAnclasEnMecanizadaExentaOPendiente(t *testing.T) {
 	}
 	if len(quejas) == 0 {
 		t.Error("la directiva `de=hola` (sin comillas) tenía que producir una queja")
+	}
+	// EL DENOMINADOR: cinco funciones Test en el fuente sintético, las cinco con ancla en su doc.
+	// Sin esto, el conteo que este censo publica —774 anclas sobre 3.219 pruebas— no tiene guarda,
+	// y es justo el número que otra sesión tuvo que corregirme.
+	if r.funcionesTest != 5 || r.pruebasConAncla != 5 {
+		t.Errorf("contó %d funciones Test y %d con ancla; el fuente tiene 5 y 5",
+			r.funcionesTest, r.pruebasConAncla)
 	}
 
 	// LA PRUEBA SE DERIVA DEL AST, no se escribe a mano: es lo que hace que mover una prueba no

@@ -2,35 +2,59 @@
 // EJECUTABLES.
 //
 // ═════════════════════════════════════════════════════════════════════════════════════════════
-// POR QUÉ EXISTE: EL ÁRBOL PROMETE 739 SABOTAJES Y NADIE PUEDE CORRERLOS
+// POR QUÉ EXISTE: EL ÁRBOL PROMETE 774 SABOTAJES Y NADIE PODÍA CORRERLOS
 //
 // Este repo pide que toda guarda venga con un sabotaje que la ponga en rojo, y la disciplina
 // rinde: `deploy/pruebas/sabotaje.sh` —que corre UNO— encontró seis guardas huecas el día que se
 // escribió. Pero el sabotaje se declara EN PROSA, y la prosa no se puede correr.
 //
-// LOS NÚMEROS, MEDIDOS EL 2026-09-12 SOBRE `git ls-files` (no sobre el disco: `.claude/` tiene
-// ~64k `.go` ajenos y ya nos mintió una vez):
+// LOS NÚMEROS, TODOS MEDIDOS EL 2026-09-12 SOBRE `git ls-files` EN LA BASE 00728f1, y cada uno con
+// su definición pegada, porque son respuestas a preguntas DISTINTAS y mezclarlas es cómo se llegó
+// al problema que este paquete viene a arreglar:
 //
-//	739 anclas de sabotaje en 152 archivos de prueba
-//	 38 con veredicto alguna vez (las auditorías a mano de A107 y A120) — el 5,1 %
-//	  6 de esos 38 NO rompían lo que decían romper — el 15,8 % de lo auditado MIENTE
+//	«¿cuántas promesas de sabotaje hay declaradas en un comentario?»
+//	    774 anclas en 163 archivos de prueba  ← lo que cuenta este lector, con go/ast, 30 formas
 //
-// Un «Sabotaje que la hace fallar:» sin correr es exactamente la clase de promesa que este repo
-// persigue: no falla, tranquiliza. Y la tasa medida de los que mienten no es cero.
+//	«¿cuántas usan la frase canónica "Sabotaje que la hace fallar"?»
+//	    396 anclas en  93 archivos            ← lo que cuenta el cabo A123, y cuenta BIEN
 //
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// Y EL REGISTRO DE LA DEUDA TAMBIÉN ENUMERA UNA FORMA
+//	«¿cuántas quedan afuera de esa frase?»
+//	    378 anclas, y 70 archivos de prueba en los que NINGUNA ancla la usa
 //
-// El cabo A123 lleva la cuenta con la frase canónica «Sabotaje que la hace fallar», y por eso
-// declara 396 anclas en 93 archivos. El árbol escribe la misma promesa de 29 formas distintas
-// —«Sabotaje:», «Sabotaje que la pone roja:», «Sabotaje visto rojo:», «Sabotajes MEDIDOS el
-// 2026-09-05:»…— así que hay 343 anclas más, y 59 archivos de prueba en los que NINGUNA ancla usa
-// la frase canónica: invisibles para el registro, enteros.
+//	«¿cuántas funciones Test hay en total?»
+//	    3.219                                 ← el denominador: las 774 son el 24 %
+//
+//	«¿cuántas tuvieron veredicto alguna vez?»
+//	    38, a mano, en las auditorías A107 y A120 — el 4,9 % de 774
+//	     6 de esas 38 NO rompían lo que decían romper — el 15,8 % de lo auditado MIENTE
+//
+// A123 NO CONTÓ MAL: contó INCOMPLETO, y la diferencia importa. Cuenta exactamente la frase que
+// enumera, y su 396/93 se reprodujo al dígito. Lo que pasa es que el árbol escribe la misma
+// promesa de 30 formas —«Sabotaje:», «Sabotaje que la pone roja:», «Sabotaje visto rojo:»,
+// «Sabotajes MEDIDOS el 2026-09-05:»…— y 39 anclas llevan el encabezado EN MAYÚSCULAS, de las
+// cuales sólo 3 usan la frase canónica: la forma dominante en mayúsculas es `SABOTAJE:`, con 30.
+// (Ese detalle está escrito así porque la primera versión de este comentario decía «42 en
+// mayúsculas» sin decir de qué conjunto, y quien fuera a reconstruirlo iba a grepear la canónica
+// en mayúsculas, encontrar 3, y concluir que este censo está inflado. Lo levantó otra sesión.)
 //
 // O sea que la contabilidad de la deuda tiene el defecto dominante del repo —una guarda que
-// enumera formas no converge— y subcontaba 1,9×. Por eso este lector NO enumera frases: pregunta
-// por el TOKEN `Sabotaje` al empezar una línea de comentario, con dos puntos en la misma línea.
-// Una forma nueva entra sola.
+// enumera formas no converge— aplicado a la cuenta de su propia deuda. Por eso este lector NO
+// enumera frases: pregunta por el TOKEN `Sabotaje` al empezar una línea de comentario, con dos
+// puntos en la misma línea. Una forma nueva entra sola.
+//
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// LO QUE ESTE CENSO NO VE, Y SE LO ENCONTRÓ OTRA SESIÓN
+//
+// Este lector cuenta anclas DECLARADAS EN EL FUENTE. Hay guardas que fueron saboteadas de verdad
+// —control en verde, sabotaje aplicado, la línea del rojo leída— y dejaron la evidencia en el
+// MENSAJE DEL COMMIT y en el cuerpo del PR, no en el código. Medidas: `normalizacion_fijada_test.go`
+// y `carga_streaming_test.go` tienen CERO menciones de la palabra, y están verificadas.
+//
+// Eso no es la forma 31 de escribir la frase: es otro archivo, y ensanchar el patrón no lo alcanza
+// nunca. Y tiene una consecuencia que hay que decir en voz alta: un sabotaje declarado en un
+// mensaje de commit NO SE VUELVE A CORRER. La disciplina se cumplió una vez y después no es
+// auditable — que es la diferencia entre una prueba y una anécdota. La salida no es ampliar el
+// censo al historial: es que la declaración viva donde el arnés la pueda ejecutar.
 //
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // LA DIRECTIVA VA EN EL COMENTARIO, PEGADA A LA PROSA, Y LA PARSEA EL SCANNER DE GO
@@ -43,12 +67,18 @@
 // trae comillas, backticks, barras y llaves. NO se inventa un esquema de escapado —cada esquema es
 // una superficie de bugs nueva—: la directiva se escribe con literales de string DE GO y la lee
 // `go/scanner`, o sea el mismo lexer que compila el archivo. Las comillas dobles, las crudas con
-// backtick y todos los escapes salen gratis y correctos.
+// backtick y todos los escapes salen gratis y correctos, y `strconv.Quote` al escribir es la
+// inversa exacta de `strconv.Unquote` al leer.
+//
+// CADA LÍNEA LLEVA SU PROPIO `arnes:`, y eso no es verbosidad: es no pelear con gofmt. La primera
+// versión usaba una línea y continuaciones indentadas debajo; gofmt las trata como bloque de
+// código, les mete una línea `//` en blanco antes, el parser cortaba ahí, y las ocho directivas
+// recién escritas quedaron con `de=""`.
 //
 //	// Sabotaje que la hace fallar: cambiar fleet.CapShell por fleet.CapExec en toolFleetShell.
 //	// arnes: archivo="internal/mcp/methods_shell.go"
-//	//        de="!existe || !PuedeSobreDevice(p, d, fleet.CapShell)"
-//	//        a="!existe || !PuedeSobreDevice(p, d, fleet.CapExec)"
+//	// arnes: de="!existe || !PuedeSobreDevice(p, d, fleet.CapShell)"
+//	// arnes: a="!existe || !PuedeSobreDevice(p, d, fleet.CapExec)"
 //
 // UNA SOLA OPERACIÓN, Y ES A PROPÓSITO: reemplazar un literal ÚNICO por otro. Las tres formas en
 // que el árbol describe sus sabotajes —«cambiar X por Y», «sacar el if …», «agregar Z»— son todas
@@ -138,6 +168,30 @@ type Censo struct {
 	Anclas   []Ancla
 	Archivos int // archivos de prueba mirados
 	Quejas   []string
+
+	// FuncionesTest y PruebasConAncla son EL DENOMINADOR HONESTO, y están acá porque otra sesión
+	// le encontró el agujero a la primera versión de este censo.
+	//
+	// Este lector cuenta ANCLAS DECLARADAS EN EL FUENTE. No cuenta guardas que fueron saboteadas
+	// de verdad y dejaron la evidencia en OTRO LADO: `musubi-62` midió cuatro guardas suyas
+	// —normalizacion_fijada, carga_streaming, red_del_parser, procedencia_del_vector— con control
+	// en verde, sabotaje aplicado y la línea del rojo leída, y la evidencia vive en el mensaje del
+	// commit y en el cuerpo del PR. En el fuente no hay ni una mención.
+	//
+	// Eso NO es la forma 31 de escribir la frase: es otro archivo, y ensanchar el patrón no lo
+	// alcanza nunca. Y tiene una consecuencia que hay que decir: un sabotaje declarado en un
+	// mensaje de commit NO SE VUELVE A CORRER. La disciplina se cumplió una vez y después no es
+	// auditable — que es exactamente la diferencia entre una prueba y una anécdota.
+	//
+	// Por eso el censo publica las dos cosas: cuántas anclas hay, y sobre cuántas funciones Test.
+	// Decir «774 promesas sin correr» sin el denominador se lee como si 774 fuera el universo, y
+	// es el 24 %.
+	//
+	// OJO CON LEER LA RESTA COMO DEUDA PURA: una prueba de tabla con quince subtests lleva UN
+	// ancla, un ancla puede cubrir tres pruebas hermanas, y un helper con nombre `Test…` no
+	// defiende ningún invariante. La resta es el techo de lo que falta, no su medida.
+	FuncionesTest   int
+	PruebasConAncla int
 
 	// SinUbicar son anclas que el lector vio en el texto crudo y NO pudo colocar en ningún
 	// comentario del AST. Tiene que ser cero: si no lo es, el lector tiene un agujero y hay que
@@ -246,16 +300,18 @@ func Censar(raiz string) (Censo, error) {
 	}
 	c := Censo{Raiz: raiz, Archivos: len(archivos), SinTrackear: pruebasSinTrackear(raiz)}
 	for _, rel := range archivos {
-		anclas, quejas, sinUbicar, err := censarArchivo(raiz, rel)
+		r, err := censarArchivo(raiz, rel)
 		if err != nil {
 			// UN ARCHIVO QUE NO SE PUEDE LEER ES UNA QUEJA, NO UN CERO. Saltearlo en silencio es
 			// exactamente «un cero que significa no sé».
 			c.Quejas = append(c.Quejas, fmt.Sprintf("%s: no pude parsearlo: %v", rel, err))
 			continue
 		}
-		c.Anclas = append(c.Anclas, anclas...)
-		c.Quejas = append(c.Quejas, quejas...)
-		c.SinUbicar = append(c.SinUbicar, sinUbicar...)
+		c.Anclas = append(c.Anclas, r.anclas...)
+		c.Quejas = append(c.Quejas, r.quejas...)
+		c.SinUbicar = append(c.SinUbicar, r.sinUbicar...)
+		c.FuncionesTest += r.funcionesTest
+		c.PruebasConAncla += r.pruebasConAncla
 	}
 	return c, nil
 }
@@ -267,27 +323,51 @@ func Censar(raiz string) (Censo, error) {
 // promete nada. Es la trampa simétrica de la que ya pagamos en la guarda del candado, donde el
 // modo 0 hacía que ningún comentario pudiera satisfacer la guarda: ahí el bug era ver comentarios,
 // acá es no verlos.
-func censarArchivo(raiz, rel string) ([]Ancla, []string, []string, error) {
+// loDeUnArchivo es lo que sale de censarArchivo. Es un struct y no seis valores de retorno
+// porque seis valores posicionales es cómo se termina pasando `quejas` donde iba `sinUbicar`.
+type loDeUnArchivo struct {
+	anclas          []Ancla
+	quejas          []string
+	sinUbicar       []string
+	funcionesTest   int
+	pruebasConAncla int
+}
+
+func censarArchivo(raiz, rel string) (loDeUnArchivo, error) {
 	ruta := filepath.Join(raiz, filepath.FromSlash(rel))
 	src, err := os.ReadFile(ruta)
 	if err != nil {
-		return nil, nil, nil, err
+		return loDeUnArchivo{}, err
 	}
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, ruta, src, parser.ParseComments)
 	if err != nil {
-		return nil, nil, nil, err
+		return loDeUnArchivo{}, err
 	}
 
 	// A qué prueba está pegado cada grupo de comentarios. El `Doc` de un FuncDecl es el grupo
 	// inmediatamente anterior, que es exactamente dónde el árbol escribe sus anclas.
 	dePrueba := map[*ast.CommentGroup]string{}
+	funcionesTest, conAncla := 0, 0
 	for _, d := range f.Decls {
 		fn, ok := d.(*ast.FuncDecl)
-		if !ok || fn.Doc == nil || fn.Name == nil {
+		if !ok || fn.Name == nil {
+			continue
+		}
+		// LA FUNCIÓN TIENE QUE SER UNA PRUEBA DE VERDAD: nombre `Test…` y receptor nil. Contar
+		// helpers con nombre `Test…` infla el denominador, y un denominador inflado hace que la
+		// cobertura se vea peor de lo que es — el error simétrico del que este arnés persigue.
+		esPrueba := fn.Recv == nil && strings.HasPrefix(fn.Name.Name, "Test")
+		if esPrueba {
+			funcionesTest++
+		}
+		if fn.Doc == nil {
 			continue
 		}
 		dePrueba[fn.Doc] = fn.Name.Name
+		if esPrueba && grupoTieneAncla(fset, fn.Doc) {
+			conAncla++
+		}
 	}
 
 	var anclas []Ancla
@@ -347,7 +427,24 @@ func censarArchivo(raiz, rel string) ([]Ancla, []string, []string, error) {
 		}
 		anterior = cuerpo
 	}
-	return anclas, quejas, sinUbicar, nil
+	return loDeUnArchivo{
+		anclas:          anclas,
+		quejas:          quejas,
+		sinUbicar:       sinUbicar,
+		funcionesTest:   funcionesTest,
+		pruebasConAncla: conAncla,
+	}, nil
+}
+
+// grupoTieneAncla dice si un comentario de doc promete al menos un sabotaje.
+func grupoTieneAncla(fset *token.FileSet, g *ast.CommentGroup) bool {
+	lineas := lineasDe(fset, g)
+	for i, l := range lineas {
+		if esAncla(l.texto, anteriorDe(lineas, i)) {
+			return true
+		}
+	}
+	return false
 }
 
 type lineaCom struct {
