@@ -34,6 +34,27 @@
 // salvedad es exactamente el defecto que el censo tuvo que corregir un piso más arriba: un número
 // sin su denominador declarado se lee como si fuera del universo.
 //
+// # Y TAMPOCO CORRE CON `-race`, QUE ES LA MISMA FORMA CON OTRO NOMBRE
+//
+// El job `test` del CI corre `go test -race` (ci.yml:85); este arnés corre pelado. La consecuencia
+// es una sola y hay que decirla en la dirección correcta, porque la inversa no es cierta:
+//
+//	· UNA GUARDA QUE SÓLO SE PONE ROJA BAJO `-race` NO SE PUEDE VERIFICAR ACÁ. Su sabotaje se
+//	  aplicaría, compilaría, y la prueba pasaría: el arnés lo contaría como guarda HUECA cuando en
+//	  realidad es el arnés el que no puede ver. Medido: el árbol declara exactamente UNA promesa de
+//	  ese tipo —`internal/mcp/shell_reaper_test.go:130`, «sacar la consulta a `s.shells.buscar` del
+//	  goroutine»— y hoy está EN PROSA, así que ninguna de las corridas la toca. Latente, no activa.
+//
+//	· LO QUE NO PUEDE PASAR ES QUE UN ROJO SE VUELVA VERDE. Agregar `-race` sólo puede agregar
+//	  fallas, nunca quitarlas, así que ningún veredicto ROJO de este arnés depende de correr sin él.
+//
+// Otra sesión levantó la sospecha hermana —que el aislamiento del `-run '^X$'` produzca un verde
+// que la suite completa no daría, porque una goroutine que le sobrevive a un test se cruza con el
+// siguiente— y se contesta con lo que ya está medido: el job `test` del CI pasa con `-race` sobre
+// la suite ENTERA, así que los controles en sano de estas 75 no son un artefacto del aislamiento.
+// De los 55 archivos con directiva, 4 largan goroutines (`time.AfterFunc` o `go func`) y los cuatro
+// están verdes en esa corrida completa.
+//
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // USO
 //
