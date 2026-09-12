@@ -125,8 +125,12 @@ func TestCompactRuns(t *testing.T) {
 		t.Fatalf("Compact(vacuum): %v", err)
 	}
 	// La base sigue usable tras VACUUM.
-	if n, err := e.CountObservations(); err != nil || n != 1 {
-		t.Errorf("tras Compact: count=%d err=%v, esperaba 1", n, err)
+	var n int
+	if err := e.db.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&n); err != nil {
+		t.Fatalf("tras Compact: contar observaciones: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("tras Compact: count=%d, esperaba 1", n)
 	}
 }
 
