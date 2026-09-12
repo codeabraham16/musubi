@@ -49,17 +49,12 @@ type Mantenimiento struct {
 	Creado    time.Time
 }
 
-// Activa dice si la ventana cubre ese instante. Una cancelada no cubre nada.
-//
-// El borde: `desde` INCLUSIVE y `hasta` EXCLUSIVO. La alternativa —los dos inclusive— hace que
-// dos ventanas consecutivas se solapen un instante, y el solapamiento de algo que silencia
-// alertas es la clase de detalle que nadie mira hasta que importa.
-func (m Mantenimiento) Activa(ahora time.Time) bool {
-	if m.Cancelada {
-		return false
-	}
-	return !ahora.Before(m.Desde) && ahora.Before(m.Hasta)
-}
+// Acá vivía `Activa`, una SEGUNDA copia de la comparación de bordes de la ventana. Nació sin
+// llamador —`git log -S` sólo la muestra en el commit que creó este archivo— y se separó de la que
+// sí corre: comparaba `time.Time` con nanosegundos contra un texto RFC3339 que el escritor trunca a
+// segundo, ~25% de discrepancia en la franja de ±1 s de cada borde. El borde vive ahora en un solo
+// lugar, el WHERE de DevicesEnMantenimiento (internal/memory/mantenimiento.go:80), que es al que le
+// hablan el auto-heal y los dos exportadores.
 
 // ValidarMantenimiento chequea lo que tiene que ser cierto ANTES de que la ventana exista.
 //

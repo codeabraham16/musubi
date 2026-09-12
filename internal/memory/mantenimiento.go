@@ -73,6 +73,14 @@ func (e *DbEngine) CancelarMantenimiento(deviceID, projectID, id string) (bool, 
 // exportador— preguntan lo mismo: «¿ésta está en ventana?». Traer las ventanas enteras los
 // obligaría a repetir la comparación de bordes, y dos copias de una comparación de bordes se
 // separan.
+//
+// ÉSTE ES EL ÚNICO LUGAR DONDE VIVE EL BORDE: `desde` INCLUSIVE y `hasta` EXCLUSIVO. La
+// alternativa —los dos inclusive— hace que dos ventanas consecutivas se solapen un instante, y el
+// solapamiento de algo que silencia alertas es la clase de detalle que nadie mira hasta que
+// importa. Hubo una segunda copia (`fleet.Mantenimiento.Activa`) y pasó exactamente lo que este
+// comentario anunciaba: se separó —comparaba nanosegundos contra este texto RFC3339, que el
+// escritor de arriba trunca a segundo— y encima se llevó la prueba de bordes, que la ejercitaba a
+// ella y dejaba este WHERE sin cubrir. Si hace falta preguntar «¿está activa?», se pregunta acá.
 func (e *DbEngine) DevicesEnMantenimiento(ahora time.Time) (map[string]bool, error) {
 	t := ahora.UTC().Format(time.RFC3339)
 	rows, err := e.db.Query(
