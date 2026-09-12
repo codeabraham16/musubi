@@ -249,18 +249,26 @@ type Censo struct {
 	SinTrackear []string
 }
 
-// Mecanizadas, Rotas, Exentas y Pendientes parten el censo en las CUATRO categorías que hay, y la
-// cuarta —rotas— existe porque la primera versión no la tenía: contaba como mecanizada una
-// directiva ilegible, o sea que la cobertura subía con sabotajes que nadie podía correr.
+// Mecanizadas es la primera de las CUATRO categorías en que se parte el censo —con Rotas, Exentas
+// y Pendientes— y son las anclas cuya directiva se pudo leer: las únicas que este arnés corre.
+//
+// La cuarta —Rotas— existe porque la primera versión no la tenía y contaba como mecanizada una
+// directiva ilegible: la cobertura subía con sabotajes que nadie podía correr.
 func (c Censo) Mecanizadas() []Ancla {
 	return c.filtrar(func(a Ancla) bool { return a.Directiva != nil && len(a.Quejas) == 0 })
 }
+
+// Rotas son las anclas que declararon una directiva y la directiva no se pudo leer.
 func (c Censo) Rotas() []Ancla {
 	return c.filtrar(func(a Ancla) bool { return a.Directiva != nil && len(a.Quejas) > 0 })
 }
+
+// Exentas son las anclas que declararon POR QUÉ su sabotaje no se puede mecanizar.
 func (c Censo) Exentas() []Ancla {
 	return c.filtrar(func(a Ancla) bool { return a.Directiva == nil && a.NoMecanizable != "" })
 }
+
+// Pendientes son las anclas que siguen sólo en prosa: la deuda que este arnés mide.
 func (c Censo) Pendientes() []Ancla {
 	return c.filtrar(func(a Ancla) bool {
 		return a.Directiva == nil && a.NoMecanizable == "" && len(a.Quejas) == 0
