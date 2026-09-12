@@ -50,22 +50,38 @@ func safetensorsDePrueba(t *testing.T, dir string, filas, dim int, partePorMedio
 // vale nada si produce OTROS vectores. Compara contra `os.ReadFile` + `parseStaticTable`, que es la
 // implementación que venía andando, y exige igualdad BIT A BIT.
 //
-// Los tamaños no son arbitrarios. `relleno` mueve el arranque del blob para cubrir los dos casos:
-// alineado a 4 (los trozos caen justo) y desalineado (un float32 queda PARTIDO entre dos trozos, y
-// hay que arrastrar los bytes sobrantes). El segundo es el único camino no trivial del conversor y
-// sin él esta guarda estaría mirando la mitad fácil.
+// LO QUE ESTA PRUEBA **NO** HACE, Y DECÍA QUE HACÍA. Hasta el 2026-09-12 su comentario afirmaba que
+// el caso desalineado dejaba «un float32 PARTIDO entre dos trozos». Es falso, y se midió poniendo un
+// `panic` en esa rama de `convertirTrozo` y corriendo el paquete ENTERO con la tabla real: 17,6 s,
+// VERDE. La rama no se alcanza NUNCA desde acá.
+//
+// El motivo: `trozoDeCarga` es 1 MiB y múltiplo de 4 a propósito, así que un trozo entero jamás
+// parte un float32; lo que sí puede partirlo es una LECTURA CORTA de `f.Read`, que con un
+// `*os.File` sobre un archivo local no pasa. Y los fixtures de acá son más chicos que un trozo, así
+// que el blob llega entero de una sola vez.
+//
+// El arrastre entre trozos lo custodia ahora `TestConvertirTrozoArrastraElFloat32Partido`, que va
+// DIRECTO al conversor con cortes que sí parten.
+//
+// Lo que esta prueba sí mide, y sigue valiendo: que el camino en streaming produzca los MISMOS
+// valores bit a bit que `os.ReadFile` + `parseStaticTable`, sobre blobs alineados y desalineados
+// en el archivo, en tamaños de una fila a varios trozos.
 func TestLaCargaEnStreamingDaLosMismosValoresQueLeerElArchivoEntero(t *testing.T) {
 	casos := []struct {
 		nombre        string
 		filas, dim    int
-		relleno       int
 		partePorMedio bool
 	}{
-		{"chico y alineado", 4, 8, 0, false},
-		{"chico y desalineado", 4, 8, 2, true},
-		{"varios trozos, alineado", 90000, 4, 0, false},
-		{"varios trozos, PARTIENDO un float32 entre trozos", 90000, 4, 2, true},
-		{"una sola fila", 1, 256, 1, true},
+		// Había un campo `relleno` acá con un valor por caso (0, 2, 0, 2, 1) y NADIE LO LEÍA: el
+		// cuerpo llama a `safetensorsDePrueba(t, dir, c.filas, c.dim, c.partePorMedio)` y el helper
+		// calcula su propio relleno. Un campo muerto en una tabla de casos se lee como cobertura
+		// —cinco números distintos parecen cinco configuraciones— y no configura nada. Encontrado
+		// por una auditoría adversaria el 2026-09-12.
+		{"chico y alineado", 4, 8, false},
+		{"chico y desalineado", 4, 8, true},
+		{"varios trozos, alineado", 90000, 4, false},
+		{"varios trozos, blob desalineado en el archivo", 90000, 4, true},
+		{"una sola fila", 1, 256, true},
 	}
 	for _, c := range casos {
 		t.Run(c.nombre, func(t *testing.T) {
@@ -82,9 +98,15 @@ func TestLaCargaEnStreamingDaLosMismosValoresQueLeerElArchivoEntero(t *testing.T
 				t.Fatalf("el camino de referencia no pudo leer el fixture: %v", err)
 			}
 
-			// CONTROL DE QUE EL FIXTURE HACE LO QUE DICE: que el blob arranque (des)alineado
-			// como el caso pretende. Sin esto, un cambio en el header dejaría todos los casos
-			// cayendo en la rama fácil y la guarda seguiría verde sin mirar lo que dice mirar.
+			// CONTROL DE QUE EL FIXTURE HACE LO QUE DICE: que el blob arranque (des)alineado en el
+			// ARCHIVO como el caso pretende.
+			//
+			// OJO CON LO QUE ESTE CONTROL **NO** DICE, porque su versión anterior lo decía y era
+			// falso: el resto del offset DENTRO DEL ARCHIVO no decide si un float32 queda partido
+			// entre trozos. Eso lo decide `len(datos) % 4`, y `datos` sale del recorte del trozo.
+			// Acá se comprueba que el fixture esté desalineado —que es lo que ejercita el recorte
+			// `desde := max(trozoIni, inicio)` y el camino de `parseStaticTable` con offset— y nada
+			// más que eso.
 			hlen := binary.LittleEndian.Uint64(crudo[:8])
 			inicioBlob := 8 + int(hlen)
 			if parte := inicioBlob%4 != 0; parte != c.partePorMedio {
