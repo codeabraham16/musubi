@@ -447,7 +447,6 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 	// método) es compartido; la marca es del proyecto.
 	consulta, recorteConsulta := normalizarConsulta(args.Prompt)
 	brandScope := brandScopeFor(principalFrom(ctx), args.Brand)
-	brandText, brandSource, brandTok := s.brandFor(brandScope)
 	limit := args.Limit
 	if limit <= 0 {
 		limit = designCorpusLimit
@@ -459,28 +458,62 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 	// criterio que el recall por proyecto.
 	corpusCtx := memory.WithProjectScope(ctx, memory.ProjectScope{ProjectID: designCorpusScope, Federate: false})
 
-	// Recall del acervo, best-effort: si algo falla, el brief conserva el NÚCLEO estático (rol +
-	// principios + marca), que ya vale por sí solo. Un fallo del acervo NO tumba la tool.
-	rec := s.recallDesignCorpus(ctx, corpusCtx, consulta, limit)
+	// ════════════════════════════════════════════════════════════════════════════════════════
+	// TRAMO 1 — SIN CANDADO: las llamadas de red. Mismo corte que `musubi_recall`.
+	//
+	// Hasta el 2026-09-12 esto corría con el candado del despacho tomado, y el peor caso no era
+	// el que se había medido: la primera llamada del proceso embebe la consulta MÁS las 19
+	// descripciones de eje, secuenciales y con su techo cada una. Ver `prepararRecallDeDiseno`.
+	// ════════════════════════════════════════════════════════════════════════════════════════
+	prep := s.prepararRecallDeDiseno(ctx, consulta)
 
-	// CAPA 2 — el MÉTODO vivo: las tarjetas del sub-acervo arbitrable `design-method/*`. Siguen
-	// viniendo del acervo y siguen siendo judge/supersede-ables —esa es la capacidad de Renaissance—
-	// pero ahora viajan como MATERIAL CITADO con procedencia, no concatenadas dentro del bloque de
-	// principios. El bloque de principios pasa a ser el núcleo ESTÁTICO del código (I-INY1).
-	metodo, methodSource := s.designMethodCards(rec.Metodo, rec.Modo)
+	// ════════════════════════════════════════════════════════════════════════════════════════
+	// TRAMO 2 — CON CANDADO: todo lo que toca la base, en UN solo tramo.
+	//
+	// Es UN tramo y no cuatro a propósito. Partirlo dejaría que un escritor se meta entre la
+	// marca, el acervo, el método y la rotación, y el brief saldría armado con mitades de dos
+	// estados distintos. Hoy el despachador le da un candado compartido a toda la tool; esto
+	// conserva esa misma consistencia y cambia sólo cuánto dura.
+	//
+	// Compartido porque la tool es `readOnly`: nada de acá escribe.
+	// ════════════════════════════════════════════════════════════════════════════════════════
+	var brandText, brandSource string
+	var brandTok *brandTokens
+	var rec resultadoRecall
+	var metodo []metodoItem
+	var methodSource string
+	var usadas map[string]bool
+	var huboRotacion bool
+	s.withReadLock(func() {
+		brandText, brandSource, brandTok = s.brandFor(brandScope)
 
-	// LA ROTACIÓN (formas_diseno.go). Se llavea por el proyecto DEL PRINCIPAL y no por la marca
-	// pedida: `brand` deja diseñar a nombre de otro proyecto, y llavear por marca haría que la sala
-	// de mando le escriba la rotación a Altura.
+		// Recall del acervo, best-effort: si algo falla, el brief conserva el NÚCLEO estático (rol +
+		// principios + marca), que ya vale por sí solo. Un fallo del acervo NO tumba la tool.
+		rec = s.recallDesignCorpus(corpusCtx, consulta, prep, limit)
+
+		// CAPA 2 — el MÉTODO vivo: las tarjetas del sub-acervo arbitrable `design-method/*`. Siguen
+		// viniendo del acervo y siguen siendo judge/supersede-ables —esa es la capacidad de Renaissance—
+		// pero ahora viajan como MATERIAL CITADO con procedencia, no concatenadas dentro del bloque de
+		// principios. El bloque de principios pasa a ser el núcleo ESTÁTICO del código (I-INY1).
+		metodo, methodSource = s.designMethodCards(rec.Metodo, rec.Modo)
+
+		// LA ROTACIÓN (formas_diseno.go). Se llavea por el proyecto DEL PRINCIPAL y no por la marca
+		// pedida: `brand` deja diseñar a nombre de otro proyecto, y llavear por marca haría que la sala
+		// de mando le escriba la rotación a Altura.
+		if len(formasPorEje[rec.Eje]) > 0 {
+			usadas, huboRotacion = s.formasUsadasPor(proyectoDelPrincipal(principalFrom(ctx)))
+		}
+	})
+
+	// TRAMO 3 — SIN CANDADO: elegir la forma es aritmética sobre lo que ya se leyó.
 	intencion := intencionDeDiseno{Keep: args.Keep, Change: args.Change}
 
 	var forma, notaDeForma string
 	var candidatas []string
 	if len(formasPorEje[rec.Eje]) > 0 {
-		usadas, hubo := s.formasUsadasPor(proyectoDelPrincipal(principalFrom(ctx)))
 		candidatas = candidatasDeForma(rec.Eje, usadas, intencion)
 		forma = formasPara(rec.Eje, usadas, intencion)
-		notaDeForma = notaDeRotacion(hubo)
+		notaDeForma = notaDeRotacion(huboRotacion)
 	}
 
 	brief := designBrief{
@@ -836,7 +869,40 @@ type resultadoRecall struct {
 // recallDesignCorpus trae los patrones más relevantes del acervo para el pedido. Prioriza la búsqueda
 // semántica (embedder) y cae a la léxica (FTS) si no hay embedder o si la semántica no devolvió nada.
 // Cualquier error es best-effort: devuelve lo que tenga (o vacío) y lo DECLARA, nunca falla la tool.
-func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query string, limit int) resultadoRecall {
+// preparacionDeRecall es lo que se calcula ANTES de tomar el candado: las DOS llamadas de red del
+// camino de diseño. Existe porque las dos vivían adentro de `recallDesignCorpus`, que corría bajo
+// el candado exclusivo del despacho.
+type preparacionDeRecall struct {
+	Vec     []float32
+	Ruta    rutaDeEje
+	HayRuta bool
+}
+
+// prepararRecallDeDiseno hace las llamadas de red del camino de diseño y NO TOCA LA BASE, así que
+// se invoca afuera del candado.
+//
+// SON DOS LLAMADAS, NO UNA, Y LA SEGUNDA ES DIECINUEVE. Además de embeber la consulta, el ruteo por
+// eje necesita los vectores de las 19 descripciones de la taxonomía, que `vectoresDeEje` embebe una
+// vez por proceso y cachea. O sea que la PRIMERA llamada a `musubi_design` de cada proceso hace 19
+// llamadas de red secuenciales, cada una con su techo de `designEmbedTimeout`. Con esto adentro del
+// candado del despacho —como estaba— ese arranque en frío congelaba el servidor entero, y no se veía
+// en ninguna medición porque la segunda llamada ya sale de la caché.
+func (s *McpServer) prepararRecallDeDiseno(ctx context.Context, query string) preparacionDeRecall {
+	if !embedding.Enabled(s.embedder) {
+		return preparacionDeRecall{}
+	}
+	embCtx, cancel := context.WithTimeout(ctx, designEmbedTimeout)
+	vec, err := s.embedder.Embed(embCtx, query)
+	cancel()
+	if err != nil {
+		// Sin vector no hay camino semántico ni ruteo; el recall cae al léxico, igual que antes.
+		return preparacionDeRecall{}
+	}
+	r, ok := s.ejeDeConsulta(ctx, vec)
+	return preparacionDeRecall{Vec: vec, Ruta: r, HayRuta: ok}
+}
+
+func (s *McpServer) recallDesignCorpus(corpusCtx context.Context, query string, prep preparacionDeRecall, limit int) resultadoRecall {
 	// Traemos un POOL más grande que `limit` para poder re-rankear: las TARJETAS destiladas (cortas) pierden
 	// en similitud cruda contra los ARTÍCULOS crudos (blobs de miles de tokens), así que primero juntamos
 	// candidatos de más y después preferimos lo curado (Musubi Renaissance · F4 — que el destilado se surfacee).
@@ -858,39 +924,35 @@ func (s *McpServer) recallDesignCorpus(ctx, corpusCtx context.Context, query str
 	modo := recuperacionLexica
 	eje := ""
 	var ruta rutaDeEje
-	if embedding.Enabled(s.embedder) {
-		embCtx, cancel := context.WithTimeout(ctx, designEmbedTimeout)
-		vec, err := s.embedder.Embed(embCtx, query)
-		cancel()
-		if err == nil {
-			// EL RUTEO POR EJE VA PRIMERO (ejes_diseno.go). Con el MISMO vector que ya se calculó
-			// —así que no cuesta una llamada más— se elige el eje top-1 de la taxonomía y se sirven
-			// sus tarjetas por importancia. Medido sobre el acervo real y los 16 pedidos dorados,
-			// M1 pasa de 0,10 a 0,50: la similitud entre 1.438 tarjetas casi idénticas no separaba
-			// nada, y entre 19 ejes bien separados el mismo embebedor sí separa.
-			if r, ok := s.ejeDeConsulta(ctx, vec); ok {
-				nombre := r.Eje
-				// Se traen MÁS candidatos del eje que los que se van a servir, y no es un detalle:
-				// el eje acota el tema pero no evita que las seis primeras tarjetas sean seis
-				// maneras de decir lo mismo — que es exactamente el defecto que F4 arregló y que la
-				// primera versión de este ruteo volvió a abrir (lo agarró
-				// TestDesignElTopKNoColapsaEnLoMismo). Con un candidato holgado, `elegirCorpus`
-				// sigue haciendo su trabajo de diversificar adentro del eje.
-				if porEje := s.tarjetasDelEje(nombre, limit*designHolguraEje); len(porEje) > 0 {
-					eje, modo = nombre, recuperacionPorEje
-					ruta = r
-					sources = porEje
-				}
-			}
-			// Sin eje utilizable se cae al camino de siempre. Un pedido que no se parece a ningún
-			// eje es justo donde forzar la taxonomía inventaría una respuesta.
-			if len(sources) == 0 {
-				if results, serr := s.engine.SearchObservations(corpusCtx, vec, pool); serr == nil {
-					modo = recuperacionSemantica
-					for _, r := range results {
-						sources = append(sources, searchSource{id: r.ID, topicKey: r.TopicKey, content: r.Content, sim: r.Similarity})
-					}
-				}
+	// EL RUTEO POR EJE VA PRIMERO (ejes_diseno.go). Con el MISMO vector que ya se calculó —así que
+	// no cuesta una llamada más— se elige el eje top-1 de la taxonomía y se sirven sus tarjetas por
+	// importancia. Medido sobre el acervo real y los 16 pedidos dorados, M1 pasa de 0,10 a 0,50: la
+	// similitud entre 1.438 tarjetas casi idénticas no separaba nada, y entre 19 ejes bien
+	// separados el mismo embebedor sí separa.
+	//
+	// EL VECTOR Y LA RUTA YA VIENEN CALCULADOS, y eso es el arreglo del 2026-09-12: los dos salían
+	// de llamadas de red que se hacían acá adentro, con el candado del despacho tomado. Ahora las
+	// calcula `prepararRecallDeDiseno` afuera — y ver su comentario, porque la primera llamada del
+	// proceso embebe DIECINUEVE descripciones de eje, no una.
+	if prep.HayRuta {
+		// Se traen MÁS candidatos del eje que los que se van a servir, y no es un detalle: el eje
+		// acota el tema pero no evita que las seis primeras tarjetas sean seis maneras de decir lo
+		// mismo — que es exactamente el defecto que F4 arregló y que la primera versión de este
+		// ruteo volvió a abrir (lo agarró TestDesignElTopKNoColapsaEnLoMismo). Con un candidato
+		// holgado, `elegirCorpus` sigue haciendo su trabajo de diversificar adentro del eje.
+		if porEje := s.tarjetasDelEje(prep.Ruta.Eje, limit*designHolguraEje); len(porEje) > 0 {
+			eje, modo = prep.Ruta.Eje, recuperacionPorEje
+			ruta = prep.Ruta
+			sources = porEje
+		}
+	}
+	// Sin eje utilizable se cae al camino de siempre. Un pedido que no se parece a ningún eje es
+	// justo donde forzar la taxonomía inventaría una respuesta.
+	if len(sources) == 0 && len(prep.Vec) > 0 {
+		if results, serr := s.engine.SearchObservations(corpusCtx, prep.Vec, pool); serr == nil {
+			modo = recuperacionSemantica
+			for _, r := range results {
+				sources = append(sources, searchSource{id: r.ID, topicKey: r.TopicKey, content: r.Content, sim: r.Similarity})
 			}
 		}
 	}
@@ -1289,6 +1351,11 @@ func (s *McpServer) designToolEntry() toolEntry {
 		},
 		handler:  s.toolDesign,
 		readOnly: true,
+		// lockSelf: el handler embebe la consulta Y —en la primera llamada del proceso— las 19
+		// descripciones de eje, todas secuenciales. Acota su lectura en UN tramo con withReadLock.
+		// `readOnly` tomaba el candado COMPARTIDO, que deja pasar otros lectores pero bloquea a
+		// todo escritor: un arranque en frío del motor de diseño frenaba la captura de memoria.
+		lock: lockSelf,
 	}
 }
 
