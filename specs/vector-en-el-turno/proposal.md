@@ -154,17 +154,37 @@ están asertadas en `arranque_mmap_unix_test.go`.
 —milisegundos, cero memoria— contra los 1013 ms del mejor caso local. Suena a que gana solo. Al
 mirar la máquina, **no**:
 
-**Hoy no hay tal proceso.** Hay **cinco `musubi daemon` vivos** (uno por sesión de editor), y sus RSS
-son **6, 6, 11, 6 y 8 MB**: ninguno tiene la tabla. Con la tabla cargada cada uno pesaría ~1,3 GB.
+**Hoy no hay tal proceso.** Hay **cinco `musubi daemon` vivos** y sus RSS son **6, 6, 11, 6 y
+8 MB**: ninguno tiene la tabla. Con la tabla cargada cada uno pesaría ~1,3 GB.
+
+Los cinco cuelgan de la extensión de Claude Code en VS Code —verificado por `PPid`, no inferido—,
+o sea **uno por sesión de agente**. Ése es el número que crece.
 
 Y ahí está el problema de forma: **la alternativa no es «un» daemon, es N**. Darle la tabla a cada
 uno son **5 × 1,3 GB = 6,5 GB** en una máquina de 7,6 GB que ya tiene 8,5 GB en swap. El camino
 «corto» resulta el más caro de todos.
 
 Lo que **sí** lo arregla es justamente la propiedad del mmap que no se ve en los milisegundos: una
-tabla mapeada es memoria **respaldada por archivo**, así que los cinco procesos comparten **las
-mismas** 488 MB de page cache — una copia, descartable, sin competir por swap. Con `ReadFile` cada
-proceso paga su propia copia anónima; con mmap, N procesos cuestan casi lo mismo que uno.
+tabla mapeada es memoria **respaldada por archivo**, así que los procesos comparten **las mismas**
+488 MB de page cache — una copia, descartable, sin competir por swap. Con `ReadFile` cada proceso
+paga su propia copia anónima; con mmap, N procesos cuestan casi lo mismo que uno.
+
+**Medido, no afirmado** (dos procesos mapeando la misma tabla y tocando todas sus páginas):
+
+| | `Rss` | `Shared_Clean` | `Private_Clean` |
+|---|---|---|---|
+| proceso 1, solo | 497 MB | 4 MB | **490 MB** |
+| proceso 2, con el 1 vivo | 497 MB | **494 MB** | 0 MB |
+
+El segundo proceso sumó **497 MB de RSS y ~0 MB de memoria real**: `buff/cache` del sistema se movió
+**6 MB**, no 488.
+
+**Y ahí hay una trampa que conviene dejar escrita, porque es la métrica que cualquiera miraría
+primero: `RSS` MIENTE SOBRE LAS PÁGINAS COMPARTIDAS.** Cinco daemons con la tabla mapeada van a
+*reportar* ~500 MB de RSS cada uno; sumarlos da 2,5 GB, y el costo real es 488 MB **una sola vez**.
+Quien mire `ps aux` después de implementar esto va a concluir que el mmap empeoró las cosas. El
+número que hay que mirar es `Private_Clean` en `/proc/PID/smaps_rollup`, o el `buff/cache` del
+sistema — no la columna de RSS.
 
 **O sea que el hallazgo se da vuelta:** el mmap no era el paso menos importante de los tres, es el
 único que resuelve el caso de N procesos, que es el que esta máquina tiene de verdad.
