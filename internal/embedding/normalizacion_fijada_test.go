@@ -79,6 +79,24 @@ func TestLaNormalizacionUnicodeEstaFijada(t *testing.T) {
 					"guardados y comparten model_id, asi que la busqueda los compara igual. Hay que "+
 					"re-embeber, o el ranking se degrada sin un solo error.", c.entrada, got, c.strip)
 			}
+
+			// Y AHORA POR EL CAMINO QUE DECIDE, que es lo que la de arriba NO mira. La aserción
+			// anterior llama a la función suelta: mide que `wpStripAccents` haga lo que dice, y
+			// queda VERDE si el WordPiece deja de llamarla. Medido el 2026-09-12 sacando
+			// `s = wpStripAccents(s)` de `wordPiece.normalize` —el ÚNICO sitio donde el
+			// strip-accents decide algo—: esta prueba en verde, `TestUnigramRealBitExact` en verde
+			// y la huella del charsmap en verde. Lo cazaba sólo `TestStaticWordPiece`, que ya
+			// existía y no es de quien escribió esta guarda.
+			//
+			// El comentario de la cabecera nombra «static.go, wpStripAccents» como lo que custodia.
+			// Con esta segunda aserción eso pasa a ser cierto.
+			wp := &wordPiece{stripAccents: true}
+			if got := wp.normalize(c.entrada); got != c.strip {
+				t.Errorf("wordPiece.normalize(%q) con stripAccents = %q, esperaba %q\n"+
+					"  El WordPiece dejó de aplicar el strip-accents donde decide. La función puede "+
+					"seguir siendo correcta y el tokenizer estar normalizando distinto igual.",
+					c.entrada, got, c.strip)
+			}
 			if got := norm.NFC.String(c.entrada); got != c.nfc {
 				t.Errorf("norm.NFC(%q) = %q, esperaba %q — lo usa el charsmap del Unigram (spm.go)", c.entrada, got, c.nfc)
 			}
