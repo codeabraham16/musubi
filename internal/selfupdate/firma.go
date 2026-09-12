@@ -45,21 +45,24 @@ type Manifiesto struct {
 	Assets map[string]string `json:"assets"`
 }
 
-// BytesFirmables devuelve la forma canónica que se firma y se verifica.
-//
-// TIENE QUE SER LA MISMA EN LOS DOS LADOS Y NO PUEDE DEPENDER DEL ORDEN DE UN MAPA. `json.Marshal`
-// de un map ordena las claves alfabéticamente, así que es determinista — y eso está clavado por
-// una prueba, porque si un día dejara de serlo la firma empezaría a fallar en algunos releases y
-// no en otros, que es el peor síntoma posible: intermitente y con pinta de problema de red.
-func (m Manifiesto) BytesFirmables() ([]byte, error) {
-	return json.Marshal(m)
-}
-
 // VerificarFirma comprueba que el manifiesto lo firmó quien tiene la clave privada.
 //
 // `pub` es la clave pública embebida en el binario. VACÍA ⇒ ERROR, nunca «pasa igual»: un binario
 // compilado sin clave no puede verificar nada, y dejarlo actualizar sería exactamente el estado
 // anterior con una función de más que da falsa tranquilidad.
+//
+// `manifiesto` SON LOS BYTES CRUDOS, TAL COMO SE DESCARGARON: no se re-serializan ni se
+// «normalizan» antes de verificar, y no hay que empezar a hacerlo. La firma se produce sobre los
+// bytes exactos del archivo (deploy/firmar-release.sh:155 firma lo que escribió en :142) y se
+// verifica sobre esos mismos bytes (cmd/musubi/update.go:83 los baja, :94 los pasa acá, :98 los
+// parsea). NO existe una «forma canónica» que mantener sincronizada entre los dos lados.
+//
+// Acá vivía `BytesFirmables`, que devolvía `json.Marshal(m)` y cuyo comentario afirmaba en
+// mayúsculas que esa forma «TIENE QUE SER LA MISMA EN LOS DOS LADOS». Era falso y se midió: Go
+// emite `version` primero (orden de campos del struct) y el firmador emite `assets` primero
+// (`sort_keys`), así que los dos bytes NO coinciden — y no importa, porque nadie re-serializa.
+// La función no tenía un solo llamador de producción. Si alguien vuelve a introducir una
+// canonicalización acá, rompe el canal de actualización entero.
 func VerificarFirma(pub ed25519.PublicKey, manifiesto []byte, firmaHex string) error {
 	if len(pub) != ed25519.PublicKeySize {
 		return fmt.Errorf("este binario no trae una clave pública de release válida (%d bytes): no puede verificar la firma de una actualización, y actualizar sin verificar es peor que no actualizar", len(pub))

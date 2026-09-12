@@ -137,8 +137,15 @@ for n in sorted(os.listdir(d)):
         assets[n] = hashlib.sha256(f.read()).hexdigest()
 if not assets:
     sys.exit("no hay ningún asset que firmar en %s (se esperan los assets que publica release.yml)" % d)
-# separators sin espacios: la MISMA forma canónica que produce json.Marshal en Go, que es contra
-# la que se verifica. Un espacio de más acá es una firma que no valida allá.
+# separators sin espacios: cosmético, NO un contrato. Lo que se firma abajo son los BYTES EXACTOS
+# de este archivo, y `musubi update` verifica los bytes que descarga sin re-serializarlos
+# (cmd/musubi/update.go:83 los baja, :94 los pasa a VerificarFirma). La forma no tiene que coincidir
+# con la de Go, y de hecho NO coincide: Go emite "version" primero (orden de campos del struct) y
+# esto emite "assets" primero (sort_keys). El comentario que había acá afirmaba lo contrario y era
+# falso; se midió.
+# LO QUE SÍ ES UN CONTRATO: el manifest.json que se sube al release tiene que ser el MISMO BYTE A
+# BYTE que el que se firmó acá. Regenerarlo, reindentarlo o editarlo después de firmar invalida la
+# firma sin tocar ningún binario.
 sys.stdout.write(json.dumps({"version": version, "assets": assets}, sort_keys=True, separators=(",", ":")))
 PY
 
@@ -149,7 +156,7 @@ try:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     from cryptography.hazmat.primitives import serialization
 except ImportError:
-    sys.exit("falta el paquete `cryptography` (pip install cryptography), o firmá con `go run ./deploy/cmd/firmar`")
+    sys.exit("falta el paquete `cryptography`: pip install cryptography")
 priv_hex = open(sys.argv[1]).read().strip()
 k = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(priv_hex))
 sys.stdout.write(k.sign(open(sys.argv[2], "rb").read()).hex())
