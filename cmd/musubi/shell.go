@@ -245,6 +245,7 @@ func bombearEntrada(cli *http.Client, base, token, id string) error {
 // Long-poll: cada GET bloquea hasta 25 s del lado del cerebro y vuelve APENAS hay un byte. Una
 // terminal quieta no genera tráfico y una que escupe se ve al instante.
 func bombearSalida(cli *http.Client, base, token, id string) error {
+	avisado := false
 	for {
 		req, _ := http.NewRequest(http.MethodGet, base+"/fleet/shell/out?id="+id, nil)
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -253,8 +254,15 @@ func bombearSalida(cli *http.Client, base, token, id string) error {
 			return err
 		}
 		datos, _ := io.ReadAll(resp.Body)
-		cerrada := resp.Header.Get("X-Musubi-Shell") == "cerrada"
+		sena := resp.Header.Get("X-Musubi-Shell")
+		cerrada := sena == "cerrada"
 		resp.Body.Close()
+		// UNA SOLA VEZ: el long-poll vuelve cada 25 s y repetir el aviso sería ruido sobre la misma
+		// espera. Va a stderr para no ensuciar el pty, y con \r\n porque la terminal ya está en crudo.
+		if sena == "esperando-agente" && !avisado {
+			avisado = true
+			fmt.Fprintf(os.Stderr, "%s esta máquina tiene agente: no acepta conexiones entrantes y se entera de que la llamaron en su próximo latido (hasta 30 s). Esperando al agente…\r\n", cYellow("·"))
+		}
 		if resp.StatusCode >= 400 {
 			return fmt.Errorf("%s", strings.TrimSpace(string(datos)))
 		}

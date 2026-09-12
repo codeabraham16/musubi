@@ -42,7 +42,10 @@ const (
 // 25 s: por debajo del deadline del transporte (60 s) con margen de sobra, y bastante largo como
 // para que una terminal quieta no genere tráfico. No es latencia: el GET vuelve apenas hay un
 // byte. Es cada cuánto se renueva la conexión cuando NO pasa nada.
-const esperaSalidaShell = 25 * time.Second
+// Es `var` y no `const` por UNA sola razón: la prueba de «esperando al agente» tiene que poder
+// achicarla. Sin eso, verificar esa rama costaría 25 s de suite y nadie la verificaría — que es
+// exactamente cómo se llega a una guarda que nunca se probó. No la toca nadie en producción.
+var esperaSalidaShell = 25 * time.Second
 
 // entradaMaxShell acota cuánto se acepta por request de entrada. Una persona tecleando manda
 // decenas de bytes; un pegado grande, unos miles. 64 KiB es holgado y le pone techo a lo que
@@ -212,6 +215,45 @@ func (s *McpServer) handlerShellOut(opt httpOptions) http.HandlerFunc {
 			s.cerrarShell(ses.ID, fleet.ShellFallida, "el cerebro se reinició y el canal se perdió", time.Now())
 			http.Error(w, "el canal de esa sesión ya no existe (¿se reinició el cerebro?): abrí una nueva", http.StatusGone)
 			return
+		}
+
+		// ────────────────────────────────────────────────────────────────────────────────
+		// TIER A: LA PRIMERA VUELTA ESPERA AL AGENTE, NO A LOS BYTES.
+		//
+		// A un Tier A no le entra nadie: se le avisó por la cola de comandos y se engancha en su
+		// PRÓXIMO LATIDO (hasta 30 s). Hasta entonces `Leer` devuelve 200 con cuerpo vacío — el
+		// MISMO 200 vacío de una terminal abierta y quieta. Mirando el buffer son idénticos; para
+		// quien espera un prompt son cosas muy distintas.
+		//
+		// Se contesta EN CUANTO se resuelve y NO se encadena una segunda espera: el cliente tiene
+		// 40 s de timeout y dos long-polls seguidos serían 50. Vacío sin seña = el agente llegó,
+		// volvé a pedir; vacío con seña = seguí esperando.
+		//
+		// EL CANAL CERRADO NO ENTRA POR ACÁ, y la distinción no es cosmética: `EsperarAgente`
+		// devuelve false tanto si venció la espera como si el canal murió, y contestar
+		// `esperando-agente` sobre un canal muerto saltearía el `cerrarShell` de más abajo y
+		// dejaría la fila de sesión viva para siempre. Por eso una cerrada cae de largo al camino
+		// normal, que ya sabe ponerle la cabecera `cerrada` y cerrarla en la bitácora.
+		// ────────────────────────────────────────────────────────────────────────────────
+		if agente, esDeAgente := canal.(*fleet.CanalAgente); esDeAgente && !agente.Enganchado() {
+			llego := agente.EsperarAgente(esperaSalidaShell)
+			muerto := false
+			if !llego {
+				select {
+				case <-agente.Terminado():
+					muerto = true
+				default:
+				}
+			}
+			if !muerto {
+				w.Header().Set("Content-Type", "application/octet-stream")
+				w.Header().Set("X-Content-Type-Options", "nosniff")
+				if !llego {
+					w.Header().Set("X-Musubi-Shell", "esperando-agente")
+				}
+				w.WriteHeader(http.StatusOK)
+				return
+			}
 		}
 
 		datos, lerr := canal.Leer(esperaSalidaShell)
