@@ -96,6 +96,17 @@ import (
 // existe para que una guarda no se mida contra sí misma, y acá el SUJETO de la guarda es el corpus
 // de archivos de prueba. El archivo elegido no es el suyo ni el del lector, y como `a` contiene a
 // `de` entero, no le rompe el ancla a nadie: `Colisiones` da 0.
+//
+// ESTA GUARDA ES LA ÚNICA DEL ÁRBOL QUE SE VUELVE NO-MEDIBLE POR SU PROPIO SUJETO, y conviene
+// saberlo antes de ir a buscar el defecto. Mide la deuda del árbol; si la deuda está pasada, su
+// CONTROL arranca en rojo —la prueba ya falla sin el sabotaje— y `sabotaje.sh` se abstiene con
+// «CONTROL EN ROJO: su rojo no prueba nada». Abstenerse es lo correcto: un rojo que ya estaba no
+// dice nada sobre el sabotaje, y acreditárselo sería contar como cobertura un rojo ajeno.
+//
+// Pero la consecuencia es una recursión: MIENTRAS EL TECHO ESTÉ PASADO, LA DIRECTIVA QUE CUSTODIA
+// EL TECHO NO SE PUEDE VERIFICAR. Se destraba sola en cuanto alguien escribe la directiva que
+// faltaba. Lo midió otra sesión corriendo este arnés contra un árbol con la deuda en 714, y lo
+// escribo acá para que el próximo que vea «sin veredicto» acá no busque el defecto en la directiva.
 // arnes: prueba="TestLaDeudaDeSabotajesNoCreceYElCorpusNoSePodre"
 // arnes: archivo="internal/mcp/sonda_permiso_test.go"
 // arnes: de="package mcp"
@@ -203,6 +214,13 @@ func TestLaDeudaDeSabotajesNoCreceYElCorpusNoSePodre(t *testing.T) {
 			"o declararla `no_mecanizable=\"<motivo>\"` si el sabotaje literal no puede compilar "+
 			"(el caso típico: la guarda es el único lector de un import o de una variable, así que "+
 			"borrarla deja `imported and not used` y el rojo sería por build roto).\n"+
+			"\nY SI ESTÁS EN CI Y NO AGREGASTE NINGUNA PROMESA, ESTO NO ES TUYO. Este techo es un "+
+			"derivado del ÁRBOL ENTERO clavado en un archivo, así que dos ramas que agregan una "+
+			"promesa cada una pasan verdes por separado y la SEGUNDA en mergear rompe sin haber "+
+			"cambiado nada. Pasó la primera vez que esta guarda entró: dos PRs en 9/9 con 48 "+
+			"segundos entre un merge y el otro. Bajá el log entero, mirá QUÉ archivo trae las "+
+			"anclas nuevas —`go run ./deploy/cmd/arnes -detalle`— y si no es tuyo, avisale a quien "+
+			"lo trajo en vez de tocar la constante.\n"+
 			"Correlo con: go run ./deploy/cmd/arnes -detalle",
 			pendientes, anclasEnProsaAlDia, pendientes-anclasEnProsaAlDia)
 	case anclasEnProsaAlDia-pendientes > holguraDelTecho:
