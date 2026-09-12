@@ -4,6 +4,8 @@ package codeintel
 
 import (
 	"testing"
+
+	ts "github.com/odvcencio/gotreesitter"
 )
 
 // TestUnPanicoDelParserNoSeLlevaElProceso — la promesa del comentario, ahora medida.
@@ -112,4 +114,76 @@ func TestLaRedNoSeTragaLoQuePasaPorAlLado(t *testing.T) {
 func panicoDeAlLado() int {
 	var vacio []int
 	return vacio[3]
+}
+
+// TestUnPanicoAlCARGARLaGramaticaTampocoSeLlevaElProceso — la red empezaba una línea tarde.
+//
+// LO QUE SE MIDIÓ, Y ES EL MOTIVO DE ESTA PRUEBA. El recover de `derivePolyglotFile` cubre el
+// PARSEO. Pero la misma dependencia se toca antes y AFUERA de esa red, al CARGAR la gramática:
+//
+//	graph.go:116  IndexableForGraph → polyglotSupported → languageFor   ← el indexador MCP
+//	graph.go:374  el filtro de DerivePackage, UNA LÍNEA arriba del llamado protegido
+//
+// El 2026-09-12 se puso `case ".tsx": panic(…)` en `languageFor` —el escenario «gotreesitter mete
+// pánicos incondicionales» que la red de al lado cita como SU motivo— y las DOS guardas del pánico
+// quedaron VERDES. Caía `TestIndexableForGraphWithTreesitter`, pero por explotar él también, no por
+// afirmar contención: CI lo DETECTABA y nadie lo CONTENÍA. En producción eso se lleva el daemon por
+// la goroutine pelada del scheduler del grafo, que es exactamente lo que la otra red evita.
+//
+// Se prueban LOS DOS SITIOS y no uno: son dos llamadores distintos —el indexador y el derivador— y
+// cubrir sólo el que uno tiene en la cabeza es la forma dominante de este repo (la guarda que está
+// en N-1 de N caminos).
+func TestUnPanicoAlCARGARLaGramaticaTampocoSeLlevaElProceso(t *testing.T) {
+	original := cargarGramatica
+	t.Cleanup(func() { cargarGramatica = original })
+
+	// EL CONTROL, PRIMERO: sin inyectar nada, un .tsx es indexable. Sin esto, la prueba de abajo
+	// pasaría en verde con `languageFor` devolviendo nil siempre, o sea midiendo la contención
+	// sobre un camino que ya no hace nada.
+	if !IndexableForGraph("componente.tsx") {
+		t.Fatal("control: un .tsx no es indexable con el binario compilado con tags; esta prueba " +
+			"estaría midiendo la red sobre un camino que ya no carga ninguna gramática")
+	}
+
+	cargarGramatica = func(path string) *ts.Language {
+		var vacio []int
+		_ = vacio[3] // runtime error: index out of range — lo que de verdad larga un cargador roto
+		return nil
+	}
+
+	// SITIO 1: el indexador. `IndexableForGraph` la llama por `polyglotSupported`.
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("EL PÁNICO SUBIÓ por IndexableForGraph (%v): el indexador de la capa MCP "+
+					"llama a `languageFor` sin red, así que una gramática que explota al cargarse se "+
+					"lleva el proceso que esté recolectando archivos", r)
+			}
+		}()
+		if IndexableForGraph("componente.tsx") {
+			t.Error("con el cargador roto un .tsx se declaró indexable: la degradación tiene que ser " +
+				"a NO derivable, que es lo mismo que contesta un languageFor que no conoce la extensión")
+		}
+	}()
+
+	// SITIO 2: el derivador. `DerivePackage` filtra con `polyglotSupported` UNA LÍNEA antes de
+	// llamar al `derivePolyglotFile` que sí está protegido. Se atraviesa la función real.
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("EL PÁNICO SUBIÓ por DerivePackage (%v): el filtro que elige qué archivos "+
+					"derivar corre FUERA de la red de derivePolyglotFile, una línea más arriba", r)
+			}
+		}()
+		g := DerivePackage("paquete", map[string]string{
+			"componente.tsx": "export const X = 1\n",
+			"modulo.go":      "package modulo\n\nfunc F() {}\n",
+		}, "ejemplo/modulo")
+		// El .go tiene que seguir derivándose: que una gramática polyglot explote no puede apagar
+		// el pase Go, que no la toca.
+		if len(g.Nodes) == 0 {
+			t.Errorf("con el cargador polyglot roto no se derivó NI UN nodo (%d aristas): el pase Go "+
+				"no depende de tree-sitter y tiene que seguir andando", len(g.Edges))
+		}
+	}()
 }

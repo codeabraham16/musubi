@@ -25,7 +25,37 @@ import (
 const motorPolyglot = "poly-on"
 
 // languageFor devuelve la gramática tree-sitter del archivo, o nil si no lo soportamos.
-func languageFor(path string) *ts.Language {
+//
+// LA RED EMPIEZA ACÁ Y NO EN `derivePolyglotFile`, Y ESE ERA EL DEFECTO. CARGAR la gramática es una
+// llamada a la dependencia —`grammars.TsxLanguage()` y sus hermanas— y puede entrar en pánico por
+// las mismas razones que el parseo: es exactamente el escenario «gotreesitter mete pánicos
+// incondicionales» que `derivePolyglotFile` cita como su motivo. Sólo que se entra ANTES y AFUERA
+// de aquella red, por `polyglotSupported`:
+//
+//	graph.go:116  IndexableForGraph → polyglotSupported → languageFor   ← el indexador MCP
+//	graph.go:374  el filtro de DerivePackage, UNA LÍNEA arriba del llamado protegido
+//
+// Medido el 2026-09-12 con `case ".tsx": panic(…)`: las DOS guardas del pánico quedaron VERDES y el
+// proceso se cayó igual. Lo cazaba `TestIndexableForGraphWithTreesitter`, pero por explotar él
+// también, no por afirmar contención — o sea que CI lo DETECTA y nadie lo CONTIENE, y en producción
+// se lo lleva el daemon por la goroutine pelada del scheduler del grafo.
+//
+// Degradar a nil es la misma respuesta honesta que da la red de abajo: el archivo queda como no
+// derivable, que es lo que contesta un `languageFor` que no conoce la extensión.
+func languageFor(path string) (lang *ts.Language) {
+	defer func() {
+		if r := recover(); r != nil {
+			lang = nil
+		}
+	}()
+	return cargarGramatica(path)
+}
+
+// cargarGramatica existe por la prueba: no hay entrada conocida que haga entrar en pánico al
+// cargador real, así que la guarda inyecta uno acá. Misma costura que `derivarPolyglotSinRed`.
+var cargarGramatica = cargarGramaticaDeVerdad
+
+func cargarGramaticaDeVerdad(path string) *ts.Language {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".ts":
 		return grammars.TypescriptLanguage()
@@ -91,10 +121,20 @@ type defSpan struct {
 func derivePolyglotFile(path, content string) (nodes []Node, edges []Edge) {
 	defer func() {
 		if r := recover(); r != nil {
-			// Se devuelve VACÍO y no parcial: `nodes`/`edges` pueden tener a medias el trabajo del
-			// archivo, y un grafo a medias es peor que ninguno —reemplaza al anterior y BORRA
-			// símbolos que sí existían—. El archivo queda como no derivable, que es lo mismo que
-			// contesta un `languageFor` nil.
+			// Se devuelve VACÍO y no parcial: un grafo a medias es peor que ninguno —reemplaza al
+			// anterior y BORRA símbolos que sí existían—. El archivo queda como no derivable, que
+			// es lo mismo que contesta un `languageFor` nil.
+			//
+			// HOY ESTA ASIGNACIÓN ES INALCANZABLE Y CONVIENE DECIRLO EN VEZ DE DEJAR QUE EL
+			// COMENTARIO PROMETA DE MÁS. El cuerpo vive en OTRA función, así que los retornos
+			// nombrados sólo se escriben en el `return` de abajo: cuando el pánico ocurre YA son
+			// nil. Medido el 2026-09-12 borrando esta línea entera —el paquete con tags quedó
+			// VERDE—, o sea que ninguna prueba la alcanza ni puede alcanzarla por la costura.
+			//
+			// SE DEJA A PROPÓSITO, y no es adorno: el día que alguien inline `derivarPolyglotSinRed`
+			// acá adentro —por un perfilado, por sacar la indirección «que es sólo para la prueba»—
+			// el parcial pasa a ser posible y esta línea es lo único entre eso y un grafo que borra
+			// símbolos. Que sea código muerto HOY es una propiedad de la estructura de hoy.
 			nodes, edges = nil, nil
 		}
 	}()
