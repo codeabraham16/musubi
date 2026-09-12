@@ -7,6 +7,10 @@ package codeintel
 // mantiene lean y model-free/Go-puro. Compilar con `-tags treesitter` (+ los grammar_subset_*)
 // reemplaza esto por la derivación real vía tree-sitter (ver treesit_on.go).
 
+// motorPolyglot es la mitad del sello del derivador que depende del BUILD TAG, y no de ninguna
+// dependencia. Ver su gemela en treesit_on.go y la guarda en sello_del_tag_test.go.
+const motorPolyglot = "poly-off"
+
 func polyglotSupported(string) bool { return false }
 
 func derivePolyglotFile(string, string) ([]Node, []Edge) { return nil, nil }
