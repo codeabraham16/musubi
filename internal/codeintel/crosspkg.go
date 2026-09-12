@@ -43,7 +43,23 @@ type SymbolIndex interface {
 //
 // Subir esta constante hace que el próximo índice incremental re-derive TODO una vez y después
 // vuelva a ser barato. Es preferible a un re-índice manual que nadie se acuerda de correr.
-const GraphDeriverVersion = "2-crosspkg"
+// Desde 2026-09-12 la identidad NO ES SÓLO el algoritmo: le cuelga la versión del MOTOR de
+// tree-sitter. El derivador polyglot (treesit_on.go) no tiene árbol propio —le pide los spans a
+// gotreesitter— así que un cambio del motor mueve el grafo sin mover ni una línea de este repo.
+// gotreesitter 0.52.0 es el caso concreto: gramáticas byte-idénticas, motor rehecho (compact
+// parser por default en parses frescos, y musubi hace SIEMPRE parses frescos). Sin la versión del
+// motor acá, subir la dependencia deja los archivos que nadie toca derivados por el motor viejo
+// PARA SIEMPRE, porque su src_fingerprint —sha256 del contenido— no cambió.
+//
+// La guarda que lo sostiene está en deriver_motor_test.go: compara motorTreeSitterDeclarado contra
+// el `require` de go.mod. Subir la dependencia sin subir esta constante es un test ROJO.
+const GraphDeriverVersion = "3-crosspkg+ts-" + motorTreeSitterDeclarado
+
+// motorTreeSitterDeclarado es la versión de github.com/odvcencio/gotreesitter que este derivador
+// DECLARA haber mirado. Se escribe a mano A PROPÓSITO: es el acuse de recibo de un humano de que
+// miró qué cambió en el motor. Lo que impide que el acuse se quede viejo no es la disciplina, es la
+// guarda de deriver_motor_test.go, que lee la versión REAL de go.mod y exige que coincida.
+const motorTreeSitterDeclarado = "v0.51.0"
 
 // ModuleIndex es la implementación EN MEMORIA de SymbolIndex: se arma con los nodos ya derivados
 // (el camino del índice completo). El camino incremental arma otra implementación desde la base.
