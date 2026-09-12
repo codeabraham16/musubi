@@ -80,7 +80,16 @@ func (s *McpServer) toolIngestURL(ctx context.Context, raw json.RawMessage) (int
 		topicKey = s.redactIfForced(topicKey)
 		content := s.redactIfForced(ingest.RenderForMemory(res))
 		emb := s.embedIfEnabled(content)
-		if serr := s.engine.SaveObservationTypedFrom(origin, author, obsID, topicKey, content, 1.0, "semantic", s.defaultScope(), emb); serr != nil {
+		// EL CANDADO SÓLO SOBRE LA ESCRITURA. Esta tool es la que más lejos estaba de la regla:
+		// tiene DOS operaciones de red antes de llegar acá —el fetch de la URL, que baja y puede
+		// transcribir un video, y el embed— y las dos corrían con el candado EXCLUSIVO del
+		// despacho tomado. Medido, el fetch sostiene hasta tres minutos: el servidor entero sin
+		// atender a nadie mientras yt-dlp trabaja.
+		var serr error
+		s.withWriteLock(func() {
+			serr = s.engine.SaveObservationTypedFrom(origin, author, obsID, topicKey, content, 1.0, "semantic", s.defaultScope(), emb)
+		})
+		if serr != nil {
 			if errors.Is(serr, memory.ErrCrossTenant) {
 				return nil, rpcErrorf(codeUnauthorized, "%v — usá un id nuevo", serr)
 			}
@@ -114,6 +123,11 @@ func (s *McpServer) ingestToolEntry() toolEntry {
 			},
 		},
 		handler: s.toolIngestURL,
+		// lockSelf: este handler tiene DOS operaciones de red antes de tocar la base —el fetch de
+		// la URL (yt-dlp baja y, si hace falta, transcribe: medido hasta tres minutos) y el embed—
+		// y acota su escritura con withWriteLock. Es la tool que más lejos estaba de la regla de
+		// server.go: sostenía el candado exclusivo durante todo el fetch.
+		lock: lockSelf,
 	}
 }
 

@@ -456,6 +456,10 @@ func (s *McpServer) buildRegistry() []toolEntry {
 			},
 			handler:  s.toolSearchSemantic,
 			readOnly: true,
+			// lockSelf: el handler embebe la consulta (llamada de red, techo 30 s) y acota su
+			// lectura con withReadLock. `readOnly` tomaba el candado COMPARTIDO, que deja pasar
+			// otros lectores pero bloquea a todo escritor — y la captura de memoria escribe.
+			lock: lockSelf,
 		},
 		{
 			Tool: Tool{
@@ -505,6 +509,11 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: s.toolResolveTelemetry,
+			// lockSelf: el handler tiene la red EN EL MEDIO (resolver el log → embeber el par
+			// error→fix → guardar la observación), así que acota dos tramos con withWriteLock y
+			// deja el embed afuera. Ver el comentario del handler: partir el candado es seguro acá
+			// porque las dos escrituras tocan filas independientes.
+			lock: lockSelf,
 			// DORMIDA por ARRASTRE: resolver un log de telemetría sólo tiene sentido si antes alguien
 			// llamó a musubi_log_error, que está dormida. Despertar una sin la otra no sirve.
 			dormant: true,
@@ -901,6 +910,11 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: noCtx(s.toolSDD),
+			// lockSelf: el handler embebe el artefacto de la fase (llamada de red, techo 30 s).
+			// El embed se calcula ANTES de tocar la base —su contenido se deriva sólo de los
+			// argumentos— así que las dos escrituras siguen en UN tramo serializado y la
+			// atomicidad paso↔artefacto de la auditoría #23 queda intacta.
+			lock: lockSelf,
 		},
 		{
 			Tool: Tool{

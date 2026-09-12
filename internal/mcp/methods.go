@@ -2121,6 +2121,11 @@ func (s *McpServer) toolSearchSemantic(ctx context.Context, raw json.RawMessage)
 		return nil, rpcErrorf(codeInvalidParams, "búsqueda semántica no disponible: no hay proveedor de embeddings configurado. Usá musubi_search_keyword o configurá embedding.provider en .musubi/config.yaml")
 	}
 
+	// EL EMBED VA AFUERA DEL CANDADO: es la llamada de red, y su techo son 30 s. Con el candado
+	// del despacho tomado —como corría hasta el 2026-09-12— esos 30 s eran 30 s de servidor
+	// entero sin atender a nadie. La tool es `readOnly`, así que el candado que tomaba era
+	// compartido: eso deja convivir a otros lectores pero BLOQUEA a cualquier escritor, que es el
+	// caso que importa porque la captura de memoria escribe.
 	embCtx, embCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer embCancel()
 	vec, err := s.embedder.Embed(embCtx, args.Query)
@@ -2128,7 +2133,11 @@ func (s *McpServer) toolSearchSemantic(ctx context.Context, raw json.RawMessage)
 		return nil, rpcErrorf(codeInternalError, "error al generar embedding de la consulta: %v", err)
 	}
 
-	results, err := s.engine.SearchObservations(s.scopedCtx(ctx), vec, clampLimit(args.Limit))
+	// Y ACÁ EL CANDADO, sobre el único tramo que lo necesita. Compartido porque esto sólo lee.
+	var results []memory.SearchResult
+	s.withReadLock(func() {
+		results, err = s.engine.SearchObservations(s.scopedCtx(ctx), vec, clampLimit(args.Limit))
+	})
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error en búsqueda semántica: %v", err)
 	}
@@ -2207,7 +2216,19 @@ func (s *McpServer) toolResolveTelemetry(ctx context.Context, raw json.RawMessag
 	// Track 18: acotar la resolución/lectura al proyecto de la credencial. Un tenant no puede
 	// resolver ni leer el log crudo de otro (un id de otro proyecto ⇒ found=false, igual que
 	// inexistente, sin filtrar su existencia).
-	log, found, err := s.engine.ResolveTelemetryLogAndGetCtx(s.scopedCtx(ctx), args.ID)
+	// ESTE HANDLER TIENE LA RED EN EL MEDIO, y por eso son DOS tramos de candado y no uno: resuelve
+	// el log (base) → embebe el par error→fix (red) → guarda la observación (base). Partirlo deja
+	// que otro escritor se meta entre los dos tramos, y acá eso es seguro porque tocan filas
+	// independientes —el log de telemetría y una observación nueva— así que ninguna interleaving
+	// produce un lost-update sobre la otra. Y la captura ya está declarada best-effort: un fallo
+	// suyo no rompe el resolve. Si algún día las dos escrituras tuvieran que ser atómicas, el
+	// arreglo NO es volver a tomar el candado todo el tiempo: es una transacción.
+	var log memory.TelemetryLog
+	var found bool
+	var err error
+	s.withWriteLock(func() {
+		log, found, err = s.engine.ResolveTelemetryLogAndGetCtx(s.scopedCtx(ctx), args.ID)
+	})
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al resolver telemetría: %v", err)
 	}
@@ -2229,14 +2250,20 @@ func (s *McpServer) toolResolveTelemetry(ctx context.Context, raw json.RawMessag
 			return nil, rpcErrorf(codeUnauthorized, "escritura sin proyecto: esta credencial no tiene project_id propio y no se declaró ninguno; una fila sin atribuir la ven TODOS los tenants")
 		}
 		author := authorFrom(principalFrom(ctx))
-		id, deduped, err := s.engine.SaveObservationDedupedTypedFrom(origin, author, "error-fix", content, 0.7, "procedural", s.defaultScope(), s.embedIfEnabled(content))
-		// Gate de novedad (M4): este error→fix también pasa por la detección de duplicados. Igual que
-		// la captura de commits, corre en modo DetectOnly (marca `pending`, nunca auto-oculta): acá
-		// el topic_key es el balde "error-fix", así que un auto-supersede taparía un arreglo anterior
-		// por parecerse. Best-effort y fire-and-forget: la observación YA quedó guardada.
-		if err == nil && !deduped {
-			s.detectOnly(id)
-		}
+		// El embed, AFUERA del candado y hoisteado de su lugar: estaba escrito como ARGUMENTO de
+		// la escritura —`SaveObservationDedupedTypedFrom(..., s.embedIfEnabled(content))`— así que
+		// la llamada de red se evaluaba adentro del tramo serializado sin que se viera en el código.
+		emb := s.embedIfEnabled(content)
+		s.withWriteLock(func() {
+			id, deduped, err := s.engine.SaveObservationDedupedTypedFrom(origin, author, "error-fix", content, 0.7, "procedural", s.defaultScope(), emb)
+			// Gate de novedad (M4): este error→fix también pasa por la detección de duplicados. Igual que
+			// la captura de commits, corre en modo DetectOnly (marca `pending`, nunca auto-oculta): acá
+			// el topic_key es el balde "error-fix", así que un auto-supersede taparía un arreglo anterior
+			// por parecerse. Best-effort y fire-and-forget: la observación YA quedó guardada.
+			if err == nil && !deduped {
+				s.detectOnly(id)
+			}
+		})
 	}
 	return textResult("Log de telemetría marcado como resuelto."), nil
 }

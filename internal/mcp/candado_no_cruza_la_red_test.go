@@ -67,6 +67,24 @@ import (
 // POSITIVOS, nunca falsos negativos — para una guarda es la dirección segura: acusa de más y
 // alguien mira, en vez de callar de menos y nadie mira.
 //
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// LO QUE ESTA GUARDA NO VE, Y HAY QUE DECIRLO PARA QUE NADIE LE CONFÍE DE MÁS
+//
+// El borde son el embebedor y el motor. Cualquier OTRA salida a la red queda fuera de su vista, y
+// hay al menos una viva: `musubi_ingest_url` baja una URL con yt-dlp y puede transcribir un video
+// —medido, hasta tres minutos—, y eso no pasa por ninguno de los dos métodos que esta guarda
+// conoce. Se la cazó de rebote porque además embebe. Una tool futura que sólo hiciera fetch NO
+// saldría acá.
+//
+// No se arregla agregando `Fetch` a la lista: eso sería enumerar formas, y ya sabemos que no
+// converge. La salida correcta es del otro lado —que salir a la red sea imposible sin declararlo,
+// por ejemplo obligando a pasar por un cliente propio que el tipo del handler exija— y es un
+// cambio de diseño, no un parche de esta prueba. Queda escrito acá porque el límite de una guarda
+// que nadie escribió es indistinguible de cobertura.
+//
+// El alcance es `internal/mcp`, y eso SÍ está medido, no supuesto: `internal/memory` no llama al
+// embebedor ni una vez, así que el vector siempre se calcula en este paquete y baja como dato.
+//
 // Sabotaje que la hace fallar: sacarle `lock: lockSelf` a `musubi_recall` (dirección 1), o
 // sacársela a una tool y borrarle además la llamada al embebedor (dirección 2). Los dos corridos.
 func TestNingunCandadoDelDespachoCruzaUnaLlamadaDeRed(t *testing.T) {
