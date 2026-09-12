@@ -16,9 +16,9 @@ import (
 // `git ls-files` en la base 00728f1, y cada número con su definición al lado porque son preguntas
 // distintas:
 //
-//	774 anclas en 163 archivos  ← promesas declaradas en un comentario (go/ast, 30 formas)
+//	774 anclas en 163 archivos  ← con el predicado de `arnes.esAncla`, que está escrito allá
 //	396 anclas en  93 archivos  ← las que usan la frase canónica: lo que cuenta el cabo A123
-//	3.219 funciones Test        ← el denominador: las 774 son el 24 %
+//	3.213 funciones Test        ← el denominador, contado con el AST: las 774 son el 24 %
 //	 38 con veredicto alguna vez (A107 y A120, a mano) — el 4,9 % de 774
 //	  6 de esas 38 NO rompían lo que decían romper — el 15,8 % de lo auditado MIENTE
 //
@@ -30,6 +30,17 @@ import (
 //
 // Es el defecto dominante del repo —una guarda que enumera formas no converge— aplicado a la
 // contabilidad de su propia deuda.
+//
+// PERO EL 774 ES LA SALIDA DE UN PREDICADO Y NO UN HECHO DEL MUNDO. Otra sesión lo replicó con su
+// propio go/ast: reprodujo 396/93 al dígito, y para el total su predicado da 569 y la cota superior
+// —cualquier mención— da 955. El 774 cae adentro de ese bracket, o sea que es defendible y a la vez
+// hipersensible a la definición. Lo que converge es el conteo de ARCHIVOS (160 contra 163). El
+// predicado exacto está en `arnes.esAncla`, y EL TECHO DE ABAJO ESTÁ MEDIDO CON ÉL: si alguien
+// cambia el predicado, este número deja de valer y hay que re-medirlo en el mismo commit.
+//
+// Y el 3.213 se cuenta con el AST: `grep "^func Test"` da 3.219 porque cuenta seis `func TestMain`
+// que viven adentro de literales crudos en `internal/testbudget/paquetes_test.go`. Acá estuvo
+// escrito el 3.219 y era el número del grep.
 //
 // Y LO QUE ESTE CENSO NO VE, que lo levantó otra sesión: hay guardas saboteadas de verdad cuya
 // evidencia vive en el MENSAJE DEL COMMIT y no en el fuente (`normalizacion_fijada_test.go` y

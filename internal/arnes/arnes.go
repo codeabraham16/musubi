@@ -22,11 +22,42 @@
 //	    378 anclas, y 70 archivos de prueba en los que NINGUNA ancla la usa
 //
 //	«¿cuántas funciones Test hay en total?»
-//	    3.219                                 ← el denominador: las 774 son el 24 %
+//	    3.213                                 ← el denominador: las 774 son el 24 %
+//	    (`grep "^func Test"` dice 3.219: cuenta SEIS `func TestMain` que viven adentro de
+//	     literales crudos en internal/testbudget/paquetes_test.go, o sea fixtures de una guarda.
+//	     El AST no los ve. Ese 3.219 estuvo escrito acá y era el número del grep — lo levantó
+//	     otra sesión midiéndolo con su propio go/ast. Es el mismo defecto que el de más abajo,
+//	     esta vez en el DENOMINADOR: un fixture contaminando el censo.)
 //
 //	«¿cuántas tuvieron veredicto alguna vez?»
 //	    38, a mano, en las auditorías A107 y A120 — el 4,9 % de 774
 //	     6 de esas 38 NO rompían lo que decían romper — el 15,8 % de lo auditado MIENTE
+//
+// EL 774 NO ES UN HECHO DEL MUNDO: ES LA SALIDA DE UN PREDICADO, Y EL PREDICADO VA ESCRITO
+//
+// Otra sesión replicó este censo con su propio programa de go/ast sobre 00728f1 pelado, sin una
+// línea compartida con éste. Reprodujo 396/93 AL DÍGITO, y el total NO:
+//
+//	569 / 160   su predicado: «sabotaje» + una palabra de consecuencia a ≤80 chars
+//	774 / 163   este predicado (abajo)
+//	955 / 207   la cota superior: cualquier comentario que mencione la palabra
+//
+// O sea que el ESCALAR es hipersensible a la definición y el 774 sólo significa algo con su
+// predicado al lado. Publicarlo pelado sería A123 otra vez, un nivel más arriba. Lo que SÍ
+// converge es el conteo de ARCHIVOS —160 contra 163, y 65 contra 70 sin ninguna canónica—, así
+// que la forma del hallazgo se sostiene aunque el total dependa de quién pregunta.
+//
+// EL PREDICADO DE ESTE LECTOR, exacto (es `esAncla`, y esto es su prosa):
+//
+//	una línea de comentario que, después de sacarle viñetas y espacios,
+//	  · empieza con «sabotaje» o «sabotajes» (sin importar la caja), Y
+//	  · tiene dos puntos en esa misma línea, Y
+//	  · o arranca con «Sabotaje» en mayúscula inicial, o su línea anterior cerró oración.
+//
+// Y UNA CONSECUENCIA PRÁCTICA PARA QUIEN TOQUE `esAncla`: el techo de la guarda del censo
+// (`anclasEnProsaAlDia`) está medido CON ESTE PREDICADO. Si lo cambiás, el número deja de valer y
+// hay que volver a medirlo EN EL MISMO COMMIT, diciéndolo. Subir el techo porque el predicado se
+// ensanchó y no decirlo convierte la guarda en la defensora del defecto que vigila.
 //
 // A123 NO CONTÓ MAL: contó INCOMPLETO, y la diferencia importa. Cuenta exactamente la frase que
 // enumera, y su 396/93 se reprodujo al dígito. Lo que pasa es que el árbol escribe la misma
@@ -186,6 +217,12 @@ type Censo struct {
 	// Por eso el censo publica las dos cosas: cuántas anclas hay, y sobre cuántas funciones Test.
 	// Decir «774 promesas sin correr» sin el denominador se lee como si 774 fuera el universo, y
 	// es el 24 %.
+	//
+	// Y SE CUENTA CON EL AST Y NO CON UN grep, que no es un detalle de estilo: `grep "^func Test"`
+	// da 3.219 y el AST 3.213, y las seis de diferencia son `func TestMain` que viven adentro de
+	// literales crudos en `internal/testbudget/paquetes_test.go` — fixtures de otra guarda. Un
+	// denominador inflado hace que la cobertura se vea peor de lo que es, que es el error simétrico
+	// del que este arnés persigue. Lo levantó otra sesión comparando su AST contra mi grep.
 	//
 	// OJO CON LEER LA RESTA COMO DEUDA PURA: una prueba de tabla con quince subtests lleva UN
 	// ancla, un ancla puede cubrir tres pruebas hermanas, y un helper con nombre `Test…` no
