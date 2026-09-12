@@ -88,6 +88,29 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 		return jsonResult(respuestaShell(previa, d, "ya tenías una sesión abierta en esta máquina; se devuelve ésa. Cerrala si querés una nueva."))
 	}
 
+	// LO QUE SE PUEDE SABER SIN TOCAR LA RED, Y VA ANTES DE GASTAR NADA.
+	//
+	// ValidarAperturaShell estaba escrita y probada y no la llamaba NADIE: el test quedaba en verde
+	// y la guarda no corría nunca.
+	//
+	// NO RECHAZA NADA QUE HOY SE ABRA, y conviene decirlo para que nadie la lea como una regla
+	// nueva. Sus dos chequeos ya se rechazan igual: la capacidad, más arriba en PuedeSobreDevice
+	// (internal/mcp/fleet_authz.go:39), y la dirección vacía, abajo del todo en AbrirShellPorSSH
+	// (internal/fleet/shell_ssh.go:48). El conjunto de pedidos que fallan es el mismo antes y después.
+	//
+	// LO QUE CAMBIA ES CUÁNDO, Y AHÍ ESTÁ TODO EL VALOR. Hoy un Tier B sin `address` —que el alta
+	// permite: `address` es opcional y ValidarAlta no lo exige— recorre la cadena entera y recién
+	// muere en el ssh. Para entonces gastarAprobacion ya consumió el permiso de cuatro ojos, que es
+	// de un solo uso, y AbrirSesionShell ya escribió una fila que sólo puede terminar en `fallida`.
+	// Quien pidió la shell tiene que volver a buscar a una segunda persona por un error de
+	// configuración que se sabía desde antes de tocar la red.
+	//
+	// VA DESPUÉS DE T7 por lo mismo que la puerta de cuatro ojos: volver a una sesión ya abierta no
+	// es abrir una, y negarle el id a quien perdió su terminal la dejaría viva sin forma de cerrarla.
+	if err := fleet.ValidarAperturaShell(d); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "%v", err)
+	}
+
 	// ════════════════════════════════════════════════════════════════════════════════════════
 	// CUATRO OJOS, Y VA DESPUÉS DE T7 A PROPÓSITO
 	//
