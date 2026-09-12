@@ -713,6 +713,116 @@ func TestCadaGuionQueSeInstalaEnElServidorSeCompara(t *testing.T) {
 			"esta prueba estaría en verde sin haber mirado nada")
 	}
 
+	// ─────────────────────────────────────────────────────────────────────────────────────────
+	// LA SEGUNDA RED: LA VENTANA. Todo lo de arriba mira `install -m`, y ÉSA ERA LA VENTANA
+	// ELEGIDA A MANO. Medido el 2026-09-12 por una auditoría adversaria, con dos sabotajes en
+	// VERDE sobre la versión anterior de esta misma prueba:
+	//
+	//   cp "$AQUI/musubi-backup.sh" /usr/local/bin/colado.sh          → VERDE
+	//   install -m … "$BACKUP_BIN" && install -m … /usr/local/bin/x   → VERDE
+	//
+	// El primero deposita un archivo del repo en el servidor sin pasar por `install`; el segundo
+	// encadena un segundo `install` en la MISMA línea, que el barrido por línea nunca mira porque
+	// `FindStringSubmatch` devuelve una sola coincidencia. Los dos son exactamente el defecto que
+	// esta guarda dice cuidar, y los dos pasaban.
+	//
+	// NO SE ARREGLA AGREGANDO `cp` A LA LISTA. Enumerar verbos de bash no converge —`mv`, `tee`,
+	// `cat >`, `ln`, `rsync`, `scp`, una redirección pelada—: la salida es dejar de contar lo que
+	// se entiende y empezar a EXIGIR QUE NO QUEDE NADA SIN CLASIFICAR. Cada línea de código que
+	// deposita algo tiene que caer en una de las categorías de abajo; una que no caiga es ROJA y
+	// pide que alguien decida qué es, en vez de pasar de largo.
+	verbo := regexp.MustCompile(`\b(install|cp|mv|tee|ln|scp|rsync)\b|(^|\s)(cat|printf|echo)\s[^|]*>`)
+	// Un destino es «del sistema» si cuelga de una raíz que sobrevive al reboot. /tmp y los
+	// temporales del propio guion no: ahí se hace el staging antes de instalar.
+	rutaDeSistema := regexp.MustCompile(`(^|[^\w/])(/usr/|/etc/|/opt/|/var/|/home/|/srv/|/boot/)`)
+	sinClasificar := 0
+	for _, ruta := range instaladores {
+		crudo, err := leerArchivoDeDespliegue(ruta)
+		if err != nil {
+			continue // ya se reportó arriba
+		}
+		rutaDe := map[string]string{}
+		for _, m := range regexp.MustCompile(`(?m)^([A-Z_]+)="(/[^"$]*)"`).FindAllSubmatch(crudo, -1) {
+			rutaDe[string(m[1])] = string(m[2])
+		}
+		// SEGUNDO MAPA, A PROPÓSITO MÁS LAXO QUE EL DE ARRIBA. Para preguntar «¿esto cuelga de una
+		// raíz del sistema?» alcanza con el PREFIJO: `BIN_VIEJO="/usr/local/bin/musubi.antes-de-$SELLO"`
+		// no se puede resolver a una ruta exacta —lleva una variable adentro— pero sí se sabe que
+		// vive en /usr/local. El mapa estricto de arriba NO se afloja: allá una `$VAR` sin resolver
+		// tiene que seguir siendo un rojo, porque allá la pregunta es CUÁL es la ruta.
+		prefijoDe := map[string]string{}
+		for _, m := range regexp.MustCompile(`(?m)^([A-Z_]+)="(/[^"]*)"`).FindAllSubmatch(crudo, -1) {
+			prefijoDe[string(m[1])] = string(m[2])
+		}
+		for n, linea := range strings.Split(string(crudo), "\n") {
+			codigo := strings.TrimSpace(linea)
+			if strings.HasPrefix(codigo, "#") || codigo == "" {
+				continue
+			}
+			// Una línea que sólo IMPRIME un comando (los mensajes de ayuda del redespliegue citan
+			// `cp -a …` para que un humano lo copie) no deposita nada. Se descuenta por la forma
+			// del `echo`/`printf` sin redirección, no por el texto que lleva adentro.
+			if regexp.MustCompile(`^\s*(echo|printf)\s`).MatchString(codigo) && !strings.Contains(codigo, ">") {
+				continue
+			}
+			if !verbo.MatchString(codigo) {
+				continue
+			}
+			// ¿Toca una ruta de sistema, literal o por variable?
+			tocaSistema := rutaDeSistema.MatchString(codigo)
+			if !tocaSistema {
+				for v, p := range prefijoDe {
+					if strings.Contains(codigo, "$"+v) && rutaDeSistema.MatchString(p) {
+						tocaSistema = true
+						break
+					}
+				}
+			}
+			if !tocaSistema {
+				continue // staging a temporales: no llega al servidor
+			}
+
+			switch {
+			case regexp.MustCompile(`\binstall\s+(-[a-zA-Z]+\s+)*-d\b|\bmkdir\b`).MatchString(codigo):
+				// Crea un DIRECTORIO: no deposita contenido que comparar contra el repo.
+			case regexp.MustCompile(`\binstall\s+-m\s`).MatchString(codigo):
+				// Ya lo miró la primera red — salvo que haya MÁS DE UNO en la línea, que era el
+				// segundo sabotaje. Se cuenta acá porque acá es donde se ve la línea entera.
+				if len(regexp.MustCompile(`\binstall\s+-m\s`).FindAllString(codigo, -1)) > 1 {
+					sinClasificar++
+					t.Errorf("%s:%d encadena MÁS DE UN `install -m` en la misma línea y la primera red "+
+						"sólo mira el primero:\n  %s\nPartilos en dos líneas: un depósito por línea es "+
+						"lo que hace que se puedan cruzar de a uno contra la tabla.",
+						filepath.Base(ruta), n+1, codigo)
+				}
+			case esCopiaEntreRutasDelSistema(codigo, prefijoDe):
+				// MUEVE UN ARCHIVO QUE YA ESTÁ EN EL SERVIDOR, sin traer nada del repo: el rollback
+				// del redespliegue aparta el binario viejo (`cp -a "$DESTINO" "$BIN_VIEJO"`) y lo
+				// restaura. No hay fuente en el repo contra la cual compararlo porque no hay fuente
+				// en el repo, punto.
+				//
+				// EL DISCRIMINADOR ES EL ORIGEN Y NO EL DESTINO, y es lo que impide que esta
+				// categoría se use para colar algo: un `cp "$AQUI/x" /usr/local/bin/y` tiene origen
+				// EN EL REPO y cae al `default` en rojo, aunque el destino sea idéntico.
+			case regexp.MustCompile(`\b(cat|printf|echo)\b[^|]*>`).MatchString(codigo):
+				// GENERA un archivo en el servidor (unidades de systemd por heredoc). No viene del
+				// repo, así que no hay fuente contra la cual compararlo: la deriva de estos la mira
+				// `verificar-despliegue.sh` por su propio camino (compara las unidades normalizadas).
+			default:
+				sinClasificar++
+				t.Errorf("%s:%d DEPOSITA ALGO EN UNA RUTA DE SISTEMA Y NO ES UN `install -m`:\n  %s\n"+
+					"La primera red de esta guarda sólo mira `install -m`, así que esto llega al "+
+					"servidor SIN que nada lo cruce contra su fuente en el repo — que es exactamente "+
+					"el defecto que esta prueba existe para cerrar, entrando por otro verbo.\n"+
+					"Arreglo: depositalo con `install -m … \"$DESTINO\"` y sumá su fila a "+
+					"GUIONES_DERIVADOS; o si de verdad no hay nada que comparar (crea un directorio, "+
+					"genera el archivo, copia a un temporal), enseñale esa forma a esta guarda con su "+
+					"razón escrita.", filepath.Base(ruta), n+1, codigo)
+			}
+		}
+	}
+	_ = sinClasificar
+
 	// EL CONTROL DE QUE LOS INSTALADORES SON MÁS DE UNO. La versión vieja de esta guarda leía un
 	// archivo solo, y ese era el defecto. Si la derivación se rompiera —la tabla cambia de forma, los
 	// `.sh` desaparecen del lado izquierdo— volveríamos a mirar uno sin que nada avise.
@@ -1002,4 +1112,34 @@ func TestNadieLeDiceAlOperadorQueDecideElDirectorioDeTrabajo(t *testing.T) {
 			"guarda pasaría en verde sin haber leído nada", revisados)
 	}
 	t.Logf("%d archivos .go de producción revisados", revisados)
+}
+
+// esCopiaEntreRutasDelSistema dice si una línea copia algo que YA ESTÁ en el servidor a otro lado
+// del servidor — o sea, si su PRIMER argumento (el origen) es una ruta de sistema y no algo que
+// venga del repo o de un temporal cargado desde el repo.
+//
+// Existe para que la guarda pueda descontar el rollback del redespliegue sin abrir un agujero: lo
+// que se descuenta es «el origen no es del repo», no «el destino me suena conocido». Un
+// `cp "$AQUI/musubi-backup.sh" /usr/local/bin/x` tiene origen en el repo y NO lo descuenta.
+func esCopiaEntreRutasDelSistema(codigo string, prefijoDe map[string]string) bool {
+	m := regexp.MustCompile(`\b(cp|mv|ln)\s+(-[a-zA-Z]+\s+)*"?([^"\s]+)"?\s`).FindStringSubmatch(codigo)
+	if m == nil {
+		return false
+	}
+	origen := m[3]
+	// Origen EN EL REPO: `$AQUI/...`, `$REPO/...`, o una ruta relativa del árbol. No se descuenta.
+	if strings.Contains(origen, "$AQUI") || strings.Contains(origen, "$REPO") || strings.Contains(origen, "$HERE") {
+		return false
+	}
+	raizDeSistema := regexp.MustCompile(`^(/usr/|/etc/|/opt/|/var/|/home/|/srv/|/boot/)`)
+	if raizDeSistema.MatchString(origen) {
+		return true
+	}
+	if strings.HasPrefix(origen, "$") {
+		v := strings.Trim(strings.TrimPrefix(origen, "$"), "{}")
+		if p, ok := prefijoDe[v]; ok && raizDeSistema.MatchString(p) {
+			return true
+		}
+	}
+	return false
 }
