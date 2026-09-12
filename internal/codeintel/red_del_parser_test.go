@@ -24,6 +24,24 @@ import (
 // entrar en pánico al parser real a pedido. Una guarda que no puede provocar el defecto que dice
 // cuidar no distingue «hay red» de «no la probé» — y ese verde vale cero. La indirección
 // (`derivarPolyglotSinRed`) existe por esta prueba y su comentario lo dice.
+//
+// MECANIZADA, Y EL SABOTAJE ES EL HUECO HISTÓRICO. Angostar la red POR TIPO y repanicar lo que
+// no sea string: es lo que una auditoría adversaria hizo el 2026-09-12 y dejaba verde a la
+// versión vieja de esta prueba, que inyectaba un string. Medido: con el angostamiento esta
+// prueba falla («EL PÁNICO SUBIÓ: runtime error: index out of range [3] with length 0») y su
+// hermana TestLaRedNoSeTragaLoQuePasaPorAlLado queda VERDE. El reparto es a propósito.
+//
+// El arreglo es la misma red sin la variable, que no se usa en el cuerpo: equivalente exacto y
+// la simplificación que pediría cualquier linter. Tiene que seguir verde, y lo está.
+//
+// OJO: este archivo es `//go:build treesitter`. Un arnés que corra `go test` sin tags recibe
+// `ok ... [no tests to run]` con exit 0 — y eso NO es un verde, es que no se midió nada.
+// Sabotaje que la pone roja: angostar la red POR TIPO y repanicar lo que no sea string.
+// arnes: archivo="internal/codeintel/treesit_on.go"
+// arnes: de="\t\tif r := recover(); r != nil {\n"
+// arnes: a="\t\tif r := recover(); r != nil {\n\t\t\tif _, ok := r.(string); !ok {\n\t\t\t\tpanic(r)\n\t\t\t}\n"
+// arnes: arreglo_de="if r := recover(); r != nil {"
+// arnes: arreglo_a="if recover() != nil {"
 func TestUnPanicoDelParserNoSeLlevaElProceso(t *testing.T) {
 	original := derivarPolyglotSinRed
 	t.Cleanup(func() { derivarPolyglotSinRed = original })
@@ -74,6 +92,9 @@ func TestUnPanicoDelParserNoSeLlevaElProceso(t *testing.T) {
 // LO QUE SÍ MIDE EL ANCHO: que `derivePolyglotFile` contenga el pánico de SU archivo, y que un
 // pánico largado FUERA de esa llamada —en el mismo paquete y el mismo stack— siga subiendo. Para
 // eso hay que atravesar la función de verdad, no un closure de juguete.
+//
+// Sabotaje: no hay ninguno que un arnés pueda aplicar desde producción. El motivo, abajo.
+// arnes: no_mecanizable="el medio que esta prueba AGREGA —que un panico largado AL LADO siga subiendo— sale de `panicoDeAlLado`, que vive en este archivo de prueba a proposito: tiene que atravesar codigo del paquete SIN estar bajo la red. Un arnes que solo muta produccion no puede provocarlo. Su otro medio (que el panico de adentro no suba) ya lo mide TestUnPanicoDelParserNoSeLlevaElProceso con SU sabotaje, y esta MEDIDO que esta prueba queda verde bajo aquel: inyecta un string y la red angostada por tipo se lo traga igual."
 func TestLaRedNoSeTragaLoQuePasaPorAlLado(t *testing.T) {
 	original := derivarPolyglotSinRed
 	t.Cleanup(func() { derivarPolyglotSinRed = original })

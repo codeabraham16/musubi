@@ -29,6 +29,19 @@ import (
 // ESTA PRUEBA VA DIRECTO AL CONVERSOR, que es donde la decisión vive, y le da trozos que SÍ parten.
 // No se puede llegar por el camino del archivo sin fabricar una lectura corta; la unidad sí es
 // alcanzable, y es la que tiene el arrastre.
+//
+// MECANIZADA. El sabotaje es el off-by clásico del arrastre: pedir 4 bytes en vez de los que
+// FALTAN. El arreglo es la condición de entrada escrita como `!= 0`, que es equivalente porque
+// nSobra sale de un `copy` y nunca es negativo. Medidas las dos el 2026-09-12: con `falta := 4`
+// los cinco subcasos fallan por su propio mensaje («el arrastre perdió un float32 por el
+// camino», 7 valores de 8); con `!= 0` pasa.
+// Sabotaje que la pone roja: pedir 4 bytes en vez de los que FALTAN (`falta := 4`), que es el
+// off-by clásico del arrastre.
+// arnes: archivo="internal/embedding/static.go"
+// arnes: de="falta := 4 - nSobra"
+// arnes: a="falta := 4"
+// arnes: arreglo_de="if nSobra > 0 {"
+// arnes: arreglo_a="if nSobra != 0 {"
 func TestConvertirTrozoArrastraElFloat32Partido(t *testing.T) {
 	valores := []float32{1, -2.5, 3.25, 4e10, -0.0001, 65535.5, 7, 8}
 	crudo := make([]byte, 4*len(valores))
