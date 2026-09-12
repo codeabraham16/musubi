@@ -1,6 +1,10 @@
 package codeintel
 
 import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -99,15 +103,99 @@ re-derive TODO una vez; sin eso, los archivos que nadie edite se quedan con el g
 viejo PARA SIEMPRE (el src_fingerprint es del contenido, no del derivador).`,
 			enElMundo, motorTreeSitterDeclarado, enElMundo, GraphDeriverVersion)
 	}
-	// Tripwire de APLANADO: hoy es cierto por construcción (GraphDeriverVersion concatena la
-	// constante), y deja de serlo en el instante en que alguien la reescriba como literal. Si el
-	// motor no viaja DENTRO del valor que se compara contra el sello guardado, subirlo no re-deriva
-	// nada y la guarda de arriba estaría custodiando un número que no decide.
-	if !strings.Contains(GraphDeriverVersion, motorTreeSitterDeclarado) {
-		t.Errorf("GraphDeriverVersion (%q) no contiene motorTreeSitterDeclarado (%q): el motor no "+
-			"viaja en el sello, así que subirlo no dispara ninguna re-derivación",
-			GraphDeriverVersion, motorTreeSitterDeclarado)
+	// TRIPWIRE DE APLANADO. Pregunta por el FUENTE y no por el valor, y el motivo es que la
+	// versión anterior —`strings.Contains(GraphDeriverVersion, motorTreeSitterDeclarado)`— estaba
+	// en VERDE sobre exactamente el aplanado que decía cazar. Medido el 2026-09-12: reescrito el
+	// sello como `const GraphDeriverVersion = "5-crosspkg+ts-v0.52.0+poly-on"`, esta prueba pasaba
+	// y la del tag también, con tags; el literal CONTIENE el texto de la constante, porque salió
+	// de concatenarla. `Contains` acierta por la misma razón por la que el aplanado es invisible.
+	//
+	// LO QUE DECIDE NO ES EL TEXTO SINO LA DERIVACIÓN: que cambiar la constante cambie el sello.
+	// Eso es una propiedad de la DECLARACIÓN, no del valor —un `const` de Go no puede variar en
+	// runtime, así que no hay forma honesta de preguntarlo desde el valor— y se lee del archivo
+	// que la decide, con el mismo parser que la compila.
+	ids := identificadoresDelSello(t)
+	for _, quiero := range []string{"motorTreeSitterDeclarado", "motorPolyglot"} {
+		if !contieneCadena(ids, quiero) {
+			t.Errorf(`GraphDeriverVersion NO SE DERIVA de %s: el sello está aplanado.
+  declaración en crosspkg.go referencia: %v
+  valor actual                         : %q
+
+Aplanado, el sello queda CONGELADO: subir %s no cambia el valor que se compara contra el sello
+guardado, así que el próximo índice incremental no re-deriva nada y los archivos que nadie edite
+se quedan con el grafo del motor viejo para siempre.
+
+No alcanza con que el valor CONTENGA el texto de la constante —lo contiene igual estando aplanado,
+porque salió de concatenarla—: tiene que REFERENCIARLA.`,
+				quiero, ids, GraphDeriverVersion, quiero)
+		}
 	}
+}
+
+// identificadoresDelSello devuelve los identificadores que la declaración de GraphDeriverVersion
+// REFERENCIA en crosspkg.go. Lee el fuente porque la propiedad que interesa —que el sello derive
+// de las constantes del motor— vive en la declaración y no en el valor.
+//
+// `go test` corre con el cwd en el directorio del paquete, así que el archivo está al lado.
+func identificadoresDelSello(t *testing.T) []string {
+	t.Helper()
+	datos, err := os.ReadFile("crosspkg.go")
+	if err != nil {
+		t.Fatalf("no pude leer crosspkg.go desde el paquete: %v", err)
+	}
+	ids, err := identificadoresDelSelloEn(string(datos))
+	if err != nil {
+		t.Fatalf("crosspkg.go: %v", err)
+	}
+	return ids
+}
+
+// identificadoresDelSelloEn es la unidad, separada del archivo a propósito: la decisión que hay que
+// poder probar es «¿esta declaración deriva o está aplanada?», y probarla con el archivo real sólo
+// mide el caso sano. Con la unidad se le puede dar un aplanado y ver que lo distingue —que es
+// justo lo que el tripwire anterior no hacía.
+func identificadoresDelSelloEn(fuente string) ([]string, error) {
+	archivo, err := parser.ParseFile(token.NewFileSet(), "crosspkg.go", fuente, 0)
+	if err != nil {
+		return nil, fmt.Errorf("no parseó: %w", err)
+	}
+	for _, decl := range archivo.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, esp := range gen.Specs {
+			val, ok := esp.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, nombre := range val.Names {
+				if nombre.Name != "GraphDeriverVersion" || i >= len(val.Values) {
+					continue
+				}
+				ids := []string{}
+				ast.Inspect(val.Values[i], func(n ast.Node) bool {
+					if id, ok := n.(*ast.Ident); ok {
+						ids = append(ids, id.Name)
+					}
+					return true
+				})
+				return ids, nil
+			}
+		}
+	}
+	// «No lo encontré» NO es «está bien». Si la declaración cambió de forma, este tripwire dejó de
+	// tener dónde apoyarse y hay que enterarse, no seguir en verde.
+	return nil, fmt.Errorf("no encontré una declaración `const GraphDeriverVersion = ...` con valor")
+}
+
+func contieneCadena(xs []string, x string) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
 }
 
 // raizDelModulo sube desde el directorio del test hasta encontrar go.mod. `go test` corre con el
@@ -271,5 +359,71 @@ func trabajoQueDesviaElModulo(raiz, modulo string) (string, bool) {
 			return "", false
 		}
 		dir = padre
+	}
+}
+
+// TestElTripwireDeAplanadoVeLoQueContainsNoVeia — el control del tripwire nuevo, y está escrito
+// para medir LA DIFERENCIA con el viejo, no para medirse a sí mismo.
+//
+// El tripwire anterior preguntaba `strings.Contains(GraphDeriverVersion, motorTreeSitterDeclarado)`
+// y quedaba VERDE sobre el aplanado que decía cazar: el literal contiene el texto de la constante
+// justamente porque salió de concatenarla. Cada subcaso de acá afirma las DOS cosas —qué contesta
+// `Contains` y qué contesta el tripwire nuevo— porque si sólo afirmara la segunda, no se vería que
+// la primera es la que estaba rota.
+func TestElTripwireDeAplanadoVeLoQueContainsNoVeia(t *testing.T) {
+	const cabecera = "package codeintel\n\nconst motorTreeSitterDeclarado = \"v0.52.0\"\nconst motorPolyglot = \"poly-on\"\n"
+
+	casos := []struct {
+		nombre        string
+		decl          string
+		valorResuelto string // lo que ese fuente compilaría, para preguntarle a `Contains`
+		deriva        bool
+	}{
+		{
+			nombre:        "sano: el sello concatena las dos constantes",
+			decl:          `const GraphDeriverVersion = "5-crosspkg+ts-" + motorTreeSitterDeclarado + "+" + motorPolyglot`,
+			valorResuelto: "5-crosspkg+ts-v0.52.0+poly-on",
+			deriva:        true,
+		},
+		{
+			nombre:        "APLANADO: el mismo valor, escrito como literal",
+			decl:          `const GraphDeriverVersion = "5-crosspkg+ts-v0.52.0+poly-on"`,
+			valorResuelto: "5-crosspkg+ts-v0.52.0+poly-on",
+			deriva:        false,
+		},
+		{
+			nombre:        "aplanado a medias: sólo el motor del tag sigue viajando",
+			decl:          `const GraphDeriverVersion = "5-crosspkg+ts-v0.52.0+" + motorPolyglot`,
+			valorResuelto: "5-crosspkg+ts-v0.52.0+poly-on",
+			deriva:        false,
+		},
+	}
+
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			ids, err := identificadoresDelSelloEn(cabecera + c.decl + "\n")
+			if err != nil {
+				t.Fatalf("no pude leer la declaración: %v", err)
+			}
+			deriva := contieneCadena(ids, "motorTreeSitterDeclarado") && contieneCadena(ids, "motorPolyglot")
+			if deriva != c.deriva {
+				t.Errorf("el tripwire dice deriva=%v y tendría que decir %v (referencia: %v)", deriva, c.deriva, ids)
+			}
+
+			// EL PUNTO DE TODO ESTO: los tres valores contienen el texto de la constante, así que
+			// `Contains` contesta que sí en los tres — incluido el aplanado entero. Si esto alguna
+			// vez deja de ser cierto, el tripwire viejo no era el instrumento ciego que creímos y
+			// hay que releer por qué se cambió.
+			if !strings.Contains(c.valorResuelto, "v0.52.0") {
+				t.Fatalf("este subcaso ya no sirve de contraste: %q no contiene la versión, así que "+
+					"`Contains` lo habría cazado y no demuestra ninguna ceguera", c.valorResuelto)
+			}
+		})
+	}
+
+	// Y la forma que el tripwire NO debe dejar pasar en silencio: que la declaración desaparezca.
+	if _, err := identificadoresDelSelloEn("package codeintel\n\nconst Otra = \"x\"\n"); err == nil {
+		t.Error("sin declaración de GraphDeriverVersion el lector contestó sin error: «no lo encontré» " +
+			"se estaría leyendo como «está bien», que es el cero que significa «no sé»")
 	}
 }
