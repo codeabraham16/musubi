@@ -3,7 +3,6 @@
 package codeintel
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -36,9 +35,15 @@ func TestUnPanicoDelParserNoSeLlevaElProceso(t *testing.T) {
 	}
 	t.Logf("control: %d nodos, %d aristas sobre un .py válido", len(nodos), len(aristas))
 
-	// AHORA SÍ: que el pánico no suba.
+	// AHORA SÍ: que el pánico no suba. SE INYECTA UN runtime.Error, NO UN STRING, y eso no es un
+	// detalle de estilo: una gramática rota no larga `panic("texto")`, larga un índice fuera de
+	// rango o un nil deref — o sea un runtime.Error. La versión original de esta prueba inyectaba
+	// un string, y con eso una red angostada al TIPO (`if _, ok := r.(string); !ok { panic(r) }`)
+	// la dejaba VERDE mientras el daemon seguía muriendo por el caso real. Medido el 2026-09-12.
 	derivarPolyglotSinRed = func(path, content string) ([]Node, []Edge) {
-		panic("pánico de prueba adentro del parser")
+		var vacio []int
+		_ = vacio[3] // runtime error: index out of range — lo que de verdad larga un parser roto
+		return nil, nil
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -55,28 +60,56 @@ func TestUnPanicoDelParserNoSeLlevaElProceso(t *testing.T) {
 	}
 }
 
-// TestLaRedNoSeTragaUnPanicoDeOtroLado — que la red sea del ANCHO justo.
+// TestLaRedNoSeTragaLoQuePasaPorAlLado — que la red sea del ANCHO justo.
 //
-// Un `recover()` puesto con la mano floja se come cualquier pánico del proceso que pase por ahí,
-// incluido uno que signifique corrupción y del que haya que enterarse. Acá el alcance es el
-// `defer` de UNA llamada: se comprueba que el pánico de la función de al lado —el mismo paquete,
-// el mismo stack— sigue subiendo.
-func TestLaRedNoSeTragaUnPanicoDeOtroLado(t *testing.T) {
+// LA VERSIÓN ANTERIOR DE ESTA PRUEBA ERA DECORATIVA Y LA ESCRIBÍ YO. Largaba un pánico adentro de
+// su propio closure y lo recuperaba con el `defer` de ESE MISMO closure: no nombraba un solo
+// símbolo de producción, así que probaba la especificación de Go y no este código. Quedaba en
+// VERDE con el `recover()` de `derivePolyglotFile` BORRADO ENTERO — o sea que no distinguía
+// «la red es angosta» de «no hay red». La encontró una auditoría adversaria el 2026-09-12, y
+// estaba anunciada en el PR como el control sofisticado de las tres.
+//
+// LO QUE SÍ MIDE EL ANCHO: que `derivePolyglotFile` contenga el pánico de SU archivo, y que un
+// pánico largado FUERA de esa llamada —en el mismo paquete y el mismo stack— siga subiendo. Para
+// eso hay que atravesar la función de verdad, no un closure de juguete.
+func TestLaRedNoSeTragaLoQuePasaPorAlLado(t *testing.T) {
+	original := derivarPolyglotSinRed
+	t.Cleanup(func() { derivarPolyglotSinRed = original })
+
+	// Adentro: contenido.
+	derivarPolyglotSinRed = func(path, content string) ([]Node, []Edge) { panic("adentro") }
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("el pánico de adentro de derivePolyglotFile SUBIÓ (%v): no hay red", r)
+			}
+		}()
+		derivePolyglotFile("x.py", "lo que sea")
+	}()
+
+	// Al lado: tiene que subir. Se llama a una función REAL del paquete que no está bajo la red,
+	// con una entrada que la hace explotar — no a un closure escrito para la ocasión.
+	derivarPolyglotSinRed = original
 	subio := false
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
 				subio = true
-				if !strings.Contains(r.(string), "de otro lado") {
-					t.Errorf("subió un pánico que no es el que largué: %v", r)
-				}
 			}
 		}()
-		// Fuera del alcance de derivePolyglotFile: tiene que subir.
-		panic("pánico de otro lado")
+		// `lineAtByte` indexa el contenido; un offset fuera de rango revienta, y no está protegido.
+		_ = panicoDeAlLado()
 	}()
 	if !subio {
-		t.Fatal("un pánico ajeno a derivePolyglotFile NO subió: la red está puesta más ancha de lo " +
-			"que dice, y estaría tapando cosas de las que hay que enterarse")
+		t.Fatal("un pánico largado FUERA de derivePolyglotFile no subió: la red está más ancha de " +
+			"lo que dice y estaría tapando cosas de las que hay que enterarse")
 	}
+}
+
+// panicoDeAlLado provoca un pánico REAL en el mismo paquete, fuera del alcance de la red. Existe
+// para que la prueba del ancho atraviese código de este paquete y no un closure de juguete: ése
+// fue exactamente el defecto de la versión anterior.
+func panicoDeAlLado() int {
+	var vacio []int
+	return vacio[3]
 }
