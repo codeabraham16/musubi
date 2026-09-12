@@ -102,22 +102,6 @@ func TestSearchObservationsFTSHandlesSpecialChars(t *testing.T) {
 	}
 }
 
-func TestCountObservations(t *testing.T) {
-	e := newTestEngine(t)
-	if n, err := e.CountObservations(); err != nil || n != 0 {
-		t.Fatalf("DB vacía debe contar 0, obtuve %d (err=%v)", n, err)
-	}
-	if err := e.SaveObservation("a", "t", "uno", nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.SaveObservation("b", "t", "dos", nil); err != nil {
-		t.Fatal(err)
-	}
-	if n, err := e.CountObservations(); err != nil || n != 2 {
-		t.Fatalf("esperaba 2 observaciones, obtuve %d (err=%v)", n, err)
-	}
-}
-
 // TestCountSavedItems verifica que la señal de captura sube ante cualquiera de las TRES
 // superficies (observación, hecho, code), no solo observaciones (Frente #3 d).
 func TestCountSavedItems(t *testing.T) {

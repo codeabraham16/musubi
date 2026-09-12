@@ -31,7 +31,7 @@ func TestUnManifiestoConFirmaAjenaNoVerifica(t *testing.T) {
 	otraPub, otraPriv := parDePrueba(t)
 
 	m := Manifiesto{Version: "1.2.3", Assets: map[string]string{"musubi-linux-amd64": strings.Repeat("a", 64)}}
-	datos, err := m.BytesFirmables()
+	datos, err := json.Marshal(m)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestUnManifiestoConFirmaAjenaNoVerifica(t *testing.T) {
 // Sabotaje: que VerificarFirma devuelva nil cuando la clave está vacía.
 func TestSinClaveEmbebidaLaVerificacionFalla(t *testing.T) {
 	m := Manifiesto{Version: "1.2.3", Assets: map[string]string{"x": strings.Repeat("b", 64)}}
-	datos, _ := m.BytesFirmables()
+	datos, _ := json.Marshal(m)
 	_, priv := parDePrueba(t)
 	firma := hex.EncodeToString(ed25519.Sign(priv, datos))
 
@@ -84,39 +84,20 @@ func TestSinClaveEmbebidaLaVerificacionFalla(t *testing.T) {
 	}
 }
 
-// LA FORMA CANÓNICA NO PUEDE DEPENDER DEL ORDEN DE UN MAPA.
+// LA FIRMA SE VERIFICA SOBRE LOS BYTES QUE LLEGARON, Y NO SOBRE UNA RE-SERIALIZACIÓN.
 //
-// Si `BytesFirmables` produjera bytes distintos en dos corridas con el mismo manifiesto, la firma
-// empezaría a fallar en algunos releases y no en otros — intermitente y con pinta de problema de
-// red, que es el peor síntoma posible. `json.Marshal` de un map ordena las claves, y esta prueba
-// lo clava para que nadie lo cambie por algo que no lo garantiza.
+// Acá vivía TestLaFormaCanonicaEsDeterministaConMuchasClaves, que probaba que `BytesFirmables`
+// devolvía siempre los mismos bytes. Se fue con la función: era su único consumidor, y la premisa
+// que defendía —que esa forma es «la misma en los dos lados»— resultó falsa al medirla. Go emitía
+// `version` primero y el firmador emite `assets` primero, y nunca importó porque ninguno de los
+// dos lados re-serializa.
 //
-// Sabotaje: serializar el manifiesto recorriendo el map a mano en vez de con json.Marshal.
-func TestLaFormaCanonicaEsDeterministaConMuchasClaves(t *testing.T) {
-	assets := map[string]string{}
-	for _, n := range []string{"z", "a", "m", "b", "y", "c", "x", "d", "w", "e"} {
-		assets["musubi-"+n] = strings.Repeat(n, 64)
-	}
-	m := Manifiesto{Version: "1.2.3", Assets: assets}
-	primero, err := m.BytesFirmables()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 50; i++ {
-		otro, err := m.BytesFirmables()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(otro) != string(primero) {
-			t.Fatalf("la forma canónica cambió entre corridas: la firma fallaría de forma intermitente\n  %s\n  %s", primero, otro)
-		}
-	}
-	// Y es JSON con las claves ordenadas, que es lo que el guion de firma produce del otro lado.
-	var control map[string]any
-	if err := json.Unmarshal(primero, &control); err != nil {
-		t.Fatalf("la forma canónica no es JSON válido: %v", err)
-	}
-}
+// Lo que SÍ hay que sostener es lo de abajo, y está cubierto: una firma ajena no verifica, un
+// binario sin clave no verifica, y un asset fuera del manifiesto firmado no se instala.
+//
+// Sabotaje que todavía vale: hacer que VerificarFirma parsee y vuelva a serializar el manifiesto
+// antes de comprobar la firma. TestUnManifiestoConFirmaAjenaNoVerifica no lo caza, pero un release
+// real deja de instalarse — por eso el aviso está escrito en el doc de VerificarFirma.
 
 // UN ASSET QUE NO ESTÁ EN EL MANIFIESTO FIRMADO NO SE INSTALA.
 //

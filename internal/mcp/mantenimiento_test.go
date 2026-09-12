@@ -78,10 +78,29 @@ func TestLasPoliticasNoActuanSobreUnaMaquinaEnMantenimiento(t *testing.T) {
 // Con los dos inclusive, dos ventanas consecutivas se solapan un instante — y el solapamiento de
 // algo que silencia alertas es la clase de detalle que nadie mira hasta que importa.
 //
-// Sabotaje: cambiar `ahora.Before(m.Hasta)` por `!ahora.After(m.Hasta)` en Activa.
+// SE PREGUNTA POR EL CAMINO QUE CORRE, Y ÉSA ES LA CORRECCIÓN. Esta prueba ejercitaba
+// `fleet.Mantenimiento.Activa`, una segunda copia de la comparación de bordes que no llamaba nadie:
+// el borde que de verdad deciden el scheduler de auto-heal y los dos exportadores es el `WHERE` de
+// DevicesEnMantenimiento. Con la copia en memoria verde, invertir el borde del SQL dejaba el suite
+// entero en verde — que es justo la forma de falla que esta prueba decía cubrir.
+//
+// Los instantes van SIN fracción de segundo a propósito: el escritor persiste en RFC3339, que no
+// tiene campo de fracción, así que un `desde` con milisegundos se guarda truncado y el borde
+// declarado deja de ser el borde almacenado.
+//
+// Sabotaje: en internal/memory/mantenimiento.go, cambiar `hasta > ?` por `hasta >= ?`, o
+// `desde <= ?` por `desde < ?`.
 func TestLaVentanaEmpiezaInclusiveYTerminaExclusive(t *testing.T) {
+	s, d := servidorConMaquina(t)
 	desde := time.Date(2026, 9, 3, 10, 0, 0, 0, time.UTC)
-	m := fleet.Mantenimiento{Desde: desde, Hasta: desde.Add(time.Hour)}
+	hasta := desde.Add(time.Hour)
+	m, err := s.engine.AbrirMantenimiento(fleet.Mantenimiento{
+		DeviceID: d.ID, ProjectID: d.ProjectID, Principal: "gio",
+		Desde: desde, Hasta: hasta, Motivo: "migración de postgres",
+	})
+	if err != nil {
+		t.Fatalf("no se pudo abrir la ventana: %v", err)
+	}
 	casos := []struct {
 		cuando time.Time
 		activa bool
@@ -90,17 +109,23 @@ func TestLaVentanaEmpiezaInclusiveYTerminaExclusive(t *testing.T) {
 		{desde.Add(-time.Second), false, "un segundo antes"},
 		{desde, true, "el instante de inicio (inclusive)"},
 		{desde.Add(30 * time.Minute), true, "en el medio"},
-		{desde.Add(time.Hour), false, "el instante de fin (exclusivo)"},
-		{desde.Add(time.Hour + time.Second), false, "un segundo después"},
+		{hasta, false, "el instante de fin (exclusivo)"},
+		{hasta.Add(time.Second), false, "un segundo después"},
 	}
 	for _, c := range casos {
-		if got := m.Activa(c.cuando); got != c.activa {
-			t.Errorf("%s: Activa=%v, esperaba %v", c.por, got, c.activa)
+		set, err := s.engine.DevicesEnMantenimiento(c.cuando)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if set[d.ID] != c.activa {
+			t.Errorf("%s: enMantenimiento=%v, esperaba %v", c.por, set[d.ID], c.activa)
 		}
 	}
 	// Y una cancelada no cubre nada, esté donde esté el reloj.
-	m.Cancelada = true
-	if m.Activa(desde.Add(30 * time.Minute)) {
+	if hubo, err := s.engine.CancelarMantenimiento(d.ID, d.ProjectID, m.ID); err != nil || !hubo {
+		t.Fatalf("no se pudo cancelar (hubo=%v err=%v)", hubo, err)
+	}
+	if set, _ := s.engine.DevicesEnMantenimiento(desde.Add(30 * time.Minute)); set[d.ID] {
 		t.Error("una ventana cancelada sigue activa")
 	}
 }

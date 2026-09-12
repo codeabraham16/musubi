@@ -316,3 +316,69 @@ func revisarCabecerasDePty(t *testing.T, quien string, h http.Header) {
 		t.Errorf("%s: X-Content-Type-Options = %q, se esperaba nosniff", quien, got)
 	}
 }
+
+// «TODAVÍA NO VINO NADIE» Y «VINO Y NO IMPRIME NADA» NO PUEDEN CONTESTAR LO MISMO.
+//
+// A un Tier A no le entra nadie: se le avisa por la cola de comandos y se engancha en su próximo
+// latido, hasta 30 s después. Durante esa ventana el long-poll devolvía 200 con cuerpo vacío — el
+// MISMO 200 vacío de una terminal abierta y quieta. Quien abría la shell veía un cursor parado sin
+// saber si la máquina estaba apagada, si el agente no arrancó, o si simplemente no había salida.
+//
+// La bandera que distinguía los dos casos existía desde el día uno (`Enganchado`) y su único
+// consumidor (`EsperarAgente`) no tenía NI UN llamador: producción ESCRIBÍA la marca y no la leía
+// nadie. Media instalación, verde en los tests.
+//
+// Sabotaje que la hace fallar: borrar el bloque `if agente, esDeAgente := canal.(*fleet.CanalAgente)`
+// de handlerShellOut — vuelve el 200 vacío sin cabecera, indistinguible de una terminal quieta.
+func TestUnaShellDeTierASinAgenteSeDistingueDeUnaTerminalQuieta(t *testing.T) {
+	// La espera real son 25 s y acá no se puede pagar eso: se achica para esta prueba y se
+	// restaura al salir. Es la única razón por la que `esperaSalidaShell` es var y no const.
+	original := esperaSalidaShell
+	esperaSalidaShell = 50 * time.Millisecond
+	defer func() { esperaSalidaShell = original }()
+
+	s := newTestServer(t, embedding.NoopProvider{})
+	d, _ := enrolarTierAConShell(t, s, "casa", "pc-gio")
+	ses, err := s.engine.AbrirSesionShell(fleet.SesionShell{
+		DeviceID: d.ID, ProjectID: "casa", Principal: "op"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canal := fleet.NuevoCanalAgente()
+	s.shells.guardar(ses.ID, canal)
+	defer s.cerrarShell(ses.ID, fleet.ShellCerrada, "fin de la prueba", time.Now())
+
+	reg := registroDePrueba(Principal{
+		Name: "op", Role: RoleWriter, Read: ReadOwn, Write: WriteOwn, ProjectID: "casa",
+		Fleet: map[fleet.Cap][]string{fleet.CapShell: {"*"}},
+		hash:  hashToken("el-token-de-op"),
+	})
+	h := s.HTTPHandler(httpOptions{reqTimeout: 5 * time.Second, registry: reg})
+
+	pedir := func() *http.Response {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, shellOutPath+"?id="+ses.ID, nil)
+		r.Header.Set("Authorization", "Bearer el-token-de-op")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("salida al operador: %d — %s", w.Code, w.Body.String())
+		}
+		if w.Body.Len() != 0 {
+			t.Fatalf("se esperaba cuerpo vacío, vino %q", w.Body.String())
+		}
+		return w.Result()
+	}
+
+	// SIN agente: 200 vacío CON seña.
+	if got := pedir().Header.Get("X-Musubi-Shell"); got != "esperando-agente" {
+		t.Fatalf("sin agente enganchado se esperaba la seña `esperando-agente`, vino %q", got)
+	}
+
+	// CONTROL POSITIVO: con el agente enganchado la seña TIENE que desaparecer. Sin esto, la
+	// aserción de arriba pasaría igual con una rama que pusiera la cabecera siempre.
+	canal.Enganchar()
+	if got := pedir().Header.Get("X-Musubi-Shell"); got != "" {
+		t.Fatalf("con el agente enganchado no tendría que haber seña, vino %q", got)
+	}
+}

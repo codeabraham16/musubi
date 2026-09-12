@@ -165,8 +165,8 @@ func sembrar(t *testing.T, s *McpServer, n int) {
 	}
 }
 
-// servidorConMotor devuelve TAMBIÉN el engine concreto: s.engine es la interfaz StorageBackend y no
-// expone CountObservations, que es lo que necesita exigeSembradas para verificar la precondición.
+// servidorConMotor devuelve TAMBIÉN el engine concreto, que es lo que toma exigeSembradas para
+// verificar la precondición (conteo de filas vía Insights + items visibles vía Recall).
 func servidorConMotor(t *testing.T, motor *motorBloqueante, cfg config.CognitionConfig, emb embedding.Provider) (*McpServer, *memory.DbEngine) {
 	t.Helper()
 	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
@@ -198,7 +198,7 @@ func servidorConMotor(t *testing.T, motor *motorBloqueante, cfg config.Cognition
 
 // exigeSembradas verifica que la siembra sobrevivió entera Y VISIBLE.
 //
-// Contaba filas con CountObservations, y ahí estaba el segundo defecto: el auto-supersede NO BORRA
+// Contaba filas y sólo filas, y ahí estaba el segundo defecto: el auto-supersede NO BORRA
 // la fila, le prende una marca que la esconde del recall. O sea que la precondición daba verde con
 // 3 filas mientras el recall veía 1 — medía bien, pero otra cosa. El test se caía después, dos pasos
 // más adelante, con un mensaje que mandaba a revisar el candado.
@@ -208,10 +208,11 @@ func servidorConMotor(t *testing.T, motor *motorBloqueante, cfg config.Cognition
 // no en una tarde.
 func exigeSembradas(t *testing.T, engine *memory.DbEngine, n int) {
 	t.Helper()
-	total, err := engine.CountObservations()
+	ins, err := engine.Insights()
 	if err != nil {
-		t.Fatalf("CountObservations: %v", err)
+		t.Fatalf("Insights (conteo de filas): %v", err)
 	}
+	total := ins.Observations.Total
 	res, err := engine.Recall(context.Background(), "candado despacho red", memory.RecallOptions{NoBump: true})
 	if err != nil {
 		t.Fatalf("Recall de precondición: %v", err)
@@ -317,8 +318,8 @@ func TestG1ClasePorDefaultEsLaDeHoy(t *testing.T) {
 // G2 — Las escrituras siguen serializadas. Es el invariante que el candado exclusivo existe para
 // sostener: no alcanza con "no lo toqué", hay que probar que sobrevive.
 func TestG2EscriturasConcurrentesNoSePisan(t *testing.T) {
-	// El engine se arma acá y no con newTestServer porque la aserción necesita el *DbEngine
-	// concreto: s.engine es la interfaz StorageBackend y no expone CountObservations.
+	// El engine se arma acá y no con newTestServer porque la aserción cuenta filas directamente
+	// sobre el engine: Insights().Observations.Total, el mismo COUNT(*) sin scope que había acá.
 	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
@@ -340,10 +341,11 @@ func TestG2EscriturasConcurrentesNoSePisan(t *testing.T) {
 	}
 	wg.Wait()
 
-	total, err := engine.CountObservations()
+	ins, err := engine.Insights()
 	if err != nil {
-		t.Fatalf("CountObservations: %v", err)
+		t.Fatalf("Insights (conteo de filas): %v", err)
 	}
+	total := ins.Observations.Total
 	if total != n {
 		t.Fatalf("esperaba %d observaciones tras %d escrituras concurrentes, hay %d: se perdió alguna", n, n, total)
 	}
