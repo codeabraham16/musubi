@@ -173,13 +173,6 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 	// LA BITÁCORA SE ESCRIBE ANTES DE CONECTAR — misma regla que F1 de S5 y G7 de S6. Si el SSH
 	// nunca prende, el PEDIDO queda registrado igual: que alguien haya intentado abrir una shell
 	// en un servidor es información de auditoría tanto como que lo haya logrado.
-	// EL PERMISO DE CUATRO OJOS SE GASTA ACÁ, inmediatamente antes de que exista la sesión. La
-	// puerta de más arriba sólo comprobó: consumir allá perdía el permiso en cualquier camino
-	// que devolviera sin abrir nada. Ver gastarAprobacion.
-	if e := s.gastarAprobacion(d, p, fleet.CapShell, ahora); e != nil {
-		return nil, e
-	}
-
 	ses, err := s.engine.AbrirSesionShell(fleet.SesionShell{
 		DeviceID: d.ID, ProjectID: proyecto, Principal: nombrePrincipal(p),
 	})
@@ -187,7 +180,7 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}
 
-	return s.abrirShellConSesion(d, ses, args.Filas, args.Columnas)
+	return s.abrirShellConSesion(d, p, ses, args.Filas, args.Columnas)
 }
 
 // abrirShellConSesion levanta el canal sobre una sesión YA REGISTRADA.
@@ -197,8 +190,30 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 // del suyo: copiarla dejaría dos lugares donde se abre un canal y dos donde recordar cerrarlo si
 // falla — y la copia que se queda vieja es siempre la del camino que se usa menos, que acá es
 // justo el de mayor autoridad.
-func (s *McpServer) abrirShellConSesion(d fleet.Device, ses fleet.SesionShell,
+func (s *McpServer) abrirShellConSesion(d fleet.Device, p *Principal, ses fleet.SesionShell,
 	filas, columnas int) (interface{}, *RpcError) {
+
+	// EL PERMISO DE CUATRO OJOS SE GASTA ACÁ, y estaba UN NIVEL MÁS ARRIBA.
+	//
+	// Estaba en `toolFleetShell`, inmediatamente antes de registrar la sesión — correcto para el
+	// camino normal y CIEGO para el otro. Con consentimiento `pide`, `toolFleetShell` devuelve
+	// antes de llegar ahí; cuando la persona acepta, la shell se abre desde
+	// `pedirPermisoParaShell`, que llama acá directo. En una máquina con `RequiereAprobacion` Y
+	// `pide`, la aprobación de cuatro ojos se comprobaba en la puerta y NO SE CONSUMÍA NUNCA: un
+	// permiso que el propio código llama «de un solo uso» quedaba vigente hasta vencer, y abría
+	// todas las sesiones que entraran en esa ventana.
+	//
+	// EL GEMELO YA LO TENÍA ARREGLADO Y ESCRITO. `entregarPantalla` gasta adentro, «en el único
+	// lugar que acuña una credencial de pantalla», y su comentario dice textual que entre la
+	// puerta y ese punto «puede haber pasado un diálogo de `pide` entero, que es donde la primera
+	// versión perdía la aprobación». La lección estaba aprendida de un lado y no del hermano, a
+	// treinta líneas de distancia.
+	//
+	// Va adentro y no en los dos llamadores por la MISMA razón por la que esta función está
+	// extraída: dos lugares donde gastar es un lugar donde olvidarse.
+	if e := s.gastarAprobacion(d, p, fleet.CapShell, time.Now().UTC()); e != nil {
+		return nil, e
+	}
 
 	canal, err := s.abrirCanalShell(d, filas, columnas)
 	if err != nil {
@@ -494,7 +509,7 @@ func (s *McpServer) pedirPermisoParaShell(d fleet.Device, p *Principal, proyecto
 			// DIJERON QUE SÍ. La sesión ya quedó en `abriendo`, así que se sigue por el camino
 			// normal SIN registrar otra: abrir una nueva dejaría la concedida colgada y la
 			// bitácora con dos filas para un solo permiso.
-			return s.abrirShellConSesion(d, previa, 0, 0)
+			return s.abrirShellConSesion(d, p, previa, 0, 0)
 		default:
 			return nil, rpcErrorf(codeUnauthorized, "%s", explicarShellSinPermiso(d, previa))
 		}
