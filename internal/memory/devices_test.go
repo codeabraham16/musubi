@@ -357,6 +357,9 @@ func TestLatidoSePersisteYElEstadoSeDeriva(t *testing.T) {
 // A10 — un latido que no encuentra a quién actualizar NO es un error.
 // Sabotaje: devolver error cuando RowsAffected es 0 → cada máquina dada de baja produce una
 // cascada de ruido hasta que alguien la apague.
+// arnes: archivo="internal/memory/devices.go"
+// arnes: de="\tif err != nil {\n\t\treturn false, fmt.Errorf(\"error al leer el resultado del latido de %q: %w\", id, err)\n\t}\n\treturn n > 0, nil"
+// arnes: a="\tif err != nil {\n\t\treturn false, fmt.Errorf(\"error al leer el resultado del latido de %q: %w\", id, err)\n\t}\n\tif n == 0 {\n\t\treturn false, fmt.Errorf(\"el latido de %q no encontró ninguna fila que actualizar\", id)\n\t}\n\treturn n > 0, nil"
 func TestLatidoDeUnDeviceQueYaNoEstaNoEsError(t *testing.T) {
 	e := newTestEngine(t)
 	alta, _ := altaDePrueba(t, e, "casa", "pc-gio")

@@ -73,6 +73,9 @@ func TestSecretoDeEnvCaeAlArchivoCuandoLaVariableNoEsta(t *testing.T) {
 // correcto.
 //
 // Sabotaje que la hace fallar: volver a mirar la variable antes que el archivo.
+// arnes: archivo="internal/config/secreto_env.go"
+// arnes: de="\truta := strings.TrimSpace(os.Getenv(nombre + SufijoArchivoDeSecreto))"
+// arnes: a="\tif v := strings.TrimSpace(os.Getenv(nombre)); v != \"\" {\n\t\treturn v, nil\n\t}\n\truta := strings.TrimSpace(os.Getenv(nombre + SufijoArchivoDeSecreto))"
 func TestSecretoDeEnvElArchivoLeGanaALaVariable(t *testing.T) {
 	dir := t.TempDir()
 	ruta := filepath.Join(dir, "token")

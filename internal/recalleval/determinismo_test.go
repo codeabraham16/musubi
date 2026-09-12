@@ -34,6 +34,10 @@ import (
 // `rankCandidates` (internal/memory/recall.go), volcar `out` a un `map[string]scoredCandidate` y
 // reconstruirlo iterándolo, justo antes del `sort.SliceStable`. Con eso `migration-en` y
 // `backup-dr-es` se intercambian entre corridas y la guarda lo dice.
+// arnes: prueba="TestElRecallEsDeterministaSinRefuerzo"
+// arnes: archivo="internal/memory/recall.go"
+// arnes: de="\tsort.SliceStable(out, func(i, j int) bool { return out[i].score > out[j].score })"
+// arnes: a="\tporID := make(map[string]scoredCandidate, len(out))\n\tfor _, sc := range out {\n\t\tporID[sc.id] = sc\n\t}\n\tout = out[:0]\n\tfor _, sc := range porID {\n\t\tout = append(out, sc)\n\t}\n\tsort.SliceStable(out, func(i, j int) bool { return out[i].score > out[j].score })"
 //
 // LA RECETA QUE NO SIRVE, y la dejo escrita porque fue la primera que se me ocurrió: sacar
 // `opts.NoBump = true` de `RunFixture`. NO toca esta prueba, porque acá el NoBump se pone en el

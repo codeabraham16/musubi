@@ -13,6 +13,28 @@
 // ocho comprobaciones.
 //
 // ─────────────────────────────────────────────────────────────────────────────────────────────
+// ESTE ARNÉS CORRE SIN BUILD TAGS, Y ESO ACOTA LO QUE SU VERDE SIGNIFICA
+//
+// El paquete se deriva del directorio del archivo de prueba y se corre `go vet <paquete>` +
+// `go test <paquete> -run ^<prueba>$` PELADO. Lo levantó otra sesión midiendo un caso suyo, y son
+// dos límites distintos:
+//
+//	· UN SABOTAJE QUE SÓLO ROMPE BAJO TAGS PASA DESAPERCIBIDO. Medido: subir la versión de
+//	  gotreesitter en `go.mod` compila sin tags —`internal/codeintel` no importa el módulo, está
+//	  `treesit_off.go`— y con tags falla con `missing go.sum entry`. El arnés diría «el sabotaje
+//	  funciona» con confianza, y sería cierto para el job `test` y falso para el de polyglot.
+//
+//	· UNA GUARDA QUE SÓLO EXISTE BAJO TAGS NO SE PUEDE VERIFICAR ACÁ, y es el peor de los dos.
+//	  `treesit_test.go`, `methods_codegraph_polyglot_test.go` y `red_del_parser_test.go` no
+//	  compilan sin su tag, así que el control de `sabotaje.sh` las rechaza por «no selecciona
+//	  ninguna prueba» — diagnóstico correcto con el sonido equivocado, porque se lee como «el ancla
+//	  está mal escrita». Por eso ese rechazo ahora imprime la causa real y el comando con el tag.
+//
+// O SEA QUE LA COBERTURA QUE ESTE COMANDO REPORTA ES SOBRE EL ÁRBOL SIN TAGS. Decirla sin esa
+// salvedad es exactamente el defecto que el censo tuvo que corregir un piso más arriba: un número
+// sin su denominador declarado se lee como si fuera del universo.
+//
+// ─────────────────────────────────────────────────────────────────────────────────────────────
 // USO
 //
 //	go run ./deploy/cmd/arnes                          # el censo: qué promete el árbol
@@ -437,6 +459,14 @@ func correrTodos(raiz string, c arnes.Censo, soloPaquete string, limite int) int
 	}
 	defer os.RemoveAll(tmp)
 
+	// La foto del árbol ANTES de tocar nada. Se compara al final: ver el bloque del cierre.
+	antes, err := estadoDelArbol(raiz)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "no pude fotografiar el estado del árbol antes de empezar:", err)
+		fmt.Fprintln(os.Stderr, "sin esa foto no se puede saber si la corrida dejó un sabotaje puesto")
+		return 2
+	}
+
 	var corridas, rojos, verdes, errores int
 	var huecas []string
 	for _, a := range c.Mecanizadas() {
@@ -486,6 +516,18 @@ func correrTodos(raiz string, c arnes.Censo, soloPaquete string, limite int) int
 			// roto, cero pruebas ejecutadas, guarda que castiga el arreglo. NO se cuenta como
 			// veredicto, porque «no medí» y «está bien» no son lo mismo.
 			errores++
+			// Y UN CASO MERECE QUE SE LE DIGA LA CAUSA REAL, porque el diagnóstico de `sabotaje.sh`
+			// es correcto y suena a otra cosa. Cuando el patrón no selecciona ninguna prueba, la
+			// causa más probable en este árbol NO es un ancla mal escrita: es que esa prueba vive
+			// detrás de un build tag (`treesitter`, `race`) y ESTE ARNÉS CORRE SIN TAGS. «no test
+			// files» se lee como «te equivocaste de nombre»; la verdad es «este árbol no compila
+			// esa prueba». Es la diferencia entre un límite declarado y un error aparente, y si la
+			// primera frase entra a un informe alguien va a ir a arreglar el ancla que está bien.
+			if strings.Contains(string(salida), "NO SELECCIONA NINGUNA PRUEBA") {
+				fmt.Println("   → OJO CON LA CAUSA: este arnés corre SIN BUILD TAGS. Si la prueba vive detrás")
+				fmt.Println("     de un tag (`treesitter`, `race`), no existe en este árbol y el ancla puede estar")
+				fmt.Println("     perfecta. Comprobalo con: go test -tags '<el tag>' " + d.Paquete + " -run '^" + d.Prueba + "$'")
+			}
 		}
 	}
 
@@ -500,12 +542,70 @@ func correrTodos(raiz string, c arnes.Censo, soloPaquete string, limite int) int
 			fmt.Println("   ", h)
 		}
 	}
+	// ── EL ÁRBOL TIENE QUE QUEDAR LIMPIO, Y SE COMPRUEBA ─────────────────────────────────────
+	//
+	// `sabotaje.sh` restaura con `cp` desde un respaldo y lo hace en un `trap EXIT INT TERM`, así
+	// que un Ctrl-C o un error restauran. Lo que NO restaura es un SIGKILL: un OOM, o la red que
+	// se cae con el proceso adentro. Este repo lo midió: cayó la red y quedaron cuatro worktrees
+	// sucios con dos sabotajes puestos, y UNO DE ELLOS MENTÍA EN VERDE.
+	//
+	// El modo de falla es silencioso y SOBREVIVE A LA SESIÓN: el próximo que corra las pruebas las
+	// va a ver fallar por un sabotaje que nadie sabe que está puesto, o —peor— en verde sobre
+	// código saboteado. Por eso la corrida termina preguntándole a git si quedó algo, y grita.
+	//
+	// Se pregunta por `--porcelain` y no por `git diff`: `diff` NO VE los archivos sin trackear, y
+	// aunque hoy ningún sabotaje crea archivos, un `de`→`a` que parta un archivo en dos sí lo
+	// haría, y ése es exactamente el caso que `git checkout` tampoco sabe deshacer.
+	//
+	// Y SE COMPARA EL ANTES CONTRA EL DESPUÉS, NO CONTRA VACÍO. Exigir un árbol limpio al final
+	// sería un falso positivo cada vez que alguien corre esto con trabajo sin commitear —que es
+	// SIEMPRE, porque las directivas recién escritas son exactamente eso—, y una guarda que grita
+	// en el caso normal enseña a ignorarla. Lo que importa no es si el árbol está sucio: es si esta
+	// corrida lo ensució.
+	if despues, err := estadoDelArbol(raiz); err != nil {
+		fmt.Printf("\n! no pude preguntarle a git si el árbol quedó como estaba: %v\n", err)
+		fmt.Println("  REVISALO A MANO. Un sabotaje que queda puesto es el peor desenlace de esta herramienta.")
+		return 1
+	} else if despues != antes {
+		fmt.Println("\n✗ ESTA CORRIDA LE DEJÓ CAMBIOS AL ÁRBOL. Antes y después no coinciden:")
+		fmt.Println("  ── antes ──")
+		fmt.Println(sangrar(antes))
+		fmt.Println("  ── después ──")
+		fmt.Println(sangrar(despues))
+		fmt.Println("  Es un SABOTAJE PUESTO: restauralo antes de correr nada más. Pasa cuando el proceso")
+		fmt.Println("  muere por SIGKILL (un OOM, la red), que se saltea el trap de sabotaje.sh.")
+		return 1
+	}
+	fmt.Println("\n✓ el árbol quedó como estaba: ningún sabotaje se quedó puesto")
+
 	// SIN VEREDICTO TAMBIÉN ES SALIDA DISTINTA DE CERO. Si esto saliera 0, una corrida donde la
 	// herramienta no pudo medir NADA se leería como una corrida limpia.
 	if verdes > 0 || errores > 0 {
 		return 1
 	}
 	return 0
+}
+
+// estadoDelArbol es la foto que se compara antes y después de la corrida.
+//
+// `status --porcelain` y no `diff`: `diff` no ve los archivos sin trackear, y el caso que más duele
+// —un sabotaje que queda puesto en un archivo que git no conoce— es justamente el que `diff` y
+// `git checkout` no alcanzan.
+func estadoDelArbol(raiz string) (string, error) {
+	out, err := exec.Command("git", "-C", raiz, "status", "--porcelain").Output()
+	if err != nil {
+		return "", err
+	}
+	lineas := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	sort.Strings(lineas) // el orden de git es estable, pero no depender de eso cuesta una línea
+	return strings.Join(lineas, "\n"), nil
+}
+
+func sangrar(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "    (limpio)"
+	}
+	return "    " + strings.ReplaceAll(s, "\n", "\n    ")
 }
 
 func comandoMutador(binario, tmp, id, de, a string) (string, error) {

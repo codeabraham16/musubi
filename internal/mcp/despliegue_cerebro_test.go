@@ -86,6 +86,9 @@ func TestElRespaldoSeSacaANTESDeTocarNada(t *testing.T) {
 // efecto y todo se veía bien.
 //
 // Sabotaje que la hace fallar: reemplazar la comparación de inodos por un `systemctl is-active`.
+// arnes: archivo="deploy/redesplegar-cerebro.sh"
+// arnes: de="[[ \"$INODO_PROC\" == \"$INODO_DISCO\" ]] || volver_atras \"el proceso corre OTRO binario que el que está en disco (inodo $INODO_PROC vs $INODO_DISCO): el reemplazo no tomó efecto\""
+// arnes: a="systemctl is-active --quiet musubi-brain || volver_atras \"el proceso corre OTRO binario que el que está en disco (inodo $INODO_PROC vs $INODO_DISCO): el reemplazo no tomó efecto\""
 func TestSeVerificaElINODOYNoElIsActive(t *testing.T) {
 	texto := leerRedespliegue(t)
 	if !strings.Contains(texto, `/proc/$PID/exe`) {

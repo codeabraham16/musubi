@@ -373,6 +373,9 @@ func TestHorasConDesdeOHastaEsUnError(t *testing.T) {
 //
 // Sabotaje: devolver los argumentos crudos en vez de la ventana normalizada → alguien copia el
 // `desde` de la respuesta, lo vuelve a pedir y le vuelven hechos distintos.
+// arnes: archivo="internal/mcp/methods_cronologia.go"
+// arnes: de="\t\t\t\"desde\":       ventana.Desde.UTC().Format(time.RFC3339),\n\t\t\t\"hasta\":       ventana.Hasta.UTC().Format(time.RFC3339),"
+// arnes: a="\t\t\t\"desde\":       args.Desde,\n\t\t\t\"hasta\":       args.Hasta,"
 func TestLaVentanaQueVuelveEsLaQueSeAplico(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	sembrarLosTresPlanos(t, s, "infra", "pc-gio")

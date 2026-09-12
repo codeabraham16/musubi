@@ -187,6 +187,9 @@ func TestElAvisaDelExecAvisaUnaVezPorVentanaYNoUnaPorComando(t *testing.T) {
 // probaban pantalla y exec.
 //
 // Sabotaje que la hace fallar: sacar el `case consent.AvisaAlUsuario()` de cualquiera de los tres.
+// arnes: archivo="internal/mcp/methods_shell.go"
+// arnes: de="\tcase consent.AvisaAlUsuario():\n\t\ts.encolarAvisoDeAcceso(d, p, avisoShell)\n"
+// arnes: a=""
 func TestTodoCaminoQueHonraAvisaLeAvisaAlUsuario(t *testing.T) {
 	for _, c := range []struct {
 		nombre, espera string

@@ -58,6 +58,9 @@ func TestFormasUnaPropiedadNoTieneForma(t *testing.T) {
 //
 // SABOTAJE: sacar el repliegue a la lista completa ⇒ un proyecto que ya usó las tres candidatas de
 // su eje deja de recibir forma para siempre.
+// arnes: archivo="internal/mcp/formas_diseno.go"
+// arnes: de="\tif len(disponibles) == 0 {\n\t\tdisponibles = pozo\n\t}\n"
+// arnes: a=""
 func TestFormasLaRotacionNoDejaSinForma(t *testing.T) {
 	cands := formasPorEje["tabla"]
 	if len(cands) == 0 {

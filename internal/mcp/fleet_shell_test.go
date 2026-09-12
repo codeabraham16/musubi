@@ -365,6 +365,9 @@ func TestElRelayDeShellExigeCredencial(t *testing.T) {
 // venció no es un problema de credencial, y una concesión revocada tampoco.
 //
 // Sabotaje que la hace fallar: devolver http.StatusUnauthorized fijo en los handlers.
+// arnes: archivo="internal/mcp/shell_relay.go"
+// arnes: de="\tcase errors.As(err, &muerta):\n\t\treturn http.StatusGone\n\tcase errors.As(err, &sinPermiso):\n\t\treturn http.StatusForbidden\n"
+// arnes: a="\tcase errors.As(err, &muerta):\n\t\treturn http.StatusUnauthorized\n\tcase errors.As(err, &sinPermiso):\n\t\treturn http.StatusUnauthorized\n"
 func TestElRelayDistingueTokenMaloDeSesionMuertaYDeConcesionRevocada(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := enrolarConShell(t, s, "casa", "nas")

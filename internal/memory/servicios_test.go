@@ -198,6 +198,9 @@ func TestLaUltimaSaludViveEnLaFilaYNoSeBorraSola(t *testing.T) {
 // inventario porque un campo no parsea es el fallo caro.
 //
 // Sabotaje: devolver el error de SaludDesdeTexto desde escanearServicio.
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\tif salud, err := fleet.SaludDesdeTexto(saludGuardada); err == nil {\n\t\ts.Salud = salud\n\t}\n"
+// arnes: a="\tsalud, errSalud := fleet.SaludDesdeTexto(saludGuardada)\n\tif errSalud != nil {\n\t\treturn fleet.Servicio{}, errSalud\n\t}\n\ts.Salud = salud\n"
 func TestUnaSaludIlegibleNoRompeElListado(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "nas")

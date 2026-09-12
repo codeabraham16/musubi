@@ -125,6 +125,9 @@ func TestUnaSaludSinFechaOConPidCeroSeRechaza(t *testing.T) {
 //
 // Sabotaje: recortar con s[:max] (bytes) en vez de por runas — el detalle queda con un byte
 // suelto y deja de ser UTF-8 válido.
+// arnes: archivo="internal/fleet/servicio.go"
+// arnes: de="\trs := []rune(s)\n\tif len(rs) <= max {\n\t\treturn s\n\t}\n\treturn string(rs[:max])"
+// arnes: a="\tif len(s) <= max {\n\t\treturn s\n\t}\n\treturn s[:max]"
 func TestElReporteSeRecortaPorRunasYNoSeRechaza(t *testing.T) {
 	r := RecortarReporte(ReporteServicio{
 		Nombre: strings.Repeat("ñ", NombreServicioMax+50),

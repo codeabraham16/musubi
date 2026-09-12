@@ -379,6 +379,9 @@ func TestSiFallaLaToolDeServiciosIgualSeVeLaFlota(t *testing.T) {
 //
 // Sabotaje: agrupar por el `name` del servicio en vez de por su `device` — los servicios de una
 // máquina aparecen colgados de la otra.
+// arnes: archivo="cmd/musubi/flota.go"
+// arnes: de="if n, _ := sv[\"device\"].(string); n != \"\" {"
+// arnes: a="if n, _ := sv[\"nombre\"].(string); n != \"\" {"
 func TestLosServiciosSeAgrupanPorSuMaquina(t *testing.T) {
 	ts := cerebroDeFlotaFalso(t, map[string]string{
 		"musubi_fleet_list": `{"devices":[{"name":"nas","online":true},{"name":"pc-gio","online":true}]}`,

@@ -54,6 +54,9 @@ func TestElTruncadoDelExportadorSaleComoSerieYNoComoComentario(t *testing.T) {
 //
 // Sabotaje que la hace fallar: volver el contador a uno global (contar sobre `out` en vez de
 // sobre `contadoPorProyecto[d.ProjectID]`).
+// arnes: archivo="internal/mcp/fleet_prometheus_servicios.go"
+// arnes: de="contadoPorProyecto[d.ProjectID] >= techo"
+// arnes: a="len(out) >= techo"
 func TestElTechoDeServiciosEsPorProyectoYNoDejaCiegoAlOtroTenant(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()

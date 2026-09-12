@@ -61,6 +61,10 @@ func TestSinPodmanNiDockerElAgenteNoPideRutasDeContenedores(t *testing.T) {
 // directiva lleva el guion, y la declaración tiene que saberlo o la generaría mal.
 //
 // Sabotaje que la hace fallar: sacar `Opcional: true` de las rutas de runtimeDir.
+// arnes: prueba="TestLasRutasDeRuntimeSonOpcionalesYSuDirectivaLlevaGuion"
+// arnes: archivo="cmd/musubi/blindaje.go"
+// arnes: de="Ruta: path.Join(runtimeDir, sub), Opcional: true,"
+// arnes: a="Ruta: path.Join(runtimeDir, sub),"
 // Sabotaje que la hace fallar: emitir la directiva sin el `-`.
 func TestLasRutasDeRuntimeSonOpcionalesYSuDirectivaLlevaGuion(t *testing.T) {
 	for _, n := range necesidadesDelAgente("/home/musubi", "/run/user/1000", conPodman) {

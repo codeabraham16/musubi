@@ -48,6 +48,9 @@ func abrirSesion(t *testing.T, s *McpServer, p *Principal) map[string]any {
 // permisos distintos.
 //
 // Sabotaje: usar CapExec en vez de CapScreen en toolFleetScreen.
+// arnes: archivo="internal/mcp/methods_pantalla.go"
+// arnes: de="!existe || !PuedeSobreDevice(p, d, fleet.CapScreen)"
+// arnes: a="!existe || !PuedeSobreDevice(p, d, fleet.CapExec)"
 func TestSinCapacidadScreenNoHaySesion(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	tok := enrolarConPantalla(t, s, "casa", "pc-gio")

@@ -70,6 +70,9 @@ var metricasQueNoSeCongelan = map[string]bool{
 //
 // Sabotaje: quitarle el `unless on(device) (musubi_fleet_device_up == 0)` a cualquier regla de
 // flota, o agregar una regla nueva sobre una métrica `musubi_fleet_*` sin él.
+// arnes: archivo="deploy/musubi-alerts-flota.yml"
+// arnes: de="        expr: (musubi_fleet_device_cpu_percent > 90) unless on(project, device) (musubi_fleet_device_up == 0)"
+// arnes: a="        expr: (musubi_fleet_device_cpu_percent > 90)"
 func TestNingunaAlertaDeMuestraDisparaSobreUnaMaquinaCaida(t *testing.T) {
 	// LOS CUATRO ARCHIVOS, NO UNO.
 	//

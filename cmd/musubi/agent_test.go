@@ -67,6 +67,9 @@ func TestElLatidoLlevaElTokenEnElHeaderYUnCuerpoChico(t *testing.T) {
 // poda del cerebro sólo corre cuando llega una lista.
 //
 // Sabotaje que la hace fallar: devolver siempre `lista` en serviciosDelLatido, sin mirar la huella.
+// arnes: archivo="cmd/musubi/servicios.go"
+// arnes: de="\tif huella == ultimoInventario.huella && time.Since(ultimoInventario.enviado) < intervaloInventarioCompleto {"
+// arnes: a="\tif false && huella == ultimoInventario.huella && time.Since(ultimoInventario.enviado) < intervaloInventarioCompleto {"
 func TestElInventarioNoViajaEnCadaLatido(t *testing.T) {
 	anterior := enumerarServicios
 	enumerarServicios = func() ([]fleet.ReporteServicio, error) {
@@ -609,6 +612,9 @@ func TestUnCuerpoConServiciosSigueSinLlevarIdentidad(t *testing.T) {
 // D4 — en un OS sin colector, tomarMuestra devuelve nil y el agente late IGUAL.
 // Sabotaje: hacer que tomarMuestra devuelva una Muestra vacía ante el error → todos los Windows
 // aparecerían al 0 % de CPU, que se cree y no se arregla.
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="\tm, err := col.Tomar()\n\tif err != nil {\n\t\treturn nil\n\t}\n"
+// arnes: a="\tm, err := col.Tomar()\n\tif err != nil {\n\t\treturn &fleet.Muestra{}\n\t}\n"
 func TestSinColectorElAgenteLateIgualYNoMandaCeros(t *testing.T) {
 	if m := tomarMuestra(colectorRoto{}); m != nil {
 		t.Fatalf("un colector que falla produjo una muestra: %+v", m)

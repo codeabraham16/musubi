@@ -209,6 +209,9 @@ func TestElContextoSaleDeLaMemoriaDeLaMaquinaYNoDeLaDeQuienPregunta(t *testing.T
 //
 // Sabotaje: contar todos los hechos sin pasar por hechosVisiblesPara → falla acá, y el resumen
 // le diría a alguien con sólo `exec` cuántas veces entraron a la pantalla de esa máquina.
+// arnes: archivo="internal/mcp/methods_contexto.go"
+// arnes: de="\tvisibles, ocultos, sinClasificar := hechosVisiblesPara(p, device, hechos)"
+// arnes: a="\tvisibles, ocultos, sinClasificar := hechos, 0, 0"
 func TestLaActividadDelContextoSeCompuertaComoLaCronologia(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	sembrarContexto(t, s)

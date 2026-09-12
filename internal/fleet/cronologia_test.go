@@ -319,6 +319,9 @@ func TestLaDuracionDiceSiSeSabe(t *testing.T) {
 // huecos declarados se lee como «esto es todo lo que pasó».
 //
 // Sabotaje: devolver nil desde HuecosDeLaCronologia → falla acá.
+// arnes: archivo="internal/fleet/cronologia.go"
+// arnes: de="func HuecosDeLaCronologia() []string {\n\treturn []string{"
+// arnes: a="func HuecosDeLaCronologia() []string {\n\tif true {\n\t\treturn nil\n\t}\n\treturn []string{"
 func TestLaCronologiaDeclaraLoQueNoVio(t *testing.T) {
 	huecos := HuecosDeLaCronologia()
 	if len(huecos) == 0 {

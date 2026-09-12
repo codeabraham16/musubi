@@ -193,6 +193,9 @@ func TestUnCuerpoInvalidoNoTumbaElLatido(t *testing.T) {
 // D8 — sin la capacidad `metrics`, la máquina late pero su muestra se descarta.
 // Sabotaje: quitar la guarda `d.Permite(fleet.CapMetrics)` → conceder capacidades sería un gesto
 // sin efecto.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\tif !d.Permite(fleet.CapMetrics) {\n\t\treturn \"\", \"descartada: esta máquina no tiene concedida la capacidad `metrics`\", notaServicios, notaProtocolo\n\t}\n"
+// arnes: a=""
 func TestSinLaCapacidadMetricsLaMuestraSeDescarta(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	// Una máquina a la que SÓLO se le concedió exec.

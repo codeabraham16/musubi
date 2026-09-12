@@ -260,6 +260,9 @@ func TestSinLaMismaCapacidadNoSePuedeAprobar(t *testing.T) {
 // abra una shell — si no, el permiso más barato de conseguir habilitaría el más caro.
 //
 // Sabotaje: sacar `AND capacidad = ?` de AprobacionVigenteDe.
+// arnes: archivo="internal/memory/aprobaciones.go"
+// arnes: de="  WHERE device_id = ? AND solicitante = ? AND capacidad = ?\n\t\t    AND estado IN ('pendiente', 'concedida', 'negada') AND vence > ?\n\t\t  ORDER BY CASE estado WHEN 'negada' THEN 0 WHEN 'concedida' THEN 1 ELSE 2 END,\n\t\t           creada DESC\n\t\t  LIMIT 1`,\n\t\tdeviceID, solicitante, string(cap), t)"
+// arnes: a="  WHERE device_id = ? AND solicitante = ?\n\t\t    AND estado IN ('pendiente', 'concedida', 'negada') AND vence > ?\n\t\t  ORDER BY CASE estado WHEN 'negada' THEN 0 WHEN 'concedida' THEN 1 ELSE 2 END,\n\t\t           creada DESC\n\t\t  LIMIT 1`,\n\t\tdeviceID, solicitante, t)"
 func TestLaAprobacionDePantallaNoAbreUnaShell(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	// Tier A, que es el único tier que admite pantalla Y shell a la vez: en B no hay framebuffer.
@@ -804,6 +807,9 @@ func TestLasSeriesDeAprobacionSalenEnCeroCuandoNoHayNadieEsperando(t *testing.T)
 // `requerir: false` no hiciera nada, la única salida sería tocar la base a mano.
 //
 // Sabotaje: que FijarAprobacion ignore el valor y escriba siempre 1.
+// arnes: archivo="internal/memory/aprobaciones.go"
+// arnes: de="\tv := 0\n\tif requiere {\n\t\tv = 1\n\t}"
+// arnes: a="\tv := 1"
 func TestApagarElControlDevuelveElAcceso(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	pantallaConCuatroOjos(t, s)

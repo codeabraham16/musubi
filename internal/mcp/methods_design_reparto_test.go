@@ -49,6 +49,9 @@ func acervoDePatrones(t *testing.T, entradas map[string]string) *McpServer {
 // SABOTAJE: volver a servir sólo la cabeza del contenido (o el gist) ⇒ el cuerpo del patrón deja de
 // estar en el brief y este test se pone rojo. Verificado en rojo cortando el texto a 90 chars en
 // comoPatronItem: "el cuerpo del patrón no llegó al brief".
+// arnes: archivo="internal/mcp/methods_design.go"
+// arnes: de="\ttxt, recortado := recortarTexto(txt, designPatronItemMax)"
+// arnes: a="\ttxt, recortado := recortarTexto(txt, 90)"
 func TestDesignElCorpusViajaCompletoNoEnTitular(t *testing.T) {
 	// La marca del final es lo que distingue "vino entero" de "vino la cabeza": un gist se queda con
 	// el principio, así que afirmar sobre el principio no probaría nada.

@@ -151,6 +151,10 @@ func TestLoQueCadaPlataformaMideEstaDeclarado(t *testing.T) {
 	//
 	// Sabotaje que la hace fallar, corriendo esta prueba en Linux: borrar la asignación de
 	// MemFree en ParsearMeminfo (linux pasa a medir mem_libre = false y la tabla dice true).
+	// arnes: prueba="TestLoQueCadaPlataformaMideEstaDeclarado"
+	// arnes: archivo="internal/fleet/procparse.go"
+	// arnes: de="\tif libre, hay := vals[\"MemFree\"]; hay {\n\t\tm.MemLibre = u64(libre)\n\t}\n"
+	// arnes: a=""
 	//
 	// Y el sabotaje que esta fila existe para cazar, que SÓLO se ve corriendo en Windows: emitir
 	// MEMORYSTATUSEX.ullAvailPhys como mem_libre. Es MemAvailable disfrazado —incluye la standby

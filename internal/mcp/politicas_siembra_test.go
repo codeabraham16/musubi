@@ -54,6 +54,9 @@ import (
 //
 // Sabotaje: sacar cualquiera de los siete de `resultadosDePolitica`, o agregar una llamada a
 // `contarPolitica` con un resultado nuevo. Los dos corridos.
+// arnes: archivo="internal/mcp/observability.go"
+// arnes: de="\t\"error\",\n\t\"mantenimiento\",\n"
+// arnes: a="\t\"error\",\n"
 func TestSeSiembranTodosLosResultadosQueSeEmiten(t *testing.T) {
 	emitidos := map[string]string{} // resultado -> archivo:línea donde se emite
 	fset := token.NewFileSet()

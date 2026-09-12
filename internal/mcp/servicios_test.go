@@ -245,6 +245,9 @@ func TestElLatidoRegistraLosServiciosDeSuPropiaMaquina(t *testing.T) {
 //
 // Sabotaje: devolver 400 cuando el bloque se pasa del techo; o truncar a los primeros 64 en vez
 // de descartar.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\tif len(reportes) > fleet.ServiciosPorLatido {\n\t\treturn fmt.Sprintf(\"descartados: %d servicios superan el techo de %d por latido. Reportá menos servicios por vez.\",\n\t\t\tlen(reportes), fleet.ServiciosPorLatido)\n\t}\n"
+// arnes: a="\tif len(reportes) > fleet.ServiciosPorLatido {\n\t\treportes = reportes[:fleet.ServiciosPorLatido]\n\t}\n"
 func TestUnLatidoConDemasiadosServiciosDescartaElBloqueYSigueValiendo(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 
@@ -903,6 +906,9 @@ func TestAuditarNoAflojaElKillSwitchParaOperar(t *testing.T) {
 // reporta `fallado`, la serie aparece en 0, y la alerta dispara. Lo que desaparece es el ruido.
 //
 // Sabotaje: devolver (0, true) para EstadoOcioso en seriesDeServicio → falla acá.
+// arnes: archivo="internal/mcp/fleet_prometheus_servicios.go"
+// arnes: de="// `fallado`, la serie aparece en 0, y la alerta dispara.\n\t\t\t\t\treturn 0, false"
+// arnes: a="// `fallado`, la serie aparece en 0, y la alerta dispara.\n\t\t\t\t\treturn 0, true"
 func TestUnServicioOciosoNoEmiteLaSerieDeUp(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 

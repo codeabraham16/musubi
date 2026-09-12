@@ -478,6 +478,9 @@ func TestUnTierBSeEjecutaPorSSHYNoSeEncola(t *testing.T) {
 // prueba de vida, y estamparlo igual haría que una máquina inalcanzable figure viva para siempre.
 //
 // Sabotaje: estampar el latido sin mirar res.Error.
+// arnes: archivo="internal/mcp/methods_exec.go"
+// arnes: de="\tif res.Error == \"\" {\n"
+// arnes: a="\tif true {\n"
 func TestUnTierBInalcanzableNoFiguraVivo(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{

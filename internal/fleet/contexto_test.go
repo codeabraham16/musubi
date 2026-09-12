@@ -90,6 +90,9 @@ func TestUnTerminoDemasiadoCortoNoEntra(t *testing.T) {
 // correlación y no causa, y qué significa cada tipo de enlace.
 //
 // Sabotaje: devolver nil → falla acá.
+// arnes: archivo="internal/fleet/contexto.go"
+// arnes: de="func HuecosDelContexto() []string {\n\treturn []string{"
+// arnes: a="func HuecosDelContexto() []string {\n\tif true {\n\t\treturn nil\n\t}\n\treturn []string{"
 func TestLosHuecosDelContextoDicenQueNoEsCausa(t *testing.T) {
 	huecos := HuecosDelContexto()
 	if len(huecos) == 0 {

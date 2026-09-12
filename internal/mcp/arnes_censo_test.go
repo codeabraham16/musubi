@@ -82,7 +82,26 @@ import (
 // puede compilar. Subir el techo es exactamente cómo una guarda se convierte en la defensora del
 // defecto que vigila — y este repo ya lo pagó con `TestG1`, que enumeraba cuatro herramientas y
 // PROHIBÍA arreglar las otras seis.
-const anclasEnProsaAlDia = 774
+//
+// Y SI EL TECHO SE PASA, MIRÁ LAS DOS PRIMERAS CONDICIONES DEL PREDICADO, NO LA TERCERA. Otra
+// sesión reimplementó `esAncla` leyendo SÓLO su descripción en prosa —sin ver el código— y obtuvo
+// 774/163 al dígito, así que el número es reproducible desde el texto. Pero además midió la
+// sensibilidad de cada cláusula, y el reparto es desparejo:
+//
+//	el predicado completo ........................ 774
+//	sin los «:» como cierre de oración ........... 774
+//	sin que la línea vacía cuente como cierre .... 774
+//	sin la tercera condición ENTERA .............. 780
+//
+// O sea que «empieza con sabotaje» + «tiene dos puntos» hacen el 99,2 % del trabajo y la cláusula
+// posicional decide SEIS anclas. Es la que impide contar una oración que se envolvió, así que no
+// sobra —esos seis son ruido puro— pero la prosa la hace sonar más pesada de lo que es. Quien
+// venga a ajustar el censo tocándola no va a mover el número.
+// BAJÓ DE 774 A 712 EN EL MISMO DÍA QUE SE MIDIÓ, y el número nuevo es el registro de eso: se
+// mecanizaron 62 anclas de una muestra SISTEMÁTICA (una de cada 13, para que el veredicto no
+// saliera medido sobre las que yo hubiera elegido). La holgura hizo exactamente lo que tenía que
+// hacer: con el techo en 774 esta guarda se puso roja pidiendo que se bajara.
+const anclasEnProsaAlDia = 712
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //

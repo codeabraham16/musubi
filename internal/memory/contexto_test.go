@@ -127,6 +127,9 @@ func TestElContextoNoTraeObservacionesTapadas(t *testing.T) {
 //
 // Sabotaje: sacar `scopeClause` de ObservacionesEnVentana, o el bloque de scope de
 // CodigoTocadoEnVentana → falla acá.
+// arnes: archivo="internal/memory/contexto.go"
+// arnes: de="scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause(\"\")"
+// arnes: a="scopeSQL, scopeArgs := \"\", []interface{}{}"
 func TestLasLecturasDeContextoRespetanElProyecto(t *testing.T) {
 	e := newTestEngine(t)
 	const cuando = "2026-05-05 12:00:00"
