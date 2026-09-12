@@ -7,6 +7,43 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Performance
+- **La tabla de embeddings entraba DOS VECES en memoria, y el pico bajó de 1321 MB a 833 MB.**
+  `NewStaticProvider` hacía `os.ReadFile` de `model.safetensors` (488 MB de bytes crudos) y después
+  `parseStaticTable` reservaba otros 488 MB de `[]float32` **con los primeros todavía vivos**. Medido
+  sobre un `musubi daemon` real arrancando en este repo: de 10 MB a **1353 MB de memoria anónima en
+  menos de 8 segundos**.
+
+  Ahora el archivo se lee UNA vez, en trozos de 1 MB, acumulando el CRC y convirtiendo cada trozo a
+  `float32` dentro de la tabla ya reservada. Los bytes crudos nunca se retienen.
+
+  | | RSS tras `NewStaticProvider` |
+  |---|---|
+  | antes | **1321 MB** |
+  | después | **833 MB** |
+
+  **No es una micro-optimización, y el número es el argumento.** Hay un daemon por sesión de agente
+  —tres vivos son ~2 GB de tabla duplicada— en una máquina de 7,6 GB con el swap en uso y **zram**
+  encima, o sea que lo swapeado no liberó RAM: la comprimió. Con el pico viejo, `ENOMEM` en el
+  `ReadFile` no era hipotético.
+
+  **LA IDENTIDAD SALE IDÉNTICA BIT A BIT**, que es lo que vuelve seguro el cambio: CRC32 es
+  incremental, así que hashear por trozos da el mismo `uint32` que hashear el buffer entero, y el
+  largo se cuenta sobre los bytes efectivamente leídos (no con `os.Stat`, así un archivo que crece
+  mientras se lee no puede mentir). Verificado contra la tabla real: mismo id `9cdf17c45367` y
+  **128.090.368 valores idénticos**. Ningún vector ya escrito deja de reconocerse.
+
+  Y la identidad pasa a tener **una sola derivación**: `checksumDeCRC` toma los cuatro números que
+  la definen, y `staticTableChecksum` queda como envoltorio de una línea. Escrita dos veces, la
+  próxima vez que se toque el formato del seed una se queda atrás y los vectores dejan de
+  reconocerse en silencio.
+
+  La guarda compara los dos caminos sobre fixtures sintéticos —incluido el caso donde un `float32`
+  queda **partido entre dos trozos de lectura**, que es el único camino no trivial del conversor— y
+  lleva un control que verifica que el fixture ejercite lo que dice: escrito con un relleno fijo,
+  el largo del header decidía la alineación por accidente y tres de los cinco casos miraban la rama
+  fácil. Lo cazó ese control.
+
 ### Fixed
 - **El servidor de SÓLO LECTURA contestaba léxico creyendo que hacía semántico.**
   `servirSoloLectura` construye un servidor MCP y **nunca estampaba la procedencia del vector**: su

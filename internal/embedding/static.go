@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -52,11 +53,7 @@ func NewStaticProvider(dir string) (*StaticProvider, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("static_path vacío: apuntá embedding.static_path a un directorio con model.safetensors + tokenizer.json")
 	}
-	tableRaw, err := os.ReadFile(filepath.Join(dir, "model.safetensors"))
-	if err != nil {
-		return nil, fmt.Errorf("tabla estática: %w", err)
-	}
-	table, rows, dim, err := parseStaticTable(tableRaw)
+	table, rows, dim, crcTabla, nTabla, err := cargarTablaEnStreaming(filepath.Join(dir, "model.safetensors"))
 	if err != nil {
 		return nil, fmt.Errorf("tabla estática: %w", err)
 	}
@@ -78,8 +75,172 @@ func NewStaticProvider(dir string) (*StaticProvider, error) {
 		// seguían pareciendo compatibles y la búsqueda los comparaba por coseno contra los de la
 		// tabla nueva ⇒ ranking corrupto EN SILENCIO. Con el checksum, una tabla distinta es una
 		// identidad distinta y el contrato de procedencia (F2.2) excluye sola a los vectores viejos.
-		modelID: "static:" + filepath.Base(filepath.Clean(dir)) + "@" + staticTableChecksum(tableRaw, tokRaw),
+		modelID: "static:" + filepath.Base(filepath.Clean(dir)) + "@" +
+			checksumDeCRC(crcTabla, nTabla, crc32.Checksum(tokRaw, castagnoli), int64(len(tokRaw))),
 	}, nil
+}
+
+// trozoDeCarga es el buffer con el que se lee la tabla. Múltiplo de 4 —el tamaño de un float32—
+// para que un trozo nunca parta un valor por la mitad.
+const trozoDeCarga = 1 << 20
+
+// topeDeHeader acota el JSON del safetensors antes de reservarle memoria: sin esto, un archivo
+// corrupto que declare un header de 2^63 bytes hace que `make` pida esa cantidad. El header real
+// de POTION son 80 bytes; 8 MB es holgado por varios órdenes.
+const topeDeHeader = 8 << 20
+
+// cargarTablaEnStreaming lee model.safetensors UNA sola vez, en trozos, y hace DOS cosas sobre cada
+// trozo: acumula el CRC del archivo entero y convierte los bytes del blob a la tabla []float32 ya
+// reservada. Devuelve la tabla, su forma, y el CRC y el tamaño que la identidad necesita.
+//
+// POR QUÉ NO `os.ReadFile` + `parseStaticTable`. Esa pareja tiene VIVOS AL MISMO TIEMPO los bytes
+// crudos (488 MB en la tabla multilingüe) y su conversión a float32 (otros 488 MB). Medido sobre un
+// `musubi daemon` real arrancando en este repo: pasa de 10 MB a **1353 MB de memoria anónima en
+// menos de 8 segundos**. Leyendo en streaming el pico baja a la tabla sola.
+//
+// NO ES UNA MICRO-OPTIMIZACIÓN, Y EL NÚMERO ES EL ARGUMENTO. La máquina donde corre esto tiene
+// 7,6 GB de RAM con el swap en uso y zram encima —o sea que lo swapeado NO liberó RAM, la
+// comprimió—. Y hay un daemon por sesión de agente: tres vivos son ~2 GB de tabla duplicada. Con
+// ese pico, `ENOMEM` en el ReadFile no es hipotético.
+//
+// LA IDENTIDAD SALE IDÉNTICA BIT A BIT, que es lo que vuelve seguro el cambio: CRC32 es
+// incremental —`crc32.New(tab)` + `Write` por trozos da el MISMO uint32 que `crc32.Checksum` sobre
+// el buffer entero— y el largo se cuenta sobre los bytes EFECTIVAMENTE leídos, no con `os.Stat`,
+// así un archivo que crece mientras se lee no puede mentir sobre su tamaño. La guarda que lo fija
+// es TestLaCargaEnStreamingDaLaMismaIdentidadYLosMismosValores.
+func cargarTablaEnStreaming(ruta string) (tabla []float32, filas, dim int, crc uint32, leidos int64, err error) {
+	f, err := os.Open(ruta)
+	if err != nil {
+		return nil, 0, 0, 0, 0, err
+	}
+	defer func() { _ = f.Close() }()
+
+	h := crc32.New(castagnoli)
+
+	// (1) EL ENCABEZADO, que es chico: 8 bytes con el largo del JSON, y el JSON.
+	var largo [8]byte
+	if _, err := io.ReadFull(f, largo[:]); err != nil {
+		return nil, 0, 0, 0, 0, fmt.Errorf("safetensors demasiado corto: %w", err)
+	}
+	_, _ = h.Write(largo[:])
+	leidos = 8
+	hlen := binary.LittleEndian.Uint64(largo[:])
+	if hlen == 0 || hlen > topeDeHeader {
+		return nil, 0, 0, 0, 0, fmt.Errorf("header safetensors inválido: declara %d bytes", hlen)
+	}
+	hdrRaw := make([]byte, hlen)
+	if _, err := io.ReadFull(f, hdrRaw); err != nil {
+		return nil, 0, 0, 0, 0, fmt.Errorf("header safetensors truncado: %w", err)
+	}
+	_, _ = h.Write(hdrRaw)
+	leidos += int64(hlen)
+
+	inicio, fin, filas, dim, err := ubicarEmbeddings(hdrRaw, leidos)
+	if err != nil {
+		return nil, 0, 0, 0, 0, err
+	}
+
+	// (2) EL RESTO DEL ARCHIVO, en trozos. Lo que cae dentro del blob se convierte; lo que no,
+	// se saltea. Todo se hashea, porque la identidad es del ARCHIVO y no sólo del tensor.
+	tabla = make([]float32, filas*dim)
+	buf := make([]byte, trozoDeCarga)
+	var sobra [4]byte // bytes de un float32 partido entre dos trozos
+	nSobra := 0
+	escritos := 0
+	for {
+		n, rerr := f.Read(buf)
+		if n > 0 {
+			_, _ = h.Write(buf[:n])
+			trozoIni := leidos
+			leidos += int64(n)
+			// Recortar el trozo a la parte que cae dentro del blob.
+			desde := max(trozoIni, inicio)
+			hasta := min(leidos, fin)
+			if desde < hasta {
+				datos := buf[desde-trozoIni : hasta-trozoIni]
+				escritos, nSobra = convertirTrozo(datos, tabla, escritos, sobra[:], nSobra)
+			}
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			return nil, 0, 0, 0, 0, fmt.Errorf("leyendo la tabla: %w", rerr)
+		}
+	}
+	if leidos < fin {
+		return nil, 0, 0, 0, 0, fmt.Errorf("blob de embeddings truncado: el header declara que termina en %d y el archivo tiene %d bytes", fin, leidos)
+	}
+	if escritos != len(tabla) || nSobra != 0 {
+		return nil, 0, 0, 0, 0, fmt.Errorf("blob de embeddings inconsistente: se convirtieron %d valores de %d (y sobraron %d bytes)", escritos, len(tabla), nSobra)
+	}
+	return tabla, filas, dim, h.Sum32(), leidos, nil
+}
+
+// convertirTrozo pasa `datos` a float32 little-endian dentro de `tabla` a partir de `escritos`,
+// arrastrando el float32 que haya quedado partido entre este trozo y el anterior. Devuelve cuántos
+// valores hay escritos en total y cuántos bytes quedaron a medias para el trozo siguiente.
+func convertirTrozo(datos []byte, tabla []float32, escritos int, sobra []byte, nSobra int) (int, int) {
+	// Primero, completar el valor que quedó partido.
+	if nSobra > 0 {
+		falta := 4 - nSobra
+		if len(datos) < falta {
+			nSobra += copy(sobra[nSobra:], datos)
+			return escritos, nSobra
+		}
+		copy(sobra[nSobra:], datos[:falta])
+		if escritos < len(tabla) {
+			tabla[escritos] = math.Float32frombits(binary.LittleEndian.Uint32(sobra))
+			escritos++
+		}
+		datos = datos[falta:]
+		nSobra = 0
+	}
+	enteros := len(datos) / 4
+	if enteros > len(tabla)-escritos {
+		enteros = len(tabla) - escritos
+	}
+	for i := 0; i < enteros; i++ {
+		tabla[escritos+i] = math.Float32frombits(binary.LittleEndian.Uint32(datos[i*4:]))
+	}
+	escritos += enteros
+	if resto := len(datos) - enteros*4; resto > 0 && resto < 4 {
+		nSobra = copy(sobra, datos[enteros*4:])
+	}
+	return escritos, nSobra
+}
+
+// ubicarEmbeddings lee del header del safetensors la forma del tensor "embeddings" y dónde
+// empieza y termina su blob, en offsets ABSOLUTOS del archivo. `hdrEnd` es el byte donde termina
+// el encabezado (8 + largo del JSON).
+func ubicarEmbeddings(hdrRaw []byte, hdrEnd int64) (inicio, fin int64, filas, dim int, err error) {
+	var hdr map[string]json.RawMessage
+	if err := json.Unmarshal(hdrRaw, &hdr); err != nil {
+		return 0, 0, 0, 0, fmt.Errorf("header JSON: %w", err)
+	}
+	crudo, ok := hdr["embeddings"]
+	if !ok {
+		return 0, 0, 0, 0, fmt.Errorf("safetensors sin tensor \"embeddings\"")
+	}
+	var ti stTensor
+	if err := json.Unmarshal(crudo, &ti); err != nil {
+		return 0, 0, 0, 0, fmt.Errorf("tensor embeddings: %w", err)
+	}
+	if ti.Dtype != "F32" || len(ti.Shape) != 2 {
+		return 0, 0, 0, 0, fmt.Errorf("esperaba embeddings F32 2D, obtuve %s %v", ti.Dtype, ti.Shape)
+	}
+	if len(ti.DataOffsets) != 2 {
+		return 0, 0, 0, 0, fmt.Errorf("data_offsets inválidos")
+	}
+	filas, dim = ti.Shape[0], ti.Shape[1]
+	if filas <= 0 || dim <= 0 {
+		return 0, 0, 0, 0, fmt.Errorf("forma inválida: %dx%d", filas, dim)
+	}
+	inicio, fin = hdrEnd+ti.DataOffsets[0], hdrEnd+ti.DataOffsets[1]
+	if ti.DataOffsets[0] < 0 || fin < inicio || fin-inicio != int64(filas)*int64(dim)*4 {
+		return 0, 0, 0, 0, fmt.Errorf("blob de embeddings inconsistente: %d bytes para %dx%d", fin-inicio, filas, dim)
+	}
+	return inicio, fin, filas, dim, nil
 }
 
 // castagnoli es la tabla CRC32-C (polinomio Castagnoli), que Go acelera por HARDWARE (SSE4.2/ARM).
@@ -98,11 +259,24 @@ var castagnoli = crc32.MakeTable(crc32.Castagnoli)
 // **y** en longitud exacta, en los dos archivos a la vez. El sha256 final es sobre 24 bytes (gratis)
 // y sólo sirve para compactar todo eso en un id corto y legible.
 func staticTableChecksum(tableRaw, tokRaw []byte) string {
+	return checksumDeCRC(crc32.Checksum(tableRaw, castagnoli), int64(len(tableRaw)),
+		crc32.Checksum(tokRaw, castagnoli), int64(len(tokRaw)))
+}
+
+// checksumDeCRC es LA derivación de la identidad, y la única. Toma los cuatro números que la
+// definen en vez de los bytes, para que el camino en streaming (cargarTablaEnStreaming, que nunca
+// tiene el archivo entero en memoria) y el camino sobre buffers (staticTableChecksum, que usan las
+// pruebas) produzcan el MISMO id sin que haya dos implementaciones que se puedan desfasar.
+//
+// Es la diferencia entre derivar y copiar: escrita dos veces, la próxima vez que se toque el
+// formato del seed una de las dos se queda atrás y los vectores viejos dejan de reconocerse —en
+// silencio, que es como duele.
+func checksumDeCRC(crcTabla uint32, nTabla int64, crcTok uint32, nTok int64) string {
 	var seed [24]byte
-	binary.BigEndian.PutUint32(seed[0:4], crc32.Checksum(tableRaw, castagnoli))
-	binary.BigEndian.PutUint64(seed[4:12], uint64(len(tableRaw)))
-	binary.BigEndian.PutUint32(seed[12:16], crc32.Checksum(tokRaw, castagnoli))
-	binary.BigEndian.PutUint64(seed[16:24], uint64(len(tokRaw)))
+	binary.BigEndian.PutUint32(seed[0:4], crcTabla)
+	binary.BigEndian.PutUint64(seed[4:12], uint64(nTabla))
+	binary.BigEndian.PutUint32(seed[12:16], crcTok)
+	binary.BigEndian.PutUint64(seed[16:24], uint64(nTok))
 	sum := sha256.Sum256(seed[:])
 	return hex.EncodeToString(sum[:])[:12]
 }
