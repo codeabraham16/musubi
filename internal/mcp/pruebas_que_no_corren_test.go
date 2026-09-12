@@ -52,6 +52,7 @@ var pruebasExcluidasAProposito = map[string]string{
 	"internal/mcp/detector_carreras_on_test.go":       "tag `race`, que lo define `go test -race` — CI lo corre en su job de carreras",
 	"internal/mcp/methods_codegraph_polyglot_test.go": "tag `treesitter`, encendido explícitamente en el job de polyglot del CI",
 	"internal/codeintel/treesit_test.go":              "tag `treesitter`, encendido explícitamente en el job de polyglot del CI",
+	"internal/codeintel/red_del_parser_test.go":       "tag `treesitter`, encendido explícitamente en el job de polyglot del CI",
 }
 
 // Los GOOS y GOARCH que Go reconoce como sufijo de archivo. No hace falta que estén todos: alcanza
