@@ -12,6 +12,34 @@ import (
 // TestTodoServidorMcpEstampaLaProcedenciaDelVector exige que TODA función de este paquete que
 // construya un `mcp.NewMcpServer` estampe también la procedencia del vector.
 //
+// ─── ESTA GUARDA ES DE SEGUNDO ORDEN, Y NO LO ERA CUANDO SE ESCRIBIÓ. LEER ESTO PRIMERO. ───
+//
+// La red de PRIMER orden vive ahora en el constructor: `NewMcpServer` estampa la procedencia él
+// mismo (internal/mcp/server.go, `estamparProcedenciaDelVector`), así que NO HAY FORMA de construir
+// un servidor sin ella, venga la llamada escrita como venga. Lo custodia
+// `TestElConstructorEstampaLaProcedenciaVengaLaLlamadaComoVenga`, que mide el COMPORTAMIENTO.
+//
+// El cambio lo forzó una auditoría adversaria del 2026-09-12 que pasó ESTA guarda por arriba de
+// tres formas, las tres compilando y las tres dejando el defecto puesto:
+//
+//	engine.SetVectorModelID("")            → cuenta como cableado: acá se mira el NOMBRE de la
+//	                                         llamada, no lo que la llamada DECIDE, y la cadena vacía
+//	                                         es exactamente el defecto que el comentario de abajo
+//	                                         describe palabra por palabra
+//	if engine == nil { cablear(...) }      → cuenta como cableado: `ast.Inspect` recorre el árbol
+//	                                         entero sin mirar alcanzabilidad
+//	nuevo := mcp.NewMcpServer; nuevo(...)  → el constructor deja de ser un `*ast.SelectorExpr` y el
+//	                                         servidor se vuelve INVISIBLE. La guarda seguía contando
+//	                                         3, así que ni su control positivo de «al menos 3» se
+//	                                         enteraba de que había un cuarto sin cablear
+//
+// Los tres siguen siendo ciertos de esta prueba. No se arreglan acá porque enumerar formas de
+// escribir una llamada no converge: se arreglaron haciendo que el camino malo deje de ser
+// escribible. Lo que esta guarda sigue aportando es OTRA cosa —que los llamadores que PUEDEN
+// escribir sigan pasando por `cablearProcedenciaDelVector`, que además avisa del cambio de modelo y
+// dispara el backfill— y como red de segundo orden vale, pero no la leas como la protección
+// principal: no lo es.
+//
 // EL DEFECTO QUE VIO NACER ESTA GUARDA. Había tres constructores de servidor —`runServe`,
 // `runDaemon` y `servirSoloLectura`— y sólo dos estampaban. El de SÓLO LECTURA no, así que su
 // engine quedaba con `vectorModelID == ""`, la regla de homogeneidad filtraba por `model_id = ”`

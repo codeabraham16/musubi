@@ -441,6 +441,47 @@ func (s *McpServer) defaultScope() string {
 	return memory.ScopeLocal
 }
 
+// estamparProcedenciaDelVector le pone al motor el `model_id` del embebedor que va a usar ESTE
+// servidor. Vive ACÁ ADENTRO, y no en los llamadores, por una razón que costó dos arreglos.
+//
+// LO QUE PASA SI FALTA. `SearchObservations` filtra `AND e.model_id = ?` con el valor estampado
+// (internal/memory/operations.go). Con el motor sin estampar, ese valor es la CADENA VACÍA, que en
+// una base poblada —donde los embeddings llevan `static:...@<checksum>`— no matchea NADA: el pool
+// vectorial sale VACÍO, SIN UN SOLO ERROR, y el servidor contesta recall léxico creyendo que hizo
+// semántico. Es el peor modo de falla que tiene este sistema: silencioso y plausible.
+//
+// PRIMER ARREGLO (A-anterior): estaba escrito en dos de los tres llamadores; el servidor de sólo
+// lectura no lo hacía. Se centralizó en `cablearProcedenciaDelVector` (cmd/musubi) y se puso una
+// guarda de AST que exigía que todo constructor pasara por ahí.
+//
+// SEGUNDO ARREGLO, QUE ES ÉSTE: esa guarda es SINTÁCTICA, y una auditoría adversaria la pasó por
+// arriba de tres formas, todas compilando y todas dejando el defecto puesto:
+//
+//	· `engine.SetVectorModelID("")` — el defecto EXACTO que la guarda describe, y contaba como
+//	  cableado porque la guarda mira el NOMBRE de la llamada y no lo que la llamada decide;
+//	· la llamada adentro de una rama muerta (`if engine == nil { ... }`) — `ast.Inspect` no mira
+//	  alcanzabilidad, así que contaba igual;
+//	· `nuevo := mcp.NewMcpServer; return nuevo(...)` — el constructor deja de ser un
+//	  `*ast.SelectorExpr` y el servidor se vuelve INVISIBLE: la guarda seguía contando 3 y su
+//	  propio control de «al menos 3» no se enteraba de que había un cuarto sin cablear.
+//
+// Enumerar formas de escribir una llamada no converge. La salida es que el camino malo deje de ser
+// ESCRIBIBLE: si el constructor estampa, no hay forma de construir un servidor sin procedencia,
+// venga la llamada por donde venga. La guarda de AST queda como red de segundo orden.
+//
+// EL TIPO NO SE PUEDE PEDIR EN LA FIRMA porque `StorageBackend` es una interfaz y `SetVectorModelID`
+// vive en `*memory.DbEngine`; subirlo a la interfaz obligaría a implementarlo a todos los dobles de
+// prueba. Se pide por aserción de interfaz, que es lo mismo sin ese costo: quien no lo tenga, no
+// tiene vectores que custodiar.
+func estamparProcedenciaDelVector(engine memory.StorageBackend, embedder embedding.Provider) {
+	if !embedding.Enabled(embedder) {
+		return
+	}
+	if eng, ok := engine.(interface{ SetVectorModelID(string) }); ok {
+		eng.SetVectorModelID(embedder.Name())
+	}
+}
+
 // NewMcpServer construye el servidor MCP. embedder genera embeddings a partir de
 // texto; usá embedding.NoopProvider{} para desactivar la búsqueda semántica.
 // opts son opciones funcionales aditivas (ej. WithSourcing); los callers existentes
@@ -449,6 +490,7 @@ func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder emb
 	if embedder == nil {
 		embedder = embedding.NoopProvider{}
 	}
+	estamparProcedenciaDelVector(engine, embedder)
 	s := &McpServer{
 		engine:      engine,
 		resolver:    skills.NewResolver(projectPath),
