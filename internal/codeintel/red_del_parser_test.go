@@ -38,10 +38,16 @@ import (
 // `ok ... [no tests to run]` con exit 0 — y eso NO es un verde, es que no se midió nada.
 // Sabotaje que la pone roja: angostar la red POR TIPO y repanicar lo que no sea string.
 // arnes: archivo="internal/codeintel/treesit_on.go"
-// arnes: de="\t\tif r := recover(); r != nil {\n"
-// arnes: a="\t\tif r := recover(); r != nil {\n\t\t\tif _, ok := r.(string); !ok {\n\t\t\t\tpanic(r)\n\t\t\t}\n"
-// arnes: arreglo_de="if r := recover(); r != nil {"
-// arnes: arreglo_a="if recover() != nil {"
+//
+// POR QUÉ EL LITERAL ES TAN LARGO. Desde #491 este archivo tiene DOS redes: ésta y la de
+// `languageFor`, que atrapa el pánico al CARGAR la gramática. Las dos abren con la misma línea
+// exacta, así que `"\t\tif r := recover(); r != nil {\n"` ya no dice cuál se toca — y el arnés
+// lo rechaza en vez de tocar una al azar. El literal arranca en la FIRMA de la función porque es
+// lo primero que las distingue; acortarlo lo vuelve ambiguo de nuevo.
+// arnes: de="func derivePolyglotFile(path, content string) (nodes []Node, edges []Edge) {\n\tdefer func() {\n\t\tif r := recover(); r != nil {\n"
+// arnes: a="func derivePolyglotFile(path, content string) (nodes []Node, edges []Edge) {\n\tdefer func() {\n\t\tif r := recover(); r != nil {\n\t\t\tif _, ok := r.(string); !ok {\n\t\t\t\tpanic(r)\n\t\t\t}\n"
+// arnes: arreglo_de="func derivePolyglotFile(path, content string) (nodes []Node, edges []Edge) {\n\tdefer func() {\n\t\tif r := recover(); r != nil {"
+// arnes: arreglo_a="func derivePolyglotFile(path, content string) (nodes []Node, edges []Edge) {\n\tdefer func() {\n\t\tif recover() != nil {"
 func TestUnPanicoDelParserNoSeLlevaElProceso(t *testing.T) {
 	original := derivarPolyglotSinRed
 	t.Cleanup(func() { derivarPolyglotSinRed = original })
