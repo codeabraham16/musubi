@@ -37,9 +37,13 @@ func rustdeskFalso(t *testing.T, cuerpo string) (registro string) {
 	// escribiría el estado real de la máquina de quien corre los tests (o fallaría por permiso
 	// contra /var/lib/musubi, que fue lo que apareció).
 	t.Setenv(envRespaldoPantalla, filepath.Join(dir, "pantalla-previa.json"))
-	anterior := binarioRustdesk
-	binarioRustdesk = guion
-	t.Cleanup(func() { binarioRustdesk = anterior; marcarSesionAbierta(false) })
+	// SE PASA POR EL SETTER Y NO SE ESCRIBE LA VARIABLE. Escribirla a mano era una CARRERA de
+	// verdad, no una formalidad: el vencimiento de la sesión corre en la goroutine de un
+	// `time.AfterFunc` que llega hasta `rutaRustdesk()`, así que lee este valor mientras la prueba
+	// lo escribe. Con el TTL de 50 ms de `TestAlVencerSeReemplazaLaContrasenaNoSeBorra` se cruzan,
+	// y el detector lo cazó en CI.
+	restaurar := ForzarBinarioRustdesk(guion)
+	t.Cleanup(func() { restaurar(); marcarSesionAbierta(false) })
 	return registro
 }
 

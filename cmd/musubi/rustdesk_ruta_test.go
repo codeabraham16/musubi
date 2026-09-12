@@ -154,9 +154,7 @@ func TestCuandoNoApareceElErrorDiceDondeSeBusco(t *testing.T) {
 
 // TestElDobleDePruebaLeGanaATodo mantiene viva la costura que usa pantalla_test.go.
 func TestElDobleDePruebaLeGanaATodo(t *testing.T) {
-	anterior := binarioRustdesk
-	binarioRustdesk = "/un/doble/cualquiera"
-	t.Cleanup(func() { binarioRustdesk = anterior })
+	t.Cleanup(ForzarBinarioRustdesk("/un/doble/cualquiera"))
 	t.Setenv("MUSUBI_RUSTDESK_BIN", "/otra/cosa")
 
 	got, err := rutaRustdesk()

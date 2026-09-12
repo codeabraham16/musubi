@@ -25,13 +25,48 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 // binarioRustdesk fuerza la ruta del cliente. Vacío —el default— significa «descubrila».
 //
-// Sigue siendo `var` por la misma razón de siempre: las pruebas lo apuntan a un doble, y así la
+// Sigue siendo variable por la misma razón de siempre: las pruebas lo apuntan a un doble, y así la
 // integración con el binario real es lo único del track que necesita una máquina de verdad.
-var binarioRustdesk = ""
+//
+// VA DETRÁS DE UN CANDADO DESDE EL 2026-09-12, Y NO ES CEREMONIA: el vencimiento de una sesión de
+// pantalla corre en una goroutine que larga `time.AfterFunc` (pantalla.go), y esa goroutine llega
+// hasta `rutaRustdesk()` para cerrar la sesión. O sea que este valor lo LEE una goroutine que
+// sobrevive a quien la creó, mientras las pruebas lo ESCRIBEN para apuntarlo al doble. Con un TTL
+// de 50 ms las dos cosas se cruzan, y el detector de carreras de Go lo cazó en CI —una vez, de
+// forma intermitente: 12 corridas locales del test solo y 3 del paquete entero no lo
+// reprodujeron—. No es un problema del andamio: la lectura es de producción.
+var (
+	rustdeskMu      sync.RWMutex
+	binarioRustdesk = ""
+)
+
+// ForzarBinarioRustdesk apunta el cliente a otra ruta y devuelve una función que restaura la
+// anterior. Existe para que las pruebas no escriban la variable a mano: escribirla sin candado es
+// exactamente la carrera que este candado vino a cerrar, y un setter es más difícil de saltear que
+// un comentario que lo pida.
+func ForzarBinarioRustdesk(ruta string) func() {
+	rustdeskMu.Lock()
+	anterior := binarioRustdesk
+	binarioRustdesk = ruta
+	rustdeskMu.Unlock()
+	return func() {
+		rustdeskMu.Lock()
+		binarioRustdesk = anterior
+		rustdeskMu.Unlock()
+	}
+}
+
+// binarioForzado lee la ruta forzada bajo el candado.
+func binarioForzado() string {
+	rustdeskMu.RLock()
+	defer rustdeskMu.RUnlock()
+	return binarioRustdesk
+}
 
 // errSinRustdesk distingue «no está instalado» de «está y falló». Son dos cosas distintas y
 // mezclarlas fue el bug: una es una máquina sin plano visual, la otra es un plano visual roto.
@@ -49,8 +84,8 @@ var errSinRustdesk = errors.New("no se encontró el cliente RustDesk en esta má
 //  3. El PATH.
 //  4. Los lugares donde el instalador oficial lo deja, por sistema operativo.
 func rutaRustdesk() (string, error) {
-	if binarioRustdesk != "" {
-		return binarioRustdesk, nil
+	if forzado := binarioForzado(); forzado != "" {
+		return forzado, nil
 	}
 	if forzado := strings.TrimSpace(os.Getenv("MUSUBI_RUSTDESK_BIN")); forzado != "" {
 		if !esEjecutable(forzado) {
