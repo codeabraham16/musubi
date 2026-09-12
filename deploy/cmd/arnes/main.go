@@ -78,6 +78,7 @@ func main() {
 		raiz       = flag.String("raiz", ".", "raíz del repo")
 		validar    = flag.Bool("validar", false, "comprobar que cada directiva siga apuntando a donde dice, sin correr nada")
 		correr     = flag.Bool("correr", false, "correr los sabotajes mecanizados vía deploy/pruebas/sabotaje.sh")
+		overlay    = flag.Bool("overlay", false, "correr cada sabotaje SIN tocar el disco (go test -overlay) y marcar los que quedan VERDES: un rojo que sólo aparece al escribir el archivo depende del disco, no del comportamiento")
 		paquete    = flag.String("paquete", "", "correr sólo los de este paquete (ej ./internal/mcp)")
 		limite     = flag.Int("limite", 0, "correr como máximo N (0 = todos)")
 		insertar   = flag.String("insertar", "", "ruta a un JSON con directivas a escribir en los comentarios")
@@ -185,7 +186,7 @@ func main() {
 		salida = 1
 	}
 
-	if *validar || *correr {
+	if *validar || *correr || *overlay {
 		// LAS COLISIONES SE INFORMAN PERO NO FALLAN. Dos directivas sobre la misma línea pueden ser
 		// dos guardas cubriéndola desde ángulos distintos —medido: el par de `internal/fleet` cae con
 		// dos motivos distintos, así que las dos miden— o pueden ser un rojo falso. Lo que sí es
@@ -214,6 +215,13 @@ func main() {
 		} else if *correr {
 			fmt.Println("\nNO SE CORRIÓ NADA: primero hay que arreglar las directivas de arriba. Correr con una " +
 				"directiva rota mide otra cosa y su resultado se lee como si midiera ésta.")
+		}
+		if *overlay && len(males) == 0 {
+			if rc := contraOverlay(*raiz, censo, *paquete, *limite); rc != 0 {
+				salida = rc
+			}
+		} else if *overlay {
+			fmt.Println("\nNO SE CORRIÓ EL OVERLAY: primero hay que arreglar las directivas de arriba.")
 		}
 	}
 	os.Exit(salida)
@@ -444,6 +452,171 @@ func imprimirCenso(c arnes.Censo, detalle bool) {
 			fmt.Printf("  %3d  %s\n", cuenta[k], k)
 		}
 	}
+}
+
+// elOverlayPuedeTocar dice si `go test -overlay` puede siquiera aplicar un sabotaje a este archivo.
+//
+// `-overlay` reemplaza archivos PARA EL BUILD DE GO. Si el blanco no entra al build —un `.yml`, un
+// `.sh`, un `.conf` que la prueba lee en runtime— la entrada del overlay es inerte: el sabotaje no
+// se aplica NUNCA y la prueba pasa. El verde queda garantizado sin importar si la guarda es buena.
+//
+// Vale una función con nombre y no un `HasSuffix` suelto porque su ausencia costó 5 falsos
+// positivos sobre 6 resultados en la primera corrida completa, y porque la condición es sutil: lo
+// que decide no es «es texto» ni «está en deploy/», es «¿el compilador de Go lo abre?».
+func elOverlayPuedeTocar(archivo string) bool {
+	return strings.HasSuffix(archivo, ".go")
+}
+
+// contraOverlay corre cada sabotaje SIN TOCAR EL DISCO y compara contra el veredicto de disco.
+//
+// LA IDEA NO ES MÍA Y SALE DE UN ACCIDENTE. Un refutador ajeno midió VERDE una directiva que este
+// arnés medía en ROJO, y las dos mediciones eran correctas: él aplicaba con `go test -overlay`, que
+// le cambia el archivo AL COMPILADOR, y la guarda en cuestión lee ese archivo DEL DISCO en tiempo de
+// ejecución con `os.ReadFile`. Bajo overlay el disco está sano, así que el daño colateral que
+// producía su rojo no ocurría. Ese rojo era falso: la prueba caía por el daño al corpus y no por el
+// defecto declarado.
+//
+// De ahí sale el detector, que es exacto para la clase:
+//
+//	ROJO al disco  ∧  VERDE bajo overlay  ⇒  el rojo depende de un efecto en el DISCO,
+//	                                          no del cambio de comportamiento
+//
+// El conjunto que sobrevive es chico y se separa a ojo: o es daño colateral —un rojo falso— o es un
+// defecto real que sólo se ve leyendo el disco, que en este árbol son contados.
+//
+// ES MÁS COMPLETO QUE `arnes.Colisiones` Y NO LO REEMPLAZA. `Colisiones` caza el daño al CORPUS DE
+// DIRECTIVAS —el `de` de uno es el ancla de otro— y dice POR QUÉ. Esto caza cualquier efecto que
+// dependa del archivo en disco, incluyendo los que no tienen ninguna directiva adentro, y dice
+// CUÁLES. Si esto marca uno que `Colisiones` no explica, ahí hay una tercera causa que ninguno de
+// los dos previó, y ése es el caso que más vale mirar.
+//
+// NO REIMPLEMENTA NINGUNA DE LAS OCHO COMPROBACIONES DE `sabotaje.sh`: no es un veredicto, es un
+// bit por directiva para cruzar contra el veredicto que ya dio el guion.
+func contraOverlay(raiz string, c arnes.Censo, soloPaquete string, limite int) int {
+	tmp, err := os.MkdirTemp("", "arnes-overlay-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	defer os.RemoveAll(tmp)
+
+	antes, err := estadoDelArbol(raiz)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "no pude fotografiar el árbol antes de empezar:", err)
+		return 2
+	}
+
+	var corridas, rojos, verdes, errores, nogo int
+	var candidatos []string
+	for _, a := range c.Mecanizadas() {
+		d := a.Directiva
+		if soloPaquete != "" && d.Paquete != soloPaquete {
+			continue
+		}
+		if limite > 0 && corridas >= limite {
+			break
+		}
+		corridas++
+		fmt.Printf("\n══ %d · %s:%d · %s\n", corridas, a.Archivo, a.Linea, d.Prueba)
+
+		// SI EL BLANCO NO ES UN `.go`, ESTE MODO NO PUEDE MEDIR, Y DECIRLO IMPORTA MÁS QUE MEDIRLO.
+		//
+		// `go test -overlay` reemplaza archivos PARA EL BUILD DE GO. Un `.yml`, un `.sh` o un
+		// `.conf` que la prueba lee en runtime queda INTACTO: el sabotaje no se aplica nunca y la
+		// prueba pasa. O sea que el verde está garantizado sin importar si la guarda es buena.
+		//
+		// La primera versión los contaba como «candidatos a rojo falso» y en la primera corrida
+		// completa eso fue 5 de 6 resultados: el instrumento contestando bien otra pregunta,
+		// justo el que se escribió para cazar eso. Un verde que no midió no puede salir por la
+		// misma puerta que un verde que midió.
+		if !elOverlayPuedeTocar(d.Archivo) {
+			fmt.Printf("   ○ NO MEDIBLE ACÁ: `%s` no es un `.go`, así que el overlay no lo toca y la\n", d.Archivo)
+			fmt.Println("     prueba lo lee sano del disco. Su veredicto lo da `-correr`, no este modo.")
+			nogo++
+			continue
+		}
+
+		destino := filepath.Join(raiz, filepath.FromSlash(d.Archivo))
+		original, err := os.ReadFile(destino)
+		if err != nil {
+			fmt.Println("   ✗ no pude leer", d.Archivo, err)
+			errores++
+			continue
+		}
+		if n := strings.Count(string(original), d.De); n != 1 {
+			fmt.Printf("   ✗ el `de` aparece %d veces: eso lo denuncia `-validar`\n", n)
+			errores++
+			continue
+		}
+
+		// El archivo parcheado vive en el temporal; el del repo no se toca NUNCA en este modo.
+		parche := filepath.Join(tmp, fmt.Sprintf("%d_%s", corridas, filepath.Base(d.Archivo)))
+		if err := os.WriteFile(parche, []byte(strings.Replace(string(original), d.De, d.A, 1)), 0o600); err != nil {
+			fmt.Println("   ✗ no pude escribir el parche:", err)
+			errores++
+			continue
+		}
+		mapa := filepath.Join(tmp, fmt.Sprintf("%d_overlay.json", corridas))
+		crudo, err := json.Marshal(map[string]map[string]string{"Replace": {destino: parche}})
+		if err != nil {
+			fmt.Println("   ✗ no pude armar el overlay:", err)
+			errores++
+			continue
+		}
+		if err := os.WriteFile(mapa, crudo, 0o600); err != nil {
+			fmt.Println("   ✗ no pude escribir el overlay:", err)
+			errores++
+			continue
+		}
+
+		cmd := exec.Command("go", "test", "-count=1", "-overlay", mapa, d.Paquete, "-run", "^"+d.Prueba+"$")
+		cmd.Dir = raiz
+		salida, err := cmd.CombinedOutput()
+		switch {
+		case err != nil && strings.Contains(string(salida), "--- FAIL"):
+			fmt.Println("   ✓ ROJO también bajo overlay: el rojo no depende del disco")
+			rojos++
+		case err != nil:
+			// No compiló, o el paquete no existe bajo overlay. No es un veredicto.
+			fmt.Println("   ! sin veredicto bajo overlay (no compiló o no seleccionó prueba)")
+			errores++
+		default:
+			fmt.Println("   ✗ VERDE BAJO OVERLAY Y ROJO AL DISCO ← candidato a rojo falso")
+			verdes++
+			candidatos = append(candidatos, fmt.Sprintf("%s:%d %s", a.Archivo, a.Linea, d.Prueba))
+		}
+	}
+
+	fmt.Printf("\n════════════════════════════════════════════════════\n")
+	fmt.Printf("corridas bajo overlay : %d\n", corridas)
+	fmt.Printf("rojas también         : %d\n", rojos)
+	fmt.Printf("VERDES bajo overlay   : %d   ← candidatos a rojo falso\n", verdes)
+	fmt.Printf("NO MEDIBLES acá       : %d   (el blanco no es un `.go`: el overlay no lo toca)\n", nogo)
+	fmt.Printf("sin veredicto         : %d   (no compiló bajo overlay; NO es un verde)\n", errores)
+	for _, cand := range candidatos {
+		fmt.Println("   · " + cand)
+	}
+	if len(candidatos) > 0 {
+		fmt.Println("\n  Un candidato NO es todavía un rojo falso. Son dos cosas y se separan leyendo:")
+		fmt.Println("   · DAÑO COLATERAL AL DISCO: el sabotaje rompió algo que la prueba lee en runtime")
+		fmt.Println("     —otra directiva, un fixture, un archivo que se parsea—. Ahí el rojo es falso.")
+		fmt.Println("     `-validar` te dice si hay colisión de directivas, que es la causa más común.")
+		fmt.Println("   · DEFECTO QUE SÓLO SE VE LEYENDO EL DISCO: la prueba mide comportamiento que")
+		fmt.Println("     depende del archivo real. Ahí el rojo es legítimo y el overlay es el ciego.")
+	}
+
+	// El repo no se tocó, y se comprueba igual: afirmarlo sin medirlo sería la misma clase que
+	// todo lo que este comando existe para no dejar pasar.
+	if despues, err := estadoDelArbol(raiz); err != nil {
+		fmt.Printf("\n! no pude confirmar que el árbol quedó igual: %v\n", err)
+	} else if despues != antes {
+		fmt.Println("\n✗ EL ÁRBOL CAMBIÓ, y este modo NO ESCRIBE en el repo: es otra sesión o vos.")
+		return 1
+	}
+	if verdes > 0 {
+		return 1
+	}
+	return 0
 }
 
 // revisarElRojo LEE LA LÍNEA DEL FALLO, QUE ES LO QUE EL EXIT CODE NO DICE.

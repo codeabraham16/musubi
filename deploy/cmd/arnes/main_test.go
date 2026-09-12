@@ -183,3 +183,45 @@ func TestElRecorteDelMotivoNoParteUnCaracter(t *testing.T) {
 		t.Errorf("lo que entra entero tiene que salir entero y sin puntos suspensivos: %q", corto)
 	}
 }
+
+// TestElOverlayNoPuedeTocarLoQueGoNoCompila fija el tercer canasto del modo `-overlay`.
+//
+// POR QUÉ EXISTE. La primera corrida completa del detector marcó 6 «candidatos a rojo falso» y
+// CINCO eran esto: sabotajes contra `.yml`, `.sh` y `.conf`. `go test -overlay` reemplaza archivos
+// para el BUILD DE GO; un YAML que la prueba lee en runtime queda intacto, el sabotaje no se aplica
+// y la prueba pasa. O sea que su verde estaba garantizado de antemano y no decía nada sobre la
+// guarda. Es el instrumento contestando bien OTRA pregunta — escrito, encima, para cazar eso mismo.
+//
+// «No pude medir» y «medí y está sano» tienen que salir por puertas distintas, así que ahora salen
+// por un contador propio.
+//
+// Sabotaje que la hace fallar: en `elOverlayPuedeTocar`, devolver `true` siempre.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\treturn strings.HasSuffix(archivo, \".go\")"
+// arnes: a="\treturn true"
+// arnes: prueba="TestElOverlayNoPuedeTocarLoQueGoNoCompila"
+func TestElOverlayNoPuedeTocarLoQueGoNoCompila(t *testing.T) {
+	// Los cinco de la corrida real, y un `.go` de control: sin el control, «devolver false siempre»
+	// también pasaría, y eso apagaría el modo entero en silencio.
+	casos := []struct {
+		archivo string
+		puede   bool
+	}{
+		{"internal/arnes/arnes.go", true},
+		{"internal/mcp/sonda_permiso_test.go", true},
+		{"deploy/musubi-alerts-flota.yml", false},
+		{"deploy/rustdesk/compose.yml", false},
+		{"deploy/redesplegar-cerebro.sh", false},
+		{"deploy/systemd/musubi-agente-contenedores.conf", false},
+		{"deploy/docker/compose.yml", false},
+		// No alcanza con que la ruta CONTENGA «.go»: lo que decide es cómo TERMINA.
+		{"deploy/go.mod", false},
+		{"internal/algo.golden", false},
+	}
+	for _, c := range casos {
+		if got := elOverlayPuedeTocar(c.archivo); got != c.puede {
+			t.Errorf("%s: esperaba puede=%v, vino %v — un `no medí` contado como veredicto es "+
+				"exactamente el defecto que este canasto existe para evitar", c.archivo, c.puede, got)
+		}
+	}
+}
