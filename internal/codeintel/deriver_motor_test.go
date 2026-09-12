@@ -27,8 +27,28 @@ import (
 //
 // POR QUÉ NO ES UN ESPEJO. El hecho del mundo sale de go.mod —el archivo que edita Dependabot— y lo
 // custodiado es motorTreeSitterDeclarado, en crosspkg.go. Dos archivos, dos motivos de edición
-// distintos. La guarda NO clava "v0.51.0" en ningún lado: si lo hiciera habría que actualizarla a
-// mano y no custodiaría nada.
+// distintos. La guarda NO clava ninguna versión en ningún lado: si lo hiciera habría que
+// actualizarla a mano y no custodiaría nada.
+//
+// CÓMO SE SABOTEA ESTA GUARDA, Y POR QUÉ ALCANZA CON UN SOLO ARCHIVO. Medido el 2026-09-12, porque
+// la respuesta intuitiva es la equivocada y cuesta tiempo: para verla ponerse roja alcanza con
+// editar LA LÍNEA DE VERSIÓN DE go.mod. NO hace falta tocar go.sum, aunque quede desincronizado.
+//
+// El motivo es del repo y no del sabotaje: SIN BUILD TAGS, internal/codeintel no importa
+// gotreesitter —lo reemplaza treesit_off.go—, así que Go nunca carga ese módulo y nunca verifica su
+// entrada en go.sum. Comprobado dejando go.mod en v0.51.0 con go.sum conteniendo SÓLO las entradas
+// de v0.52.0: `go build ./internal/codeintel/` compila y la guarda da rojo por SU PROPIA aserción.
+//
+// LA SALVEDAD, Y ES LA QUE IMPORTA SI AUTOMATIZÁS ESTO: con los tags de tree-sitter, ese mismo
+// árbol NO COMPILA — `missing go.sum entry for module providing package
+// github.com/odvcencio/gotreesitter`. O sea que el sabotaje de un archivo es válido para ESTA
+// guarda, que corre sin tags en el job `test`, pero deja el árbol roto para el paso polyglot. Si
+// después de sabotear corrés algo con tags, el rojo que vas a ver es de BUILD y no prueba nada
+// (ver deploy/pruebas/sabotaje.sh, que compila antes y después justamente por esto). Restaurá
+// go.mod antes de seguir, o sabotéalo con `go mod tidy` si vas a tocar el árbol con tags.
+//
+// Esa es también la propiedad rara de esta guarda: su sabotaje es EXACTAMENTE la edición que hace
+// Dependabot. Prueba el caso real, no uno inventado.
 
 const moduloMotorTreeSitter = "github.com/odvcencio/gotreesitter"
 
