@@ -364,11 +364,39 @@ jobs:
         #
         # El `grep -- '--- PASS'` es por lo mismo que su hermano de arriba: si alguien saca esta
         # env var, el test se saltea y el job pasa igual. `--- SKIP` no es `--- PASS`.
+        #
+        # EL `grep` LLEVA UN ESPACIO AL FINAL Y NO ES UN DESCUIDO. `--- PASS: TestUnigramRealBitExact`
+        # es un PREFIJO: la linea `--- PASS: TestUnigramRealBitExactLoQueSea` lo satisface, y `-run`
+        # tampoco esta anclado, asi que un test con ese nombre lo correria. Entre los dos, la
+        # compuerta podia pasar en verde con el test de verdad SALTEADO. El espacio ancla contra el
+        # `(0.62s)` que `go test` imprime siempre despues del nombre.
         run: |
           set -o pipefail
           go test ./internal/embedding/ -run TestUnigramRealBitExact -count=1 -v | tee tokenizer-bitexact.txt
-          grep -q -- '--- PASS: TestUnigramRealBitExact' tokenizer-bitexact.txt || {
+          grep -q -- '--- PASS: TestUnigramRealBitExact ' tokenizer-bitexact.txt || {
             echo "::error::la guarda bit-exacta del tokenizer NO EJECUTO TestUnigramRealBitExact (se salteo, o el nombre ya no existe). Un verde de este job sin esa linea no vigila la tokenizacion."
+            exit 1
+          }
+
+      - name: Huella del charsmap contra el asset real
+        env:
+          MUSUBI_SPM_TESTDATA: ${{ github.workspace }}/.musubi/embeddings/potion-multilingual-128M
+        # LA HERMANA BIT-EXACTA ERA CIEGA AL CHARSMAP, Y SE MIDIO.
+        #
+        # Una auditoria adversaria rompio el trie darts con un typo de UN BIT y `TestUnigramRealBitExact`
+        # quedo VERDE — junto con el paquete entero y el gate de recall. La tokenizacion SI cambiaba
+        # (huella c7bf6e14... contra 7126b392...). La causa es el corpus: las 12 entradas de
+        # testdata/spm_potion_ids.json son ASCII/Latin-1 ya normalizadas y no atraviesan el charsmap.
+        #
+        # Este paso corre la guarda que si lo atraviesa. Las dos son necesarias y ninguna sustituye a
+        # la otra: aquella compara contra IDs de REFERENCIA (tokenizamos igual que el tokenizer de
+        # verdad), esta fija una HUELLA de nuestra propia salida sobre catorce frases dificiles
+        # (la tokenizacion no cambio). Correccion contra deteccion de cambio.
+        run: |
+          set -o pipefail
+          go test ./internal/embedding/ -run TestLaTokenizacionDelCharsmapEstaFijada -count=1 -v | tee charsmap.txt
+          grep -q -- '--- PASS: TestLaTokenizacionDelCharsmapEstaFijada ' charsmap.txt || {
+            echo "::error::la huella del charsmap NO EJECUTO TestLaTokenizacionDelCharsmapEstaFijada (se salteo, o el nombre ya no existe). Un verde de este job sin esa linea no vigila el camino del charsmap."
             exit 1
           }
 
