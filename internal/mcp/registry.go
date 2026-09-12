@@ -207,6 +207,10 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: s.countingSaveCtx(s.toolSaveObservation),
+			// lockSelf: el handler embebe (llamada de red) ANTES de tocar la base y acota su
+			// propio tramo con withWriteLock. Medido con el embebedor colgado, bajo el candado
+			// del despacho esta tool congelaba el servidor entero 8,006 s.
+			lock: lockSelf,
 		},
 		{
 			Tool: Tool{

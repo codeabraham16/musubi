@@ -315,32 +315,66 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 	// 10 minutos. La regla del repo es «embeddings opcionales con fallback»: se guarda sin vector
 	// y AutoEmbedBackfill la embebe cuando el embedder vuelve. Mismo camino best-effort que la
 	// captura automática usa desde siempre (embedIfEnabled).
+	// ════════════════════════════════════════════════════════════════════════════════════════
+	// ESTA LÍNEA VA AFUERA DEL CANDADO, Y ES TODO EL PUNTO DE `lockSelf`.
+	//
+	// Hasta el 2026-09-12 esta tool corría bajo el candado EXCLUSIVO del despacho, que el
+	// despachador toma ANTES de entrar al handler. O sea que el embebedor —una llamada de red—
+	// se hacía con el servidor entero trabado: medido con el embebedor colgado, 8,006 s en los
+	// que ninguna otra tool podía entrar. Y el costo real es peor que la llamada: el embebedor
+	// estático tarda 800 ms-3 s en CONSTRUIRSE la primera vez, y esa construcción también caía
+	// adentro.
+	//
+	// La regla que esto cumple la escribe `server.go`: ningún candado del despacho puede cruzar
+	// una llamada de red. La custodia `TestNingunCandadoDelDespachoCruzaUnaLlamadaDeRed`, que la
+	// DERIVA del AST en vez de enumerar nombres — la guarda anterior enumeraba cuatro y por eso
+	// prohibía este arreglo.
+	// ════════════════════════════════════════════════════════════════════════════════════════
 	emb := s.embedIfEnabled(content)
 
-	// Sin id explícito: deduplicar por contenido y autogenerar UUID. El origen se derivó de la
-	// credencial arriba (Track 17); admin/legacy conserva el project_id declarado por el caller.
-	if strings.TrimSpace(args.ID) == "" {
-		id, deduped, err := s.engine.SaveObservationDedupedTypedFromWithOrigins(origin, author, topicKey, content, importance, args.MemType, scope, args.OriginPaths, emb)
-		if err != nil {
-			return nil, errorDeGuardado(err)
+	// Y ACÁ ARRANCA EL CANDADO, sobre el único tramo que lo necesita: el que toca la base.
+	// Exclusivo y no compartido porque esto ESCRIBE, así que sigue sin haber lost-updates de
+	// read-modify-write — lo que cambia es cuánto dura, no quién entra.
+	//
+	// El resultado sale por variables y no por `return` porque un `return` adentro del closure
+	// volvería del closure, no del handler: dejaría el save hecho y la respuesta vacía.
+	//
+	// `detectAndSurface` va ADENTRO a propósito: toca la base (`DetectRelations`,
+	// `surfaceBandNeighbors`) y su encolado al modo sombra es un `select` con `default` que no
+	// bloquea nunca, así que no arrastra I/O de red al tramo serializado.
+	var res interface{}
+	var rpcErr *RpcError
+	s.withWriteLock(func() {
+		// Sin id explícito: deduplicar por contenido y autogenerar UUID. El origen se derivó de la
+		// credencial arriba (Track 17); admin/legacy conserva el project_id declarado por el caller.
+		if strings.TrimSpace(args.ID) == "" {
+			id, deduped, err := s.engine.SaveObservationDedupedTypedFromWithOrigins(origin, author, topicKey, content, importance, args.MemType, scope, args.OriginPaths, emb)
+			switch {
+			case err != nil:
+				rpcErr = errorDeGuardado(err)
+			case deduped:
+				res = textResult("Observación ya existente, no se duplicó (id: " + id + ").")
+			default:
+				res = textResult("Observación guardada con éxito (id: " + id + ")." + s.detectAndSurface(id))
+			}
+			return
 		}
-		if deduped {
-			return textResult("Observación ya existente, no se duplicó (id: " + id + ")."), nil
-		}
-		return textResult("Observación guardada con éxito (id: " + id + ")." + s.detectAndSurface(id)), nil
-	}
 
-	// Con id explícito: upsert por id. Una id que ya pertenece a OTRO proyecto se rechaza (no se
-	// puede escribir memoria de otro tenant, ni siquiera "de vuelta" a la propia: el UPSERT preserva
-	// la atribución, así que reenviarla sólo corrompería la fila ajena). El caller debe usar una id
-	// nueva; reasignar el tenant de una fila existente sólo puede hacerlo un admin en el central.
-	if err := s.engine.SaveObservationTypedWithOrigins(origin, author, args.ID, topicKey, content, importance, args.MemType, scope, args.OriginPaths, emb); err != nil {
-		if errors.Is(err, memory.ErrCrossTenant) {
-			return nil, rpcErrorf(codeUnauthorized, "%v — guardala con un id nuevo", err)
+		// Con id explícito: upsert por id. Una id que ya pertenece a OTRO proyecto se rechaza (no se
+		// puede escribir memoria de otro tenant, ni siquiera "de vuelta" a la propia: el UPSERT preserva
+		// la atribución, así que reenviarla sólo corrompería la fila ajena). El caller debe usar una id
+		// nueva; reasignar el tenant de una fila existente sólo puede hacerlo un admin en el central.
+		if err := s.engine.SaveObservationTypedWithOrigins(origin, author, args.ID, topicKey, content, importance, args.MemType, scope, args.OriginPaths, emb); err != nil {
+			if errors.Is(err, memory.ErrCrossTenant) {
+				rpcErr = rpcErrorf(codeUnauthorized, "%v — guardala con un id nuevo", err)
+				return
+			}
+			rpcErr = errorDeGuardado(err)
+			return
 		}
-		return nil, errorDeGuardado(err)
-	}
-	return textResult("Observación guardada con éxito (id: " + args.ID + ")." + s.detectAndSurface(args.ID)), nil
+		res = textResult("Observación guardada con éxito (id: " + args.ID + ")." + s.detectAndSurface(args.ID))
+	})
+	return res, rpcErr
 }
 
 // errorDeGuardado traduce un fallo de guardado al código JSON-RPC que corresponde. Lo que se

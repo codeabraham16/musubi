@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TODA TOOL QUE PUEDA LLEGAR A UNA LLAMADA DE RED TIENE QUE DECLARAR `lockSelf`, Y AL REVÉS.
@@ -325,4 +326,65 @@ func TestNingunCandadoDelDespachoCruzaUnaLlamadaDeRed(t *testing.T) {
 		"%d funciones tocan el borde, %d lo alcanzan transitivamente",
 		archivos, len(tools), sinHandlerLegible, strings.Join(bordesVivos, ", "),
 		len(enElBorde), len(alcanza))
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// LA MITAD DE COMPORTAMIENTO: la guarda de arriba mira la FORMA, ésta mide el EFECTO.
+//
+// Una guarda estructural sola no alcanza. Puede estar verde con `lock: lockSelf` declarado y el
+// embed adentro del `withWriteLock`, que es exactamente el defecto con la marca puesta. Así que
+// acá se cuelga el embebedor de verdad, se deja a `musubi_save_observation` atrapada dentro de la
+// llamada de red, y se exige que OTRO escritor entre igual.
+//
+// POR QUÉ ESTA MEDICIÓN NO EXISTÍA. La sonda de G5 —`exigeQueUnEscritorSinEmbedderResponda`— fue
+// elegida para NO pasar por el embebedor, y su comentario lo dice: «guardar una observación
+// también pasa por el embedder y la sonda quedaría atrapada en el mismo cuelgue que se está
+// midiendo». El arnés esquivaba el caso defectuoso a propósito, y el `embedderBloqueante` que hacía
+// falta para medirlo estaba escrito, con su interruptor `activo` y su comentario explicando para
+// qué servía, y NADIE lo usaba. Construido y nunca prendido, en el propio arnés de prueba.
+//
+// LA SONDA TIENE QUE SER ESCRITORA, y no es un detalle: una de sólo lectura pasaría igual con el
+// defecto puesto si el tramo tomara RLock, porque dos lectores conviven. El escritor es el único
+// que se bloquea con CUALQUIER candado tomado, compartido o exclusivo.
+//
+// Sabotaje que la hace fallar: sacarle `lock: lockSelf` a `musubi_save_observation` en el registro.
+// Corrido: la sonda concurrente no vuelve y la prueba declara el bloqueo.
+func TestGuardarUnaObservacionNoCongelaElServidor(t *testing.T) {
+	emb := nuevoEmbedderBloqueante()
+	s := newTestServer(t, emb)
+
+	// El interruptor se prende DESPUÉS de construir el servidor: si el embebedor colgara desde el
+	// arranque, frenaría cualquier siembra y la prueba moriría antes de medir.
+	emb.activo.Store(true)
+
+	guardado := make(chan *RpcError, 1)
+	go func() {
+		guardado <- llamarSinT(s, "musubi_save_observation", map[string]interface{}{
+			"topic_key": "candado/medicion",
+			"content":   "esta observación se queda colgada en el embebedor a propósito, para medir si el servidor sigue atendiendo",
+		})
+	}()
+
+	// SE ESPERA A ESTAR ADENTRO DEL Embed. Sin esto la sonda podría correr antes de que la tool
+	// llegue a la llamada de red, y la prueba pasaría con el defecto puesto — un verde que mide
+	// el momento equivocado.
+	select {
+	case <-emb.entro:
+	case <-time.After(esperaArranque):
+		t.Fatal("musubi_save_observation no llegó al embebedor: esta prueba no pudo empezar a medir, " +
+			"así que su verde no significaría nada")
+	}
+
+	exigeQueUnEscritorSinEmbedderResponda(t, s,
+		"musubi_save_observation está colgada dentro del embebedor")
+
+	close(emb.soltar)
+	select {
+	case rpcErr := <-guardado:
+		if rpcErr != nil {
+			t.Fatalf("al soltar el embebedor, el guardado falló: %+v", rpcErr)
+		}
+	case <-time.After(esperaMax):
+		t.Fatal("soltado el embebedor, el guardado igual no volvió: el candado quedó tomado por otra cosa")
+	}
 }
