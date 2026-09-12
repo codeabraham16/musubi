@@ -148,50 +148,97 @@ si:
 La implementación tiene que **chequear las dos y caer al camino de copia** si alguna no da. Las dos
 están asertadas en `arranque_mmap_unix_test.go`.
 
-### La alternativa del daemon, mirada de cerca — y no gana tan fácil
+### CORRECCIÓN (2026-09-12) — los daemons SÍ tenían la tabla, y el error fue mío
 
-«Pedirle el vector a un proceso que **ya** tenga la tabla cargada» cuesta un ida y vuelta por socket
-—milisegundos, cero memoria— contra los 1013 ms del mejor caso local. Suena a que gana solo. Al
-mirar la máquina, **no**:
+**Lo que decía esta sección estaba mal, y el argumento que sostenía se da vuelta.** Decía: «hay cinco
+`musubi daemon` vivos y sus RSS son 6, 6, 11, 6 y 8 MB: **ninguno tiene la tabla**». De ahí salían
+«la alternativa no es un daemon, es N» y «5 × 1,3 GB» como escenario **futuro**.
 
-**Hoy no hay tal proceso.** Hay **cinco `musubi daemon` vivos** y sus RSS son **6, 6, 11, 6 y
-8 MB**: ninguno tiene la tabla. Con la tabla cargada cada uno pesaría ~1,3 GB.
+**Medí `VmRSS` y `VmRSS` no cuenta lo que está swapeado.** Los mismos procesos, mirados bien:
 
-Los cinco cuelgan de la extensión de Claude Code en VS Code —verificado por `PPid`, no inferido—,
-o sea **uno por sesión de agente**. Ése es el número que crece.
-
-Y ahí está el problema de forma: **la alternativa no es «un» daemon, es N**. Darle la tabla a cada
-uno son **5 × 1,3 GB = 6,5 GB** en una máquina de 7,6 GB que ya tiene 8,5 GB en swap. El camino
-«corto» resulta el más caro de todos.
-
-Lo que **sí** lo arregla es justamente la propiedad del mmap que no se ve en los milisegundos: una
-tabla mapeada es memoria **respaldada por archivo**, así que los procesos comparten **las mismas**
-488 MB de page cache — una copia, descartable, sin competir por swap. Con `ReadFile` cada proceso
-paga su propia copia anónima; con mmap, N procesos cuestan casi lo mismo que uno.
-
-**Medido, no afirmado** (dos procesos mapeando la misma tabla y tocando todas sus páginas):
-
-| | `Rss` | `Shared_Clean` | `Private_Clean` |
+| | `VmRSS` | `VmSwap` | anónimo real |
 |---|---|---|---|
-| proceso 1, solo | 497 MB | 4 MB | **490 MB** |
-| proceso 2, con el 1 vivo | 497 MB | **494 MB** | 0 MB |
+| daemon 1 | 82 MB | **594 MB** | **664 MB** |
+| daemon 2 | 82 MB | **594 MB** | **664 MB** |
+| daemon 3 | 82 MB | **593 MB** | **663 MB** |
 
-El segundo proceso sumó **497 MB de RSS y ~0 MB de memoria real**: `buff/cache` del sistema se movió
-**6 MB**, no 488.
+664 MB = 488 MB de tabla `[]float32` + ~178 MB del mapa del tokenizer. **Los dos artefactos, exactos.**
+Y `safetensors` **no aparece** en `/proc/PID/maps`: no está mapeada, está leída a heap anónimo,
+exactamente como manda `os.ReadFile` en `static.go:55`.
 
-**Y ahí hay una trampa que conviene dejar escrita, porque es la métrica que cualquiera miraría
-primero: `RSS` MIENTE SOBRE LAS PÁGINAS COMPARTIDAS.** Cinco daemons con la tabla mapeada van a
-*reportar* ~500 MB de RSS cada uno; sumarlos da 2,5 GB, y el costo real es 488 MB **una sola vez**.
-Quien mire `ps aux` después de implementar esto va a concluir que el mmap empeoró las cosas. El
-número que hay que mirar es `Private_Clean` en `/proc/PID/smaps_rollup`, o el `buff/cache` del
-sistema — no la columna de RSS.
+Confirmado además en directo, arrancando un daemon nuevo en este repo:
 
-**O sea que el hallazgo se da vuelta:** el mmap no era el paso menos importante de los tres, es el
-único que resuelve el caso de N procesos, que es el que esta máquina tiene de verdad.
+```
+t=4s   RssAnon=   10 MB              (recién arrancado)
+t=8s   RssAnon= 1156 MB + Swap=197 MB = 1353 MB anónimo   ← safetensors_mapeado=0
+```
 
-Queda todavía en pie una variante del daemon: **un único proceso dedicado** que tenga la tabla y le
-sirva vectores a los cinco. Es defendible, y cuesta infraestructura nueva —ciclo de vida, socket,
-degradado cuando no está— contra la nada que cuesta mapear un archivo. **Eso sí sigue sin medirse.**
+**De 10 MB a 1,35 GB en menos de 8 segundos.** Después el GC libera los bytes crudos y se estabiliza
+en ~664 MB.
+
+**La ironía, dicha de frente:** dos secciones más abajo este mismo documento avisa que «RSS MIENTE
+SOBRE LAS PÁGINAS COMPARTIDAS». Caí en el hermano exacto de esa trampa — **RSS también miente sobre
+las páginas anónimas swapeadas** — mientras escribía la advertencia.
+
+### Lo que la corrección cambia
+
+**Los `N × 1,3 GB` no son un escenario futuro: ya se están pagando.** Tres daemons × 664 MB ≈
+**2 GB** de tabla duplicada, casi toda empujada a swap. Y el swap de esta máquina es **zram**
+(`/dev/zram0`, 4,6 G usados comprimidos a 2,4 G), o sea **RAM real, comprimida, ahora mismo**, con
+341 MB libres.
+
+**Y hay una guarda que ya existe y que estos dos caminos no consultan.** `cmd/musubi/turn.go:666`
+pregunta `embedderCaroDeConstruir(cfg, root)` **antes** de construir, y degrada a léxico si la
+construcción es cara. `runDaemon` (`main.go:466`) y `runServe` (`main.go:343`) llaman a
+`resolveEmbedder` **sin ninguna guarda**. Es el patrón de la lección aprendida en N-1 de N caminos.
+
+### La tercera salida, que es más barata que las dos que este documento comparaba
+
+**Construcción PEREZOSA del embebedor en `runDaemon` y `runServe`.** Nada necesita un vector hasta
+que alguien llame una tool semántica; hoy la tabla se carga **al arrancar**, siempre, en cada daemon.
+
+Lo único que ata la construcción al arranque es la identidad:
+
+```go
+main.go:358  if embedding.Enabled(embedder) {
+main.go:362      engine.SetVectorModelID(embedder.Name())
+main.go:363      engine.WarnOnEmbedModelSwitch(embedder.Name())
+```
+
+**y esa identidad ya está persistida en la base**: `internal/memory/meta.go:118`,
+`MetaEmbedModel = "embed_model_id"`, con `GetMeta`/`SetMeta`. Se puede leer **sin tocar la tabla**.
+
+Construir perezoso borraría los ~2 GB de hoy **sin IPC nueva, sin mmap, y sin mitad Windows**. Es,
+por lejos, la mejor relación entre lo que cuesta y lo que devuelve — y no la propuso nadie, ni yo.
+
+### Y una corrección al encuadre del techo de 10 s
+
+Este documento repite que el piso de 1013 ms «entra bajo el techo de 10 s». **El techo de 10 s es el
+umbral de MATAR, no el presupuesto de experiencia.** El hook corre en `UserPromptSubmit` con una
+persona esperando, y hoy cuesta **0,29 s**. Llevarlo a ~1,3 s es **4,5× en cada prompt**. «Entra» no
+es lo mismo que «conviene», y acá se usaron como sinónimos.
+
+Peor: el mmap **no toca** esa cifra. En la tabla de medición de arriba, `loadTokenizerBytes` mide
+983 ms **en las dos columnas**. El piso es 97 % tokenizer, así que hasta que exista el caché binario
+del tokenizer —lo que este documento llama «el único de los tres sin camino conocido»— el camino
+mmap le deja al hook ~1 segundo por turno.
+
+### Los dos caminos son ORTOGONALES, que es lo que ninguna versión anterior dijo
+
+- **El mmap ataca las N copias de la tabla** (los ~2 GB medidos arriba). **No toca el costo del hook.**
+- **El daemon ataca que un proceso efímero no puede pagar la construcción.** **No toca el costo de
+  los N daemons**, que seguirían cargando la tabla igual.
+- **La construcción perezosa ataca lo primero, hoy, y es la más barata de las tres.**
+
+### Un número de este documento que se midió en caliente
+
+El estado estacionario de esta máquina es **cache fría**: `mincore` sobre la tabla da **0 de 125.089
+páginas residentes (0,00 %)**. Los números de mmap de más arriba se midieron con la cache caliente,
+porque el mismo proceso acababa de leer el archivo.
+
+En frío y medido: la identidad muestreada cuesta **~49 ms** (no 18-29), y tocar las ~120 filas que
+consume un `Embed` real cuesta **~14 ms**. **Buena noticia igual, y hay que decirla: la tabla no es
+el problema ni siquiera en frío.** El problema del mmap sigue siendo el tokenizer.
 
 ## Lo que hay en el repo por esto
 
