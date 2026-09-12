@@ -30,6 +30,13 @@
 //	  ninguna prueba» — diagnóstico correcto con el sonido equivocado, porque se lee como «el ancla
 //	  está mal escrita». Por eso ese rechazo ahora imprime la causa real y el comando con el tag.
 //
+// EL VEREDICTO SE ARMA POR ANCLA Y NO POR PAQUETE, Y ESO NO ES UN DETALLE DE IMPLEMENTACIÓN.
+// Medido desde afuera por otra sesión: en `internal/codeintel`, DOS corridas de la MISMA invocación
+// y el MISMO paquete dieron resultados distintos —una roja, la otra sin veredicto por su build tag—.
+// Si el manejo del tag fuera por paquete o por invocación, las dos habrían caído igual y un paquete
+// mitad-tagueado se perdería ENTERO. El día que alguien agrupe por paquete «para ir más rápido»,
+// esto se rompe y nada se pone rojo: la cobertura bajaría en silencio.
+//
 // O SEA QUE LA COBERTURA QUE ESTE COMANDO REPORTA ES SOBRE EL ÁRBOL SIN TAGS. Decirla sin esa
 // salvedad es exactamente el defecto que el censo tuvo que corregir un piso más arriba: un número
 // sin su denominador declarado se lee como si fuera del universo.
