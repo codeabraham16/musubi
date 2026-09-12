@@ -355,11 +355,9 @@ func runServe(args []string) {
 
 	// Aviso de cambio de modelo de embedding (homogeneidad de vectores): si el modelo
 	// activo cambió y hay vectores viejos de otro modelo, se logea un warning.
-	if embedding.Enabled(embedder) {
-		// Procedencia del vector (F2.2): cada embedding que escriba este engine lleva este
-		// model_id, y la búsqueda semántica sólo compara vectores de la misma procedencia
-		// (regla de homogeneidad). Debe fijarse ANTES de servir pedidos.
-		engine.SetVectorModelID(embedder.Name())
+	// Procedencia del vector (F2.2), en UN solo lugar para los tres servidores de este paquete:
+	// ver cablearProcedenciaDelVector. Debe fijarse ANTES de servir pedidos.
+	if cablearProcedenciaDelVector(engine, embedder) {
 		engine.WarnOnEmbedModelSwitch(embedder.Name())
 		// M3: además de AVISAR del hueco, cerrarlo. Re-embebe en background la memoria que no
 		// tiene vector de este modelo (la previa a encender la semántica, o la de otra tabla tras
@@ -507,11 +505,9 @@ func runDaemon() {
 
 	// Aviso de cambio de modelo de embedding (homogeneidad de vectores): si el modelo
 	// activo cambió y hay vectores viejos de otro modelo, se logea un warning.
-	if embedding.Enabled(embedder) {
-		// Procedencia del vector (F2.2): cada embedding que escriba este engine lleva este
-		// model_id, y la búsqueda semántica sólo compara vectores de la misma procedencia
-		// (regla de homogeneidad). Debe fijarse ANTES de servir pedidos.
-		engine.SetVectorModelID(embedder.Name())
+	// Procedencia del vector (F2.2), en UN solo lugar para los tres servidores de este paquete:
+	// ver cablearProcedenciaDelVector. Debe fijarse ANTES de servir pedidos.
+	if cablearProcedenciaDelVector(engine, embedder) {
 		engine.WarnOnEmbedModelSwitch(embedder.Name())
 		// M3: además de AVISAR del hueco, cerrarlo. Re-embebe en background la memoria que no
 		// tiene vector de este modelo (la previa a encender la semántica, o la de otra tabla tras
@@ -695,6 +691,16 @@ func startOutboxDrain(ctx context.Context, server *mcp.McpServer, cfg config.Syn
 func servirSoloLectura(eng *memory.DbEngine, root string, cfg config.Config, embedder embedding.Provider, causa error) {
 	defer eng.Close()
 	eng.SetProjectID(resolveProjectID(cfg, root))
+	// ACÁ FALTABA, Y EL SÍNTOMA NO SE VEÍA. Sin estampar la procedencia, `vectorModelID` queda
+	// vacío y la regla de homogeneidad filtra por `model_id = ''`: en una base poblada eso no
+	// matchea nada y el pool vectorial sale VACÍO SIN ERROR, o sea que este servidor contestaba
+	// recall léxico creyendo que hacía semántico. Los otros dos caminos sí lo hacían — la regla
+	// estaba escrita en tres lugares y envejeció en uno.
+	//
+	// Sólo la procedencia: avisar del cambio de modelo ESCRIBE meta (SetMeta) y el backfill
+	// ESCRIBE vectores, y este engine es de sólo lectura. Por eso el aviso y el backfill se
+	// quedan en los llamadores que sí pueden escribir, y no adentro del helper.
+	cablearProcedenciaDelVector(eng, embedder)
 	srv := mcp.NewMcpServer(eng, root, embedder,
 		mcp.WithVersion(version),
 		mcp.WithSoloLectura(causa.Error()),

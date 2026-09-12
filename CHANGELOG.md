@@ -8,6 +8,26 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **El servidor de SÓLO LECTURA contestaba léxico creyendo que hacía semántico.**
+  `servirSoloLectura` construye un servidor MCP y **nunca estampaba la procedencia del vector**: su
+  engine quedaba con `vectorModelID` vacío, la regla de homogeneidad filtraba por `model_id = ''` y
+  en una base poblada —donde los embeddings llevan `static:...@<checksum>`— eso **no matchea nada**.
+  El pool vectorial salía **vacío, sin un solo error**.
+
+  Había **tres** constructores de `mcp.NewMcpServer` (`runServe`, `runDaemon`, `servirSoloLectura`)
+  y **dos** estampaban. La regla estaba escrita en tres lugares y envejeció en uno.
+
+  El arreglo no agrega la tercera copia: extrae **una sola derivación**
+  (`cablearProcedenciaDelVector`) por la que pasan los tres. El aviso de cambio de modelo y el
+  backfill **no** entran ahí a propósito — los dos **escriben**, y el engine de sólo lectura no
+  puede, así que se quedan en los llamadores que sí pueden.
+
+  Y la guarda es **por AST, no por texto**: `TestTodoServidorMcpEstampaLaProcedenciaDelVector`
+  enumera del código toda función que construya un `NewMcpServer` y le exige el cableado, con un
+  **control positivo** que la pone roja si la enumeración deja de ver los constructores (el modo de
+  falla de una guarda así es quedar verde vigilando un conjunto vacío). Buscar una cadena no
+  serviría: el que agregue el cuarto servidor tampoco la va a escribir.
+
 - **CORRECCIÓN: los `musubi daemon` SÍ tenían la tabla cargada, y son ~2 GB que se están pagando
   hoy.** La entrada anterior afirmaba que ninguno de los cinco daemons vivos tenía la tabla, con sus
   RSS de 6-11 MB como prueba. **`VmRSS` no cuenta lo que está swapeado.** Mirados bien, cada uno

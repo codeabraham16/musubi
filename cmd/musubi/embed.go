@@ -259,6 +259,31 @@ func embedPullProgress() func(string, int64, int64) {
 	}
 }
 
+// cablearProcedenciaDelVector estampa en el engine la PROCEDENCIA (F2.2) de los vectores: el
+// `model_id` con el que escribe cada embedding y contra el que compara al buscar. Devuelve si el
+// embebedor está prendido.
+//
+// SI NO SE LLAMA, `vectorModelID` queda VACÍO y la regla de homogeneidad filtra por `model_id = ”`
+// (internal/memory/operations.go:586 y 644, mmr.go:116). En una base poblada —donde los embeddings
+// llevan `static:...@<checksum>`— eso no matchea NADA: el pool vectorial sale **vacío, sin un solo
+// error**, y el servidor contesta recall léxico creyendo que hizo semántico.
+//
+// EXISTE PORQUE FALTABA EN UNO DE TRES CAMINOS. `runServe` y `runDaemon` estampaban; el servidor de
+// SÓLO LECTURA (`servirSoloLectura`) no. Es la forma que este repo ya tiene anotada: una regla
+// escrita en N lugares envejece en N-1. Ahora hay UN lugar, y la guarda
+// TestTodoServidorMcpEstampaLaProcedenciaDelVector exige que todo constructor de McpServer en este
+// paquete pase por acá.
+//
+// El llamador decide qué MÁS hacer: los caminos que pueden escribir avisan además del cambio de
+// modelo y disparan el backfill; el de sólo lectura no puede, y por eso eso no vive acá adentro.
+func cablearProcedenciaDelVector(engine *memory.DbEngine, embedder embedding.Provider) bool {
+	if !embedding.Enabled(embedder) {
+		return false
+	}
+	engine.SetVectorModelID(embedder.Name())
+	return true
+}
+
 // embedderCaroDeConstruir dice si construir el embebedor de esta config es una operación PESADA,
 // sin construirlo.
 //
