@@ -184,7 +184,7 @@ func TestElRecorteDelMotivoNoParteUnCaracter(t *testing.T) {
 	}
 }
 
-// TestElOverlayNoPuedeTocarLoQueGoNoCompila fija el tercer canasto del modo `-overlay`.
+// TestElOverlaySoloAlcanzaLoQueLeeElComandoGo fija el tercer canasto del modo `-overlay`.
 //
 // POR QUÉ EXISTE. La primera corrida completa del detector marcó 6 «candidatos a rojo falso» y
 // CINCO eran esto: sabotajes contra `.yml`, `.sh` y `.conf`. `go test -overlay` reemplaza archivos
@@ -195,12 +195,17 @@ func TestElRecorteDelMotivoNoParteUnCaracter(t *testing.T) {
 // «No pude medir» y «medí y está sano» tienen que salir por puertas distintas, así que ahora salen
 // por un contador propio.
 //
-// Sabotaje que la hace fallar: en `elOverlayPuedeTocar`, devolver `true` siempre.
+// Sabotaje que la hace fallar: en `elOverlayPuedeTocar`, aceptar cualquier archivo → los cinco
+// `.yml`/`.sh`/`.conf` de la tabla vuelven a contarse como medibles.
 // arnes: archivo="deploy/cmd/arnes/main.go"
-// arnes: de="\treturn strings.HasSuffix(archivo, \".go\")"
-// arnes: a="\treturn true"
-// arnes: prueba="TestElOverlayNoPuedeTocarLoQueGoNoCompila"
-func TestElOverlayNoPuedeTocarLoQueGoNoCompila(t *testing.T) {
+// El sabotaje va en la PRIMERA rama y no en el `return` final, y no es una preferencia: con
+// `return true` al final, `base` queda `declared and not used` y el sabotaje NO COMPILA. Es la
+// clase que este repo ya tiene medida —cuando la guarda es la única lectora de una variable, el
+// sabotaje literal es imposible— y el arnés la contó como SIN VEREDICTO, que es lo correcto.
+// arnes: de="\tif strings.HasSuffix(archivo, \".go\") {"
+// arnes: a="\tif true {"
+// arnes: prueba="TestElOverlaySoloAlcanzaLoQueLeeElComandoGo"
+func TestElOverlaySoloAlcanzaLoQueLeeElComandoGo(t *testing.T) {
 	// Los cinco de la corrida real, y un `.go` de control: sin el control, «devolver false siempre»
 	// también pasaría, y eso apagaría el modo entero en silencio.
 	casos := []struct {
@@ -214,8 +219,15 @@ func TestElOverlayNoPuedeTocarLoQueGoNoCompila(t *testing.T) {
 		{"deploy/redesplegar-cerebro.sh", false},
 		{"deploy/systemd/musubi-agente-contenedores.conf", false},
 		{"deploy/docker/compose.yml", false},
-		// No alcanza con que la ruta CONTENGA «.go»: lo que decide es cómo TERMINA.
-		{"deploy/go.mod", false},
+		// LAS DOS FILAS QUE DESARMAN LAS DOS REGLAS EQUIVOCADAS, y por eso son las que importan.
+		//
+		// `go.mod` NO es fuente y NO lo lee el compilador, y el overlay lo cambia igual: medido con
+		// `go test -overlay` sobre un go.mod que pide `go 1.99` → rc=1, «requires go >= 1.99». Con
+		// la regla «el compilador lo lee como fuente» esta fila decía `false` y estaba MAL.
+		{"go.mod", true},
+		{"deploy/go.sum", true},
+		// Y no alcanza con el sufijo: `HasSuffix(…, "go.mod")` aceptaría esto, que no es un go.mod.
+		{"internal/cargo.mod", false},
 		{"internal/algo.golden", false},
 		// EL CASO QUE DESARMA LA RAZÓN FÁCIL. `assets/dashboard.html` ENTRA AL BUILD: viaja adentro
 		// del binario por `//go:embed` en cmd/musubi/dashboard.go:24. Y el overlay igual no lo toca,

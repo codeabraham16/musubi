@@ -456,18 +456,36 @@ func imprimirCenso(c arnes.Censo, detalle bool) {
 
 // elOverlayPuedeTocar dice si `go test -overlay` puede siquiera aplicar un sabotaje a este archivo.
 //
-// LA REGLA ES «EL COMPILADOR LO LEE COMO FUENTE», Y NO «ENTRA AL BUILD», y la diferencia importa.
-// La primera redacción de este comentario decía lo segundo: es cierta para los cinco casos que
-// motivaron la función —`.yml`, `.sh`, `.conf` leídos en runtime— pero es la razón equivocada, y
-// quien la lea frente a un archivo EMBEBIDO va a razonar al revés. Un `//go:embed` entra al build y
-// viaja adentro del binario, y el overlay TAMPOCO lo toca.
+// LA REGLA ES «LO QUE EL COMANDO `go` LEE POR SU SISTEMA DE ARCHIVOS VIRTUAL», y costó dos
+// redacciones equivocadas llegar ahí. Las dos anteriores tenían el resultado bien y la razón mal, y
+// la razón es lo único que sirve cuando aparece un caso que no está en la tabla:
 //
-// Medido acá, con el control adentro del MISMO overlay.json —un `.go` y el `.txt` que ese `.go`
-// embebe— porque «el overlay no alcanza al embebido» y «mi overlay.json no se aplicó» se ven
-// idénticos sin control:
+//	«entra al build»                   → falla con el EMBEBIDO: entra, viaja en el binario, y el
+//	                                     overlay no lo toca
+//	«el compilador lo lee como fuente» → falla con `go.mod`: no es fuente, no lo lee el compilador,
+//	                                     y el overlay SÍ lo cambia
 //
-//	sin overlay : EMBEBIDO="SANO"  MARCA="MARCA-SANA"
-//	con overlay : EMBEBIDO="SANO"  MARCA="MARCA-SABOTEADA"   ← el .go cambió, el embebido no
+// Lo que aguanta las dos mediciones es la frontera del comando: fuentes `.go`, `go.mod` y `go.sum`,
+// y nada más. Ni `//go:embed`, ni nada que el programa abra en runtime.
+//
+// LAS DOS PUNTAS, MEDIDAS ACÁ Y CON EL CONTROL ADENTRO DEL MISMO overlay.json —porque «el overlay no
+// alcanza» y «mi overlay.json no se aplicó» se ven idénticos sin control—:
+//
+//	embebido, junto al `.go` que lo embebe, un solo mapa y una sola invocación:
+//	  sin overlay : EMBEBIDO="SANO"  MARCA="MARCA-SANA"
+//	  con overlay : EMBEBIDO="SANO"  MARCA="MARCA-SABOTEADA"   ← el .go cambió, el embebido no
+//
+//	go.mod pidiendo `go 1.99`, junto al mismo control:
+//	  go test -overlay … → rc=1  «go: go.mod requires go >= 1.99 (running go 1.22.2)»
+//	  o sea que el go.mod del overlay fue el que se leyó
+//
+// Se midió con `go test` y no con `go list`: `go test` es el comando que corre este arnés, y dar por
+// sentado que otro comando comparte el sistema de archivos virtual sería suponer lo que se mide.
+//
+// HOY NINGUNA DIRECTIVA NI NINGÚN ANCLA DEL CENSO APUNTA A `go.mod` NI A `go.sum` —contado, da 0—
+// así que esto no cambia ningún veredicto de las 74. Se escribe por lo latente: el árbol tiene
+// guardas sobre versiones de `go.mod`, y el día que alguna se mecanice esta línea decide si se puede
+// medir bajo overlay o no.
 //
 // EL ÁRBOL TIENE UN CASO QUE CAE JUSTO AHÍ: `cmd/musubi/flota_test.go:244` declara «sacar el enlace
 // de dashboard.html», y `dashboard.html` es un `//go:embed`. Hoy está en prosa, así que ninguna de
@@ -478,7 +496,12 @@ func imprimirCenso(c arnes.Censo, detalle bool) {
 // Vale una función con nombre y no un `HasSuffix` suelto porque su ausencia costó 5 falsos
 // positivos sobre 6 resultados en la primera corrida completa.
 func elOverlayPuedeTocar(archivo string) bool {
-	return strings.HasSuffix(archivo, ".go")
+	if strings.HasSuffix(archivo, ".go") {
+		return true
+	}
+	// Por nombre de base y no por sufijo: `HasSuffix(…, "go.mod")` también aceptaría `cargo.mod`.
+	base := filepath.Base(archivo)
+	return base == "go.mod" || base == "go.sum"
 }
 
 // contraOverlay corre cada sabotaje SIN TOCAR EL DISCO y compara contra el veredicto de disco.
