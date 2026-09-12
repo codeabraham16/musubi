@@ -52,8 +52,20 @@
 // que la suite completa no daría, porque una goroutine que le sobrevive a un test se cruza con el
 // siguiente— y se contesta con lo que ya está medido: el job `test` del CI pasa con `-race` sobre
 // la suite ENTERA, así que los controles en sano de estas 75 no son un artefacto del aislamiento.
-// De los 55 archivos con directiva, 4 largan goroutines (`time.AfterFunc` o `go func`) y los cuatro
-// están verdes en esa corrida completa.
+//
+// LA PRIMERA VEZ QUE INTENTÉ ACOTAR ESA CLASE, LA ACOTÉ MAL, y vale dejarlo escrito porque el
+// número era tranquilizador. Conté `go func`/`time.AfterFunc` EN LOS ARCHIVOS DE PRUEBA y salieron
+// 4 de 55. Pero la goroutine casi nunca la larga la prueba: la larga PRODUCCIÓN. El caso real que
+// motivó la sospecha —una carrera que el `-race` del CI cazó una sola vez— sale de
+// `cmd/musubi/pantalla.go:92` (`time.AfterFunc(ttl, …)`), y `cmd/musubi/pantalla_test.go`, que ES
+// uno de los archivos con directiva de esta rama, tiene CERO sentencias `go` propias. Mi
+// instrumento no lo podía ver: contestaba «qué pruebas escriben una goroutine», no «qué pruebas
+// despiertan una».
+//
+// La cota honesta se cuenta del otro lado y es mucho más grande: 20 archivos de PRODUCCIÓN largan
+// trabajo de fondo, viven en 4 paquetes, y en esos 4 paquetes hay ~489 archivos de prueba. No es
+// que 489 corran riesgo —es una cota por paquete, no un grafo de llamadas— es que el número 4 no
+// era una cota de nada.
 //
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // USO
@@ -677,6 +689,30 @@ func contraOverlay(raiz string, c arnes.Censo, soloPaquete string, limite int) i
 	return 0
 }
 
+// claseDeQueja identifica POR QUÉ un rojo quedó bajo sospecha, SIN depender de cómo se redacte.
+//
+// LO PIDIÓ LA FALLA 7, Y LA FALLA 7 SE ESTRENÓ ACÁ. Este arnés nació con `arreglo_de`/`arreglo_a`
+// parseados, validados y despachados, y con CERO directivas que los usaran: construido y nunca
+// prendido, adentro de la herramienta escrita para cazar eso. La primera vez que corrió, encontró
+// esto: la prueba de `revisarElRojo` comparaba los textos EXACTOS de cada queja, así que redactar
+// mejor un mensaje —«no imprimió NINGUNA prueba» → «no nombró NINGUNA prueba», mismo significado—
+// la ponía ROJA. Una guarda que castiga una corrección de redacción está fijando la FORMA.
+//
+// La salida no es aflojar la aserción hasta que no mida nada: es darle a cada queja una IDENTIDAD
+// que no sea su prosa. La prueba afirma la clase y los DATOS que el mensaje tiene que llevar —el
+// nombre de la prueba que cayó, el archivo—, y deja el resto libre. El camino malo queda
+// irrepresentable en vez de prohibido caso por caso.
+type claseDeQueja int
+
+const (
+	sinQueja claseDeQueja = iota
+	quejaSinPruebaFallando
+	quejaOtraPrueba
+	quejaSinLinea
+	quejaMotivoIlegible
+	quejaOtroArchivo
+)
+
 // revisarElRojo LEE LA LÍNEA DEL FALLO, QUE ES LO QUE EL EXIT CODE NO DICE.
 //
 // `sabotaje.sh` sale con 0 cuando la prueba se puso en rojo, y eso NO ES LO MISMO que «la guarda
@@ -693,7 +729,7 @@ func contraOverlay(raiz string, c arnes.Censo, soloPaquete string, limite int) i
 // que dos pruebas distintas que caen en la MISMA aserción den la misma clave— y una queja cuando lo
 // que se puso en rojo no es lo que el ancla declaraba. Una queja no invalida el rojo: lo manda a
 // leer a mano, que es lo que hoy no pasaba nunca.
-func revisarElRojo(salida, archivoAncla, pruebaDeclarada string) (motivo, queja string) {
+func revisarElRojo(salida, archivoAncla, pruebaDeclarada string) (motivo string, clase claseDeQueja, queja string) {
 	var fallos, crudos []string
 	seccion := ""
 	for _, l := range strings.Split(salida, "\n") {
@@ -718,19 +754,19 @@ func revisarElRojo(salida, archivoAncla, pruebaDeclarada string) (motivo, queja 
 	}
 
 	if len(fallos) == 0 {
-		return "", "salió con 0 y no imprimió NINGUNA prueba fallando: no sé qué se puso en rojo"
+		return "", quejaSinPruebaFallando, "salió con 0 y no imprimió NINGUNA prueba fallando: no sé qué se puso en rojo"
 	}
 	// El `-run` filtra a la prueba declarada, así que una raíz distinta significa que el patrón no
 	// es el que creo. Los subtests (`TestX/caso`) cuelgan de su raíz y no son un desvío.
 	if pruebaDeclarada != "" {
 		for _, f := range fallos {
 			if raiz, _, _ := strings.Cut(f, "/"); raiz != pruebaDeclarada {
-				return "", "cayó `" + raiz + "` y el ancla declara `" + pruebaDeclarada + "`"
+				return "", quejaOtraPrueba, "cayó `" + raiz + "` y el ancla declara `" + pruebaDeclarada + "`"
 			}
 		}
 	}
 	if len(crudos) == 0 {
-		return "", "se puso en rojo sin una línea de `_test.go` que ubique la aserción"
+		return "", quejaSinLinea, "se puso en rojo sin una línea de `_test.go` que ubique la aserción"
 	}
 
 	// La PRIMERA es la que el guion eligió como motivo; se le saca el nombre de la prueba de
@@ -741,12 +777,13 @@ func revisarElRojo(salida, archivoAncla, pruebaDeclarada string) (motivo, queja 
 	}
 	arch, ok := archivoDelMotivo(primera)
 	if !ok {
-		return "", "el motivo no nombra un `_test.go:línea`: " + primerasRunas(primera, 80)
+		return "", quejaMotivoIlegible, "el motivo no nombra un `_test.go:línea`: " + primerasRunas(primera, 80)
 	}
 	if base := archivoAncla[strings.LastIndex(archivoAncla, "/")+1:]; arch != base {
+		clase = quejaOtroArchivo
 		queja = "la aserción que cayó vive en " + arch + " y el ancla está en " + base
 	}
-	return primera, queja
+	return primera, clase, queja
 }
 
 // archivoDelMotivo saca el `foo_test.go` de una línea `foo_test.go:123: mensaje`.
@@ -857,8 +894,8 @@ func correrTodos(raiz string, c arnes.Censo, soloPaquete string, limite int) int
 		case err == nil:
 			rojos++
 			// NO ALCANZA CON QUE `sabotaje.sh` HAYA SALIDO CON 0. Ver `revisarElRojo`.
-			motivo, queja := revisarElRojo(string(salida), a.Archivo, d.Prueba)
-			if queja != "" {
+			motivo, clase, queja := revisarElRojo(string(salida), a.Archivo, d.Prueba)
+			if clase != sinQueja {
 				fmt.Println("   ! " + queja)
 				sospechas = append(sospechas, fmt.Sprintf("%s:%d %s — %s", a.Archivo, a.Linea, d.Prueba, queja))
 			}

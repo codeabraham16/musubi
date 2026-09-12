@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestElRojoSeLeeYNoSeDeduceDelExitCode fija lo que `revisarElRojo` tiene que distinguir.
 //
@@ -21,6 +24,22 @@ import "testing"
 // arnes: de="if len(fallos) == 0 {"
 // arnes: a="if false {"
 // arnes: prueba="TestElRojoSeLeeYNoSeDeduceDelExitCode"
+//
+// Y LA OTRA DIRECCIÓN, que hasta esta línea NUNCA se había ejercitado en el árbol: `arreglo_de` y
+// `arreglo_a` estaban parseados, validados y despachados por `comandoMutador`, con CERO directivas
+// y CERO pruebas que los usaran. Construido y nunca prendido, adentro del arnés escrito para cazar
+// eso. Lo levantó otra sesión contando las apariciones en el diff, no leyendo el código.
+//
+// EL ARREGLO ES REDACTAR MEJOR UN MENSAJE, y no es un ejemplo inventado: es el cambio que la falla 7
+// encontró apenas se prendió. La primera versión de esta prueba comparaba los textos EXACTOS de cada
+// queja, así que cambiar «no imprimió» por «no nombró» —mismo significado, mejor palabra— la ponía
+// ROJA. Estaba fijando la prosa y no el comportamiento.
+//
+// El arreglo no fue aflojar la aserción hasta que no midiera nada: fue darle a cada queja una
+// IDENTIDAD que no es su prosa (`claseDeQueja`) y afirmar eso más los DATOS que el mensaje tiene que
+// llevar. Medido: con el cambio de abajo, rc=1 → rc=0.
+// arnes: arreglo_de="no imprimió NINGUNA prueba fallando"
+// arnes: arreglo_a="no nombró NINGUNA prueba fallando"
 func TestElRojoSeLeeYNoSeDeduceDelExitCode(t *testing.T) {
 	// La forma EXACTA que imprime deploy/pruebas/sabotaje.sh, copiada de una corrida real.
 	sano := "" +
@@ -38,8 +57,9 @@ func TestElRojoSeLeeYNoSeDeduceDelExitCode(t *testing.T) {
 		salida       string
 		archivoAncla string
 		prueba       string
-		motivo       string // "" = no espero motivo
-		queja        string // "" = no espero queja
+		motivo       string       // "" = no espero motivo
+		clase        claseDeQueja // la IDENTIDAD de la queja, que no depende de cómo se redacte
+		debeLlevar   []string     // los DATOS que el mensaje tiene que llevar sí o sí
 	}{
 		{
 			nombre:       "el rojo normal deja motivo y no deja queja",
@@ -47,6 +67,7 @@ func TestElRojoSeLeeYNoSeDeduceDelExitCode(t *testing.T) {
 			archivoAncla: "cmd/musubi/agent_test.go",
 			prueba:       "TestElInventarioNoViajaEnCadaLatido",
 			motivo:       "agent_test.go:101: el latido volvió a mandar el inventario",
+			clase:        sinQueja,
 		},
 		{
 			// EL CASO QUE EL EXIT CODE NO PUEDE VER. El guion salió con 0 y no dijo qué cayó.
@@ -54,7 +75,7 @@ func TestElRojoSeLeeYNoSeDeduceDelExitCode(t *testing.T) {
 			salida:       "  ✓ control: compila y pasa (1 subtest/s REALMENTE ejecutados)\n",
 			archivoAncla: "cmd/musubi/agent_test.go",
 			prueba:       "TestAlgo",
-			queja:        "salió con 0 y no imprimió NINGUNA prueba fallando: no sé qué se puso en rojo",
+			clase:        quejaSinPruebaFallando,
 		},
 		{
 			nombre: "cayo una prueba que no es la declarada",
@@ -63,7 +84,9 @@ func TestElRojoSeLeeYNoSeDeduceDelExitCode(t *testing.T) {
 				"      TestOtraCosa · agent_test.go:101: algo\n",
 			archivoAncla: "cmd/musubi/agent_test.go",
 			prueba:       "TestElInventarioNoViajaEnCadaLatido",
-			queja:        "cayó `TestOtraCosa` y el ancla declara `TestElInventarioNoViajaEnCadaLatido`",
+			clase:        quejaOtraPrueba,
+			// LOS DOS NOMBRES SON DATOS, NO PROSA: sin ellos el mensaje no sirve para ir a mirar.
+			debeLlevar: []string{"TestOtraCosa", "TestElInventarioNoViajaEnCadaLatido"},
 		},
 		{
 			// UN SUBTEST NO ES UN DESVÍO: `TestX/caso` cuelga de `TestX`.
@@ -74,13 +97,14 @@ func TestElRojoSeLeeYNoSeDeduceDelExitCode(t *testing.T) {
 			archivoAncla: "internal/x/x_test.go",
 			prueba:       "TestX",
 			motivo:       "x_test.go:12: algo",
+			clase:        sinQueja,
 		},
 		{
 			nombre:       "se puso en rojo sin una linea que ubique la asercion",
 			salida:       "  ✓ ROJO, y falla en:\n      TestX\n",
 			archivoAncla: "internal/x/x_test.go",
 			prueba:       "TestX",
-			queja:        "se puso en rojo sin una línea de `_test.go` que ubique la aserción",
+			clase:        quejaSinLinea,
 		},
 		{
 			// LA ASERCIÓN CAYÓ EN OTRO ARCHIVO. No invalida el rojo; lo manda a leer.
@@ -91,7 +115,8 @@ func TestElRojoSeLeeYNoSeDeduceDelExitCode(t *testing.T) {
 			archivoAncla: "internal/x/x_test.go",
 			prueba:       "TestX",
 			motivo:       "ayudantes_test.go:12: algo",
-			queja:        "la aserción que cayó vive en ayudantes_test.go y el ancla está en x_test.go",
+			clase:        quejaOtroArchivo,
+			debeLlevar:   []string{"ayudantes_test.go", "x_test.go"},
 		},
 		{
 			nombre: "el motivo no trae numero de linea",
@@ -100,18 +125,33 @@ func TestElRojoSeLeeYNoSeDeduceDelExitCode(t *testing.T) {
 				"      TestX · algo salió mal en x_test.go: sin número\n",
 			archivoAncla: "internal/x/x_test.go",
 			prueba:       "TestX",
-			queja:        "el motivo no nombra un `_test.go:línea`: algo salió mal en x_test.go: sin número",
+			clase:        quejaMotivoIlegible,
+			// El texto que no se pudo leer TIENE que viajar: sin él no se sabe qué arreglar.
+			debeLlevar: []string{"algo salió mal en x_test.go"},
 		},
 	}
 
 	for _, c := range casos {
 		t.Run(c.nombre, func(t *testing.T) {
-			motivo, queja := revisarElRojo(c.salida, c.archivoAncla, c.prueba)
+			motivo, clase, queja := revisarElRojo(c.salida, c.archivoAncla, c.prueba)
 			if motivo != c.motivo {
 				t.Errorf("motivo:\n  esperaba %q\n  vino     %q", c.motivo, motivo)
 			}
-			if queja != c.queja {
-				t.Errorf("queja:\n  esperaba %q\n  vino     %q", c.queja, queja)
+			if clase != c.clase {
+				t.Errorf("clase de queja: esperaba %d, vino %d (queja: %q)", c.clase, clase, queja)
+			}
+			// SE AFIRMA QUE HAY TEXTO Y QUE LLEVA LOS DATOS, NUNCA CÓMO ESTÁ REDACTADO. Una queja
+			// vacía deja al que la lee sin nada que hacer; una queja redactada distinto no.
+			if c.clase == sinQueja && queja != "" {
+				t.Errorf("no esperaba queja y vino %q", queja)
+			}
+			if c.clase != sinQueja && strings.TrimSpace(queja) == "" {
+				t.Error("la clase dice que hay queja y el texto vino vacío: el que la lee no tiene qué hacer")
+			}
+			for _, dato := range c.debeLlevar {
+				if !strings.Contains(queja, dato) {
+					t.Errorf("la queja no lleva %q, así que no se puede ir a mirar:\n  %s", dato, queja)
+				}
 			}
 		})
 	}
@@ -140,9 +180,9 @@ func TestDosSabotajesQueFallanIgualDanLaMISMAClave(t *testing.T) {
 		"  ── motivo (la primera línea de cada fallo, para poder compararlos) ──\n" +
 		"      TestOtro · guarda_test.go:42: el camino sin permiso llegó al ejecutor\n"
 
-	a, quejaA := revisarElRojo(uno, "internal/x/guarda_test.go", "TestUno")
-	b, quejaB := revisarElRojo(otro, "internal/x/guarda_test.go", "TestOtro")
-	if quejaA != "" || quejaB != "" {
+	a, claseA, quejaA := revisarElRojo(uno, "internal/x/guarda_test.go", "TestUno")
+	b, claseB, quejaB := revisarElRojo(otro, "internal/x/guarda_test.go", "TestOtro")
+	if claseA != sinQueja || claseB != sinQueja {
 		t.Fatalf("no esperaba quejas: %q / %q", quejaA, quejaB)
 	}
 	if a == "" {
