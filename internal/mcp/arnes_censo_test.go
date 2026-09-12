@@ -96,6 +96,17 @@ import (
 // existe para que una guarda no se mida contra sí misma, y acá el SUJETO de la guarda es el corpus
 // de archivos de prueba. El archivo elegido no es el suyo ni el del lector, y como `a` contiene a
 // `de` entero, no le rompe el ancla a nadie: `Colisiones` da 0.
+//
+// ESTA GUARDA ES LA ÚNICA DEL ÁRBOL QUE SE VUELVE NO-MEDIBLE POR SU PROPIO SUJETO, y conviene
+// saberlo antes de ir a buscar el defecto. Mide la deuda del árbol; si la deuda está pasada, su
+// CONTROL arranca en rojo —la prueba ya falla sin el sabotaje— y `sabotaje.sh` se abstiene con
+// «CONTROL EN ROJO: su rojo no prueba nada». Abstenerse es lo correcto: un rojo que ya estaba no
+// dice nada sobre el sabotaje, y acreditárselo sería contar como cobertura un rojo ajeno.
+//
+// Pero la consecuencia es una recursión: MIENTRAS EL TECHO ESTÉ PASADO, LA DIRECTIVA QUE CUSTODIA
+// EL TECHO NO SE PUEDE VERIFICAR. Se destraba sola en cuanto alguien escribe la directiva que
+// faltaba. Lo midió otra sesión corriendo este arnés contra un árbol con la deuda en 714, y lo
+// escribo acá para que el próximo que vea «sin veredicto» acá no busque el defecto en la directiva.
 // arnes: prueba="TestLaDeudaDeSabotajesNoCreceYElCorpusNoSePodre"
 // arnes: archivo="internal/mcp/sonda_permiso_test.go"
 // arnes: de="package mcp"
