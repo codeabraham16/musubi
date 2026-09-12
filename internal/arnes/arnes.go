@@ -247,6 +247,22 @@ type Censo struct {
 	// así que se AVISA y no se falla: un cero que significa «todavía no lo agregaste» no puede
 	// salir por la misma puerta que un cero que significa «no hay nada».
 	SinTrackear []string
+
+	// Huerfanas son las líneas `// arnes:` que NO cuelgan de ningún ancla, y son el defecto que
+	// este campo existe para no repetir.
+	//
+	// LO ENCONTRÓ OTRA SESIÓN ESCRIBIENDO SEIS DIRECTIVAS QUE ESTE LECTOR NUNCA VIO. Eran válidas,
+	// con `de`/`a` únicos y anclaje correcto, y el censo dio el MISMO número que sin ellas: ni
+	// contadas, ni validadas, ni corridas, y sin una línea de aviso. Sus bloques empezaban con
+	// «MECANIZADA. El sabotaje es…» —la palabra está, pero no al empezar la línea— así que no había
+	// ancla de la cual colgarlas y se tiraban en silencio.
+	//
+	// HAY UNA CATEGORÍA PARA «DIRECTIVA ILEGIBLE» (`Rotas`) Y NO HABÍA PARA ÉSTA, y la huérfana es
+	// peor: la rota avisa, y el que escribió la huérfana cree que la cobertura subió. Iba a abrir
+	// un PR diciendo «seis mecanizadas» con seis que no corrían. Es la lección aprendida de un lado
+	// y no del hermano — mis directivas nacieron pegadas a anclas que ya existían, así que esta
+	// cara no me podía aparecer nunca.
+	Huerfanas []string
 }
 
 // Mecanizadas es la primera de las CUATRO categorías en que se parte el censo —con Rotas, Exentas
@@ -355,6 +371,7 @@ func Censar(raiz string) (Censo, error) {
 		c.Anclas = append(c.Anclas, r.anclas...)
 		c.Quejas = append(c.Quejas, r.quejas...)
 		c.SinUbicar = append(c.SinUbicar, r.sinUbicar...)
+		c.Huerfanas = append(c.Huerfanas, r.huerfanas...)
 		c.FuncionesTest += r.funcionesTest
 		c.PruebasConAncla += r.pruebasConAncla
 	}
@@ -374,6 +391,7 @@ type loDeUnArchivo struct {
 	anclas          []Ancla
 	quejas          []string
 	sinUbicar       []string
+	huerfanas       []string
 	funcionesTest   int
 	pruebasConAncla int
 }
@@ -416,8 +434,9 @@ func censarArchivo(raiz, rel string) (loDeUnArchivo, error) {
 	}
 
 	var anclas []Ancla
-	var quejas, sinUbicar []string
-	vistas := map[int]bool{} // líneas ya colocadas, para cruzar contra el texto crudo
+	var quejas, sinUbicar, huerfanas []string
+	vistas := map[int]bool{}     // líneas ya colocadas, para cruzar contra el texto crudo
+	consumidas := map[int]bool{} // líneas `arnes:` que ALGÚN ancla se llevó; el resto son huérfanas
 
 	for _, g := range f.Comments {
 		lineas := lineasDe(fset, g)
@@ -440,6 +459,12 @@ func censarArchivo(raiz, rel string) (loDeUnArchivo, error) {
 				}
 			}
 			mias := lineas[i:fin]
+			// QUÉ LÍNEAS `arnes:` SE COMIÓ ESTA ANCLA. Lo que sobre es huérfano: ver el control.
+			for _, m := range mias {
+				if esDirectiva(m.texto) {
+					consumidas[m.linea] = true
+				}
+			}
 			a := Ancla{
 				Archivo:  rel,
 				Linea:    ln.linea,
@@ -453,6 +478,27 @@ func censarArchivo(raiz, rel string) (loDeUnArchivo, error) {
 				quejas = append(quejas, fmt.Sprintf("%s:%d: %s", rel, ln.linea, q))
 			}
 			anclas = append(anclas, a)
+		}
+	}
+
+	// EL CONTROL DE LAS HUÉRFANAS: una línea `// arnes:` que ningún ancla se llevó.
+	//
+	// Es el hermano del control de abajo y por eso vive pegado a él. Aquél pregunta «¿se me
+	// escapó un ANCLA?»; éste pregunta «¿se me escapó una DIRECTIVA?». Las dos terminan en lo
+	// mismo —el sabotaje no se corre— pero sólo una avisaba, y la que faltaba es la peor: el que
+	// escribió la directiva cree que la cobertura subió.
+	//
+	// Se recorre el TEXTO CRUDO por la misma razón que el otro control: derivarlo del mismo
+	// recorrido del AST que produjo las anclas heredaría su agujero y contestaría que no hay
+	// ninguna.
+	for n, linea := range strings.Split(string(src), "\n") {
+		t := strings.TrimSpace(linea)
+		if !strings.HasPrefix(t, "//") {
+			continue
+		}
+		cuerpo := strings.TrimSpace(strings.TrimPrefix(t, "//"))
+		if esDirectiva(cuerpo) && !consumidas[n+1] {
+			huerfanas = append(huerfanas, fmt.Sprintf("%s:%d: %s", rel, n+1, cuerpo))
 		}
 	}
 
@@ -474,6 +520,7 @@ func censarArchivo(raiz, rel string) (loDeUnArchivo, error) {
 	}
 	return loDeUnArchivo{
 		anclas:          anclas,
+		huerfanas:       huerfanas,
 		quejas:          quejas,
 		sinUbicar:       sinUbicar,
 		funcionesTest:   funcionesTest,

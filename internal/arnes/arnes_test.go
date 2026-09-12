@@ -581,3 +581,82 @@ func TestSeDenuncianLosSabotajesQueSePisanEntreSi(t *testing.T) {
 		}
 	})
 }
+
+// ── 10 · UNA DIRECTIVA QUE NO CUELGA DE NINGÚN ANCLA ───────────────────────────────────────────
+//
+// POR QUÉ EXISTE. Otra sesión escribió SEIS directivas —válidas, con `de`/`a` únicos y anclaje
+// correcto— y este lector no las vio nunca. Ni como rotas: el censo dio el MISMO número que sin
+// ellas, `-validar` contestó «✓ las 76 apuntan a un literal único», y las seis no se contaron, no
+// se validaron y no se corrieron. Sus bloques empezaban con «MECANIZADA. El sabotaje es…»: la
+// palabra está, pero no al empezar la línea, así que no había ancla de la cual colgarlas.
+//
+// HABÍA CATEGORÍA PARA «DIRECTIVA ILEGIBLE» Y NO PARA ÉSTA, y la huérfana es la peor de las dos:
+// la rota avisa, y el que escribió la huérfana cree que la cobertura subió. Iba a abrir un PR
+// diciendo «seis mecanizadas» con seis que no corrían.
+//
+// Y no me podía pasar a mí: mis directivas nacieron pegadas a anclas que ya existían. Es la
+// lección aprendida de un lado y no del hermano, en el instrumento que existe para cazar eso.
+//
+// Sabotaje que la hace fallar: en censarArchivo, no marcar `consumidas[m.linea]` → todas las
+// directivas del árbol pasan a contarse como huérfanas y el control de abajo cae.
+// arnes: archivo="internal/arnes/arnes.go"
+// arnes: de="\t\t\t\t\tconsumidas[m.linea] = true"
+// arnes: a="\t\t\t\t\t_ = m"
+// arnes: prueba="TestUnaDirectivaSinAnclaSeDenunciaYNoSePierde"
+func TestUnaDirectivaSinAnclaSeDenunciaYNoSePierde(t *testing.T) {
+	raiz := t.TempDir()
+	escribir := func(rel, cuerpo string) {
+		if err := os.WriteFile(filepath.Join(raiz, rel), []byte(cuerpo), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("la huerfana se denuncia con archivo y linea", func(t *testing.T) {
+		escribir("h_test.go", "package p\n\n"+
+			"// MECANIZADA. Esta línea NO empieza con la palabra canónica, así que no es un ancla.\n"+
+			"// arnes: archivo=\"p.go\"\n"+
+			"// arnes: de=\"uno\"\n"+
+			"// arnes: a=\"dos\"\n"+
+			"func TestAlgo(t *testing.T) {}\n")
+		r, err := censarArchivo(raiz, "h_test.go")
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := Censo{Raiz: raiz, Anclas: r.anclas, Huerfanas: r.huerfanas}
+		if len(c.Huerfanas) != 3 {
+			t.Fatalf("esperaba 3 líneas huérfanas denunciadas, vinieron %d: %v", len(c.Huerfanas), c.Huerfanas)
+		}
+		junto := strings.Join(c.Huerfanas, "\n")
+		if !strings.Contains(junto, "h_test.go:4") {
+			t.Errorf("la denuncia no lleva archivo:línea, así que no se puede ir a mirar:\n%s", junto)
+		}
+		// Y NO SE CUENTAN COMO COBERTURA, que es la mitad que importa.
+		if n := len(c.Mecanizadas()); n != 0 {
+			t.Errorf("una directiva huérfana se contó como mecanizada (%d): la cobertura subiría con "+
+				"sabotajes que nadie corre", n)
+		}
+	})
+
+	t.Run("con su ancla arriba deja de ser huerfana", func(t *testing.T) {
+		escribir("s_test.go", "package p\n\n"+
+			"// Sabotaje que la hace fallar: cambiar uno por dos.\n"+
+			"// arnes: archivo=\"p.go\"\n"+
+			"// arnes: de=\"uno\"\n"+
+			"// arnes: a=\"dos\"\n"+
+			"func TestAlgo(t *testing.T) {}\n")
+		r, err := censarArchivo(raiz, "s_test.go")
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := Censo{Raiz: raiz, Anclas: r.anclas, Huerfanas: r.huerfanas}
+		// EL CONTROL DE QUE LA COMPROBACIÓN NO SEA UN «SIEMPRE HUÉRFANA»: sin este caso, marcar
+		// todo como huérfano pasaría el subtest de arriba y dejaría la herramienta gritando
+		// siempre, que es la otra forma de no medir.
+		if len(c.Huerfanas) != 0 {
+			t.Errorf("una directiva CON su ancla se denunció como huérfana: %v", c.Huerfanas)
+		}
+		if n := len(c.Mecanizadas()); n != 1 {
+			t.Errorf("esperaba 1 mecanizada, vinieron %d", n)
+		}
+	})
+}

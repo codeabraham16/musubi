@@ -225,6 +225,19 @@ func main() {
 		// dos motivos distintos, así que las dos miden— o pueden ser un rojo falso. Lo que sí es
 		// seguro es que a lo sumo UNA de las dos es sobre el comportamiento de esa línea. Falla si
 		// grita en el caso legítimo; calla si no lo dice. Así que lo dice y no falla.
+		// LAS HUÉRFANAS SE GRITAN Y CORTAN. Una directiva que no cuelga de ningún ancla es trabajo
+		// que no existe: no se cuenta, no se valida y no se corre — y el que la escribió cree que
+		// la cobertura subió. Es peor que una rota, porque la rota avisa.
+		if hs := censo.Huerfanas; len(hs) > 0 {
+			fmt.Printf("\n✗ %d línea/s `arnes:` NO CUELGAN DE NINGÚN ANCLA, así que no existen para esta herramienta:\n", len(hs))
+			for _, h := range hs {
+				fmt.Println("   " + h)
+			}
+			fmt.Println("  Una directiva se cuelga de una línea de PROSA que empieza con `Sabotaje` y lleva")
+			fmt.Println("  dos puntos —«Sabotaje que la hace fallar: …»—. Sin esa línea arriba no hay de qué")
+			fmt.Println("  colgarla. Agregala y volvé a correr: el censo se mueve solo.")
+			salida = 1
+		}
 		if choques := arnes.Colisiones(censo); len(choques) > 0 {
 			fmt.Printf("\n! %d sabotaje/s se pisan entre sí:\n", len(choques))
 			for _, ch := range choques {
@@ -239,7 +252,14 @@ func main() {
 			}
 			salida = 1
 		} else if len(censo.Mecanizadas()) > 0 {
+			// EL ÉXITO DICE SOBRE CUÁNTAS Y CUÁNTAS NO MIRÓ, y esa segunda mitad la enseñó una
+			// sesión que escribió seis directivas huérfanas: este tilde dijo «✓ las 76 apuntan a un
+			// literal único» con las suyas ahí, y era CIERTO sobre las 76 que miró. Un mensaje de
+			// éxito sin su universo declarado se lee como «validé todo».
 			fmt.Printf("\n✓ las %d directivas apuntan a un literal que existe y es único\n", len(censo.Mecanizadas()))
+			if n := len(censo.Huerfanas); n > 0 {
+				fmt.Printf("  (y %d línea/s `arnes:` quedaron FUERA de esa cuenta por no tener ancla)\n", n)
+			}
 		}
 		if *correr && len(males) == 0 {
 			if rc := correrTodos(*raiz, censo, *paquete, *limite); rc != 0 {
