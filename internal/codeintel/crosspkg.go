@@ -53,13 +53,13 @@ type SymbolIndex interface {
 //
 // La guarda que lo sostiene está en deriver_motor_test.go: compara motorTreeSitterDeclarado contra
 // el `require` de go.mod. Subir la dependencia sin subir esta constante es un test ROJO.
-const GraphDeriverVersion = "3-crosspkg+ts-" + motorTreeSitterDeclarado
+const GraphDeriverVersion = "4-crosspkg+ts-" + motorTreeSitterDeclarado
 
 // motorTreeSitterDeclarado es la versión de github.com/odvcencio/gotreesitter que este derivador
 // DECLARA haber mirado. Se escribe a mano A PROPÓSITO: es el acuse de recibo de un humano de que
 // miró qué cambió en el motor. Lo que impide que el acuse se quede viejo no es la disciplina, es la
 // guarda de deriver_motor_test.go, que lee la versión REAL de go.mod y exige que coincida.
-const motorTreeSitterDeclarado = "v0.51.0"
+const motorTreeSitterDeclarado = "v0.52.0"
 
 // ModuleIndex es la implementación EN MEMORIA de SymbolIndex: se arma con los nodos ya derivados
 // (el camino del índice completo). El camino incremental arma otra implementación desde la base.
