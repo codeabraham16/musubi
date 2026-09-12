@@ -77,6 +77,9 @@ func TestLaContrasenaSeAplicaEnElCliente(t *testing.T) {
 //
 // Sabotaje que la hace fallar: poner `pass` en res.Stdout, o devolver el error del binario sin
 // pasarlo por `sinSecreto` (muchos binarios repiten sus argumentos en el mensaje de error).
+// arnes: archivo="cmd/musubi/pantalla.go"
+// arnes: de="sinSecreto(err.Error(), pass)"
+// arnes: a="err.Error()"
 func TestElResultadoQueVaALaBitacoraNoTraeLaContrasena(t *testing.T) {
 	const clave = "SecretoDeSesion99"
 

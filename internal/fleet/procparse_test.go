@@ -183,6 +183,10 @@ func TestUnaLecturaIncompletaNoInventaNumeros(t *testing.T) {
 	// I9 — los dos campos nuevos hablan el mismo idioma del «no sé»: nil el puntero, 0 el entero.
 	// Sabotaje: inicializar MemLibre con u64(0) cuando no hay MemFree — un 0 se lee «no le queda
 	// nada de RAM libre», que es lo contrario de «no lo sé».
+	// arnes: prueba="TestUnaLecturaIncompletaNoInventaNumeros"
+	// arnes: archivo="internal/fleet/procparse.go"
+	// arnes: de="\tif libre, hay := vals[\"MemFree\"]; hay {\n\t\tm.MemLibre = u64(libre)\n\t}\n"
+	// arnes: a="\tif libre, hay := vals[\"MemFree\"]; hay {\n\t\tm.MemLibre = u64(libre)\n\t} else {\n\t\tm.MemLibre = u64(0)\n\t}\n"
 	if m.MemLibre != nil {
 		t.Errorf("MemLibre = %d sin haber leído meminfo: tiene que ser nil", *m.MemLibre)
 	}

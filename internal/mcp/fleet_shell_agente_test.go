@@ -84,6 +84,9 @@ func TestUnaMaquinaNoPuedeEngancharseALaSesionDeOtra(t *testing.T) {
 // prueba anterior pasaría también con una ruta que rechaza a todo el mundo.
 //
 // Sabotaje que la hace fallar: rechazar siempre en canalDelAgente.
+// arnes: archivo="internal/mcp/shell_agente_http.go"
+// arnes: de="\tif ses.DeviceID != d.ID {"
+// arnes: a="\tif true {"
 func TestLaMaquinaDuenaSiRecogeSusTeclas(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d, token := enrolarTierAConShell(t, s, "casa", "pc-gio")

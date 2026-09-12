@@ -350,6 +350,9 @@ func TestLaCredencialViajaEnElHeaderYNoSeFiltraPorElError(t *testing.T) {
 // porque un endpoint ajeno se lo pidió.
 //
 // Sabotaje que la hace fallar: sacar el CheckRedirect del cliente.
+// arnes: archivo="internal/fleet/exposicion.go"
+// arnes: de="var clienteExposicion = &http.Client{\n\tCheckRedirect: func(*http.Request, []*http.Request) error {\n\t\treturn errors.New(\"el endpoint redirige y esto no sigue redirecciones: apuntá a la URL final\")\n\t},\n}"
+// arnes: a="var clienteExposicion = &http.Client{}"
 func TestUnaRedireccionNoSeSigue(t *testing.T) {
 	var golpeado bool
 	destino := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

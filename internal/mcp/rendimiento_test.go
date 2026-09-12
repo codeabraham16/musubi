@@ -326,6 +326,9 @@ func idDeDevice(t *testing.T, s *McpServer, nombre string) string {
 //
 // Sabotaje que la hace fallar: sacar una de las series de rendimiento de seriesDeServicio.
 // Sabotaje que la hace fallar: sacar `fila["rendimiento"]` de filaDeServicio.
+// arnes: archivo="internal/mcp/methods_servicios.go"
+// arnes: de="\t\t\tfila[\"rendimiento\"] = rend\n"
+// arnes: a=""
 func TestLaToolYElExportadorCoincidenSobreElRendimiento(t *testing.T) {
 	ahora := time.Now().UTC()
 	d := fleet.Device{Name: "pc-gio", Tier: fleet.TierAgente, OS: "linux", ProjectID: "casa", LastSeen: ahora}

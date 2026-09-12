@@ -70,6 +70,9 @@ func TestNoHayShellImplicito(t *testing.T) {
 
 // F8 — el timeout MATA el comando y lo dice.
 // Sabotaje: usar exec.Command en vez de exec.CommandContext → el proceso sobrevive al agente.
+// arnes: archivo="cmd/musubi/ejecutor.go"
+// arnes: de="cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)"
+// arnes: a="cmd := exec.Command(argv[0], argv[1:]...)"
 func TestElTimeoutMataElComando(t *testing.T) {
 	arranque := time.Now()
 	res := ejecutar(comandoRecibido{ID: "x", Argv: []string{"sleep", "30"}, TimeoutSeg: 1}, "", "")

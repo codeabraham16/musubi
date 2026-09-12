@@ -28,6 +28,9 @@ import (
 // SABOTAJE QUE TIENE QUE ROMPERLO: cambiar el `select` con `default` de publish por un envío
 // directo `s.ch <- e`. Con eso el test no falla: se cuelga hasta el timeout de go test, que es
 // exactamente la falla que describe.
+// arnes: archivo="internal/mcp/livefeed.go"
+// arnes: de="\t\tselect {\n\t\tcase s.ch <- e:\n\t\t\ts.perdidos = 0\n\t\tdefault:"
+// arnes: a="\t\ts.ch <- e\n\t\ts.perdidos = 0\n\t\tif false {"
 func TestFeedVivoNoBloqueaConSuscriptorMuerto(t *testing.T) {
 	f := newLiveFeed()
 	_, _, _ = f.subscribe("", false) // se suscribe y NUNCA lee

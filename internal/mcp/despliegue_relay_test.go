@@ -139,6 +139,9 @@ func TestElRelayPublicaElUDPDel21116(t *testing.T) {
 // root.
 //
 // Sabotaje que la hace fallar: agregarle `network_mode: host` a cualquiera de los dos servicios.
+// arnes: archivo="deploy/rustdesk/compose.yml"
+// arnes: de="    command: hbbs -k _ -r ${MUSUBI_RUSTDESK_BIND}:21117"
+// arnes: a="    command: hbbs -k _ -r ${MUSUBI_RUSTDESK_BIND}:21117\n    network_mode: host"
 func TestElComposeDelRelayNoUsaLaRedDelHost(t *testing.T) {
 	texto := leerDespliegueRelay(t, "compose.yml")
 	// Sólo las líneas que NO son comentario. La primera versión de esta guarda daba rojo con el

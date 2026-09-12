@@ -96,6 +96,9 @@ func TestEjesUnaMencionSueltaNoEtiqueta(t *testing.T) {
 //
 // SABOTAJE: devolver la tabla a medias en vez de nil ante un error del embebedor ⇒ el motor rutea
 // con una taxonomía incompleta y no hay nada que lo declare.
+// arnes: archivo="internal/mcp/ejes_diseno.go"
+// arnes: de="\t\t\treturn nil\n"
+// arnes: a="\t\t\treturn vecs\n"
 func TestEjesSinTablaCompletaNoSeRutea(t *testing.T) {
 	engine, err := memory.NewDbEngine(t.TempDir())
 	if err != nil {

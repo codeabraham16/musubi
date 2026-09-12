@@ -228,6 +228,9 @@ func TestUnaMaquinaQueLateSinMedirNoDisparaPoliticas(t *testing.T) {
 // justo cuando algo ya va mal.
 //
 // Sabotaje que la hace fallar: quitar la consulta a ultimoDisparo.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="\tif previo, hay := s.ultimoDisparo.Load(clave); hay {\n\t\tif t, ok := previo.(time.Time); ok && ahora.Sub(t) < pol.CooldownEfectivo() {\n\t\t\treturn false\n\t\t}\n\t}\n"
+// arnes: a=""
 func TestElCooldownEvitaLaTormentaDeComandosIdenticos(t *testing.T) {
 	s, d := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal())) // cooldown 60 min
 	ahora := time.Now()
@@ -799,6 +802,9 @@ func TestLaSerieDeUnaPoliticaExisteAntesDeLaPrimeraAccion(t *testing.T) {
 // exactamente cuando más importan.
 //
 // Sabotaje: cambiar el `LoadOrStore` de sembrarPoliticas por un `Store`.
+// arnes: archivo="internal/mcp/observability.go"
+// arnes: de="m.politicaStats.LoadOrStore(n+\"\\x00\"+r, new(atomic.Int64))"
+// arnes: a="m.politicaStats.Store(n+\"\\x00\"+r, new(atomic.Int64))"
 func TestSembrarNoPisaUnContadorQueYaCuenta(t *testing.T) {
 	s, _ := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal()))
 

@@ -64,6 +64,9 @@ var (
 //
 // Sabotaje que la hace fallar: agregar un volumen `${MUSUBI_PROM_DIR}/nuevo.yml:...` al compose sin
 // tocar claseDeMount.
+// arnes: archivo="deploy/docker/compose.yml"
+// arnes: de="      - ${MUSUBI_PROM_DIR}/prometheus.yml:/etc/prometheus/prometheus.yml:ro,z"
+// arnes: a="      - ${MUSUBI_PROM_DIR}/prometheus.yml:/etc/prometheus/prometheus.yml:ro,z\n      - ${MUSUBI_PROM_DIR}/nuevo.yml:/etc/prometheus/nuevo.yml:ro,z"
 func TestTodoMountDePrometheusEstaClasificado(t *testing.T) {
 	compose := leerDeploy(t, "docker", "compose.yml")
 	hallados := map[string]bool{}

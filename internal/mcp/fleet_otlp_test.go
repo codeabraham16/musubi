@@ -406,6 +406,9 @@ func ptrPrincipal(p Principal) *Principal { return &p }
 //
 // Sabotaje que la hace fallar: borrar la llamada a validarPrincipalDeEmpuje de
 // vincularRegistroDeFlota — los tres casos arrancan y el empuje queda mudo para siempre.
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\tif err := s.validarPrincipalDeEmpuje(lookup); err != nil {\n\t\treturn err\n\t}\n"
+// arnes: a=""
 func TestElEmpujeNoArrancaSinPrincipalNombrado(t *testing.T) {
 	casos := []struct {
 		nombre string
@@ -924,6 +927,9 @@ func TestElSobreOTLPTieneLaFormaDeLaEspecificacion(t *testing.T) {
 //
 // Sabotaje que la hace fallar: ponerle Unidad "1" a musubi_fleet_device_up (que es lo que dice la
 // especificación de OTLP para lo adimensional, y es justo lo que rompe acá).
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\t\t\t\"1 si la máquina dio señal de vida dentro de SU umbral, 0 si no. El umbral es por tier: 90s (3 latidos) con agente, 3x el intervalo de sondeo sin agente.\",\n\t\t\t\"\", false,"
+// arnes: a="\t\t\t\"1 si la máquina dio señal de vida dentro de SU umbral, 0 si no. El umbral es por tier: 90s (3 latidos) con agente, 3x el intervalo de sondeo sin agente.\",\n\t\t\t\"1\", false,"
 func TestNingunaUnidadRenombraLaSerieEnPrometheus(t *testing.T) {
 	sufijos := map[string]string{"By": "_bytes", "s": "_seconds", "Cel": "_celsius", "%": "_percent"}
 	for _, serie := range seriesDeFlota(time.Now(), 0, versionDePrueba, nil) {

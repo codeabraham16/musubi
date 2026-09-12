@@ -22,6 +22,10 @@ import (
 // Sabotaje que la hace fallar: registrar la plantilla SIN cerrar el engine antes. Con la base
 // abierta el archivo principal son 4 KB y el esquema entero vive en el `-wal`; la copia llega con
 // `user_version` en 0. Ejecutado: la prueba dice exactamente eso.
+// arnes: prueba="TestLaPlantillaLlegaConElEsquemaAlDia"
+// arnes: archivo="internal/memory/plantilla.go"
+// arnes: de="\teng.Close()\n"
+// arnes: a="\t_ = eng\n"
 //
 // NO hay un sabotaje sobre un `wal_checkpoint` explícito, porque no hay tal llamada: se probó
 // quitarla y la suite quedó verde —SQLite hace checkpoint solo al cerrar la última conexión— así

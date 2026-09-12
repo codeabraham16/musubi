@@ -49,6 +49,9 @@ func conShell(proyecto string) *Principal {
 // a ser decoración en la que alguien confía.
 //
 // Sabotaje que la hace fallar: cambiar fleet.CapShell por fleet.CapExec en toolFleetShell.
+// arnes: archivo="internal/mcp/methods_shell.go"
+// arnes: de="!existe || !PuedeSobreDevice(p, d, fleet.CapShell)"
+// arnes: a="!existe || !PuedeSobreDevice(p, d, fleet.CapExec)"
 func TestExecNoOtorgaShellNiSiquieraConAccesoTotal(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConShell(t, s, "casa", "nas")
@@ -96,6 +99,9 @@ func TestUnaAllowlistDeUnComandoNoSeSalteaPidiendoUnaShell(t *testing.T) {
 // prometer al dar de alta.
 //
 // Sabotaje que la hace fallar: agregar CapShell a TierMovil.
+// arnes: archivo="internal/fleet/device.go"
+// arnes: de="\tTierMovil:     {CapMetrics, CapScreen, CapScreenView},"
+// arnes: a="\tTierMovil:     {CapMetrics, CapScreen, CapScreenView, CapShell},"
 func TestTierCNoAdmiteShellYElAltaLoRechaza(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	_, e := call(t, s, "musubi_fleet_enroll", map[string]any{
@@ -359,6 +365,9 @@ func TestElRelayDeShellExigeCredencial(t *testing.T) {
 // venció no es un problema de credencial, y una concesión revocada tampoco.
 //
 // Sabotaje que la hace fallar: devolver http.StatusUnauthorized fijo en los handlers.
+// arnes: archivo="internal/mcp/shell_relay.go"
+// arnes: de="\tcase errors.As(err, &muerta):\n\t\treturn http.StatusGone\n\tcase errors.As(err, &sinPermiso):\n\t\treturn http.StatusForbidden\n"
+// arnes: a="\tcase errors.As(err, &muerta):\n\t\treturn http.StatusUnauthorized\n\tcase errors.As(err, &sinPermiso):\n\t\treturn http.StatusUnauthorized\n"
 func TestElRelayDistingueTokenMaloDeSesionMuertaYDeConcesionRevocada(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := enrolarConShell(t, s, "casa", "nas")

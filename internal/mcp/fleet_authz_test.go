@@ -79,6 +79,9 @@ func TestLaConcesionEsPorMaquina(t *testing.T) {
 
 // C4 — la tenencia sigue mandando: el grant no es puerta lateral al aislamiento.
 // Sabotaje: quitar la llamada a alcanzaElProyecto de PuedeSobreDevice.
+// arnes: archivo="internal/mcp/fleet_authz.go"
+// arnes: de="\tif !alcanzaElProyecto(p, d.ProjectID) {\n\t\treturn false\n\t}\n"
+// arnes: a=""
 func TestElGrantNoEsUnaPuertaLateralALaTenencia(t *testing.T) {
 	// Nombra una máquina del tenant ajeno, e incluso con comodín.
 	acotado := &Principal{

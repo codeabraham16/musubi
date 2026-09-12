@@ -81,6 +81,9 @@ func TestFilaConCapImposibleNoLaHonraIgual(t *testing.T) {
 // A6 — sin project_id no hay alta. Es el bug ya medido con las observaciones
 // (2 filas sin atribuir visibles desde los 3 proyectos).
 // Sabotaje: quitar el chequeo de ProjectID de ValidarAlta.
+// arnes: archivo="internal/fleet/device.go"
+// arnes: de="\tif strings.TrimSpace(d.ProjectID) == \"\" {\n\t\treturn fmt.Errorf(\"%w (dispositivo %q)\", ErrSinProyecto, d.Name)\n\t}\n"
+// arnes: a=""
 func TestAltaSinProyectoFalla(t *testing.T) {
 	d := Device{Name: "huerfano", Tier: TierAgente, Caps: []Cap{CapMetrics}}
 	if err := ValidarAlta(d); !errors.Is(err, ErrSinProyecto) {

@@ -116,6 +116,9 @@ func TestElCertificadoRenovadoEnDiscoEMPIEZAaSERVIRSE(t *testing.T) {
 //
 // Sabotaje que la pone roja: en la rama de error de `GetCertificate`, devolver `nil, err` en vez
 // del par anterior; o sacar el `c.fallos++`.
+// arnes: archivo="internal/mcp/tls_recarga.go"
+// arnes: de="\t\t\t\"serie\", nombreRecargasFallidas)\n\t\treturn c.par, nil"
+// arnes: a="\t\t\t\"serie\", nombreRecargasFallidas)\n\t\treturn nil, err"
 func TestUnParAMedioEscribirNoTumbaElTLS(t *testing.T) {
 	dir := t.TempDir()
 	vence := time.Now().Add(30 * 24 * time.Hour).Truncate(time.Second)

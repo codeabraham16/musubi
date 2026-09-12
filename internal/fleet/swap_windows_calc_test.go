@@ -20,6 +20,9 @@ import (
 // movimiento que ya se había hecho con los parsers de servicios.
 //
 // Sabotaje que lo hace fallar: devolver (total, total, true) cuando disponiblePagina <= disponibleFisica.
+// arnes: archivo="internal/fleet/swap_windows_calc.go"
+// arnes: de="if disponiblePagina <= disponibleFisica {\n\t\treturn 0, 0, false"
+// arnes: a="if disponiblePagina <= disponibleFisica {\n\t\treturn total, total, true"
 func TestUnSwapQueNoSePudoMedirNoViajaComoLleno(t *testing.T) {
 	const gb = uint64(1) << 30
 

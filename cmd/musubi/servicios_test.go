@@ -34,6 +34,9 @@ func repDe(nombre string, estado fleet.EstadoServicio) fleet.ReporteServicio {
 //
 // Sabotaje que la hace fallar: sacar el desempate por nombre de serviciosParaElLatido, o invertir
 // prioridadDeReporte para que `corriendo` gane.
+// arnes: archivo="cmd/musubi/servicios.go"
+// arnes: de="\t\treturn lista[i].Nombre < lista[j].Nombre"
+// arnes: a="\t\treturn false"
 func TestElRecorteEsEstableYDejaAfueraLoQueANDA(t *testing.T) {
 	var crudos []fleet.ReporteServicio
 	for i := 0; i < fleet.ServiciosPorLatido+20; i++ {
@@ -542,6 +545,9 @@ func TestElParserDeMacosSeLeeDesdeLinux(t *testing.T) {
 //
 // Sabotaje: devolver "" siempre en detalleDeWindows, o publicar el código también cuando el
 // servicio está corriendo (arrastra el de una caída anterior de la que ya se recuperó).
+// arnes: archivo="cmd/musubi/servicios_parsers.go"
+// arnes: de="return \"salida=\" + c"
+// arnes: a="return \"\""
 func TestElCodigoDeSalidaDeWindowsViajaConElServicioFallado(t *testing.T) {
 	csv := "\"Name\",\"State\",\"StartMode\",\"ExitCode\"\n" +
 		"\"murio\",\"Stopped\",\"Auto\",\"1067\"\n" +

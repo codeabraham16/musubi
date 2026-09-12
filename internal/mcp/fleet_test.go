@@ -113,6 +113,9 @@ func TestTokenDePersonaNoLate(t *testing.T) {
 
 // B3 — el 401 no es un oráculo: desconocido, revocado y basura dicen lo MISMO.
 // Sabotaje: devolver un motivo distinto según el caso.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\t\t\tw.Header().Set(\"WWW-Authenticate\", \"Bearer\")\n\t\t\tescribirLatido(w, http.StatusUnauthorized, fleet.RespuestaLatido{OK: false, Motivo: motivoRechazo})\n\t\t\treturn\n\t\t}\n\t\tlimiter.reset(ip)\n\n\t\t// La telemetría (S4). Se lee DESPUÉS de autenticar, nunca antes: leer el cuerpo de un"
+// arnes: a="\t\t\tw.Header().Set(\"WWW-Authenticate\", \"Bearer\")\n\t\t\tmotivo := motivoRechazo\n\t\t\tif len(token) != 64 {\n\t\t\t\tmotivo = \"formato de credencial inválido: no parece un token de dispositivo\"\n\t\t\t}\n\t\t\tescribirLatido(w, http.StatusUnauthorized, fleet.RespuestaLatido{OK: false, Motivo: motivo})\n\t\t\treturn\n\t\t}\n\t\tlimiter.reset(ip)\n\n\t\t// La telemetría (S4). Se lee DESPUÉS de autenticar, nunca antes: leer el cuerpo de un"
 func TestElRechazoNoDiceCualExistio(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 
@@ -736,6 +739,9 @@ func TestLaBitacoraDeSesionesSeCompuertaPorModalidad(t *testing.T) {
 //
 // Sabotaje que la hace fallar: mostrar sólo uno de los dos, o escribir `consentimiento` siempre
 // (con lo que la ausencia de decisión se vería idéntica a una decisión).
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="\t\t\tif d.Consentimiento != \"\" {\n"
+// arnes: a="\t\t\tif true {\n"
 func TestLaPoliticaDeConsentimientoSeVeEnElInventario(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarDePrueba(t, s, "casa", "pc-gio")

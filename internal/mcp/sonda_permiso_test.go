@@ -136,3 +136,59 @@ func TestElCorredorDeSabotajesRechazaHaberMedidoCero(t *testing.T) {
 			"que no haberlo detectado, y encima con un diagnóstico que culpa a la guarda")
 	}
 }
+
+// EL CORREDOR TAMPOCO ACEPTA HABER MEDIDO MENOS BAJO EL SABOTAJE — EL HERMANO DE LA DE ARRIBA.
+//
+// La de arriba mira el CONTROL; ésta mira al SABOTAJE, y que faltara una de las dos es el defecto
+// dominante de este árbol. El control puede ejecutar tres subtests y el sabotaje saltear uno: si el
+// cambio apaga la condición que un `t.Skip` consulta, la prueba se saltea, `go test` sale con 0, no
+// hay `--- FAIL`, y el corredor acusaba a la guarda de estar HUECA. Medido con un caso armado:
+// control 3, sabotaje 2, 1 salteado, y se reportaba «EL SABOTAJE NO LA PONE EN ROJO».
+//
+// Un falso HALLAZGO es peor que un falso verde: manda a reescribir una guarda que está bien.
+//
+// Y LA PARTE QUE MÁS IMPORTA ES EL `-v`, porque el primer arreglo que escribí estaba mal y pasó su
+// caso de prueba por el motivo equivocado. `corrida()` va SIN `-v`, así que cuando todo pasa no
+// imprime NI UN `--- PASS`: comparar ese cero contra el del control —que sí es verboso— daría «no
+// se midió» en TODOS los verdes legítimos y dejaría muda la única señal que esta herramienta
+// existe para dar. Un remedio que apaga la alarma es peor que el agujero que tapa.
+//
+// Sabotaje que la hace fallar: en sabotaje.sh, cambiar `SAB_V="$(controlVerboso)"` por
+// `SAB_V="$CON"` → la comparación vuelve a ser contra una corrida sin `-v`.
+// arnes: archivo="deploy/pruebas/sabotaje.sh"
+// arnes: de="  SAB_V=\"$(controlVerboso)\""
+// arnes: a="  SAB_V=\"$CON\""
+// arnes: prueba="TestElCorredorDeSabotajesRechazaHaberMedidoMenosBajoElSabotaje"
+func TestElCorredorDeSabotajesRechazaHaberMedidoMenosBajoElSabotaje(t *testing.T) {
+	guion := leerDeploy(t, "pruebas", "sabotaje.sh")
+
+	// DELIMITADA POR CÓDIGO Y NO POR UN COMENTARIO, por lo que enseñó la guarda de arriba:
+	// `leerDeploy` blanquea los comentarios, así que un marcador que sea un título nunca existe y
+	// la guarda termina mirando el guion entero, donde cualquier `exit 1` la satisface.
+	ini := strings.Index(guion, `if [[ -z "$FALLOS" ]]; then`)
+	if ini < 0 {
+		t.Fatal("no encuentro la rama del verde en sabotaje.sh: sin ese corte esta guarda mira " +
+			"cualquier cosa")
+	}
+	cola := guion[ini:]
+	if k := strings.Index(cola, "EL SABOTAJE NO LA PONE EN ROJO"); k > 0 {
+		cola = cola[:k]
+	} else {
+		t.Fatal("no encuentro el mensaje del verde: sin ese corte la guarda se come el resto del guion")
+	}
+
+	// EL `-v` ES LA ASERCIÓN QUE MÁS VALE: sin él la comparación es degenerada y siempre dispara.
+	if !strings.Contains(cola, "controlVerboso") {
+		t.Error("la comprobación del skip NO corre su propia corrida verbosa: `corrida()` va sin " +
+			"`-v` y no imprime ningún `--- PASS`, así que comparar contra el control daría «no se " +
+			"midió» en TODOS los verdes legítimos — la herramienta quedaría muda en vez de ciega")
+	}
+	if !strings.Contains(cola, "--- SKIP") {
+		t.Error("no busca `--- SKIP`: un subtest salteado bajo el sabotaje sale con `ok` y código 0, " +
+			"y su ausencia de rojo se lee como guarda hueca")
+	}
+	if !strings.Contains(cola, "exit 1") {
+		t.Error("detecta que se midió menos y NO corta: informar y seguir deja el mismo desenlace " +
+			"que no haberlo detectado, y encima acusando a una guarda sana")
+	}
+}

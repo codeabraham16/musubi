@@ -123,6 +123,9 @@ func TestLaCapacidadDeAvisarLlevaSuMotivo(t *testing.T) {
 // interrumpir una sesión que no existe, o le enseña que la columna miente.
 //
 // Sabotaje que la hace fallar: sacar la guarda de SesionEsperandoPermiso de Abierta.
+// arnes: archivo="internal/fleet/sesion_viva.go"
+// arnes: de="\tif s.Estado == string(SesionEsperandoPermiso) {\n\t\treturn false\n\t}\n"
+// arnes: a=""
 func TestUnPedidoDePermisoNoFiguraComoSesionAbierta(t *testing.T) {
 	ahora := time.Now().UTC()
 	esperando := DesdeSesionPantalla(SesionPantalla{

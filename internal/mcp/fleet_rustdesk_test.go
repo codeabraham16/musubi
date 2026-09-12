@@ -150,6 +150,9 @@ func TestUnIdDePantallaQueCambiaQuedaEscrito(t *testing.T) {
 // momento en que hace falta mirar una máquina es descubrirlo tarde.
 //
 // Sabotaje que la hace fallar: no agregar rustdesk_id_ambiguo al inventario.
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="\t\t\t\t\tfila[\"rustdesk_id_ambiguo\"] = true\n"
+// arnes: a=""
 func TestElInventarioAvisaDeUnIdAmbiguo(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConPantallaViva(t, s, "casa", "pc-gio", "555")

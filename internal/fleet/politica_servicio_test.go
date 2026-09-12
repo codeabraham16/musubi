@@ -115,6 +115,9 @@ func TestElNombreDelServicioDeLaPoliticaSeValida(t *testing.T) {
 // y el caso es real: un `systemctl` que falla por permisos, un agente recién arrancado.
 //
 // Sabotaje que la hace fallar: hacer que EstadoServicio desconocido cuente como caído.
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="return e == EstadoFallado || e == EstadoDetenido"
+// arnes: a="return e == EstadoFallado || e == EstadoDetenido || e == EstadoDesconocido"
 func TestUnServicioDesconocidoNoDisparaUnaPolitica(t *testing.T) {
 	casos := []struct {
 		estado EstadoServicio

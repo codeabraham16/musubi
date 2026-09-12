@@ -74,6 +74,9 @@ func TestElDropInDelAgenteNoPuedeImpedirQueElAgenteArranque(t *testing.T) {
 // una excepción enumerada, no una puerta abierta.
 //
 // Sabotaje que la hace fallar: agregar `ProtectHome=no` al drop-in.
+// arnes: archivo="deploy/systemd/musubi-agente-contenedores.conf"
+// arnes: de="[Service]"
+// arnes: a="[Service]\nProtectHome=no"
 func TestElDropInAbreRutasYNoApagaElBlindaje(t *testing.T) {
 	conf := leerDropInDelAgente(t)
 	sinComentarios := []string{}

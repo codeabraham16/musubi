@@ -174,6 +174,35 @@ echo "  ✓ el sabotaje se aplicó y COMPILA"
 CON="$(corrida)"
 FALLOS="$(grep -E '^\s*--- FAIL: ' <<<"$CON" | sed -E 's/^\s*--- FAIL: ([^ ]+).*/\1/')"
 if [[ -z "$FALLOS" ]]; then
+  # ── 9 · ¿CORRIÓ LO MISMO QUE EL CONTROL, O SE SALTEÓ? ──────────────────────────────────────
+  #
+  # LA COMPROBACIÓN 1 MIRA EL CONTROL Y ÉSTA MIRA AL SABOTAJE, y falta una de las dos es el mismo
+  # defecto de siempre: el hermano. Arriba se exige que el control ejecute al menos un subtest,
+  # justamente porque un `--- SKIP` sale con `ok` y código 0. Pero el control puede ejecutar
+  # tres y el SABOTAJE saltear: si el cambio apaga la condición que un `t.Skip` consulta, la
+  # prueba se saltea, `go test` sale con 0, no hay `--- FAIL`, y esto de acá abajo la acusaba de
+  # estar HUECA. La guarda estaba sana y nadie midió nada.
+  #
+  # Medido con un caso armado a propósito: control con 3 subtests ejecutados, sabotaje que hace
+  # que uno se saltee → se reportaba «EL SABOTAJE NO LA PONE EN ROJO» y el arnés lo contaba como
+  # guarda en verde. Un falso HALLAZGO es peor que un falso verde: manda a reescribir una guarda
+  # que está bien.
+  # SE VUELVE A CORRER CON -v, Y ESO NO ES UN LUJO. `corrida()` va SIN `-v`, así que cuando todo
+  # pasa no imprime NI UN `--- PASS`: comparar ese cero contra el $N del control —que sí es
+  # verboso— daría «no se midió» en TODOS los verdes legítimos y dejaría muda la única señal que
+  # esta herramienta existe para dar. Lo comprobé antes de creerle al primer arreglo: el caso de
+  # prueba pasó por el motivo equivocado. Un remedio que apaga la alarma es peor que el agujero.
+  SAB_V="$(controlVerboso)"
+  N_SAB="$(grep -c '^\s*--- PASS' <<<"$SAB_V")"
+  SKIPS="$(grep -c '^\s*--- SKIP' <<<"$SAB_V")"
+  if [[ "${SKIPS:-0}" -gt 0 || "${N_SAB:-0}" -lt "${N:-0}" ]]; then
+    echo "✗ NO SE MIDIÓ NADA BAJO EL SABOTAJE: el control ejecutó $N subtest/s y el sabotaje $N_SAB,"
+    echo "  con $SKIPS salteado/s. Un \`--- SKIP\` sale con \`ok\` y código 0, así que la ausencia de"
+    echo "  rojo NO dice nada sobre la guarda: dice que esa parte no corrió."
+    echo "  Casi siempre el sabotaje apagó la condición que un \`t.Skip\` consulta. Buscá el skip:"
+    grep -m5 -E '^\s*--- SKIP|_test\.go:[0-9]+: ' <<<"$SAB_V" | sed 's/^/    /'
+    exit 1
+  fi
   echo "✗ EL SABOTAJE NO LA PONE EN ROJO."
   echo "  Es el desenlace más silencioso de todos, porque el verde se lee como «no hay defecto»."
   echo

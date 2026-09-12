@@ -80,6 +80,9 @@ func TestRechazoElBloqueDeEjeTieneTope(t *testing.T) {
 // sólo prohíbe produce diseños que esquivan la letra y repiten el defecto.
 //
 // SABOTAJE: dejar un tell como orden pelada ⇒ este test lo señala por nombre.
+// arnes: archivo="internal/mcp/rechazo_diseno.go"
+// arnes: de="{\"\", \"NO pongas más de una acción primaria por vista. Tres CTA con el mismo peso no son tres oportunidades: son ninguna jerarquía.\"},"
+// arnes: a="{\"\", \"NO pongas más de una acción primaria por vista.\"},"
 func TestRechazoCadaTellDiceElPorQue(t *testing.T) {
 	for _, x := range tellsDeDiseno {
 		if len(x.Texto) < 60 {
