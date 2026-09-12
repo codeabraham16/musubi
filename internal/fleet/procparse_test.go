@@ -180,6 +180,10 @@ func TestUnaLecturaIncompletaNoInventaNumeros(t *testing.T) {
 	if m.CPUPct != nil || m.Load1 != nil || m.TempC != nil {
 		t.Errorf("se inventaron valores que no vinieron: cpu=%v load=%v temp=%v", m.CPUPct, m.Load1, m.TempC)
 	}
+	// COMPARTE SITIO CON colector_test.go:152, Y ESO ESTÁ BIEN — medido el 2026-09-12; el detalle
+	// de la medición está escrito allá. En una línea: mismo `de`, `a` opuestos, cada sabotaje
+	// hace caer SÓLO su propia prueba y con su propio motivo. El aviso de `Colisiones` es una
+	// pregunta legítima («¿dos guardas, o una contada dos veces?») y la respuesta es dos.
 	// I9 — los dos campos nuevos hablan el mismo idioma del «no sé»: nil el puntero, 0 el entero.
 	// Sabotaje: inicializar MemLibre con u64(0) cuando no hay MemFree — un 0 se lee «no le queda
 	// nada de RAM libre», que es lo contrario de «no lo sé».
