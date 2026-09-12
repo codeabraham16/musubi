@@ -87,6 +87,15 @@ import (
 //
 // Sabotaje que la hace fallar: sacarle `lock: lockSelf` a `musubi_recall` (dirección 1), o
 // sacársela a una tool y borrarle además la llamada al embebedor (dirección 2). Los dos corridos.
+//
+// EL `de` ARRANCA EN EL COMENTARIO Y NO EN EL `lock:`, porque `lock: lockSelf,` aparece cinco veces
+// en el registro y el arnés exige que el literal sea ÚNICO —con dos ocurrencias no se sabría cuál
+// se tocó, y con cero el sabotaje no se aplica y su verde no diría nada—. La línea de arriba es la
+// que lo ancla a ESTA tool.
+// arnes: archivo="internal/mcp/registry.go"
+// arnes: de="\t\t\t// sin atender a nadie hasta 120 s. El handler acota su propia sección crítica.\n\t\t\tlock: lockSelf,"
+// arnes: a="\t\t\t// sin atender a nadie hasta 120 s. El handler acota su propia sección crítica."
+// arnes: prueba="TestNingunCandadoDelDespachoCruzaUnaLlamadaDeRed"
 func TestNingunCandadoDelDespachoCruzaUnaLlamadaDeRed(t *testing.T) {
 	// ── El BORDE DE RED. Son los únicos métodos de las dos interfaces que salen a la red.
 	// Escrito a mano a propósito: es un HECHO DEL MUNDO —cuáles métodos hacen I/O—, no un
@@ -367,6 +376,10 @@ func TestNingunCandadoDelDespachoCruzaUnaLlamadaDeRed(t *testing.T) {
 //
 // Sabotaje que la hace fallar: sacarle `lock: lockSelf` a `musubi_save_observation` en el registro.
 // Corrido: la sonda concurrente no vuelve y la prueba declara el bloqueo.
+// arnes: archivo="internal/mcp/registry.go"
+// arnes: de="\t\t\t// del despacho esta tool congelaba el servidor entero 8,006 s.\n\t\t\tlock: lockSelf,"
+// arnes: a="\t\t\t// del despacho esta tool congelaba el servidor entero 8,006 s."
+// arnes: prueba="TestGuardarUnaObservacionNoCongelaElServidor"
 func TestGuardarUnaObservacionNoCongelaElServidor(t *testing.T) {
 	emb := nuevoEmbedderBloqueante()
 	s := newTestServer(t, emb)
