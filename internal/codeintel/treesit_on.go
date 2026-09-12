@@ -20,6 +20,10 @@ import (
 //
 // (los grammar_subset_* acotan las gramáticas embebidas a las que usamos: pocos MB, no las 206).
 
+// motorPolyglot es la mitad del sello del derivador que depende del BUILD TAG, y no de ninguna
+// dependencia. Ver su gemela en treesit_off.go y la guarda en sello_del_tag_test.go.
+const motorPolyglot = "poly-on"
+
 // languageFor devuelve la gramática tree-sitter del archivo, o nil si no lo soportamos.
 func languageFor(path string) *ts.Language {
 	switch strings.ToLower(filepath.Ext(path)) {

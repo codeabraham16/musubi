@@ -53,7 +53,16 @@ type SymbolIndex interface {
 //
 // La guarda que lo sostiene está en deriver_motor_test.go: compara motorTreeSitterDeclarado contra
 // el `require` de go.mod. Subir la dependencia sin subir esta constante es un test ROJO.
-const GraphDeriverVersion = "4-crosspkg+ts-" + motorTreeSitterDeclarado
+// El sello lleva TRES cosas y no dos, desde 2026-09-12: la revisión del algoritmo, la versión del
+// MOTOR de tree-sitter, y si el binario se compiló CON o SIN el build tag `treesitter`.
+//
+// La tercera se agregó por una medición incómoda: dos binarios de musubi, uno con el tag y otro
+// sin, derivaban el MISMO archivo .py a 3 nodos y a 0 nodos respectivamente, y escribían EL MISMO
+// valor en MetaCodegraphDeriver. O sea que un binario sin el tag marcaba cada archivo polyglot como
+// «ya derivado» con CERO símbolos, y el índice incremental no lo volvía a mirar nunca porque el
+// sello coincidía. Es el mismo agujero que cerró la versión del motor, por un eje que no necesita
+// ningún bump para abrirse: alcanza con desplegar un binario compilado distinto.
+const GraphDeriverVersion = "5-crosspkg+ts-" + motorTreeSitterDeclarado + "+" + motorPolyglot
 
 // motorTreeSitterDeclarado es la versión de github.com/odvcencio/gotreesitter que este derivador
 // DECLARA haber mirado. Se escribe a mano A PROPÓSITO: es el acuse de recibo de un humano de que
