@@ -26,6 +26,7 @@ package fleet
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -478,17 +479,43 @@ func CapsDesdeTexto(s string) []Cap {
 
 // ── Credencial del dispositivo ──────────────────────────────────────────────────────────────
 
-// NuevoToken genera la credencial de un dispositivo: 32 bytes de crypto/rand en hex.
+// tokenPrefijo marca una credencial de dispositivo a simple vista, igual que `msb_` marca la de una
+// persona. Sirve para leer un log y saber QUÉ se filtró; lo que impide que se filtre es el alfabeto
+// del cuerpo, no esto.
+const tokenPrefijo = "msbd_"
+
+// NuevoToken genera la credencial de un dispositivo: 32 bytes de crypto/rand, con prefijo y en
+// base64url.
 //
 // Vive en el DOMINIO y no en la capa de persistencia a propósito: así el único lugar del código
 // que puede fabricar una credencial es también el único que define cómo se guarda (HashToken), y
 // no hay forma de que un camino nuevo invente su propio esquema más débil.
+//
+// POR QUÉ NO ES HEX, Y NO ES UNA PREFERENCIA DE ESTILO. Hasta el 2026-09-13 esto devolvía
+// `hex.EncodeToString(b)`: 64 caracteres hex. El redactor de salidas (internal/redact) TIENE que
+// dejar pasar el hex de 40 y 64 caracteres —son los SHA-1 y SHA-256 de git, y taparlos vuelve
+// ilegible cualquier salida que hable de commits—, así que la credencial era indistinguible de un
+// digest PARA EL REDACTOR y salía en claro. No es hipotético: se midieron CUATRO tokens de
+// dispositivo en claro en un transcripto de sesión, dos de máquinas con `exec` y `shell`.
+//
+// El arreglo no es enseñarle al redactor a adivinar por largo —eso es perseguir la forma N+1—: es
+// que la credencial no comparta alfabeto con un digest. base64url tiene entropía ~5,4 y cae sola en
+// el catch-all de entropía que ya existía. ES LA FORMA QUE EL TOKEN DE PERSONA YA TENÍA
+// (`GenerateToken`, internal/mcp/principals_admin.go): la lección estaba aprendida de un lado y no
+// del hermano.
+//
+// El prefijo NO es lo que lo protege —un cuerpo hex con prefijo sigue fugando— y hay un subtest que
+// lo fija, para que nadie «simplifique» esto a pegarle `msbd_` al hex de antes.
+//
+// LAS CREDENCIALES YA EMITIDAS SIGUEN SIENDO HEX DE 64 y siguen siendo indistinguibles de un
+// digest: el registro guarda hashes, así que cambiar el formato no las invalida ni las arregla. La
+// única salida para ésas es rotarlas, y al rotarlas nacen con esta forma.
 func NuevoToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("no se pudo generar la credencial del dispositivo: %w", err)
 	}
-	return hex.EncodeToString(b), nil
+	return tokenPrefijo + base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 // HashToken devuelve el SHA-256 hex de una credencial. El registro guarda ESTO, nunca el token
