@@ -113,9 +113,17 @@ func TestTokenDePersonaNoLate(t *testing.T) {
 
 // B3 — el 401 no es un oráculo: desconocido, revocado y basura dicen lo MISMO.
 // Sabotaje: devolver un motivo distinto según el caso.
+//
+// EL LARGO DEL SABOTAJE SE DERIVA DEL GENERADOR, Y LA PRIMERA VERSIÓN LO TENÍA COPIADO. Decía
+// `len(token) != 64`: el formato viejo del token de dispositivo, escrito a mano. Cuando #498 le
+// cambió la forma (hex de 64 → `msbd_` + base64url, 48 caracteres), los TRES casos de esta prueba
+// pasaron a medir distinto de 64, recibieron el mismo mensaje saboteado, y la guarda quedó EN VERDE
+// sobre su propio sabotaje — el barrido de internal/mcp la reportó hueca. La guarda estaba bien; el
+// sabotaje era una copia del mundo de ayer. Pedirle una muestra a `fleet.NuevoToken` lo ata al
+// formato de hoy y al de mañana.
 // arnes: archivo="internal/mcp/fleet_http.go"
 // arnes: de="\t\t\tw.Header().Set(\"WWW-Authenticate\", \"Bearer\")\n\t\t\tescribirLatido(w, http.StatusUnauthorized, fleet.RespuestaLatido{OK: false, Motivo: motivoRechazo})\n\t\t\treturn\n\t\t}\n\t\tlimiter.reset(ip)\n\n\t\t// La telemetría (S4). Se lee DESPUÉS de autenticar, nunca antes: leer el cuerpo de un"
-// arnes: a="\t\t\tw.Header().Set(\"WWW-Authenticate\", \"Bearer\")\n\t\t\tmotivo := motivoRechazo\n\t\t\tif len(token) != 64 {\n\t\t\t\tmotivo = \"formato de credencial inválido: no parece un token de dispositivo\"\n\t\t\t}\n\t\t\tescribirLatido(w, http.StatusUnauthorized, fleet.RespuestaLatido{OK: false, Motivo: motivo})\n\t\t\treturn\n\t\t}\n\t\tlimiter.reset(ip)\n\n\t\t// La telemetría (S4). Se lee DESPUÉS de autenticar, nunca antes: leer el cuerpo de un"
+// arnes: a="\t\t\tw.Header().Set(\"WWW-Authenticate\", \"Bearer\")\n\t\t\tmotivo := motivoRechazo\n\t\t\tif muestra, _ := fleet.NuevoToken(); len(token) != len(muestra) {\n\t\t\t\tmotivo = \"formato de credencial inválido: no parece un token de dispositivo\"\n\t\t\t}\n\t\t\tescribirLatido(w, http.StatusUnauthorized, fleet.RespuestaLatido{OK: false, Motivo: motivo})\n\t\t\treturn\n\t\t}\n\t\tlimiter.reset(ip)\n\n\t\t// La telemetría (S4). Se lee DESPUÉS de autenticar, nunca antes: leer el cuerpo de un"
 func TestElRechazoNoDiceCualExistio(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 
