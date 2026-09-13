@@ -56,6 +56,39 @@ const (
 var (
 	// rules: reglas ancladas por forma. Todas RE2 (sin lookahead).
 	rules = []rule{
+		// LA CREDENCIAL DE CASA VA PRIMERA, Y HASTA HOY ERA LA ÚNICA QUE NO TENÍA REGLA.
+		//
+		// Esta tabla cubría a AWS, GitHub, GitLab, Stripe, Anthropic, OpenAI, Google, Slack, Telegram,
+		// SendGrid, Twilio y npm — y a las de Musubi, no. Dependían del catch-all de entropía, que es
+		// PROBABILÍSTICO: un token entra sólo si su entropía de Shannon llega a 4.5.
+		//
+		// Y no llega siempre. Medido sobre 200.000 tokens generados con la forma real (32 bytes al azar
+		// → base64url sin relleno): el 0,022 % de los de dispositivo (`msbd_`, 48 chars) y el 0,045 %
+		// de los de persona (`msb_`, 47 — uno menos, y por eso el doble de tasa) quedan por DEBAJO del
+		// umbral y son invisibles acá. O sea ~1 de cada 4.500 credenciales emitidas, escrita en claro
+		// en la bitácora de comandos y devuelta cruda a quien la lea.
+		//
+		// No es hipotético: el CI cazó una con entropía 4,4647 (el umbral es 4,5) y puso roja la guarda
+		// de fleet_exec, que deriva su token del generador y por lo tanto fallaba a esa misma tasa.
+		//
+		// EL ARREGLO NO ES BAJAR EL UMBRAL: eso llenaría de [REDACTED] cualquier prosa. Es lo que el
+		// comentario de `entropyThreshold` ya dice unas líneas más arriba —«lo cortito se cubre con una
+		// REGLA POR FORMA, no acá»—, aplicado a la credencial cuya forma controlamos nosotros.
+		//
+		// El patrón cubre las dos de una: `msb_` (persona, GenerateToken) y `msbd_` (dispositivo,
+		// fleet.NuevoToken).
+		//
+		// LA CUSTODIAN DOS GUARDAS Y PRUEBAN COSAS DISTINTAS, que conviene no confundir:
+		//
+		//	TestLaCredencialPropiaLaTapaLaReglaYNoLaSuerte ... usa un cuerpo de entropía CERO, que el
+		//	                                                   catch-all no puede ver. Si queda tapado,
+		//	                                                   lo tapó ESTA regla. Es la que cae si se
+		//	                                                   la desactiva.
+		//	TestNingunaCredencialQueAcunamosAtraviesaElRedactor ... le pide el token al GENERADOR y
+		//	                                                   exige que no atraviese por ninguna de
+		//	                                                   las nueve formas reales. Ésa es la que
+		//	                                                   fallaba de a ratos antes de esta regla.
+		{"musubi-token", regexp.MustCompile(`\bmsbd?_[0-9A-Za-z_\-]{20,}`), 0},
 		{"aws-access-key", regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`), 0},
 		{"github-token", regexp.MustCompile(`\bgh[opsur]_[0-9A-Za-z]{20,}\b`), 0},
 		// GitHub personal access token FINO (github_pat_...): NO lo cubre la regla gh[opsur]_.
