@@ -433,10 +433,17 @@ func (s *McpServer) toolFleetLog(ctx context.Context, raw json.RawMessage) (inte
 			"device":     nombre,
 			"principal":  c.Principal,
 			// LA CONTRASEÑA DE PANTALLA VIAJA EN EL ARGV —tiene que llegar a la máquina de
-			// alguna forma— y esta tabla guarda el argv tal cual. Sin este ocultamiento, la
-			// bitácora entregaría contraseñas de sesión a cualquiera que pueda leerla, y la
-			// garantía G1 («Musubi nunca guarda la contraseña») se caería por la puerta de al
-			// lado: no la guardaría, pero la mostraría.
+			// alguna forma—, y MIENTRAS EL COMANDO ESPERA SER ENTREGADO la tabla la tiene en
+			// claro. Al entregarlo, `taparArgvConSecreto` (internal/memory/comandos.go) reescribe
+			// el argv guardado a `["musubi:pantalla", <sesión>, "[oculto]"]`, y
+			// `taparPantallasPendientesVencidas` hace lo mismo con las que vencen sin entregarse.
+			// Este ocultamiento cubre la ventana de antes: sin él, la bitácora mostraría la
+			// contraseña de una sesión todavía pendiente, y la garantía G1 («Musubi nunca guarda
+			// la contraseña») se caería por la puerta de al lado.
+			//
+			// (Hasta el 2026-09-13 este comentario decía que la tabla «guarda el argv tal cual», a
+			// secas. Leído así, llevó a reportar como hallazgo una contraseña guardada en claro
+			// para siempre, que el código ya tapaba al entregar.)
 			"argv":   ocultarArgvDePantalla(c.Argv),
 			"creado": c.Creado.UTC().Format(time.RFC3339),
 		}

@@ -305,19 +305,41 @@ func (s *McpServer) toolInstallSkill(raw json.RawMessage) (interface{}, *RpcErro
 			"la skill del arsenal no pasa el gate de calidad:\n%s", formatIssues(report.Errors))
 	}
 
-	// F5: sin overwrite no se pisa nada de lo que ya hay en el proyecto.
 	skillsDir := filepath.Join(s.projectPath, config.DirName, config.SkillsDir)
-	if _, serr := os.Stat(filepath.Join(skillsDir, sk.Name+".yaml")); serr == nil && !args.Overwrite {
-		return nil, rpcErrorf(codeInvalidParams,
-			"la skill %q ya existe en este proyecto; pasá overwrite=true para reemplazarla", sk.Name)
-	}
 
-	// F4: queda marcada como adoptada. SourceURL se PRESERVA — si la skill venía de un catálogo,
-	// ese enlace sigue siendo el rastro a su origen; lo que se pisa es sólo el 'source', que pasa
-	// a decir cómo llegó a ESTE proyecto.
-	sk.Source = arsenalSource
-
-	path, rerr := s.writeSkillFile(sk)
+	// ── LA SECCIÓN CRÍTICA EMPIEZA ACÁ, Y LA RED QUEDÓ ARRIBA ────────────────────────────────
+	//
+	// Esta tool declara `lockSelf` (ver su entrada en el registro), así que el despachador NO le
+	// toma el candado: lo toma ella, y sólo para el tramo que escribe. El `FetchSkill` de arriba
+	// —un POST al central, hasta el timeout de sync— queda afuera, que es el punto entero.
+	//
+	// Y EL `os.Stat` ENTRA CON LA ESCRITURA, no antes — pero NO porque hubiera una carrera vieja que
+	// arreglar. Hasta hoy no la había, y por accidente: `musubi_install_skill` no declara `readOnly`,
+	// así que el despacho le daba el candado EXCLUSIVO y serializaba la instalación entera de punta a
+	// punta —chequeo, red y escritura—, al precio de dejar el servidor trabado durante todo el
+	// `FetchSkill`.
+	//
+	// LA CARRERA LA DESTAPA ESTE CAMBIO. Al sacar la red del candado, lo que antes cubría el
+	// exclusivo hay que sostenerlo a mano: con el chequeo y la escritura en viajes distintos, dos
+	// instalaciones simultáneas pasarían las dos por «no existe» y la segunda pisaría a la primera
+	// sin `overwrite`. Es la condición donde se comprueba y no donde se escribe, que este repo ya
+	// tiene catalogada. Juntas en la misma sección crítica son atómicas, y el arreglo del cuelgue no
+	// se paga con un defecto nuevo.
+	var path string
+	var rerr *RpcError
+	s.withWriteLock(func() {
+		// F5: sin overwrite no se pisa nada de lo que ya hay en el proyecto.
+		if _, serr := os.Stat(filepath.Join(skillsDir, sk.Name+".yaml")); serr == nil && !args.Overwrite {
+			rerr = rpcErrorf(codeInvalidParams,
+				"la skill %q ya existe en este proyecto; pasá overwrite=true para reemplazarla", sk.Name)
+			return
+		}
+		// F4: queda marcada como adoptada. SourceURL se PRESERVA — si la skill venía de un catálogo,
+		// ese enlace sigue siendo el rastro a su origen; lo que se pisa es sólo el 'source', que pasa
+		// a decir cómo llegó a ESTE proyecto.
+		sk.Source = arsenalSource
+		path, rerr = s.writeSkillFile(sk)
+	})
 	if rerr != nil {
 		return nil, rerr
 	}

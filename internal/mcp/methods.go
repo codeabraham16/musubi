@@ -2696,9 +2696,22 @@ func (s *McpServer) toolListSkills(ctx context.Context, raw json.RawMessage) (in
 	// directorio no existe. Se reusa en vez de releer el disco acá: dos lecturas con criterios
 	// propios se desincronizan el día que cambie qué es una skill válida.
 	// Se cargan SIEMPRE, incluso con source=central: son las que dicen qué está ya instalado.
-	locales, err := s.resolver.LoadSkills()
-	if err != nil {
-		return nil, rpcErrorf(codeInternalError, "no se pudo leer el arsenal de skills: %v", err)
+	//
+	// ── LA ÚNICA SECCIÓN CRÍTICA, Y LA RED QUEDA AFUERA ──────────────────────────────────────
+	//
+	// Esta tool declara `lockSelf` (ver su entrada en el registro): el despachador NO le toma el
+	// candado, lo toma ella y sólo para esta lectura. El `ListArsenal` de más abajo —HTTP al cerebro,
+	// hasta el timeout de sync— queda afuera, que es el punto entero.
+	//
+	// Y LA LECTURA VA ADENTRO AUNQUE SEA DE DISCO Y NO DE LA BASE. Hasta acá el RLock del despacho la
+	// excluía de los escritores, y `writeSkillFile` —quien escribe estos mismos .yaml— toma el
+	// exclusivo. Sin este withReadLock, una instalación concurrente podría estar escribiendo un
+	// archivo mientras esto lo lee: sacar el candado no puede pagarse con eso.
+	var locales []skills.Skill
+	var lerr error
+	s.withReadLock(func() { locales, lerr = s.resolver.LoadSkills() })
+	if lerr != nil {
+		return nil, rpcErrorf(codeInternalError, "no se pudo leer el arsenal de skills: %v", lerr)
 	}
 	tengo := make(map[string]bool, len(locales))
 	for _, sk := range locales {

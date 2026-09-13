@@ -642,6 +642,22 @@ func (s *McpServer) buildRegistry() []toolEntry {
 			},
 			handler:  s.toolListSkills,
 			readOnly: true,
+			// LA RED VA AFUERA DEL CANDADO DEL DESPACHO. Con source=central o source=all este handler
+			// le pide el catálogo al cerebro por HTTP (`ListArsenal`), y lo hacía con el candado del
+			// despacho tomado: el servidor entero esperando a que conteste el central.
+			//
+			// ES LA ÚNICA DE LAS SIETE QUE DECLARA `readOnly`, o sea la única que sostenía el
+			// COMPARTIDO y no el exclusivo. No la salva: un escritor que espera bloquea también a los
+			// lectores NUEVOS, así que el servidor se frena igual — sólo que un instante después.
+			//
+			// `readOnly` NO SE TOCA. Gobierna la AUTORIZACIÓN —un principal reader puede llamarla— y
+			// eso no cambia acá; `lock` pisa el default sólo para la concurrencia.
+			//
+			// La sección crítica es una sola y es de lectura: `LoadSkills` lee el disco, y hasta ahora
+			// el RLock del despacho la excluía de los escritores. `writeSkillFile` —quien escribe esos
+			// mismos .yaml— toma el exclusivo, así que esa exclusión hay que conservarla a mano con
+			// withReadLock. Lo mide TestListarElArsenalNoCongelaElServidor.
+			lock: lockSelf,
 		},
 		{
 			Tool: Tool{
@@ -657,6 +673,15 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: noCtx(s.toolPromoteSkill),
+			// LA RED VA AFUERA DEL CANDADO DEL DESPACHO. Este handler lee las skills del DISCO y
+			// empuja la elegida al central por HTTP: no toca la base, así que no necesita acotar
+			// ninguna sección crítica con withReadLock/withWriteLock — le alcanza con que el
+			// despachador NO le tome el candado.
+			//
+			// Sin esto tomaba el EXCLUSIVO (es la única de las siete que no declara `readOnly`),
+			// así que el servidor entero quedaba sin atender a nadie durante el POST al central,
+			// hasta el timeout de sync. Lo mide TestPromoverUnaSkillNoCongelaElServidor.
+			lock: lockSelf,
 		},
 		{
 			Tool: Tool{
@@ -672,6 +697,17 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: noCtx(s.toolInstallSkill),
+			// LA RED VA AFUERA DEL CANDADO DEL DESPACHO. Este handler baja la skill del central por
+			// HTTP (`FetchSkill`) y recién después escribe: el fetch no puede sostener el candado.
+			//
+			// Y lo que sostenía era el EXCLUSIVO: no declara `readOnly`, así que el despacho tomaba
+			// Lock y no RLock. El servidor entero quedaba serializado hasta el timeout de sync.
+			//
+			// A DIFERENCIA DE promote_skill, ÉSTA SÍ TOCA LA BASE —`writeSkillFile` estampa el
+			// fingerprint del stack con `SetMeta`— así que no alcanza con declarar la clase: el
+			// handler acota su propia sección crítica con withWriteLock, y mete adentro el chequeo de
+			// existencia junto con la escritura. Lo mide TestInstalarUnaSkillNoCongelaElServidor.
+			lock: lockSelf,
 		},
 		{
 			Tool: Tool{
