@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -66,24 +67,47 @@ type precheckInput struct {
 	SessionID string `json:"session_id"`
 }
 
+// leerEventoPrecheck lee y decodifica el evento de stdin, y dice si al hook le toca actuar.
+//
+// ES LA ÚNICA DECISIÓN, Y VIVE EN UN SOLO LUGAR. La usan runPrecheck (antes de abrir la base) y
+// precheckOutput (los tests y quien ya tenga un store). Si cada uno tuviera su copia, la del
+// binario podría dejar pasar una tool que la de adentro descarta —y volveríamos a pagar la
+// apertura para no decir nada—, o al revés, callar una que adentro sí tenía mensaje.
+func leerEventoPrecheck(stdin io.Reader) (precheckInput, bool) {
+	var in precheckInput
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		return in, false
+	}
+	if err := json.Unmarshal(data, &in); err != nil {
+		return in, false
+	}
+	return in, precheckAplica(in)
+}
+
+// precheckAplica: el hook sólo tiene algo que decir antes de LEER o de EDITAR un archivo nombrado.
+func precheckAplica(in precheckInput) bool {
+	if in.ToolInput.FilePath == "" {
+		return false
+	}
+	return in.ToolName == "Read" || esEdicion(in.ToolName)
+}
+
 // precheckOutput arma el additionalContext del hook PreToolUse para una lectura.
 // Devuelve "" (silencioso) si no aplica.
 func precheckOutput(store codeStore, root string, stdin io.Reader) string {
 	if store == nil {
 		return ""
 	}
-	data, err := io.ReadAll(stdin)
-	if err != nil {
+	in, aplica := leerEventoPrecheck(stdin)
+	if !aplica {
 		return ""
 	}
-	var in precheckInput
-	if err := json.Unmarshal(data, &in); err != nil {
-		return ""
-	}
-	if in.ToolInput.FilePath == "" {
-		return ""
-	}
+	return precheckParaEvento(store, root, in)
+}
 
+// precheckParaEvento arma el contexto de un evento que YA se decidió que aplica.
+func precheckParaEvento(store codeStore, root string, in precheckInput) string {
 	path := in.ToolInput.FilePath
 	key := memory.NormalizeCodePath(root, path)
 
@@ -267,7 +291,7 @@ func codeGraphMessage(store codeStore, root, key string) string {
 		}
 	}
 
-	shown := 0
+	shown, sinCallers := 0, 0
 	for _, n := range nodes {
 		if n.Kind != codeintel.KindFunc && n.Kind != codeintel.KindMethod {
 			continue
@@ -277,10 +301,20 @@ func codeGraphMessage(store codeStore, root, key string) string {
 			break
 		}
 		callees := graphRefNames(store, ctx, n.Key, true)
-		callers := graphRefNames(store, ctx, n.Key, false)
+		callers := joinCapped(graphRefNames(store, ctx, n.Key, false), maxGraphRefs)
+		// «← lo llaman: —» se leía como «nadie lo llama». Ver ceroLlamadasDirectas.
+		if callers == "" {
+			callers = ceroLlamadasDirectas
+			sinCallers++
+		}
 		fmt.Fprintf(&b, "\n- %s → llama a: %s | ← lo llaman: %s",
-			n.Name, noneIfEmpty(joinCapped(callees, maxGraphRefs)), noneIfEmpty(joinCapped(callers, maxGraphRefs)))
+			n.Name, noneIfEmpty(joinCapped(callees, maxGraphRefs)), callers)
 		shown++
+	}
+	// La reserva va UNA vez y sólo si algún símbolo salió en cero: repetirla en cada renglón
+	// multiplicaría el costo de CADA Read por la cantidad de símbolos del archivo.
+	if sinCallers > 0 {
+		b.WriteString("\nNota: " + cegueraDelGrafo + ", así que «" + ceroLlamadasDirectas + "» no quiere decir que nadie lo use.")
 	}
 	b.WriteString("\nProfundizá con musubi_code_graph / musubi_impact / musubi_code_context.")
 	return b.String()
@@ -309,10 +343,10 @@ func esEdicion(tool string) bool {
 // tienen quien los llame, cuántos son de forma directa y cuántos arrastrando el cierre transitivo.
 // "" si el archivo no está en el grafo — inerte hasta que se indexe, igual que codeGraphMessage.
 //
-// El caso "ningún símbolo tiene callers" NO devuelve vacío: que un archivo esté aislado es
-// justamente lo que uno quiere saber antes de cambiarlo, y cuesta una línea decirlo. Callar ahí
-// sería confundir "no hay riesgo" con "no sé", que es la distinción que el resto de esta memoria
-// se toma el trabajo de mantener.
+// El caso "ningún símbolo tiene llamadas DIRECTAS en el grafo" NO devuelve vacío: cuesta una línea
+// decirlo, y callar ahí sería confundir "no hay riesgo" con "no sé". Pero tampoco afirma que el
+// archivo esté aislado: el grafo no ve llamadas por interfaz ni métodos pasados como valor (ver
+// ceroLlamadasDirectas), así que lo que dice es lo que vio, no lo que no existe.
 // avisoSinGrafo dice, ANTES DE EDITAR, que el radio de impacto no se pudo mirar.
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════
@@ -373,6 +407,24 @@ func avisoSinGrafo(store codeStore, key, sessionID string) string {
 		"tomá mi silencio en los demás archivos de este tipo como «no sé», nunca como «no arrastra a nadie».", key, motor))
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// LO QUE EL GRAFO VE SON LLAMADAS DIRECTAS, Y TODO MENSAJE QUE CUENTE CALLERS LO DICE ASÍ
+//
+// El hook afirmaba «Ningún símbolo tiene callers en el grafo, y su huella coincide con el disco:
+// tocarlo no arrastra a nadie conocido», y en la lectura ponía «← lo llaman: —». Las dos se leen
+// como «nadie usa esto», y el grafo no puede saberlo: sólo registra llamadas DIRECTAS. Medido el
+// 2026-09-13 sobre este repo: DbEngine.ListGraphNodesForFileCtx figuraba con callers [] y tiene 5
+// llamadas reales, 4 de ellas por interfaz (s.engine es memory.StorageBackend en
+// internal/mcp/server.go); McpServer.toolCodeGraph, registrado como VALOR, también figuraba con
+// callers []. O sea que la afirmación era falsa aun con el grafo al día —el único caso en que se
+// daba permiso de hacerla— y en la dirección que duele: justo antes de cambiar una firma.
+//
+// Las dos frases viven acá para que la lectura y la edición digan lo mismo con las mismas palabras.
+const (
+	ceroLlamadasDirectas = "0 llamadas DIRECTAS vistas por el grafo"
+	cegueraDelGrafo      = "el grafo no ve llamadas por interfaz ni métodos pasados como valor"
+)
+
 func impactMessage(store codeStore, root, key, sessionID string) string {
 	ctx := context.Background()
 	nodes, err := store.ListGraphNodesForFileCtx(ctx, key)
@@ -382,11 +434,11 @@ func impactMessage(store codeStore, root, key, sessionID string) string {
 	if len(nodes) == 0 {
 		return avisoSinGrafo(store, key, sessionID)
 	}
-	// ACÁ LA FRESCURA PESA MÁS QUE EN LA LECTURA, porque el mensaje no describe: TRANQUILIZA.
-	// «Ningún símbolo tiene callers: tocarlo no arrastra a nadie conocido» es una afirmación de
-	// seguridad, y sobre un grafo viejo es falsa en la dirección que duele — el caller nuevo es
-	// exactamente el que el grafo todavía no vio. Y esto corre antes de CADA edición, o sea en el
-	// momento en que alguien va a decidir si mira quién depende de lo que está por cambiar.
+	// ACÁ LA FRESCURA PESA MÁS QUE EN LA LECTURA, porque este mensaje se lee para decidir si mirar
+	// quién depende de lo que se está por cambiar. Sobre un grafo viejo el caller nuevo es
+	// exactamente el que el grafo todavía no vio; y aun al día, el grafo no ve los que llaman por
+	// interfaz o reciben el método como valor (ver ceroLlamadasDirectas). Esto corre antes de CADA
+	// edición.
 	frescura := medirFrescura(root, key, nodes)
 	reserva := ""
 	switch frescura {
@@ -420,14 +472,18 @@ func impactMessage(store codeStore, root, key, sessionID string) string {
 		return ""
 	}
 	if len(conectados) == 0 {
-		// La versión al día afirma; las otras dos dicen lo que saben y lo que no. La diferencia
-		// entre «no arrastra a nadie» y «el grafo no conoce a nadie, y está viejo» es toda.
+		// Ninguna de las dos versiones tranquiliza: la al día dice que la huella coincide —que es
+		// cierto y es lo único que sabe de más— y la vieja además dice que no sabe. La versión al
+		// día afirmaba «tocarlo no arrastra a nadie conocido», y eso el grafo no lo puede saber
+		// nunca (ver ceroLlamadasDirectas).
 		if frescura == grafoAlDia {
-			return fmt.Sprintf("[Musubi — radio de impacto] Ningún símbolo de «%s» tiene callers en el grafo, "+
-				"y su huella coincide con el disco: tocarlo no arrastra a nadie conocido.", key)
+			return fmt.Sprintf("[Musubi — radio de impacto] Los símbolos de «%s» tienen %s, y su huella coincide con el disco. "+
+				"Eso NO es «no arrastra a nadie»: %s. Si implementa una interfaz o se registra como handler, "+
+				"buscá esos usos antes de cambiar una firma.", key, ceroLlamadasDirectas, cegueraDelGrafo)
 		}
-		return fmt.Sprintf("[Musubi — radio de impacto] Ningún símbolo de «%s» tiene callers EN EL GRAFO%s. "+
-			"No lo leas como «no arrastra a nadie»: leelo como «el grafo no sabe».", key, reserva)
+		return fmt.Sprintf("[Musubi — radio de impacto] Los símbolos de «%s» tienen %s%s. "+
+			"No lo leas como «no arrastra a nadie»: %s, y además no sé si está al día; leelo como «el grafo no sabe».",
+			key, ceroLlamadasDirectas, reserva, cegueraDelGrafo)
 	}
 
 	// Ordena por callers DE PRODUCCIÓN, no por callers a secas. Medido sobre este mismo repo: los
@@ -462,6 +518,9 @@ func impactMessage(store codeStore, root, key, sessionID string) string {
 	if resto := len(conectados) - len(mostrados); resto > 0 {
 		fmt.Fprintf(&b, "\n(+%d símbolo(s) más con callers)", resto)
 	}
+	// Los símbolos que no aparecen en la lista son los de 0 llamadas directas, y la omisión se lee
+	// igual que «nadie los usa». Una línea, no una por símbolo.
+	b.WriteString("\nSon llamadas DIRECTAS: " + cegueraDelGrafo + ", así que un símbolo que no figura acá puede tener callers igual.")
 	b.WriteString("\nSi vas a cambiar una FIRMA, pedí el cierre completo con musubi_impact (symbol='" +
 		mostrados[0].clave + "').")
 	return b.String()
@@ -662,9 +721,55 @@ func preEnvelope(ctx string) string {
 	return string(datos)
 }
 
+// storeDelHook es el codeStore que el binario abre y tiene que cerrar.
+type storeDelHook interface {
+	codeStore
+	Close() error
+}
+
+// abridorDelHook abre la memoria del proyecto. Es un parámetro para que la prueba pueda poner un
+// abridor que DEJA RASTRO (crea .musubi) y así ver desde afuera si el hook abrió o no.
+type abridorDelHook func(root string) (storeDelHook, error)
+
+// abrirMemoriaDelHook abre la base SIN el trabajo de arranque de NewDbEngine: ni crea la base, ni
+// migra, ni backfillea, ni siembra el outbox, ni entrena el índice vectorial (y Close ya no espera
+// a esa goroutine). Sí escribe, porque el ledger de las superficies precheck_* es una escritura:
+// por eso NO es NewDbEngineSoloLectura. El porqué completo está en internal/memory/sin_arranque.go.
+func abrirMemoriaDelHook(root string) (storeDelHook, error) {
+	eng, err := memory.NewDbEngineSinArranque(root)
+	if err != nil {
+		return nil, err // nunca un *DbEngine nil adentro de una interfaz no-nil
+	}
+	return eng, nil
+}
+
+// precheckHook es el cuerpo de `musubi precheck --hook-mode`, con sus entradas explícitas.
+//
+// PRIMERO DECIDE, DESPUÉS ABRE. Antes abría la base y recién adentro leía stdin, así que un
+// evento que no le tocaba —un Bash, un Grep, cualquier tool sin file_path— pagaba la apertura
+// completa (y, con un matcher más ancho, la pagaría en cada tool de la sesión) para devolver "".
+// Sabotaje: mover la apertura antes de leerEventoPrecheck → TestPrecheckNoAbreLaBaseSiNoLeToca.
+func precheckHook(root string, stdin io.Reader, abrir abridorDelHook, stderr io.Writer) string {
+	in, aplica := leerEventoPrecheck(stdin)
+	if !aplica {
+		return ""
+	}
+	store, err := abrir(root)
+	if err != nil {
+		// Sin base no hay nada que avisar: el proyecto no usa Musubi, y un renglón en stderr por
+		// cada Read sería ruido. Cualquier otro error sí se dice, como antes.
+		if !errors.Is(err, memory.ErrBaseAusente) {
+			fmt.Fprintf(stderr, "musubi precheck: memoria no disponible: %v\n", err)
+		}
+		return ""
+	}
+	defer store.Close()
+	return precheckParaEvento(store, root, in)
+}
+
 // runPrecheck implementa 'musubi precheck [--hook-mode]'. Sin --hook-mode es no-op.
-// En hook-mode lee stdin, abre la memoria (best-effort) y escribe el envelope en
-// stdout. Errores no fatales van a stderr y sale 0 para no romper la lectura.
+// En hook-mode lee stdin, decide si le toca, abre la memoria (best-effort) y escribe el envelope
+// en stdout. Errores no fatales van a stderr y sale 0 para no romper la lectura.
 func runPrecheck() {
 	hookMode := false
 	for _, arg := range os.Args[2:] {
@@ -675,16 +780,7 @@ func runPrecheck() {
 	if !hookMode {
 		return
 	}
-
-	root := workspaceDir()
-	engine, err := memory.NewDbEngine(root)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "musubi precheck: memoria no disponible: %v\n", err)
-		os.Exit(0)
-	}
-	defer engine.Close()
-
-	if out := precheckOutput(engine, root, os.Stdin); out != "" {
+	if out := precheckHook(workspaceDir(), os.Stdin, abrirMemoriaDelHook, os.Stderr); out != "" {
 		fmt.Println(out)
 	}
 }

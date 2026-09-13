@@ -125,6 +125,18 @@ func configPresente(projectPath string) bool {
 	return err == nil
 }
 
+// dsnEscribible es el DSN de TODO engine que escribe: NewDbEngine y NewDbEngineSinArranque salen de
+// acá. Vive en un solo lugar porque hubo dos copias del literal y nada las ataba: sacarle
+// `_txlock=immediate&_pragma=busy_timeout(5000)` a la del hook dejaba todas las suites verdes, y el
+// ledger del hook —que escribe mientras el daemon escribe— perdía la escritura al instante con
+// «database is locked», callado detrás del `_, _ = LedgerAdd` de precheck.go. El porqué de cada
+// pragma está en el comentario largo de NewDbEngine; el engine de sólo lectura tiene el suyo y a
+// propósito no usa éste. Sabotaje: sacar `busy_timeout(5000)` de acá →
+// TestSinArranqueElLedgerEsperaAlOtroEscritor (sin_arranque_test.go), además de X3.
+func dsnEscribible(dbPath string) string {
+	return dbPath + "?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
+}
+
 func NewDbEngine(projectPath string) (*DbEngine, error) {
 	dbPath := filepath.Join(projectPath, config.DirName, config.DBFile)
 
@@ -186,7 +198,7 @@ func NewDbEngine(projectPath string) (*DbEngine, error) {
 	//    la regla es abrirla lo más tarde posible**, y no al principio de la función por costumbre.
 	//
 	// El engine de sólo lectura (solo_lectura.go) tiene su propio DSN y a propósito no lo lleva.
-	dsn := dbPath + "?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
+	dsn := dsnEscribible(dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("error al abrir la base de datos: %w", err)
