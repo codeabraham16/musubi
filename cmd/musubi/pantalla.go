@@ -16,8 +16,13 @@ package main
 //
 // Con el temporizador local, lo peor que puede pasar es que el AGENTE muera; y si el agente
 // muere, se lleva el temporizador y la contraseña queda... puesta. Por eso el reemplazo también
-// se intenta al arrancar (ver `cerrarSesionesColgadas`): un agente que vuelve no hereda una
-// sesión abierta de su encarnación anterior.
+// se intenta al arrancar (ver `cerrarSesionColgadaDeArranque`, llamada desde el arranque del
+// agente): un agente que vuelve no hereda una sesión abierta de su encarnación anterior.
+//
+// (Este comentario nombraba `cerrarSesionesColgadas`, una función que ya no existe. Se encontró el
+// 2026-09-13 verificando si una contraseña de pantalla filtrada en un transcripto seguía sirviendo:
+// la red de seguridad que prometía había que ir a buscarla con otro nombre, y un lector que
+// confiara en el comentario habría concluido que no existía.)
 // ────────────────────────────────────────────────────────────────────────────────────────────
 
 import (
