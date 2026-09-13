@@ -102,11 +102,11 @@ func (e *DbEngine) CodeGraphViz(ctx context.Context, limit int) (CodeGraphViz, e
 	if limit == 0 {
 		limit = defaultCodeVizLimit
 	}
-	nodes, err := e.listAllGraphNodes(ctx)
+	nodes, err := e.listAllGraphNodes(ctx, e.db)
 	if err != nil {
 		return CodeGraphViz{}, err
 	}
-	edges, err := e.listAllGraphEdges(ctx)
+	edges, err := e.listAllGraphEdges(ctx, e.db)
 	if err != nil {
 		return CodeGraphViz{}, err
 	}
@@ -193,12 +193,12 @@ func codeModuleOf(n GraphNode) string {
 
 // listAllGraphNodes vuelca TODOS los nodos del grafo de código, scopeado por la credencial (ctx).
 // Es el análogo "grafo completo" que faltaba (las otras lecturas son per-símbolo/agregadas).
-func (e *DbEngine) listAllGraphNodes(ctx context.Context) ([]GraphNode, error) {
+func (e *DbEngine) listAllGraphNodes(ctx context.Context, db consultor) ([]GraphNode, error) {
 	sc := projectScopeFrom(ctx)
 	clause, args := sc.scopeClause("")
 	q := `SELECT node_key, kind, name, path, start_line, end_line, external, COALESCE(src_fingerprint,'')
 	      FROM code_graph_nodes WHERE 1=1` + clause + ` ORDER BY node_key`
-	rows, err := e.db.QueryContext(ctx, q, args...)
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -217,12 +217,12 @@ func (e *DbEngine) listAllGraphNodes(ctx context.Context) ([]GraphNode, error) {
 }
 
 // listAllGraphEdges vuelca TODAS las aristas del grafo de código, scopeado por la credencial (ctx).
-func (e *DbEngine) listAllGraphEdges(ctx context.Context) ([]GraphEdge, error) {
+func (e *DbEngine) listAllGraphEdges(ctx context.Context, db consultor) ([]GraphEdge, error) {
 	sc := projectScopeFrom(ctx)
 	clause, args := sc.scopeClause("")
 	q := `SELECT from_key, to_key, kind, COALESCE(confidence,0), COALESCE(provenance,''), src_path, COALESCE(src_fingerprint,'')
 	      FROM code_graph_edges WHERE 1=1` + clause + ` ORDER BY kind, from_key, to_key`
-	rows, err := e.db.QueryContext(ctx, q, args...)
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -242,11 +242,11 @@ func (e *DbEngine) listAllGraphEdges(ctx context.Context) ([]GraphEdge, error) {
 // credencial) para el push-on-index de la federación (Track 20 · F6): envuelven los volcados
 // internos ya existentes con un nombre exportado que la capa MCP puede llamar por la interfaz.
 func (e *DbEngine) AllGraphNodesCtx(ctx context.Context) ([]GraphNode, error) {
-	return e.listAllGraphNodes(ctx)
+	return e.listAllGraphNodes(ctx, e.db)
 }
 
 func (e *DbEngine) AllGraphEdgesCtx(ctx context.Context) ([]GraphEdge, error) {
-	return e.listAllGraphEdges(ctx)
+	return e.listAllGraphEdges(ctx, e.db)
 }
 
 // ExplainedBy deriva el weld código→memoria de UN símbolo (Track 20 · F3): busca por FTS las

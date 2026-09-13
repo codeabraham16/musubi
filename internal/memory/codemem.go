@@ -106,12 +106,18 @@ func (e *DbEngine) GetCodeMemoryCtx(ctx context.Context, path string) (CodeMemor
 // ganó el correcto, pero por casualidad: bastaba un VACUUM o un plan de consulta distinto para
 // federar el gist rancio. Un empate que se resuelve solo hoy es un bug que aparece mañana.
 func (e *DbEngine) AllCodeMemoryCtx(ctx context.Context) ([]CodeMemory, error) {
+	return e.allCodeMemory(ctx, e.db)
+}
+
+// allCodeMemory es el cuerpo de AllCodeMemoryCtx contra cualquier consultor: la base o una
+// transacción de lectura (FotoDelGrafoCtx necesita los gists en la MISMA foto que el grafo).
+func (e *DbEngine) allCodeMemory(ctx context.Context, db consultor) ([]CodeMemory, error) {
 	sc := projectScopeFrom(ctx)
 	var rows *sql.Rows
 	var err error
 	if sc.Federate || sc.ProjectID == "" {
 		// Sin scope no hay proyecto que preferir: se desempata por el más recientemente tocado.
-		rows, err = e.db.QueryContext(ctx,
+		rows, err = db.QueryContext(ctx,
 			`SELECT path, gist, symbols, fingerprint, tokens FROM (
 			   SELECT path, gist, COALESCE(symbols,'') AS symbols,
 			          COALESCE(fingerprint,'') AS fingerprint, tokens,
@@ -119,7 +125,7 @@ func (e *DbEngine) AllCodeMemoryCtx(ctx context.Context) ([]CodeMemory, error) {
 			   FROM code_memory
 			 ) WHERE rn = 1 ORDER BY path`)
 	} else {
-		rows, err = e.db.QueryContext(ctx,
+		rows, err = db.QueryContext(ctx,
 			`SELECT path, gist, symbols, fingerprint, tokens FROM (
 			   SELECT path, gist, COALESCE(symbols,'') AS symbols,
 			          COALESCE(fingerprint,'') AS fingerprint, tokens,
