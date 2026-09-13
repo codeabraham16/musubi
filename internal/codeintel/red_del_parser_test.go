@@ -38,6 +38,7 @@ import (
 // `ok ... [no tests to run]` con exit 0 — y eso NO es un verde, es que no se midió nada.
 // Sabotaje que la pone roja: angostar la red POR TIPO y repanicar lo que no sea string.
 // arnes: archivo="internal/codeintel/treesit_on.go"
+// arnes: tags="treesitter grammar_subset grammar_subset_typescript grammar_subset_tsx grammar_subset_javascript grammar_subset_python"
 //
 // POR QUÉ EL LITERAL ES TAN LARGO. Desde #491 este archivo tiene DOS redes: ésta y la de
 // `languageFor`, que atrapa el pánico al CARGAR la gramática. Las dos abren con la misma línea

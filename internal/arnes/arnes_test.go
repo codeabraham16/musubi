@@ -660,3 +660,86 @@ func TestUnaDirectivaSinAnclaSeDenunciaYNoSePierde(t *testing.T) {
 		}
 	})
 }
+
+// ── 11 · `tags` Y `env`: EL ENTORNO QUE LA PRUEBA NECESITA PARA EXISTIR ───────────────────────
+//
+// Sin estas dos claves el corredor sólo sabe correr `go test` PELADO, y una prueba detrás de un
+// build tag o de un `t.Skip(os.Getenv(X) == "")` sale «sin veredicto». Medido el 2026-09-12 sobre
+// el árbol entero: 85 corridas y 2 sin veredicto, las dos por eso. Ninguna era un hueco —las
+// verifiqué a mano— pero verificar a mano no escala y lo que se mide a mano se deja de medir.
+//
+// LO QUE SE EXIGE ACÁ NO ES QUE FUNCIONEN: ES QUE UN ERROR DE ESCRITURA NO SE VUELVA SILENCIO.
+// `tags="tree!sitter"` se lo come el toolchain, y `env="FOO=/x"` —la confusión natural, porque
+// parece que fuera a SETEARLA— nunca va a estar, así que la directiva diagnosticaría «falta
+// FOO=/x» para siempre. Las dos terminan en «sin veredicto», o sea en el desenlace exacto que
+// estas claves existen para sacar: el defecto se disfraza de la enfermedad que cura.
+//
+// Sabotaje que la hace fallar: en `directivaDe`, sacar el bucle que valida `d.Env` —el
+// `for _, e := range d.Env`— y con él la queja de `env`.
+// arnes: archivo="internal/arnes/arnes.go"
+// arnes: de="\t\tif !esNombreDeVariable(e) {"
+// arnes: a="\t\tif false {"
+// arnes: arreglo_de="\t\tif !esNombreDeVariable(e) {"
+// arnes: arreglo_a="\t\tif !esIdentificadorDeBuild(e) {"
+func TestTagsYEnvSeLeenYUnErrorDeEscrituraNoSeVuelveSilencio(t *testing.T) {
+	leer := func(pares ...string) (*Directiva, []string) {
+		lineas := []lineaCom{{linea: 1, texto: "Sabotaje: X", cruda: " Sabotaje: X"}}
+		for i, p := range pares {
+			lineas = append(lineas, lineaCom{linea: i + 2, texto: "arnes: " + p, cruda: " arnes: " + p})
+		}
+		d, _, quejas := directivaDe(lineas, "internal/x/x_test.go", "TestX")
+		return d, quejas
+	}
+	base := []string{`archivo="x.go"`, `de="viejo"`, `a="nuevo"`}
+	con := func(extra ...string) (*Directiva, []string) {
+		return leer(append(append([]string{}, base...), extra...)...)
+	}
+
+	t.Run("los tags se separan por espacios y viajan como lista de GOFLAGS", func(t *testing.T) {
+		// Se escriben como se escriben en la línea de comandos (`-tags 'a b'`) y se guardan como
+		// los quiere GOFLAGS (`-tags=a,b`). Traducir acá es lo que evita que cada sitio de uso
+		// invente su propia conversión.
+		d, quejas := con(`tags="treesitter grammar_subset"`)
+		if len(quejas) > 0 {
+			t.Fatalf("tags bien escritos se quejaron: %v", quejas)
+		}
+		if d.Tags != "treesitter,grammar_subset" {
+			t.Errorf("Tags = %q, esperaba %q", d.Tags, "treesitter,grammar_subset")
+		}
+	})
+
+	t.Run("env declara NOMBRES, y un `NOMBRE=valor` se denuncia", func(t *testing.T) {
+		d, quejas := con(`env="MUSUBI_SPM_TESTDATA OTRA"`)
+		if len(quejas) > 0 {
+			t.Fatalf("env bien escrito se quejó: %v", quejas)
+		}
+		if len(d.Env) != 2 || d.Env[0] != "MUSUBI_SPM_TESTDATA" || d.Env[1] != "OTRA" {
+			t.Errorf("Env = %v, esperaba [MUSUBI_SPM_TESTDATA OTRA]", d.Env)
+		}
+		// LA MITAD QUE IMPORTA: escribirle un valor tiene que ser un rojo del censo, no un
+		// diagnóstico eterno de «falta FOO=/x».
+		_, quejas = con(`env="FOO=/x"`)
+		if len(quejas) == 0 {
+			t.Error("`env=\"FOO=/x\"` pasó sin queja: esa directiva no mediría NUNCA, " +
+				"y su «sin veredicto» se leería como un límite de la herramienta")
+		}
+	})
+
+	t.Run("un tag que el toolchain rechaza se denuncia acá, no noventa segundos después", func(t *testing.T) {
+		if _, quejas := con(`tags="tree!sitter"`); len(quejas) == 0 {
+			t.Error("un tag con `!` pasó sin queja: el toolchain lo rechaza en medio de la corrida")
+		}
+	})
+
+	t.Run("CONTROL: sin declarar ninguna de las dos, la directiva sigue siendo válida", func(t *testing.T) {
+		// Las 83 directivas que no necesitan entorno no tienen que escribir nada. Si esto se
+		// pusiera rojo, la guarda estaría exigiendo las claves nuevas en todo el árbol.
+		d, quejas := con()
+		if len(quejas) > 0 {
+			t.Fatalf("una directiva sin `tags` ni `env` se quejó: %v", quejas)
+		}
+		if d.Tags != "" || len(d.Env) != 0 {
+			t.Errorf("sin declarar nada quedó Tags=%q Env=%v", d.Tags, d.Env)
+		}
+	})
+}

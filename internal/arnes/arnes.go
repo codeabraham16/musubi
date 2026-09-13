@@ -191,6 +191,23 @@ type Directiva struct {
 	// —premia el defecto y manda a sacar la línea buena—, que es peor que no mirar.
 	ArregloDe string
 	ArregloA  string
+
+	// Tags y Env SON EL ENTORNO QUE LA PRUEBA NECESITA PARA EXISTIR, declarado por quien lo sabe.
+	//
+	// El corredor corre `go test` PELADO, así que una prueba detrás de `//go:build treesitter` o
+	// detrás de un `t.Skip(os.Getenv(...) == "")` no contesta: sale «sin veredicto». Eso es
+	// honesto —no es un verde— pero deja al que lee el informe con dos ciegas que tiene que ir a
+	// medir a mano, y lo que se mide a mano se deja de medir.
+	//
+	// Tags se traduce a `GOFLAGS=-tags=…`, que alcanza al `go vet` Y al `go test` de dentro de
+	// `sabotaje.sh` sin tocar el guion.
+	//
+	// Env NO trae valores: sólo NOMBRES de variables que la prueba necesita. El valor es del
+	// entorno de quien corre —una ruta a un asset es distinta en cada máquina y clavarla acá
+	// sería una copia—. Lo que compra es el DIAGNÓSTICO: sin esto, una prueba salteada se ve como
+	// «el control salió en verde sin ejecutar UNA SOLA prueba», que suena a ancla rota.
+	Tags string
+	Env  []string
 }
 
 // Censo es lo que el árbol declara, contado.
@@ -728,6 +745,8 @@ func directivaDe(lineas []lineaCom, rel, pruebaDerivada string) (*Directiva, str
 		Prueba:    campos["prueba"],
 		ArregloDe: campos["arreglo_de"],
 		ArregloA:  campos["arreglo_a"],
+		Tags:      strings.Join(strings.Fields(campos["tags"]), ","),
+		Env:       strings.Fields(campos["env"]),
 	}
 	if d.Prueba == "" {
 		d.Prueba = pruebaDerivada
@@ -753,6 +772,26 @@ func directivaDe(lineas []lineaCom, rel, pruebaDerivada string) (*Directiva, str
 	if d.De != "" && d.De == d.A {
 		quejas = append(quejas, "`de` y `a` son iguales: el sabotaje no cambiaría nada y su verde diría "+
 			"«no lo apliqué», no «la guarda no cubre»")
+	}
+	// UN `tags` O UN `env` MAL ESCRITO NO FALLA: NO HACE NADA, que es peor.
+	//
+	// `GOFLAGS=-tags=treesitter!` lo rechaza el toolchain con un error que sale por el medio de la
+	// salida del sabotaje; y un nombre de variable con un typo nunca va a estar seteado, así que
+	// la directiva diagnosticaría «falta FOO_TYPO» para siempre y nadie mediría nada. Las dos
+	// terminan en «sin veredicto» —el mismo desenlace que estas claves existen para sacar—, así
+	// que la forma se exige acá, barato y en CI.
+	for _, t := range strings.Split(d.Tags, ",") {
+		if t != "" && !esIdentificadorDeBuild(t) {
+			quejas = append(quejas, fmt.Sprintf("`tags` trae %q, que no es un tag de build: "+
+				"van separados por espacios y sólo con letras, dígitos y `_`", t))
+		}
+	}
+	for _, e := range d.Env {
+		if !esNombreDeVariable(e) {
+			quejas = append(quejas, fmt.Sprintf("`env` trae %q, que no es un nombre de variable: "+
+				"`env` declara NOMBRES separados por espacios, no `NOMBRE=valor` — el valor es del "+
+				"entorno de quien corre", e))
+		}
 	}
 	if len(quejas) > 0 {
 		return d, "", quejas
@@ -825,7 +864,23 @@ func camposDe(payload string) (map[string]string, []string) {
 	return campos, quejas
 }
 
-var clavesValidas = []string{"archivo", "de", "a", "paquete", "prueba", "arreglo_de", "arreglo_a", "no_mecanizable"}
+var clavesValidas = []string{"archivo", "de", "a", "paquete", "prueba", "arreglo_de", "arreglo_a", "no_mecanizable", "tags", "env"}
+
+// esIdentificadorDeBuild dice si `t` puede ser un tag de build de Go.
+func esIdentificadorDeBuild(t string) bool {
+	for i, r := range t {
+		esLetra := r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		if esLetra || (i > 0 && r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return t != ""
+}
+
+// esNombreDeVariable dice si `e` es un nombre de variable de entorno y NO un `NOMBRE=valor`: la
+// confusión es la que hay que atajar, porque un `env="FOO=/x"` parece que fuera a setearla.
+func esNombreDeVariable(e string) bool { return esIdentificadorDeBuild(e) }
 
 func claveConocida(k string) bool {
 	for _, v := range clavesValidas {

@@ -668,6 +668,12 @@ func contraOverlay(raiz string, c arnes.Censo, soloPaquete string, limite int) i
 
 		cmd := exec.Command("go", "test", "-count=1", "-overlay", mapa, d.Paquete, "-run", "^"+d.Prueba+"$")
 		cmd.Dir = raiz
+		// El MISMO entorno que el corredor de disco: si no, los dos caminos miden árboles distintos
+		// y el contraste overlay-vs-disco —que existe para cazar rojos que dependen del disco—
+		// pasaría a decir «bajo overlay no compila» por una razón que no tiene nada que ver.
+		if d.Tags != "" {
+			cmd.Env = append(os.Environ(), "GOFLAGS=-tags="+d.Tags)
+		}
 		salida, err := cmd.CombinedOutput()
 		switch {
 		case err != nil && strings.Contains(string(salida), "--- FAIL"):
@@ -911,8 +917,29 @@ func correrTodos(raiz string, c arnes.Censo, soloPaquete string, limite int) int
 			args = append(args, cmdArr)
 		}
 
+		// EL ENTORNO QUE LA DIRECTIVA DECLARA. Ver `Directiva.Tags` / `.Env`.
+		//
+		// Faltando una variable declarada NO se corre: la prueba haría `t.Skip`, `go test` saldría
+		// con 0 sin un solo `--- PASS`, y el diagnóstico que llega es «el control salió en verde
+		// sin ejecutar UNA SOLA prueba» — cierto, y suena a ancla rota. Decir la causa acá cuesta
+		// una comparación y evita que alguien vaya a arreglar una directiva que está bien.
+		if faltan := variablesQueFaltan(d.Env); len(faltan) > 0 {
+			fmt.Printf("   ✗ NO SE MIDIÓ: la directiva declara que esta prueba necesita %s, y no está "+
+				"en este entorno.\n", strings.Join(faltan, ", "))
+			fmt.Println("     No es un ancla rota ni un verde: es que sin eso la prueba hace `t.Skip` y")
+			fmt.Println("     `go test` sale 0 sin un solo `--- PASS`. Seteala y volvé a correr.")
+			errores++
+			continue
+		}
+
 		cmd := exec.Command(guion, args...)
 		cmd.Dir = raiz
+		if d.Tags != "" {
+			// GOFLAGS y no un argumento nuevo del guion: alcanza al `go vet` Y a los tres `go test`
+			// que `sabotaje.sh` corre adentro, sin que el guion tenga que enterarse. Go se queda
+			// con la ÚLTIMA de las claves repetidas, así que esto pisa un GOFLAGS heredado.
+			cmd.Env = append(os.Environ(), "GOFLAGS=-tags="+d.Tags)
+		}
 		salida, err := cmd.CombinedOutput()
 		for _, l := range strings.Split(strings.TrimRight(string(salida), "\n"), "\n") {
 			fmt.Println("   " + l)
@@ -946,10 +973,12 @@ func correrTodos(raiz string, c arnes.Censo, soloPaquete string, limite int) int
 			// files» se lee como «te equivocaste de nombre»; la verdad es «este árbol no compila
 			// esa prueba». Es la diferencia entre un límite declarado y un error aparente, y si la
 			// primera frase entra a un informe alguien va a ir a arreglar el ancla que está bien.
-			if strings.Contains(string(salida), "NO SELECCIONA NINGUNA PRUEBA") {
-				fmt.Println("   → OJO CON LA CAUSA: este arnés corre SIN BUILD TAGS. Si la prueba vive detrás")
-				fmt.Println("     de un tag (`treesitter`, `race`), no existe en este árbol y el ancla puede estar")
-				fmt.Println("     perfecta. Comprobalo con: go test -tags '<el tag>' " + d.Paquete + " -run '^" + d.Prueba + "$'")
+			if strings.Contains(string(salida), "NO SELECCIONA NINGUNA PRUEBA") && d.Tags == "" {
+				fmt.Println("   → OJO CON LA CAUSA: sin `tags=` en la directiva, este arnés corre SIN BUILD TAGS.")
+				fmt.Println("     Si la prueba vive detrás de un tag (`treesitter`, `race`), no existe en este")
+				fmt.Println("     árbol y el ancla puede estar perfecta. La salida es declararlo en la directiva:")
+				fmt.Println("       // arnes: tags=\"treesitter …\"")
+				fmt.Println("     Comprobalo a mano con: go test -tags '<el tag>' " + d.Paquete + " -run '^" + d.Prueba + "$'")
 			}
 		}
 	}
@@ -1065,6 +1094,21 @@ func sangrar(s string) string {
 		return "    (limpio)"
 	}
 	return "    " + strings.ReplaceAll(s, "\n", "\n    ")
+}
+
+// variablesQueFaltan devuelve los nombres declarados en `env=` que NO están en este entorno.
+//
+// «Presente pero vacía» cuenta como FALTA a propósito: el `t.Skip` de este repo se escribe
+// `os.Getenv(X) == ""`, así que una variable exportada vacía saltea la prueba igual que una
+// ausente, y decir «está seteada» sería cierto y useless.
+func variablesQueFaltan(nombres []string) []string {
+	var faltan []string
+	for _, n := range nombres {
+		if os.Getenv(n) == "" {
+			faltan = append(faltan, n)
+		}
+	}
+	return faltan
 }
 
 func comandoMutador(binario, tmp, id, de, a string) (string, error) {
