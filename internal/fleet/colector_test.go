@@ -147,7 +147,8 @@ func TestLoQueCadaPlataformaMideEstaDeclarado(t *testing.T) {
 		t.Errorf("%s: cuenta procesos = %v, la tabla dice %v — actualizá la tabla o el colector",
 			runtime.GOOS, got, quiero.procesos)
 	}
-	// COMPARTE SITIO CON procparse_test.go:184, Y ESO ESTÁ BIEN — medido el 2026-09-12.
+	// COMPARTE SITIO CON el sabotaje de TestUnaLecturaIncompletaNoInventaNumeros (procparse_test.go),
+	// Y ESO ESTÁ BIEN — medido el 2026-09-12.
 	// `Colisiones` las denuncia a las dos porque tienen el MISMO `de`, y hace bien en preguntar:
 	// con el mismo literal, o son dos guardas distintas o es una contada dos veces. Se leyeron los
 	// dos motivos y se corrieron los dos sabotajes por separado (el corredor restaura entre uno y
@@ -155,7 +156,7 @@ func TestLoQueCadaPlataformaMideEstaDeclarado(t *testing.T) {
 	//
 	//	ésta          a=""              -> cae SÓLO TestLoQueCadaPlataformaMideEstaDeclarado
 	//	                                   «linux: mide mem_libre = false, la tabla dice true»
-	//	procparse:184 a=«+ else u64(0)» -> cae SÓLO TestUnaLecturaIncompletaNoInventaNumeros
+	//	el otro       a=«+ else u64(0)» -> cae SÓLO TestUnaLecturaIncompletaNoInventaNumeros
 	//	                                   «MemLibre = 0 sin haber leído meminfo: tiene que ser nil»
 	//
 	// Son las dos formas OPUESTAS de romper la misma asignación —quedarse en nil teniendo el dato,

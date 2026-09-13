@@ -475,3 +475,67 @@ func TestLaMarcaDeSinMotivoPropioSigueEnElGuion(t *testing.T) {
 			guion, marcaSinMotivoPropio)
 	}
 }
+
+// TestLosTagsSeAGREGANaGOFLAGSyNoLoPISAN fija que el entorno heredado sobreviva.
+//
+// LO ESCRIBÍ MAL Y LO ENCONTRÓ OTRA SESIÓN LEYENDO EL PR. La línea era
+// `cmd.Env = append(os.Environ(), "GOFLAGS=-tags="+d.Tags)`, que PARECE que agregara —lo dice el
+// `append`— y reemplaza: Go se queda con la última de las claves repetidas. Un
+// `GOFLAGS=-mod=readonly` del entorno se evaporaba sin una línea de aviso.
+//
+// LO QUE HACE FALTA DECIR ES POR QUÉ SOBREVIVIÓ A SU PROPIA MEDICIÓN. Medí las dos direcciones de
+// `tags=` —sin la clave «no tests to run», con la clave `--- PASS`— y las dos daban bien, porque
+// en este repo NADIE setea GOFLAGS: el defecto sólo se ve con un entorno que el árbol no tiene
+// hoy. Es la forma de la guarda apagada por una variable que nadie setea, mirada desde el otro
+// lado: no es que la guarda esté apagada, es que el caso que la rompe no existe todavía. Un verde
+// sobre el único mundo que se puede montar no dice nada del mundo de al lado, y el día que alguien
+// agregue `GOFLAGS: -mod=readonly` a un job el arnés se lo comería lejos de acá y sin relación
+// aparente.
+//
+// Por eso la prueba MONTA el entorno que el repo no tiene, en vez de medir el que tiene.
+//
+// Sabotaje que la pone roja: volver a la forma que reemplaza, `return "GOFLAGS=-tags=" + tags`
+// para cualquier entorno.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\tif heredado == \"\" {\n\t\treturn \"GOFLAGS=-tags=\" + tags\n\t}\n\treturn \"GOFLAGS=\" + heredado + \" -tags=\" + tags"
+// arnes: a="\treturn \"GOFLAGS=-tags=\" + tags"
+// arnes: arreglo_de="\treturn \"GOFLAGS=\" + heredado + \" -tags=\" + tags"
+// arnes: arreglo_a="\treturn \"GOFLAGS=\" + heredado + \" \" + \"-tags=\" + tags"
+func TestLosTagsSeAGREGANaGOFLAGSyNoLoPISAN(t *testing.T) {
+	t.Run("sin GOFLAGS heredado, sale solo lo nuestro", func(t *testing.T) {
+		t.Setenv("GOFLAGS", "")
+		if got := entornoConTags("treesitter"); got != "GOFLAGS=-tags=treesitter" {
+			t.Errorf("entornoConTags = %q, esperaba %q", got, "GOFLAGS=-tags=treesitter")
+		}
+	})
+
+	t.Run("con GOFLAGS heredado, lo heredado SOBREVIVE", func(t *testing.T) {
+		// LA MITAD QUE IMPORTA. Con la forma vieja esto daba `GOFLAGS=-tags=treesitter` y el
+		// `-mod=readonly` desaparecía: la corrida pasaba a resolver módulos de otra manera que la
+		// que el job pidió, sin una línea que lo dijera.
+		t.Setenv("GOFLAGS", "-mod=readonly")
+		got := entornoConTags("treesitter")
+		if !strings.Contains(got, "-mod=readonly") {
+			t.Errorf("entornoConTags = %q: se comió el `-mod=readonly` del entorno", got)
+		}
+		if !strings.Contains(got, "-tags=treesitter") {
+			t.Errorf("entornoConTags = %q: perdió los tags de la directiva", got)
+		}
+		// Y el orden importa: los nuestros ÚLTIMOS, porque el último `-tags` gana y la directiva
+		// sabe qué necesita esta prueba mejor que una variable de ambiente.
+		if strings.Index(got, "-tags=treesitter") < strings.Index(got, "-mod=readonly") {
+			t.Errorf("entornoConTags = %q: los tags de la directiva tienen que ir ÚLTIMOS", got)
+		}
+	})
+
+	t.Run("CONTROL: es una entrada de entorno con la forma que `exec` espera", func(t *testing.T) {
+		// Sin esto la guarda pasaría con cualquier string que contenga los dos textos —incluido uno
+		// sin el `GOFLAGS=` de adelante, que `exec` ignoraría en silencio y dejaría al arnés
+		// corriendo sin tags otra vez.
+		t.Setenv("GOFLAGS", "-mod=readonly")
+		clave, valor, ok := strings.Cut(entornoConTags("x"), "=")
+		if !ok || clave != "GOFLAGS" || valor == "" {
+			t.Errorf("entornoConTags no devolvió una entrada `GOFLAGS=<algo>`: %q", entornoConTags("x"))
+		}
+	})
+}
