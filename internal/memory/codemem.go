@@ -40,7 +40,15 @@ func (e *DbEngine) SaveCodeMemoryFrom(originProjectID string, cm CodeMemory) err
 	if projectID == "" {
 		projectID = e.projectID
 	}
-	_, err := e.db.Exec(
+	// Una transacción para un solo INSERT, por la generación del grafo: los gists viajan en la foto
+	// del push, así que un gist nuevo es un cambio que el central tiene que recibir aunque el grafo
+	// del paquete no se haya re-derivado (un archivo que el grafo no indexa, o un refresh que falló).
+	tx, err := e.db.Begin()
+	if err != nil {
+		return fmt.Errorf("error al iniciar el guardado de memoria de código: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(
 		`INSERT INTO code_memory (path, gist, symbols, fingerprint, tokens, project_id, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		 ON CONFLICT(path, project_id) DO UPDATE SET
@@ -48,9 +56,14 @@ func (e *DbEngine) SaveCodeMemoryFrom(originProjectID string, cm CodeMemory) err
 		   fingerprint=excluded.fingerprint, tokens=excluded.tokens,
 		   updated_at=CURRENT_TIMESTAMP`,
 		cm.Path, cm.Gist, cm.Symbols, cm.Fingerprint, cm.Tokens, projectID,
-	)
-	if err != nil {
+	); err != nil {
 		return fmt.Errorf("error al guardar memoria de código: %w", err)
+	}
+	if err := avanzarGeneracionDelGrafo(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("error al commitear la memoria de código: %w", err)
 	}
 	return nil
 }
@@ -185,6 +198,9 @@ func (e *DbEngine) ReplaceProjectCodeMemoryFrom(originProjectID string, gists []
 		); err != nil {
 			return fmt.Errorf("error al guardar gist de %s: %w", cm.Path, err)
 		}
+	}
+	if err := avanzarGeneracionDelGrafo(tx); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("error al commitear el reemplazo de gists: %w", err)

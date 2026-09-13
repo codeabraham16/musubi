@@ -19,6 +19,10 @@ type FotoDelGrafo struct {
 	Nodes []GraphNode
 	Edges []GraphEdge
 	Gists []CodeMemory
+	// Generacion es la generación del grafo (ver codegraph_generacion.go) en la MISMA instantánea
+	// que las tres listas. Es lo que se marca como empujado si el push sale bien: leerla después,
+	// fuera de la transacción, podría declarar empujado un cambio que la foto no trae.
+	Generacion int64
 }
 
 // FotoDelGrafoCtx lee la foto completa del grafo (scopeada por la credencial) dentro de UNA
@@ -55,6 +59,11 @@ func (e *DbEngine) fotoDelGrafo(ctx context.Context, entreLecturas func()) (Foto
 	// Sólo lectura: Rollback no puede dejar nada a medias, y cierra la instantánea al salir.
 	defer func() { _ = tx.Rollback() }()
 
+	// La generación va PRIMERO: en WAL la primera lectura fija la instantánea, y así la generación
+	// es exactamente la de las listas que siguen.
+	if foto.Generacion, err = leerGeneracionDelGrafo(ctx, tx); err != nil {
+		return foto, err
+	}
 	if foto.Nodes, err = e.listAllGraphNodes(ctx, tx); err != nil {
 		return foto, fmt.Errorf("error al leer los nodos de la foto del grafo: %w", err)
 	}

@@ -97,6 +97,10 @@ func (e *DbEngine) UpsertPackageGraphFrom(originProjectID string, files []string
 			return fmt.Errorf("error al guardar arista %s→%s: %w", ed.FromKey, ed.ToKey, err)
 		}
 	}
+	// La generación sube en la misma transacción: ver codegraph_generacion.go.
+	if err := avanzarGeneracionDelGrafo(tx); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("error al commitear el grafo de código: %w", err)
 	}
@@ -153,6 +157,9 @@ func (e *DbEngine) ReplaceProjectGraphFrom(originProjectID string, nodes []Graph
 		); err != nil {
 			return fmt.Errorf("error al guardar arista %s→%s: %w", ed.FromKey, ed.ToKey, err)
 		}
+	}
+	if err := avanzarGeneracionDelGrafo(tx); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("error al commitear el reemplazo del grafo: %w", err)
@@ -274,6 +281,9 @@ func (e *DbEngine) PruneGraphFilesFrom(originProjectID string, paths []string) (
 		if _, err := tx.Exec(`DELETE FROM code_graph_edges WHERE project_id=? AND src_path=?`, projectID, f); err != nil {
 			return 0, fmt.Errorf("error al podar aristas de %s: %w", f, err)
 		}
+	}
+	if err := avanzarGeneracionDelGrafo(tx); err != nil {
+		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("error al commitear la poda del grafo: %w", err)
