@@ -424,7 +424,9 @@ func runServe(args []string) {
 	// VAN SÓLO EL MANTENIMIENTO Y SU CORRIDA DE ARRANQUE, y no los otros tres schedulers del
 	// daemon: el del grafo indexa el árbol CHECKOUTEADO y en un servidor no hay proyecto que
 	// indexar; el de sombra es no-op salvo que alguien lo encienda. Agregarlos sería trabajo
-	// programado sin nadie que lo pidió.
+	// programado sin nadie que lo pidió. Por el mismo motivo tampoco va la corrida de ARRANQUE
+	// del grafo que el daemon sí tiene: el central no tiene árbol de fuentes, su grafo llega
+	// federado por musubi_codegraph_push.
 	if cfg.Maintenance.AutoIntervalHours > 0 {
 		go func() {
 			if ran, rep, mErr := server.RunScheduledMaintenance(); mErr != nil {
@@ -533,30 +535,12 @@ func runDaemon() {
 	// un daemon stdio no tiene por dónde sacar sus eventos y por eso el trabajo local no se veía.
 	defer server.CloseSpool()
 
-	// Auto-mantenimiento de fondo (Track 5 / T5.2): el daemon es long-running; sin esto el
-	// ciclo cognitivo (consolidar/olvidar/purgar) solo correría una vez al arrancar. Dos
-	// goroutines best-effort que serializan contra el dispatch vía el write-lock del server:
-	//   (1) una corrida de arranque NO bloqueante (un VACUUM grande no demora el primer pedido);
-	//   (2) un ticker periódico que repite el ciclo intra-sesión.
-	// El ctx se cancela al retornar de runDaemon (señal o EOF de stdin), parando el ticker.
+	// Auto-mantenimiento de la memoria y reindexado del grafo, en goroutines (ver
+	// lanzarMantenimientoYGrafo, que es donde vive el cableado y su prueba). El ctx se cancela al
+	// retornar de runDaemon (señal o EOF de stdin), parando los tickers.
 	maintCtx, stopMaint := context.WithCancel(context.Background())
 	defer stopMaint()
-	if cfg.Maintenance.AutoIntervalHours > 0 {
-		go func() {
-			if ran, rep, mErr := server.RunScheduledMaintenance(); mErr != nil {
-				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento de arranque falló: %v\n", mErr)
-			} else if ran {
-				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento: %d fusionadas, %d archivadas, %d evictadas, %d purgadas\n", rep.Consolidate.Merged, rep.Decay.Archived, rep.Evicted, rep.Purged)
-			}
-		}()
-		go server.RunMaintenanceScheduler(maintCtx, time.Duration(cfg.Maintenance.AutoIntervalHours*float64(time.Hour)))
-	}
-	// El grafo de código se mantiene solo (P3). Va en su PROPIO gate y no colgado del de
-	// mantenimiento: son dos ciclos con costos y riesgos distintos, y quien apague el
-	// mantenimiento de la memoria no está pidiendo que además se le quede rancio el grafo.
-	if cfg.Maintenance.GraphIndexHours > 0 {
-		go server.RunCodeGraphScheduler(maintCtx, time.Duration(cfg.Maintenance.GraphIndexHours*float64(time.Hour)))
-	}
+	lanzarMantenimientoYGrafo(maintCtx, server, cfg.Maintenance, os.Stderr)
 	// Auto-drain del acervo (pilar Musubi Renaissance): no-op sin motor de cognición o con el intervalo
 	// en 0. Va en su propio gate, como el grafo — dos ciclos con costos distintos.
 	if cfg.Maintenance.AutoDistillMinutes > 0 {

@@ -121,19 +121,23 @@ func TestElRankingPrefiereCallersDeProduccion(t *testing.T) {
 	}
 }
 
-// I3 — un archivo indexado SIN callers no calla: lo dice. "No hay riesgo" es información, y es
-// distinta de "no sé", que es lo que significaría el silencio.
+// I3 — un archivo indexado SIN callers no calla: dice lo que el grafo vio. Hasta el 2026-09-13
+// esta prueba exigía «no arrastra a nadie», y eso el grafo no lo puede saber: no ve llamadas por
+// interfaz ni métodos pasados como valor. La frase exacta la fija TestElGrafoDiceLlamadasDirectas.
 func TestArchivoAisladoLoDiceEnVezDeCallar(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "solo.go", "package p\nfunc nadieMeLlama(){}\n")
 	in := `{"tool_name":"Write","tool_input":{"file_path":"solo.go"},"session_id":"s"}`
 	out := precheckOutput(cadenaStore(), root, strings.NewReader(in))
 	if out == "" {
-		t.Fatal("un archivo indexado y aislado debe decir que no arrastra a nadie, no quedarse mudo")
+		t.Fatal("un archivo indexado y aislado debe decir lo que el grafo vio, no quedarse mudo")
 	}
 	_, ctx := hookAdditionalContext(t, out)
-	if !strings.Contains(ctx, "no arrastra a nadie") {
+	if !strings.Contains(ctx, "0 llamadas DIRECTAS vistas por el grafo") {
 		t.Errorf("esperaba el aviso de archivo aislado, obtuve %q", ctx)
+	}
+	if strings.Contains(ctx, "no arrastra a nadie conocido") {
+		t.Errorf("el grafo no puede afirmar que no arrastra a nadie, obtuve %q", ctx)
 	}
 }
 

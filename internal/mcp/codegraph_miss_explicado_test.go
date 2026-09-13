@@ -389,3 +389,32 @@ func TestEnElCentralElMissNoAfirmaQueElArchivoEsDeOtraRama(t *testing.T) {
 		t.Errorf("el camino nuevo filtró la señal interna: %v", central)
 	}
 }
+
+// C1 — UN MISS EN UN ARCHIVO QUE CAMBIÓ DESDE EL ÍNDICE NO CULPA AL NOMBRE.
+//
+// La lista de símbolos es la del ÍNDICE. Una función recién escrita no está, y «revisá el nombre»
+// sobre un nombre bien escrito manda a dudar de lo único que estaba bien.
+func TestMissEnArchivoQueCambioDesdeElIndiceNoCulpaAlNombre(t *testing.T) {
+	s, dir := proyectoIndexado(t)
+
+	// El control: con el archivo intacto, la pista SÍ es el nombre. Sin esta mitad, una pista que
+	// dijera «cambió» siempre pasaría la prueba.
+	intacto := decodeCG(t, mustCall(t, s, "musubi_code_graph", map[string]interface{}{"symbol": "pkg/a.go#func:NoExiste"}))
+	if h, _ := intacto["hint"].(string); !strings.Contains(h, "revisá el nombre") || strings.Contains(h, "CAMBIÓ") {
+		t.Fatalf("con el archivo intacto la pista tenía que mandar al nombre, obtuve %q", h)
+	}
+
+	writeFile(t, filepath.Join(dir, "pkg", "a.go"), "package pkg\n\nfunc Alpha() { beta() }\n\nfunc beta() {}\n\nfunc Gamma() {}\n")
+	cg := decodeCG(t, mustCall(t, s, "musubi_code_graph", map[string]interface{}{"symbol": "pkg/a.go#func:Gamma"}))
+
+	h, _ := cg["hint"].(string)
+	if strings.Contains(h, "revisá el nombre") {
+		t.Errorf("el archivo cambió desde el índice y la pista culpa al nombre: %q", h)
+	}
+	if !strings.Contains(h, "CAMBIÓ") || !strings.Contains(h, "nuevo") {
+		t.Errorf("la pista tiene que decir que el archivo cambió y que el símbolo puede ser nuevo, obtuve %q", h)
+	}
+	if cg["file_changed_since_index"] != true {
+		t.Errorf("falta la marca file_changed_since_index, obtuve %v", cg)
+	}
+}
