@@ -743,3 +743,162 @@ func TestTagsYEnvSeLeenYUnErrorDeEscrituraNoSeVuelveSilencio(t *testing.T) {
 		}
 	})
 }
+
+// ── 12 · `colision_ok`: CONTESTAR UN AVISO SIN APAGAR EL DETECTOR ─────────────────────────────
+//
+// El aviso de `Colisiones` es una pregunta legítima —con el mismo `de`, o son dos guardas o es una
+// contada dos veces— y a veces la respuesta es «dos». Ahí el aviso es CIERTO y no se puede apagar:
+// sale en cada corrida, para siempre. Un aviso verdadero que nadie puede contestar entrena a
+// ignorar los avisos, que es la misma familia que un cero que significa «no sé».
+//
+// LO PELIGROSO DE UNA CLAVE QUE SILENCIA ES QUE SILENCIE DE MÁS, así que la clave no dice «ya lo
+// miré»: dice A QUIÉN. Una respuesta que nombra a un tercero no tapa esta colisión, y una que no
+// se pisa con nadie se denuncia como rancia — porque «esto ya se miró» sobre algo que nadie miró
+// es peor que el aviso que reemplaza.
+//
+// Sabotaje que la hace fallar: en `Colisiones`, que alcance con tener la clave puesta sin exigir
+// que nombre a la prueba que se pisa → cualquier respuesta tapa cualquier colisión.
+// arnes: archivo="internal/arnes/arnes.go"
+// arnes: de="\t\t\t\tif x.Directiva.ColisionOk != \"\" && x.Directiva.ColisionOk == y.Directiva.Prueba {"
+// arnes: a="\t\t\t\tif x.Directiva.ColisionOk != \"\" {"
+// arnes: prueba="TestUnaColisionContestadaSeCallaYUnaRespuestaRanciaSeDenuncia"
+func TestUnaColisionContestadaSeCallaYUnaRespuestaRanciaSeDenuncia(t *testing.T) {
+	raiz := t.TempDir()
+	ruta := filepath.Join(raiz, "prod.go")
+	if err := os.WriteFile(ruta, []byte("package p\n\nfunc f() {\n\tif n != 1 {\n\t\treturn\n\t}\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Las dos se pisan de verdad: el `a` de cada una destruye el `de` de la otra.
+	const literal = "\tif n != 1 {"
+	una := func(colisionOk string) Ancla {
+		return Ancla{Archivo: "uno_test.go", Linea: 10, Directiva: &Directiva{
+			Archivo: "prod.go", De: literal, A: "\tif n != 2 {",
+			Prueba: "TestUna", ColisionOk: colisionOk,
+		}}
+	}
+	otra := func(colisionOk string) Ancla {
+		return Ancla{Archivo: "otro_test.go", Linea: 20, Directiva: &Directiva{
+			Archivo: "prod.go", De: literal, A: "\tif false {",
+			Prueba: "TestOtra", ColisionOk: colisionOk,
+		}}
+	}
+	males := func(anclas ...Ancla) []string {
+		return Colisiones(Censo{Raiz: raiz, Anclas: anclas})
+	}
+
+	t.Run("CONTROL: sin la clave, las dos direcciones se denuncian", func(t *testing.T) {
+		// Si esto no diera 2, nada de lo que sigue significaría algo: un «no se denunció» sobre un
+		// detector muerto se lee igual que sobre una colisión contestada.
+		if m := males(una(""), otra("")); len(m) != 2 {
+			t.Fatalf("esperaba 2 denuncias, vinieron %d:\n  %s", len(m), strings.Join(m, "\n  "))
+		}
+	})
+
+	t.Run("la clave tapa SÓLO su dirección", func(t *testing.T) {
+		// Contestar de un lado no contesta del otro: cada guarda declara lo que su autor miró.
+		m := males(una("TestOtra"), otra(""))
+		if len(m) != 1 {
+			t.Fatalf("esperaba 1 (la dirección sin contestar), vinieron %d:\n  %s",
+				len(m), strings.Join(m, "\n  "))
+		}
+		if !strings.Contains(m[0], "otro_test.go:20") {
+			t.Errorf("la que quedó no es la que falta contestar:\n  %s", m[0])
+		}
+	})
+
+	t.Run("contestadas las dos, el aviso se calla", func(t *testing.T) {
+		if m := males(una("TestOtra"), otra("TestUna")); len(m) != 0 {
+			t.Errorf("las dos contestaron y siguió avisando:\n  %s", strings.Join(m, "\n  "))
+		}
+	})
+
+	t.Run("una respuesta que nombra a OTRO no tapa esta colisión", func(t *testing.T) {
+		// LA MITAD QUE IMPIDE QUE LA CLAVE SEA UN INTERRUPTOR. Si alcanzara con tenerla puesta,
+		// `colision_ok="TestLoQueSea"` apagaría un aviso que nadie miró.
+		m := males(una("TestUnTercero"), otra("TestUna"))
+		if len(m) == 0 {
+			t.Fatal("una respuesta que no nombra a la prueba que se pisa tapó la colisión: " +
+				"la clave dejó de ser una respuesta y pasó a ser un interruptor")
+		}
+		junto := strings.Join(m, "\n")
+		if !strings.Contains(junto, "uno_test.go:10") {
+			t.Errorf("la denuncia no nombra el sitio que contestó mal:\n%s", junto)
+		}
+		// Y ADEMÁS SE DICE QUE LA RESPUESTA NO CONTESTA NADA: sin eso, el autor ve el aviso, cree
+		// que su clave no llegó a leerse, y la escribe de nuevo igual de mal.
+		if !strings.Contains(junto, "TestUnTercero") {
+			t.Errorf("no se dice a quién decía contestarle, así que no se puede corregir:\n%s", junto)
+		}
+	})
+
+	t.Run("una respuesta a una colisión que ya no existe se denuncia como rancia", func(t *testing.T) {
+		// Pasa cuando la otra guarda se reescribe o se va. La clave queda, nadie la relee, y lo que
+		// fue una medición se vuelve una afirmación heredada.
+		// LAS DOS AGREGAN EN VEZ DE REEMPLAZAR, así que sus `a` CONTIENEN al `de` y ninguna rompe el
+		// ancla de la otra: no hay colisión que contestar. Lo que queda es la clave sola.
+		sinPisar := func(arch string, lin int, prueba, colisionOk string) Ancla {
+			return Ancla{Archivo: arch, Linea: lin, Directiva: &Directiva{
+				Archivo: "prod.go", De: literal, A: literal + "\n\t\t_ = 0",
+				Prueba: prueba, ColisionOk: colisionOk,
+			}}
+		}
+		m := males(sinPisar("uno_test.go", 10, "TestUna", "TestOtra"),
+			sinPisar("otro_test.go", 20, "TestOtra", ""))
+		if len(m) != 1 {
+			t.Fatalf("esperaba 1 (la respuesta rancia), vinieron %d:\n  %s",
+				len(m), strings.Join(m, "\n  "))
+		}
+		if !strings.Contains(m[0], "uno_test.go:10") || !strings.Contains(m[0], "TestOtra") {
+			t.Errorf("la denuncia no dice qué sitio ni a quién decía contestarle:\n  %s", m[0])
+		}
+	})
+}
+
+// TestUnColisionOkConNumeroDeLineaSeRechaza fija la forma de la respuesta.
+//
+// La manera natural de señalar el otro sitio es `archivo:línea`, y es justo la que se pudre: se
+// midió pasando. La respuesta en prosa que #494 dejó escrita nombraba `colector_test.go:152`, y el
+// PROPIO PR que la escribió insertó catorce líneas de comentario arriba y movió esa ancla a la 166.
+// La respuesta quedó apuntando a otro lado el día que aterrizó, y nada se puso rojo.
+//
+// Sabotaje que la hace fallar: en `directivaDe`, sacar la exigencia de que `colision_ok` sea un
+// nombre de prueba → un `archivo:línea` pasa y vuelve a pudrirse solo.
+// arnes: archivo="internal/arnes/arnes.go"
+// arnes: de="\tif d.ColisionOk != \"\" && !esNombreDePrueba(d.ColisionOk) {"
+// arnes: a="\tif false {"
+// arnes: prueba="TestUnColisionOkConNumeroDeLineaSeRechaza"
+func TestUnColisionOkConNumeroDeLineaSeRechaza(t *testing.T) {
+	leer := func(extra string) []string {
+		lineas := []lineaCom{{linea: 1, texto: "Sabotaje: X", cruda: " Sabotaje: X"}}
+		for i, p := range []string{`archivo="x.go"`, `de="viejo"`, `a="nuevo"`, extra} {
+			if p == "" {
+				continue
+			}
+			lineas = append(lineas, lineaCom{linea: i + 2, texto: "arnes: " + p, cruda: " arnes: " + p})
+		}
+		_, _, quejas := directivaDe(lineas, "internal/x/x_test.go", "TestX")
+		return quejas
+	}
+
+	t.Run("un archivo:linea se rechaza", func(t *testing.T) {
+		if q := leer(`colision_ok="internal/fleet/colector_test.go:152"`); len(q) == 0 {
+			t.Error("pasó un `archivo:línea`: esa respuesta apunta a otro lado en cuanto alguien " +
+				"agrega una línea arriba, y nada se pondría rojo")
+		}
+	})
+
+	t.Run("un nombre de prueba se acepta", func(t *testing.T) {
+		// LA MITAD QUE IMPIDE QUE ESTO SEA UN «SIEMPRE RECHAZA», que dejaría la clave inutilizable.
+		if q := leer(`colision_ok="TestUnaLecturaIncompletaNoInventaNumeros"`); len(q) != 0 {
+			t.Errorf("un nombre de prueba legítimo se rechazó: %v", q)
+		}
+	})
+
+	t.Run("CONTROL: sin la clave la directiva sigue siendo válida", func(t *testing.T) {
+		// Las 88 directivas que no tienen colisión no tienen que escribir nada.
+		if q := leer(""); len(q) != 0 {
+			t.Errorf("una directiva sin `colision_ok` se quejó: %v", q)
+		}
+	})
+}

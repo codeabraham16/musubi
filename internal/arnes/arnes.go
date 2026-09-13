@@ -208,6 +208,20 @@ type Directiva struct {
 	// «el control salió en verde sin ejecutar UNA SOLA prueba», que suena a ancla rota.
 	Tags string
 	Env  []string
+
+	// ColisionOk ES LA RESPUESTA A UN AVISO DE `Colisiones`, PUESTA DONDE LA HERRAMIENTA LA VE.
+	//
+	// Dos directivas con el MISMO `de` se denuncian entre sí, y el aviso es una pregunta legítima:
+	// con el mismo literal, o son dos guardas distintas o es una contada dos veces. A veces la
+	// respuesta es «dos», y entonces el aviso es CIERTO y no se puede apagar — sale en cada corrida
+	// para siempre. Un aviso verdadero que nadie puede contestar entrena a ignorar los avisos, que
+	// es la misma familia que un cero que significa «no sé».
+	//
+	// Se declara el NOMBRE DE LA OTRA PRUEBA y no su `archivo:línea`, y la diferencia no es
+	// cosmética: se midió que un `:línea` se pudre solo. La respuesta en prosa que #494 dejó
+	// escrita nombraba `colector_test.go:152`, y al aterrizar ese mismo PR corrió el ancla a la
+	// 166. Un nombre de prueba no se mueve cuando alguien agrega un comentario arriba.
+	ColisionOk string
 }
 
 // Censo es lo que el árbol declara, contado.
@@ -747,6 +761,8 @@ func directivaDe(lineas []lineaCom, rel, pruebaDerivada string) (*Directiva, str
 		ArregloA:  campos["arreglo_a"],
 		Tags:      strings.Join(strings.Fields(campos["tags"]), ","),
 		Env:       strings.Fields(campos["env"]),
+
+		ColisionOk: strings.TrimSpace(campos["colision_ok"]),
 	}
 	if d.Prueba == "" {
 		d.Prueba = pruebaDerivada
@@ -792,6 +808,19 @@ func directivaDe(lineas []lineaCom, rel, pruebaDerivada string) (*Directiva, str
 				"`env` declara NOMBRES separados por espacios, no `NOMBRE=valor` — el valor es del "+
 				"entorno de quien corre", e))
 		}
+	}
+	// `colision_ok` NOMBRA UNA PRUEBA, Y EXIGIRLO ES LO QUE HACE QUE LA RESPUESTA NO SE PUDRA.
+	//
+	// La forma natural de contestar «ya miré esta colisión» es señalar el otro sitio como
+	// `archivo:línea`, y ésa es justo la que se pudre: un comentario agregado arriba corre el
+	// número y la respuesta pasa a apuntar a otro lado, sin que nada se ponga rojo. Se midió
+	// pasando: la respuesta en prosa de #494 nombraba `colector_test.go:152` y el propio PR que la
+	// escribió movió esa ancla a la 166.
+	if d.ColisionOk != "" && !esNombreDePrueba(d.ColisionOk) {
+		quejas = append(quejas, fmt.Sprintf("`colision_ok` trae %q, y tiene que ser el NOMBRE de la "+
+			"otra prueba (`TestLoQueSea`), no un `archivo:línea`: un número de línea se corre solo "+
+			"en cuanto alguien agrega una línea arriba, y la respuesta quedaría apuntando a otro lado",
+			d.ColisionOk))
 	}
 	if len(quejas) > 0 {
 		return d, "", quejas
@@ -864,7 +893,7 @@ func camposDe(payload string) (map[string]string, []string) {
 	return campos, quejas
 }
 
-var clavesValidas = []string{"archivo", "de", "a", "paquete", "prueba", "arreglo_de", "arreglo_a", "no_mecanizable", "tags", "env"}
+var clavesValidas = []string{"archivo", "de", "a", "paquete", "prueba", "arreglo_de", "arreglo_a", "no_mecanizable", "tags", "env", "colision_ok"}
 
 // esIdentificadorDeBuild dice si `t` puede ser un tag de build de Go.
 func esIdentificadorDeBuild(t string) bool {
@@ -881,6 +910,15 @@ func esIdentificadorDeBuild(t string) bool {
 // esNombreDeVariable dice si `e` es un nombre de variable de entorno y NO un `NOMBRE=valor`: la
 // confusión es la que hay que atajar, porque un `env="FOO=/x"` parece que fuera a setearla.
 func esNombreDeVariable(e string) bool { return esIdentificadorDeBuild(e) }
+
+// esNombreDePrueba dice si `s` es el nombre de una prueba de Go.
+//
+// SE EXIGE EL PREFIJO `Test` Y NO SÓLO QUE SEA UN IDENTIFICADOR, porque lo que hay que rechazar es
+// el `archivo:línea` —la forma natural de señalar el otro sitio, y la que se pudre—. Un
+// identificador a secas lo aceptaría a medias y dejaría pasar cualquier palabra.
+func esNombreDePrueba(s string) bool {
+	return strings.HasPrefix(s, "Test") && esIdentificadorDeBuild(s)
+}
 
 func claveConocida(k string) bool {
 	for _, v := range clavesValidas {
@@ -951,6 +989,11 @@ func Colisiones(c Censo) []string {
 	for _, a := range c.Mecanizadas() {
 		porArchivo[a.Directiva.Archivo] = append(porArchivo[a.Directiva.Archivo], a)
 	}
+	// Las respuestas que de verdad taparon una colisión. Lo que quede declarado y NO esté acá es una
+	// respuesta a algo que ya no pasa: se denuncia, porque una respuesta rancia es peor que ninguna
+	// —dice «esto ya se miró» sobre algo que nadie miró—.
+	usadas := map[string]bool{}
+	declaradas := map[string]string{} // sitio → a qué prueba dice contestarle
 	for archivo, anclas := range porArchivo {
 		if len(anclas) < 2 {
 			continue
@@ -963,21 +1006,47 @@ func Colisiones(c Censo) []string {
 			if strings.Count(string(b), x.Directiva.De) != 1 {
 				continue // idem: eso es de `Validar`
 			}
+			sitio := fmt.Sprintf("%s:%d", x.Archivo, x.Linea)
+			if x.Directiva.ColisionOk != "" {
+				declaradas[sitio] = x.Directiva.ColisionOk
+			}
 			despues := strings.Replace(string(b), x.Directiva.De, x.Directiva.A, 1)
 			for _, y := range anclas {
 				if y.Archivo == x.Archivo && y.Linea == x.Linea {
 					continue
 				}
-				if strings.Count(despues, y.Directiva.De) != 1 {
-					males = append(males, fmt.Sprintf(
-						"%s:%d pisa a %s:%d — al aplicarse rompe el `de` del otro en %s. A lo sumo UNA de "+
-							"las dos es sobre el comportamiento de esa línea; la otra, si cae, puede "+
-							"estar cayendo por el daño al corpus. Andá a leer los dos motivos: si son "+
-							"distintos son dos guardas cubriendo la línea, si son el mismo es una sola "+
-							"contada dos veces.",
-						x.Archivo, x.Linea, y.Archivo, y.Linea, archivo))
+				if strings.Count(despues, y.Directiva.De) == 1 {
+					continue
 				}
+				// LA RESPUESTA, SI ESTÁ Y ES PARA ESTA COLISIÓN. Tiene que nombrar a la prueba que
+				// se pisa con ésta y no a cualquier otra: contestar «ya lo miré» señalando a un
+				// tercero sería apagar el aviso sin haberlo mirado.
+				if x.Directiva.ColisionOk != "" && x.Directiva.ColisionOk == y.Directiva.Prueba {
+					usadas[sitio] = true
+					continue
+				}
+				males = append(males, fmt.Sprintf(
+					"%s:%d pisa a %s:%d — al aplicarse rompe el `de` del otro en %s. A lo sumo UNA de "+
+						"las dos es sobre el comportamiento de esa línea; la otra, si cae, puede "+
+						"estar cayendo por el daño al corpus. Andá a leer los dos motivos: si son "+
+						"distintos son dos guardas cubriendo la línea, si son el mismo es una sola "+
+						"contada dos veces. Si ya los leíste y son dos, dejá la respuesta donde esta "+
+						"herramienta la vea: `// arnes: colision_ok=\"%s\"`.",
+					x.Archivo, x.Linea, y.Archivo, y.Linea, archivo, y.Directiva.Prueba))
 			}
+		}
+	}
+	// UNA RESPUESTA QUE YA NO CONTESTA NADA. Pasa cuando la otra guarda se reescribe o se va: el
+	// `colision_ok` queda, nadie lo relee, y lo que era una medición se vuelve una afirmación
+	// heredada. Es la forma de siempre —lo que se midió una vez se cita para siempre— y sale barato
+	// denunciarla acá, que es donde alguien está mirando las colisiones.
+	for sitio, aQuien := range declaradas {
+		if !usadas[sitio] {
+			males = append(males, fmt.Sprintf(
+				"%s declara `colision_ok=%q` y NO se pisa con esa prueba — la respuesta quedó rancia. "+
+					"O la otra guarda cambió y hay que releer las dos, o la colisión ya no existe y la "+
+					"clave sobra. Un «esto ya se miró» sobre algo que nadie miró es peor que el aviso.",
+				sitio, aQuien))
 		}
 	}
 	sort.Strings(males)
