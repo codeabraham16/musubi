@@ -119,18 +119,28 @@ func TestM2ElSegundoQueLlegaNoVuelveACorrerElCiclo(t *testing.T) {
 // La tercera es la que evita el arreglo obvio y equivocado: el escalón de sólo lectura NO puede
 // mantener nada —`PRAGMA query_only` rechazaría la escritura— y agregárselo «por simetría» sería
 // programar trabajo que va a fallar cada vez.
+//
+// runDaemon ya no lanza el ciclo en línea: lo hace lanzarMantenimientoYGrafo (cmd/musubi/
+// ciclos_de_fondo.go), que es donde su cableado tiene prueba de comportamiento. Por eso a runDaemon se
+// le pide la LLAMADA y a esa función el scheduler: las dos mitades, porque cualquiera de las dos que
+// falte deja al daemon sin ciclo y con la otra mitad en verde.
 func TestM3CadaServidorArrancaElCicloSegunPuedaEscribir(t *testing.T) {
-	crudo, err := os.ReadFile("../../cmd/musubi/main.go")
-	if err != nil {
-		t.Fatalf("leer main.go: %v", err)
+	leer := func(ruta string) string {
+		t.Helper()
+		crudo, err := os.ReadFile(ruta)
+		if err != nil {
+			t.Fatalf("leer %s: %v", ruta, err)
+		}
+		return string(crudo)
 	}
-	src := string(crudo)
+	mainGo := leer("../../cmd/musubi/main.go")
+	ciclosGo := leer("../../cmd/musubi/ciclos_de_fondo.go")
 
-	cuerpoDe := func(fn string) string {
+	cuerpoDe := func(src, archivo, fn string) string {
 		t.Helper()
 		i := strings.Index(src, "\nfunc "+fn+"(")
 		if i < 0 {
-			t.Fatalf("no se encontró %s en cmd/musubi/main.go: ¿se renombró?", fn)
+			t.Fatalf("no se encontró %s en cmd/musubi/%s: ¿se renombró?", fn, archivo)
 		}
 		j := strings.Index(src[i+1:], "\n}\n")
 		if j < 0 {
@@ -138,16 +148,24 @@ func TestM3CadaServidorArrancaElCicloSegunPuedaEscribir(t *testing.T) {
 		}
 		return src[i : i+1+j]
 	}
-
-	for _, fn := range []string{"runServe", "runDaemon"} {
-		if !strings.Contains(cuerpoDe(fn), "RunMaintenanceScheduler") {
-			t.Errorf("%s no arranca el ciclo de memoria. Un cerebro que no se mantiene RESPONDE IGUAL "+
-				"que uno sano —la memoria sigue contestando, sólo deja de envejecer bien—, así que "+
-				"la ausencia no se nota mirando. Medido: el central dependía de que el bot de "+
-				"Telegram estuviera vivo.", fn)
-		}
+	sinCiclo := func(fn string) {
+		t.Errorf("%s no arranca el ciclo de memoria. Un cerebro que no se mantiene RESPONDE IGUAL "+
+			"que uno sano —la memoria sigue contestando, sólo deja de envejecer bien—, así que "+
+			"la ausencia no se nota mirando. Medido: el central dependía de que el bot de "+
+			"Telegram estuviera vivo.", fn)
 	}
-	if strings.Contains(cuerpoDe("servirSoloLectura"), "RunMaintenanceScheduler") {
+
+	if !strings.Contains(cuerpoDe(mainGo, "main.go", "runServe"), "RunMaintenanceScheduler") {
+		sinCiclo("runServe")
+	}
+	if !strings.Contains(cuerpoDe(mainGo, "main.go", "runDaemon"), "lanzarMantenimientoYGrafo(") {
+		sinCiclo("runDaemon (no llama a lanzarMantenimientoYGrafo)")
+	}
+	if !strings.Contains(cuerpoDe(ciclosGo, "ciclos_de_fondo.go", "lanzarMantenimientoYGrafo"), "RunMaintenanceScheduler") {
+		sinCiclo("lanzarMantenimientoYGrafo, y con ella runDaemon,")
+	}
+	soloLectura := cuerpoDe(mainGo, "main.go", "servirSoloLectura")
+	if strings.Contains(soloLectura, "RunMaintenanceScheduler") || strings.Contains(soloLectura, "lanzarMantenimientoYGrafo(") {
 		t.Error("servirSoloLectura arranca el ciclo de memoria: esa base se abre con PRAGMA query_only " +
 			"y toda escritura rebota, así que sería trabajo programado para fallar cada vez")
 	}
