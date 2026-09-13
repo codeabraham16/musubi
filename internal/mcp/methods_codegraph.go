@@ -759,7 +759,7 @@ func (s *McpServer) empujarFotoDelGrafo(ctx context.Context) bool {
 	// fallida, no federar nada es lo único seguro — el grafo local ya quedó bien y el próximo index
 	// reintenta.
 	//
-	// Sabotaje que lo pone rojo: sacar el `return false` de acá abajo → TestUnaFotoQueFallaNoMandaNadaAlCentral.
+	// Lo custodia TestUnaFotoQueFallaNoMandaNadaAlCentral, que saca el `return false` de acá abajo.
 	foto, err := s.engine.FotoDelGrafoCtx(s.scopedCtx(ctx))
 	if err != nil {
 		logx.Error("federación del grafo: no se pudo leer la foto local (se aborta el push para no borrar lo del central)", "error", err)

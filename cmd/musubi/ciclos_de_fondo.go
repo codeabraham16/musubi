@@ -33,8 +33,8 @@ type ciclosDeFondo interface {
 // mantenimiento está apagado): la corrida de arranque del grafo lo espera, porque las dos escriben y
 // no hay motivo para que compitan por la base en el primer minuto del daemon.
 //
-// Sabotajes que ponen rojas las pruebas de ciclos_de_fondo_test.go: cerrar el canal ANTES del
-// mantenimiento (`close` en vez de `defer close`, S2) y lanzar RunCodeGraphScheduler sin `go` (S5).
+// Las dos cosas las custodian las pruebas de ciclos_de_fondo_test.go, con sus sabotajes mecanizados:
+// el canal que se cierra ANTES del mantenimiento y el scheduler lanzado sin `go`.
 func lanzarMantenimientoYGrafo(ctx context.Context, srv ciclosDeFondo, m config.MaintenanceConfig, avisos io.Writer) {
 	mantenimientoDeArranque := make(chan struct{})
 	if m.AutoIntervalHours > 0 {

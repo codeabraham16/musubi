@@ -25,8 +25,12 @@ const conGamma = "package pkg\n\nfunc Alpha() { beta() }\n\nfunc beta() {}\n\nfu
 //
 // Sobre la misma .musubi/memory.db corren varios daemons. B no tiene sync (o su sesión muere antes
 // de empujar) e indexa Gamma; A, con sync, ve el árbol limpio. Con la marca en memoria de un proceso
-// A no empujaba nunca (medido: pushes=1 tras 3 ticks). Sabotaje que la pone roja: que el scheduler
-// decida con `cambio` —lo que indexó SU tick— en vez de con la generación de la base.
+// A no empujaba nunca (medido: pushes=1 tras 3 ticks).
+//
+// Sabotaje que la pone roja: que el scheduler decida con `cambio` —lo que indexó SU tick— en vez de con la generación de la base.
+// arnes: archivo="internal/mcp/scheduler.go"
+// arnes: de="s.empujarGrafoSiHaceFalta(ctx)"
+// arnes: a="if cambio {\n\t\ts.pushCodeGraphToCentral(ctx)\n\t}"
 func TestUnCambioQueIndexoOtroDaemonLlegaAlCentral(t *testing.T) {
 	central := nuevoCentralQueCuentaPushes(t)
 	dir := proyectoGoSinIndexar(t)
@@ -65,7 +69,13 @@ func TestUnCambioQueIndexoOtroDaemonLlegaAlCentral(t *testing.T) {
 //
 // musubi_codegraph_index indexa y empuja; si ese push falla, la empujada no avanza y el próximo tick
 // del scheduler ve generación > empujada. Antes el scheduler no se enteraba (medido: pushes=2,
-// esperaba 3). Sabotaje que la pone roja: marcar empujado ANTES de PushGraph.
+// esperaba 3).
+//
+// Sabotaje que la pone roja: marcar empujado ANTES de PushGraph, o sea aunque el push falle.
+// arnes: archivo="internal/mcp/methods_codegraph.go"
+// arnes: de="if err := s.syncClient.PushGraph(foto.Nodes"
+// arnes: a="_ = s.engine.MarcarGrafoEmpujado(foto.Generacion, time.Now())\n\tif err := s.syncClient.PushGraph(foto.Nodes"
+// arnes: colision_ok="TestUnaFotoQueFallaNoMandaNadaAlCentral"
 func TestUnPushFallidoDeLaToolLoReintentaElScheduler(t *testing.T) {
 	central := nuevoCentralQueCuentaPushes(t)
 	dir := proyectoGoSinIndexar(t)
@@ -94,8 +104,17 @@ func TestUnPushFallidoDeLaToolLoReintentaElScheduler(t *testing.T) {
 // Dos daemons pueden cruzar sus fotos en la red y dejar al central con una vieja mientras la base
 // dice «empujada». Nada local lo ve, así que se empuja cada 24 h aunque no haya cambios. Y una base
 // que nunca escribió el grafo NO empuja por higiene: la foto saldría vacía y un push vacío borra el
-// grafo del central. Sabotajes que la ponen roja: sacar la condición de las 24 h, y sacar el
-// `Generacion > 0`.
+// grafo del central.
+//
+// Sabotaje que la pone roja: sacar la condición de las 24 h.
+// arnes: archivo="internal/mcp/methods_codegraph.go"
+// arnes: de="ahora.Sub(est.EmpujadoEn) >= higieneDelPushDelGrafo"
+// arnes: a="false"
+//
+// Sabotaje que la pone roja: sacar el `Generacion > 0` y dejar que una base sin grafo empuje la foto vacía.
+// arnes: archivo="internal/mcp/methods_codegraph.go"
+// arnes: de="return est.Generacion > 0 &&"
+// arnes: a="return"
 func TestElPushDeHigieneSaleCada24Horas(t *testing.T) {
 	central := nuevoCentralQueCuentaPushes(t)
 	s := servidorFederado(t, proyectoGoSinIndexar(t), central)
@@ -138,7 +157,11 @@ func TestElPushDeHigieneSaleCada24Horas(t *testing.T) {
 // El push del scheduler viaja sin dispatchMu, así que un save_code puede re-derivar un paquete
 // mientras la foto vieja está en la red. Con el atomic, el Store(!ok) final pisaba la marca del
 // save_code (medido: pushes=1, pendiente=false). Ahora se marca empujada la generación DE LA FOTO.
-// Sabotaje que la pone roja: marcar con la generación leída después del push.
+//
+// Sabotaje que la pone roja: marcar con la generación leída después del push, no con la de la foto.
+// arnes: archivo="internal/mcp/methods_codegraph.go"
+// arnes: de="MarcarGrafoEmpujado(foto.Generacion, time.Now()); err != nil"
+// arnes: a="MarcarGrafoEmpujado(func() int64 { e, _ := s.engine.EstadoDelPushDelGrafo(); return e.Generacion }(), time.Now()); err != nil"
 func TestUnaEscrituraDuranteElPushSeFederaAlTickSiguiente(t *testing.T) {
 	dir := proyectoGoSinIndexar(t)
 	var srv atomic.Pointer[McpServer]
@@ -183,8 +206,12 @@ func TestUnaEscrituraDuranteElPushSeFederaAlTickSiguiente(t *testing.T) {
 //
 // El protocolo es de reemplazo: si dos push viajan a la vez, el que llega último gana aunque traiga
 // la foto más vieja. El stub retiene el primer push (el del scheduler) y mira si llega un segundo
-// (el de la tool) antes de soltarlo. Sabotaje que la pone roja: sacar el pushMu.Lock de
-// pushCodeGraphToCentral.
+// (el de la tool) antes de soltarlo.
+//
+// Sabotaje que la pone roja: sacar el pushMu.Lock de pushCodeGraphToCentral, el push de la tool.
+// arnes: archivo="internal/mcp/methods_codegraph.go"
+// arnes: de="\ts.pushMu.Lock()\n\tdefer s.pushMu.Unlock()\n\treturn true, s.empujarFotoDelGrafo(ctx)"
+// arnes: a="\treturn true, s.empujarFotoDelGrafo(ctx)"
 func TestLosPushDeLaToolYDelSchedulerNoSeCruzan(t *testing.T) {
 	dir := proyectoGoSinIndexar(t)
 	var llegados atomic.Int64
@@ -243,8 +270,12 @@ func TestLosPushDeLaToolYDelSchedulerNoSeCruzan(t *testing.T) {
 // M4 — UNA FOTO QUE FALLA NO MANDA NADA AL CENTRAL.
 //
 // El protocolo es de reemplazo: listas vacías no dicen «no pude leer» sino «borrá todo lo mío». Un
-// contexto cancelado hace fallar el BeginTx de la foto de forma determinista. Sabotaje que la pone
-// roja: sacar el `return false` tras el error de FotoDelGrafoCtx (S1).
+// contexto cancelado hace fallar el BeginTx de la foto de forma determinista.
+//
+// Sabotaje que la pone roja: sacar el `return false` tras el error de FotoDelGrafoCtx (S1).
+// arnes: archivo="internal/mcp/methods_codegraph.go"
+// arnes: de="\t\treturn false\n\t}\n\tif err := s.syncClient.PushGraph("
+// arnes: a="\t}\n\tif err := s.syncClient.PushGraph("
 func TestUnaFotoQueFallaNoMandaNadaAlCentral(t *testing.T) {
 	central := nuevoCentralQueCuentaPushes(t)
 	s := servidorFederado(t, proyectoGoSinIndexar(t), central)

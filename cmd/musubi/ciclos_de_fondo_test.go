@@ -42,6 +42,11 @@ var ambosCiclos = config.MaintenanceConfig{AutoIntervalHours: 6, GraphIndexHours
 //
 // runDaemon llama esto y DESPUÉS atiende el loop stdio. Un scheduler lanzado sin `go` no vuelve
 // nunca, y el daemon arranca mudo: el cliente MCP espera un initialize que nadie contesta.
+//
+// Sabotaje que la pone roja: lanzar RunCodeGraphScheduler sin `go` (S5). Falla a los 5 s, no cuelga.
+// arnes: archivo="cmd/musubi/ciclos_de_fondo.go"
+// arnes: de="go srv.RunCodeGraphScheduler("
+// arnes: a="srv.RunCodeGraphScheduler("
 func TestLanzarLosCiclosDeFondoNoBloqueaAlDaemon(t *testing.T) {
 	f := nuevoCicloFalso()
 	close(f.soltar)
@@ -69,6 +74,11 @@ func TestLanzarLosCiclosDeFondoNoBloqueaAlDaemon(t *testing.T) {
 //
 // Los dos escriben, y el mantenimiento puede traer un VACUUM. El canal que recibe el scheduler del
 // grafo tiene que seguir abierto mientras el mantenimiento corre, y cerrarse cuando termina.
+//
+// Sabotaje que la pone roja: cerrar el canal al ENTRAR a la goroutine del mantenimiento y no al salir (S2).
+// arnes: archivo="cmd/musubi/ciclos_de_fondo.go"
+// arnes: de="defer close(mantenimientoDeArranque)"
+// arnes: a="close(mantenimientoDeArranque)"
 func TestElGrafoEsperaAlMantenimientoDeArranque(t *testing.T) {
 	f := nuevoCicloFalso()
 	ctx, cancel := context.WithCancel(context.Background())

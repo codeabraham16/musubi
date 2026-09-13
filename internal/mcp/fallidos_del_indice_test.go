@@ -7,7 +7,12 @@ import "testing"
 // En el incremental `skipped` son archivos SIN CAMBIO y los fallidos van en `failed`; en el completo
 // `skipped` son los directorios que FALLARON. Confundirlas sella el commit del índice con fallidos o
 // lo frena con el árbol sano, y ninguna otra prueba lo notaba: con `return 0` la suite de mcp daba
-// ok. Sabotajes que la ponen roja: `return 0` (S3), o leer la misma clave en las dos corridas.
+// ok.
+//
+// Sabotaje que la pone roja: `return 0` al entrar (S3).
+// arnes: archivo="internal/mcp/methods_codegraph.go"
+// arnes: de="func fallidosDelIndice(res map[string]interface{}, incremental bool) int {"
+// arnes: a="func fallidosDelIndice(res map[string]interface{}, incremental bool) int {\n\treturn 0"
 func TestFallidosDelIndiceLeeLaClaveDeCadaCorrida(t *testing.T) {
 	casos := []struct {
 		nombre      string

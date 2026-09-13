@@ -13,8 +13,12 @@ import (
 //
 // La generación sube adentro de las funciones que escriben, no en los llamadores, justamente para
 // que un escritor no pueda olvidarse. Esta tabla es la lista: si mañana aparece un escritor nuevo de
-// nodos, aristas o gists, va acá. Sabotaje que la pone roja: sacar avanzarGeneracionDelGrafo de
-// cualquiera de los cinco (medido con PruneGraphFilesFrom).
+// nodos, aristas o gists, va acá.
+//
+// Sabotaje que la pone roja: sacar avanzarGeneracionDelGrafo de cualquiera de los cinco; el mecanizado es PruneGraphFilesFrom.
+// arnes: archivo="internal/memory/codegraph.go"
+// arnes: de="\tif err := avanzarGeneracionDelGrafo(tx); err != nil {\n\t\treturn 0, err\n\t}\n"
+// arnes: a=""
 func TestCadaEscritorDeLaFotoSubeLaGeneracion(t *testing.T) {
 	e, err := NewDbEngine(dirSembrado(t))
 	if err != nil {
