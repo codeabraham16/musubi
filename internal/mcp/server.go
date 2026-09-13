@@ -347,10 +347,21 @@ type McpServer struct {
 	// dispara un mantenimiento async (T5.3). maintBusy garantiza un solo ciclo en vuelo.
 	saveCount atomic.Int64
 	maintBusy atomic.Bool
-	// grafoPushPendiente marca que el grafo local tiene algo que el central todavía no recibió: un
-	// push del scheduler que falló, o un refresco que hizo otra tool (musubi_save_code). El próximo
-	// tick empuja aunque su propio incremental no encuentre cambios (ver reindexCodeGraphOnce).
-	grafoPushPendiente atomic.Bool
+	// pushMu serializa TODOS los push del grafo al central de este proceso: el de la tool
+	// musubi_codegraph_index y el del scheduler. Sin él no había orden entre los dos —la tool empuja
+	// con dispatchMu y el scheduler sin él— y como el protocolo es de REEMPLAZO, una foto vieja que
+	// llegaba después de una nueva dejaba al central atrás. La foto se lee ADENTRO de pushMu, así el
+	// orden de las lecturas es el orden de los envíos.
+	//
+	// ORDEN DE CANDADOS: dispatchMu → pushMu. La tool llega con dispatchMu tomado y pide pushMu; el
+	// scheduler pide sólo pushMu. Con pushMu tomado NUNCA se pide dispatchMu: por eso la marca de
+	// «empujado» (MarcarGrafoEmpujado) escribe directo en la base, sin withWriteLock. Pedirlo ahí
+	// cerraría el ciclo con una tool que espera pushMu teniendo dispatchMu.
+	//
+	// La marca de «qué tiene el central» NO vive acá: es durable, en la tabla meta (ver
+	// memory/codegraph_generacion.go), porque una marca en memoria no la ve el otro daemon que
+	// comparte la base ni sobrevive a la sesión que muere entre el índice y el push.
+	pushMu sync.Mutex
 	// syncClient empuja las filas del outbox al cerebro central (F2); nil ⇒ sync desactivado
 	// (el drain no arranca). syncCfg trae los parámetros del drain (batch/lease/backoff/tope).
 	// Ambos los fija el entrypoint (SetSyncClient) cuando sync.enabled && central_url != "".

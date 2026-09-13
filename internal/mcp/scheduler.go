@@ -498,14 +498,11 @@ func (s *McpServer) reindexCodeGraphOnce(ctx context.Context) {
 	s.sellarHeadDelIndice(fallidos, s.withWriteLock)
 
 	// FEDERACIÓN SÓLO SI HAY ALGO NUEVO QUE CONTAR. El push manda el grafo ENTERO (11.415 nodos y
-	// 27.350 aristas en Musubi) y antes salía en cada tick aunque no hubiera cambiado un byte. La
-	// excepción es un push anterior que falló: el central se quedó con la foto vieja, y esperar al
-	// próximo cambio de código para reintentar la dejaría vieja por tiempo indefinido.
-	if cambio || s.grafoPushPendiente.Load() {
-		if attempted, ok := s.pushCodeGraphToCentral(ctx); attempted {
-			s.grafoPushPendiente.Store(!ok)
-		}
-	}
+	// 27.350 aristas en Musubi) y antes salía en cada tick aunque no hubiera cambiado un byte. Qué es
+	// «nuevo» NO lo decide `cambio` —lo que indexó ESTE tick—, sino la generación durable de la base
+	// contra la empujada: así cuenta también lo que indexó otro daemon, lo que refrescó save_code, el
+	// push de la tool que falló y el de una sesión que murió antes de empujar.
+	s.empujarGrafoSiHaceFalta(ctx)
 }
 
 // RunDistillScheduler es el AUTO-DRAIN del acervo de diseño (pilar Musubi Renaissance, el "molino

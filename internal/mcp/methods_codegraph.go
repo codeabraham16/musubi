@@ -682,10 +682,71 @@ func (s *McpServer) toolCodegraphIndex(ctx context.Context, raw json.RawMessage)
 // del cerebro compartido) — igual que el drain entrante. Cualquier fallo se loguea y se traga: no
 // rompe el index. Devuelve (attempted, ok): attempted=false cuando el gate está apagado (no-op sin
 // red); ok=true sólo si el push se concretó.
+//
+// Toma pushMu (ver server.go): la tool llega acá con dispatchMu tomado, y el orden es
+// dispatchMu → pushMu.
 func (s *McpServer) pushCodeGraphToCentral(ctx context.Context) (attempted, ok bool) {
-	if s.syncClient == nil || !s.memory.TeamMode {
+	if !s.federaElGrafo() {
 		return false, false // no-op: sin sync o proyecto local (R6/E4)
 	}
+	s.pushMu.Lock()
+	defer s.pushMu.Unlock()
+	return true, s.empujarFotoDelGrafo(ctx)
+}
+
+// higieneDelPushDelGrafo es cada cuánto se empuja el grafo aunque la generación no haya cambiado.
+//
+// POR QUÉ HACE FALTA SI YA HAY GENERACIÓN. La generación y la marca de empujada son de la BASE, y
+// pushMu sólo ordena los push de UN proceso. Dos daemons sobre la misma base pueden cruzar sus
+// fotos en la red: A lee la generación 5, B lee la 6, el push de B llega primero y el de A después.
+// El central queda con la 5 y la base dice «empujada 6». Nada local puede verlo, porque el orden de
+// llegada lo sabe el central. Un push cada 24 h lo cura sin volver al push de cada tick (que eran 24
+// grafos enteros por día por daemon con el intervalo de 1 h).
+const higieneDelPushDelGrafo = 24 * time.Hour
+
+// empujarGrafoSiHaceFalta es el push del scheduler: el mismo envío que la tool, pero sólo si el
+// central está atrás (generación > empujada) o si el último push exitoso venció la higiene. La
+// pregunta se hace ADENTRO de pushMu, así un push de la tool que acaba de terminar ya cuenta.
+func (s *McpServer) empujarGrafoSiHaceFalta(ctx context.Context) (attempted, ok bool) {
+	if !s.federaElGrafo() {
+		return false, false
+	}
+	s.pushMu.Lock()
+	defer s.pushMu.Unlock()
+	if !s.grafoPorEmpujar(time.Now()) {
+		return false, false
+	}
+	return true, s.empujarFotoDelGrafo(ctx)
+}
+
+// federaElGrafo es el gate de la federación del grafo: sync configurado Y team mode.
+func (s *McpServer) federaElGrafo() bool {
+	return s.syncClient != nil && s.memory.TeamMode
+}
+
+// grafoPorEmpujar decide si el central necesita la foto.
+//
+// Una generación 0 es una base que nunca escribió el grafo (o una vieja, anterior a la generación):
+// ahí la higiene NO empuja, porque la foto saldría vacía y el protocolo es de REEMPLAZO — un push
+// vacío BORRA el grafo del central. Un grafo que quedó vacío de verdad (todo podado) tiene
+// generación > 0 y sí viaja, que es lo correcto.
+//
+// Si el estado no se puede leer, se empuja: un push de más cuesta un grafo por la red, uno de menos
+// deja al central atrás sin que nadie lo vea.
+func (s *McpServer) grafoPorEmpujar(ahora time.Time) bool {
+	est, err := s.engine.EstadoDelPushDelGrafo()
+	if err != nil {
+		logx.Error("federación del grafo: no se pudo leer qué generación tiene el central (se empuja por las dudas)", "error", err)
+		return true
+	}
+	if est.Generacion > est.Empujada {
+		return true
+	}
+	return est.Generacion > 0 && ahora.Sub(est.EmpujadoEn) >= higieneDelPushDelGrafo
+}
+
+// empujarFotoDelGrafo lee la foto y la manda. Se llama con pushMu tomado.
+func (s *McpServer) empujarFotoDelGrafo(ctx context.Context) bool {
 	// LA FOTO SE LEE EN UNA SOLA TRANSACCIÓN, no en tres lecturas sueltas: el protocolo es de
 	// REEMPLAZO y una foto con nodos de un instante y aristas de otro queda así en el central hasta
 	// el próximo push. Por qué transacción y no dispatchMu: ver memory.FotoDelGrafoCtx.
@@ -697,17 +758,26 @@ func (s *McpServer) pushCodeGraphToCentral(ctx context.Context) (attempted, ok b
 	// lista vacía no significa "no pude leerlos" sino "borrá todos los míos". Ante una lectura
 	// fallida, no federar nada es lo único seguro — el grafo local ya quedó bien y el próximo index
 	// reintenta.
+	//
+	// Sabotaje que lo pone rojo: sacar el `return false` de acá abajo → TestUnaFotoQueFallaNoMandaNadaAlCentral.
 	foto, err := s.engine.FotoDelGrafoCtx(s.scopedCtx(ctx))
 	if err != nil {
 		logx.Error("federación del grafo: no se pudo leer la foto local (se aborta el push para no borrar lo del central)", "error", err)
-		return true, false
+		return false
 	}
 	if err := s.syncClient.PushGraph(foto.Nodes, foto.Edges, foto.Gists); err != nil {
+		// La empujada NO avanza: el próximo tick del scheduler ve generación > empujada y reintenta,
+		// sea este push de la tool o del propio scheduler.
 		logx.Error("federación del grafo: el push al central falló (best-effort, no rompe el index)", "error", err)
-		return true, false
+		return false
 	}
-	logx.Info("federación del grafo: empujado al central", "nodes", len(foto.Nodes), "edges", len(foto.Edges), "gists", len(foto.Gists))
-	return true, true
+	// Se marca la generación DE LA FOTO, no la de ahora (ver memory.MarcarGrafoEmpujado). Si la marca
+	// no se puede escribir, el push igual salió: lo peor es un push repetido en el próximo tick.
+	if err := s.engine.MarcarGrafoEmpujado(foto.Generacion, time.Now()); err != nil {
+		logx.Error("federación del grafo: empujado, pero no se pudo registrar la generación empujada", "error", err)
+	}
+	logx.Info("federación del grafo: empujado al central", "nodes", len(foto.Nodes), "edges", len(foto.Edges), "gists", len(foto.Gists), "generacion", foto.Generacion)
+	return true
 }
 
 // toolCodegraphPush RECIBE el grafo de código federado de un proyecto (Track 20 · F6): el daemon

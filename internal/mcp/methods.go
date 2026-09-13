@@ -1936,13 +1936,11 @@ func (s *McpServer) toolSaveCode(ctx context.Context, raw json.RawMessage) (inte
 	// `treesitter` devuelve true igual para los poliglotas y el refresh no encuentra símbolos —
 	// que es exactamente lo que hay que hacer visible, y lo hace `codegraph_index`.
 	if codeintel.IndexableForGraph(key) {
-		// Y SI EL GRAFO CAMBIÓ ACÁ, EL CENTRAL NO SE ENTERA POR EL SCHEDULER. El scheduler empuja
-		// sólo cuando SU incremental encuentra algo, y este refresco deja el fingerprint al día:
-		// el próximo tick ve el paquete limpio y no empujaría nunca lo que cambió en este guardado.
-		// Antes no hacía falta porque el scheduler empujaba en cada tick, cambiara algo o no.
-		if err := s.refreshCodeGraphForPackage(ctx, packageDirOf(key)); err == nil {
-			s.grafoPushPendiente.Store(true)
-		}
+		// Este refresco deja el fingerprint al día, así que el incremental del próximo tick ve el
+		// paquete LIMPIO. Que el central igual se entere no depende de nada que se haga acá: la
+		// escritura del grafo (y la del gist, más arriba) sube la generación durable en su propia
+		// transacción, y el scheduler empuja cuando la generación supera a la empujada.
+		_ = s.refreshCodeGraphForPackage(ctx, packageDirOf(key))
 	}
 	res := map[string]interface{}{"ok": true, "path": cm.Path, "tokens": cm.Tokens, "symbols_derivados": symbolsDerivados}
 	if !symbolsDerivados {
