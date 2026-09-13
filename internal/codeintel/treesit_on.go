@@ -106,7 +106,7 @@ type defSpan struct {
 // «SIN PÁNICO» ERA UNA PROMESA DEL COMENTARIO Y NO DEL CÓDIGO. Hasta el 2026-09-12 esta función no
 // tenía ninguna red: un pánico adentro de la gramática o del motor subía por `DerivePackage` →
 // `toolCodegraphIndex` → `reindexCodeGraphOnce` hasta `RunCodeGraphScheduler`, que corre en una
-// goroutine PELADA (`go server.RunCodeGraphScheduler(...)`, cmd/musubi/main.go:558). Un pánico ahí
+// goroutine PELADA (`go server.RunCodeGraphScheduler(...)`, cmd/musubi/main.go:568). Un pánico ahí
 // no degrada un archivo: se lleva el proceso entero —la memoria, el MCP, todo— por un `.js`
 // cualquiera de un repo indexado.
 //

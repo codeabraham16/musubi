@@ -424,7 +424,9 @@ func runServe(args []string) {
 	// VAN SÓLO EL MANTENIMIENTO Y SU CORRIDA DE ARRANQUE, y no los otros tres schedulers del
 	// daemon: el del grafo indexa el árbol CHECKOUTEADO y en un servidor no hay proyecto que
 	// indexar; el de sombra es no-op salvo que alguien lo encienda. Agregarlos sería trabajo
-	// programado sin nadie que lo pidió.
+	// programado sin nadie que lo pidió. Por el mismo motivo tampoco va la corrida de ARRANQUE
+	// del grafo que el daemon sí tiene: el central no tiene árbol de fuentes, su grafo llega
+	// federado por musubi_codegraph_push.
 	if cfg.Maintenance.AutoIntervalHours > 0 {
 		go func() {
 			if ran, rep, mErr := server.RunScheduledMaintenance(); mErr != nil {
@@ -541,8 +543,13 @@ func runDaemon() {
 	// El ctx se cancela al retornar de runDaemon (señal o EOF de stdin), parando el ticker.
 	maintCtx, stopMaint := context.WithCancel(context.Background())
 	defer stopMaint()
+	// `mantenimientoDeArranque` se cierra cuando esa corrida de arranque termina (o enseguida, si el
+	// mantenimiento está apagado): la corrida de arranque del grafo lo espera, porque las dos
+	// escriben y no hay motivo para que compitan por la base en el primer minuto del daemon.
+	mantenimientoDeArranque := make(chan struct{})
 	if cfg.Maintenance.AutoIntervalHours > 0 {
 		go func() {
+			defer close(mantenimientoDeArranque)
 			if ran, rep, mErr := server.RunScheduledMaintenance(); mErr != nil {
 				fmt.Fprintf(os.Stderr, "musubi: auto-mantenimiento de arranque falló: %v\n", mErr)
 			} else if ran {
@@ -550,12 +557,15 @@ func runDaemon() {
 			}
 		}()
 		go server.RunMaintenanceScheduler(maintCtx, time.Duration(cfg.Maintenance.AutoIntervalHours*float64(time.Hour)))
+	} else {
+		close(mantenimientoDeArranque)
 	}
 	// El grafo de código se mantiene solo (P3). Va en su PROPIO gate y no colgado del de
 	// mantenimiento: son dos ciclos con costos y riesgos distintos, y quien apague el
 	// mantenimiento de la memoria no está pidiendo que además se le quede rancio el grafo.
+	// Corre una vez al arrancar (después del mantenimiento de arranque) y después por intervalo.
 	if cfg.Maintenance.GraphIndexHours > 0 {
-		go server.RunCodeGraphScheduler(maintCtx, time.Duration(cfg.Maintenance.GraphIndexHours*float64(time.Hour)))
+		go server.RunCodeGraphScheduler(maintCtx, time.Duration(cfg.Maintenance.GraphIndexHours*float64(time.Hour)), mantenimientoDeArranque)
 	}
 	// Auto-drain del acervo (pilar Musubi Renaissance): no-op sin motor de cognición o con el intervalo
 	// en 0. Va en su propio gate, como el grafo — dos ciclos con costos distintos.

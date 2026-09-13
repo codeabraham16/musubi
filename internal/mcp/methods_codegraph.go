@@ -459,16 +459,47 @@ func reportarIgnorados(res map[string]interface{}, ignorados map[string]int) {
 // y salta los sin cambio. El dir de un fantasma que aún existe se re-deriva para limpiar aristas
 // colgantes que lo referenciaban. Devuelve {packages, pruned, skipped, nodes, edges}.
 func (s *McpServer) indexIncremental(ctx context.Context) (map[string]interface{}, error) {
+	plan, err := s.planearIncremental(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.aplicarIncremental(ctx, plan), nil
+}
+
+// planIncremental es lo que el índice incremental VA a hacer, calculado sin escribir nada.
+//
+// Va separado de la aplicación para que el scheduler pueda preguntar «¿hay algo que hacer?» SIN el
+// candado del despacho: con el árbol quieto —casi todos los ticks— la respuesta es no, y antes esa
+// respuesta se averiguaba con dispatchMu tomado, o sea con TODAS las tools del daemon congeladas
+// mientras se leían los fingerprints de ~840 archivos. Una sola función arma el plan, así que la
+// pregunta del scheduler y el trabajo de la tool no pueden separarse con el tiempo.
+type planIncremental struct {
+	dirtyDirs       map[string]bool
+	ghostPaths      []string
+	skipped         int
+	derivadorViejo  string
+	derivadorCambio bool
+	ignorados       map[string]int
+}
+
+// sinCambios: nada que re-derivar, nada que podar y el derivador al día.
+func (p planIncremental) sinCambios() bool {
+	return len(p.dirtyDirs) == 0 && len(p.ghostPaths) == 0 && !p.derivadorCambio
+}
+
+// planearIncremental compara el grafo guardado contra el disco y devuelve el plan. Sólo LEE (la
+// base y el árbol), así que es seguro correrlo sin el candado del despacho.
+func (s *McpServer) planearIncremental(ctx context.Context) (planIncremental, error) {
 	scoped := s.scopedCtx(ctx)
 	stored, err := s.engine.GraphFileFingerprintsCtx(scoped)
 	if err != nil {
-		return nil, err
+		return planIncremental{}, err
 	}
 	// `walkSourceTree` devuelve tres valores desde que esta rama agregó `ignorados` (qué quedó
 	// afuera por lenguaje); main usa `dirsDisco` para el barrido del derivador. Los dos hacen falta.
 	dirsDisco, diskFiles, ignorados := s.walkSourceTree()
 
-	dirtyDirs := map[string]bool{}
+	plan := planIncremental{dirtyDirs: map[string]bool{}, ignorados: ignorados}
 
 	// EL DERIVADOR CAMBIÓ ⇒ TODO ES SUCIO, UNA VEZ. El fingerprint es el sha256 del contenido, así
 	// que sigue al input y no a quien lo deriva: sin esta puerta, una mejora del derivador jamás
@@ -476,48 +507,53 @@ func (s *McpServer) indexIncremental(ctx context.Context) (map[string]interface{
 	// distintas, sin que nada lo declare. Ya pasó —seis paquetes quedaron sin aristas cross-paquete
 	// durante tres semanas porque sus filas eran de catorce horas antes de que existiera el
 	// resolvedor— y sólo se descubrió midiendo a mano. Ver codeintel.GraphDeriverVersion.
-	derivadorViejo, _, _ := s.engine.GetMeta(memory.MetaCodegraphDeriver)
-	derivadorCambio := derivadorViejo != codeintel.GraphDeriverVersion
-	if derivadorCambio {
+	plan.derivadorViejo, _, _ = s.engine.GetMeta(memory.MetaCodegraphDeriver)
+	plan.derivadorCambio = plan.derivadorViejo != codeintel.GraphDeriverVersion
+	if plan.derivadorCambio {
 		for dir := range dirsDisco {
-			dirtyDirs[dir] = true
+			plan.dirtyDirs[dir] = true
 		}
 	}
-	var ghostPaths []string
-	skipped := 0
 	for path, fp := range stored {
 		if !diskFiles[path] {
-			ghostPaths = append(ghostPaths, path)
+			plan.ghostPaths = append(plan.ghostPaths, path)
 			if dir := packageDirOf(path); s.dirExists(dir) {
-				dirtyDirs[dir] = true // re-derivar para soltar aristas que apuntaban al fantasma
+				plan.dirtyDirs[dir] = true // re-derivar para soltar aristas que apuntaban al fantasma
 			}
 			continue
 		}
 		cur, ferr := memory.FileFingerprint(s.projectPath, path)
 		if ferr == nil && cur == fp {
-			skipped++
+			plan.skipped++
 			continue
 		}
-		dirtyDirs[packageDirOf(path)] = true
+		plan.dirtyDirs[packageDirOf(path)] = true
 	}
 	for path := range diskFiles {
 		if _, ok := stored[path]; !ok {
-			dirtyDirs[packageDirOf(path)] = true // archivo nuevo
+			plan.dirtyDirs[packageDirOf(path)] = true // archivo nuevo
 		}
 	}
+	return plan, nil
+}
 
+// aplicarIncremental ejecuta un plan: poda, re-deriva y sella. ESCRIBE, así que va con el candado
+// del despacho tomado (la tool lo tiene por el despacho; el scheduler lo toma para esto y nada más).
+// Devuelve {packages, pruned, skipped, nodes, edges}.
+func (s *McpServer) aplicarIncremental(ctx context.Context, plan planIncremental) map[string]interface{} {
+	scoped := s.scopedCtx(ctx)
 	pruned := 0
-	if len(ghostPaths) > 0 {
+	if len(plan.ghostPaths) > 0 {
 		// Poda scopeada por credencial (como el refresh): sin proyecto atribuible, no borramos.
 		if origin, ok := writeOriginFor(principalFrom(ctx), ""); ok {
-			if n, perr := s.engine.PruneGraphFilesFrom(origin, ghostPaths); perr == nil {
+			if n, perr := s.engine.PruneGraphFilesFrom(origin, plan.ghostPaths); perr == nil {
 				pruned = n
 			}
 		}
 	}
 	refreshed := 0
 	var fallidos []string
-	for dir := range dirtyDirs {
+	for dir := range plan.dirtyDirs {
 		if err := s.refreshCodeGraphForPackage(ctx, dir); err == nil {
 			refreshed++
 		} else {
@@ -529,20 +565,20 @@ func (s *McpServer) indexIncremental(ctx context.Context) (map[string]interface{
 	// condenaría a no reintentarse NUNCA: la próxima corrida vería la versión al día, volvería a
 	// saltearlos por fingerprint, y quedarían derivados por el motor viejo para siempre. Que es
 	// exactamente el modo de falla que esta puerta vino a cerrar.
-	if debeSellarDerivador(derivadorCambio, len(fallidos)) {
+	if debeSellarDerivador(plan.derivadorCambio, len(fallidos)) {
 		_ = s.engine.SetMeta(memory.MetaCodegraphDeriver, codeintel.GraphDeriverVersion)
 	}
 
 	nodes, edges := s.graphSize(scoped)
 	res := map[string]interface{}{
 		"mode": "incremental", "packages": refreshed, "pruned": pruned,
-		"skipped": skipped, "nodes": nodes, "edges": edges,
+		"skipped": plan.skipped, "nodes": nodes, "edges": edges,
 	}
-	if derivadorCambio {
+	if plan.derivadorCambio {
 		// Se declara, porque cambia el costo de la corrida de golpe y sin aviso se lee como un
 		// cuelgue: una barrida entera donde se esperaba un incremental barato.
 		res["deriver_changed"] = true
-		res["deriver_from"] = derivadorViejo
+		res["deriver_from"] = plan.derivadorViejo
 		res["deriver_to"] = codeintel.GraphDeriverVersion
 	}
 	if len(fallidos) > 0 {
@@ -552,9 +588,54 @@ func (s *McpServer) indexIncremental(ctx context.Context) (map[string]interface{
 	}
 	// Mismo criterio que en el índice completo: `failed` es «no pude derivar» e `ignorados` es
 	// «no entiendo ese lenguaje». Son dos hechos distintos y se informan por separado.
-	reportarIgnorados(res, ignorados)
-	return res, nil
+	reportarIgnorados(res, plan.ignorados)
+	return res
 }
+
+// fallidosDelIndice cuenta los directorios que el índice NO pudo derivar. Las dos corridas lo dicen
+// con claves distintas, y la confusión muerde: en el incremental `skipped` son archivos SIN CAMBIO
+// (lo sano), y en el completo `skipped` son directorios que FALLARON. Leer la clave equivocada
+// sellaría el commit con fallidos o lo frenaría con un árbol perfecto.
+func fallidosDelIndice(res map[string]interface{}, incremental bool) int {
+	if incremental {
+		n, _ := res["failed"].(int)
+		return n
+	}
+	n, _ := res["skipped"].(int)
+	return n
+}
+
+// sellarHeadDelIndice registra DE QUÉ COMMIT es el índice que acaba de terminar, y es la regla ÚNICA
+// que usan la tool y el scheduler. Devuelve el commit sellado, o "" si no se selló.
+//
+// POR QUÉ EL SCHEDULER TAMBIÉN SELLA. Antes sólo lo hacía la tool: medido el 2026-09-13, el sello
+// seguía en 6175c21 (del 2026-09-06) aunque el scheduler había re-indexado 722 archivos el
+// 2026-09-11. La pista de un miss repetía ese commit viejo como «el árbol del índice», o sea que el
+// scheduler mantenía el grafo al día y la única etiqueta que lo decía afirmaba lo contrario.
+//
+// NO SE SELLA CON FALLIDOS, por la misma trampa que debeSellarDerivador: un sello al día sobre
+// directorios que no se derivaron hace que un grafo con agujeros se lea como del commit actual.
+//
+// `escribir` envuelve la escritura en la base. La tool ya corre con el candado del despacho tomado y
+// pasa una llamada directa; el scheduler pasa withWriteLock. Así el commit se averigua —un `git` de
+// hasta 2 s— sin candado, y el candado se toma sólo si el sello de verdad cambia.
+func (s *McpServer) sellarHeadDelIndice(fallidos int, escribir func(func())) string {
+	if fallidos > 0 {
+		return ""
+	}
+	head := s.commitDeHEAD()
+	if head == "" {
+		return ""
+	}
+	if previo, ok, _ := s.engine.GetMeta(memory.MetaCodegraphHead); ok && previo == head {
+		return head
+	}
+	escribir(func() { _ = s.engine.SetMeta(memory.MetaCodegraphHead, head) })
+	return head
+}
+
+// directo corre fn sin tomar nada: es el `escribir` de quien YA tiene el candado del despacho.
+func directo(fn func()) { fn() }
 
 func (s *McpServer) toolCodegraphIndex(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
@@ -565,18 +646,23 @@ func (s *McpServer) toolCodegraphIndex(ctx context.Context, raw json.RawMessage)
 		res map[string]interface{}
 		err error
 	)
-	if strings.EqualFold(strings.TrimSpace(args.Mode), "incremental") {
+	incremental := strings.EqualFold(strings.TrimSpace(args.Mode), "incremental")
+	if incremental {
 		res, err = s.indexIncremental(ctx)
 	} else {
 		res, err = s.indexAllPackages(ctx)
 	}
 	// De QUÉ ÁRBOL es este índice. Se registra al indexar y no al consultar porque es un hecho del
 	// momento del índice, no del momento de la pregunta: registrarlo tarde diría el commit de HOY
-	// sobre un grafo derivado la semana pasada, que es peor que no decir nada.
+	// sobre un grafo derivado la semana pasada, que es peor que no decir nada. La regla vive en
+	// sellarHeadDelIndice porque el scheduler la comparte; esta tool ya tiene el candado del
+	// despacho, así que escribe directo.
 	if err == nil {
-		if head := s.commitDeHEAD(); head != "" {
-			_ = s.engine.SetMeta(memory.MetaCodegraphHead, head)
+		fallidos := fallidosDelIndice(res, incremental)
+		if head := s.sellarHeadDelIndice(fallidos, directo); head != "" {
 			res["indexed_head"] = head
+		} else if fallidos > 0 {
+			res["head_not_sealed"] = strconv.Itoa(fallidos) + " directorios sin derivar: el commit del índice no se sella hasta que una barrida salga entera"
 		}
 	}
 	if err != nil {
@@ -600,34 +686,27 @@ func (s *McpServer) pushCodeGraphToCentral(ctx context.Context) (attempted, ok b
 	if s.syncClient == nil || !s.memory.TeamMode {
 		return false, false // no-op: sin sync o proyecto local (R6/E4)
 	}
-	scoped := s.scopedCtx(ctx)
-	nodes, err := s.engine.AllGraphNodesCtx(scoped)
-	if err != nil {
-		logx.Error("federación del grafo: no se pudieron leer los nodos locales", "error", err)
-		return true, false
-	}
-	edges, err := s.engine.AllGraphEdgesCtx(scoped)
-	if err != nil {
-		logx.Error("federación del grafo: no se pudieron leer las aristas locales", "error", err)
-		return true, false
-	}
+	// LA FOTO SE LEE EN UNA SOLA TRANSACCIÓN, no en tres lecturas sueltas: el protocolo es de
+	// REEMPLAZO y una foto con nodos de un instante y aristas de otro queda así en el central hasta
+	// el próximo push. Por qué transacción y no dispatchMu: ver memory.FotoDelGrafoCtx.
+	//
 	// Los GISTS viajan con el grafo. Sin esto el central se quedaba con la estructura y sin los
 	// titulares: 4.862 nodos federados contra 0 filas en code_memory, medido el 2026-08-12.
 	//
-	// Si leerlos falla se ABORTA el push entero, y es a propósito: el protocolo es de REEMPLAZO,
-	// así que mandar la lista vacía no significa "no pude leerlos" sino "borrá todos los míos".
-	// Ante una lectura fallida, no federar nada es lo único seguro — el grafo local ya quedó bien
-	// y el próximo index reintenta.
-	gists, err := s.engine.AllCodeMemoryCtx(scoped)
+	// Si CUALQUIER parte de la foto falla se ABORTA el push entero, y es a propósito: mandar la
+	// lista vacía no significa "no pude leerlos" sino "borrá todos los míos". Ante una lectura
+	// fallida, no federar nada es lo único seguro — el grafo local ya quedó bien y el próximo index
+	// reintenta.
+	foto, err := s.engine.FotoDelGrafoCtx(s.scopedCtx(ctx))
 	if err != nil {
-		logx.Error("federación del grafo: no se pudieron leer los gists locales (se aborta el push para no borrar los del central)", "error", err)
+		logx.Error("federación del grafo: no se pudo leer la foto local (se aborta el push para no borrar lo del central)", "error", err)
 		return true, false
 	}
-	if err := s.syncClient.PushGraph(nodes, edges, gists); err != nil {
+	if err := s.syncClient.PushGraph(foto.Nodes, foto.Edges, foto.Gists); err != nil {
 		logx.Error("federación del grafo: el push al central falló (best-effort, no rompe el index)", "error", err)
 		return true, false
 	}
-	logx.Info("federación del grafo: empujado al central", "nodes", len(nodes), "edges", len(edges), "gists", len(gists))
+	logx.Info("federación del grafo: empujado al central", "nodes", len(foto.Nodes), "edges", len(foto.Edges), "gists", len(foto.Gists))
 	return true, true
 }
 

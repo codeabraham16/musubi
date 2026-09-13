@@ -365,8 +365,8 @@ func backoffSeconds(attempts, base, max int) int {
 	return v
 }
 
-// RunCodeGraphScheduler re-indexa el grafo de código de forma INCREMENTAL cada `interval`, hasta
-// que ctx se cancela. interval<=0 lo desactiva.
+// RunCodeGraphScheduler re-indexa el grafo de código de forma INCREMENTAL: una vez al arrancar y
+// después cada `interval`, hasta que ctx se cancela. interval<=0 lo desactiva.
 //
 // EL AGUJERO QUE TAPA. Hasta acá el grafo sólo se indexaba si un AGENTE llamaba
 // musubi_codegraph_index: no hay subcomando CLI, así que ni un hook de git ni un timer podían
@@ -377,18 +377,68 @@ func backoffSeconds(attempts, base, max int) int {
 // consumen musubi_impact y el precheck, que avisan del radio de impacto ANTES de escribir, así que
 // el precio de la ranciedad se paga en una decisión de código, no en una consulta curiosa.
 //
+// POR QUÉ UNA CORRIDA AL ARRANCAR. Sin ella el primer reindexado llegaba recién después de un
+// intervalo ENTERO, y un daemon de una sesión de Claude rara vez vive tanto: el grafo sólo se ponía
+// al día si el proceso sobrevivía 6 h. La corrida de arranque espera a `despuesDe` —el mantenimiento
+// de arranque, que también escribe y no tiene por qué competir con ella— y después una espera
+// aleatoria acotada: sobre la base de Musubi arrancan dos daemons casi juntos (tres sobre
+// altura-erp), y no hay candado entre procesos para reindexar. Sin la espera los dos derivan lo
+// mismo a la vez y se esperan en el busy_timeout; con ella el segundo suele encontrar el trabajo
+// hecho y su corrida es sólo leer fingerprints. `despuesDe` nil no espera a nadie.
+//
 // POR QUÉ INCREMENTAL Y NO COMPLETO: el incremental compara el fingerprint de cada archivo contra
 // el guardado y sólo re-deriva los paquetes sucios. Con el árbol quieto —el caso de casi todos los
-// ticks— la corrida es leer fingerprints y salir. Un índice completo cada 6 h sería quemar CPU para
+// ticks— la corrida es leer fingerprints y salir. Un índice completo cada tick sería quemar CPU para
 // llegar al mismo grafo.
 //
 // BEST-EFFORT, como el resto del scheduler: un fallo se loguea y el ciclo sigue. El grafo es una
 // AYUDA para el recall y el impacto; que un tick falle no puede tumbar el daemon ni bloquear una
 // herramienta.
-func (s *McpServer) RunCodeGraphScheduler(ctx context.Context, interval time.Duration) {
+func (s *McpServer) RunCodeGraphScheduler(ctx context.Context, interval time.Duration, despuesDe <-chan struct{}) {
 	if interval <= 0 {
 		return
 	}
+	s.correrSchedulerDelGrafo(ctx, interval, despuesDe, esperaDeArranqueDelGrafo(interval))
+}
+
+// topeEsperaArranqueGrafo acota la espera aleatoria de la corrida de arranque. Tiene que ser más
+// larga que una corrida sin cambios (para que dos daemons no se pisen) y corta al lado de la vida de
+// una sesión (para que la corrida de arranque siga siendo «al arrancar»).
+const topeEsperaArranqueGrafo = 90 * time.Second
+
+// esperaDeArranqueDelGrafo sortea la espera de la corrida de arranque en [0, tope), con el tope en
+// topeEsperaArranqueGrafo o en medio intervalo si es menor: esperar más que el intervalo sería
+// dejar que el primer tick llegue antes que la corrida de arranque.
+func esperaDeArranqueDelGrafo(interval time.Duration) time.Duration {
+	tope := min(topeEsperaArranqueGrafo, interval/2)
+	if tope <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int63n(int64(tope)))
+}
+
+// correrSchedulerDelGrafo es el cuerpo de RunCodeGraphScheduler con la espera ya sorteada, para que
+// las pruebas la fijen en vez de depender del azar o de un intervalo real.
+func (s *McpServer) correrSchedulerDelGrafo(ctx context.Context, interval time.Duration, despuesDe <-chan struct{}, espera time.Duration) {
+	// Un canal nil en un select bloquea para siempre: por eso se pregunta antes.
+	if despuesDe != nil {
+		select {
+		case <-ctx.Done():
+			return
+		case <-despuesDe:
+		}
+	}
+	if espera > 0 {
+		t := time.NewTimer(espera)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return
+		case <-t.C:
+		}
+	}
+	s.reindexCodeGraphOnce(ctx)
+
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -401,28 +451,61 @@ func (s *McpServer) RunCodeGraphScheduler(ctx context.Context, interval time.Dur
 	}
 }
 
-// reindexCodeGraphOnce corre UN índice incremental bajo el candado del despacho.
+// reindexCodeGraphOnce corre UN índice incremental, en tres tramos con candados distintos.
 //
-// Toma dispatchMu por el mismo motivo que RunScheduledMaintenance: escribe nodos y aristas, y sin
-// el candado se cruzaría con una tool en vuelo. Va en su propio método —y no inline en el select—
-// para que el `defer Unlock` cierre en cada vuelta en vez de acumularse hasta que muera el ticker.
+//  1. PREGUNTAR, SIN CANDADO. planearIncremental sólo lee la base y el disco. Con el árbol quieto
+//     —casi todos los ticks— el tick termina acá sin haber tocado dispatchMu. Antes esta pregunta
+//     se hacía con el candado EXCLUSIVO tomado: medido el 2026-09-13, una corrida sin cambios
+//     sostuvo dispatchMu 5,3 s, con todas las tools del daemon —las lectoras también— esperando.
+//     Leer sin candado es seguro acá: si un escritor está a mitad de camino, lo peor es ver sucio
+//     algo que ya se estaba limpiando (y re-planear bajo el candado lo resuelve) o ver limpio algo
+//     que ese mismo escritor está terminando de dejar limpio.
+//  2. ESCRIBIR, CON EL CANDADO EXCLUSIVO, y sólo si el plan tiene algo. indexIncremental vuelve a
+//     planear adentro: el plan de afuera pudo quedar viejo mientras se esperaba el candado.
+//  3. EMPUJAR, SIN CANDADO. La foto se lee en una transacción de lectura y el envío por red va
+//     afuera: NINGÚN CANDADO DEL DESPACHO PUEDE CRUZAR UNA LLAMADA DE RED (ver server.go).
+//
+// El `defer Unlock` de withWriteLock cierra en cada vuelta, así que un pánico no deja el candado
+// tomado para la próxima tool.
 func (s *McpServer) reindexCodeGraphOnce(ctx context.Context) {
-	s.dispatchMu.Lock()
-	defer s.dispatchMu.Unlock()
-
-	res, err := s.indexIncremental(ctx)
+	plan, err := s.planearIncremental(ctx)
 	if err != nil {
-		logx.Error("scheduler: el índice incremental del grafo falló", "error", err)
+		logx.Error("scheduler: no se pudo comparar el grafo contra el disco", "error", err)
 		return
 	}
-	// Sólo se anuncia cuando HUBO trabajo. Un log por tick con "0 paquetes" en un daemon que vive
-	// días es ruido que entierra la línea que sí importa.
-	if refreshed, _ := res["packages"].(int); refreshed > 0 {
-		logx.Info("scheduler: grafo de código re-indexado", "paquetes", refreshed, "podados", res["pruned"])
+	cambio, fallidos := false, 0
+	if !plan.sinCambios() {
+		var res map[string]interface{}
+		s.withWriteLock(func() { res, err = s.indexIncremental(ctx) })
+		if err != nil {
+			logx.Error("scheduler: el índice incremental del grafo falló", "error", err)
+			return
+		}
+		refreshed, _ := res["packages"].(int)
+		pruned, _ := res["pruned"].(int)
+		fallidos = fallidosDelIndice(res, true)
+		cambio = refreshed > 0 || pruned > 0
+		// Sólo se anuncia cuando HUBO trabajo. Un log por tick con "0 paquetes" en un daemon que
+		// vive días es ruido que entierra la línea que sí importa.
+		if cambio {
+			logx.Info("scheduler: grafo de código re-indexado", "paquetes", refreshed, "podados", pruned, "fallidos", fallidos)
+		}
 	}
-	// Federación best-effort, igual que en la tool: si el gate está apagado no hace nada, y un
-	// fallo del push jamás invalida el índice local, que ya quedó bien.
-	s.pushCodeGraphToCentral(ctx)
+
+	// El commit del índice, con la misma regla que la tool. Va aunque no haya cambiado nada: un
+	// commit nuevo que no tocó código fuente (docs, un merge sin conflictos) también mueve el árbol
+	// que el índice describe.
+	s.sellarHeadDelIndice(fallidos, s.withWriteLock)
+
+	// FEDERACIÓN SÓLO SI HAY ALGO NUEVO QUE CONTAR. El push manda el grafo ENTERO (11.415 nodos y
+	// 27.350 aristas en Musubi) y antes salía en cada tick aunque no hubiera cambiado un byte. La
+	// excepción es un push anterior que falló: el central se quedó con la foto vieja, y esperar al
+	// próximo cambio de código para reintentar la dejaría vieja por tiempo indefinido.
+	if cambio || s.grafoPushPendiente.Load() {
+		if attempted, ok := s.pushCodeGraphToCentral(ctx); attempted {
+			s.grafoPushPendiente.Store(!ok)
+		}
+	}
 }
 
 // RunDistillScheduler es el AUTO-DRAIN del acervo de diseño (pilar Musubi Renaissance, el "molino

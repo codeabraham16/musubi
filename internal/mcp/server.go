@@ -347,6 +347,10 @@ type McpServer struct {
 	// dispara un mantenimiento async (T5.3). maintBusy garantiza un solo ciclo en vuelo.
 	saveCount atomic.Int64
 	maintBusy atomic.Bool
+	// grafoPushPendiente marca que el grafo local tiene algo que el central todavía no recibió: un
+	// push del scheduler que falló, o un refresco que hizo otra tool (musubi_save_code). El próximo
+	// tick empuja aunque su propio incremental no encuentre cambios (ver reindexCodeGraphOnce).
+	grafoPushPendiente atomic.Bool
 	// syncClient empuja las filas del outbox al cerebro central (F2); nil ⇒ sync desactivado
 	// (el drain no arranca). syncCfg trae los parámetros del drain (batch/lease/backoff/tope).
 	// Ambos los fija el entrypoint (SetSyncClient) cuando sync.enabled && central_url != "".

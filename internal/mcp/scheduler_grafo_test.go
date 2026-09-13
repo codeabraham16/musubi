@@ -15,7 +15,7 @@ func TestSchedulerDelGrafoApagadoVuelveEnseguida(t *testing.T) {
 	for _, intervalo := range []time.Duration{0, -time.Hour} {
 		listo := make(chan struct{})
 		go func() {
-			s.RunCodeGraphScheduler(context.Background(), intervalo)
+			s.RunCodeGraphScheduler(context.Background(), intervalo, nil)
 			close(listo)
 		}()
 		select {
@@ -33,7 +33,7 @@ func TestSchedulerDelGrafoMuereConSuContexto(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	listo := make(chan struct{})
 	go func() {
-		s.RunCodeGraphScheduler(ctx, time.Hour)
+		s.RunCodeGraphScheduler(ctx, time.Hour, nil)
 		close(listo)
 	}()
 	cancel()
