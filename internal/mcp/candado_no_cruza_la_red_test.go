@@ -192,7 +192,12 @@ var toolsQueTodaviaCruzanLaRed = []string{
 	"musubi_fleet_exec",      // Tier B: SSH sincrónico, hasta ComandoTimeoutMax (10 min)
 	"musubi_fleet_probe",     // SSH/HTTP por máquina, secuencial: hasta 20 × 15 s
 	"musubi_fleet_shell",     // Tier B: AbrirShellPorSSH
-	"musubi_list_skills",     // source=central: ListArsenal por HTTP
+	// musubi_list_skills SALIÓ el 2026-09-13, la tercera, y es el caso DISTINTO de las siete: era la
+	// única que declaraba `readOnly`, o sea la única que sostenía el candado COMPARTIDO y no el
+	// exclusivo. No la salvaba: un escritor esperando bloquea también a los lectores nuevos. Su
+	// sección crítica es de LECTURA (`withReadLock` sobre LoadSkills, que lee el disco) y se conserva
+	// porque `writeSkillFile` escribe esos mismos .yaml bajo el exclusivo. Ver
+	// TestListarElArsenalNoCongelaElServidor.
 	// musubi_install_skill SALIÓ el 2026-09-13, la segunda. A diferencia de promote, ésta SÍ toca la
 	// base —`writeSkillFile` estampa el fingerprint del stack con `SetMeta`— así que no alcanzaba con
 	// declarar `lockSelf`: hubo que acotar la sección crítica. Ver
