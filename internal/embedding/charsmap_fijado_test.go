@@ -49,6 +49,7 @@ import (
 // eso como VERDE, o sea como guarda hueca, que es un hallazgo FALSO. Medido acá mismo.
 // Sabotaje que la pone roja: dar vuelta un bit en `dartsHasLeaf`, de `(u>>8)&1` a `(u>>9)&1`.
 // arnes: archivo="internal/embedding/spm.go"
+// arnes: env="MUSUBI_SPM_TESTDATA"
 // arnes: de="return (u>>8)&1 == 1"
 // arnes: a="return (u>>9)&1 == 1"
 // arnes: arreglo_de="return (u>>8)&1 == 1"
