@@ -69,8 +69,11 @@ import (
 // lo que vuelve a `lockFromReadOnly` y —al no ser readOnly— al candado exclusivo sobre todo el
 // handler, red incluida.
 //
-// EL ANCLA ARRANCA EN EL COMENTARIO Y NO EN EL `lock:`, porque `lock: lockSelf,` aparece nueve veces
-// en el registro y el arnés exige un literal ÚNICO. La línea de arriba es la que lo ata a ESTA tool,
+// EL ANCLA ARRANCA EN EL COMENTARIO Y NO EN EL `lock:`, porque `lock: lockSelf,` NO ES ÚNICO en el
+// registro —hay varias entradas con esa misma línea— y el arnés exige que el literal lo sea. Acá
+// decía «aparece nueve veces» y estaba mal: cuando se escribió eran ocho, y ya son más. Un conteo a
+// mano de algo que crece con cada conversión se pudre solo, y lo que decide el ancla no es el número
+// sino que haya más de una. La línea de arriba es la que lo ata a ESTA tool,
 // y se eligió DESPUÉS de imprimir los bytes con los tabs a la vista: la directiva de promote nació
 // rota justamente por anclar en dos campos que gofmt dejó de alinear al meterles un comentario en el
 // medio.

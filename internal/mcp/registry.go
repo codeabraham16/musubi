@@ -642,6 +642,22 @@ func (s *McpServer) buildRegistry() []toolEntry {
 			},
 			handler:  s.toolListSkills,
 			readOnly: true,
+			// LA RED VA AFUERA DEL CANDADO DEL DESPACHO. Con source=central o source=all este handler
+			// le pide el catálogo al cerebro por HTTP (`ListArsenal`), y lo hacía con el candado del
+			// despacho tomado: el servidor entero esperando a que conteste el central.
+			//
+			// ES LA ÚNICA DE LAS SIETE QUE DECLARA `readOnly`, o sea la única que sostenía el
+			// COMPARTIDO y no el exclusivo. No la salva: un escritor que espera bloquea también a los
+			// lectores NUEVOS, así que el servidor se frena igual — sólo que un instante después.
+			//
+			// `readOnly` NO SE TOCA. Gobierna la AUTORIZACIÓN —un principal reader puede llamarla— y
+			// eso no cambia acá; `lock` pisa el default sólo para la concurrencia.
+			//
+			// La sección crítica es una sola y es de lectura: `LoadSkills` lee el disco, y hasta ahora
+			// el RLock del despacho la excluía de los escritores. `writeSkillFile` —quien escribe esos
+			// mismos .yaml— toma el exclusivo, así que esa exclusión hay que conservarla a mano con
+			// withReadLock. Lo mide TestListarElArsenalNoCongelaElServidor.
+			lock: lockSelf,
 		},
 		{
 			Tool: Tool{
