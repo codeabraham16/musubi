@@ -103,6 +103,10 @@ func TestSinArranqueNoHaceElTrabajoDeArranque(t *testing.T) {
 			t.Fatalf("el control no reprodujo el trabajo de arranque (gist=%q outbox=%d): la prueba de arriba no estaría midiendo nada", gist, outbox)
 		}
 		// Sabotaje: saltear `engine.index = newIVFIndex()` en NewDbEngine → rojo acá.
+		// arnes: archivo="internal/memory/database.go"
+		// arnes: de="if engine.vindexCfg.Enabled {"
+		// arnes: a="if false && engine.vindexCfg.Enabled {"
+		// arnes: prueba="TestSinArranqueNoHaceElTrabajoDeArranque"
 		if normal.index == nil {
 			t.Fatal("el control no armó el índice vectorial: el «no tenía que armar el índice» de arriba no estaría midiendo nada")
 		}

@@ -104,6 +104,9 @@ func TestPrecheckSinBaseNoLaCreaNiAvisa(t *testing.T) {
 // archivo pasaba L2 verde. Con la carpeta presente esa guarda deja pasar a sql.Open, el driver crea
 // una memory.db vacía y cada Read/Edit escribe «no such table: meta» en stderr.
 // Sabotaje: que el Stat de NewDbEngineSinArranque mire filepath.Dir(dbPath) → rojo acá.
+// arnes: archivo="internal/memory/sin_arranque.go"
+// arnes: de="if fi, err := os.Stat(dbPath); err != nil || fi.IsDir() {"
+// arnes: a="if fi, err := os.Stat(filepath.Dir(dbPath)); err != nil || !fi.IsDir() {"
 func TestPrecheckConCarpetaYSinBaseNoLaCreaNiAvisa(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "a.go", "package a\n")
