@@ -642,24 +642,38 @@ func (s *McpServer) toolCodegraphIndex(ctx context.Context, raw json.RawMessage)
 		Mode string `json:"mode"`
 	}
 	_ = json.Unmarshal(raw, &args) // best-effort: sin/mal 'mode' ⇒ full (no rompe callers)
+	// ── dispatchMu SÓLO EN LOS TRAMOS QUE TOCAN LA BASE ──────────────────────────────────────
+	//
+	// Esta tool declara `lockSelf`, así que el despachador NO le toma el candado. Antes se lo tomaba
+	// sobre el handler ENTERO —y como no declara `readOnly`, era el EXCLUSIVO—, de modo que el POST
+	// al central y el `git rev-parse` de `commitDeHEAD` ocurrían con el servidor entero congelado.
 	var (
 		res map[string]interface{}
 		err error
 	)
 	incremental := strings.EqualFold(strings.TrimSpace(args.Mode), "incremental")
-	if incremental {
-		res, err = s.indexIncremental(ctx)
-	} else {
-		res, err = s.indexAllPackages(ctx)
-	}
+	s.withWriteLock(func() {
+		if incremental {
+			res, err = s.indexIncremental(ctx)
+		} else {
+			res, err = s.indexAllPackages(ctx)
+		}
+	})
 	// De QUÉ ÁRBOL es este índice. Se registra al indexar y no al consultar porque es un hecho del
 	// momento del índice, no del momento de la pregunta: registrarlo tarde diría el commit de HOY
 	// sobre un grafo derivado la semana pasada, que es peor que no decir nada. La regla vive en
-	// sellarHeadDelIndice porque el scheduler la comparte; esta tool ya tiene el candado del
-	// despacho, así que escribe directo.
+	// sellarHeadDelIndice porque el scheduler la comparte.
+	//
+	// EL SELLO PASA POR withWriteLock Y YA NO POR `directo`. `directo` significa «yo ya tengo el
+	// candado del despacho», y eso era cierto mientras el despachador se lo tomaba; con `lockSelf`
+	// dejó de serlo, y dejarlo así escribiría la meta SIN ningún candado. Ahora esta tool toma el
+	// mismo camino que el scheduler, que ya sellaba con withWriteLock.
+	//
+	// El `git rev-parse` NO queda adentro: sellarHeadDelIndice corre `commitDeHEAD` afuera y sólo
+	// mete la escritura dentro del locker que recibe.
 	if err == nil {
 		fallidos := fallidosDelIndice(res, incremental)
-		if head := s.sellarHeadDelIndice(fallidos, directo); head != "" {
+		if head := s.sellarHeadDelIndice(fallidos, s.withWriteLock); head != "" {
 			res["indexed_head"] = head
 		} else if fallidos > 0 {
 			res["head_not_sealed"] = strconv.Itoa(fallidos) + " directorios sin derivar: el commit del índice no se sella hasta que una barrida salga entera"
@@ -683,8 +697,9 @@ func (s *McpServer) toolCodegraphIndex(ctx context.Context, raw json.RawMessage)
 // rompe el index. Devuelve (attempted, ok): attempted=false cuando el gate está apagado (no-op sin
 // red); ok=true sólo si el push se concretó.
 //
-// Toma pushMu (ver server.go): la tool llega acá con dispatchMu tomado, y el orden es
-// dispatchMu → pushMu.
+// Toma pushMu (ver server.go). NINGUNO de sus dos llamadores llega con dispatchMu tomado: el
+// scheduler nunca lo tuvo, y la tool dejó de tenerlo al pasar a `lockSelf`. Ése es el punto — el
+// POST de acá abajo es la llamada de red que no puede ocurrir con el candado del despacho puesto.
 func (s *McpServer) pushCodeGraphToCentral(ctx context.Context) (attempted, ok bool) {
 	if !s.federaElGrafo() {
 		return false, false // no-op: sin sync o proyecto local (R6/E4)

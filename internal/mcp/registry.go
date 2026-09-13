@@ -1057,6 +1057,17 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: s.toolCodegraphIndex,
+			// LA RED VA AFUERA DEL CANDADO DEL DESPACHO. Este handler empuja el grafo al central por
+			// HTTP y además lanza un PROCESO (`commitDeHEAD` corre `git rev-parse`): la regla de
+			// server.go no distingue entre red y subproceso, ningún candado del despacho puede cruzar
+			// ninguna de las dos.
+			//
+			// No declara `readOnly` —indexa, o sea escribe—, así que lo que sostenía era el EXCLUSIVO:
+			// el servidor entero sin atender a nadie mientras esperaba al cerebro.
+			//
+			// El handler acota con withWriteLock los dos tramos que tocan la base (el índice, y el
+			// sello del head vía sellarHeadDelIndice). Lo mide TestIndexarElGrafoNoCongelaElServidor.
+			lock: lockSelf,
 		},
 		{
 			Tool: Tool{

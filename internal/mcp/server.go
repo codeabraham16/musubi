@@ -353,10 +353,15 @@ type McpServer struct {
 	// llegaba después de una nueva dejaba al central atrás. La foto se lee ADENTRO de pushMu, así el
 	// orden de las lecturas es el orden de los envíos.
 	//
-	// ORDEN DE CANDADOS: dispatchMu → pushMu. La tool llega con dispatchMu tomado y pide pushMu; el
-	// scheduler pide sólo pushMu. Con pushMu tomado NUNCA se pide dispatchMu: por eso la marca de
-	// «empujado» (MarcarGrafoEmpujado) escribe directo en la base, sin withWriteLock. Pedirlo ahí
-	// cerraría el ciclo con una tool que espera pushMu teniendo dispatchMu.
+	// ORDEN DE CANDADOS: con pushMu tomado NUNCA se pide dispatchMu. Por eso la marca de «empujado»
+	// (MarcarGrafoEmpujado) escribe directo en la base, sin withWriteLock.
+	//
+	// LA RAZÓN CAMBIÓ, Y EL INVARIANTE SE QUEDA. Antes era obligatorio: la tool llegaba al push CON
+	// dispatchMu tomado, así que pedirlo de nuevo adentro cerraba el ciclo. Desde que
+	// `musubi_codegraph_index` declara `lockSelf`, ninguno de los dos llamadores llega con dispatchMu
+	// —el scheduler nunca lo tuvo—, de modo que ya no hay ciclo posible. Se mantiene igual porque es
+	// lo que garantiza que el POST al central no dependa jamás del candado del despacho, que es el
+	// defecto que esta regla existe para impedir.
 	//
 	// La marca de «qué tiene el central» NO vive acá: es durable, en la tabla meta (ver
 	// memory/codegraph_generacion.go), porque una marca en memoria no la ve el otro daemon que
