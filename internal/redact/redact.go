@@ -32,6 +32,22 @@ type rule struct {
 // entropyThreshold y minTokenLen calibran el catch-all de entropía. Umbral 4.5 bits/char sobre
 // tokens base64-ish largos: pega en secretos aleatorios (entropía ~5.5-6) y deja pasar prosa y
 // git SHAs de 40 hex (entropía ~3.9, y además el token de entropía NO cubre hex puro).
+//
+// ESTE CATCH-ALL TIENE UN PISO MATEMÁTICO Y HAY QUE SABERLO ANTES DE CONFIAR EN ÉL. La entropía de
+// Shannon de una cadena de n caracteres no puede pasar de log2(n) —con n caracteres hay a lo sumo n
+// símbolos distintos—, así que para alcanzar 4.5 hacen falta n ≥ 2^4.5 ≈ 22.63, o sea 23 caracteres.
+//
+//	TODO SECRETO DE 22 CARACTERES O MENOS ES INVISIBLE ACÁ, por más aleatorio que sea.
+//
+// No es una calibración floja: es el techo de la métrica. Un secreto de 16 caracteres con 91 bits de
+// entropía real —criptográficamente sobrado— tiene entropía de Shannon ≤ 4.0 y no se ve nunca.
+// Bajar el umbral para alcanzarlo llenaría de [REDACTED] cualquier prosa; subir minTokenLen no mueve
+// el techo. Lo cortito se cubre con una REGLA POR FORMA (tabla `rules`), no acá.
+//
+// Se descubrió midiendo por qué una contraseña de sesión de 16 caracteres (fleet.NuevaPassPantalla)
+// atravesaba el redactor por 6 de 9 formas. El defecto no era la contraseña: era suponer que este
+// catch-all la cubría. Lo fija TestElCatchAllDeEntropiaTieneUnPisoYEstaDeclarado, que además exige
+// que este comentario siga diciéndolo.
 const (
 	entropyThreshold = 4.5
 	minTokenLen      = 20
