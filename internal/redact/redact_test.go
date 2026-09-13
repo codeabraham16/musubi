@@ -22,6 +22,17 @@ func TestRedactKnownSecrets(t *testing.T) {
 		twilio   = "SK" + "0123456789abcdef0123456789abcdef"
 		npmTok   = "npm_" + "ABCDEFGHIJ0123456789abcdefghij012345"
 		connPass = "s3cr3tPass"
+		// LAS DOS DE CASA, CON CUERPO DE ENTROPÍA BAJA A PROPÓSITO.
+		//
+		// Un cuerpo repetido tiene entropía de Shannon ~0, muy por debajo del umbral de 4.5 del
+		// catch-all. Si la regla `musubi-token` no existiera, estos dos ATRAVESARÍAN el redactor — así
+		// que un verde acá prueba que los tapa LA REGLA y no el azar de un sorteo afortunado.
+		//
+		// Con un token real sacado del generador, en cambio, el catch-all suele alcanzar solo: la
+		// prueba pasaría el 99,978 % de las veces aunque la regla no estuviera, que es exactamente el
+		// verde falso que este caso viene a impedir.
+		musubiDev = "msbd_" + "aaaaaaaaaaaaaaaaaaaaaaaa"
+		musubiPer = "msb_" + "bbbbbbbbbbbbbbbbbbbbbbbb"
 	)
 	cases := []struct {
 		name    string
@@ -47,6 +58,13 @@ func TestRedactKnownSecrets(t *testing.T) {
 		{"twilio", "tw " + twilio + " end", twilio, "twilio-key"},
 		{"npm", "npm " + npmTok + " end", npmTok, "npm-token"},
 		{"connstring", "db postgres://admin:" + connPass + "@db.internal:5432/app end", connPass, "connstring-password"},
+		// EL TEXTO ES PROSA PELADA A PROPÓSITO. La forma más realista sería
+		// `MUSUBI_DEVICE_TOKEN=<tok>`, pero ésa la tapa TAMBIÉN la regla `env-secret` —cualquier clave
+		// que contenga TOKEN—, así que el caso pasaría por la regla equivocada y la aserción sobre el
+		// tipo sería un verde falso. Acá la única que puede taparlos es `musubi-token`: el catch-all
+		// no los ve (entropía ~0) y ninguna otra regla matchea.
+		{"musubi-dispositivo", "ssh: la credencial " + musubiDev + " fue rechazada", musubiDev, "musubi-token"},
+		{"musubi-persona", "el principal usa " + musubiPer + " para autenticar", musubiPer, "musubi-token"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
