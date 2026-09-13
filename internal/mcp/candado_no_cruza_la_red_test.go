@@ -194,7 +194,11 @@ var toolsQueTodaviaCruzanLaRed = []string{
 	"musubi_fleet_shell",     // Tier B: AbrirShellPorSSH
 	"musubi_install_skill",   // FetchSkill: HTTP al central
 	"musubi_list_skills",     // source=central: ListArsenal por HTTP
-	"musubi_promote_skill",   // PushSkill: HTTP al central, con el candado EXCLUSIVO
+	// musubi_promote_skill SALIÓ DE ACÁ el 2026-09-13: declara `lockSelf` y suelta el candado
+	// durante el POST al central. Fue la primera porque es la más simple de las siete —lee las
+	// skills del DISCO y empuja por HTTP, así que no necesita ninguna sección crítica— y sirvió
+	// para estrenar el molde de prueba que las otras seis van a copiar:
+	// TestPromoverUnaSkillNoCongelaElServidor.
 }
 
 // TestLasToolsQueTodaviaCruzanLaRedSonLasDelTrinquete exige que la deuda declarada sea la medida.

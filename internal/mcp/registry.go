@@ -657,6 +657,15 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: noCtx(s.toolPromoteSkill),
+			// LA RED VA AFUERA DEL CANDADO DEL DESPACHO. Este handler lee las skills del DISCO y
+			// empuja la elegida al central por HTTP: no toca la base, así que no necesita acotar
+			// ninguna sección crítica con withReadLock/withWriteLock — le alcanza con que el
+			// despachador NO le tome el candado.
+			//
+			// Sin esto tomaba el EXCLUSIVO (es la única de las siete que no declara `readOnly`),
+			// así que el servidor entero quedaba sin atender a nadie durante el POST al central,
+			// hasta el timeout de sync. Lo mide TestPromoverUnaSkillNoCongelaElServidor.
+			lock: lockSelf,
 		},
 		{
 			Tool: Tool{
