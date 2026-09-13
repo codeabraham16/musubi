@@ -38,12 +38,35 @@ func (f *cicloFalso) RunCodeGraphScheduler(ctx context.Context, _ time.Duration,
 
 var ambosCiclos = config.MaintenanceConfig{AutoIntervalHours: 6, GraphIndexHours: 1}
 
+// lanzarConPlazo llama a lanzarMantenimientoYGrafo desde OTRA goroutine y le da 5 s para volver.
+//
+// Toda prueba de este archivo la llama por acá y no directo, por lo que pasa con S5: un scheduler
+// sin `go` no vuelve nunca, y si la llamada está en la goroutine de la prueba el t.Fatal no llega
+// jamás. La prueba se queda esperando un ctx que sólo cancela su propio Cleanup, y el que falla es
+// el PAQUETE entero, por el -timeout de go test. Medido con UNA sola prueba llamando directo: la
+// otra falló a los 5 s y el paquete murió igual con «panic: test timed out after 5m0s», 300 s.
+// Con el plazo la prueba falla, su Cleanup cancela el ctx y el scheduler falso vuelve solo.
+func lanzarConPlazo(t *testing.T, ctx context.Context, srv ciclosDeFondo, m config.MaintenanceConfig) {
+	t.Helper()
+	volvio := make(chan struct{})
+	go func() {
+		defer close(volvio)
+		lanzarMantenimientoYGrafo(ctx, srv, m, io.Discard)
+	}()
+	select {
+	case <-volvio:
+	case <-time.After(5 * time.Second):
+		t.Fatal("lanzarMantenimientoYGrafo no volvió en 5 s: algún ciclo corre en la goroutine de runDaemon y el loop stdio no arranca")
+	}
+}
+
 // S5 — LANZAR LOS CICLOS NO BLOQUEA AL DAEMON.
 //
 // runDaemon llama esto y DESPUÉS atiende el loop stdio. Un scheduler lanzado sin `go` no vuelve
 // nunca, y el daemon arranca mudo: el cliente MCP espera un initialize que nadie contesta.
 //
-// Sabotaje que la pone roja: lanzar RunCodeGraphScheduler sin `go` (S5). Falla a los 5 s, no cuelga.
+// Sabotaje que la pone roja: lanzar RunCodeGraphScheduler sin `go` (S5). Cada prueba de este archivo
+// que la llama falla a los 5 s, y el PAQUETE no cuelga: ninguna la llama sin plazo (ver lanzarConPlazo).
 // arnes: archivo="cmd/musubi/ciclos_de_fondo.go"
 // arnes: de="go srv.RunCodeGraphScheduler("
 // arnes: a="srv.RunCodeGraphScheduler("
@@ -53,16 +76,7 @@ func TestLanzarLosCiclosDeFondoNoBloqueaAlDaemon(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel) // desbloquea al que se haya quedado esperando, así la prueba no deja nada colgado
 
-	volvio := make(chan struct{})
-	go func() {
-		defer close(volvio)
-		lanzarMantenimientoYGrafo(ctx, f, ambosCiclos, io.Discard)
-	}()
-	select {
-	case <-volvio:
-	case <-time.After(5 * time.Second):
-		t.Fatal("lanzarMantenimientoYGrafo no volvió en 5 s: algún ciclo corre en la goroutine de runDaemon y el loop stdio no arranca")
-	}
+	lanzarConPlazo(t, ctx, f, ambosCiclos)
 	select {
 	case <-f.grafoLanzado:
 	case <-time.After(5 * time.Second):
@@ -91,7 +105,7 @@ func TestElGrafoEsperaAlMantenimientoDeArranque(t *testing.T) {
 		}
 	})
 
-	lanzarMantenimientoYGrafo(ctx, f, ambosCiclos, io.Discard)
+	lanzarConPlazo(t, ctx, f, ambosCiclos)
 	var despuesDe <-chan struct{}
 	select {
 	case despuesDe = <-f.grafoLanzado:
@@ -112,7 +126,7 @@ func TestElGrafoEsperaAlMantenimientoDeArranque(t *testing.T) {
 
 	// Con el mantenimiento apagado no hay nada que esperar.
 	g := nuevoCicloFalso()
-	lanzarMantenimientoYGrafo(ctx, g, config.MaintenanceConfig{GraphIndexHours: 1}, io.Discard)
+	lanzarConPlazo(t, ctx, g, config.MaintenanceConfig{GraphIndexHours: 1})
 	select {
 	case d := <-g.grafoLanzado:
 		select {
