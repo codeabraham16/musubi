@@ -112,6 +112,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"musubi/internal/arnes"
 )
@@ -675,7 +676,7 @@ func contraOverlay(raiz string, c arnes.Censo, soloPaquete string, limite int) i
 		// y el contraste overlay-vs-disco —que existe para cazar rojos que dependen del disco—
 		// pasaría a decir «bajo overlay no compila» por una razón que no tiene nada que ver.
 		if d.Tags != "" {
-			cmd.Env = append(os.Environ(), "GOFLAGS=-tags="+d.Tags)
+			cmd.Env = append(os.Environ(), entornoConTags(d.Tags))
 		}
 		salida, err := cmd.CombinedOutput()
 		switch {
@@ -1035,9 +1036,8 @@ func correrTodos(raiz string, c arnes.Censo, soloPaquete string, limite int) int
 		cmd.Dir = raiz
 		if d.Tags != "" {
 			// GOFLAGS y no un argumento nuevo del guion: alcanza al `go vet` Y a los tres `go test`
-			// que `sabotaje.sh` corre adentro, sin que el guion tenga que enterarse. Go se queda
-			// con la ÚLTIMA de las claves repetidas, así que esto pisa un GOFLAGS heredado.
-			cmd.Env = append(os.Environ(), "GOFLAGS=-tags="+d.Tags)
+			// que `sabotaje.sh` corre adentro, sin que el guion tenga que enterarse.
+			cmd.Env = append(os.Environ(), entornoConTags(d.Tags))
 		}
 		salida, err := cmd.CombinedOutput()
 		for _, l := range strings.Split(strings.TrimRight(string(salida), "\n"), "\n") {
@@ -1194,6 +1194,35 @@ func sangrar(s string) string {
 	}
 	return "    " + strings.ReplaceAll(s, "\n", "\n    ")
 }
+
+// entornoConTags arma la entrada `GOFLAGS=…` AGREGANDO los tags a lo que el entorno ya traía.
+//
+// POR QUÉ NO ES UNA ASIGNACIÓN. `cmd.Env = append(os.Environ(), "GOFLAGS=-tags=…")` parece que
+// agregara y REEMPLAZA: Go se queda con la última de las claves repetidas, así que un
+// `GOFLAGS=-mod=readonly` del entorno desaparece sin una línea de aviso. Hoy este repo no pone
+// GOFLAGS en ningún job, así que no rompe nada — y ése es justo el problema: se rompería el día
+// que alguien lo agregue, lejos de acá y sin relación aparente. Lo encontró otra sesión leyendo
+// el PR que lo introdujo.
+//
+// GOFLAGS es una lista separada por espacios y los nuestros van ÚLTIMOS a propósito: si el
+// entorno ya trae un `-tags`, el último gana y la directiva —que sabe qué necesita ESTA prueba—
+// es más específica que una variable de ambiente. Que eso descarte los tags heredados se avisa,
+// porque un descarte callado acá se lee como «el arnés no corrió mi build».
+func entornoConTags(tags string) string {
+	heredado := strings.TrimSpace(os.Getenv("GOFLAGS"))
+	if strings.Contains(heredado, "-tags") {
+		avisarTagsPisados.Do(func() {
+			fmt.Printf("   ! el entorno trae GOFLAGS=%q con sus propios `-tags`: los de la directiva van "+
+				"últimos y ganan.\n", heredado)
+		})
+	}
+	if heredado == "" {
+		return "GOFLAGS=-tags=" + tags
+	}
+	return "GOFLAGS=" + heredado + " -tags=" + tags
+}
+
+var avisarTagsPisados sync.Once
 
 // variablesQueFaltan devuelve los nombres declarados en `env=` que NO están en este entorno.
 //
