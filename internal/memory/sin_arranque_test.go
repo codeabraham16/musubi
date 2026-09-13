@@ -1,11 +1,14 @@
 package memory
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"musubi/internal/config"
 )
@@ -148,5 +151,105 @@ func TestSinArranqueRechazaUnEsquemaMasNuevo(t *testing.T) {
 		t.Fatal("abrió una base con esquema más nuevo que el binario")
 	} else if !errors.Is(err, ErrSchemaTooNew) {
 		t.Errorf("esperaba ErrSchemaTooNew, obtuve %v", err)
+	}
+}
+
+// SA5 — EL LEDGER ESPERA AL OTRO ESCRITOR Y PERSISTE.
+//
+// El hook escribe el ledger mientras el daemon escribe, y precheck.go descarta el error de
+// LedgerAdd: una escritura perdida por SQLITE_BUSY no se ve en ningún lado. El DSN del engine
+// liviano era una COPIA del de NewDbEngine, y sacarle `busy_timeout` dejaba todo verde (X1–X3 miden
+// NewDbEngine, no este engine). Sabotaje: sacar `busy_timeout(5000)` de dsnEscribible → rojo acá, con
+// «database is locked» al instante.
+//
+// NO PASA POR TIMING, y por eso tiene tres piezas y no una:
+//   - El otro escritor abre SU PROPIA conexión con un DSN a mano, sin dsnEscribible: si usara el
+//     compartido, el sabotaje también le cambiaría el lock a él y el caso mediría otra cosa.
+//   - Antes de llamar a LedgerAdd se COMPRUEBA que el lock está tomado: un tercero sin espera tiene
+//     que chocar. Sin esto, un LedgerAdd «que esperó» a un lock que nunca se tomó pasaría verde.
+//   - El piso de espera se calibra contra una escritura libre en esta máquina, como en X3.
+func TestSinArranqueElLedgerEsperaAlOtroEscritor(t *testing.T) {
+	dir := dirSembrado(t)
+	dbPath := filepath.Join(dir, config.DirName, config.DBFile)
+	eng, err := NewDbEngineSinArranque(dir)
+	if err != nil {
+		t.Fatalf("NewDbEngineSinArranque: %v", err)
+	}
+	defer eng.Close()
+
+	// Calentamiento y calibración: cuánto tarda LedgerAdd sin nadie enfrente.
+	if _, err := eng.LedgerAdd("sesion-sa5", "precheck_code", 1); err != nil {
+		t.Fatalf("calentamiento: %v", err)
+	}
+	inicioLibre := time.Now()
+	if _, err := eng.LedgerAdd("sesion-sa5", "precheck_code", 1); err != nil {
+		t.Fatalf("calibración: %v", err)
+	}
+	libre := time.Since(inicioLibre)
+
+	ctx := context.Background()
+	otro, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("abrir el otro escritor: %v", err)
+	}
+	defer otro.Close()
+	conn, err := otro.Conn(ctx) // una conexión fija: BEGIN y COMMIT tienen que ir por la misma
+	if err != nil {
+		t.Fatalf("conexión del otro escritor: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		t.Fatalf("el otro escritor no tomó el lock: %v", err)
+	}
+
+	tercero, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(0)")
+	if err != nil {
+		t.Fatalf("abrir la sonda: %v", err)
+	}
+	defer tercero.Close()
+	sonda, err := tercero.Conn(ctx)
+	if err != nil {
+		t.Fatalf("conexión de la sonda: %v", err)
+	}
+	defer sonda.Close()
+	if _, err := sonda.ExecContext(ctx, `BEGIN IMMEDIATE`); !esBaseBloqueada(err) {
+		if err == nil {
+			_, _ = sonda.ExecContext(ctx, `ROLLBACK`)
+		}
+		t.Fatalf("la sonda sin espera tenía que chocar contra el lock del otro escritor y obtuvo %v: el lock no está tomado y el caso no probaría ninguna espera", err)
+	}
+
+	const retencion = 700 * time.Millisecond
+	soltado := make(chan error, 1)
+	go func() {
+		time.Sleep(retencion)
+		_, err := conn.ExecContext(ctx, `COMMIT`)
+		soltado <- err
+	}()
+
+	inicio := time.Now()
+	_, errLedger := eng.LedgerAdd("sesion-sa5", "precheck_impacto", 25)
+	esperado := time.Since(inicio)
+	if err := <-soltado; err != nil {
+		t.Fatalf("el otro escritor no pudo soltar el lock: %v", err)
+	}
+	if errLedger != nil {
+		t.Fatalf("LedgerAdd no esperó al otro escritor (tardó %v): al DSN de dsnEscribible le falta `busy_timeout` y el hook perdería esta escritura callado — %v", esperado, errLedger)
+	}
+	if piso := libre + retencion/2; esperado < piso {
+		t.Errorf("LedgerAdd tardó %v y el piso calibrado era %v (libre: %v, retención: %v): no esperó al otro escritor", esperado, piso, libre, retencion)
+	}
+
+	otra, err := NewDbEngineSinArranque(dir)
+	if err != nil {
+		t.Fatalf("reabrir: %v", err)
+	}
+	defer otra.Close()
+	l, err := otra.LedgerStatus()
+	if err != nil {
+		t.Fatalf("LedgerStatus: %v", err)
+	}
+	if l.Surfaces["precheck_impacto"] != 25 || l.Surfaces["precheck_code"] != 2 {
+		t.Errorf("lo sumado mientras había otro escritor no persistió: %v", l.Surfaces)
 	}
 }

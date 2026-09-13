@@ -56,9 +56,10 @@ func NewDbEngineSinArranque(projectPath string) (*DbEngine, error) {
 		return nil, fmt.Errorf("%w: %s", ErrBaseAusente, dbPath)
 	}
 
-	// El mismo DSN que NewDbEngine, a propósito: ver el comentario largo de database.go sobre
-	// `_txlock=immediate`. El ledger es un leer-y-después-escribir, justo el patrón que lo necesita.
-	dsn := dbPath + "?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
+	// El DSN de NewDbEngine, de la MISMA fuente (dsnEscribible, database.go) y no una copia: ver el
+	// comentario largo de NewDbEngine sobre `_txlock=immediate`. El ledger es un leer-y-después-
+	// escribir contra un daemon que también escribe, justo el patrón que lo necesita.
+	dsn := dsnEscribible(dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("error al abrir la base sin arranque: %w", err)
