@@ -746,6 +746,20 @@ func (s *McpServer) pistaDelMiss(ctx context.Context, symbol string) map[string]
 			nombres = append(nombres, n.Name)
 		}
 		res["hint"] = "«" + archivo + "» SÍ está indexado pero no tiene ese símbolo: revisá el nombre (los métodos van 'Tipo.Metodo')"
+		// PERO SI EL ARCHIVO CAMBIÓ DESDE EL ÍNDICE, EL NOMBRE NO ES EL SOSPECHOSO. La lista de
+		// símbolos es la del índice, no la del disco: una función recién escrita no está ahí, y
+		// mandar a «revisar el nombre» de algo bien escrito es mandar a dudar de lo único que estaba
+		// bien. Con el reindexado cada varias horas esa ventana es la normal, no la rara. Todos los
+		// nodos de un archivo comparten su src_fingerprint, así que alcanza con mirar uno; y
+		// cgStale ya sabe no opinar donde el disco no está (el central).
+		if s.cgStale(syms[0]) {
+			if _, serr := os.Stat(filepath.Join(s.projectPath, filepath.FromSlash(archivo))); serr != nil {
+				res["hint"] = "«" + archivo + "» está indexado pero ya NO está en disco: el índice es anterior a que se borrara o moviera. Re-indexá (musubi_codegraph_index con mode=incremental) antes de buscar el símbolo"
+			} else {
+				res["hint"] = "«" + archivo + "» CAMBIÓ en disco desde el índice: el símbolo puede ser nuevo y todavía no estar en el grafo, así que no es el nombre lo que hay que revisar. Re-indexá (musubi_codegraph_index con mode=incremental) y volvé a preguntar"
+			}
+			res["file_changed_since_index"] = true
+		}
 		res["symbols_in_file"] = nombres
 		res[pathConocido] = true
 		return res
