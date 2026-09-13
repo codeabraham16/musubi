@@ -153,8 +153,11 @@ func TestElRadioDeImpactoNoTranquilizaSobreUnGrafoViejo(t *testing.T) {
 		}
 	})
 
-	t.Run("«no arrastra a nadie» sólo si el grafo está al día", func(t *testing.T) {
-		// El archivo aislado: sin callers. Al día es una afirmación útil; viejo es una trampa.
+	// ACTUALIZADO EL 2026-09-13: esta sub-prueba exigía que, al día, el mensaje dijera «no arrastra
+	// a nadie conocido». Era falso también al día: el grafo no ve llamadas por interfaz ni métodos
+	// pasados como valor (DbEngine.ListGraphNodesForFileCtx figuraba sin callers con 5 llamadas
+	// reales, 4 por interfaz). Lo que sigue separando al día de viejo es la huella, no la promesa.
+	t.Run("sin callers: al día dice la huella, viejo dice que no sabe, ninguno tranquiliza", func(t *testing.T) {
 		root := t.TempDir()
 		writeFile(t, root, "a.go", contenido)
 		aislado := func(huella string) *fakeCodeStore {
@@ -163,12 +166,15 @@ func TestElRadioDeImpactoNoTranquilizaSobreUnGrafoViejo(t *testing.T) {
 			return s
 		}
 		alDia := contextoDeEdicion(t, aislado(huellaDe(contenido)), root)
-		if !strings.Contains(alDia, "no arrastra a nadie conocido") {
-			t.Errorf("al día tiene que poder decirlo, obtuve %q", alDia)
+		if strings.Contains(alDia, "no arrastra a nadie conocido") {
+			t.Errorf("ni al día puede afirmar que no arrastra a nadie, obtuve %q", alDia)
+		}
+		if !strings.Contains(alDia, "coincide con el disco") {
+			t.Errorf("al día tiene que decir que la huella coincide, obtuve %q", alDia)
 		}
 		viejo := contextoDeEdicion(t, aislado(huellaDe(contenido+"//x\n")), root)
-		if strings.Contains(viejo, "no arrastra a nadie conocido") {
-			t.Errorf("sobre un grafo viejo NO puede decir que no arrastra a nadie, obtuve %q", viejo)
+		if strings.Contains(viejo, "no arrastra a nadie conocido") || strings.Contains(viejo, "coincide con el disco") {
+			t.Errorf("sobre un grafo viejo NO puede tranquilizar ni decir que coincide, obtuve %q", viejo)
 		}
 		if !strings.Contains(viejo, "el grafo no sabe") {
 			t.Errorf("tiene que decir de quién es la ignorancia, obtuve %q", viejo)

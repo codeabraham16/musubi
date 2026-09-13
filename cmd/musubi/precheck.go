@@ -291,7 +291,7 @@ func codeGraphMessage(store codeStore, root, key string) string {
 		}
 	}
 
-	shown := 0
+	shown, sinCallers := 0, 0
 	for _, n := range nodes {
 		if n.Kind != codeintel.KindFunc && n.Kind != codeintel.KindMethod {
 			continue
@@ -301,10 +301,20 @@ func codeGraphMessage(store codeStore, root, key string) string {
 			break
 		}
 		callees := graphRefNames(store, ctx, n.Key, true)
-		callers := graphRefNames(store, ctx, n.Key, false)
+		callers := joinCapped(graphRefNames(store, ctx, n.Key, false), maxGraphRefs)
+		// «← lo llaman: —» se leía como «nadie lo llama». Ver ceroLlamadasDirectas.
+		if callers == "" {
+			callers = ceroLlamadasDirectas
+			sinCallers++
+		}
 		fmt.Fprintf(&b, "\n- %s → llama a: %s | ← lo llaman: %s",
-			n.Name, noneIfEmpty(joinCapped(callees, maxGraphRefs)), noneIfEmpty(joinCapped(callers, maxGraphRefs)))
+			n.Name, noneIfEmpty(joinCapped(callees, maxGraphRefs)), callers)
 		shown++
+	}
+	// La reserva va UNA vez y sólo si algún símbolo salió en cero: repetirla en cada renglón
+	// multiplicaría el costo de CADA Read por la cantidad de símbolos del archivo.
+	if sinCallers > 0 {
+		b.WriteString("\nNota: " + cegueraDelGrafo + ", así que «" + ceroLlamadasDirectas + "» no quiere decir que nadie lo use.")
 	}
 	b.WriteString("\nProfundizá con musubi_code_graph / musubi_impact / musubi_code_context.")
 	return b.String()
@@ -333,10 +343,10 @@ func esEdicion(tool string) bool {
 // tienen quien los llame, cuántos son de forma directa y cuántos arrastrando el cierre transitivo.
 // "" si el archivo no está en el grafo — inerte hasta que se indexe, igual que codeGraphMessage.
 //
-// El caso "ningún símbolo tiene callers" NO devuelve vacío: que un archivo esté aislado es
-// justamente lo que uno quiere saber antes de cambiarlo, y cuesta una línea decirlo. Callar ahí
-// sería confundir "no hay riesgo" con "no sé", que es la distinción que el resto de esta memoria
-// se toma el trabajo de mantener.
+// El caso "ningún símbolo tiene llamadas DIRECTAS en el grafo" NO devuelve vacío: cuesta una línea
+// decirlo, y callar ahí sería confundir "no hay riesgo" con "no sé". Pero tampoco afirma que el
+// archivo esté aislado: el grafo no ve llamadas por interfaz ni métodos pasados como valor (ver
+// ceroLlamadasDirectas), así que lo que dice es lo que vio, no lo que no existe.
 // avisoSinGrafo dice, ANTES DE EDITAR, que el radio de impacto no se pudo mirar.
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════
@@ -397,6 +407,24 @@ func avisoSinGrafo(store codeStore, key, sessionID string) string {
 		"tomá mi silencio en los demás archivos de este tipo como «no sé», nunca como «no arrastra a nadie».", key, motor))
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// LO QUE EL GRAFO VE SON LLAMADAS DIRECTAS, Y TODO MENSAJE QUE CUENTE CALLERS LO DICE ASÍ
+//
+// El hook afirmaba «Ningún símbolo tiene callers en el grafo, y su huella coincide con el disco:
+// tocarlo no arrastra a nadie conocido», y en la lectura ponía «← lo llaman: —». Las dos se leen
+// como «nadie usa esto», y el grafo no puede saberlo: sólo registra llamadas DIRECTAS. Medido el
+// 2026-09-13 sobre este repo: DbEngine.ListGraphNodesForFileCtx figuraba con callers [] y tiene 5
+// llamadas reales, 4 de ellas por interfaz (s.engine es memory.StorageBackend en
+// internal/mcp/server.go); McpServer.toolCodeGraph, registrado como VALOR, también figuraba con
+// callers []. O sea que la afirmación era falsa aun con el grafo al día —el único caso en que se
+// daba permiso de hacerla— y en la dirección que duele: justo antes de cambiar una firma.
+//
+// Las dos frases viven acá para que la lectura y la edición digan lo mismo con las mismas palabras.
+const (
+	ceroLlamadasDirectas = "0 llamadas DIRECTAS vistas por el grafo"
+	cegueraDelGrafo      = "el grafo no ve llamadas por interfaz ni métodos pasados como valor"
+)
+
 func impactMessage(store codeStore, root, key, sessionID string) string {
 	ctx := context.Background()
 	nodes, err := store.ListGraphNodesForFileCtx(ctx, key)
@@ -406,11 +434,11 @@ func impactMessage(store codeStore, root, key, sessionID string) string {
 	if len(nodes) == 0 {
 		return avisoSinGrafo(store, key, sessionID)
 	}
-	// ACÁ LA FRESCURA PESA MÁS QUE EN LA LECTURA, porque el mensaje no describe: TRANQUILIZA.
-	// «Ningún símbolo tiene callers: tocarlo no arrastra a nadie conocido» es una afirmación de
-	// seguridad, y sobre un grafo viejo es falsa en la dirección que duele — el caller nuevo es
-	// exactamente el que el grafo todavía no vio. Y esto corre antes de CADA edición, o sea en el
-	// momento en que alguien va a decidir si mira quién depende de lo que está por cambiar.
+	// ACÁ LA FRESCURA PESA MÁS QUE EN LA LECTURA, porque este mensaje se lee para decidir si mirar
+	// quién depende de lo que se está por cambiar. Sobre un grafo viejo el caller nuevo es
+	// exactamente el que el grafo todavía no vio; y aun al día, el grafo no ve los que llaman por
+	// interfaz o reciben el método como valor (ver ceroLlamadasDirectas). Esto corre antes de CADA
+	// edición.
 	frescura := medirFrescura(root, key, nodes)
 	reserva := ""
 	switch frescura {
@@ -444,14 +472,18 @@ func impactMessage(store codeStore, root, key, sessionID string) string {
 		return ""
 	}
 	if len(conectados) == 0 {
-		// La versión al día afirma; las otras dos dicen lo que saben y lo que no. La diferencia
-		// entre «no arrastra a nadie» y «el grafo no conoce a nadie, y está viejo» es toda.
+		// Ninguna de las dos versiones tranquiliza: la al día dice que la huella coincide —que es
+		// cierto y es lo único que sabe de más— y la vieja además dice que no sabe. La versión al
+		// día afirmaba «tocarlo no arrastra a nadie conocido», y eso el grafo no lo puede saber
+		// nunca (ver ceroLlamadasDirectas).
 		if frescura == grafoAlDia {
-			return fmt.Sprintf("[Musubi — radio de impacto] Ningún símbolo de «%s» tiene callers en el grafo, "+
-				"y su huella coincide con el disco: tocarlo no arrastra a nadie conocido.", key)
+			return fmt.Sprintf("[Musubi — radio de impacto] Los símbolos de «%s» tienen %s, y su huella coincide con el disco. "+
+				"Eso NO es «no arrastra a nadie»: %s. Si implementa una interfaz o se registra como handler, "+
+				"buscá esos usos antes de cambiar una firma.", key, ceroLlamadasDirectas, cegueraDelGrafo)
 		}
-		return fmt.Sprintf("[Musubi — radio de impacto] Ningún símbolo de «%s» tiene callers EN EL GRAFO%s. "+
-			"No lo leas como «no arrastra a nadie»: leelo como «el grafo no sabe».", key, reserva)
+		return fmt.Sprintf("[Musubi — radio de impacto] Los símbolos de «%s» tienen %s%s. "+
+			"No lo leas como «no arrastra a nadie»: %s, y además no sé si está al día; leelo como «el grafo no sabe».",
+			key, ceroLlamadasDirectas, reserva, cegueraDelGrafo)
 	}
 
 	// Ordena por callers DE PRODUCCIÓN, no por callers a secas. Medido sobre este mismo repo: los
@@ -486,6 +518,9 @@ func impactMessage(store codeStore, root, key, sessionID string) string {
 	if resto := len(conectados) - len(mostrados); resto > 0 {
 		fmt.Fprintf(&b, "\n(+%d símbolo(s) más con callers)", resto)
 	}
+	// Los símbolos que no aparecen en la lista son los de 0 llamadas directas, y la omisión se lee
+	// igual que «nadie los usa». Una línea, no una por símbolo.
+	b.WriteString("\nSon llamadas DIRECTAS: " + cegueraDelGrafo + ", así que un símbolo que no figura acá puede tener callers igual.")
 	b.WriteString("\nSi vas a cambiar una FIRMA, pedí el cierre completo con musubi_impact (symbol='" +
 		mostrados[0].clave + "').")
 	return b.String()
