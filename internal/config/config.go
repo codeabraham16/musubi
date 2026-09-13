@@ -177,6 +177,9 @@ type MaintenanceConfig struct {
 	// Cuelga del mismo daemon que ya corre el auto-mantenimiento porque el índice incremental es
 	// barato cuando no cambió nada: compara el fingerprint de cada archivo contra el guardado y sólo
 	// re-deriva los paquetes sucios. Con el árbol quieto, una corrida es leer fingerprints.
+	//
+	// Además del intervalo, el daemon corre UNA vez al arrancar (tras el mantenimiento de arranque
+	// y una espera aleatoria acotada): sin eso, el primer índice esperaba un intervalo entero.
 	GraphIndexHours float64 `yaml:"graph_index_hours"`
 	// PurgeArchivedAfterDays borra DEFINITIVAMENTE las observaciones archivadas que no
 	// se tocaron en esta cantidad de días (retención dura, acota el crecimiento). El
@@ -1190,11 +1193,21 @@ func Default() Config {
 			DecayMinAgeDays:     14,
 			DecayReinforcementK: 0.5,
 			AutoIntervalHours:   24,
-			// 6 h y no 24: el grafo lo consumen musubi_impact y el precheck ANTES de escribir, o
+			// 1 h y no 24: el grafo lo consumen musubi_impact y el precheck ANTES de escribir, o
 			// sea que una respuesta rancia se paga en una decisión de código y no en una consulta
-			// curiosa. Es más barato que el mantenimiento (fingerprints contra disco, sin LLM),
-			// así que puede correr más seguido sin que se note.
-			GraphIndexHours:        6,
+			// curiosa.
+			//
+			// ERA 6, Y BAJÓ A 1 POR UN NÚMERO MEDIDO, no por gusto. La regla fijada antes de medir:
+			// bajar a 1 sólo si un tick SIN CAMBIOS y SIN PUSH costaba 300 ms o menos. Medido el
+			// 2026-09-13 con el binario de release sobre una copia de la base de Musubi (11.415
+			// nodos, 27.350 aristas, 1.013 archivos con huella), sync apagado: mediana 111 ms en 7
+			// corridas (110-113 ms), medida sobre musubi_codegraph_index incremental por stdio, que
+			// hace el trabajo del tick sin cambios y además el despacho, el conteo del grafo y el
+			// JSON — o sea una cota POR ARRIBA del tick. Y ese tick ya no toma dispatchMu ni empuja
+			// al central si nada cambió (ver reindexCodeGraphOnce), así que correrlo seis veces más
+			// seguido no congela nada ni manda nada por la red. Lo que cuesta de verdad —la
+			// federación, 3,19 s medidos con el grafo entero— sólo sale cuando hubo cambios.
+			GraphIndexHours:        1,
 			PurgeArchivedAfterDays: 90,
 			MaxActivePerProject:    50000,
 			Vacuum:                 true,

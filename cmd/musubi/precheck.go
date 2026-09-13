@@ -205,8 +205,9 @@ const (
 // 798 archivos con huella, 791 al día y 7 viejos — cuatro de los siete cambiados por el mismo
 // despliegue que encendió el hook. En concreto, un Read de internal/fleet/procparse.go inyectaba
 // una lista de diez símbolos SIN `ElegirTemperatura`, que es justo la función que ese despliegue
-// agregó y que reemplazó a `ParsearTempMiligrados` como punto de entrada. La ventana llega a las
-// 6 h que dura el reindexado (Maintenance.GraphIndexHours).
+// agregó y que reemplazó a `ParsearTempMiligrados` como punto de entrada. La ventana llegaba a las
+// 6 h que duraba el reindexado; desde el 2026-09-13 es 1 h, más la corrida al arrancar el daemon
+// (Maintenance.GraphIndexHours) — más corta, pero sigue existiendo entre una edición y el tick.
 //
 // Y la tool equivalente SÍ lo marca (`cgView` → `Stale: s.cgStale(n)`), o sea que la señal
 // existía y este camino la tiraba: N superficies que deberían decir lo mismo, N-1 lo decían.

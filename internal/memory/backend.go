@@ -205,6 +205,13 @@ type CodeGraphStore interface {
 	// credencial) para serializarlo en el push-on-index de la federación (F6).
 	AllGraphNodesCtx(ctx context.Context) ([]GraphNode, error)
 	AllGraphEdgesCtx(ctx context.Context) ([]GraphEdge, error)
+	// FotoDelGrafoCtx lee nodos, aristas y gists en UNA transacción de lectura: la foto que viaja
+	// en el push de reemplazo tiene que ser de un solo instante (ver codegraph_foto.go).
+	FotoDelGrafoCtx(ctx context.Context) (FotoDelGrafo, error)
+	// EstadoDelPushDelGrafo / MarcarGrafoEmpujado son la cuenta DURABLE de qué generación del grafo
+	// tiene el central, compartida por todos los procesos sobre la base (ver codegraph_generacion.go).
+	EstadoDelPushDelGrafo() (PushDelGrafo, error)
+	MarcarGrafoEmpujado(generacion int64, en time.Time) error
 }
 
 // MetaStore — almacén clave/valor + gates de throttling por intervalo.

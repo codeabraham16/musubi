@@ -40,7 +40,15 @@ func (e *DbEngine) SaveCodeMemoryFrom(originProjectID string, cm CodeMemory) err
 	if projectID == "" {
 		projectID = e.projectID
 	}
-	_, err := e.db.Exec(
+	// Una transacción para un solo INSERT, por la generación del grafo: los gists viajan en la foto
+	// del push, así que un gist nuevo es un cambio que el central tiene que recibir aunque el grafo
+	// del paquete no se haya re-derivado (un archivo que el grafo no indexa, o un refresh que falló).
+	tx, err := e.db.Begin()
+	if err != nil {
+		return fmt.Errorf("error al iniciar el guardado de memoria de código: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(
 		`INSERT INTO code_memory (path, gist, symbols, fingerprint, tokens, project_id, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		 ON CONFLICT(path, project_id) DO UPDATE SET
@@ -48,9 +56,14 @@ func (e *DbEngine) SaveCodeMemoryFrom(originProjectID string, cm CodeMemory) err
 		   fingerprint=excluded.fingerprint, tokens=excluded.tokens,
 		   updated_at=CURRENT_TIMESTAMP`,
 		cm.Path, cm.Gist, cm.Symbols, cm.Fingerprint, cm.Tokens, projectID,
-	)
-	if err != nil {
+	); err != nil {
 		return fmt.Errorf("error al guardar memoria de código: %w", err)
+	}
+	if err := avanzarGeneracionDelGrafo(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("error al commitear la memoria de código: %w", err)
 	}
 	return nil
 }
@@ -106,12 +119,18 @@ func (e *DbEngine) GetCodeMemoryCtx(ctx context.Context, path string) (CodeMemor
 // ganó el correcto, pero por casualidad: bastaba un VACUUM o un plan de consulta distinto para
 // federar el gist rancio. Un empate que se resuelve solo hoy es un bug que aparece mañana.
 func (e *DbEngine) AllCodeMemoryCtx(ctx context.Context) ([]CodeMemory, error) {
+	return e.allCodeMemory(ctx, e.db)
+}
+
+// allCodeMemory es el cuerpo de AllCodeMemoryCtx contra cualquier consultor: la base o una
+// transacción de lectura (FotoDelGrafoCtx necesita los gists en la MISMA foto que el grafo).
+func (e *DbEngine) allCodeMemory(ctx context.Context, db consultor) ([]CodeMemory, error) {
 	sc := projectScopeFrom(ctx)
 	var rows *sql.Rows
 	var err error
 	if sc.Federate || sc.ProjectID == "" {
 		// Sin scope no hay proyecto que preferir: se desempata por el más recientemente tocado.
-		rows, err = e.db.QueryContext(ctx,
+		rows, err = db.QueryContext(ctx,
 			`SELECT path, gist, symbols, fingerprint, tokens FROM (
 			   SELECT path, gist, COALESCE(symbols,'') AS symbols,
 			          COALESCE(fingerprint,'') AS fingerprint, tokens,
@@ -119,7 +138,7 @@ func (e *DbEngine) AllCodeMemoryCtx(ctx context.Context) ([]CodeMemory, error) {
 			   FROM code_memory
 			 ) WHERE rn = 1 ORDER BY path`)
 	} else {
-		rows, err = e.db.QueryContext(ctx,
+		rows, err = db.QueryContext(ctx,
 			`SELECT path, gist, symbols, fingerprint, tokens FROM (
 			   SELECT path, gist, COALESCE(symbols,'') AS symbols,
 			          COALESCE(fingerprint,'') AS fingerprint, tokens,
@@ -179,6 +198,9 @@ func (e *DbEngine) ReplaceProjectCodeMemoryFrom(originProjectID string, gists []
 		); err != nil {
 			return fmt.Errorf("error al guardar gist de %s: %w", cm.Path, err)
 		}
+	}
+	if err := avanzarGeneracionDelGrafo(tx); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("error al commitear el reemplazo de gists: %w", err)
