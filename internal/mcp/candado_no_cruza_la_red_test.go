@@ -192,8 +192,11 @@ var toolsQueTodaviaCruzanLaRed = []string{
 	"musubi_fleet_exec",      // Tier B: SSH sincrónico, hasta ComandoTimeoutMax (10 min)
 	"musubi_fleet_probe",     // SSH/HTTP por máquina, secuencial: hasta 20 × 15 s
 	"musubi_fleet_shell",     // Tier B: AbrirShellPorSSH
-	"musubi_install_skill",   // FetchSkill: HTTP al central
 	"musubi_list_skills",     // source=central: ListArsenal por HTTP
+	// musubi_install_skill SALIÓ el 2026-09-13, la segunda. A diferencia de promote, ésta SÍ toca la
+	// base —`writeSkillFile` estampa el fingerprint del stack con `SetMeta`— así que no alcanzaba con
+	// declarar `lockSelf`: hubo que acotar la sección crítica. Ver
+	// TestInstalarUnaSkillNoCongelaElServidor.
 	// musubi_promote_skill SALIÓ DE ACÁ el 2026-09-13: declara `lockSelf` y suelta el candado
 	// durante el POST al central. Fue la primera porque es la más simple de las siete —lee las
 	// skills del DISCO y empuja por HTTP, así que no necesita ninguna sección crítica— y sirvió

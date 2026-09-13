@@ -1,7 +1,7 @@
 package mcp
 
 import (
-	"io"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -19,6 +19,14 @@ import (
 type centralQueCuelga struct {
 	entro  chan struct{}
 	soltar chan struct{}
+	// texto es el contenido que devuelve UNA VEZ SOLTADO. Vacío significa "ok", que es todo lo que
+	// `PushSkill` necesita para dar por buena la promoción.
+	//
+	// install_skill NO se conforma con eso: su `FetchSkill` pasa por `ListArsenal`, que parsea este
+	// mismo texto como un ARRAY JSON de skillPayload. Con "ok" ahí, la aserción final de esa prueba
+	// caería por «respuesta del arsenal ilegible» — roja, sí, pero por el motivo equivocado, que es
+	// el tropiezo que esta prueba ya documenta más abajo.
+	texto  string
 	unaVez sync.Once
 	unSolo sync.Once
 }
@@ -36,8 +44,18 @@ func (c *centralQueCuelga) liberar() { c.unSolo.Do(func() { close(c.soltar) }) }
 func (c *centralQueCuelga) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	c.unaVez.Do(func() { close(c.entro) })
 	<-c.soltar
+	// Se lee DESPUÉS del <-soltar, pero `texto` se fija antes de arrancar el servidor y no se toca
+	// más: no hay carrera que proteger.
+	texto := c.texto
+	if texto == "" {
+		texto = "ok"
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":"x","result":{"content":[{"type":"text","text":"ok"}]}}`)
+	// Se serializa con el encoder y no con una cadena a mano: el arsenal que manda install lleva
+	// comillas adentro, y concatenarlo produciría un JSON roto que se leería como «el central
+	// contestó mal» en vez de como el error de la prueba.
+	_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": "x",
+		"result": map[string]any{"content": []map[string]string{{"type": "text", "text": texto}}}})
 }
 
 // TestPromoverUnaSkillNoCongelaElServidor mide el EFECTO de `lockSelf` en musubi_promote_skill: que
@@ -52,10 +70,18 @@ func (c *centralQueCuelga) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // sección crítica que acotar con withReadLock/withWriteLock. Por eso estrena el molde que las otras
 // seis van a copiar.
 //
-// Y era la peor de las siete en una dimensión: es la ÚNICA que no declara `readOnly`, así que el
-// despachador le daba el candado EXCLUSIVO. Las otras seis toman el compartido — que tampoco salva,
-// porque un escritor esperando bloquea a los lectores nuevos, pero la exclusiva frena a todos desde
-// el primer instante.
+// Y sostenía el candado EXCLUSIVO, porque no declara `readOnly`: cuando la clase es la de por
+// default, el despacho deriva el candado de ese campo —RLock si está, Lock si no— en methods.go.
+//
+// CORRECCIÓN DEL 2026-09-13, Y QUEDA ESCRITA COMO CORRECCIÓN PORQUE LA FRASE ANTERIOR SE MERGEÓ.
+// Acá decía que promote era «la ÚNICA que no declara readOnly» y que «las otras seis toman el
+// compartido». Es exactamente al revés, y lo dice el censo del registro: de las siete del trinquete
+// SEIS no declaran `readOnly` —promote, install_skill, codegraph_index, fleet_exec, fleet_probe y
+// fleet_shell— y la única que sí es `musubi_list_skills`. O sea que seis de siete tenían el servidor
+// entero serializado mientras esperaban la red, no una sola.
+//
+// El error no fue de medición sino de no medir: la frase se heredó de un análisis anterior y se
+// repitió. Un número derivado no se cita, se vuelve a contar.
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════
 // POR QUÉ HACE FALTA ESTA PRUEBA SI YA ESTÁ LA ESTRUCTURAL

@@ -681,6 +681,17 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: noCtx(s.toolInstallSkill),
+			// LA RED VA AFUERA DEL CANDADO DEL DESPACHO. Este handler baja la skill del central por
+			// HTTP (`FetchSkill`) y recién después escribe: el fetch no puede sostener el candado.
+			//
+			// Y lo que sostenía era el EXCLUSIVO: no declara `readOnly`, así que el despacho tomaba
+			// Lock y no RLock. El servidor entero quedaba serializado hasta el timeout de sync.
+			//
+			// A DIFERENCIA DE promote_skill, ÉSTA SÍ TOCA LA BASE —`writeSkillFile` estampa el
+			// fingerprint del stack con `SetMeta`— así que no alcanza con declarar la clase: el
+			// handler acota su propia sección crítica con withWriteLock, y mete adentro el chequeo de
+			// existencia junto con la escritura. Lo mide TestInstalarUnaSkillNoCongelaElServidor.
+			lock: lockSelf,
 		},
 		{
 			Tool: Tool{
