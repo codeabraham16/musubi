@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"musubi/internal/fleet"
+	"musubi/internal/redact"
 
 	"github.com/google/uuid"
 )
@@ -303,6 +304,32 @@ func (e *DbEngine) GuardarResultado(deviceID, comandoID string, exit *int, stdou
 	// puede romper y todo sigue verde. Una segunda barrera que además ESCONDE a la primera no es
 	// defensa en profundidad, es una prueba que miente. El `estado` que se leyó arriba sigue
 	// haciendo falta para la guarda de propiedad, que es de seguridad y no se toca.
+	//
+	// ── LA SALIDA SE REDACTA ACÁ, Y ACÁ ES EL ÚNICO LUGAR QUE ALCANZA ─────────────────────────
+	//
+	// Hasta el 2026-09-13 la salida de `fleet_exec` no pasaba por el redactor en NINGÚN punto de
+	// la cadena: se guardaba cruda y se devolvía cruda. Y la fuga no era hipotética: cuatro tokens
+	// de dispositivo quedaron en claro en un transcripto de sesión.
+	//
+	// SE REDACTA EN EL ESCRITOR Y NO EN CADA LECTOR, porque medido hay UN solo escritor —esta
+	// función, con dos llamadores: el Tier B por SSH y el Tier A por HTTP— y TODO camino que
+	// devuelve salida la LEE de la base (`ComandoPorID`, compartido por la tool, la bitácora y la
+	// cronología). Redactar acá hace irrepresentable guardar un secreto; redactar en cada lector
+	// sería una lista de lugares que se olvida en el próximo.
+	//
+	// LOS TRES CANALES, no sólo stdout: un secreto sale igual de fácil por stderr, y el error de
+	// canal de un Tier B puede traer texto de `ssh`.
+	//
+	// ANTES DE TRUNCAR, Y EL ORDEN NO ES COSMÉTICO. Truncar primero puede cortar un token justo en
+	// el borde: quedan unos pocos caracteres del secreto, muy pocos para el catch-all de entropía
+	// —que no ve NADA de 22 caracteres o menos—, y salen en claro. Lo fija su propia prueba.
+	//
+	// LO QUE ESTO NO ARREGLA, dicho: los tokens de dispositivo ya EMITIDOS son hex de 64, y el
+	// redactor tiene que dejar pasar el hex de 64 (son los SHA-256 de git). Un `cat` de uno de ésos
+	// sigue saliendo en claro salvo que venga rotulado (`TOKEN=…`). Para ésos la salida es rotarlos.
+	stdout, _ = redact.Redact(stdout)
+	stderr, _ = redact.Redact(stderr)
+	errCanal, _ = redact.Redact(errCanal)
 	so, _ := fleet.TruncarSalida(stdout)
 	se, _ := fleet.TruncarSalida(stderr)
 	res, err := e.db.Exec(

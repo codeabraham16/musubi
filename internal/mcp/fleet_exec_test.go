@@ -336,7 +336,12 @@ func TestLaSalidaSeAcotaTambienEnElCerebro(t *testing.T) {
 	c, _ := s.engine.EncolarComando(fleet.Comando{
 		DeviceID: d.ID, ProjectID: "casa", Argv: []string{"true"}, Timeout: time.Second})
 
-	gigante := strings.Repeat("A", fleet.SalidaMaxBytes*2)
+	// «z» Y NO «A», Y NO ES AFLOJAR LA PRUEBA: la aserción de abajo es la misma. Desde que la salida
+	// se redacta en GuardarResultado, 128 KiB de «A» —un dígito hex— se redactan enteros como
+	// `hex-secret` (el catch-all de hex no mira entropía), la salida guardada queda en unos bytes y
+	// nunca llega al límite. La prueba seguía preguntando por el truncado con un relleno que ya no
+	// podía producirlo. «z» no es hex y tiene entropía cero: vuelve a medir lo que dice medir.
+	gigante := strings.Repeat("z", fleet.SalidaMaxBytes*2)
 	cero := 0
 	if err := s.engine.GuardarResultado(d.ID, c.ID, &cero, gigante, "", "", time.Now()); err != nil {
 		t.Fatal(err)
