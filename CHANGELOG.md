@@ -8,6 +8,25 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El grafo de código se mantiene al día solo, y el central lo recibe sin el push de cada tick.**
+  Tres cambios que van juntos:
+  - **Corrida al arrancar.** El scheduler del grafo corre una vez apenas termina el mantenimiento de
+    arranque (con una espera aleatoria de hasta 90 s, o medio intervalo si es menor, para que dos
+    daemons sobre la misma base no deriven lo mismo a la vez) y después por intervalo. Antes el
+    primer reindexado llegaba recién a las 6 h, y un daemon de sesión rara vez vive tanto.
+  - **`maintenance.graph_index_hours` baja de 6 a 1 h.** Es barato porque el tick sin cambios ya no
+    toma el candado del despacho: medido, 111 ms (antes sostenía `dispatchMu` 5,3 s con todas las
+    tools esperando). Quien lo tenga fijado en su `config.yaml` conserva su valor.
+  - **El push al central sale sólo si el central está atrás.** La base lleva una **generación
+    durable** del grafo en `meta` (`codegraph_generation`), que sube en la MISMA transacción que
+    escribe nodos, aristas o gists, y la generación que un push exitoso llevó al central
+    (`codegraph_pushed_generation`, que nunca retrocede). El scheduler empuja si la primera supera a
+    la segunda. Así cuenta lo que indexó **otro daemon** sobre la misma base, lo que refrescó
+    `musubi_save_code`, el push fallido de `musubi_codegraph_index` y el de una sesión que murió
+    entre el índice y el push — los cuatro se perdían con la marca en memoria de un solo proceso.
+    Los push de la tool y del scheduler se serializan (`pushMu`), y **cada 24 h se empuja igual**
+    para curar dos daemons que cruzan sus fotos en la red. Una base que nunca escribió el grafo no
+    empuja por higiene: la foto saldría vacía y un push vacío borra el grafo del central.
 - **La normalización Unicode queda CLAVADA, porque el `model_id` no cubre el código que produce el
   vector.** Un embedding lleva `static:<carpeta>@<checksum de model.safetensors + tokenizer.json>`:
   ese checksum vigila que cambie **la tabla** —es la regla N1 y funciona— pero el vector no sale
