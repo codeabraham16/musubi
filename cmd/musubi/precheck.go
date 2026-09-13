@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -66,24 +67,47 @@ type precheckInput struct {
 	SessionID string `json:"session_id"`
 }
 
+// leerEventoPrecheck lee y decodifica el evento de stdin, y dice si al hook le toca actuar.
+//
+// ES LA ÚNICA DECISIÓN, Y VIVE EN UN SOLO LUGAR. La usan runPrecheck (antes de abrir la base) y
+// precheckOutput (los tests y quien ya tenga un store). Si cada uno tuviera su copia, la del
+// binario podría dejar pasar una tool que la de adentro descarta —y volveríamos a pagar la
+// apertura para no decir nada—, o al revés, callar una que adentro sí tenía mensaje.
+func leerEventoPrecheck(stdin io.Reader) (precheckInput, bool) {
+	var in precheckInput
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		return in, false
+	}
+	if err := json.Unmarshal(data, &in); err != nil {
+		return in, false
+	}
+	return in, precheckAplica(in)
+}
+
+// precheckAplica: el hook sólo tiene algo que decir antes de LEER o de EDITAR un archivo nombrado.
+func precheckAplica(in precheckInput) bool {
+	if in.ToolInput.FilePath == "" {
+		return false
+	}
+	return in.ToolName == "Read" || esEdicion(in.ToolName)
+}
+
 // precheckOutput arma el additionalContext del hook PreToolUse para una lectura.
 // Devuelve "" (silencioso) si no aplica.
 func precheckOutput(store codeStore, root string, stdin io.Reader) string {
 	if store == nil {
 		return ""
 	}
-	data, err := io.ReadAll(stdin)
-	if err != nil {
+	in, aplica := leerEventoPrecheck(stdin)
+	if !aplica {
 		return ""
 	}
-	var in precheckInput
-	if err := json.Unmarshal(data, &in); err != nil {
-		return ""
-	}
-	if in.ToolInput.FilePath == "" {
-		return ""
-	}
+	return precheckParaEvento(store, root, in)
+}
 
+// precheckParaEvento arma el contexto de un evento que YA se decidió que aplica.
+func precheckParaEvento(store codeStore, root string, in precheckInput) string {
 	path := in.ToolInput.FilePath
 	key := memory.NormalizeCodePath(root, path)
 
@@ -662,9 +686,55 @@ func preEnvelope(ctx string) string {
 	return string(datos)
 }
 
+// storeDelHook es el codeStore que el binario abre y tiene que cerrar.
+type storeDelHook interface {
+	codeStore
+	Close() error
+}
+
+// abridorDelHook abre la memoria del proyecto. Es un parámetro para que la prueba pueda poner un
+// abridor que DEJA RASTRO (crea .musubi) y así ver desde afuera si el hook abrió o no.
+type abridorDelHook func(root string) (storeDelHook, error)
+
+// abrirMemoriaDelHook abre la base SIN el trabajo de arranque de NewDbEngine: ni crea la base, ni
+// migra, ni backfillea, ni siembra el outbox, ni entrena el índice vectorial (y Close ya no espera
+// a esa goroutine). Sí escribe, porque el ledger de las superficies precheck_* es una escritura:
+// por eso NO es NewDbEngineSoloLectura. El porqué completo está en internal/memory/sin_arranque.go.
+func abrirMemoriaDelHook(root string) (storeDelHook, error) {
+	eng, err := memory.NewDbEngineSinArranque(root)
+	if err != nil {
+		return nil, err // nunca un *DbEngine nil adentro de una interfaz no-nil
+	}
+	return eng, nil
+}
+
+// precheckHook es el cuerpo de `musubi precheck --hook-mode`, con sus entradas explícitas.
+//
+// PRIMERO DECIDE, DESPUÉS ABRE. Antes abría la base y recién adentro leía stdin, así que un
+// evento que no le tocaba —un Bash, un Grep, cualquier tool sin file_path— pagaba la apertura
+// completa (y, con un matcher más ancho, la pagaría en cada tool de la sesión) para devolver "".
+// Sabotaje: mover la apertura antes de leerEventoPrecheck → TestPrecheckNoAbreLaBaseSiNoLeToca.
+func precheckHook(root string, stdin io.Reader, abrir abridorDelHook, stderr io.Writer) string {
+	in, aplica := leerEventoPrecheck(stdin)
+	if !aplica {
+		return ""
+	}
+	store, err := abrir(root)
+	if err != nil {
+		// Sin base no hay nada que avisar: el proyecto no usa Musubi, y un renglón en stderr por
+		// cada Read sería ruido. Cualquier otro error sí se dice, como antes.
+		if !errors.Is(err, memory.ErrBaseAusente) {
+			fmt.Fprintf(stderr, "musubi precheck: memoria no disponible: %v\n", err)
+		}
+		return ""
+	}
+	defer store.Close()
+	return precheckParaEvento(store, root, in)
+}
+
 // runPrecheck implementa 'musubi precheck [--hook-mode]'. Sin --hook-mode es no-op.
-// En hook-mode lee stdin, abre la memoria (best-effort) y escribe el envelope en
-// stdout. Errores no fatales van a stderr y sale 0 para no romper la lectura.
+// En hook-mode lee stdin, decide si le toca, abre la memoria (best-effort) y escribe el envelope
+// en stdout. Errores no fatales van a stderr y sale 0 para no romper la lectura.
 func runPrecheck() {
 	hookMode := false
 	for _, arg := range os.Args[2:] {
@@ -675,16 +745,7 @@ func runPrecheck() {
 	if !hookMode {
 		return
 	}
-
-	root := workspaceDir()
-	engine, err := memory.NewDbEngine(root)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "musubi precheck: memoria no disponible: %v\n", err)
-		os.Exit(0)
-	}
-	defer engine.Close()
-
-	if out := precheckOutput(engine, root, os.Stdin); out != "" {
+	if out := precheckHook(workspaceDir(), os.Stdin, abrirMemoriaDelHook, os.Stderr); out != "" {
 		fmt.Println(out)
 	}
 }
