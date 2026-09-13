@@ -222,9 +222,46 @@ echo "  ✓ ROJO, y falla en:"
 printf '      %s\n' $FALLOS
 # LA PRIMERA LÍNEA DEL FALLO, que es lo que distingue dos sabotajes de uno mal medido. Dos
 # sabotajes distintos que fallan con el MISMO mensaje son un sabotaje solo, contado dos veces.
-echo "  ── motivo (la primera línea de cada fallo, para poder compararlos) ──"
-awk '/^\s*--- FAIL: /{t=$3; got=0; next}
-     t!="" && got==0 && /_test\.go:[0-9]+:/{sub(/^[ \t]+/,""); print "      " t " · " substr($0,1,150); got=1}' <<<"$CON"
+#
+# PERO «LA PRIMERA LÍNEA» NO ES LA ASERCIÓN, Y ESO SE DESCUBRIÓ MIDIÉNDOLO. `t.Logf` y `t.Errorf`
+# imprimen con el MISMO formato `archivo:línea: mensaje`, así que un log de control escrito antes
+# de la aserción gana el primer puesto:
+#
+#	--- FAIL: TestConLogDeControlAntes
+#	    x_test.go:6: control: el corpus trae 7 casos      ← ésta ganaba
+#	    x_test.go:7: LA ASERCIÓN QUE REALMENTE CAYÓ
+#
+# Con eso, el motivo dejaba de decir QUÉ ASERCIÓN cayó y pasaba a decir QUÉ PRUEBA cayó: dos
+# sabotajes distintos sobre la misma guarda levantaban el mismo log y se veían como uno solo, que
+# es exactamente el conteo que este bloque existe para hacer bien.
+#
+# LA RESTA CONTRA EL CONTROL LO SACA, Y NO CUESTA UNA CORRIDA MÁS: `$BASE` ya es la corrida sana y
+# verbosa de arriba, y `-v` imprime los `t.Logf` de las pruebas que PASAN. Una línea que sale con
+# y sin sabotaje no puede ser el motivo del rojo. Se compara por MENSAJE y no por la línea entera
+# porque un sabotaje de distinto largo corre los números de línea y la resta fallaría en silencio.
+#
+# LA FRONTERA, ESCRITA PARA QUE UN MOTIVO RARO NO SE LEA COMO UN BUG NUEVO: un
+# `t.Logf("control: %d casos", n)` cuyo número CAMBIA por el sabotaje tampoco está en el control y
+# vuelve a ganar. No hace el daño original —por variar, distingue los dos sabotajes, que es lo que
+# el conteo pide—; lo que queda es el caso angosto de un log que varía IGUAL para dos sabotajes
+# distintos. Cerrarlo del todo pide distinguir `Logf` de `Errorf`, y en la salida de `go test` no
+# se distinguen (tampoco con `-json`, que además implica `-v` e invierte este orden). Eso se hace
+# por AST del lado de `arnes`, que ya tiene el árbol parseado.
+echo "  ── motivo (la primera línea de cada fallo que NO esté en el control) ──"
+MOTIVOS="$(awk 'NR==FNR{ if (/_test\.go:[0-9]+: /){ sub(/^[ \t]+/,""); sub(/^[^ ]*_test\.go:[0-9]+: /,""); base[$0]=1 } ; next }
+     /^\s*--- FAIL: /{t=$3; got=0; next}
+     t!="" && got==0 && /_test\.go:[0-9]+: /{
+         sub(/^[ \t]+/,""); linea=$0; msj=$0; sub(/^[^ ]*_test\.go:[0-9]+: /,"",msj)
+         if (msj in base) next
+         print "      " t " · " substr(linea,1,150); got=1 }' <(printf '%s\n' "$BASE") <(printf '%s\n' "$CON"))"
+if [[ -n "$MOTIVOS" ]]; then
+  printf '%s\n' "$MOTIVOS"
+else
+  # NO SE INVENTA UNO. Que todas las líneas del rojo estén también en el verde es raro y hay que
+  # poder verlo: sin esto saldría el mismo hueco visual que un rojo sin ninguna línea, y son dos
+  # cosas distintas. `arnes` lo lee y lo cuenta como «no pude medir», no como un motivo.
+  echo "      SIN MOTIVO PROPIO: todas las líneas del rojo salen igual en el control."
+fi
 echo
 echo "  ✓ el sabotaje funciona"
 

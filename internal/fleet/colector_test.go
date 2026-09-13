@@ -166,6 +166,7 @@ func TestLoQueCadaPlataformaMideEstaDeclarado(t *testing.T) {
 	// Sabotaje que la hace fallar, corriendo esta prueba en Linux: borrar la asignación de
 	// MemFree en ParsearMeminfo (linux pasa a medir mem_libre = false y la tabla dice true).
 	// arnes: prueba="TestLoQueCadaPlataformaMideEstaDeclarado"
+	// arnes: colision_ok="TestUnaLecturaIncompletaNoInventaNumeros"
 	// arnes: archivo="internal/fleet/procparse.go"
 	// arnes: de="\tif libre, hay := vals[\"MemFree\"]; hay {\n\t\tm.MemLibre = u64(libre)\n\t}\n"
 	// arnes: a=""

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -133,7 +136,11 @@ func TestElRojoSeLeeYNoSeDeduceDelExitCode(t *testing.T) {
 
 	for _, c := range casos {
 		t.Run(c.nombre, func(t *testing.T) {
-			motivo, clase, queja := revisarElRojo(c.salida, c.archivoAncla, c.prueba)
+			// La raíz es un directorio vacío A PROPÓSITO: estos casos miden cómo se LEE la salida
+			// del guion, y con la raíz vacía el barrido por AST no encuentra archivo y se calla —
+			// que es lo que tiene que hacer cuando no puede contestar. La otra mitad, la de mirar
+			// el AST de verdad, se mide en `TestUnMotivoQueEsUnLogSeDenunciaYUnoQueEsAsercionNo`.
+			motivo, clase, queja := revisarElRojo(c.salida, c.archivoAncla, c.prueba, t.TempDir(), "./internal/x/")
 			if motivo != c.motivo {
 				t.Errorf("motivo:\n  esperaba %q\n  vino     %q", c.motivo, motivo)
 			}
@@ -180,8 +187,10 @@ func TestDosSabotajesQueFallanIgualDanLaMISMAClave(t *testing.T) {
 		"  ── motivo (la primera línea de cada fallo, para poder compararlos) ──\n" +
 		"      TestOtro · guarda_test.go:42: el camino sin permiso llegó al ejecutor\n"
 
-	a, claseA, quejaA := revisarElRojo(uno, "internal/x/guarda_test.go", "TestUno")
-	b, claseB, quejaB := revisarElRojo(otro, "internal/x/guarda_test.go", "TestOtro")
+	// Raíz vacía: acá se mide la CLAVE, no el AST. Ver la nota en el caso de arriba.
+	vacia := t.TempDir()
+	a, claseA, quejaA := revisarElRojo(uno, "internal/x/guarda_test.go", "TestUno", vacia, "./internal/x/")
+	b, claseB, quejaB := revisarElRojo(otro, "internal/x/guarda_test.go", "TestOtro", vacia, "./internal/x/")
 	if claseA != sinQueja || claseB != sinQueja {
 		t.Fatalf("no esperaba quejas: %q / %q", quejaA, quejaB)
 	}
@@ -281,5 +290,188 @@ func TestElOverlaySoloAlcanzaLoQueLeeElComandoGo(t *testing.T) {
 			t.Errorf("%s: esperaba puede=%v, vino %v — un `no medí` contado como veredicto es "+
 				"exactamente el defecto que este canasto existe para evitar", c.archivo, c.puede, got)
 		}
+	}
+}
+
+// TestUnMotivoQueEsUnLogSeDenunciaYUnoQueEsAsercionNo cierra la mitad que el guion NO puede mirar.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// QUÉ SE MIDIÓ ANTES DE ESCRIBIR ESTO
+//
+// El motivo con que se distinguen dos sabotajes era «la primera línea `_test.go:N:` bajo el
+// `--- FAIL:`», y `t.Logf` imprime con EL MISMO formato que `t.Errorf`. Medido en un módulo
+// aparte, con el comando real del guion (`corrida()`, SIN `-v`):
+//
+//	--- FAIL: TestUnaConLogDeControlAntes
+//	    m_test.go:6: control: el corpus trae 7 casos      ← ganaba ésta
+//	    m_test.go:7: LA ASERCION QUE REALMENTE CAYO
+//	--- FAIL: TestOtraConELMISMOLogDeControl
+//	    m_test.go:11: control: el corpus trae 7 casos     ← y ésta
+//	    m_test.go:12: UNA ASERCION COMPLETAMENTE DISTINTA
+//
+// Dos sabotajes que caen por motivos opuestos daban un motivo con el MISMO texto: el contador no
+// medía qué ASERCIÓN cayó sino qué PRUEBA cayó, y dos guardas distintas de una misma prueba se
+// veían como una sola contada dos veces.
+//
+// `sabotaje.sh` saca los logs que salen IGUAL en el control. Lo que sobrevive a esa resta es un
+// log cuyo texto CAMBIA con el sabotaje, y ése no se puede distinguir desde el texto: ni con
+// `-json`, que además implica `-v` e invierte el orden del que depende el extractor. Desde el AST
+// sí, y acá el AST ya está a mano.
+//
+// LO QUE NO HACE, Y ES A PROPÓSITO: no invalida el rojo ni descarta el motivo. Lo DENUNCIA, que es
+// la diferencia entre «medí y esto es raro» y «no se midió».
+//
+// Sabotaje que la hace fallar: en `laLineaEsUnLog`, que el `case` de los logs no case nunca → un
+// motivo que es un `t.Logf` deja de denunciarse y entra callado a la comparación.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\t\tcase \"Log\", \"Logf\":"
+// arnes: a="\t\tcase \"NUNCA_NINGUN_LOG\":"
+// arnes: prueba="TestUnMotivoQueEsUnLogSeDenunciaYUnoQueEsAsercionNo"
+func TestUnMotivoQueEsUnLogSeDenunciaYUnoQueEsAsercionNo(t *testing.T) {
+	// El fuente se escribe acá y los números de línea se DERIVAN de él. Clavarlos a mano sería una
+	// copia: alguien agrega una línea arriba y la prueba pasa a preguntar por otra cosa sin que
+	// nada se ponga rojo.
+	lineas := []string{
+		"package x",
+		"",
+		"import \"testing\"",
+		"",
+		"func TestAlgo(t *testing.T) {",
+		"\tt.Logf(\"control: el corpus trae %d casos\", 7)",
+		"\tt.Errorf(\"la aserción que de verdad cayó\")",
+		"\tayudante(t)",
+		"}",
+		"",
+		"func ayudante(t *testing.T) { t.Helper() }",
+		"",
+	}
+	numeroDe := func(aguja string) int {
+		n := 0
+		for i, l := range lineas {
+			if strings.Contains(l, aguja) {
+				if n != 0 {
+					t.Fatalf("%q aparece más de una vez en el fuente de prueba: el número de línea "+
+						"que derive de ahí sería ambiguo", aguja)
+				}
+				n = i + 1
+			}
+		}
+		if n == 0 {
+			t.Fatalf("no encontré %q en el fuente de prueba: esta prueba no estaría midiendo nada", aguja)
+		}
+		return n
+	}
+
+	raiz := t.TempDir()
+	dir := filepath.Join(raiz, "internal", "x")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "guarda_test.go"),
+		[]byte(strings.Join(lineas, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	salidaCon := func(linea int, mensaje string) string {
+		return "  ✓ ROJO, y falla en:\n      TestAlgo\n" +
+			"  ── motivo (la primera línea de cada fallo que NO esté en el control) ──\n" +
+			fmt.Sprintf("      TestAlgo · guarda_test.go:%d: %s\n", linea, mensaje)
+	}
+	revisar := func(linea int, mensaje string) (string, claseDeQueja, string) {
+		return revisarElRojo(salidaCon(linea, mensaje), "internal/x/guarda_test.go", "TestAlgo",
+			raiz, "./internal/x/")
+	}
+
+	t.Run("un motivo que cae en un t.Logf se denuncia", func(t *testing.T) {
+		motivo, clase, queja := revisar(numeroDe("t.Logf("), "control: el corpus trae 9 casos")
+		if clase != quejaMotivoEsUnLog {
+			t.Fatalf("clase = %d, esperaba quejaMotivoEsUnLog (%d) — queja: %q\n"+
+				"Si vino sinQueja, o el AST no encontró el archivo o el `case` de los logs no casa: "+
+				"en los dos casos esta guarda no estaría mirando nada.",
+				clase, quejaMotivoEsUnLog, queja)
+		}
+		if strings.TrimSpace(queja) == "" {
+			t.Error("la clase dice que hay queja y el texto vino vacío")
+		}
+		// EL MOTIVO NO SE TIRA: un rojo denunciado sigue siendo un rojo, y sin clave no se podría
+		// comparar contra los otros sabotajes. Denunciar no es descartar.
+		if motivo == "" {
+			t.Error("se perdió el motivo al denunciarlo: la denuncia tiene que agregar información, " +
+				"no sacarla")
+		}
+	})
+
+	t.Run("un motivo que cae en la aserción NO se denuncia", func(t *testing.T) {
+		// LA MITAD QUE IMPIDE QUE ESTO SEA UN «SIEMPRE DENUNCIA». Sin esta rama, cambiar el `case`
+		// de los logs por `default` pasaría la prueba de arriba y rompería la herramienta entera.
+		motivo, clase, queja := revisar(numeroDe("t.Errorf("), "la aserción que de verdad cayó")
+		if clase != sinQueja {
+			t.Errorf("una aserción se denunció como log: clase = %d, queja = %q", clase, queja)
+		}
+		if motivo == "" {
+			t.Error("no salió motivo para una aserción legítima")
+		}
+	})
+
+	t.Run("si en esa línea no hay ninguna llamada a t.X, no se opina", func(t *testing.T) {
+		// UNA GUARDA QUE ESCRIBE SU ASERCIÓN EN UN AYUDANTE CON `t.Helper()` hace que `go test`
+		// reporte la línea del LLAMADOR, que no es una llamada a `t.X` y no se puede clasificar.
+		// Contestar «no es un log» ahí sería afirmar algo que no se midió.
+		_, clase, queja := revisar(numeroDe("ayudante(t)"), "lo que sea que haya dicho el ayudante")
+		if clase != sinQueja {
+			t.Errorf("opinó sobre una línea que no puede clasificar: clase = %d, queja = %q", clase, queja)
+		}
+	})
+
+	t.Run("CONTROL: sin archivo que parsear no se opina, y el resto sigue funcionando", func(t *testing.T) {
+		// Si esto se pusiera rojo, el barrido estaría inventando una clasificación desde un archivo
+		// que no existe — y entonces el verde de las otras ramas no significaría nada.
+		_, clase, queja := revisarElRojo(salidaCon(numeroDe("t.Logf("), "da igual"),
+			"internal/x/guarda_test.go", "TestAlgo", t.TempDir(), "./internal/x/")
+		if clase != sinQueja {
+			t.Errorf("opinó sin archivo: clase = %d, queja = %q", clase, queja)
+		}
+	})
+}
+
+// TestLaMarcaDeSinMotivoPropioSigueEnElGuion evita que dos programas se desincronicen callados.
+//
+// `marcaSinMotivoPropio` es una COPIA de un literal que vive en `deploy/pruebas/sabotaje.sh`. Este
+// repo tiene medido qué pasa con las copias: no fallan, dejan de coincidir. Si alguien reescribe
+// esa frase en el guion, acá no se reconocería y el desenlace «no me quedó ninguna línea propia»
+// volvería a salir por la puerta de `quejaMotivoIlegible` —que manda a mirar la redacción— sin que
+// nada se ponga rojo.
+//
+// Sabotaje que la hace fallar: cambiarle el valor a `marcaSinMotivoPropio` → la constante deja de
+// coincidir con la frase que el guion imprime, que es exactamente la desincronización que se teme.
+//
+// VA SOBRE LA CONSTANTE Y NO SOBRE EL GUION, Y NO ES UNA COMODIDAD: el guion sería, en esa corrida,
+// el intérprete que se está ejecutando. `bash` lee el archivo a medida que avanza, así que mutarlo
+// en vuelo no mide esta guarda, mide otra cosa. Los dos lados de una desincronización dan el mismo
+// rojo, así que se elige el lado seguro.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="const marcaSinMotivoPropio = \"SIN MOTIVO PROPIO:\""
+// arnes: a="const marcaSinMotivoPropio = \"UNA FRASE QUE EL GUION NO DICE:\""
+// arnes: prueba="TestLaMarcaDeSinMotivoPropioSigueEnElGuion"
+func TestLaMarcaDeSinMotivoPropioSigueEnElGuion(t *testing.T) {
+	// LA PREGUNTA TAUTOLÓGICA, ATAJADA: `strings.Contains(x, "")` es true siempre. Sin esto, vaciar
+	// la constante dejaría la guarda en verde para siempre — que es la forma en que una guarda deja
+	// de medir sin avisar.
+	if marcaSinMotivoPropio == "" {
+		t.Fatal("`marcaSinMotivoPropio` está vacía: `Contains` contra \"\" es true siempre y esta " +
+			"guarda no podría fallar nunca")
+	}
+	const guion = "../../pruebas/sabotaje.sh"
+	b, err := os.ReadFile(guion)
+	if err != nil {
+		t.Fatalf("no pude leer %s: %v — no medí nada", guion, err)
+	}
+	if !strings.Contains(string(b), marcaSinMotivoPropio) {
+		t.Errorf("`%s` no dice %q en ninguna parte.\n"+
+			"  Esa frase es la que el guion imprime cuando, después de restar el control, no le\n"+
+			"  queda ninguna línea con que identificar el rojo — y `revisarElRojo` la reconoce por\n"+
+			"  texto para darle su propia clase. Si la reescribiste en el guion, actualizá también\n"+
+			"  `marcaSinMotivoPropio`; si no, ese desenlace vuelve a salir por la puerta equivocada.",
+			guion, marcaSinMotivoPropio)
 	}
 }

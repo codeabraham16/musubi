@@ -103,6 +103,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -744,6 +747,15 @@ const (
 	quejaSinLinea
 	quejaMotivoIlegible
 	quejaOtroArchivo
+	// quejaSinMotivoPropio: el rojo no trajo NI UNA línea que no saliera también en el control.
+	// No es lo mismo que un rojo sin líneas (`quejaSinLinea`) y por eso no comparte su clase: acá
+	// hubo líneas y todas eran del control.
+	quejaSinMotivoPropio
+	// quejaMotivoEsUnLog: la línea que quedó de motivo es un `t.Log`/`t.Logf`, no una aserción.
+	// La resta contra el control saca los logs CONSTANTES; éste sobrevivió porque su texto cambia
+	// con el sabotaje. Sigue siendo una clave peor que la aserción, así que se dice en vez de
+	// entrar callado a la comparación de motivos repetidos.
+	quejaMotivoEsUnLog
 )
 
 // revisarElRojo LEE LA LÍNEA DEL FALLO, QUE ES LO QUE EL EXIT CODE NO DICE.
@@ -762,7 +774,7 @@ const (
 // que dos pruebas distintas que caen en la MISMA aserción den la misma clave— y una queja cuando lo
 // que se puso en rojo no es lo que el ancla declaraba. Una queja no invalida el rojo: lo manda a
 // leer a mano, que es lo que hoy no pasaba nunca.
-func revisarElRojo(salida, archivoAncla, pruebaDeclarada string) (motivo string, clase claseDeQueja, queja string) {
+func revisarElRojo(salida, archivoAncla, pruebaDeclarada, raiz, paquete string) (motivo string, clase claseDeQueja, queja string) {
 	var fallos, crudos []string
 	seccion := ""
 	for _, l := range strings.Split(salida, "\n") {
@@ -808,6 +820,14 @@ func revisarElRojo(salida, archivoAncla, pruebaDeclarada string) (motivo string,
 	if _, resto, ok := strings.Cut(primera, " · "); ok {
 		primera = resto
 	}
+	// EL GUION SE QUEDÓ SIN MOTIVO Y LO DIJO. Tiene clase propia y no se mezcla con «no hubo
+	// líneas»: acá hubo líneas y todas salían igual en el control, que es un desenlace distinto y
+	// bastante más raro. Sin esta rama entraría por `quejaMotivoIlegible`, que manda a mirar la
+	// redacción del motivo cuando el problema es otro.
+	if strings.HasPrefix(primera, marcaSinMotivoPropio) {
+		return "", quejaSinMotivoPropio, "el rojo no trajo NI UNA línea que no saliera también en el " +
+			"control: no tengo con qué compararlo contra los otros sabotajes"
+	}
 	arch, ok := archivoDelMotivo(primera)
 	if !ok {
 		return "", quejaMotivoIlegible, "el motivo no nombra un `_test.go:línea`: " + primerasRunas(primera, 80)
@@ -815,8 +835,87 @@ func revisarElRojo(salida, archivoAncla, pruebaDeclarada string) (motivo string,
 	if base := archivoAncla[strings.LastIndex(archivoAncla, "/")+1:]; arch != base {
 		clase = quejaOtroArchivo
 		queja = "la aserción que cayó vive en " + arch + " y el ancla está en " + base
+		return primera, clase, queja
+	}
+	// LO QUE EL GUION NO PUEDE MIRAR Y ACÁ SÍ. `t.Logf` y `t.Errorf` imprimen con el mismo formato,
+	// así que desde el texto son indistinguibles; desde el AST no. El guion ya sacó los logs que
+	// salen IGUAL en el control; el que sobrevive es uno cuyo texto cambia con el sabotaje, y ése
+	// sigue siendo peor clave que la aserción. Se dice en vez de entrar callado a la comparación.
+	if esLog, pude := laLineaEsUnLog(raiz, paquete, arch, lineaDelMotivo(primera)); pude && esLog {
+		clase = quejaMotivoEsUnLog
+		queja = "el motivo es un `t.Log`/`t.Logf`, no la aserción: compara por lo que la prueba " +
+			"IMPRIME y no por lo que AFIRMA"
 	}
 	return primera, clase, queja
+}
+
+// marcaSinMotivoPropio es lo que `sabotaje.sh` imprime cuando, después de restar el control, no le
+// queda ninguna línea con que identificar el rojo.
+//
+// ES UNA COPIA DE UN LITERAL DE OTRO PROGRAMA, y las copias se pudren calladas: si alguien reescribe
+// esa frase en el guion, acá dejaría de reconocerse y el desenlace volvería a salir por la puerta
+// equivocada sin que nada se ponga rojo. Por eso hay una guarda que lee el guion y exige que la
+// frase siga estando — ver `TestLaMarcaDeSinMotivoPropioSigueEnElGuion`.
+const marcaSinMotivoPropio = "SIN MOTIVO PROPIO:"
+
+// lineaDelMotivo saca el 123 de `foo_test.go:123: mensaje`. Devuelve 0 si no lo encuentra, y 0 no
+// es una línea válida, así que quien lo reciba no puede confundirlo con un resultado.
+func lineaDelMotivo(motivo string) int {
+	i := strings.Index(motivo, "_test.go:")
+	if i < 0 {
+		return 0
+	}
+	resto := motivo[i+len("_test.go:"):]
+	n := 0
+	for _, r := range resto {
+		if r < '0' || r > '9' {
+			break
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n
+}
+
+// laLineaEsUnLog dice si la llamada que está en esa línea es un `t.Log`/`t.Logf`.
+//
+// Devuelve (esLog, pude). `pude=false` cuando no hay con qué contestar —el archivo no se parsea, o
+// en esa línea no arranca ninguna llamada `algo.Metodo(`— y entonces NO se opina: una guarda que
+// escribe su aserción adentro de un ayudante con `t.Helper()` hace que `go test` reporte la línea
+// del LLAMADOR, que no es una llamada a `t.X` y no se puede clasificar. Callarse ahí es lo correcto;
+// inventar «no es un log» sería afirmar algo que no se midió.
+//
+// SE BUSCA POR LA LÍNEA DONDE LA LLAMADA ABRE, y eso se midió antes de escribirlo: con un
+// `t.Errorf` de cuatro líneas, `go test` reporta la de APERTURA, no la del paréntesis que cierra.
+// Si fuera al revés este barrido no encontraría nada, porque en este árbol casi toda aserción se
+// escribe en cuatro o cinco líneas.
+func laLineaEsUnLog(raiz, paquete, base string, linea int) (esLog bool, pude bool) {
+	if linea <= 0 || base == "" {
+		return false, false
+	}
+	dir := strings.TrimPrefix(strings.TrimSuffix(paquete, "/"), "./")
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, filepath.Join(raiz, dir, base), nil, 0)
+	if err != nil {
+		return false, false
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		c, ok := n.(*ast.CallExpr)
+		if !ok || fset.Position(c.Pos()).Line != linea {
+			return true
+		}
+		sel, ok := c.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		switch sel.Sel.Name {
+		case "Log", "Logf":
+			esLog, pude = true, true
+		case "Error", "Errorf", "Fatal", "Fatalf", "Skip", "Skipf":
+			esLog, pude = false, true
+		}
+		return true
+	})
+	return esLog, pude
 }
 
 // archivoDelMotivo saca el `foo_test.go` de una línea `foo_test.go:123: mensaje`.
@@ -948,7 +1047,7 @@ func correrTodos(raiz string, c arnes.Censo, soloPaquete string, limite int) int
 		case err == nil:
 			rojos++
 			// NO ALCANZA CON QUE `sabotaje.sh` HAYA SALIDO CON 0. Ver `revisarElRojo`.
-			motivo, clase, queja := revisarElRojo(string(salida), a.Archivo, d.Prueba)
+			motivo, clase, queja := revisarElRojo(string(salida), a.Archivo, d.Prueba, raiz, d.Paquete)
 			if clase != sinQueja {
 				fmt.Println("   ! " + queja)
 				sospechas = append(sospechas, fmt.Sprintf("%s:%d %s — %s", a.Archivo, a.Linea, d.Prueba, queja))

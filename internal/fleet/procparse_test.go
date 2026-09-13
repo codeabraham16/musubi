@@ -188,6 +188,7 @@ func TestUnaLecturaIncompletaNoInventaNumeros(t *testing.T) {
 	// Sabotaje: inicializar MemLibre con u64(0) cuando no hay MemFree — un 0 se lee «no le queda
 	// nada de RAM libre», que es lo contrario de «no lo sé».
 	// arnes: prueba="TestUnaLecturaIncompletaNoInventaNumeros"
+	// arnes: colision_ok="TestLoQueCadaPlataformaMideEstaDeclarado"
 	// arnes: archivo="internal/fleet/procparse.go"
 	// arnes: de="\tif libre, hay := vals[\"MemFree\"]; hay {\n\t\tm.MemLibre = u64(libre)\n\t}\n"
 	// arnes: a="\tif libre, hay := vals[\"MemFree\"]; hay {\n\t\tm.MemLibre = u64(libre)\n\t} else {\n\t\tm.MemLibre = u64(0)\n\t}\n"
