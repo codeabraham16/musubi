@@ -188,10 +188,15 @@ func TestNingunCandadoDelDespachoCruzaUnaLlamadaDeRed(t *testing.T) {
 // Las siete coinciden con la tabla armada leyendo el código a mano el mismo día; dos métodos
 // independientes dieron el mismo conjunto.
 var toolsQueTodaviaCruzanLaRed = []string{
-	"musubi_codegraph_index", // pushCodeGraphToCentral: HTTP al central
-	"musubi_fleet_exec",      // Tier B: SSH sincrónico, hasta ComandoTimeoutMax (10 min)
-	"musubi_fleet_probe",     // SSH/HTTP por máquina, secuencial: hasta 20 × 15 s
-	"musubi_fleet_shell",     // Tier B: AbrirShellPorSSH
+	"musubi_fleet_exec",  // Tier B: SSH sincrónico, hasta ComandoTimeoutMax (10 min)
+	"musubi_fleet_probe", // SSH/HTTP por máquina, secuencial: hasta 20 × 15 s
+	"musubi_fleet_shell", // Tier B: AbrirShellPorSSH
+	// musubi_codegraph_index SALIÓ el 2026-09-13, la cuarta, y es la que cruzaba DOS fronteras y no
+	// una: el POST al central y el `git rev-parse` de `commitDeHEAD`. El sello del head pasó de
+	// `directo` a withWriteLock, porque `directo` significaba «ya tengo el candado del despacho» y
+	// con `lockSelf` dejó de ser cierto. El tick de fondo que hacía lo mismo —y que esta guarda NO
+	// ve, por no ser una tool del registro— ya lo había arreglado #505. Ver
+	// TestIndexarElGrafoNoCongelaElServidor.
 	// musubi_list_skills SALIÓ el 2026-09-13, la tercera, y es el caso DISTINTO de las siete: era la
 	// única que declaraba `readOnly`, o sea la única que sostenía el candado COMPARTIDO y no el
 	// exclusivo. No la salvaba: un escritor esperando bloquea también a los lectores nuevos. Su
