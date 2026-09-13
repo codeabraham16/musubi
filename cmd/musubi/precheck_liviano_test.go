@@ -97,6 +97,32 @@ func TestPrecheckSinBaseNoLaCreaNiAvisa(t *testing.T) {
 	}
 }
 
+// L4 — `.musubi/` con config.yaml y SIN memory.db: tampoco crea la base ni avisa.
+//
+// Es el estado real que deja ensureWorkspace (la carpeta y la config existen, la base todavía no),
+// y L2 no lo cubre porque su root no tiene `.musubi`: una guarda que mirara la CARPETA en vez del
+// archivo pasaba L2 verde. Con la carpeta presente esa guarda deja pasar a sql.Open, el driver crea
+// una memory.db vacía y cada Read/Edit escribe «no such table: meta» en stderr.
+// Sabotaje: que el Stat de NewDbEngineSinArranque mire filepath.Dir(dbPath) → rojo acá.
+func TestPrecheckConCarpetaYSinBaseNoLaCreaNiAvisa(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "a.go", "package a\n")
+	writeFile(t, root, filepath.Join(config.DirName, config.ConfigFile), "# proyecto con config y sin base todavía\n")
+	var stderr bytes.Buffer
+	for _, tool := range []string{"Read", "Edit"} {
+		in := `{"tool_name":"` + tool + `","tool_input":{"file_path":"a.go"},"session_id":"s"}`
+		if out := precheckHook(root, strings.NewReader(in), abrirMemoriaDelHook, &stderr); out != "" {
+			t.Errorf("%s con .musubi y sin base no debía producir salida: %q", tool, out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, config.DirName, config.DBFile)); !os.IsNotExist(err) {
+		t.Errorf("el hook creó %s en un proyecto con %s pero sin base (stat: %v)", config.DBFile, config.DirName, err)
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("con .musubi y sin base el hook tiene que callar, escribió en stderr: %q", stderr.String())
+	}
+}
+
 // L3 — con el abridor REAL, la contabilidad de las superficies precheck_* sigue sumando en la base.
 // Es lo que se perdería en silencio si alguien «optimizara» el hook con NewDbEngineSoloLectura.
 func TestPrecheckLivianoConservaElLedger(t *testing.T) {
