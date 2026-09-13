@@ -253,3 +253,56 @@ func TestSinArranqueElLedgerEsperaAlOtroEscritor(t *testing.T) {
 		t.Errorf("lo sumado mientras había otro escritor no persistió: %v", l.Surfaces)
 	}
 }
+
+// SA6 — UNA BASE ATRASADA SE ABRE Y SIGUE ATRASADA: el hook no migra.
+//
+// Migrar desde el hook le cambia el esquema por debajo a un daemon viejo que ya está corriendo (ver
+// el encabezado de sin_arranque.go). Ningún caso lo miraba, y no por descuido visible:
+// SembrarPlantillaDePruebas deja la base en la ÚLTIMA versión, donde migrar es un no-op, así que un
+// runMigrations metido en NewDbEngineSinArranque pasaba verde. Por eso acá la base se baja a
+// latest-1 antes de abrirla. Sabotaje: llamar runMigrations(db) después de SetMaxIdleConns → rojo.
+//
+// El CONTROL abre la misma base con NewDbEngine y verifica que ésa sí sube a latest: sin él,
+// «quedó en latest-1» también sería verde si la migración no pudiera correr sobre esta base.
+func TestSinArranqueNoMigraUnaBaseAtrasada(t *testing.T) {
+	dir := dirSembrado(t)
+	anterior := latestSchemaVersion() - 1
+	eng, err := NewDbEngineSinArranque(dir)
+	if err != nil {
+		t.Fatalf("NewDbEngineSinArranque: %v", err)
+	}
+	if _, err := eng.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, anterior)); err != nil {
+		t.Fatalf("bajar user_version: %v", err)
+	}
+	eng.Close()
+
+	atrasada, err := NewDbEngineSinArranque(dir)
+	if err != nil {
+		t.Fatalf("una base atrasada tiene que abrirse igual (la consulta que pida una columna nueva falla sola): %v", err)
+	}
+	v := versionDeEsquema(t, atrasada.db)
+	atrasada.Close()
+	if v != anterior {
+		t.Fatalf("abrir con el engine del hook llevó la base de v%d a v%d: migró, y el hook no migra", anterior, v)
+	}
+
+	t.Run("control: NewDbEngine sí la migra", func(t *testing.T) {
+		normal, err := NewDbEngine(dir)
+		if err != nil {
+			t.Fatalf("NewDbEngine sobre la base atrasada: %v", err)
+		}
+		defer normal.Close()
+		if v := versionDeEsquema(t, normal.db); v != latestSchemaVersion() {
+			t.Fatalf("el control dejó la base en v%d y no en v%d: la prueba de arriba no estaría midiendo nada", v, latestSchemaVersion())
+		}
+	})
+}
+
+func versionDeEsquema(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	var v int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
+		t.Fatalf("leer user_version: %v", err)
+	}
+	return v
+}
