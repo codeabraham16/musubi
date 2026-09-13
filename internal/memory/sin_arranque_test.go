@@ -84,6 +84,9 @@ func TestSinArranqueNoHaceElTrabajoDeArranque(t *testing.T) {
 	if outbox != 0 {
 		t.Errorf("no tenía que sembrar el outbox, y hay %d fila(s)", outbox)
 	}
+	// Este «sigue en nil» sólo mide algo si con esta misma base y esta misma config el engine normal
+	// SÍ lo arma: el cero de un puntero es nil, y con el índice apagado por config (o sin armar en
+	// NewDbEngine) este assert sería verde sin haber probado nada. Por eso el control lo exige abajo.
 	if eng.index != nil {
 		t.Error("no tenía que armar el índice vectorial")
 	}
@@ -98,6 +101,10 @@ func TestSinArranqueNoHaceElTrabajoDeArranque(t *testing.T) {
 		gist, outbox := gistYOutbox(t, normal)
 		if gist == "" || outbox != 1 {
 			t.Fatalf("el control no reprodujo el trabajo de arranque (gist=%q outbox=%d): la prueba de arriba no estaría midiendo nada", gist, outbox)
+		}
+		// Sabotaje: saltear `engine.index = newIVFIndex()` en NewDbEngine → rojo acá.
+		if normal.index == nil {
+			t.Fatal("el control no armó el índice vectorial: el «no tenía que armar el índice» de arriba no estaría midiendo nada")
 		}
 	})
 }
