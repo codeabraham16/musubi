@@ -539,3 +539,42 @@ func TestLosTagsSeAGREGANaGOFLAGSyNoLoPISAN(t *testing.T) {
 		}
 	})
 }
+
+// TestElAvisoDeTagsHeredadosMiraElFlagYNoUnaSubcadena fija que `traeTagsPropios` lea GOFLAGS como Go.
+//
+// El aviso de `entornoConTags` salía con `GOFLAGS=-ldflags=-X=main.origen=-tags`: el `-tags` era
+// parte del valor de OTRO flag y la subcadena no lo distinguía. No es la lógica —los tags de la
+// directiva van últimos igual— pero un aviso que sale cuando no corresponde entrena a ignorar los
+// que sí.
+//
+// Los casos salen del toolchain, no de una suposición: `-tags=x` y `--tags=x` Go los acepta, y
+// `-tags x` separado lo rechaza, así que cada entrada separada por blancos es un flag entero.
+//
+// Sabotaje que la pone roja: volver a aceptar la subcadena, sumándola a la comparación por nombre.
+// El `nombre == "tags"` se deja a propósito: sacarlo dejaría `nombre` sin usar, el paquete no
+// compilaría y el arnés contestaría «sin veredicto» en vez de ROJO.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\t\tif nombre == \"tags\" {"
+// arnes: a="\t\tif nombre == \"tags\" || strings.Contains(f, \"-tags\") {"
+// arnes: arreglo_de="\t\tif nombre == \"tags\" {"
+// arnes: arreglo_a="\t\tif \"tags\" == nombre {"
+func TestElAvisoDeTagsHeredadosMiraElFlagYNoUnaSubcadena(t *testing.T) {
+	casos := []struct {
+		goflags string
+		quiero  bool
+	}{
+		{"", false},
+		{"-mod=readonly", false},
+		{"-tags=treesitter", true},
+		{"--tags=treesitter", true},
+		{"-mod=readonly -tags=a,b", true},
+		// EL CASO POR EL QUE EXISTE: el `-tags` vive adentro del valor de otro flag.
+		{"-ldflags=-X=main.origen=-tags", false},
+		{"-mod=readonly -ldflags=-X=main.v=-tags", false},
+	}
+	for _, c := range casos {
+		if got := traeTagsPropios(c.goflags); got != c.quiero {
+			t.Errorf("traeTagsPropios(%q) = %v, esperaba %v", c.goflags, got, c.quiero)
+		}
+	}
+}
