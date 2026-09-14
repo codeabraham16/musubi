@@ -27,6 +27,15 @@ import (
 // con subtests los dos imprimen distinta cantidad de líneas. Sin subtests la salida es idéntica en
 // los dos —medido—, así que esta prueba no depende del sabor de awk de la máquina.
 //
+// POR QUÉ POR BASH Y CON `Portable`. La primera versión ejecutaba `awk` directo bajo
+// `guiones.Exigir`, y la guarda de alcance de la compuerta la rechazó en la CI de los tres sistemas:
+// «llama a guiones.Exigir y NO ejecuta ninguna shell» — un salteo de propósito general disfrazado.
+// Tenía razón: los tres modos son para pruebas que corren guiones de shell. La salida no fue
+// esquivar la guarda sino mirar cómo corre esto en producción: a motivo.awk no lo ejecuta nadie
+// directo, lo ejecuta sabotaje.sh, que es bash. Así lo corre la prueba. Y `Portable` no saltea en
+// ningún lado: además de mawk mide el gawk de Git Bash y el awk de macOS, que es justo lo que la
+// entrada sin subtests hace posible.
+//
 // Sabotaje que la pone roja: volver a recortar el motivo a 150 caracteres.
 // arnes: archivo="deploy/pruebas/motivo.awk"
 // arnes: de="\" · \" linea; got=1"
@@ -34,7 +43,7 @@ import (
 // arnes: arreglo_de="\" · \" linea; got=1"
 // arnes: arreglo_a="\" · \" substr(linea,1); got=1"
 func TestElMotivoSeComparaEnteroYNoPorSusPrimeros150(t *testing.T) {
-	guiones.Exigir(t, "corre deploy/pruebas/motivo.awk, el programa con el que sabotaje.sh elige el motivo de cada rojo", "awk")
+	guiones.Portable(t, "corre deploy/pruebas/motivo.awk con bash, igual que sabotaje.sh, y no saltea en ningún sistema", "bash")
 
 	dir := t.TempDir()
 	escribir := func(nombre, cuerpo string) string {
@@ -52,10 +61,12 @@ func TestElMotivoSeComparaEnteroYNoPorSusPrimeros150(t *testing.T) {
 	if len(prefijo) <= 150 {
 		t.Fatalf("el prefijo mide %d bytes: tiene que pasar de 150 o esta prueba no pregunta nada", len(prefijo))
 	}
+	programa := filepath.ToSlash(filepath.Join("..", "..", "pruebas", "motivo.awk"))
 	motivoDe := func(cola string) string {
 		con := escribir("con-"+strings.Trim(cola, "*.")+".txt",
 			"--- FAIL: TestX (0.00s)\n    x_test.go:5: "+logDeControl+"\n    x_test.go:9: "+prefijo+cola+"\nFAIL\n")
-		out, err := exec.Command("awk", "-f", "../../pruebas/motivo.awk", base, con).CombinedOutput()
+		out, err := exec.Command("bash", "-c", `awk -f "$0" "$1" "$2"`,
+			programa, filepath.ToSlash(base), filepath.ToSlash(con)).CombinedOutput()
 		if err != nil {
 			t.Fatalf("motivo.awk no corrió: %v\n%s", err, out)
 		}
