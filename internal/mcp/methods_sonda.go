@@ -69,7 +69,15 @@ func (s *McpServer) toolFleetProbe(ctx context.Context, raw json.RawMessage) (in
 	if proyecto == "" {
 		return nil, rpcErrorf(codeInvalidParams, "no se pudo determinar el proyecto: declaralo en `project`")
 	}
-	devices, err := s.engine.ListarDevices(proyecto, false)
+	// ── LA ÚNICA LECTURA DE LA BASE DE ESTE TRAMO, Y EL BUCLE QUEDA AFUERA ───────────────────
+	//
+	// Esta tool declara `lockSelf` (ver su entrada en el registro): el despachador NO le toma el
+	// candado. Lo toma ella, y sólo para listar. El bucle de abajo —hasta 20 máquinas, 15 s cada
+	// una— corre SIN candado del despacho, que es el punto entero: antes esto sostenía el exclusivo
+	// durante todos los viajes.
+	var devices []fleet.Device
+	var err error
+	s.withReadLock(func() { devices, err = s.engine.ListarDevices(proyecto, false) })
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}
@@ -186,9 +194,23 @@ func (s *McpServer) sondearUno(d fleet.Device, ahora time.Time) map[string]inter
 	}
 	// El MISMO UPDATE que estampa la señal de vida guarda la muestra: acá el sondeo exitoso ES
 	// la prueba de que se llegó.
-	if _, err := s.engine.LatirDevice(d.ID, ahora, texto); err != nil {
+	//
+	// ── EL CANDADO SE TOMA ACÁ Y NO EN EL BUCLE, Y LA DIFERENCIA IMPORTA ─────────────────────
+	//
+	// Envolver el bucle entero volvería a sostener el candado durante los viajes de red, que es el
+	// defecto. Tomarlo por máquina acota el exclusivo a UNA sentencia: `latirDeviceCon` es un UPDATE
+	// sobre la fila de ESTE dispositivo, no un read-modify-write, y dos máquinas distintas tocan
+	// filas distintas — así que partirlo no rompe ninguna atomicidad que el candado único estuviera
+	// dando sin declararla.
+	//
+	// Y va DENTRO de `sondearUno` en vez de en su llamador porque hay un segundo llamador:
+	// exposicion_config_test.go la invoca directo. Puesto en el bucle, ese camino escribiría sin
+	// candado y nadie lo notaría.
+	var errLatido error
+	s.withWriteLock(func() { _, errLatido = s.engine.LatirDevice(d.ID, ahora, texto) })
+	if errLatido != nil {
 		fila["ok"] = false
-		fila["error"] = err.Error()
+		fila["error"] = errLatido.Error()
 		return fila
 	}
 	fila["ok"] = true
