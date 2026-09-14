@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -377,10 +378,22 @@ func readTurnInput(stdin io.Reader) turnInput {
 	return in
 }
 
-// Claves de meta del estado de inyección diferencial (delta) por sesión.
+// Claves de meta del estado de inyección diferencial (delta), UNA POR SESIÓN.
+//
+// Antes era un solo par de claves para toda la base (loop_delta_session dueña +
+// loop_delta_injected), y cada sesión que escribía le reiniciaba el estado a las demás: con dos
+// ventanas abiertas la memoria se volvía a inyectar turno por medio. Medido el 2026-09-13 sobre 16
+// días de transcripts: el 88% de las líneas inyectadas por turno ya estaban en la misma sesión, y en
+// el 29% de esas repeticiones otra sesión había inyectado en el medio. Ver
+// turn_delta_por_sesion_test.go.
 const (
-	metaDeltaSession  = "loop_delta_session"  // sesión a la que pertenece el estado delta
-	metaDeltaInjected = "loop_delta_injected" // JSON {id -> content_hash} ya inyectado
+	metaDeltaSession  = "loop_delta_session"  // LEGADO: dueña del slot único; sólo se vacía al arrancar
+	metaDeltaInjected = "loop_delta_injected" // prefijo: loop_delta_injected:<session_id> -> JSON {id -> content_hash}
+	metaDeltaSessions = "loop_delta_sessions" // JSON {session_id -> unix de la última escritura}, para podar
+	sepDeltaKey       = ":"
+	// maxDeltaSessions acota cuántas sesiones conservan su delta. Una sesión que queda afuera sólo
+	// pierde el filtro y vuelve a inyectar lo relevante: es el comportamiento de antes, no un error.
+	maxDeltaSessions = 32
 )
 
 // turnEmbedTimeout es el techo de latencia para embeber el prompt en el hook por turno. Ver el
@@ -487,14 +500,16 @@ type metaStore interface {
 	SetMeta(key, value string) error
 }
 
+// deltaKey es la clave de meta donde vive el delta de UNA sesión.
+func deltaKey(sessionID string) string {
+	return metaDeltaInjected + sepDeltaKey + sessionID
+}
+
 // loadDeltaState devuelve el conjunto {id -> content_hash} ya inyectado en la
-// sesión sessionID. Si el estado pertenece a otra sesión, arranca vacío (reset).
+// sesión sessionID. Una sesión sin estado propio arranca vacía; lo que hayan
+// inyectado otras sesiones no cuenta, porque no está en su contexto.
 func loadDeltaState(store metaStore, sessionID string) map[string]string {
-	prevSession, _, _ := store.GetMeta(metaDeltaSession)
-	if prevSession != sessionID {
-		return map[string]string{}
-	}
-	raw, ok, _ := store.GetMeta(metaDeltaInjected)
+	raw, ok, _ := store.GetMeta(deltaKey(sessionID))
 	m := map[string]string{}
 	if ok && raw != "" {
 		_ = json.Unmarshal([]byte(raw), &m)
@@ -502,14 +517,56 @@ func loadDeltaState(store metaStore, sessionID string) map[string]string {
 	return m
 }
 
-// saveDeltaState persiste el estado delta para la sesión.
+// saveDeltaState persiste el estado delta de la sesión y la registra en el índice
+// que acota cuántas sesiones conservan el suyo.
 func saveDeltaState(store metaStore, sessionID string, m map[string]string) {
 	data, err := json.Marshal(m)
 	if err != nil {
 		return
 	}
-	_ = store.SetMeta(metaDeltaInjected, string(data))
-	_ = store.SetMeta(metaDeltaSession, sessionID)
+	_ = store.SetMeta(deltaKey(sessionID), string(data))
+	registrarSesionDelta(store, sessionID, time.Now().Unix())
+}
+
+// clearDeltaState vacía el delta de UNA sesión: lo usa el arranque (o la compactación) de esa
+// sesión, cuyo contexto ya no tiene lo inyectado. No toca el de las demás sesiones.
+func clearDeltaState(store metaStore, sessionID string) {
+	_ = store.SetMeta(deltaKey(sessionID), "")
+}
+
+// registrarSesionDelta anota la última escritura de la sesión y, si hay más de maxDeltaSessions,
+// vacía el delta de las más viejas. Leer-modificar-escribir sin candado: dos hooks de sesiones
+// distintas a la vez pueden perder una entrada del índice, y lo único que cuesta es que esa clave
+// no se pode; el delta de cada sesión vive en su propia clave y no se pisa.
+func registrarSesionDelta(store metaStore, sessionID string, ahora int64) {
+	sesiones := map[string]int64{}
+	if raw, ok, _ := store.GetMeta(metaDeltaSessions); ok && raw != "" {
+		_ = json.Unmarshal([]byte(raw), &sesiones)
+	}
+	sesiones[sessionID] = ahora
+	if len(sesiones) > maxDeltaSessions {
+		type par struct {
+			id string
+			t  int64
+		}
+		ps := make([]par, 0, len(sesiones))
+		for id, t := range sesiones {
+			ps = append(ps, par{id, t})
+		}
+		sort.Slice(ps, func(i, j int) bool {
+			if ps[i].t != ps[j].t {
+				return ps[i].t < ps[j].t
+			}
+			return ps[i].id < ps[j].id
+		})
+		for _, p := range ps[:len(ps)-maxDeltaSessions] {
+			_ = store.SetMeta(deltaKey(p.id), "")
+			delete(sesiones, p.id)
+		}
+	}
+	if data, err := json.Marshal(sesiones); err == nil {
+		_ = store.SetMeta(metaDeltaSessions, string(data))
+	}
 }
 
 // formatDeltaGists arma el bloque de gists del turno, marcando como "actualizado"

@@ -125,10 +125,10 @@ func TestPrimingSeedsDeltaState(t *testing.T) {
 	}
 	// El priming debe sembrar el estado del delta con lo que inyectó, para que el
 	// recall por turno no repita esos gists en la misma sesión.
-	if store.meta[metaDeltaSession] != "s1" {
-		t.Errorf("el priming debe fijar la sesión del delta, obtuve %q", store.meta[metaDeltaSession])
+	if !strings.Contains(store.meta[metaDeltaSessions], "\"s1\"") {
+		t.Errorf("el priming debe registrar la sesión en el índice del delta, obtuve %q", store.meta[metaDeltaSessions])
 	}
-	raw := store.meta[metaDeltaInjected]
+	raw := store.meta[deltaKey("s1")]
 	if !strings.Contains(raw, "\"a\"") || !strings.Contains(raw, "\"b\"") {
 		t.Errorf("el delta debe quedar sembrado con a y b, obtuve %q", raw)
 	}

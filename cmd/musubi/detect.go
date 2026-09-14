@@ -89,8 +89,12 @@ func buildHookOutput(root string, store startupStore, cfg config.StartupConfig, 
 	current, _ := detector.DetectStack(root)
 
 	// SessionStart (arranque o compactación) = contexto fresco: limpiar el estado
-	// de inyección diferencial para que la memoria relevante se re-inyecte por turno.
+	// de inyección diferencial DE ESTA SESIÓN para que su memoria relevante se
+	// re-inyecte por turno. Las otras sesiones conservan el suyo: antes se vaciaba el
+	// slot único y el arranque de cualquier ventana les hacía repetir la memoria a todas.
+	// Las dos claves globales del esquema viejo se vacían para no dejar un JSON huérfano.
 	if store != nil {
+		clearDeltaState(store, sessionID)
 		_ = store.SetMeta(metaDeltaInjected, "")
 		_ = store.SetMeta(metaDeltaSession, "")
 	}

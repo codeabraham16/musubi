@@ -97,6 +97,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   fácil. Lo cazó ese control.
 
 ### Fixed
+- **La memoria por turno ya no se repite cuando hay varias ventanas abiertas.** El estado de la
+  inyección diferencial (qué gists ya vio la sesión) vivía en un solo par de claves de `meta` para
+  toda la base: cada sesión que escribía le reiniciaba el estado a las demás, y el arranque de
+  cualquier ventana lo vaciaba para todas. Medido sobre 16 días de transcripts: el 88% de las
+  líneas inyectadas por turno ya estaban en la misma sesión, y en el 29% de esas repeticiones otra
+  sesión del mismo proyecto había inyectado en el medio. Ahora cada sesión tiene su clave
+  (`loop_delta_injected:<sesión>`), el arranque o la compactación limpia sólo la propia, y un
+  índice (`loop_delta_sessions`) conserva las 32 sesiones más recientes. El ahorro es modesto
+  (~0,3% del gasto de una PC con varias sesiones), pero es memoria que el agente ya tenía.
 - **El servidor de SÓLO LECTURA contestaba léxico creyendo que hacía semántico.**
   `servirSoloLectura` construye un servidor MCP y **nunca estampaba la procedencia del vector**: su
   engine quedaba con `vectorModelID` vacío, la regla de homogeneidad filtraba por `model_id = ''` y
