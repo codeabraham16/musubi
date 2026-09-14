@@ -189,8 +189,15 @@ func TestNingunCandadoDelDespachoCruzaUnaLlamadaDeRed(t *testing.T) {
 // independientes dieron el mismo conjunto.
 var toolsQueTodaviaCruzanLaRed = []string{
 	"musubi_fleet_exec",  // Tier B: SSH sincrónico, hasta ComandoTimeoutMax (10 min)
-	"musubi_fleet_probe", // SSH/HTTP por máquina, secuencial: hasta 20 × 15 s
 	"musubi_fleet_shell", // Tier B: AbrirShellPorSSH
+	// musubi_fleet_probe SALIÓ el 2026-09-14, la quinta, y es la primera cuyo corte NO se pudo copiar
+	// del molde anterior: las cuatro previas hacían UN viaje y bastaba acotar un tramo, y ésta sale a
+	// medir hasta 20 máquinas a 15 s cada una. El candado se toma y se suelta POR MÁQUINA —
+	// `withReadLock` para listar, nada durante el sondeo, `withWriteLock` sólo alrededor del UPDATE
+	// del latido—, así que entre una máquina y la siguiente el servidor respira. Partirlo es seguro y
+	// está medido: el latido es una sentencia única sobre la fila de ESE dispositivo, y el contador
+	// de CPU compartido entre sondeos ya tenía su propio mutex. Ver
+	// TestSondearLaFlotaNoCongelaElServidor.
 	// musubi_codegraph_index SALIÓ el 2026-09-13, la cuarta, y es la que cruzaba DOS fronteras y no
 	// una: el POST al central y el `git rev-parse` de `commitDeHEAD`. El sello del head pasó de
 	// `directo` a withWriteLock, porque `directo` significaba «ya tengo el candado del despacho» y

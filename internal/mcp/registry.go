@@ -1443,6 +1443,24 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: s.toolFleetProbe,
+			// LA RED VA AFUERA DEL CANDADO DEL DESPACHO, Y ACÁ NO ES UN VIAJE: SON HASTA VEINTE.
+			//
+			// Esta tool sale a medir máquina por máquina —SSH, ADB o un endpoint de exposición— con
+			// `sondaTimeoutPorDispositivo` de 15 s cada una y un tope de 20 por llamada. Sin declarar
+			// nada tomaba el candado EXCLUSIVO (no declara `readOnly`) sobre el bucle entero: en el
+			// peor caso, cinco minutos de servidor sin atender a nadie.
+			//
+			// EL CORTE NO ES EL DE LAS CUATRO ANTERIORES, y por eso no se copió. Aquéllas hacían UN
+			// viaje y bastaba acotar un tramo. Acá cada vuelta es red y después una escritura, así que
+			// el candado se toma y se suelta POR MÁQUINA: `withReadLock` para listar los dispositivos,
+			// nada durante el sondeo, y `withWriteLock` sólo alrededor del UPDATE del latido. Entre una
+			// máquina y la siguiente el servidor respira.
+			//
+			// Partirlo es seguro y está medido: `LatirDevice` es una sentencia única sobre la fila de
+			// ESE dispositivo, no un read-modify-write, y dos máquinas distintas tocan filas distintas.
+			// El estado compartido entre sondeos —el contador de CPU— ya tiene su propio mutex y nunca
+			// dependió de este candado. Lo mide TestSondearLaFlotaNoCongelaElServidor.
+			lock: lockSelf,
 		},
 		{
 			Tool: Tool{
