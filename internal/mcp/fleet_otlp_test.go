@@ -299,6 +299,9 @@ func seriesDelScrape(salida string) map[string]string {
 //
 // Sabotaje que la hace fallar: sacar el `if p == nil` de armarPayloadOTLP y dejar que siga —
 // devuelve un payload con las máquinas de los dos proyectos en vez de un error.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="if p == nil {"
+// arnes: a="if false {"
 func TestArmarPayloadConPrincipalNilNoExporta(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()
@@ -778,6 +781,14 @@ func TestElErrorDelEmpujeNoLlevaLaCredencialNiElCuerpoDelDestino(t *testing.T) {
 // Un destino http:// que NO es loopback haría viajar el bearer en texto plano. Fail-closed.
 //
 // Sabotaje: quitar la comprobación de esquema/loopback de nuevoEmpujadorOTLP.
+//
+// EL CORTE INVIERTE EL `!` EN VEZ DE BORRAR LA CONDICIÓN, y no es capricho: borrarla dejaría a
+// `esLoopback` sin su única llamada viva. En Go una función de paquete sin usar compila, así que el
+// sabotaje igual daría rojo — pero invertir es el defecto que alguien escribe DE VERDAD (un `!` que
+// se cae en un rebase) y deja el árbol en un estado que el compilador no puede distinguir del sano.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="!esLoopback(u.Hostname())"
+// arnes: a="esLoopback(u.Hostname())"
 func TestUnDestinoRemotoSinTLSNoArranca(t *testing.T) {
 	_, err := nuevoEmpujadorOTLP(config.OTLPPushConfig{
 		Endpoint: "http://prometheus.ajeno.example/api/v1/otlp/v1/metrics", Principal: "prometheus",
@@ -806,6 +817,9 @@ func TestUnDestinoRemotoSinTLSNoArranca(t *testing.T) {
 // Una URL con userinfo es un secreto que termina en un log de diagnóstico el primer día malo.
 //
 // Sabotaje: sacar el `if u.User != nil` de nuevoEmpujadorOTLP.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="if u.User != nil {"
+// arnes: a="if false {"
 func TestUnaURLConUserinfoSeRechaza(t *testing.T) {
 	_, err := nuevoEmpujadorOTLP(config.OTLPPushConfig{
 		Endpoint: "https://prom:clave-secreta@ejemplo.com/api/v1/otlp/v1/metrics", Principal: "prometheus",
@@ -1279,6 +1293,14 @@ func TestElAvisoDelEmpujeMudoSeRearmaCuandoVuelveLaConcesion(t *testing.T) {
 //
 // Sabotaje que la hace fallar: quitar `req.Header.Set("Content-Type", "application/json")`.
 // Sabotaje que la hace fallar: cambiar http.MethodPost por http.MethodPut (o MethodGet).
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="http.MethodPost"
+// arnes: a="http.MethodPut"
+//
+// SÓLO EL SEGUNDO SABOTAJE ESTÁ MECANIZADO, Y NO ES UN OLVIDO. El alcance de un ancla termina donde
+// empieza la siguiente (ver `arnes.Censar`), y estas dos son renglones pegados: el primero no tiene
+// dónde poner sus propias líneas `arnes:` sin que se las coma el segundo. Mecanizarlo pide separar
+// las dos oraciones, que es un cambio de la prosa de otro y no de esta entrega.
 func TestElEmpujeMandaUnPOSTDeJSONAlPathQueSeConfiguro(t *testing.T) {
 	destino := nuevoReceptor(t, http.StatusOK)
 	s := prepararEmpuje(t, destino.URL+"/api/v1/otlp/v1/metrics",
@@ -1350,6 +1372,9 @@ func TestElEmpujeMandaUnPOSTDeJSONAlPathQueSeConfiguro(t *testing.T) {
 // secreto viajara ahí, taparlo en el log no alcanzaría.
 //
 // Sabotaje que la hace fallar: quitar el `req.Header.Set("Authorization", ...)` de enviar.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="\t\treq.Header.Set(\"Authorization\", \"Bearer \"+e.token)\n"
+// arnes: a=""
 func TestElBearerDelEmpujeViajaEnElHeaderYNoEnLaURL(t *testing.T) {
 	const variable = "MUSUBI_TEST_OTLP_TOKEN_A49"
 	t.Setenv(variable, "s3cr3t0-del-empuje")
