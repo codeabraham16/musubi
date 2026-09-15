@@ -7,6 +7,40 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **`verificar-despliegue.sh` se terminaba a la mitad cuando Prometheus no contestaba, y con él se
+  iban cinco secciones y el veredicto entero** (A126). La sección «reglas de alerta» salía con
+  `exit 2` si no podía leer las reglas cargadas. El veredicto era el correcto —«no vi» no es «está
+  bien»— pero el `exit` se llevaba puesto todo lo que venía después. Medido con el puerto de
+  Prometheus cerrado: el informe eran **32 líneas** y terminaba en el título de esa sección, sin
+  correr `scrapes`, `alertmanager`, `versión`, `el watchdog externo` ni `guiones derivados`, y **sin
+  imprimir una sola línea de veredicto** — la corrida salía 2 y no decía por qué. Ahora la sección
+  se marca SIN VERIFICAR y el guion sigue: **61 líneas, las diez secciones y el veredicto
+  completo**. *El código de salida no cambia*: `dudoso` prende `SIN_VERIFICAR`, que el bloque final
+  traduce a la misma salida 2. No se bajó ningún listón, se dejó de confundir «esta comparación no
+  se puede hacer» con «esta corrida se terminó». Es el idioma que el propio guion ya usaba para esa
+  misma variable en las recording rules del SLA.
+- **Dos defectos que ese corte venía escondiendo, y que aparecieron al abrirlo.** Los dos vivían en
+  la mitad de abajo, que es donde ya se habían escondido cuatro de los cinco `$VAR` pegados a un
+  carácter no-ASCII que mataban el guion en el bash 3.2 de macOS:
+  - **La sección `scrapes` declaraba divergencias sobre cero información.** Con Prometheus mudo la
+    lista de targets quedaba vacía y el bucle acusaba en ROJO a cada job del repo de «no estar en
+    Prometheus» — tres rojos medidos, y eran los que prendían `producción diverge del repo` en el
+    veredicto. `PROM_VIVO` ya se consultaba en las otras cinco secciones que dependen de
+    Prometheus; ésta era la sexta y la única que no preguntaba. Lo mismo tenía «alertmanager» con su
+    propio servicio, que ahora resuelve `AM_VIVO`. Los dos casos pasan a `dudoso`, que dice cuántos
+    quedaron sin mirar y por qué.
+  - **Un volcado de Python crudo en medio del informe.** De dos invocaciones de `python3` hermanas,
+    la que arma `JOBS_VIVOS` no silenciaba stderr: cuando la respuesta no era el JSON esperado
+    escribía diez líneas de traceback entre el título de la sección y sus veredictos. Un informe que
+    muestra un volcado se deja de leer, que es la forma más barata de que un hallazgo real pase
+    desapercibido.
+
+  Lo custodian cuatro guardas nuevas en `despliegue_informe_entero_test.go`, y ninguna enumera
+  secciones: la última sección se **deriva** del guion, la prohibición de salir se busca entre dos
+  anclas de código, y las otras dos preguntan por una propiedad. Los cuatro sabotajes se corrieron y
+  cada uno cae en su propia aserción.
+
 ## [0.141.0] - 2026-09-14
 
 ### Added
