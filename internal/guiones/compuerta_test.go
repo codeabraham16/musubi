@@ -353,7 +353,8 @@ type funcDePrueba struct {
 	pos      string
 	esTest   bool
 	shell    bool // ejecuta una shell EN SU PROPIO cuerpo
-	compuert bool // llama a alguno de losModosDeLaCompuerta en su propio cuerpo
+	compuert bool // la compuerta GATEA: sentencia incondicional del cuerpo y antes de la shell
+	gateEsc  bool // la compuerta está ESCRITA en alguna parte del cuerpo, gatee o no
 	llama    []string
 }
 
@@ -374,6 +375,33 @@ type funcDePrueba struct {
 // compuerta» es el que caza al HERMANO —el defecto dominante de este repo: la guarda puesta en N-1
 // de N caminos—. Cuando mañana alguien agregue la prueba número 15 que ejecuta un guion, esta
 // guarda se la va a pedir sin que nadie se acuerde.
+//
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// A127 · Y SE PREGUNTA SI LA COMPUERTA GATEA, NO SI ESTÁ ESCRITA.
+//
+// Hasta el 2026-09-15 alcanzaba con que el identificador APARECIERA en el cuerpo. Medido con
+// control positivo sobre `TestLaPodaDePuntosDeRetornoHaceLoQueDice`: envolver su
+// `guiones.Exigir` en un `if false { … }` dejaba esta guarda EN VERDE mientras la prueba corría
+// `deploy/pruebas/poda-puntos-de-retorno.sh` afuera del `if`. El control —borrar la compuerta— sí
+// salía rojo, o sea que la guarda funcionaba para la forma que entendía y era ciega a ésta.
+//
+// Hoy la pregunta es si la compuerta DOMINA a la shell (ver `analizarCuerpo`), y con eso caen las
+// dos formas: la compuerta en una rama que no encierra al `exec`, y la escrita DESPUÉS de él.
+//
+// LO QUE SIGUE ABIERTO, Y SE DICE ACÁ PARA QUE NADIE LO DESCUBRA DE NUEVO. `esLiteralDeShell`
+// sólo entiende un `*ast.BasicLit` —o un identificador que venga de un `exec.LookPath("bash")` en
+// el mismo cuerpo—, así que una shell nombrada por un `const` de paquete le es INVISIBLE. Medido
+// el mismo día, con el mismo control: la guarda queda verde. No se cerró acá porque el arreglo de
+// fondo no es enseñarle la forma número N+1 —una ronda anterior cerró once y aparecieron catorce—
+// sino hacer imposible ejecutar una shell sin pasar por la compuerta, y eso alcanza a las 25
+// llamadas de 18 archivos: es un refactor, no una entrega. Sigue anotado en A127.
+//
+// Sabotaje que la pone roja: envolver la compuerta de esa prueba en un `if false`, que la deja
+// escrita y sin gatear.
+// arnes: archivo="internal/mcp/despliegue_poda_test.go"
+// arnes: de="\tguiones.Exigir(t, \"corre deploy/pruebas/poda-puntos-de-retorno.sh contra el guion de \"+\n\t\t\"redespliegue, que es de un servidor Linux\", \"bash\", \"awk\", \"sed\", \"grep\", \"touch\")\n"
+// arnes: a="\tif false {\n\tguiones.Exigir(t, \"corre deploy/pruebas/poda-puntos-de-retorno.sh contra el guion de \"+\n\t\t\"redespliegue, que es de un servidor Linux\", \"bash\", \"awk\", \"sed\", \"grep\", \"touch\")\n\t}\n"
+// ─────────────────────────────────────────────────────────────────────────────────────────────
 func TestElSalteoEstaAcotadoALasPruebasQueCorrenUnaShell(t *testing.T) {
 	raiz := filepath.Join("..", "..")
 	fset := token.NewFileSet()
@@ -453,12 +481,15 @@ func TestElSalteoEstaAcotadoALasPruebasQueCorrenUnaShell(t *testing.T) {
 					if g.compuert && !f.compuert {
 						f.compuert, cambio = true, true
 					}
+					if g.gateEsc && !f.gateEsc {
+						f.gateEsc, cambio = true, true
+					}
 				}
 			}
 		}
 	}
 
-	var sinCompuerta, fueraDeAlcance []string
+	var sinCompuerta, noGatea, fueraDeAlcance []string
 	conShell := 0
 	for _, fs := range porNombre {
 		for _, f := range fs {
@@ -468,15 +499,21 @@ func TestElSalteoEstaAcotadoALasPruebasQueCorrenUnaShell(t *testing.T) {
 			switch {
 			case f.shell && f.compuert:
 				conShell++
-			case f.shell && !f.compuert:
+			case f.shell && f.gateEsc:
+				// La compuerta ESTÁ escrita y no gatea. Se cuenta aparte porque el remedio es otro:
+				// mandarlo al mensaje de «falta la compuerta» diría que agregue una que ya tiene.
+				conShell++
+				noGatea = append(noGatea, f.pos+" "+f.nombre)
+			case f.shell:
 				conShell++
 				sinCompuerta = append(sinCompuerta, f.pos+" "+f.nombre)
-			case !f.shell && f.compuert:
+			case f.gateEsc:
 				fueraDeAlcance = append(fueraDeAlcance, f.pos+" "+f.nombre)
 			}
 		}
 	}
 	sort.Strings(sinCompuerta)
+	sort.Strings(noGatea)
 	sort.Strings(fueraDeAlcance)
 
 	// El piso NO es el número exacto de pruebas de hoy —eso obligaría a tocar esta guarda cada vez
@@ -505,6 +542,18 @@ func TestElSalteoEstaAcotadoALasPruebasQueCorrenUnaShell(t *testing.T) {
 			"  Y OJO CON ELEGIR `Exigir` POR COMODIDAD: el defecto de `${VAR}` pegada a un carácter\n"+
 			"  no-ASCII que mata el guion en el bash 3.2 de macOS es INVISIBLE en Linux. Para una\n"+
 			"  prueba que caza eso, `Exigir` no acota el alcance: lo apaga. Ésa es `Unix`.", x)
+	}
+	for _, x := range noGatea {
+		t.Errorf("LA COMPUERTA ESTÁ ESCRITA Y NO GATEA: %s ejecuta una shell y su llamada a la\n"+
+			"  compuerta no la protege — está adentro de un `if`, de un `for`, de un `t.Run` o de otra\n"+
+			"  función literal, o escrita DESPUÉS del `exec`.\n"+
+			"  La prueba corre el guion igual en la plataforma donde el arnés no se sostiene, y el\n"+
+			"  identificador ahí parado hace creer a cualquiera que la lea —y hasta hoy también a esta\n"+
+			"  guarda— que está cubierta. Es peor que no tenerla: una compuerta que no gatea es la\n"+
+			"  forma exacta de un falso verde.\n"+
+			"  Arreglo: subila a ser la PRIMERA sentencia del cuerpo de la prueba, incondicional y\n"+
+			"  antes de cualquier `exec`. Si lo que querés es gatear sólo un subtest, la compuerta va\n"+
+			"  en el cuerpo de ESE subtest, que también es una prueba.", x)
 	}
 	for _, x := range fueraDeAlcance {
 		t.Errorf("COMPUERTA FUERA DE ALCANCE: %s llama a guiones.Exigir y NO ejecuta ninguna shell.\n"+
@@ -612,6 +661,68 @@ func analizarCuerpo(fd *ast.FuncDecl, alias string, esLaCompuerta bool, info *fu
 		return true
 	})
 
+	// ════════════════════════════════════════════════════════════════════════════════════════
+	// LA COMPUERTA GATEA SI DOMINA A LA SHELL, y eso se contesta por BLOQUES.
+	//
+	// Hasta A127 alcanzaba con que el identificador APARECIERA en el cuerpo. Medido el 2026-09-15
+	// con control positivo: un `if false { guiones.Exigir(t, …) }` dejaba esta guarda EN VERDE
+	// mientras la prueba corría el guion afuera del `if`. O sea que lo que se medía era
+	// co-ocurrencia, no que la compuerta protegiera nada.
+	//
+	// EL PRIMER INTENTO FUE «SENTENCIA DEL PRIMER NIVEL DEL CUERPO» Y ACUSABA A ONCE LLAMADAS
+	// SANAS, las once de este mismo archivo: las sondas de `Exigir` y `Unix` ponen la compuerta
+	// como primera sentencia del closure de su `t.Run` —y ejecutan la shell ahí adentro—, y el
+	// ayudante de uso indebido la pone en el brazo del `switch` que corre bash. Las once dominan a
+	// su shell; lo que no hacen es vivir en el primer nivel. Una guarda que castiga el código
+	// correcto se termina apagando, así que la regla se corrigió en vez de exceptuarlas.
+	//
+	// LA PREGUNTA, UNA SOLA: ¿hay una compuerta que sea sentencia DIRECTA de un bloque que ENCIERRA
+	// a esta shell, y que esté ANTES? El `if false` no la contesta —el bloque del `if` no encierra
+	// al `exec` de afuera— y una compuerta escrita después del `exec` tampoco.
+	//
+	// SE RESUELVE POR CONTENCIÓN DE POSICIONES Y NO CON UNA PILA: `ast.Inspect` llama con `nil` al
+	// salir de CADA nodo, no sólo de los que uno empujaría, así que una pila se desincroniza sin
+	// avisar. `Pos()`/`End()` de un bloque dan el rango exacto y no hay estado que mantener.
+	// ════════════════════════════════════════════════════════════════════════════════════════
+	type compuertaEnBloque struct{ ini, fin, gate token.Pos }
+	var dominios []compuertaEnBloque
+
+	gatesDirectosDe := func(n ast.Node, sts []ast.Stmt) {
+		for _, st := range sts {
+			es, ok := st.(*ast.ExprStmt)
+			if !ok {
+				continue
+			}
+			c, ok := es.X.(*ast.CallExpr)
+			if !ok || !esLlamadaALaCompuerta(c, alias, esLaCompuerta) {
+				continue
+			}
+			dominios = append(dominios, compuertaEnBloque{n.Pos(), n.End(), c.Pos()})
+		}
+	}
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		switch b := n.(type) {
+		case *ast.BlockStmt:
+			gatesDirectosDe(b, b.List)
+		case *ast.CaseClause:
+			gatesDirectosDe(b, b.Body)
+		case *ast.CommClause:
+			gatesDirectosDe(b, b.Body)
+		}
+		return true
+	})
+	// `domina` contesta si alguna de esas compuertas encierra a la shell de la posición p y está
+	// antes que ella.
+	domina := func(p token.Pos) bool {
+		for _, d := range dominios {
+			if d.ini <= p && p <= d.fin && d.gate < p {
+				return true
+			}
+		}
+		return false
+	}
+
+	shellSinDominar := 0
 	ast.Inspect(fd.Body, func(n ast.Node) bool {
 		c, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -627,23 +738,21 @@ func analizarCuerpo(fd *ast.FuncDecl, alias string, esLaCompuerta bool, info *fu
 		}
 		if prog >= 0 && len(c.Args) > prog {
 			a := c.Args[prog]
-			if esLiteralDeShell(a) {
-				info.shell = true
-			}
+			corre := esLiteralDeShell(a)
 			if id, ok := a.(*ast.Ident); ok && deShell[id.Name] {
+				corre = true
+			}
+			if corre {
 				info.shell = true
-			}
-		}
-		// ¿llama a la compuerta?
-		for _, modo := range losModosDeLaCompuerta {
-			if alias != "" && esSelector(c.Fun, alias, modo) {
-				info.compuert = true
-			}
-			if esLaCompuerta {
-				if id, ok := c.Fun.(*ast.Ident); ok && id.Name == modo {
-					info.compuert = true
+				if !domina(c.Pos()) {
+					shellSinDominar++
 				}
 			}
+		}
+		// ¿llama a la compuerta? (esté donde esté: esto es lo que distingue «no la escribió» de «la
+		// escribió y no gatea», que se arreglan distinto)
+		if esLlamadaALaCompuerta(c, alias, esLaCompuerta) {
+			info.gateEsc = true
 		}
 		// ¿llama a otra función del mismo paquete?
 		if id, ok := c.Fun.(*ast.Ident); ok {
@@ -651,6 +760,31 @@ func analizarCuerpo(fd *ast.FuncDecl, alias string, esLaCompuerta bool, info *fu
 		}
 		return true
 	})
+
+	// GATEA si hay alguna compuerta incondicional Y ninguna shell de este cuerpo quedó sin dominar.
+	// Cuando el cuerpo no ejecuta ninguna shell —el caso de una prueba que delega en un ayudante—
+	// alcanza con que la compuerta esté: quien ejecuta es otro, y el cierre transitivo de más
+	// arriba se encarga de juntarlos.
+	info.compuert = len(dominios) > 0 && shellSinDominar == 0
+}
+
+// esLlamadaALaCompuerta reconoce los tres modos, tanto por el alias del import como sin calificar
+// —que es como los llama el paquete de la compuerta en sus propias pruebas—.
+//
+// Existe como función y no repetido en dos lados porque ya pasó: la lista de modos vivía en cuatro
+// lugares y agregar el tercero dejó tres mintiendo (ver `losModosDeLaCompuerta`).
+func esLlamadaALaCompuerta(c *ast.CallExpr, alias string, esLaCompuerta bool) bool {
+	for _, modo := range losModosDeLaCompuerta {
+		if alias != "" && esSelector(c.Fun, alias, modo) {
+			return true
+		}
+		if esLaCompuerta {
+			if id, ok := c.Fun.(*ast.Ident); ok && id.Name == modo {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func esSelector(e ast.Expr, x, sel string) bool {

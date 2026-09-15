@@ -8,6 +8,20 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **La guarda de alcance de la compuerta de guiones preguntaba si la compuerta ESTABA ESCRITA, no
+  si gateaba** (A127, primera mitad). `TestElSalteoEstaAcotadoALasPruebasQueCorrenUnaShell` arma el
+  grafo de llamadas y exige que toda prueba que ejecute una shell pase por `guiones.Exigir`,
+  `Portable` o `Unix`. Lo que medía era la CO-OCURRENCIA del identificador en el cuerpo: medido con
+  control positivo, envolver la compuerta en un `if false { … }` dejaba la guarda **en verde**
+  mientras la prueba corría el guion afuera del `if` — y borrar la compuerta sí salía rojo, o sea
+  que era ciega justo a la forma que más se parece a estar cubierta. Ahora se pregunta si la
+  compuerta **domina** a la shell: que sea sentencia directa de un bloque que encierra al `exec` y
+  que esté antes. Caen las dos formas, y hay una clase de error nueva —«la compuerta está escrita y
+  no gatea»— porque el remedio no es el mismo que el de «falta la compuerta». *El primer intento de
+  la regla pedía que la compuerta fuera sentencia del primer nivel del cuerpo y acusaba a **once
+  llamadas sanas** —las sondas de la propia compuerta, que la ponen adentro de su `t.Run` junto con
+  la shell—: se corrigió la regla en vez de exceptuarlas.* Sigue abierto en A127 que una shell
+  nombrada por un `const` de paquete es invisible para el detector, medido con el mismo control.
 - **`verificar-despliegue.sh` se terminaba a la mitad cuando Prometheus no contestaba, y con él se
   iban cinco secciones y el veredicto entero** (A126). La sección «reglas de alerta» salía con
   `exit 2` si no podía leer las reglas cargadas. El veredicto era el correcto —«no vi» no es «está
