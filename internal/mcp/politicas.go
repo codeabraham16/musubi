@@ -355,13 +355,25 @@ func (s *McpServer) actuarSiCorresponde(pol fleet.Politica, d fleet.Device, valo
 // registro de auditoría «para lo automático» es cómo se llega a auditar sólo la mitad de lo que
 // pasa — y la mitad automática es justo la que nadie miró ejecutarse.
 func (s *McpServer) correrAccionDePolitica(pol fleet.Politica, pr *Principal, d fleet.Device, ahora time.Time) error {
-	cmd, err := s.engine.EncolarComando(fleet.Comando{
-		DeviceID: d.ID, ProjectID: d.ProjectID, Principal: pr.Name,
-		// LO ÚNICO AUTOMÁTICO DE TODO EL CANAL. Va a la misma bitácora que una persona (I16) y
-		// ahora además se puede DISTINGUIR al leer: cuarenta reinicios seguidos son un relato
-		// distinto según si los pidió alguien o los disparó una regla.
-		Origen: fleet.OrigenPolitica,
-		Argv:   pol.Hacer, Timeout: fleet.ComandoTimeoutDefault,
+	// EL BARRIDO TAMBIÉN ESCRIBE BAJO CANDADO, Y ANTES NO LO HACÍA NADIE POR ÉL.
+	//
+	// Mientras `musubi_fleet_exec` no declaraba `lockSelf`, el despacho serializaba las escrituras
+	// de la tool y este camino —un temporizador— escribía por afuera. Ahora que la tool acota sus
+	// propios tramos, dejar éste sin candado sería la guarda a medias: la mitad automática, que es
+	// justo la que nadie mira ejecutarse, quedaría como el único escritor sin serializar.
+	//
+	// Es seguro: RunFlotaScheduler no toma dispatchMu (scheduler_flota.go:273).
+	var cmd fleet.Comando
+	var err error
+	s.withWriteLock(func() {
+		cmd, err = s.engine.EncolarComando(fleet.Comando{
+			DeviceID: d.ID, ProjectID: d.ProjectID, Principal: pr.Name,
+			// LO ÚNICO AUTOMÁTICO DE TODO EL CANAL. Va a la misma bitácora que una persona (I16) y
+			// ahora además se puede DISTINGUIR al leer: cuarenta reinicios seguidos son un relato
+			// distinto según si los pidió alguien o los disparó una regla.
+			Origen: fleet.OrigenPolitica,
+			Argv:   pol.Hacer, Timeout: fleet.ComandoTimeoutDefault,
+		})
 	})
 	if err != nil {
 		return err

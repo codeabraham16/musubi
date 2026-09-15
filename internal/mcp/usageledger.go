@@ -3,12 +3,20 @@ package mcp
 // usageledger.go es el lado MCP del LEDGER DE USO (F0 · track «Potencia medida»): amortigua las
 // invocaciones en memoria y las baja a la base desde una goroutine aparte.
 //
-// POR QUÉ UN BUFFER Y NO UN INSERT DIRECTO. El handler corre CON dispatchMu tomado (write-lock
-// para las tools que mutan, read-lock para las de lectura). Escribir a disco ahí adentro alargaría
-// el lock en el camino caliente de toda tool. Y la goroutine de flush NO puede tomar dispatchMu:
-// es la misma trampa que documenta maybeTriggerMaintenance en scheduler.go — el handler todavía lo
-// tiene y re-entrarlo es deadlock. Por eso el flush va DIRECTO contra la base, y la concurrencia
-// con las escrituras de las tools la resuelve SQLite con busy_timeout(5000) + WAL del DSN.
+// POR QUÉ UN BUFFER Y NO UN INSERT DIRECTO. La mayoría de los handlers corre CON dispatchMu tomado
+// (write-lock para las tools que mutan, read-lock para las de lectura). Escribir a disco ahí adentro
+// alargaría el lock en el camino caliente de toda tool.
+//
+// «LA MAYORÍA» Y NO «TODOS», DESDE QUE EXISTE `lockSelf`: las tools que hacen I/O externa —el motor
+// LLM, el embedder, el SSH de la flota— declaran esa clase y el despacho NO les toma nada; acotan
+// sus propios tramos con withReadLock/withWriteLock. Para ellas este handler corre SIN el candado.
+// No cambia nada de lo de abajo —el flush nunca lo toma, venga de donde venga la invocación— pero
+// la frase anterior decía «el handler» a secas y hoy eso es falso para seis tools.
+//
+// Y LA GOROUTINE DE FLUSH NO PUEDE TOMAR dispatchMu: es la misma trampa que documenta
+// maybeTriggerMaintenance en scheduler.go — el handler todavía lo tiene y re-entrarlo es deadlock.
+// Por eso el flush va DIRECTO contra la base, y la concurrencia con las escrituras de las tools la
+// resuelve SQLite con busy_timeout(5000) + WAL del DSN.
 
 import (
 	"context"
