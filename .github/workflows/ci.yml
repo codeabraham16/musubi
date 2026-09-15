@@ -410,6 +410,36 @@ jobs:
         with:
           go-version: '1.26.6'
 
+      # LOS .syso CORRESPONDEN A versioninfo.json — la misma valla que el bundle, en el hermano
+      # que no la tenía.
+      #
+      # `cmd/musubi/rsrc_windows_*.syso` son artefactos DERIVADOS de `versioninfo.json`, están
+      # commiteados, y hasta hoy nadie verificaba que correspondieran. Medido el 2026-09-15: los dos
+      # declaraban 0.139.1.0 con VERSION en 0.141.0 —dos releases atrás— y el .exe de Windows mostraba
+      # esa versión vieja en sus Propiedades. `TestVersioninfoMatchesVERSION` estaba VERDE todo ese
+      # tiempo porque compara VERSION contra versioninfo.json: fuente contra fuente, sin tocar el
+      # artefacto.
+      #
+      # `release.yml` ya los regenera, pero ahí es tarde: compila en el mismo job, así que lo
+      # commiteado nunca se compara con nada y el desfase viaja hasta el release.
+      #
+      # `goversioninfo` es DETERMINISTA —medido: dos corridas con la misma entrada dan el mismo
+      # sha256—, así que `git diff --exit-code` no puede dar un rojo espurio. La versión va PINEADA
+      # a la misma que usa release.yml: con @latest, un cambio del generador se leería como un
+      # artefacto desactualizado.
+      - name: Los .syso corresponden a versioninfo.json
+        run: |
+          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.4.0
+          GVI="$(go env GOPATH)/bin/goversioninfo"
+          cd cmd/musubi
+          "$GVI" -64 -o rsrc_windows_amd64.syso versioninfo.json
+          "$GVI" -arm -64 -o rsrc_windows_arm64.syso versioninfo.json
+          cd ../..
+          if ! git diff --exit-code -- cmd/musubi/rsrc_windows_amd64.syso cmd/musubi/rsrc_windows_arm64.syso; then
+            echo "::error::los .syso no corresponden a cmd/musubi/versioninfo.json. Corré 'go generate ./...' en cmd/musubi y commiteá los dos .syso en el MISMO commit que el bump de versión."
+            exit 1
+          fi
+
       - name: golangci-lint
         # Versión fijada (la verificada localmente); usa .golangci.yml del repo.
         run: |
