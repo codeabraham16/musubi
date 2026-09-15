@@ -750,6 +750,25 @@ func TestRevocarAlPrincipalDelEmpujeLoApagaEnElActo(t *testing.T) {
 // (que es exactamente lo que se logea).
 //
 // Sabotaje: volcar resp.Body en el error, o incluir e.token en el mensaje.
+//
+// ESTA GUARDA ES NEGATIVA, ASÍ QUE EL SABOTAJE AGREGA Y NO QUITA. La aserción dice «esto NO puede
+// aparecer»: sacar lo prohibido es un no-op, y su verde no significa «la guarda no cubre» sino «no
+// la toqué». El corte mete el token en el mensaje del error, que es la filtración exacta que esta
+// prueba existe para impedir, y compila porque `e.token` ya está referenciado unas líneas arriba.
+//
+// Y VA SOBRE EL BRAZO DEL 401/403, NO SOBRE EL GENÉRICO — MEDIDO, PORQUE PRIMERO LE ERRÉ. El primer
+// intento inyectaba el token en el `default:` del `switch` de `enviar` y el arnés lo devolvió EN
+// VERDE: esta prueba levanta el receptor con `http.StatusUnauthorized`, o sea que cae en el `case`
+// de credencial y nunca pisa el genérico. Acertar la DIRECCIÓN del sabotaje no alcanza si el corte
+// queda en una rama que la prueba no recorre.
+//
+// Y el corte deja intacto el `auth_token_env` del mensaje a propósito: así la otra aserción de la
+// prueba —la que exige que el error diga qué revisar— sigue satisfecha, y el rojo llega por la
+// línea que prohíbe la credencial y no por una vecina. Un rojo de otra aserción se ve igual que uno
+// bueno.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="return fmt.Errorf(\"%w: el receptor rechazó la credencial (HTTP %d). Revisá la variable que nombra fleet.otlp.auth_token_env\", errEmpujePermanente, resp.StatusCode)"
+// arnes: a="return fmt.Errorf(\"%w: el receptor rechazó la credencial (HTTP %d, token %s). Revisá la variable que nombra fleet.otlp.auth_token_env\", errEmpujePermanente, resp.StatusCode, e.token)"
 func TestElErrorDelEmpujeNoLlevaLaCredencialNiElCuerpoDelDestino(t *testing.T) {
 	destino := nuevoReceptor(t, http.StatusUnauthorized)
 	destino.ecoAuth = true
@@ -995,6 +1014,14 @@ func TestElPayloadUsaUnSoloReloj(t *testing.T) {
 //
 // Sabotaje: emitir musubi_push_last_success_seconds en 0 cuando nunca hubo un empuje exitoso (un
 // «último éxito hace 56 años» se lee como un bug del panel y no como «esto nunca funcionó»).
+//
+// LA DIRECTIVA APUNTA A OTRO ARCHIVO, y está bien: lo que esta prueba custodia se decide en
+// `renderEmpuje` (`internal/mcp/observability.go`), no en el empujador. El `ultimo > 0` es la
+// compuerta que mantiene AUSENTE a la serie mientras nunca hubo un éxito; con `>= 0` la serie sale
+// igual y trae la edad de la época Unix, que es el «hace 56 años» de acá arriba.
+// arnes: archivo="internal/mcp/observability.go"
+// arnes: de="if ultimo := s.empujeUltimoExito.Load(); ultimo > 0 {"
+// arnes: a="if ultimo := s.empujeUltimoExito.Load(); ultimo >= 0 {"
 func TestLaFallaDelEmpujeSeVeDesdeMetrics(t *testing.T) {
 	destino := nuevoReceptor(t, http.StatusInternalServerError)
 	s := prepararEmpuje(t, destino.URL, registroDePrueba(principalDePrometheus()), nil)
@@ -1059,6 +1086,18 @@ func TestLasSeriesDelEmpujeSalenPorElMetricsDeVerdad(t *testing.T) {
 // aviso va al log. Truncar en silencio es dejar media flota sin exportar sin que nadie lo sepa.
 //
 // Sabotaje: truncar sin avisar (borrar el avisarUnaVez de empujarUnaVez).
+//
+// EL CORTE APUNTA AL AVISO DE **PROYECTOS** Y ESO HAY QUE MEDIRLO, NO ADIVINARLO. `empujarUnaVez`
+// tiene TRES avisos de truncado —servicios, proyectos e ilegible— y esta prueba ejercita el de
+// proyectos: da de alta `proyectosParaExportar+1` proyectos, afirma `truncado.Proyectos` y busca la
+// clave `empuje_truncado_proyectos`. Apuntar al primero de los tres que aparece en el archivo
+// —servicios— habría dado una directiva que el censo valida y que no mide NADA: el sabotaje inerte
+// es el desenlace más silencioso, porque su verde se lee como «no hay defecto».
+//
+// Y apaga la condición en vez de borrar el bloque, para no dejar símbolos huérfanos.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="s.avisoMientras(\"empuje_truncado_proyectos\", truncado.Proyectos, func() {"
+// arnes: a="s.avisoMientras(\"empuje_truncado_proyectos\", false, func() {"
 func TestUnBarridoTruncadoSeAnuncia(t *testing.T) {
 	destino := nuevoReceptor(t, http.StatusOK)
 	s := prepararEmpuje(t, destino.URL, registroDePrueba(principalDePrometheus()), nil)
