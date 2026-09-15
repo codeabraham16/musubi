@@ -1210,7 +1210,7 @@ func sangrar(s string) string {
 // porque un descarte callado acá se lee como «el arnés no corrió mi build».
 func entornoConTags(tags string) string {
 	heredado := strings.TrimSpace(os.Getenv("GOFLAGS"))
-	if strings.Contains(heredado, "-tags") {
+	if traeTagsPropios(heredado) {
 		avisarTagsPisados.Do(func() {
 			fmt.Printf("   ! el entorno trae GOFLAGS=%q con sus propios `-tags`: los de la directiva van "+
 				"últimos y ganan.\n", heredado)
@@ -1220,6 +1220,28 @@ func entornoConTags(tags string) string {
 		return "GOFLAGS=-tags=" + tags
 	}
 	return "GOFLAGS=" + heredado + " -tags=" + tags
+}
+
+// traeTagsPropios dice si un GOFLAGS ya fija `-tags`, leyéndolo COMO LO LEE GO.
+//
+// LA PRIMERA VERSIÓN PREGUNTABA POR UNA SUBCADENA: `strings.Contains(heredado, "-tags")`. Eso
+// también es cierto para `-ldflags=-X=main.origen=-tags`, donde el `-tags` es parte del VALOR de
+// otro flag, y el aviso salía diciendo que el entorno traía sus propios tags cuando no traía
+// ninguno. Medido con la función real. Un aviso que sale cuando no corresponde entrena a ignorar los
+// que sí, que es peor que no avisar.
+//
+// La forma no se inventa acá: es la de Go. Medido el 2026-09-14 contra el toolchain:
+// `GOFLAGS="-tags foo"` lo rechaza («non-flag "foo"»), `-tags=foo` y `--tags=foo` los acepta. O sea
+// que cada entrada separada por blancos es un flag ENTERO, y el nombre es lo que hay entre los
+// guiones de adelante y el primer `=`.
+func traeTagsPropios(goflags string) bool {
+	for _, f := range strings.Fields(goflags) {
+		nombre, _, _ := strings.Cut(strings.TrimLeft(f, "-"), "=")
+		if nombre == "tags" {
+			return true
+		}
+	}
+	return false
 }
 
 var avisarTagsPisados sync.Once
