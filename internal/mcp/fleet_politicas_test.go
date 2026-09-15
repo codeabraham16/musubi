@@ -79,6 +79,18 @@ func comandosEncolados(t *testing.T, s *McpServer) []fleet.Comando {
 // sobre esa máquina. No pasa nada.
 //
 // Sabotaje que la hace fallar: quitar el PuedeSobreDevice de evaluarPolitica.
+//
+// EL CORTE LLEVA EL `if !` ENTERO, Y NO ES VERBOSIDAD: `PuedeSobreDevice(` aparece TRES veces en
+// `politicas.go` —acá, en la lectura del inventario y en `politicaPuedeActuar`, que lo usa junto a
+// `argvPermitido` en una sola expresión—. Un `de` repetido no identifica nada, y cortar en la
+// equivocada da un sabotaje que el censo valida y que no mide NADA.
+//
+// (Y la compuerta NO vive en `evaluarPolitica`, que termina bifurcando: vive en
+// `actuarSiCorresponde`, que es donde las tres compuertas corren para todos los caminos. La prosa
+// de arriba quedó vieja y se deja como está: la directiva apunta al código que HAY.)
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="if !PuedeSobreDevice(pr, d, fleet.CapExec) {"
+// arnes: a="if false {"
 func TestUnaPoliticaNoPuedeMasQueSuPrincipal(t *testing.T) {
 	// Mismo principal, pero con la concesión de exec acotada a OTRA máquina.
 	acotado := autoHeal()
@@ -108,6 +120,12 @@ func TestUnaPoliticaNoPuedeMasQueSuPrincipal(t *testing.T) {
 // aun así sólo puede correr journalctl.
 //
 // Sabotaje que la hace fallar: quitar el argvPermitido de evaluarPolitica.
+//
+// Mismo cuidado que su hermana de arriba: `argvPermitido(` aparece DOS veces y la otra está en
+// `politicaPuedeActuar`. El `if !` completo desambigua.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="if !argvPermitido(pr, d, pol.Hacer) {"
+// arnes: a="if false {"
 func TestUnaPoliticaRespetaLaAllowlistDeSuPrincipal(t *testing.T) {
 	pol := politicaDeMemoria()
 	pol.Run = []string{"rm", "-rf", "/var/log"} // no está en la allowlist de auto-heal
@@ -291,6 +309,13 @@ func TestLaAccionDeUnaPoliticaQuedaEnLaMismaBitacoraQueLasPersonas(t *testing.T)
 	// Sabotaje: quitarle `Origen: fleet.OrigenPolitica` a correrAccionDePolitica → falla acá, y
 	// es el ÚNICO lugar donde ese cableado se verifica: sembrar el comando a mano con el origen
 	// puesto probaría que el campo viaja, no que alguien lo setea.
+	//
+	// `prueba=` VA DECLARADO PORQUE ESTA ANCLA FLOTA: vive adentro del cuerpo y no pegada al
+	// `func Test…`, así que el lector no la puede derivar del AST y la devuelve vacía.
+	// arnes: prueba="TestLaAccionDeUnaPoliticaQuedaEnLaMismaBitacoraQueLasPersonas"
+	// arnes: archivo="internal/mcp/politicas.go"
+	// arnes: de="\t\t\tOrigen: fleet.OrigenPolitica,\n"
+	// arnes: a=""
 	for _, quiero := range []string{`"origen":"politica"`, `"automatico":true`} {
 		if !strings.Contains(crudo, quiero) {
 			t.Errorf("la acción automática no se distingue de una manual: falta %q en\n%s", quiero, crudo)
@@ -461,6 +486,13 @@ func servidorSobre(t *testing.T, dir string, pol config.PolicyConfig, reg *Princ
 // todavía cruza el umbral. Dos acciones donde tenía que haber una.
 //
 // Sabotaje que la hace fallar: quitar la llamada a cargarCooldowns, o la persistencia del disparo.
+//
+// LA LLAMADA VIVE EN `scheduler_flota.go`, no en `politicas.go` —ahí sólo está la función—, y el
+// corte va sobre la llamada porque es lo que el reinicio ejercita: sin ella el proceso nuevo
+// arranca con el mapa vacío y el cooldown se rearma solo, que es el defecto que A24 cerró.
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\ts.cargarCooldowns()\n"
+// arnes: a=""
 func TestElCooldownSobreviveUnReinicioDelCerebro(t *testing.T) {
 	dir := t.TempDir()
 	reg := registroDePrueba(autoHeal())
@@ -501,6 +533,13 @@ func TestElCooldownSobreviveUnReinicioDelCerebro(t *testing.T) {
 //
 // Sabotaje que la hace fallar: quitar la guarda de len(vivas)==0 (el DELETE con un IN vacío borra
 // la tabla entera).
+//
+// La guarda vive en el ALMACÉN (`internal/memory/comandos.go`), no en `politicas.go`: la prosa
+// nombra la condición y no el archivo, y buscarla donde uno espera devuelve cero — que no es
+// «no existe» sino «miré el archivo equivocado».
+// arnes: archivo="internal/memory/comandos.go"
+// arnes: de="if len(vivas) == 0 {"
+// arnes: a="if false {"
 func TestPodarElEstadoDePoliticasConListaVaciaNoBorraNada(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if err := s.engine.MarcarDisparoDePolitica("vaciar-journal", "dev-1", "", time.Now()); err != nil {
@@ -778,6 +817,14 @@ func TestUnServicioAusenteDelInventarioNoDisparaLaPolitica(t *testing.T) {
 // se reinició el cerebro y volvió a haber cero series.
 //
 // Sabotaje que la hace fallar: sacar la llamada a `sembrarPoliticas` de `ConfigurarFlota`.
+//
+// OJO CON EL NOMBRE DE ARRIBA: la llamada real está en `scheduler_flota.go`, no en
+// `ConfigurarFlota`. La prosa envejeció cuando el cableado se movió, y se deja como está —no se
+// reescribe lo que afirmó otro—, pero la directiva apunta al código que HAY, que es lo único
+// saboteable.
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\ts.metrics.sembrarPoliticas(nombres)\n"
+// arnes: a=""
 func TestLaSerieDeUnaPoliticaExisteAntesDeLaPrimeraAccion(t *testing.T) {
 	s, _ := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal()))
 
