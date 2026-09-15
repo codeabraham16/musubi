@@ -49,6 +49,9 @@ func pantallaConCuatroOjos(t *testing.T, s *McpServer) {
 // entero y no existe: es el único falso verde que esta feature no puede permitirse.
 //
 // Sabotaje: sacar `if quien == sol.Solicitante` de toolFleetApprove.
+// arnes: archivo="internal/mcp/methods_aprobacion.go"
+// arnes: de="if quien == sol.Solicitante {"
+// arnes: a="if false {"
 func TestNadieApruebaSuPropiaSolicitud(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	pantallaConCuatroOjos(t, s)
@@ -205,6 +208,23 @@ func TestLaAprobacionSeGastaEnUnaSolaSesion(t *testing.T) {
 // control en cualquier organización.
 //
 // Sabotaje: sacar 'negada' del IN de AprobacionVigenteDe.
+//
+// PISA AL SABOTAJE DE `TestUnaAprobacionVencidaNoAbreNada`, Y SON DOS DE VERDAD — LEÍDOS LOS DOS
+// MOTIVOS. Las dos directivas caen sobre la misma línea de `AprobacionVigenteDe`, pero atacan
+// cláusulas distintas: ésta le saca `'negada'` al `IN` de estados (un «no» deja de contar como
+// vigente y se puede volver a pedir en el acto), y aquélla neutraliza la comparación `vence > ?`
+// (una aprobación vencida sigue abriendo sesiones). Ninguna de las dos es la otra contada dos
+// veces, así que se declara en vez de callar la advertencia.
+// arnes: archivo="internal/memory/aprobaciones.go"
+// arnes: de="IN ('pendiente', 'concedida', 'negada')"
+// arnes: a="IN ('pendiente', 'concedida')"
+// `colision_ok` ES UNA POR PAREJA Y NO UNA LISTA, y este corte se pisa con DOS. La clave es un
+// string: repetirla no la vuelve lista, la vuelve ilegible (lo probé, y el censo la denunció). Se
+// contesta la pareja con el de vencimiento, y la otra —la de `TestLaAprobacionDePantallaNoAbreUnaShell`—
+// sigue avisando A PROPÓSITO: su `de` abarca el `WHERE` ENTERO de `AprobacionVigenteDe`, así que se
+// pisa con cualquier corte fino sobre esa consulta. El aviso es correcto y es de esa directiva, no
+// de ésta; callarlo desde acá sería apagar una señal ajena.
+// arnes: colision_ok="TestUnaAprobacionVencidaNoAbreNada"
 func TestUnNoNoSeVuelveAPedirEnElActo(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	pantallaConCuatroOjos(t, s)
@@ -260,6 +280,7 @@ func TestSinLaMismaCapacidadNoSePuedeAprobar(t *testing.T) {
 // abra una shell — si no, el permiso más barato de conseguir habilitaría el más caro.
 //
 // Sabotaje: sacar `AND capacidad = ?` de AprobacionVigenteDe.
+//
 // arnes: archivo="internal/memory/aprobaciones.go"
 // arnes: de="  WHERE device_id = ? AND solicitante = ? AND capacidad = ?\n\t\t    AND estado IN ('pendiente', 'concedida', 'negada') AND vence > ?\n\t\t  ORDER BY CASE estado WHEN 'negada' THEN 0 WHEN 'concedida' THEN 1 ELSE 2 END,\n\t\t           creada DESC\n\t\t  LIMIT 1`,\n\t\tdeviceID, solicitante, string(cap), t)"
 // arnes: a="  WHERE device_id = ? AND solicitante = ?\n\t\t    AND estado IN ('pendiente', 'concedida', 'negada') AND vence > ?\n\t\t  ORDER BY CASE estado WHEN 'negada' THEN 0 WHEN 'concedida' THEN 1 ELSE 2 END,\n\t\t           creada DESC\n\t\t  LIMIT 1`,\n\t\tdeviceID, solicitante, t)"
@@ -317,6 +338,16 @@ func TestLaAprobacionDePantallaNoAbreUnaShell(t *testing.T) {
 // ENCENDER O APAGAR EL CONTROL ES DE ADMIN. Si quien entra pudiera apagarlo, no habría control.
 //
 // Sabotaje: sacar el `if !p.isAdmin()` de toolFleetRequireApproval.
+//
+// `&& false` EN VEZ DE `if false`: así la llamada a `p.isAdmin()` sigue escrita y `p` conserva una
+// referencia viva. Un corte que deja un símbolo huérfano no compila, y el arnés contesta «sin
+// veredicto» —no ROJO—, o sea una directiva que parece cubrir y nunca se mide.
+//
+// (El literal es único EN ESTE ARCHIVO, que es lo que la directiva nombra: `if !p.isAdmin() {`
+// aparece siete veces en `internal/mcp` entero, y ese conteo más grande no viene al caso.)
+// arnes: archivo="internal/mcp/methods_aprobacion.go"
+// arnes: de="if !p.isAdmin() {"
+// arnes: a="if !p.isAdmin() && false {"
 func TestApagarLosCuatroOjosExigeAdmin(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	pantallaConCuatroOjos(t, s)
@@ -600,6 +631,19 @@ func devicePorNombreEnPrueba(t *testing.T, s *McpServer, proyecto, nombre string
 // AprobacionVigenteDe defiende con más párrafos, y no tenía ninguna prueba que se pusiera roja.
 //
 // Sabotaje: sacar `AND solicitante = ?` de AprobacionVigenteDe.
+//
+// PISA AL SABOTAJE DE `TestLaAprobacionDePantallaNoAbreUnaShell`, y son dos de verdad: aquél
+// reescribe el `WHERE` ENTERO de `AprobacionVigenteDe` para sacarle `AND capacidad = ?` —la
+// aprobación de una pantalla abriría una shell—, y éste neutraliza el filtro por solicitante —la
+// aprobación de uno le sirve a otro—. Dos invariantes distintos de la misma consulta.
+//
+// Y conviene saber POR QUÉ se pisan: el `de` de aquél abarca la consulta completa, así que
+// cualquier corte fino sobre ella lo rompe. Los de acá son quirúrgicos justamente para no
+// arrastrarse entre sí.
+// arnes: archivo="internal/memory/aprobaciones.go"
+// arnes: de="AND solicitante = ?"
+// arnes: a="AND (solicitante = ? OR 1=1)"
+// arnes: colision_ok="TestLaAprobacionDePantallaNoAbreUnaShell"
 func TestLaAprobacionDeUnoNoLeSirveAOtro(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	pantallaConCuatroOjos(t, s)
@@ -682,6 +726,12 @@ func TestUnNoNoLoTapaUnaSolicitudPosterior(t *testing.T) {
 // volver a poner en `concedida` una solicitud ya gastada y regalar una segunda sesión.
 //
 // Sabotaje: sacar `AND estado = 'pendiente'` del UPDATE de ResolverAprobacion.
+//
+// El `de` lleva el `WHERE` entero porque `AND estado = 'pendiente'` solo no distingue este UPDATE
+// del `SELECT` de las pendientes, y `AND vence > ?` pelado aparece CUATRO veces en el archivo.
+// arnes: archivo="internal/memory/aprobaciones.go"
+// arnes: de="WHERE id = ? AND estado = 'pendiente' AND vence > ?"
+// arnes: a="WHERE id = ? AND (estado = 'pendiente' OR 1=1) AND vence > ?"
 func TestUnaAprobacionUsadaNoSeReanima(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	pantallaConCuatroOjos(t, s)
@@ -711,6 +761,14 @@ func TestUnaAprobacionUsadaNoSeReanima(t *testing.T) {
 // sostiene: sin él, un «sí» de hace tres días seguiría abriendo sesiones.
 //
 // Sabotaje: sacar `AND vence > ?` de AprobacionVigenteDe.
+//
+// El `de` arrastra el `IN` de estados porque `AND vence > ?` a secas aparece CUATRO veces en el
+// archivo —las tres consultas de aprobaciones y el listado de pendientes— y un `de` repetido no
+// identifica nada. Con el `IN` delante, el corte es único y cae en la consulta que esta prueba usa.
+// arnes: archivo="internal/memory/aprobaciones.go"
+// arnes: de="AND estado IN ('pendiente', 'concedida', 'negada') AND vence > ?"
+// arnes: a="AND estado IN ('pendiente', 'concedida', 'negada') AND (vence > ? OR 1=1)"
+// arnes: colision_ok="TestLaAprobacionDePantallaNoAbreUnaShell"
 func TestUnaAprobacionVencidaNoAbreNada(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	pantallaConCuatroOjos(t, s)
@@ -747,6 +805,9 @@ func TestUnaAprobacionVencidaNoAbreNada(t *testing.T) {
 // en el almacén, que es donde vive la garantía: dos consumos del mismo permiso, el segundo falla.
 //
 // Sabotaje: sacar `AND estado = 'concedida'` del UPDATE de ConsumirAprobacion.
+// arnes: archivo="internal/memory/aprobaciones.go"
+// arnes: de="WHERE id = ? AND estado = 'concedida' AND vence > ?"
+// arnes: a="WHERE id = ? AND (estado = 'concedida' OR 1=1) AND vence > ?"
 func TestConsumirDosVecesElMismoPermisoFallaLaSegunda(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	pantallaConCuatroOjos(t, s)
