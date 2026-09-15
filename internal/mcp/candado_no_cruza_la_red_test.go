@@ -185,11 +185,29 @@ func TestNingunCandadoDelDespachoCruzaUnaLlamadaDeRed(t *testing.T) {
 //   - una tool de la lista que se arregló (o que dejó de cruzar) pone la de abajo en ROJO hasta que
 //     se la saca — una entrada rancia es una deuda que figura pagada sin que nadie la cobre.
 //
-// Las siete coinciden con la tabla armada leyendo el código a mano el mismo día; dos métodos
-// independientes dieron el mismo conjunto.
+// LAS SIETE ORIGINALES coincidían con la tabla armada leyendo el código a mano el mismo día; dos
+// métodos independientes dieron el mismo conjunto. De ésas ya salieron SEIS —promote_skill,
+// install_skill, list_skills, codegraph_index, fleet_probe y fleet_exec, cada una con su prueba de
+// EFECTO—, así que el «siete» de arriba es la foto del 2026-09-13 y no el largo de esta lista. El
+// número vivo lo cuenta la guarda de abajo contra el código, que es el único lugar donde no se
+// puede quedar rancio.
 var toolsQueTodaviaCruzanLaRed = []string{
-	"musubi_fleet_exec",  // Tier B: SSH sincrónico, hasta ComandoTimeoutMax (10 min)
 	"musubi_fleet_shell", // Tier B: AbrirShellPorSSH
+	// musubi_fleet_exec SALIÓ el 2026-09-14, la sexta, y es la primera con DOS cuelgues de dos
+	// techos distintos — y sólo uno de los dos era una llamada de red:
+	//
+	//	Tier B  `EjecutarPorSSH` hace `cmd.Run()`, que espera de verdad, hasta ComandoTimeoutMax:
+	//	        DIEZ MINUTOS con el servidor entero serializado.
+	//	Tier A  `esperarComando` relee la bitácora cada 250 ms hasta `esperaMaxExec` (45 s). No es
+	//	        red: es un bucle contra la propia base, así que ESTA GUARDA NO PODÍA VERLO —busca
+	//	        salidas del paquete fleet— y congelaba igual.
+	//
+	// El candado del resultado y del latido va dentro de `correrPorSSH` porque esa función la
+	// comparten la tool y el barrido de políticas; puesto en el handler, el camino automático
+	// escribiría sin candado y nadie lo notaría. Lo que NO se tocó, a propósito, es
+	// `encolarAvisoDeAcceso`: shell y pantalla entran ahí con el exclusivo del despacho ya tomado,
+	// así que meterle el candado adentro sería un deadlock en producción para esas dos.
+	// Lo miden TestEjecutarEnUnTierBNoCongelaElServidor y TestEsperarElResultadoNoCongelaElServidor.
 	// musubi_fleet_probe SALIÓ el 2026-09-14, la quinta, y es la primera cuyo corte NO se pudo copiar
 	// del molde anterior: las cuatro previas hacían UN viaje y bastaba acotar un tramo, y ésta sale a
 	// medir hasta 20 máquinas a 15 s cada una. El candado se toma y se suelta POR MÁQUINA —

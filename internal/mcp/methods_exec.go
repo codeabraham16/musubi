@@ -158,7 +158,15 @@ func (s *McpServer) toolFleetExec(ctx context.Context, raw json.RawMessage) (int
 		return nil, rpcErrorf(codeInvalidParams, "no se pudo determinar el proyecto: declaralo en `project`")
 	}
 
-	d, existe, err := s.engine.DevicePorNombre(proyecto, nombre)
+	// ── ESTA TOOL DECLARA `lockSelf`: EL CANDADO LO TOMA ELLA, TRAMO POR TRAMO ───────────────
+	//
+	// El despachador NO le toma nada (ver su entrada en el registro). Cada acceso a la base se
+	// envuelve acá, y las dos ESPERAS —el SSH de hasta 10 min y el bucle de hasta 45 s— quedan
+	// afuera, que es el punto entero.
+	var d fleet.Device
+	var existe bool
+	var err error
+	s.withReadLock(func() { d, existe, err = s.engine.DevicePorNombre(proyecto, nombre) })
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}
@@ -201,8 +209,15 @@ func (s *McpServer) toolFleetExec(ctx context.Context, raw json.RawMessage) (int
 	// máquina»— y los siguientes no repiten. La unidad honesta de este aviso no es el comando: es
 	// la SESIÓN DE TRABAJO, y la ventana es lo más cerca que se puede estar de eso sin inventar
 	// un concepto de sesión que el exec no tiene.
-	if e := s.aplicarConsentimientoDeExec(d, p, nombre); e != nil {
-		return nil, e
+	//
+	// VA BAJO EL EXCLUSIVO PORQUE PUEDE ESCRIBIR: la rama `avisa` encola un aviso al usuario de la
+	// máquina (encolarAvisoDeExecConVentana → encolarAvisoDeAcceso → EncolarComando). Las otras dos
+	// ramas no tocan la base, pero el candado se toma igual: distinguirlas acá obligaría a este
+	// llamador a saber por dentro cuál rama va a correr, que es justo lo que la función encapsula.
+	var eConsent *RpcError
+	s.withWriteLock(func() { eConsent = s.aplicarConsentimientoDeExec(d, p, nombre) })
+	if eConsent != nil {
+		return nil, eConsent
 	}
 
 	timeout := fleet.ComandoTimeoutDefault
@@ -240,10 +255,13 @@ func (s *McpServer) toolFleetExec(ctx context.Context, raw json.RawMessage) (int
 
 	// F1 — LA BITÁCORA SE ESCRIBE ANTES DE EJECUTAR. Desde acá, el pedido está registrado pase
 	// lo que pase: se caiga el cerebro, muera el agente, se apague la máquina.
-	cmd, err := s.engine.EncolarComando(fleet.Comando{
-		DeviceID: d.ID, ProjectID: proyecto, Principal: nombrePrincipal(p),
-		Origen: fleet.OrigenPersona,
-		Argv:   args.Argv, Timeout: timeout,
+	var cmd fleet.Comando
+	s.withWriteLock(func() {
+		cmd, err = s.engine.EncolarComando(fleet.Comando{
+			DeviceID: d.ID, ProjectID: proyecto, Principal: nombrePrincipal(p),
+			Origen: fleet.OrigenPersona,
+			Argv:   args.Argv, Timeout: timeout,
+		})
 	})
 	if err != nil {
 		// LA COLA LLENA NO ES UN ARGUMENTO INVÁLIDO, y confundirlos manda a la persona a
@@ -318,7 +336,19 @@ func (s *McpServer) toolFleetExec(ctx context.Context, raw json.RawMessage) (int
 func (s *McpServer) esperarComando(ctx context.Context, id string, paciencia time.Duration) (fleet.Comando, error) {
 	limite := time.Now().Add(paciencia)
 	for {
-		c, existe, err := s.engine.ComandoPorID(id)
+		// ── EL CANDADO SE TOMA Y SE SUELTA POR VUELTA, Y LA ESPERA QUEDA AFUERA ──────────────
+		//
+		// Éste es el SEGUNDO cuelgue de esta tool, y el que ninguna guarda estructural podía ver:
+		// no es una llamada de red, es un bucle contra la propia base que puede durar hasta
+		// `esperaMaxExec` (45 s). Antes corría entero con el candado EXCLUSIVO del despacho.
+		//
+		// Envolver el bucle COMPLETO sería volver al defecto con otra cara. Lo que se acota es cada
+		// relectura; el `time.After` de abajo —que es donde se pasa el 99,9 % del tiempo— queda
+		// afuera, y entre vuelta y vuelta el servidor respira.
+		var c fleet.Comando
+		var existe bool
+		var err error
+		s.withReadLock(func() { c, existe, err = s.engine.ComandoPorID(id) })
 		if err != nil {
 			return fleet.Comando{}, err
 		}
@@ -522,7 +552,11 @@ func (s *McpServer) ejecutarEnTierB(d fleet.Device, cmd fleet.Comando, timeout t
 	if err := s.correrPorSSH(d, cmd, timeout, time.Now()); err != nil {
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}
-	final, _, err := s.engine.ComandoPorID(cmd.ID)
+	// La relectura del resultado va bajo el compartido: `correrPorSSH` ya soltó el suyo, así que acá
+	// no hay nada tomado y pedirlo es seguro.
+	var final fleet.Comando
+	var err error
+	s.withReadLock(func() { final, _, err = s.engine.ComandoPorID(cmd.ID) })
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}
@@ -538,22 +572,42 @@ func (s *McpServer) ejecutarEnTierB(d fleet.Device, cmd fleet.Comando, timeout t
 // esto se habrían separado a la primera corrección, y la que se quedaría vieja sería la que nadie
 // mira ejecutarse.
 func (s *McpServer) correrPorSSH(d fleet.Device, cmd fleet.Comando, timeout time.Duration, ahora time.Time) error {
+	// ── LA ESPERA VA AFUERA DEL CANDADO, Y ES LA MÁS LARGA DE TODO EL DAEMON ─────────────────
+	//
+	// `EjecutarPorSSH` hace `cmd.Run()`: espera de verdad, hasta ComandoTimeoutMax (10 min). Antes
+	// esto corría con el candado EXCLUSIVO del despacho tomado, así que un solo `exec` sobre un
+	// Tier B lento dejaba al servidor entero sin atender a nadie durante ese rato.
 	res := fleet.EjecutarPorSSH(d.Address, cmd.Argv, timeout)
 
-	// Se guarda con el DeviceID como dueño, igual que si lo hubiera reportado un agente: la
-	// bitácora no distingue el transporte, y no debería.
-	if err := s.engine.GuardarResultado(d.ID, cmd.ID, res.ExitCode, res.Stdout, res.Stderr, res.Error, ahora); err != nil {
-		return err
-	}
-
-	// H3a — «en línea» de un Tier B es «la última vez que pudimos llegar». Se estampa sólo si
-	// SE LLEGÓ: un fallo de canal (host caído, credencial rechazada) no es una prueba de vida, y
-	// estamparlo igual haría que una máquina inalcanzable figure viva para siempre.
-	if res.Error == "" {
-		if _, err := s.engine.LatirDevice(d.ID, ahora, ""); err != nil {
-			// No es fatal: el comando corrió y su resultado ya está guardado.
-			_ = err
+	// ── Y EL CANDADO SE TOMA ACÁ, EN ESTA FUNCIÓN Y NO EN EL HANDLER ─────────────────────────
+	//
+	// Porque tiene DOS llamadores: `ejecutarEnTierB` (la tool) y `correrAccionDePolitica`
+	// (politicas.go, el auto-heal por temporizador). Puesto en el handler, el camino automático
+	// escribiría estas dos filas sin candado y nadie lo notaría — es exactamente el agujero que
+	// `sondearUno` tenía con su segundo llamador.
+	//
+	// Es seguro porque NINGUNO de los dos llega con dispatchMu tomado: la tool declara `lockSelf`
+	// (ver el registro) y el barrido lo dice por escrito en scheduler_flota.go:273.
+	//
+	// Las dos escrituras van en UN solo tramo: son el resultado y su señal de vida sobre la misma
+	// ejecución, y partirlas dejaría una ventana donde el comando figura terminado y la máquina
+	// todavía muerta.
+	var errGuardar error
+	s.withWriteLock(func() {
+		// Se guarda con el DeviceID como dueño, igual que si lo hubiera reportado un agente: la
+		// bitácora no distingue el transporte, y no debería.
+		if errGuardar = s.engine.GuardarResultado(d.ID, cmd.ID, res.ExitCode, res.Stdout, res.Stderr, res.Error, ahora); errGuardar != nil {
+			return
 		}
-	}
-	return nil
+		// H3a — «en línea» de un Tier B es «la última vez que pudimos llegar». Se estampa sólo si
+		// SE LLEGÓ: un fallo de canal (host caído, credencial rechazada) no es una prueba de vida, y
+		// estamparlo igual haría que una máquina inalcanzable figure viva para siempre.
+		if res.Error == "" {
+			if _, err := s.engine.LatirDevice(d.ID, ahora, ""); err != nil {
+				// No es fatal: el comando corrió y su resultado ya está guardado.
+				_ = err
+			}
+		}
+	})
+	return errGuardar
 }

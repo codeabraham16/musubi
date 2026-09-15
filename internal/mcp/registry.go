@@ -1286,6 +1286,34 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: s.toolFleetExec,
+			// LA RED VA AFUERA DEL CANDADO DEL DESPACHO, Y ACÁ SON DOS ESPERAS, NO UNA.
+			//
+			// Sin declarar nada, el despacho le daba el candado EXCLUSIVO (no declara `readOnly`) y
+			// lo sostenía sobre TODO el handler. Eso son dos cuelgues distintos, con dos techos
+			// distintos, y sólo uno de los dos es una llamada de red:
+			//
+			//	Tier B  `EjecutarPorSSH` hace `cmd.Run()` —espera de verdad— hasta
+			//	        ComandoTimeoutMax, que son DIEZ MINUTOS con el servidor entero serializado.
+			//	Tier A  `esperarComando` relee la bitácora cada 250 ms hasta `esperaMaxExec` (45 s).
+			//	        NO es red: es un bucle contra la propia base, y por eso la guarda estructural
+			//	        —que busca salidas del paquete fleet— no podía verlo. Congela igual.
+			//
+			// EL CANDADO DEL LATIDO Y DEL RESULTADO VA DENTRO DE `correrPorSSH` y no acá, porque esa
+			// función tiene DOS llamadores: esta tool y el barrido de políticas (politicas.go:373,
+			// auto-heal por temporizador). Puesto en el handler, el camino automático escribiría sin
+			// candado y nadie lo notaría — el mismo agujero que `sondearUno` tenía con su segundo
+			// llamador. Es seguro porque ninguno de los dos llega con dispatchMu tomado:
+			// scheduler_flota.go:273 lo dice por escrito y el censo del paquete lo confirma.
+			//
+			// LO QUE NO SE TOCÓ, A PROPÓSITO: `encolarAvisoDeAcceso` (methods_pantalla.go) lo
+			// comparten exec, shell, pantalla y el barrido. Shell y pantalla NO declaran `lockSelf`,
+			// así que entran ahí CON el exclusivo del despacho ya tomado; meterle el candado adentro
+			// sería un deadlock en producción para esas dos. El candado va en los llamadores que no
+			// lo tienen, y ésta es deliberadamente una guarda en N-1 de N caminos.
+			//
+			// Lo miden TestEjecutarEnUnTierBNoCongelaElServidor (la red) y
+			// TestEsperarElResultadoNoCongelaElServidor (el bucle).
+			lock: lockSelf,
 		},
 		{
 			Tool: Tool{
