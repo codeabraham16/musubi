@@ -28,7 +28,10 @@ import (
 //
 // POR QUÉ UNA GUARDA Y NO UN ARREGLO SUELTO: cuando lo busqué había CUATRO casos y sólo uno era
 // mío. Los otros tres —`$am_raiz»` dos veces y `$PRESTART»`— estaban desde antes y nunca se
-// vieron, porque viven DESPUÉS del corte por Prometheus y CI no llega hasta ahí. O sea que no es
+// vieron, porque vivían DESPUÉS del `exit 2` por Prometheus inalcanzable y ninguna corrida llegaba
+// hasta ahí. Ese corte lo sacó A126 —hoy la sección se marca SIN VERIFICAR y el guion sigue—, así
+// que esa mitad del informe pasó a correr en cada corrida; lo que sigue valiendo es el motivo de
+// fondo, y es el que importa para esta guarda: no es
 // un descuido de una vez: es una forma que este repo escribe naturalmente —las comillas angulares
 // son el idioma de sus mensajes— y que sólo se castiga en una plataforma que no es la de todos
 // los días. Exactamente la clase de defecto que necesita una guarda y no un arreglo.

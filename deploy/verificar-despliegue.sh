@@ -375,7 +375,9 @@ if [ -n "${MUSUBI_REF_SALIDA:-}" ]; then
 fi
 
 # `corre_alla` VIVE ACÁ ARRIBA Y NO EN LA SECCIÓN DE LOS GUIONES DERIVADOS, que es donde nació:
-# la comprobación del esquema la necesita y tiene que correr ANTES del corte por Prometheus.
+# la comprobación del esquema la necesita, y en bash una función tiene que estar definida antes de
+# la primera línea que la llame. (Hasta A126 el motivo era además que había un `exit 2` unas
+# secciones más abajo; ese corte ya no existe, pero el orden sigue siendo obligatorio por lo otro.)
 corre_alla() {  # corre un comando en el servidor si hay SSH_HOST, o acá si no
   if [ -n "$SSH_HOST" ]; then
     # EL `-n` NO ES DECORACIÓN: SIN ÉL ESTE INFORME DEJA DE MIRAR COSAS Y NO LO DICE.
@@ -791,12 +793,19 @@ print(len(d.get("activeAlertmanagers") or []))
   fi
 fi
 
+# `AM_VIVO` ES EL HERMANO DE `PROM_VIVO`, y se resuelve acá porque acá es donde de verdad se le
+# habla a Alertmanager. La sección «alertmanager», más abajo, necesita distinguir «nunca contestó»
+# de «contestó y su configuración no se pudo leer», y no puede averiguarlo sola: su `pedir` corre
+# adentro de un `$( )`, así que el `HTTP_CODIGO` que asigna muere en el subshell y allá arriba se
+# leería el código de otra consulta.
+AM_VIVO=no
 pedir_http "$ALERT_URL/api/v2/status"
 if parece_html; then
   rojo "en $ALERT_URL contesta una página web, no la API de Alertmanager (HTTP $HTTP_CODIGO): apuntá ALERT_URL a 127.0.0.1:9093"
 else
   case "$HTTP_CODIGO" in
     200)
+      AM_VIVO=si
       RUTAS="$(python3 -c '
 import sys, json, re
 cfg = (json.load(sys.stdin).get("config") or {}).get("original") or ""
@@ -845,57 +854,115 @@ fi
 # ── 2 · LAS REGLAS DE ALERTA, ARCHIVO POR ARCHIVO ───────────────────────────────────────────
 titulo "reglas de alerta"
 
-# La foto es la de la sección 1: se pidió una vez y se compara contra ella. Si no se pudo pedir, se
-# corta acá — comparar contra una lista vacía diría «no falta nada» sobre cero información.
+# La foto es la de la sección 1: se pidió una vez y se compara contra ella. Si no se pudo pedir, esta
+# sección no puede contestar nada —comparar contra una lista vacía diría «no falta nada» sobre cero
+# información— así que se marca SIN VERIFICAR y se sigue.
+#
+# ────────────────────────────────────────────────────────────────────────────────────────────
+# ACÁ HABÍA UN `exit 2`, Y SE LLEVABA PUESTO MEDIO INFORME (A126).
+#
+# El veredicto era el correcto —«no vi» no es «está bien»— pero el `exit` es lo que estaba de más:
+# salir acá deja SIN CORRER las cinco secciones que vienen después (`scrapes`, `alertmanager`,
+# `versión`, `el watchdog externo` y `guiones derivados`) y, además, nunca imprime el bloque del
+# veredicto, así que la corrida termina en 2 sin una sola línea que diga por qué.
+#
+# Medido el 2026-09-15 sobre este repo con el puerto de Prometheus cerrado: el informe entero eran
+# 32 líneas y terminaba en el título de esta sección.
+#
+# LO QUE CUESTA NO ES HIPOTÉTICO. De los cinco `$VAR` pegados a un carácter no-ASCII que mataban el
+# guion en el bash 3.2 de macOS, CUATRO eran preexistentes y nunca se habían visto —viven después
+# de este punto, y nadie llegaba hasta ahí—. Ver
+# `TestNingunaVariableDeShellQuedaPegadaAUnCaracterNoAscii`.
+#
+# EL CÓDIGO DE SALIDA NO CAMBIA, y eso es a propósito: `dudoso` prende `SIN_VERIFICAR`, que el
+# bloque del veredicto traduce a la misma salida 2. Lo que cambia es cuánto se ve ANTES de emitirla.
+# Por eso el arreglo no es «bajar el listón» —el estado sigue siendo «no verifiqué»— sino dejar de
+# confundir «esta comparación no se puede hacer» con «esta corrida se terminó».
+#
+# Es además el idioma que este mismo guion ya usa para esta misma variable unas líneas arriba, en
+# las recording rules del SLA: `if [ -z "$REGLAS_JSON" ]; then dudoso …; else …; fi`.
+# ────────────────────────────────────────────────────────────────────────────────────────────
 if [ -z "$REGLAS_JSON" ]; then
-  printf '  no se pudieron leer las reglas cargadas de %s (ver «cadena de alertas» arriba)\n' "$PROM_URL" >&2
-  printf '  (desde afuera del servidor hace falta MUSUBI_SSH=<host>: Prometheus escucha en loopback)\n' >&2
-  exit 2
-fi
+  dudoso "no se compararon las reglas archivo por archivo: no se pudieron leer las cargadas de $PROM_URL (ver «cadena de alertas» arriba). Desde afuera del servidor hace falta MUSUBI_SSH=<host>, porque Prometheus escucha en loopback"
+else
+  for f in "$REPO"/deploy/musubi-alerts*.yml; do
+    nombre="$(basename "$f")"
+    # La condición de despliegue la declara el propio archivo. La custodia
+    # TestCadaArchivoDeReglasDeclaraCuandoSeDespliega, así que si falta, es un bug del repo.
+    cond="$(sed -n 's/^#[[:space:]]*despliegue:[[:space:]]*//p' "$f" | head -1)"
+    declara="$(grep -E '^[[:space:]]*-[[:space:]]+alert:' "$f" | sed -E 's/.*alert:[[:space:]]*//' | sort -u)"
+    n_declara="$(printf '%s\n' "$declara" | grep -c . || true)"
 
-for f in "$REPO"/deploy/musubi-alerts*.yml; do
-  nombre="$(basename "$f")"
-  # La condición de despliegue la declara el propio archivo. La custodia
-  # TestCadaArchivoDeReglasDeclaraCuandoSeDespliega, así que si falta, es un bug del repo.
-  cond="$(sed -n 's/^#[[:space:]]*despliegue:[[:space:]]*//p' "$f" | head -1)"
-  declara="$(grep -E '^[[:space:]]*-[[:space:]]+alert:' "$f" | sed -E 's/.*alert:[[:space:]]*//' | sort -u)"
-  n_declara="$(printf '%s\n' "$declara" | grep -c . || true)"
+    faltan="$(comm -23 <(printf '%s\n' "$declara") <(printf '%s\n' "$CARGADAS"))"
+    n_faltan="$(printf '%s\n' "$faltan" | grep -c . || true)"
 
-  faltan="$(comm -23 <(printf '%s\n' "$declara") <(printf '%s\n' "$CARGADAS"))"
-  n_faltan="$(printf '%s\n' "$faltan" | grep -c . || true)"
+    if [ "$n_faltan" -eq 0 ]; then
+      verde "$nombre — sus $n_declara reglas están cargadas"
+    elif [ "$n_faltan" -eq "$n_declara" ]; then
+      # NINGUNA cargada: o el archivo no se instaló, o no correspondía instalarlo. La diferencia la
+      # da la línea `# despliegue:`, y confundirlas es lo que hace que un informe deje de leerse.
+      case "$cond" in
+        siempre) rojo "$nombre — NO está desplegado, y se declara «siempre»: sus $n_declara reglas no existen en producción" ;;
+        condicional*) gris "$nombre — sin cargar, y así corresponde: $cond" ;;
+        *) rojo "$nombre — no declara su condición de despliegue (# despliegue:) y no está cargado" ;;
+      esac
+    else
+      rojo "$nombre — desplegado A MEDIAS: faltan $n_faltan de $n_declara"
+      detalle 'falta: ' "$faltan"
+    fi
 
-  if [ "$n_faltan" -eq 0 ]; then
-    verde "$nombre — sus $n_declara reglas están cargadas"
-  elif [ "$n_faltan" -eq "$n_declara" ]; then
-    # NINGUNA cargada: o el archivo no se instaló, o no correspondía instalarlo. La diferencia la
-    # da la línea `# despliegue:`, y confundirlas es lo que hace que un informe deje de leerse.
-    case "$cond" in
-      siempre) rojo "$nombre — NO está desplegado, y se declara «siempre»: sus $n_declara reglas no existen en producción" ;;
-      condicional*) gris "$nombre — sin cargar, y así corresponde: $cond" ;;
-      *) rojo "$nombre — no declara su condición de despliegue (# despliegue:) y no está cargado" ;;
-    esac
-  else
-    rojo "$nombre — desplegado A MEDIAS: faltan $n_faltan de $n_declara"
-    detalle 'falta: ' "$faltan"
+    sobran="$(comm -13 <(printf '%s\n' "$declara") <(printf '%s\n' "$CARGADAS"))"
+    : "${sobran:=}"
+  done
+
+  # LO QUE CORRE Y EL REPO NO TIENE. Se compara contra la UNIÓN de los cuatro archivos —calculada en
+  # la sección 1—: una regla vieja que quedó cargada no aparece como «sobrante» de cada archivo por
+  # separado.
+  huerfanas="$(comm -13 <(printf '%s\n' "$TODAS_DECLARADAS") <(printf '%s\n' "$CARGADAS"))"
+  if [ -n "$huerfanas" ]; then
+    rojo "hay reglas CARGADAS que el repo ya no tiene (quedaron de un despliegue anterior):"
+    detalle 'sobra: ' "$huerfanas"
   fi
-
-  sobran="$(comm -13 <(printf '%s\n' "$declara") <(printf '%s\n' "$CARGADAS"))"
-  : "${sobran:=}"
-done
-
-# LO QUE CORRE Y EL REPO NO TIENE. Se compara contra la UNIÓN de los cuatro archivos —calculada en
-# la sección 1—: una regla vieja que quedó cargada no aparece como «sobrante» de cada archivo por
-# separado.
-huerfanas="$(comm -13 <(printf '%s\n' "$TODAS_DECLARADAS") <(printf '%s\n' "$CARGADAS"))"
-if [ -n "$huerfanas" ]; then
-  rojo "hay reglas CARGADAS que el repo ya no tiene (quedaron de un despliegue anterior):"
-  detalle 'sobra: ' "$huerfanas"
 fi
 
 # ── 3 · LOS SCRAPES ─────────────────────────────────────────────────────────────────────────
 titulo "scrapes"
 
-JOBS_VIVOS="$(pedir "$PROM_URL/api/v1/targets?state=any" | python3 -c '
+# Los scrapes de SITIO entran por glob (`scrape_config_files`) y no se comparan: el repo trae el
+# `.ejemplo` y cada sitio instala el suyo. Está dicho en prometheus.yml y se repite acá porque
+# alguien va a mirar este bloque sin leer aquel archivo.
+#
+# Se lee ANTES de preguntarle nada al servidor: sale del repo, así que se puede contar aunque
+# Prometheus esté mudo — y el aviso de abajo necesita ese número para decir cuántos quedaron sin
+# mirar.
+JOBS_REPO="$(grep -E '^[[:space:]]*-[[:space:]]*job_name:' "$REPO/deploy/prometheus/prometheus.yml" \
+  | sed -E 's/.*job_name:[[:space:]]*"?([A-Za-z0-9_-]+)"?.*/\1/' | sort -u)"
+N_JOBS_REPO="$(printf '%s\n' "$JOBS_REPO" | grep -c . || true)"
+
+# ESTA SECCIÓN NO PODÍA CONTESTAR MAL PORQUE NO SE CORRÍA NUNCA, Y AL ABRIR EL CORTE DE A126 SÍ.
+#
+# Con Prometheus mudo, `JOBS_VIVOS` queda VACÍO y el bucle de abajo declaraba en ROJO —o sea como
+# divergencia— que el repo declara jobs «que Prometheus NO tiene». Medido el 2026-09-15 con el
+# puerto cerrado: tres rojos, uno por cada job del repo, y `producción diverge del repo` en el
+# veredicto. Es una afirmación sobre el estado del servidor construida sobre CERO información, que
+# es exactamente el defecto que este guion entero existe para no cometer.
+#
+# `PROM_VIVO` ya se consulta así en las otras cinco secciones que dependen de Prometheus (las
+# reglas, la flota, los targets, las disparadas y el conteo de Alertmanager). Ésta era la sexta y la
+# única que no preguntaba: la guarda estaba en cinco de seis caminos.
+#
+# Y NO SE USA `HTTP_CODIGO` para esto aunque parezca a mano: `pedir` corre adentro de un `$( )`, así
+# que la asignación que hace muere en el subshell y acá arriba se leería el código de OTRA consulta.
+if [ "$PROM_VIVO" != si ]; then
+  dudoso "no se compararon los $N_JOBS_REPO scrapes que declara el repo: Prometheus no contestó (arriba está por qué). Sin la lista de targets, «el repo lo declara y Prometheus no lo tiene» sería una divergencia afirmada sobre cero información"
+else
+  # `2>/dev/null` y no a pelo: si la respuesta no es el JSON esperado, python escribe un traceback de
+  # DIEZ LÍNEAS en medio del informe. Se midió al abrir el corte —salía entre el título y los
+  # veredictos— y no es cosmético: un informe que de golpe muestra un volcado de Python se deja de
+  # leer, que es la forma más barata de que un hallazgo real pase desapercibido. Su hermano de la
+  # sección siguiente ya lo silenciaba; éste no. La consecuencia de no poder leer la lista la dice
+  # `JOBS_VIVOS` vacío, no el volcado.
+  JOBS_VIVOS="$(pedir "$PROM_URL/api/v1/targets?state=any" | python3 -c '
 import sys, json
 d = json.load(sys.stdin)["data"]
 vistos = set()
@@ -904,21 +971,22 @@ for k in ("activeTargets", "droppedTargets"):
         j = (t.get("labels") or t.get("discoveredLabels") or {}).get("job")
         if j: vistos.add(j)
 print("\n".join(sorted(vistos)))
-')"
+' 2>/dev/null)"
 
-# Los scrapes de SITIO entran por glob (`scrape_config_files`) y no se comparan: el repo trae el
-# `.ejemplo` y cada sitio instala el suyo. Está dicho en prometheus.yml y se repite acá porque
-# alguien va a mirar este bloque sin leer aquel archivo.
-JOBS_REPO="$(grep -E '^[[:space:]]*-[[:space:]]*job_name:' "$REPO/deploy/prometheus/prometheus.yml" \
-  | sed -E 's/.*job_name:[[:space:]]*"?([A-Za-z0-9_-]+)"?.*/\1/' | sort -u)"
-
-for j in $JOBS_REPO; do
-  if printf '%s\n' "$JOBS_VIVOS" | grep -qx "$j"; then
-    verde "job $j — configurado"
+  if [ -z "$JOBS_VIVOS" ]; then
+    # Prometheus contestó `/-/ready` pero su lista de targets no se pudo leer: tampoco es
+    # divergencia. Se distingue del caso de arriba porque el remedio es otro.
+    dudoso "no se compararon los $N_JOBS_REPO scrapes que declara el repo: Prometheus está vivo pero no se pudo leer su lista de targets ($PROM_URL/api/v1/targets). Mirala a mano: curl -s $PROM_URL/api/v1/targets | head -c 300"
   else
-    rojo "job $j — el repo lo declara y Prometheus NO lo tiene: todo lo que dependa de sus métricas está ciego, no en verde"
+    for j in $JOBS_REPO; do
+      if printf '%s\n' "$JOBS_VIVOS" | grep -qx "$j"; then
+        verde "job $j — configurado"
+      else
+        rojo "job $j — el repo lo declara y Prometheus NO lo tiene: todo lo que dependa de sus métricas está ciego, no en verde"
+      fi
+    done
   fi
-done
+fi
 gris "los scrapes de sitio (scrape_config_files) no se comparan: el repo sólo trae el .ejemplo"
 
 # ── 4 · EL MENSAJE DE TELEGRAM ──────────────────────────────────────────────────────────────
@@ -929,7 +997,16 @@ import sys, json
 print(json.load(sys.stdin)["config"]["original"])
 ' 2>/dev/null)"
 
-if [ -z "$AM_CFG" ]; then
+# TRES RESPUESTAS Y NO DOS, por la misma razón que el watchdog y que la versión del cerebro: «no
+# pude preguntar» no es «está mal».
+#
+# Hasta A126 esta sección no se corría NUNCA con Prometheus mudo —el `exit 2` de «reglas de alerta»
+# la dejaba afuera—, así que el rojo único no molestaba a nadie. Abierto el corte, un Alertmanager
+# inalcanzable emitía una DIVERGENCIA. Y el mensaje ya lo decía con todas las letras: «no se pudo
+# leer». La palabra estaba bien y el veredicto no.
+if [ "$AM_VIVO" != si ]; then
+  dudoso "no se comprobó el mensaje de Telegram: Alertmanager no contestó en $ALERT_URL (arriba está por qué). Sin su configuración viva no se puede saber si el parse_mode y la plantilla están bien, y declararlos rotos sería inventar"
+elif [ -z "$AM_CFG" ]; then
   rojo "no se pudo leer la configuración viva de Alertmanager en $ALERT_URL"
 else
   # `parse_mode: ''` es una decisión medida, no un detalle: con Markdown o HTML, un nombre de
