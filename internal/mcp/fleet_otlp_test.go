@@ -1094,6 +1094,9 @@ func TestUnBarridoTruncadoSeAnuncia(t *testing.T) {
 // nombrar el flag, o alguien pierde una tarde con la configuración del cerebro perfecta.
 //
 // Sabotaje: devolver un error genérico de «HTTP 404» sin nombrar --web.enable-otlp-receiver.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="return fmt.Errorf(\"%w: el receptor devolvió 404. Prometheus NO acepta OTLP por defecto: tiene que correr con --web.enable-otlp-receiver, y el path del endpoint tiene que ser /api/v1/otlp/v1/metrics\", errEmpujePermanente)"
+// arnes: a="return fmt.Errorf(\"%w: el receptor devolvió HTTP 404\", errEmpujePermanente)"
 func TestUn404DiceQueFaltaElFlagDeProm(t *testing.T) {
 	destino := nuevoReceptor(t, http.StatusNotFound)
 	emp, err := nuevoEmpujadorOTLP(config.OTLPPushConfig{Endpoint: destino.URL, Principal: "prometheus"})
@@ -1131,6 +1134,14 @@ func capturarLog(t *testing.T) *strings.Builder {
 // A50 el empuje seguía corriendo, armaba un payload vacío y volvía sin dejar rastro.
 //
 // Sabotaje: borrar el bloque `if len(p.Fleet[fleet.CapMetrics]) == 0` de empujarUnaVez.
+//
+// EL CORTE MUTA LA DECISIÓN Y NO LAS REFERENCIAS: `== 0` pasa a `< 0`, que es siempre falso y deja
+// vivos `p`, `fleet.CapMetrics` y el propio `sinConcesion`. Borrar la condición entera podía dejar
+// al import `fleet` sin su última referencia, y un `imported and not used` da «sin veredicto» —no
+// ROJO—, o sea una directiva que parece cubrir y nunca se mide.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="sinConcesion := len(p.Fleet[fleet.CapMetrics]) == 0"
+// arnes: a="sinConcesion := len(p.Fleet[fleet.CapMetrics]) < 0"
 func TestSacarleLaConcesionMetricsEnCalienteLoDiceEnElLog(t *testing.T) {
 	destino := nuevoReceptor(t, http.StatusOK)
 	s := prepararEmpuje(t, destino.URL, registroDePrueba(principalDePrometheus()), nil)
@@ -1194,6 +1205,13 @@ func TestSacarleLaConcesionMetricsEnCalienteLoDiceEnElLog(t *testing.T) {
 // exportar — y no había forma de que llegara a valer 0 en esa situación.
 //
 // Sabotaje: quitar `s.empujeDatapoints.Store(0)` de la rama `if !ok` de principalDelEmpuje.
+//
+// EL `de` LLEVA EL BLOQUE ENTERO y no la línea sola, porque `s.empujeDatapoints.Store(0)` aparece
+// TRES veces en el archivo —medido— y un `de` repetido no identifica nada. Con el bloque completo el
+// corte es único, y las otras dos llamadas quedan en pie: el símbolo no se queda huérfano.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="if !ok {\n\t\ts.empujeDatapoints.Store(0)\n\t\ts.empujeFallos.Add(1)\n\t\treturn\n\t}"
+// arnes: a="if !ok {\n\t\ts.empujeFallos.Add(1)\n\t\treturn\n\t}"
 func TestElGaugeDePuntosNoSeQuedaConElUltimoConteoBueno(t *testing.T) {
 	destino := nuevoReceptor(t, http.StatusOK)
 	s := prepararEmpuje(t, destino.URL, registroDePrueba(principalDePrometheus()), nil)
@@ -1220,6 +1238,18 @@ func TestElGaugeDePuntosNoSeQuedaConElUltimoConteoBueno(t *testing.T) {
 // dos —cero puntos, cero fallos, silencio— y el arreglo es completamente distinto.
 //
 // Sabotaje: borrar el bloque `avisarUnaVez("empuje_vacio", ...)` de empujarUnaVez.
+//
+// OJO CON EL NOMBRE DE ARRIBA: la llamada real es `avisoMientras`, no `avisarUnaVez`. La prosa
+// quedó vieja cuando el aviso pasó a rearmarse solo, y se deja tal cual para no reescribir lo que
+// alguien más afirmó — pero la directiva apunta al código que HAY, que es lo único que se puede
+// sabotear. Es la misma clase de rancio que este registro persigue: un texto que envejece mientras
+// el árbol se mueve.
+//
+// Y EL CORTE APAGA LA CONDICIÓN EN VEZ DE BORRAR EL BLOQUE: con `true` → `false` el aviso no sale
+// nunca y el `func()` literal sigue referenciado, así que no hay símbolo huérfano ni build roto.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="s.avisoMientras(\"empuje_vacio\", true, func() {"
+// arnes: a="s.avisoMientras(\"empuje_vacio\", false, func() {"
 func TestUnEmpujeQueNoAlcanzaNingunaMaquinaLoDice(t *testing.T) {
 	destino := nuevoReceptor(t, http.StatusOK)
 	// La concesión es real y no está vacía: apunta a un proyecto que no existe.
