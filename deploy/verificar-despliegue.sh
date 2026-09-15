@@ -521,17 +521,52 @@ fi
 # agujero que este archivo entero existe para tapar.
 titulo "cadena de alertas"
 
-# Lo que el repo declara, UNA vez: sirve para el conteo de acá y para las huérfanas de la sección 2.
-TODAS_DECLARADAS="$(cat "$REPO"/deploy/musubi-alerts*.yml \
-  | grep -E '^[[:space:]]*-[[:space:]]+alert:' | sed -E 's/.*alert:[[:space:]]*//' | sort -u)"
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# ESTE BLOQUE ESTABA ROTO EN macOS DESDE SIEMPRE, Y NINGUNA GUARDA LO VEÍA.
+#
+# Tenía un `case` ADENTRO de un `$( … )`. El bash 3.2 del runner de macOS no lo parsea: toma el
+# `)` del patrón `siempre)` como el cierre de la sustitución. Salida real del runner, 2026-09-15:
+#
+#     verificar-despliegue.sh: command substitution: line 536: syntax error near unexpected token `newline'
+#     verificar-despliegue.sh: command substitution: line 536: `    siempre'
+#     verificar-despliegue.sh: line 534: f: unbound variable
+#
+# En bash 5.x anda perfecto, así que en Linux es invisible — la misma forma que los cinco `$VAR`
+# pegados a un carácter no-ASCII (ver `TestNingunaVariableDeShellQuedaPegadaAUnCaracterNoAscii`):
+# una construcción que sólo se castiga en la plataforma que no es la de todos los días.
+#
+# POR QUÉ NADIE LO HABÍA VISTO, que es la parte que vale. Las guardas que CORREN este guion
+# —`TestElVerificadorDiceContraQueArbolCompara`, la del esquema— afirman sobre secciones que se
+# imprimen ANTES de esta línea. El informe se rompía acá y sus verdes seguían siendo ciertos: una
+# guarda que sólo mira lo que pasa antes del punto de muerte no puede verlo. Lo destapó la guarda
+# de A126, que es la primera que exige llegar al FINAL.
+#
+# Y EL GLOB PUEDE NO MATCHEAR NADA. Sin `nullglob`, `musubi-alerts*.yml` queda literal y el `cat`
+# de antes le escupía «No such file or directory» al informe. El `[ -e ]` es lo que distingue «no
+# hay archivos» de «los leí todos».
+# ════════════════════════════════════════════════════════════════════════════════════════════
+alertas_de() { grep -E '^[[:space:]]*-[[:space:]]+alert:' "$1" | sed -E 's/.*alert:[[:space:]]*//'; }
+
+# Se recorre UNA vez y se llenan las dos listas juntas:
+#   · TODAS_DECLARADAS — para el conteo de acá y para las huérfanas de la sección 2.
+#   · OBLIGATORIAS     — sólo las de los archivos que se declaran `# despliegue: siempre`. Son las
+#     que no admiten excusa: las condicionales pueden faltar con razón, y mezclarlas haría que el
+#     conteo denuncie una decisión.
+TODAS_DECLARADAS=""
+OBLIGATORIAS=""
+for f in "$REPO"/deploy/musubi-alerts*.yml; do
+  [ -e "$f" ] || continue
+  TODAS_DECLARADAS="$TODAS_DECLARADAS$(alertas_de "$f")
+"
+  cond_f="$(sed -n 's/^#[[:space:]]*despliegue:[[:space:]]*//p' "$f" | head -1)"
+  if [ "$cond_f" = siempre ]; then
+    OBLIGATORIAS="$OBLIGATORIAS$(alertas_de "$f")
+"
+  fi
+done
+TODAS_DECLARADAS="$(printf '%s' "$TODAS_DECLARADAS" | sort -u | grep . || true)"
+OBLIGATORIAS="$(printf '%s' "$OBLIGATORIAS" | sort -u | grep . || true)"
 N_DECLARADAS="$(printf '%s\n' "$TODAS_DECLARADAS" | grep -c . || true)"
-# Las de los archivos que se declaran `# despliegue: siempre`. Son las que no admiten excusa: las
-# condicionales pueden faltar con razón, y mezclarlas haría que el conteo denuncie una decisión.
-OBLIGATORIAS="$(for f in "$REPO"/deploy/musubi-alerts*.yml; do
-  case "$(sed -n 's/^#[[:space:]]*despliegue:[[:space:]]*//p' "$f" | head -1)" in
-    siempre) grep -E '^[[:space:]]*-[[:space:]]+alert:' "$f" | sed -E 's/.*alert:[[:space:]]*//' ;;
-  esac
-done | sort -u | grep . || true)"
 N_OBLIGATORIAS="$(printf '%s\n' "$OBLIGATORIAS" | grep -c . || true)"
 
 # (a) ¿PROMETHEUS ESTÁ AHÍ, Y ES PROMETHEUS? ─────────────────────────────────────────────────
@@ -645,7 +680,10 @@ fi
 #
 # Lo que hace peligroso al caso es que un `avg30d` viejo sigue devolviendo un número plausible: no
 # hay síntoma. Así que la comparación es contra el repo y por conteo, igual que las otras dos.
-N_SLA_REPO="$(grep -cE '^[[:space:]]*-[[:space:]]+record:' "$REPO/deploy/musubi-recording.yml" || true)"
+# `2>/dev/null` por lo mismo que las lecturas de JSON: si el archivo no está —un checkout parcial,
+# un repo de prueba— la consecuencia la dice el conteo en 0, no el mensaje de `grep` tirado en medio
+# del informe. Ver `TestNingunaLecturaDeJsonEscupeSuVolcadoAlInforme`.
+N_SLA_REPO="$(grep -cE '^[[:space:]]*-[[:space:]]+record:' "$REPO/deploy/musubi-recording.yml" 2>/dev/null || true)"
 if [ -z "$REGLAS_JSON" ]; then
   dudoso "no se contaron las recording rules del SLA: no hay lista de reglas que mirar (el repo declara $N_SLA_REPO)"
 else
@@ -935,7 +973,7 @@ titulo "scrapes"
 # Se lee ANTES de preguntarle nada al servidor: sale del repo, así que se puede contar aunque
 # Prometheus esté mudo — y el aviso de abajo necesita ese número para decir cuántos quedaron sin
 # mirar.
-JOBS_REPO="$(grep -E '^[[:space:]]*-[[:space:]]*job_name:' "$REPO/deploy/prometheus/prometheus.yml" \
+JOBS_REPO="$(grep -E '^[[:space:]]*-[[:space:]]*job_name:' "$REPO/deploy/prometheus/prometheus.yml" 2>/dev/null \
   | sed -E 's/.*job_name:[[:space:]]*"?([A-Za-z0-9_-]+)"?.*/\1/' | sort -u)"
 N_JOBS_REPO="$(printf '%s\n' "$JOBS_REPO" | grep -c . || true)"
 
