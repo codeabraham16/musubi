@@ -61,6 +61,11 @@ PATRON="${2:?falta el patrón del test}"
 ARCHIVO="${3:?falta el archivo a sabotear}"
 SABOTAJE="${4:?falta el comando que aplica el sabotaje}"
 ARREGLO="${5:-}"   # opcional: un cambio CORRECTO que la guarda tiene que seguir aceptando (falla 7)
+# EL PROGRAMA QUE ELIGE EL MOTIVO VIVE AL LADO (ver motivo.awk). Se exige ANTES de tocar nada: si
+# falta, `awk` sale con error, MOTIVOS queda vacío y el guion diría «sin motivo propio» — un archivo
+# perdido disfrazado de un rojo que no se pudo identificar.
+MOTIVO_AWK="$(dirname -- "${BASH_SOURCE[0]}")/motivo.awk"
+[[ -r "$MOTIVO_AWK" ]] || { echo "✗ no encuentro $MOTIVO_AWK: es el programa que elige el motivo de cada rojo."; exit 1; }
 
 [[ -r "$ARCHIVO" ]] || { echo "✗ no puedo leer $ARCHIVO"; exit 2; }
 
@@ -248,12 +253,10 @@ printf '      %s\n' $FALLOS
 # se distinguen (tampoco con `-json`, que además implica `-v` e invierte este orden). Eso se hace
 # por AST del lado de `arnes`, que ya tiene el árbol parseado.
 echo "  ── motivo (la primera línea de cada fallo que NO esté en el control) ──"
-MOTIVOS="$(awk 'NR==FNR{ if (/_test\.go:[0-9]+: /){ sub(/^[ \t]+/,""); sub(/^[^ ]*_test\.go:[0-9]+: /,""); base[$0]=1 } ; next }
-     /^\s*--- FAIL: /{t=$3; got=0; next}
-     t!="" && got==0 && /_test\.go:[0-9]+: /{
-         sub(/^[ \t]+/,""); linea=$0; msj=$0; sub(/^[^ ]*_test\.go:[0-9]+: /,"",msj)
-         if (msj in base) next
-         print "      " t " · " substr(linea,1,150); got=1 }' <(printf '%s\n' "$BASE") <(printf '%s\n' "$CON"))"
+MOTIVOS="$(awk -f "$MOTIVO_AWK" <(printf '%s\n' "$BASE") <(printf '%s\n' "$CON"))" || {
+  echo "✗ motivo.awk no corrió: sin él no hay motivo que comparar, y un vacío acá se leería como «sin motivo propio»."
+  exit 1
+}
 if [[ -n "$MOTIVOS" ]]; then
   printf '%s\n' "$MOTIVOS"
 else
