@@ -35,6 +35,11 @@ import (
 // son ~100 KiB) y chico como para que mil sesiones no sean un problema de memoria.
 const bufferMaxBytes = 256 * 1024
 
+// programarDespertador arma el aviso que le pone plazo a `leer`. Es `time.AfterFunc` y es var por la
+// prueba, que se dice: la guarda necesita meter una pausa ENTRE armar el aviso y lo que sigue, que es
+// la ventana donde se colgaba, y desde afuera de la función no hay otra forma de abrirla.
+var programarDespertador = time.AfterFunc
+
 type bufferInteractivo struct {
 	mu      sync.Mutex
 	hay     *sync.Cond // despierta al lector cuando entran bytes o se cierra
@@ -80,14 +85,29 @@ func (b *bufferInteractivo) leer(espera time.Duration) ([]byte, error) {
 		// Broadcast al vencer la espera. Es feo y es la forma 0-dep de tener un Wait con plazo;
 		// la alternativa (canales) obliga a un modelo de buffer entero distinto y sin
 		// contrapresión natural.
-		fin := time.AfterFunc(espera, func() {
+		//
+		// EL BUCLE SALE POR LA MARCA QUE PONE EL DESPERTADOR, NO POR UN RELOJ QUE LEE ÉL MISMO. La
+		// versión anterior armaba el aviso y DESPUÉS calculaba `limite := time.Now().Add(espera)`, y el
+		// bucle seguía mientras `time.Now().Before(limite)`. El aviso suena UNA vez. Si entre armarlo y
+		// leer el reloj pasaba más tiempo que lo que tarda el lector en despertarse, el lector se
+		// despertaba con su reloj diciendo que todavía quedaba plazo, volvía a `Wait`, y ya no quedaba
+		// nadie que lo despertara: una terminal quieta se leía PARA SIEMPRE.
+		//
+		// Pasó en CI, en Windows, el 2026-09-14: `panic: test timed out after 20m0s` con el lector en
+		// `sync.Cond.Wait` hace 16 minutos dentro de `leer(50ms)`. En Linux la ventana es de
+		// nanosegundos; en un runner cargado alcanza una expropiación. Medido acá con el temporizador
+		// real y ese mismo plazo, forzando sólo la pausa: el bucle viejo no volvía en 3 s, éste vuelve.
+		// En producción no era sólo CI: el long-poll de 25 s de una terminal quieta —Tier A en las dos
+		// direcciones y Tier B por SSH— no volvía hasta que llegara salida o se cerrara la sesión.
+		vencio := false
+		fin := programarDespertador(espera, func() {
 			b.mu.Lock()
+			vencio = true
 			b.hay.Broadcast()
 			b.mu.Unlock()
 		})
 		defer fin.Stop()
-		limite := time.Now().Add(espera)
-		for len(b.datos) == 0 && !b.cerrado && time.Now().Before(limite) {
+		for len(b.datos) == 0 && !b.cerrado && !vencio {
 			b.hay.Wait()
 		}
 	}
