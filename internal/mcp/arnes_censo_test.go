@@ -140,7 +140,7 @@ import (
 // mecanizaron 62 anclas de una muestra SISTEMÁTICA (una de cada 13, para que el veredicto no
 // saliera medido sobre las que yo hubiera elegido). La holgura hizo exactamente lo que tenía que
 // hacer: con el techo en 774 esta guarda se puso roja pidiendo que se bajara.
-const anclasEnProsaAlDia = 703
+const anclasEnProsaAlDia = 700
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
