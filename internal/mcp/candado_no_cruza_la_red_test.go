@@ -192,7 +192,25 @@ func TestNingunCandadoDelDespachoCruzaUnaLlamadaDeRed(t *testing.T) {
 // número vivo lo cuenta la guarda de abajo contra el código, que es el único lugar donde no se
 // puede quedar rancio.
 var toolsQueTodaviaCruzanLaRed = []string{
-	"musubi_fleet_shell", // Tier B: AbrirShellPorSSH
+	// ── VACÍA DESDE EL 2026-09-14 ────────────────────────────────────────────────────────────
+	//
+	// La última salida NO fue una conversión: fue una CORRECCIÓN DE ESTA GUARDA.
+	//
+	// `musubi_fleet_shell` figuraba acá por «Tier B: AbrirShellPorSSH», y esa entrada era falsa.
+	// `AbrirShellPorSSH` hace `cmd.Start()` y vuelve; su `cmd.Wait()` corre en una goroutine. O sea
+	// que abrir una shell NUNCA sostuvo el candado esperando a nadie — medido, 0,19 s con un `ssh`
+	// falso que duerme 30 s. Estaba en la lista porque `primitivasDeSalida` preguntaba «¿construye un
+	// proceso?» (`os/exec.Command`) en vez de «¿lo espera?» (`(*exec.Cmd).Run`), y porque el recorrido
+	// le imputaba al llamador un `Wait()` que corre en otra goroutine.
+	//
+	// Las dos cosas se arreglaron y shell salió sola, sin tocarle una línea a la tool. Lo custodia
+	// TestLaGuardaDistingueEsperarDeCruzar, porque un arreglo de la guarda que la guarda misma no
+	// vigila se deshace en el primer refactor y nadie se entera.
+	//
+	// QUE ESTÉ VACÍA NO LA VUELVE INÚTIL: sigue siendo el único lugar donde una tool nueva que
+	// espere con el candado tomado puede declararse, y la guarda de arriba la acusa mientras no lo
+	// haga. Lo que ya no puede es esconder una entrada que no corresponde.
+	//
 	// musubi_fleet_exec SALIÓ el 2026-09-14, la sexta, y es la primera con DOS cuelgues de dos
 	// techos distintos — y sólo uno de los dos era una llamada de red:
 	//
@@ -293,12 +311,157 @@ func TestLasToolsQueTodaviaCruzanLaRedSonLasDelTrinquete(t *testing.T) {
 	}
 }
 
-// primitivasDeSalida son las funciones de la stdlib que sacan una llamada del proceso. Es un HECHO
+// TestLaGuardaDistingueEsperarDeCruzar custodia la corrección del 2026-09-14: que el borde se defina
+// por la ESPERA y no por la construcción de un proceso.
+//
+// POR QUÉ HACE FALTA UNA GUARDA PARA LA GUARDA. El arreglo son dos piezas —la tabla de primitivas y
+// el corte de `*ast.GoStmt`— y ninguna de las dos tiene nada que la sostenga: reponer
+// `os/exec.Command` en la tabla, o borrar el corte, deja todo compilando y en verde, y la guarda
+// vuelve a confundir `AbrirShellPorSSH` con `EjecutarPorSSH` sin que nadie se entere. Un arreglo que
+// se deshace en silencio no es un arreglo.
+//
+// EL PAR ES LA ASERCIÓN, no cada mitad por separado. Exigir sólo que EjecutarPorSSH esté en el borde
+// la dejaría verde con la tabla vieja (que también lo incluía, por el motivo equivocado); exigir
+// sólo que AbrirShellPorSSH NO esté la dejaría verde si alguien vacía la tabla entera y el análisis
+// queda ciego. Las dos juntas son lo que distingue «mide la espera» de «no mide nada».
+//
+// Los dos son HECHOS DEL CÓDIGO, verificables en internal/fleet:
+//
+//	EjecutarPorSSH    remoto.go: `err := cmd.Run()` — espera al proceso, hasta 10 min.
+//	AbrirShellPorSSH  shell_ssh.go: `cmd.Start()`, y el `cmd.Wait()` adentro de un `go func()`.
+//
+// SON DOS PRUEBAS Y NO UNA, Y LA RAZÓN LA DIO EL CENSO. La primera versión era una sola con DOS
+// «Sabotaje que la hace fallar:» y una sola directiva `arnes:`, así que el segundo quedaba de
+// promesa en prosa — y `TestLaDeudaDeSabotajesNoCreceYElCorpusNoSePodre` se puso roja diciendo
+// exactamente eso: «agregaste 1 promesa de sabotaje que nadie puede correr». Una directiva lleva un
+// `prueba=`, así que dos sabotajes mecanizados piden dos pruebas. Partirlas además mejora el
+// diagnóstico: el rojo dice CUÁL de las dos piezas del arreglo se deshizo.
+//
+// Sabotaje que la hace fallar: borrar el corte de `*ast.GoStmt` en grafoDeLlamadas — el `Wait()` de
+// la goroutine de limpieza vuelve a imputarse al llamador y AbrirShellPorSSH reaparece en el borde.
+// arnes: archivo="internal/mcp/candado_no_cruza_la_red_test.go"
+// arnes: de="\t\t\t\tif _, esGoroutine := n.(*ast.GoStmt); esGoroutine {\n\t\t\t\t\treturn false\n\t\t\t\t}\n"
+// arnes: a=""
+// arnes: prueba="TestLaGuardaDistingueEsperarDeCruzar"
+func TestLaGuardaDistingueEsperarDeCruzar(t *testing.T) {
+	enElBorde := salidasDeFleetAlDia(t)
+
+	// LA QUE ESPERA TIENE QUE ESTAR. `EjecutarPorSSH` hace `cmd.Run()` y puede tardar
+	// ComandoTimeoutMax (10 min) con el candado tomado: es el caso que esta guarda existe para ver.
+	if !enElBorde["EjecutarPorSSH"] {
+		t.Errorf("EjecutarPorSSH NO figura entre las salidas de fleet (%v).\n"+
+			"  Hace `cmd.Run()`, que espera al proceso hasta 10 minutos. Si el análisis dejó de verlo,\n"+
+			"  la guarda entera quedó ciega justo para el caso más caro que tiene que atrapar.",
+			clavesOrdenadas(enElBorde))
+	}
+
+	// LA QUE NO ESPERA NO PUEDE ESTAR. `AbrirShellPorSSH` hace `cmd.Start()` y vuelve; su `Wait()`
+	// corre en una goroutine y no bloquea a quien la llamó. Medido: 0,19 s con un ssh que duerme 30.
+	if enElBorde["AbrirShellPorSSH"] {
+		t.Errorf("AbrirShellPorSSH volvió a figurar entre las salidas de fleet (%v).\n"+
+			"  No espera a nadie: `cmd.Start()` y vuelve, con el `cmd.Wait()` adentro de un `go func()`.\n"+
+			"  Que reaparezca por ACÁ significa que se borró el corte de *ast.GoStmt en grafoDeLlamadas,\n"+
+			"  y entonces una espera que corre en otra goroutine vuelve a imputársele al llamador.",
+			clavesOrdenadas(enElBorde))
+	}
+}
+
+// TestLaTablaDePrimitivasPreguntaPorLaEspera custodia la OTRA mitad del arreglo: que
+// `primitivasDeSalida` liste lo que ESPERA y no lo que construye.
+//
+// Es la pregunta simétrica de la de arriba y hace falta por separado, porque las dos piezas se
+// deshacen por caminos distintos: aquélla cae si alguien borra el corte de goroutines; ésta, si
+// alguien repone `os/exec.Command` —que sólo arma un *exec.Cmd y no sale a ningún lado— entre las
+// primitivas. Con cualquiera de las dos rota, `AbrirShellPorSSH` vuelve al borde y `fleet_shell`
+// vuelve al trinquete por un cuelgue que no existe.
+//
+// LA ASERCIÓN ES SOBRE LA TABLA Y NO SOBRE EL RESULTADO, a propósito: preguntar otra vez por
+// AbrirShellPorSSH sería repetir la prueba de arriba con otro nombre, y el día que las dos midan lo
+// mismo una de las dos deja de cubrir su mitad sin que nadie lo note.
+//
+// Sabotaje que la hace fallar: reponer "os/exec.Command" en primitivasDeSalida.
+// arnes: archivo="internal/mcp/candado_no_cruza_la_red_test.go"
+// arnes: de="\t\"(*os/exec.Cmd).Run\":            \"un proceso externo (lo espera)\","
+// arnes: a="\t\"os/exec.Command\": \"un proceso externo\","
+// arnes: prueba="TestLaTablaDePrimitivasPreguntaPorLaEspera"
+func TestLaTablaDePrimitivasPreguntaPorLaEspera(t *testing.T) {
+	// Construir un comando NO es salir: `exec.Command` devuelve un *exec.Cmd y no habla con nadie.
+	// Si vuelve a la tabla, todo el que arme un comando entra al borde aunque nunca lo espere.
+	for _, construye := range []string{"os/exec.Command", "os/exec.CommandContext"} {
+		if motivo, esta := primitivasDeSalida[construye]; esta {
+			t.Errorf("%q volvió a primitivasDeSalida (como %q), y no hace esperar a nadie:\n"+
+				"  sólo CONSTRUYE un *exec.Cmd. Con esto en la tabla, `AbrirShellPorSSH` —que hace\n"+
+				"  `cmd.Start()` y vuelve— pesa lo mismo que `EjecutarPorSSH`, que espera hasta 10\n"+
+				"  minutos con el candado tomado. Lo que hay que listar es la ESPERA: (*os/exec.Cmd).Run\n"+
+				"  y sus hermanas.", construye, motivo)
+		}
+	}
+
+	// Y las que SÍ esperan tienen que seguir estando. Sin esta mitad, vaciar la tabla entera dejaría
+	// la prueba en verde: cero primitivas es cero falsos positivos y también cero medición.
+	for _, espera := range []string{"(*os/exec.Cmd).Run", "(*net/http.Client).Do"} {
+		if _, esta := primitivasDeSalida[espera]; !esta {
+			t.Errorf("%q salió de primitivasDeSalida. Es una espera real con el candado del despacho\n"+
+				"  tomado; sin ella el análisis deja de ver el borde y su verde no distingue «no hay\n"+
+				"  defecto» de «no estoy mirando».", espera)
+		}
+	}
+}
+
+// salidasDeFleetAlDia corre el análisis y devuelve las salidas exportadas de internal/fleet.
+//
+// Aborta si el conjunto viene vacío: con cero salidas, cualquier aserción de la forma «X no está»
+// pasa por vacuidad, que es el verde que no distingue «está bien» de «no miré».
+func salidasDeFleetAlDia(t *testing.T) map[string]bool {
+	t.Helper()
+	a := analizarCandado(t)
+	enElBorde := map[string]bool{}
+	for _, s := range a.salidasFleet {
+		enElBorde[s] = true
+	}
+	if len(enElBorde) == 0 {
+		t.Fatal("el análisis no derivó NI UNA salida de internal/fleet: está ciego, y con cero " +
+			"salidas las aserciones de «no está» pasarían por vacuidad")
+	}
+	return enElBorde
+}
+
+// clavesOrdenadas devuelve las claves en orden, para que el mensaje de un fallo no cambie de una
+// corrida a otra por el recorrido aleatorio de un mapa.
+func clavesOrdenadas(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// primitivasDeSalida son las funciones de la stdlib que HACEN ESPERAR al que las llama. Es un HECHO
 // DEL MUNDO y va clavado: derivarlo de las tools que ya declaran `lockSelf` volvería espejo a la guarda.
+//
+// ANTES DECÍAN «sacan una llamada del proceso» Y LISTABAN `os/exec.Command`. Era la pregunta
+// equivocada, y se vio recién cuando quedó una sola tool en el trinquete:
+//
+//	`exec.Command` y `exec.CommandContext` NO salen a ningún lado — CONSTRUYEN un *exec.Cmd. Lo que
+//	sale, y sobre todo lo que ESPERA, es `Run`, `Wait`, `Output` o `CombinedOutput`.
+//
+// La diferencia no es académica: `AbrirShellPorSSH` (internal/fleet/shell_ssh.go) hace `cmd.Start()`
+// y vuelve — su `cmd.Wait()` corre en una goroutine—, así que abrir una shell tarda MILISEGUNDOS y
+// nunca sostuvo el candado esperando nada. Medido: 0,19 s con un `ssh` falso que duerme 30 s. Con la
+// tabla vieja, `musubi_fleet_shell` figuraba en el trinquete por «cruzar la red» cuando no espera a
+// nadie, y `EjecutarPorSSH` —que hace `cmd.Run()` y puede tardar diez minutos— entraba por la MISMA
+// puerta y con el mismo peso. La guarda no podía distinguirlas porque no estaba preguntando por la
+// espera, sino por la construcción.
+//
+// Lo que importa para el candado del despacho es CUÁNTO SE ESPERA con él tomado. Una llamada que
+// arranca un proceso y vuelve no congela a nadie; una que espera su salida, sí.
 var primitivasDeSalida = map[string]string{
-	"(*net/http.Client).Do":  "HTTP",
-	"os/exec.Command":        "un proceso externo",
-	"os/exec.CommandContext": "un proceso externo",
+	"(*net/http.Client).Do":         "HTTP (espera la respuesta)",
+	"(*os/exec.Cmd).Run":            "un proceso externo (lo espera)",
+	"(*os/exec.Cmd).Wait":           "un proceso externo (lo espera)",
+	"(*os/exec.Cmd).Output":         "un proceso externo (lo espera)",
+	"(*os/exec.Cmd).CombinedOutput": "un proceso externo (lo espera)",
 }
 
 // bordesDeInterfaz son los métodos de red de las interfaces propias. Se reconocen por nombre porque
@@ -397,6 +560,22 @@ func grafoDeLlamadas(t *testing.T, fset *token.FileSet, imp types.Importer, pkgP
 				llama[yo] = map[string]bool{}
 			}
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				// ── LO QUE CORRE EN UNA GOROUTINE NO HACE ESPERAR A QUIEN LA LANZÓ ───────────
+				//
+				// `go func() { cmd.Wait() }()` devuelve el control en el acto: el llamador sigue y
+				// suelta el candado, y el Wait bloquea a OTRA goroutine que no lo tiene. Sin este
+				// corte, esa espera se le imputaba igual al llamador.
+				//
+				// Es la mitad que faltaba para que la tabla de primitivas signifique algo. Con las
+				// primitivas corregidas pero sin esto, `AbrirShellPorSSH` seguiría figurando en el
+				// borde por su `cmd.Wait()` de la goroutine de limpieza — o sea que el arreglo
+				// habría quedado verde y falso, midiendo una espera que nadie espera.
+				//
+				// MEDIDO antes de escribirlo: `ast.Inspect` SÍ desciende en el cuerpo de un GoStmt
+				// (ve `adentroDeGoroutine` y `directa`); cortando acá ve sólo `directa`.
+				if _, esGoroutine := n.(*ast.GoStmt); esGoroutine {
+					return false
+				}
 				call, ok := n.(*ast.CallExpr)
 				if !ok {
 					return true
