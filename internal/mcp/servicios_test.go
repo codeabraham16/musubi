@@ -294,6 +294,19 @@ func TestUnLatidoConDemasiadosServiciosDescartaElBloqueYSigueValiendo(t *testing
 //
 // Sabotaje que la hace fallar: sacar el `if !d.Permite(fleet.CapMetrics)` de
 // guardarServiciosDelLatido.
+//
+// EL CORTE ARRASTRA EL `return` DE ADENTRO, Y AVERIGUARLO COSTÓ UNA CORRIDA. La guarda aparece DOS
+// veces en `fleet_http.go` —la de la MUESTRA (que devuelve cuatro valores) y la del INVENTARIO, que
+// es la de esta prueba— y las dos líneas del `if` son IDÉNTICAS, indentación incluida. Medí la
+// unicidad del literal corto, vi 2, y supuse que agregarle el `if !` desambiguaba: nunca medí el
+// literal que iba a escribir. El censo lo denunció («el `de` aparece 2 veces … alargá el literal»),
+// que es exactamente su trabajo. Lo único que distingue a las dos es lo que devuelven.
+//
+// Y el archivo es `fleet_http.go` y no `methods_servicios.go`: el latido entra por HTTP, así que
+// `guardarServiciosDelLatido` vive con el handler.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\tif !d.Permite(fleet.CapMetrics) {\n\t\treturn \"descartados: esta máquina no tiene concedida la capacidad `metrics`\"\n\t}"
+// arnes: a="\tif false {\n\t\treturn \"descartados: esta máquina no tiene concedida la capacidad `metrics`\"\n\t}"
 func TestUnaMaquinaSinMetricsNoRegistraServiciosPeroLateIgual(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	// Se enrola SIN `metrics`: sólo `exec`.
@@ -440,6 +453,13 @@ func TestLaPodaPorAusenciaCorreDesdeElLatidoYUnLatidoMudoNoVaciaNada(t *testing.
 // Sabotaje que la hace fallar (VERIFICADO): sacarle el `AND declared = 0` al UPDATE de
 // PodarServiciosAusentes. `bot-telegram` desaparece del listado y redeclararlo... lo revive, así
 // que la segunda mitad de esta prueba también cubre la salida que antes no existía.
+//
+// El `de` arrastra el `AND revoked = 0` de al lado porque `AND declared = 0` solo aparece DOS
+// veces en el archivo —la otra está en la prosa que explica la guarda—, y un `de` repetido no
+// identifica nada.
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="WHERE device_id = ? AND revoked = 0 AND declared = 0"
+// arnes: a="WHERE device_id = ? AND revoked = 0"
 // ────────────────────────────────────────────────────────────────────────────────────────────
 func TestElLatidoNoPodaLoQueSeDeclaroAMano(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t) // enrola `pc-gio` en el proyecto `casa`
@@ -621,6 +641,13 @@ func TestFiltrarPorUnaMaquinaQueNoVesRespondeVacioYNoUnError(t *testing.T) {
 // ESCRIBIR en el inventario del plano de control.
 //
 // Sabotaje: sacar el `if !p.isAdmin()` de toolFleetServiceDeclare.
+//
+// `&& false` en vez de `if false`: así la llamada a `p.isAdmin()` sigue escrita y `p` conserva una
+// referencia viva. Un corte que deja un símbolo huérfano no compila, y el arnés contesta «sin
+// veredicto» —no ROJO—, o sea una directiva que parece cubrir y nunca se mide.
+// arnes: archivo="internal/mcp/methods_servicios.go"
+// arnes: de="if !p.isAdmin() {"
+// arnes: a="if !p.isAdmin() && false {"
 func TestDeclararUnServicioExigeAdmin(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarDePrueba(t, s, "casa", "nas")
@@ -1027,6 +1054,13 @@ func cuerpoDeServiciosRecortado(omitidos int, reportes ...fleet.ReporteServicio)
 // se suspende es la única operación que afirma algo sobre lo que NO llegó.
 //
 // Sabotaje: quitar el `if omitidos > 0 { return ... }` de `guardarServiciosDelLatido`.
+//
+// Apaga la condición en vez de borrar el bloque: el `return` con su mensaje queda escrito y ningún
+// símbolo se queda huérfano. Con la guarda apagada, un inventario RECORTADO vuelve a autorizar la
+// poda — que es A116: el cerebro anota `revoked = 1` sobre servicios que están corriendo.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="if omitidos > 0 {"
+// arnes: a="if false {"
 func TestUnInventarioRECORTADONoAutorizaAPodar(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 
@@ -1078,6 +1112,14 @@ func TestUnInventarioRECORTADONoAutorizaAPodar(t *testing.T) {
 // contrario del original: servicios que ya no corren, vivos en el inventario para siempre.
 //
 // Sabotaje: envolver la llamada a `FijarServiciosOmitidos` en un `if omitidos > 0`.
+//
+// ESTE SABOTAJE AGREGA Y NO QUITA, porque la guarda es sobre lo que pasa con el CERO: el recorte se
+// registra SIEMPRE, incluido `omitidos == 0`, que es lo que borra la marca cuando deja de haber
+// recorte. Envolverlo en `if omitidos > 0` deja la marca vieja pegada para siempre — y sacar la
+// llamada, en cambio, rompería también la mitad que sí escribe, o sea mediría otra cosa.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\tif err := s.engine.FijarServiciosOmitidos(d.ID, omitidos); err != nil {"
+// arnes: a="\tif err := error(nil); omitidos > 0 && err != nil {"
 func TestElRecorteDelInventarioSeGuardaYSEBORRACuandoDejaDeHaberlo(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 
