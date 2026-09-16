@@ -140,7 +140,7 @@ import (
 // mecanizaron 62 anclas de una muestra SISTEMÁTICA (una de cada 13, para que el veredicto no
 // saliera medido sobre las que yo hubiera elegido). La holgura hizo exactamente lo que tenía que
 // hacer: con el techo en 774 esta guarda se puso roja pidiendo que se bajara.
-const anclasEnProsaAlDia = 642
+const anclasEnProsaAlDia = 623
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
@@ -148,6 +148,16 @@ const anclasEnProsaAlDia = 642
 // PODRE: se mecanizan 300 anclas, el techo sigue en 774, y la guarda deja de medir sin ponerse
 // roja ni una vez. Con la holgura, un lote grande obliga a bajar el número — que es el único
 // registro de que la deuda bajó.
+// Y HAY UN MATIZ MEDIDO EL 2026-09-16, que el párrafo de arriba no cubría: la holgura tolera
+// hasta 30, pero el SABOTAJE de esta guarda suma UNA sola línea de deuda. O sea que apenas alguien
+// mecaniza un ancla, ese +1 ya no cruza el techo y esta guarda queda HUECA — verde sobre su propio
+// sabotaje— sin que el CI proteste, porque la holgura todavía está dentro de lo tolerado. Se
+// descubrió corriendo el arnés después de mecanizar 19 anclas en una tanda: techo 642, deuda 623.
+//
+// Por eso bajar el número en el MISMO commit que mecaniza no es cosmética contable: es lo único
+// que le devuelve el filo al sabotaje. La holgura sigue en 30 a propósito —bajarla a 0 haría que
+// dos lotes en paralelo se pisen el número— y el precio de esa elección es este matiz, que ahora
+// está escrito.
 const holguraDelTecho = 30
 
 func TestLaDeudaDeSabotajesNoCreceYElCorpusNoSePodre(t *testing.T) {

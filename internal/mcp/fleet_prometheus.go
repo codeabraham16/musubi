@@ -1059,6 +1059,25 @@ func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration, versionCerebro
 		// NO SALE DE LA MUESTRA: sale de la FILA del device (A68). `agent_version` la escribe
 		// `LatirDevice` en cada latido y sobrevive a que la máquina se muera, así que una máquina
 		// caída sigue diciendo en qué versión se quedó — que es lo que se quiere saber de ella.
+		// LA HERMANA DE LA DE ABAJO, Y CONTESTA LA OTRA MITAD (A118). Aquélla compara el NÚCLEO
+		// semver y por eso no puede ver que una máquina se quedó 41 commits atrás dentro del mismo
+		// release; ésta compara el BUILD completo. No se fusionan: la del núcleo marcaría a la
+		// flota entera después de cada despliegue del cerebro —su propia guarda declara eso como
+		// sabotaje— y ésta, leída al instante, diría lo mismo. Por eso su alerta la lee con un
+		// plazo LARGO: lo que importa no es que difiera hoy, es que siga difiriendo en una semana.
+		{"musubi_fleet_device_agent_build_stale",
+			"1 si el agente corre un BINARIO distinto del cerebro (release Y commit), 0 si es el mismo. Es la hermana de musubi_fleet_device_agent_stale, que compara sólo el NÚCLEO semver y por eso no ve a una máquina que se quedó commits atrás dentro del mismo release — el caso de A118, medido con las cadenas reales de la flota. AUSENTE con las mismas dos reglas que su hermana: en las máquinas sin agente (un Tier B no tiene versión que comparar) y cuando el cerebro no sabe la suya (sin referencia, marcar a la flota entera sería culparla de un build propio). SE LEE CON UN PLAZO LARGO: el binario del cerebro se redespliega varias veces por día, así que un 1 recién aparecido es lo normal y lo que importa es que PERSISTA.",
+			"", false,
+			func(d fleet.Device, _ *fleet.Muestra) (float64, bool) {
+				difiere, comparable := fleet.BuildDelAgenteDifiere(d.AgentVer, versionCerebro)
+				if !comparable {
+					return 0, false
+				}
+				if difiere {
+					return 1, true
+				}
+				return 0, true
+			}},
 		{"musubi_fleet_device_agent_stale",
 			"1 si el agente corre un release distinto del cerebro, 0 si es el mismo. Compara el NÚCLEO semver y no el commit: el binario de cada máquina se cruza a mano y el del cerebro se redespliega varias veces por día, así que comparar commits dejaría a la flota entera marcada después de cada despliegue. AUSENTE en las máquinas sin agente (un Tier B sondeado por SSH no tiene versión que comparar) y AUSENTE también si el cerebro no sabe la suya: sin referencia, marcar a toda la flota sería culparla de un problema del build propio. CUÁL versión corre cada una se mira en musubi_fleet_list — ninguna de las dos viaja como etiqueta, que dejaría la serie re-etiquetándose sola en cada actualización y las viejas huérfanas.",
 			"", false,

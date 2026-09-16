@@ -55,6 +55,44 @@ func NucleoDeVersion(v string) (string, bool) {
 	return v, true
 }
 
+// BuildDelAgenteDifiere responde si el agente corre un BINARIO distinto del cerebro, y no sólo un
+// release distinto. Es la hermana de VersionDelAgenteDifiere y existe porque las dos preguntas son
+// distintas y sólo una estaba contestada.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// POR QUÉ NO ALCANZA CON LA DEL NÚCLEO, Y POR QUÉ NO SE LA CAMBIA
+//
+// `NucleoDeVersion` recorta en el primer `-`, así que `0.131.0-flota.b97a81c` y
+// `0.131.0-flota.d6f623d` —41 commits de diferencia— dan el MISMO núcleo y la serie contesta «no
+// difiere». Una máquina puede quedarse meses atrás sin que nada lo diga, mientras el MINOR no
+// cambie (A118).
+//
+// Y la del núcleo NO se toca, a propósito: su prueba
+// `TestDosCommitsDelMismoReleaseNoSonUnAgenteAtrasado` declara como sabotaje exactamente eso
+// —comparar las cadenas completas— porque el binario del cerebro se redespliega varias veces por
+// día y marcaría a la flota entera después de cada despliegue. Las dos coexisten: aquélla dice
+// «esta máquina se quedó en otro RELEASE» y ésta «esta máquina corre OTRO BINARIO». La segunda es
+// ruidosa por naturaleza, y por eso su alerta la lee con un plazo largo en vez de al instante.
+//
+// LA COMPARACIÓN ES TEXTUAL Y NO SEMÁNTICA, y es lo correcto acá: un sufijo distinto ES un binario
+// distinto, no hay orden entre dos commits que se pueda derivar de la cadena, y pretender uno
+// inventaría una precisión que el dato no tiene.
+// ════════════════════════════════════════════════════════════════════════════════════════════
+func BuildDelAgenteDifiere(agente, cerebro string) (difiere bool, comparable bool) {
+	a := strings.TrimPrefix(strings.TrimSpace(agente), "v")
+	c := strings.TrimPrefix(strings.TrimSpace(cerebro), "v")
+	// Sin versión del agente no hay nada que comparar: es un Tier B, que no corre nuestro binario.
+	if a == "" {
+		return false, false
+	}
+	// Sin referencia propia, callarse. Marcar a la flota entera por un build nuestro sin ldflags
+	// sería culparla de un problema de acá — la misma regla que gobierna a la del núcleo.
+	if _, ok := NucleoDeVersion(c); !ok {
+		return false, false
+	}
+	return a != c, true
+}
+
 // VersionDelAgenteDifiere responde si el agente de una máquina corre una versión distinta de la
 // del cerebro. El segundo valor es si la pregunta se puede contestar; false ⇒ la serie NO se
 // emite, que es la regla que gobierna el exportador entero (un dato ausente no es un cero).

@@ -81,3 +81,60 @@ func TestUnCerebroSinVersionNoMarcaAtrasadaALaFlotaEntera(t *testing.T) {
 		}
 	}
 }
+
+// EL BUILD ES OTRA PREGUNTA QUE EL RELEASE, Y HASTA A118 SÓLO UNA ESTABA CONTESTADA.
+//
+// `0.131.0-flota.b97a81c` y `0.131.0-flota.d6f623d` son 41 commits de diferencia y el MISMO
+// núcleo: la serie del release contesta «no difiere» y una máquina puede quedarse meses atrás
+// mientras el MINOR no cambie. Medido con las cadenas reales de la flota el 2026-09-08.
+//
+// LAS DOS CONVIVEN Y NINGUNA REEMPLAZA A LA OTRA: la del núcleo NO puede comparar el build —su
+// propia guarda declara eso como sabotaje, porque el cerebro se redespliega varias veces por día
+// y marcaría a la flota entera— y ésta no puede ordenar dos commits, porque de la cadena no sale
+// ningún orden.
+//
+// Sabotaje: hacer que BuildDelAgenteDifiere compare el núcleo, que es volver a A118.
+//
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="\treturn a != c, true\n}"
+// arnes: a="\tna, _ := NucleoDeVersion(a)\n\tnc, _ := NucleoDeVersion(c)\n\treturn na != nc, true\n}"
+func TestDosBuildsDelMismoReleaseSonBinariosDistintos(t *testing.T) {
+	const cerebro = "0.131.0-flota.d6f623d"
+
+	casos := []struct {
+		nombre     string
+		agente     string
+		difiere    bool
+		comparable bool
+	}{
+		// EL CASO DE A118, medido con las cadenas reales de la flota: mismo release, 41 commits
+		// de diferencia. La serie del núcleo dice «al día»; ésta dice la verdad.
+		{"mismo release, otro commit", "0.131.0-flota.b97a81c", true, true},
+		{"el mismo binario", "0.131.0-flota.d6f623d", false, true},
+		{"con espacios y prefijo v", "  v0.131.0-flota.d6f623d ", false, true},
+		{"otro release", "0.130.0-flota.38a0a9f", true, true},
+		// Un agente viejo de la otra familia: difiere, y se puede decir.
+		{"la familia de git describe", "v0.106.0-28-gdf2ec21", true, true},
+		// Tier B: no corre nuestro binario, no hay nada que comparar.
+		{"sin versión", "", false, false},
+		// Un agente ilegible SÍ se responde: no sabemos cuánto se atrasó, pero no es el nuestro.
+		{"ilegible", "dev", true, true},
+	}
+	for _, c := range casos {
+		difiere, comparable := BuildDelAgenteDifiere(c.agente, cerebro)
+		if difiere != c.difiere || comparable != c.comparable {
+			t.Errorf("%s: BuildDelAgenteDifiere(%q) = (%v, %v); esperaba (%v, %v)",
+				c.nombre, c.agente, difiere, comparable, c.difiere, c.comparable)
+		}
+	}
+}
+
+// SIN REFERENCIA PROPIA, LA PREGUNTA NO SE CONTESTA — la misma regla que gobierna a la del
+// núcleo: un cerebro construido sin ldflags marcaría a la flota entera por un defecto de acá.
+func TestSinVersionDelCerebroElBuildNoSeCompara(t *testing.T) {
+	for _, cerebro := range []string{"", "dev", "0.131", "v"} {
+		if difiere, comparable := BuildDelAgenteDifiere("0.131.0-flota.abc", cerebro); comparable || difiere {
+			t.Errorf("con el cerebro en %q la comparación se contestó (difiere=%v comparable=%v)", cerebro, difiere, comparable)
+		}
+	}
+}
