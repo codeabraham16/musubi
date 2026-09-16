@@ -41,6 +41,18 @@ jobs:
       - name: Build
         run: go build ./...
 
+      # LA SONDA SE COMPILA ACÁ, Y NO SE CORRE EN NINGÚN LADO.
+      #
+      # `internal/mcp/sonda_diseno_test.go` vive detrás del tag `sonda` porque SALE A LA RED
+      # contra el central real, y CI no puede depender de eso. Correcto — pero quedaba sin
+      # compilar en ningún paso, así que podía pudrirse sin que nada se pusiera rojo: era la
+      # única entrada de `pruebasExcluidasAProposito` que no cubría ningún job.
+      #
+      # `go vet` COMPILA y no ejecuta, así que este paso no abre un solo socket. La distinción
+      # es toda la gracia: el motivo para no CORRERLA no es un motivo para no COMPILARLA.
+      - name: Vet (sonda, compila sin correr)
+        run: go vet -tags sonda ./internal/mcp/
+
       # EL TECHO SALE DE UN ARCHIVO, NO DE ACÁ. presupuesto-de-pruebas.env es la única fuente:
       # este paso lo lee y lo publica en $GITHUB_ENV, y el paso de tests lo consume. Antes el
       # `20m` estaba tipeado en DOS comandos de este archivo (acá y en test-cross) y justificado

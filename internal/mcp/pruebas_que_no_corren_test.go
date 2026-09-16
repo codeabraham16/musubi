@@ -4,6 +4,7 @@ import (
 	"go/build/constraint"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -44,7 +45,7 @@ var pruebasExcluidasAProposito = map[string]string{
 	// Sale de la red y necesita una credencial del central. Su propia cabecera lo argumenta: es un
 	// INSTRUMENTO y no una compuerta, y no falla por umbral a propósito — «una sonda que rompe el
 	// build por eso se apaga sola a la semana». CI no puede depender de la red.
-	"internal/mcp/sonda_diseno_test.go": "instrumento contra el central real; CI no debe depender de la red ni de una credencial",
+	"internal/mcp/sonda_diseno_test.go": "instrumento contra el central real; CI no la CORRE porque no debe depender de la red ni de una credencial, pero SÍ la compila (`go vet -tags sonda`)",
 
 	// Éstas SÍ corren en CI, con su tag encendido, así que no son pruebas muertas: van acá porque
 	// esta guarda evalúa sin tags. `-race` define el tag `race` solo; `treesitter` va explícito en
@@ -163,6 +164,91 @@ func TestNingunaPruebaQuedaFueraDeLaCompilacionSinDecirlo(t *testing.T) {
 	for rel := range pruebasExcluidasAProposito {
 		if _, e := os.Stat(filepath.Join(raiz, rel)); e != nil {
 			t.Errorf("`pruebasExcluidasAProposito` exime a %s y ese archivo ya no está: sacá la entrada", rel)
+		}
+	}
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// UNA EXENCIÓN QUE DICE «LO CUBRE EL CI» ES PROSA HASTA QUE ALGUIEN LA MIDE
+//
+// El allowlist de arriba justifica tres entradas diciendo «tag `treesitter`, encendido
+// explícitamente en el job de polyglot del CI». Eso es una AFIRMACIÓN SOBRE OTRO ARCHIVO escrita
+// en un comentario: si ese job cambia sus tags o se va, el allowlist sigue diciendo que están
+// cubiertas y las tres pruebas se vuelven invisibles de verdad, en silencio. Es exactamente el
+// defecto que la guarda de arriba existe para impedir, alojado en su propia justificación.
+//
+// La sonda tenía la mitad complementaria: su motivo justifica no EJECUTARLA —sale a la red— y de
+// ahí se seguía, sin decirlo, que tampoco se compilaba. Compilar no sale a la red.
+//
+// LOS TAGS DEL CI SE DERIVAN DEL CI, no se escriben acá: una lista a mano sería una segunda copia
+// que se queda vieja, que es el mismo defecto una capa más arriba.
+//
+// Sabotajes verificados que la ponen en rojo: sacar el paso `go vet -tags sonda` del workflow, y
+// sacarle `treesitter` al TAGS del job de polyglot.
+// arnes: archivo=".github/workflows/ci.yml"
+// arnes: de="        run: go vet -tags sonda ./internal/mcp/\n"
+// arnes: a=""
+func TestCadaExencionPorTagSeCompilaEnAlgunPasoDelCI(t *testing.T) {
+	ci, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatalf("no se pudo leer el workflow: %v", err)
+	}
+	texto := string(ci)
+
+	// Los tags ENCENDIDOS en el CI, derivados de sus comandos. `-race` define el tag `race` solo.
+	encendidos := map[string]bool{}
+	// `-tags <literal>` y TAMBIEN `-tags "$VAR"`, siguiendo la asignacion de esa variable en el
+	// mismo workflow. El job de polyglot arma su lista en `TAGS='treesitter ...'`, asi que una
+	// derivacion que no sigue la variable acusa de descubiertas a tres pruebas que el CI SI
+	// compila: medido, la primera version de esta guarda hizo exactamente eso.
+	for _, m := range regexp.MustCompile(`-tags[= ]+["']?(\$\{?(\w+)\}?|[a-zA-Z0-9_ ]+)["']?`).FindAllStringSubmatch(texto, -1) {
+		valor := m[1]
+		if m[2] != "" {
+			asig := regexp.MustCompile(m[2] + `=['"]([^'"]*)['"]`).FindStringSubmatch(texto)
+			if asig == nil {
+				continue // una variable que no se asigna en este archivo: no se puede derivar
+			}
+			valor = asig[1]
+		}
+		for _, tag := range strings.Fields(valor) {
+			encendidos[tag] = true
+		}
+	}
+	if regexp.MustCompile(`go test[^\n]*-race`).MatchString(texto) {
+		encendidos["race"] = true
+	}
+	// CONTROL DE QUE MIDIÓ ALGO: si el patrón dejara de matchear, el mapa quedaría vacío y todas
+	// las exenciones se verían descubiertas —o peor, con otra redacción, todas cubiertas—.
+	if len(encendidos) < 2 {
+		t.Fatalf("se derivaron %d tags del CI y el workflow usa varios: el patrón dejó de matchear "+
+			"y esta guarda está midiendo el vacío", len(encendidos))
+	}
+
+	for rel := range pruebasExcluidasAProposito {
+		b, err := os.ReadFile(filepath.Join("..", "..", rel))
+		if err != nil {
+			continue // la guarda de arriba ya denuncia las entradas que no existen
+		}
+		for _, linea := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(linea), "package ") {
+				break
+			}
+			if !constraint.IsGoBuild(linea) {
+				continue
+			}
+			// Los tags que este archivo necesita para compilar.
+			for _, tag := range regexp.MustCompile(`[a-zA-Z0-9_]+`).FindAllString(
+				strings.TrimPrefix(strings.TrimSpace(linea), "//go:build"), -1) {
+				if encendidos[tag] {
+					goto cubierto
+				}
+			}
+			t.Errorf("%s está exento de correr en CI y NINGÚN paso del workflow lo compila con su "+
+				"tag (`%s`): puede dejar de compilar y nada se va a poner rojo.\n"+
+				"  No correrlo puede estar bien —la sonda sale a la red—, pero COMPILARLO no sale a\n"+
+				"  la red: alcanza con un `go vet -tags <tag>` en el CI.",
+				rel, strings.TrimSpace(linea))
+		cubierto:
 		}
 	}
 }
