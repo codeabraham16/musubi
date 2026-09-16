@@ -79,6 +79,9 @@ func TestElRecorteEsEstableYDejaAfueraLoQueANDA(t *testing.T) {
 // guardaría uno y el otro quedaría como ausente en la misma pasada — se daría de baja solo.
 //
 // Sabotaje que la hace fallar: quitar el mapa `vistos`.
+// arnes: archivo="cmd/musubi/servicios.go"
+// arnes: de="\t\tif vistos[strings.ToLower(r.Nombre)] {\n\t\t\tcontinue\n\t\t}\n"
+// arnes: a="\t\tif false {\n\t\t\tcontinue\n\t\t}\n"
 func TestUnNombreRepetidoNoSeReportaDosVeces(t *testing.T) {
 	lista, _ := serviciosParaElLatido([]fleet.ReporteServicio{
 		repDe("docker", fleet.EstadoCorriendo),
@@ -123,6 +126,9 @@ func TestUnEstadoDeTransicionNoEsCorriendo(t *testing.T) {
 // habilitado más lo fallado es exactamente la pregunta «¿está corriendo lo que tiene que correr?».
 //
 // Sabotaje que la hace fallar: sacar el `if !habilitada && !fallada { continue }`.
+// arnes: archivo="cmd/musubi/servicios_parsers.go"
+// arnes: de="\t\tif !habilitada && !fallada {\n\t\t\tcontinue\n\t\t}\n"
+// arnes: a="\t\tif !habilitada && !fallada && false {\n\t\t\tcontinue\n\t\t}\n"
 func TestSoloSeReportaLoQueAlguienDeclaroQueCorra(t *testing.T) {
 	salida := strings.Join([]string{
 		"Id=importante.service\nActiveState=active\nSubState=running\nUnitFileState=enabled\nMainPID=42\nNRestarts=0\nResult=success",
@@ -163,6 +169,9 @@ func TestSoloSeReportaLoQueAlguienDeclaroQueCorra(t *testing.T) {
 // Unix diría «corriendo desde 1970», que es una afirmación falsa y encima verosímil en una tabla.
 //
 // Sabotaje que la hace fallar: devolver &time.Time{} en vez de nil.
+// arnes: archivo="cmd/musubi/servicios_parsers.go"
+// arnes: de="\tif s == \"\" || s == \"n/a\" {\n\t\treturn nil\n\t}\n"
+// arnes: a="\tif s == \"\" || s == \"n/a\" {\n\t\treturn &time.Time{}\n\t}\n"
 func TestUnaFechaQueNoSeEntiendeQuedaEnNilYNoEnLaEpoca(t *testing.T) {
 	for _, s := range []string{"", "n/a", "cualquier cosa"} {
 		if got := fechaDeSystemd(s); got != nil {
@@ -225,6 +234,9 @@ func TestElParserDeWindowsSeLeeDesdeLinux(t *testing.T) {
 //
 // Sabotaje: devolver EstadoDetenido en vez de EstadoOcioso para "stopped" → falla acá, y el
 // exportador vuelve a emitir up=0 para servicios que están bien.
+// arnes: archivo="cmd/musubi/servicios_parsers.go"
+// arnes: de="\t\treturn fleet.EstadoOcioso\n"
+// arnes: a="\t\treturn fleet.EstadoDetenido\n"
 func TestUnAutomaticoQueSeApagoLimpioEsOciosoYNoCaido(t *testing.T) {
 	if got := estadoDeWindows("Stopped", "0"); got != fleet.EstadoOcioso {
 		t.Errorf("un servicio apagado con salida limpia se reporta %q: eso dispara ServicioCaido sin que nada esté mal", got)
@@ -786,6 +798,9 @@ func TestTodaPlataformaQueEnumeraServiciosEnumeraSusContenedores(t *testing.T) {
 //
 // La otra dirección también está medida: con `if vivo == false` —la misma condición escrita
 // distinto— la prueba sigue en VERDE, así que la guarda juzga conducta y no texto.
+// arnes: archivo="cmd/musubi/servicios_parsers.go"
+// arnes: de="\t\t\tvivo = true\n"
+// arnes: a="\t\t\tvivo = false\n"
 func TestLaSalidaViejaNoMataUnServicioVivoEnMacos(t *testing.T) {
 	// Formato real: PID, último código de salida, etiqueta. La fila del medio es el caso: tiene
 	// PID (está corriendo AHORA) y arrastra el código de una caída anterior.
@@ -842,6 +857,9 @@ func TestLaSalidaViejaNoMataUnServicioVivoEnMacos(t *testing.T) {
 // que nadie cuestiona porque tiene la forma correcta.
 //
 // Sabotaje que lo hace fallar: devolver siempre ActiveEnterTimestamp en desdeDeSystemd.
+// arnes: archivo="cmd/musubi/servicios_parsers.go"
+// arnes: de="\treturn fechaDeSystemd(p[\"InactiveEnterTimestamp\"])\n"
+// arnes: a="\treturn fechaDeSystemd(p[\"ActiveEnterTimestamp\"])\n"
 func TestElDesdeDeUnServicioHablaDelEstadoEnQueEsta(t *testing.T) {
 	const arranco = "Thu 2026-08-01 03:00:00 EDT"
 	const murio = "Mon 2026-09-01 22:15:00 EDT"
