@@ -72,6 +72,9 @@ func tiposDe(t *testing.T, res interface{}) (map[string]int, string) {
 // La cronología cruza los TRES planos en una sola lista para quien tiene las tres capacidades.
 //
 // Sabotaje: leer sólo `device_commands` → faltan las dos sesiones.
+// arnes: archivo="internal/memory/cronologia.go"
+// arnes: de="\tpantallas, err := e.hechosDePantalla(projectID, deviceID, desde, hasta, tope, nombre, ahora)\n\tif err != nil {\n\t\treturn nil, false, err\n\t}\n\tif len(pantallas) >= tope {\n\t\ttruncado = true\n\t}\n\tout = append(out, pantallas...)\n\n\tshells, err := e.hechosDeShell(projectID, deviceID, desde, hasta, tope, nombre)\n\tif err != nil {\n\t\treturn nil, false, err\n\t}\n\tif len(shells) >= tope {\n\t\ttruncado = true\n\t}\n\tout = append(out, shells...)\n"
+// arnes: a=""
 func TestLaCronologiaCruzaLosTresPlanos(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	sembrarLosTresPlanos(t, s, "infra", "pc-gio")
@@ -106,6 +109,9 @@ func TestLaCronologiaCruzaLosTresPlanos(t *testing.T) {
 // acá) alguien que sólo puede ejecutar vería quién tuvo un prompt y quién miró la pantalla; con
 // `shell` (la más estricta) alguien que puede ejecutar no vería sus propios comandos. Las dos
 // direcciones fallan acá.
+// arnes: archivo="internal/mcp/methods_cronologia.go"
+// arnes: de="\t\tnecesaria, clasificado := fleet.CapDeHecho(h.Tipo)\n"
+// arnes: a="\t\tnecesaria, clasificado := fleet.CapExec, true\n"
 func TestLaCompuertaEsPorHechoYNoPorLaLista(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	sembrarLosTresPlanos(t, s, "infra", "pc-gio")
@@ -152,6 +158,9 @@ func TestLaCompuertaEsPorHechoYNoPorLaLista(t *testing.T) {
 //
 // Sabotaje: clasificar por tabla de origen → quien tiene sólo `exec` se entera de que alguien
 // miró la pantalla de esa máquina, que es información del otro plano.
+// arnes: archivo="internal/fleet/cronologia.go"
+// arnes: de="\tcase OpPantalla:\n\t\treturn HechoCanalPantalla\n"
+// arnes: a="\tcase OpPantalla:\n\t\treturn HechoComando\n"
 func TestUnaOperacionDePantallaNoSeLeMuestraAQuienSoloPuedeEjecutar(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")
@@ -286,6 +295,9 @@ func TestElTopeQueCortaSeDeclara(t *testing.T) {
 //
 // Sabotaje: usar PuedeSobreDevice en vez de PuedeVerHistorialDeDevice → la cronología de la
 // máquina que se dio de baja después de un incidente se vuelve ilegible justo cuando se necesita.
+// arnes: archivo="internal/mcp/methods_cronologia.go"
+// arnes: de="\t\tif !PuedeVerHistorialDeDevice(p, d, necesaria) {\n"
+// arnes: a="\t\tif !PuedeSobreDevice(p, d, necesaria) {\n"
 func TestLaCronologiaDeUnaMaquinaRevocadaSeSigueLeyendo(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	sembrarLosTresPlanos(t, s, "infra", "pc-gio")
@@ -307,6 +319,9 @@ func TestLaCronologiaDeUnaMaquinaRevocadaSeSigueLeyendo(t *testing.T) {
 //
 // Sabotaje: sacar la guarda algunPlanoVisible → quien sólo tiene `metrics` recibe una cronología
 // vacía de una máquina llena de actividad y concluye lo contrario de lo que pasó.
+// arnes: archivo="internal/mcp/methods_cronologia.go"
+// arnes: de="\tif !algunPlanoVisible(p, device) {\n"
+// arnes: a="\tif false {\n"
 func TestSinNingunPlanoVisibleSeExplicaEnVezDeDevolverVacio(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	sembrarLosTresPlanos(t, s, "infra", "pc-gio")
@@ -539,6 +554,9 @@ func TestTodaOperacionInternaDelCodigoEstaClasificada(t *testing.T) {
 // que las otras tres esquivan — la misma razón por la que el techo de la cola vive en esa función.
 //
 // Sabotaje que la hace fallar: sacar el `if fleet.OpsClasificadasPorFila[...]` de EncolarComando.
+// arnes: archivo="internal/memory/comandos.go"
+// arnes: de="\tif fleet.OpsClasificadasPorFila[primerArgv(c.Argv)] && fleet.TipoDeComando(c) == fleet.HechoSinClasificar {\n"
+// arnes: a="\tif false {\n"
 func TestNoSePuedeEncolarUnAvisoSinDeclararSuPlano(t *testing.T) {
 	s, d := servidorConMaquina(t)
 	for op := range fleet.OpsClasificadasPorFila {
