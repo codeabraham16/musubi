@@ -126,6 +126,9 @@ func TestElInventarioNoViajaEnCadaLatido(t *testing.T) {
 // Encontrado el 2026-09-02 leyendo el código, no por un síntoma.
 //
 // Sabotaje que la hace fallar: devolver `false` cuando la lista está vacía.
+// arnes: archivo="cmd/musubi/servicios.go"
+// arnes: de="\tif lista == nil {\n\t\tlista = []fleet.ReporteServicio{}\n\t}\n\treturn lista, afuera, true, func() {"
+// arnes: a="\tif lista == nil {\n\t\treturn nil, 0, false, nil\n\t}\n\treturn lista, afuera, true, func() {"
 func TestUnInventarioVacioSeReportaYNoSeCallaParaSiempre(t *testing.T) {
 	anterior := enumerarServicios
 	enumerarServicios = func() ([]fleet.ReporteServicio, error) { return nil, nil }
@@ -155,6 +158,9 @@ func TestUnInventarioVacioSeReportaYNoSeCallaParaSiempre(t *testing.T) {
 // B5 — un 401 se clasifica como REVOCADO (no se reintenta), no como fallo transitorio.
 // Sabotaje: tratar el 401 como un error más → el agente golpea el lockout del cerebro para
 // siempre en vez de detenerse.
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="\t\treturn resultadoLatido{revocado: true, motivo: \"credencial inválida o revocada\"}"
+// arnes: a="\t\treturn resultadoLatido{motivo: \"credencial inválida o revocada\"}"
 func TestUn401SeClasificaComoRevocadoYNoComoFalloTransitorio(t *testing.T) {
 	casos := []struct {
 		status         int
@@ -204,6 +210,9 @@ func TestElCerebroInalcanzableEsReintentableNoRevocado(t *testing.T) {
 // B7 — un cerebro que acepta la conexión y no responde NUNCA no puede colgar el bucle.
 // Sabotaje: quitarle el Timeout a clienteLatido → el agente queda esperando para siempre y la
 // máquina figura viva sin volver a latir jamás.
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="\t\treturn &http.Client{Timeout: 10 * time.Second}"
+// arnes: a="\t\treturn &http.Client{}"
 func TestElClienteDelLatidoTieneTimeout(t *testing.T) {
 	if clienteLatido.Timeout <= 0 {
 		t.Fatal("clienteLatido no tiene timeout: un cerebro que no responde cuelga el bucle para siempre")
@@ -221,6 +230,9 @@ func TestElClienteDelLatidoTieneTimeout(t *testing.T) {
 //
 // Sabotaje que la hace fallar: volver esperaMaxima a 5 min → el peor caso con jitter (6 min)
 // supera los 3 min 30 s de presupuesto. O quitar el tope en siguienteEspera.
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="\tesperaMaxima = 2 * time.Minute"
+// arnes: a="\tesperaMaxima = 5 * time.Minute"
 func TestElBackoffTieneTecho(t *testing.T) {
 	espera := esperaMinima
 	for i := 0; i < 100; i++ {
@@ -305,6 +317,9 @@ func TestElBackoffTieneTechoDeDosMinutosYJitterDeVeintePorCiento(t *testing.T) {
 //
 // Sabotaje que la hace fallar: que desfaseDeArranque devuelva 0 siempre → rojo por el medio.
 // Subir desfaseDeArranqueMaximo por encima del intervalo → rojo por el tope.
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="\treturn time.Duration(azarDelAgente() * float64(desfaseDeArranqueMaximo))"
+// arnes: a="\treturn 0"
 func TestElPrimerLatidoSeDesfasaAlAzarHastaTreintaSegundos(t *testing.T) {
 	anterior := azarDelAgente
 	t.Cleanup(func() { azarDelAgente = anterior })
@@ -722,6 +737,9 @@ func TestElAgenteUsaLaRutaCorrectaParaCadaCosa(t *testing.T) {
 //
 // Sabotaje que la hace fallar: poner `InsecureSkipVerify: true` en clienteParaElCerebro, bajar
 // MinVersion, o devolver un Transport propio cuando el nombre viene vacio.
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="\ttr.TLSClientConfig.MinVersion = tls.VersionTLS12"
+// arnes: a="\ttr.TLSClientConfig.InsecureSkipVerify = true"
 func TestElClienteDelLatidoDeclaraElNombreYNoApagaLaVerificacion(t *testing.T) {
 	// Sin nombre: el cliente de siempre, SIN Transport propio. Que el default del stdlib siga
 	// siendo el default es la mitad del punto — un Transport clonado que nadie necesita es una
