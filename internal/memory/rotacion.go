@@ -161,7 +161,7 @@ func (e *DbEngine) AbandonarRotacionesVencidas(ahora time.Time) (int64, error) {
 // si tiene que completar la rotación. Devolverlas juntas evita una segunda consulta y, sobre
 // todo, evita que alguien deduzca `esNuevo` comparando hashes en otro lado — que es donde se
 // separan las dos mitades de una condición.
-func (e *DbEngine) DevicePorTokenConRotacion(token string) (d fleet.Device, esNuevo bool, existe bool, err error) {
+func (e *DbEngine) DevicePorTokenConRotacion(token string, ahora time.Time) (d fleet.Device, esNuevo bool, existe bool, err error) {
 	if strings.TrimSpace(token) == "" {
 		return fleet.Device{}, false, false, nil
 	}
@@ -175,8 +175,19 @@ func (e *DbEngine) DevicePorTokenConRotacion(token string) (d fleet.Device, esNu
 	// rotación abierta comparten el valor vacío, y sin esto una petición sin credencial se
 	// autenticaría como cualquiera de ellas.
 	h := fleet.HashToken(token)
+	// LA FECHA DECIDE, NO EL BARRIDO QUE PASA A LIMPIAR. `rotacion_vence` acota cuánto vive un
+	// token EMITIDO y todavía no confirmado, y antes esa columna no entraba en la consulta: el
+	// token nuevo valía hasta que `AbandonarRotacionesVencidas` corriera un UPDATE. Ese UPDATE
+	// cuelga del barrido de flota, que tiene salidas tempranas ajenas a las rotaciones —un
+	// barrido anterior en vuelo, una lista de proyectos ilegible, el contexto cancelado—, así que
+	// una credencial vencida seguía autenticando mientras durara cualquiera de ellas. Y el latido
+	// no sólo la aceptaba: COMPLETABA la rotación con ella.
+	//
+	// Es el mismo criterio que SesionShell.Vencida, y por el mismo motivo: un estado que alguien
+	// tiene que ir a actualizar miente en cuanto nadie lo actualiza. El abandono sigue existiendo
+	// —libera la fila y deja el token viejo vivo—, pero ya no es lo que define la vigencia.
 	row := e.db.QueryRow(
-		`SELECT `+columnasDevice+` FROM devices WHERE token_sha256_nuevo = ? AND token_sha256_nuevo <> '' AND revoked = 0`, h)
+		`SELECT `+columnasDevice+` FROM devices WHERE token_sha256_nuevo = ? AND token_sha256_nuevo <> '' AND rotacion_vence > ? AND revoked = 0`, h, ahora.UTC().Format(time.RFC3339))
 	d, existe, err = escanearUnDevice(row)
 	return d, existe, existe, err
 }

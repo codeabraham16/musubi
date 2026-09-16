@@ -570,7 +570,7 @@ type ServiceStore interface {
 	AbrirRotacion(deviceID string, vence time.Time) (string, error)
 	CompletarRotacion(deviceID string) error
 	AbandonarRotacionesVencidas(ahora time.Time) (int64, error)
-	DevicePorTokenConRotacion(token string) (fleet.Device, bool, bool, error)
+	DevicePorTokenConRotacion(token string, ahora time.Time) (fleet.Device, bool, bool, error)
 
 	// ── Aprobación de cuatro ojos (Ola 2) ───────────────────────────────────────────────────
 	// CUÁNTAS PERSONAS hacen falta para abrir una sesión. Es un eje aparte de las capacidades
