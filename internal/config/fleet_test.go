@@ -88,3 +88,46 @@ func TestElTechoDeServiciosDelExportDistingueElDefaultDelApagado(t *testing.T) {
 		}
 	}
 }
+
+// EL TECHO DE APROBACIONES NO TIENE APAGADO, Y ESA ASIMETRÍA CON SU HERMANO ES EL PUNTO (A124).
+//
+// `EffectiveServicesPerProjectExport` lee un negativo como «sin techo» y devuelve 0. Copiar esa
+// convención acá habría sido un defecto silencioso: `AprobacionesPendientes`
+// (internal/memory/aprobaciones.go) hace `if tope <= 0 { tope = 50 }`, así que un 0 que viajara
+// hasta la consulta NO desactivaría el techo — lo APRETARÍA de 200 a 50. Alguien que escribiera
+// `approvals_per_project_export: -1` por analogía con la perilla de al lado habría perdido tres
+// cuartas partes de la página creyendo que la sacaba, y sin una sola línea que lo dijera.
+//
+// Por eso esta función CLAMPEA en vez de propagar, y la guarda mide justamente eso: que no exista
+// ninguna entrada que la haga devolver un valor que el almacén vaya a reinterpretar. No alcanza
+// con probar −1: lo que hay que sostener es la propiedad «nunca <= 0», que es la que hace
+// irrepresentable el camino malo.
+//
+// Sabotaje que la hace fallar: dejar pasar los negativos (`== 0` en vez de `<= 0`).
+// arnes: archivo="internal/config/config.go"
+// arnes: de="if f.ApprovalsPerProjectExport <= 0 {"
+// arnes: a="if f.ApprovalsPerProjectExport == 0 {"
+func TestElTechoDeAprobacionesNuncaLeEntregaAlAlmacenUnValorQueVaAReinterpretar(t *testing.T) {
+	casos := []struct {
+		nombre  string
+		cfg     FleetConfig
+		esperar int
+	}{
+		{"sin la clave ⇒ default", FleetConfig{}, 200},
+		{"un número ⇒ ese número", FleetConfig{ApprovalsPerProjectExport: 500}, 500},
+		{"cero explícito ⇒ default", FleetConfig{ApprovalsPerProjectExport: 0}, 200},
+		{"negativo ⇒ default, NO «sin techo»", FleetConfig{ApprovalsPerProjectExport: -1}, 200},
+	}
+	for _, c := range casos {
+		if got := c.cfg.EffectiveApprovalsPerProjectExport(); got != c.esperar {
+			t.Errorf("%s: techo = %d, esperaba %d", c.nombre, got, c.esperar)
+		}
+	}
+	// LA PROPIEDAD, no los tres casos de arriba: ningún valor de entrada puede producir un techo
+	// <= 0, porque ahí el almacén dejaría de leer el número como un techo.
+	for _, v := range []int{-1000, -200, -50, -1, 0, 1, 50, 200, 5000} {
+		if got := (FleetConfig{ApprovalsPerProjectExport: v}).EffectiveApprovalsPerProjectExport(); got <= 0 {
+			t.Errorf("con `approvals_per_project_export: %d` el techo efectivo es %d; el almacén leería eso como 50 y apretaría el techo en vez de sacarlo", v, got)
+		}
+	}
+}

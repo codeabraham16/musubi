@@ -140,6 +140,25 @@ import (
 // mecanizaron 62 anclas de una muestra SISTEMÁTICA (una de cada 13, para que el veredicto no
 // saliera medido sobre las que yo hubiera elegido). La holgura hizo exactamente lo que tenía que
 // hacer: con el techo en 774 esta guarda se puso roja pidiendo que se bajara.
+// BAJÓ DE 642 A 623 EL 2026-09-16, Y LO ENCONTRÓ EL ARNÉS: ESTA GUARDA ESTABA EN VERDE SOBRE SU
+// PROPIO SABOTAJE. `arnes -correr -paquete ./internal/mcp` dio 117 corridas, 116 en ROJO y UNA en
+// VERDE. Dos sesiones llegaron al mismo 623 el mismo día, por caminos distintos (ver #544); el
+// número coincide porque es la deuda medida, no una elección.
+//
+// LA PARTE QUE NO ES OBVIA, Y QUE CONVIENE LEER ANTES DE TOCAR `holguraDelTecho`: el sabotaje
+// declarado arriba agrega EXACTAMENTE UN ancla. O sea que esta guarda sólo puede ponerse roja si
+// `anclasEnProsaAlDia <= pendientes`, y por lo tanto QUEDA HUECA CON CUALQUIER HOLGURA >= 1.
+//
+// Las dos condiciones del predicado parecen cubrirse entre sí y no lo hacen: la primera —«la deuda
+// subió»— es la que el sabotaje ejercita, y la segunda —«bajá el techo»— recién se despierta
+// pasadas las 30. Entre una y otra hay una ventana de 30 anclas en la que el ratchet no mide nada
+// y TAMPOCO SE PONE ROJA PARA DECIRLO. Así fue como se llegó acá: un lote mecanizó 22 anclas, la
+// deuda cayó a 623, el techo se quedó en 642, y la diferencia de 19 pasó por debajo del umbral.
+//
+// El precio de ese hueco es que la única forma de que esta guarda mida es dejar el techo PEGADO a
+// la deuda. Por eso se baja a 623 y no a 630: cualquier número mayor la devuelve al estado en que
+// se la encontró. Y la regla general, que vale más que este número: cuando el sabotaje mueve el
+// indicador en UNA unidad, cualquier tolerancia > 0 en el umbral vuelve la guarda hueca.
 const anclasEnProsaAlDia = 623
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.

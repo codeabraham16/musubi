@@ -60,6 +60,7 @@ func (s *McpServer) ConfigurarFlota(cfg config.FleetConfig) error {
 	s.sondaIntervalo = cfg.EffectiveProbeInterval()
 	s.retencionSalidasDias = cfg.EffectiveOutputRetentionDays()
 	s.techoServiciosPorProyecto = cfg.EffectiveServicesPerProjectExport()
+	s.techoAprobacionesPorProyecto = cfg.EffectiveApprovalsPerProjectExport()
 
 	politicas := make([]fleet.Politica, 0, len(cfg.Policies))
 	vistos := make(map[string]bool, len(cfg.Policies))

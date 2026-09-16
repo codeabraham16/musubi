@@ -108,7 +108,7 @@ func TestLaSerieDelEmisorSeOmiteSiElAgenteNoLoDeclara(t *testing.T) {
 	}
 
 	var b strings.Builder
-	renderFlota(&b, s.engine, nil, time.Now(), s.sondaIntervalo, "0.140.3", nil, serviciosPorProyectoDefault)
+	renderFlota(&b, s.engine, nil, time.Now(), s.sondaIntervalo, "0.140.3", nil, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
 	for _, l := range strings.Split(b.String(), "\n") {
 		if strings.HasPrefix(l, "musubi_fleet_device_emitter_stable_seconds{") {
 			t.Errorf("se exportó la serie del emisor para un agente que no lo declara: %s\n"+

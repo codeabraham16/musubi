@@ -35,7 +35,7 @@ func TestUnaRotacionAbiertaSeVeYUnaCerradaNo(t *testing.T) {
 
 	dump := func(ahora time.Time) string {
 		var b strings.Builder
-		renderFlota(&b, s.engine, nil, ahora, s.sondaIntervalo, "0.140.3", nil, serviciosPorProyectoDefault)
+		renderFlota(&b, s.engine, nil, ahora, s.sondaIntervalo, "0.140.3", nil, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
 		return b.String()
 	}
 
