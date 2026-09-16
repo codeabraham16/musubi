@@ -163,7 +163,19 @@ func (e *DbEngine) ClaimWorkUnit(batchID, agent string, ttlSeconds, maxAttempts 
 
 	// Paso 2: claim atómico. Elegible = open OR huérfana (claimed con lease vencido).
 	leaseExpr := `datetime('now','+' || ? || ' seconds')`
-	eligible := `(status=? OR (status=? AND lease_expires_at IS NOT NULL AND lease_expires_at < datetime('now')))`
+	// SIN LEASE CUENTA COMO VENCIDO, y no como «trabajo en curso que no se toca».
+	//
+	// La condición exigía `lease_expires_at IS NOT NULL`, así que una unidad `claimed` con el
+	// lease en NULL no era elegible para nadie. Ese estado existe: la migración que agregó los
+	// leases hizo backfill de las unidades ya reclamadas y les dejó el lease en NULL a propósito,
+	// para no expropiar trabajo en curso durante el upgrade. La intención era correcta y el efecto
+	// era permanente — si aquel dueño no volvió, la unidad quedaba inmortal: no la reclamaba
+	// nadie, no la cerraba el dead-letter (que exigía lo mismo) y `ReopenWorkUnit` sólo toca las
+	// `failed`. El único camino era borrar el lote entero.
+	//
+	// Expropiar no es peligroso acá: `fencing_token` es monótono y se incrementa en cada reclamo,
+	// así que un dueño zombie que vuelva con su token viejo no puede completar ni renovar nada.
+	eligible := `(status=? OR (status=? AND (lease_expires_at IS NULL OR lease_expires_at < datetime('now'))))`
 	// La historia se anota EN EL MISMO UPDATE atómico, con una concatenación. Leer el log,
 	// agregarle una línea y volver a escribirlo sería un read-modify-write: dos reclamos
 	// concurrentes se pisarían y perderían justo el registro que explica la carrera.
@@ -412,8 +424,11 @@ func escaladaDesdeHistoria(log string, maxAttempts int) string {
 // deadLetterAgotadas cierra como failed las huérfanas que ya agotaron sus reintentos, y a cada una
 // le escribe SU historia. Fila por fila porque el mensaje dejó de ser una constante.
 func (e *DbEngine) deadLetterAgotadas(batchID string, maxAttempts int) error {
+	// El mismo criterio que el reclamo: sin lease cuenta como vencido. Si acá siguiera exigiendo
+	// `IS NOT NULL`, una unidad sin lease que agotó sus reintentos no moriría nunca — y el estado
+	// que el reclamo ahora sí sabe retomar volvería a ser inmortal por el otro lado.
 	sel := `SELECT id, COALESCE(claim_log,'') FROM work_units
-	         WHERE status=? AND lease_expires_at IS NOT NULL AND lease_expires_at < datetime('now')
+	         WHERE status=? AND (lease_expires_at IS NULL OR lease_expires_at < datetime('now'))
 	           AND attempts >= ?`
 	args := []interface{}{WorkClaimed, maxAttempts}
 	if batchID != "" {
