@@ -336,6 +336,26 @@ func (s *McpServer) proyectosAVigilar(barrido string) ([]string, error) {
 
 // barrerFlotaUnaVez hace UN barrido completo: sondear, evaluar políticas, podar.
 func (s *McpServer) barrerFlotaUnaVez(ctx context.Context) {
+	// LOS TECHOS DE LAS SESIONES DE SHELL VAN PRIMERO, ANTES DE CUALQUIER SALIDA TEMPRANA.
+	//
+	// Los aplica EL CEREBRO y no la máquina remota (S5b · T5): si dependieran del otro lado, una
+	// máquina comprometida se los saltearía — y esa máquina es justamente aquélla de la que uno
+	// se protege al ponerle un techo a una sesión de shell.
+	//
+	// Estaban en la ÚLTIMA línea de esta función, detrás de tres salidas que no tienen nada que
+	// ver con las shells: un barrido anterior todavía en vuelo, un error al listar los proyectos
+	// con máquinas, o el contexto cancelado a mitad del recorrido. En las tres, un prompt que ya
+	// pasó su techo seguía abierto con su proceso remoto vivo. Y dos de ellas DURAN: mientras la
+	// base no deje leer `devices`, o mientras un barrido siga colgado contra una máquina que no
+	// contesta, ningún tick futuro llega hasta acá tampoco. Un techo que se apaga porque la SONDA
+	// anda mal no es un techo.
+	//
+	// Puede correr con otro barrido en vuelo: es una consulta por sesión viva y `cerrarShell` es
+	// idempotente, así que no comparte nada con las conexiones que `flotaBusy` viene a acotar.
+	if n := s.cerrarShellsVencidas(time.Now()); n > 0 {
+		logx.Info("flota: sesiones de shell cerradas por vencimiento", "sesiones", n)
+	}
+
 	// I5 — un barrido que sigue corriendo no arranca otro. Con 40 máquinas por SSH, dos barridos
 	// solapados son 80 conexiones simultáneas; y si un tick tarda más que el intervalo (una red
 	// lenta, un dispositivo colgado), solaparse es la regla y no la excepción.
@@ -384,12 +404,6 @@ func (s *McpServer) barrerFlotaUnaVez(ctx context.Context) {
 
 	podadas := s.podarSalidasSiToca(time.Now())
 	s.podarEstadoDePoliticasSiToca(time.Now())
-	// Los techos de las sesiones de shell los aplica EL CEREBRO (S5b · T5). Si dependieran de la
-	// máquina remota, una máquina comprometida se los saltearía — y esa máquina es justamente
-	// aquélla de la que uno se protege al ponerle un techo a una sesión de shell.
-	if n := s.cerrarShellsVencidas(time.Now()); n > 0 {
-		logx.Info("flota: sesiones de shell cerradas por vencimiento", "sesiones", n)
-	}
 
 	// Se anuncia sólo cuando HUBO trabajo, como el resto del scheduler: un log por tick en un
 	// daemon que vive días es ruido que entierra la línea que sí importa.
