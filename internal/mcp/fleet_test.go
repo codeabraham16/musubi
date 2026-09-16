@@ -203,6 +203,21 @@ func TestElLatidoSeVeEnElInventario(t *testing.T) {
 // B6 — el lockout anti fuerza-bruta cubre la puerta nueva.
 // Sabotaje: quitar el limiter de handlerLatido → la tabla de dispositivos queda como oráculo de
 // fuerza bruta sin costo.
+//
+// NO SE MECANIZÓ, Y NO ES POR FALTA DE GANAS: no hay ancla única cerca de esta decisión. El bloque
+// del limiter —y TAMBIÉN el comentario de veinte líneas que lo precede— está repetido byte por byte
+// en las TRES puertas: `handlerLatido` (124), `handlerResultado` (642) y `handlerSaludDeServicios`
+// (838). Medido, no estimado: `limiter.fail(ip, ahora)` + el `if locked` da 3; con `ahora :=
+// time.Now()` arrastrado, 3; el comentario largo + `ip := clientIP(r)`, 3; extendido hasta
+// `escribirLatido` baja a 2 —mata a la de salud, que usa `escribirSalud`— y sólo llega a 1 si se
+// estira hasta el comentario `// La telemetría (S4)` de la línea 135, que es EXACTAMENTE el `de` que
+// ya usa la directiva de `TestElRechazoNoDiceCualExistio` veinte líneas más arriba.
+//
+// Cortar el `authLimiter` en su propio archivo SÍ es único, y está descartado a propósito: apaga el
+// lockout de las tres puertas, así que probaría «el limiter funciona» —lo que ya mide
+// `authlimit_test.go`— y no «esta puerta lo usa», que es lo que afirma ESTA guarda. Una guarda que
+// no discrimina entre esas dos cosas no vale como sabotaje, y el día que alguien mecanice el ancla
+// del limiter el censo marcaría colisión con razón: sería una sola contada dos veces.
 func TestLaPuertaDelDispositivoTieneLockout(t *testing.T) {
 	_, ts, _, _ := servidorConFlota(t)
 
@@ -238,6 +253,9 @@ func TestElLatidoSoloAceptaPost(t *testing.T) {
 
 // B8 — enrolar y revocar son ADMIN; listar no.
 // Sabotaje: quitar el gate isAdmin de toolFleetEnroll.
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="\tif !p.isAdmin() {\n\t\treturn nil, rpcErrorf(codeUnauthorized, \"musubi_fleet_enroll da de alta una máquina en el plano de control: requiere un principal admin\")\n\t}"
+// arnes: a="\tif !p.isAdmin() && false {\n\t\treturn nil, rpcErrorf(codeUnauthorized, \"musubi_fleet_enroll da de alta una máquina en el plano de control: requiere un principal admin\")\n\t}"
 func TestEnrolarYRevocarSonAdmin(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	writer := &Principal{Name: "dev", Role: RoleWriter, ProjectID: "casa"}
@@ -268,6 +286,9 @@ func TestEnrolarYRevocarSonAdmin(t *testing.T) {
 
 // B9 — el proyecto sale de la CREDENCIAL. Un admin acotado no enrola en el tenant de otro.
 // Sabotaje: usar args.Project directo en vez de writeOriginFor.
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="\tproyecto, ok := writeOriginFor(p, args.Project)\n\tif !ok || strings.TrimSpace(proyecto) == \"\" {\n\t\treturn nil, rpcErrorf(codeInvalidParams, \"no se pudo determinar el proyecto del dispositivo: declaralo en `project` (un dispositivo sin proyecto sería visible desde todos los tenants)\")"
+// arnes: a="\tproyecto, ok := strings.TrimSpace(args.Project), true\n\tif !ok || strings.TrimSpace(proyecto) == \"\" {\n\t\treturn nil, rpcErrorf(codeInvalidParams, \"no se pudo determinar el proyecto del dispositivo: declaralo en `project` (un dispositivo sin proyecto sería visible desde todos los tenants)\")"
 func TestEnrolarNoPuedeElegirElTenantAjeno(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	// Admin con write=own: administra, pero acotado a su proyecto.
@@ -290,6 +311,9 @@ func TestEnrolarNoPuedeElegirElTenantAjeno(t *testing.T) {
 
 // B10 — listar no cruza tenants: el arg `project` sólo lo respeta read=all.
 // Sabotaje: devolver `declarado` sin chequear las capacidades en fleetReadScopeFor.
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="\tif declarado != \"\" {\n\t\tif read, _ := p.caps(); read == ReadAll {\n\t\t\treturn declarado\n\t\t}\n\t}"
+// arnes: a="\tif declarado != \"\" {\n\t\treturn declarado\n\t}"
 func TestListarNoCruzaTenants(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarDePrueba(t, s, "casa", "pc-gio")
@@ -318,6 +342,9 @@ func TestListarNoCruzaTenants(t *testing.T) {
 
 // B11 — `online` se calcula al servir, con el umbral que pide el llamador.
 // Sabotaje: fijar el umbral e ignorar umbral_segundos.
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="\tumbralExplicito := time.Duration(args.UmbralSegundos) * time.Second"
+// arnes: a="\tumbralExplicito := time.Duration(0)"
 func TestOnlineSeCalculaConElUmbralQuePideElLlamador(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 	if code, _ := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, ""); code != http.StatusOK {
