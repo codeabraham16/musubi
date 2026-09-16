@@ -383,6 +383,36 @@ groups:
       #
       # La serie compara NÚCLEOS semver: dos commits del mismo release no son un agente atrasado.
       # Ver internal/fleet/version.go, que explica lo que esto NO puede ver.
+      # EL BUILD, QUE ES LA OTRA MITAD DE LA PREGUNTA (A118).
+      #
+      # `AgenteDesactualizado` compara el NÚCLEO semver, y por eso no ve a una máquina que se quedó
+      # commits atrás dentro del mismo release: medido el 2026-09-08 con las cadenas reales,
+      # `0.131.0-flota.b97a81c` (61 commits atrás) y `0.131.0-flota.d6f623d` (20 atrás) daban las
+      # dos «al día». Esa comparación NO se cambió a propósito —su guarda declara como sabotaje
+      # justamente compararlas enteras, porque el cerebro se redespliega varias veces por día y
+      # marcaría a la flota entera en cada despliegue—, así que la otra mitad va en su propia serie.
+      #
+      # EL PLAZO ES LARGO Y ES LO QUE LA HACE UTILIZABLE. Un 1 recién aparecido es lo NORMAL: el
+      # cerebro se acaba de redesplegar y los agentes se cruzan a mano. Lo que no es normal es que
+      # siga en 1 una semana después. Con un `for` corto esta alerta sería ruido puro y alguien la
+      # apagaría, que es peor que no tenerla.
+      #
+      # AUSENTE en las mismas dos condiciones que su hermana: sin agente (Tier B) y sin versión del
+      # cerebro. Y no dispara sobre una máquina caída ni en mantenimiento: ahí la versión vieja es
+      # una consecuencia, no la causa que hay que mirar.
+      - alert: AgenteConBuildViejo
+        expr: >-
+          musubi_fleet_device_agent_build_stale == 1
+          unless on(project, device) (musubi_fleet_device_agent_stale == 1)
+          unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 7d
+        labels: { severity: info }
+        annotations:
+          summary: "{{ $labels.device }} lleva una semana con un binario distinto del cerebro, dentro del mismo release."
+          nota: "El release coincide, así que `AgenteDesactualizado` no lo ve: lo que cambió es el commit. El binario de cada máquina se cruza a mano, así que una semana de diferencia es un agente que se quedó sin actualizar, no un despliegue en curso. Qué versión corre cada una se mira en `musubi_fleet_list`. Si la máquina es Windows, el actualizador es `deploy/actualizar-agente-windows.sh`."
+          ausente_en: "tier=B — un Tier B no corre agente, así que no hay versión que comparar; y si el CEREBRO no sabe la suya, la serie se omite para toda la flota (musubi_fleet_version_reference_usable == 0 lo dice)."
+
       - alert: AgenteDesactualizado
         expr: (musubi_fleet_device_agent_stale == 1) unless on(project, device) (musubi_fleet_device_up == 0)
           unless on(project, device) (musubi_fleet_device_maintenance == 1)
