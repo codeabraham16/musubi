@@ -111,7 +111,7 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 		// RESUELVE POR CUALQUIERA DE LOS DOS TOKENS mientras hay una rotación abierta (Ola 2).
 		// El agente se entera del nuevo en la RESPUESTA de un latido, o sea después de haber
 		// usado el viejo: sin solapamiento quedaría afuera entre que lo recibe y lo guarda.
-		d, conElNuevo, ok, err := s.engine.DevicePorTokenConRotacion(token)
+		d, conElNuevo, ok, err := s.engine.DevicePorTokenConRotacion(token, time.Now())
 		if err != nil {
 			// Un fallo de la base NO es un rechazo de credencial: no gasta la cuota del limiter
 			// (si no, una base caída bloquearía por IP a toda la flota legítima) y se responde
