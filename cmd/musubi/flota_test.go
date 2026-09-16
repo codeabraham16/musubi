@@ -419,6 +419,9 @@ func TestLosServiciosSeAgrupanPorSuMaquina(t *testing.T) {
 //
 // Sabotaje que la hace fallar: usar la misma marca (o la misma clase CSS) para `desconocido` y
 // `detenido`; o sacar el `if (!e.con_servicios) return ND` y dibujar 0.
+// arnes: archivo="cmd/musubi/assets/flota.html"
+// arnes: de="  if (!e.con_servicios) return ND;\n"
+// arnes: a=""
 func TestLaPaginaDeFlotaNoDibujaUnServicioDesconocidoComoDetenido(t *testing.T) {
 	p := string(assetsFS(t, "assets/flota.html"))
 	for _, quiero := range []struct{ frag, porque string }{
@@ -486,6 +489,9 @@ func TestLaPaginaDeFlotaNoDibujaUnServicioDesconocidoComoDetenido(t *testing.T) 
 //
 // Sabotaje que la hace fallar: dibujar sólo `consentimiento` (el declarado), que es nil en la
 // mayoría de las máquinas y dejaría la columna vacía justo donde el default está rigiendo.
+// arnes: archivo="cmd/musubi/assets/flota.html"
+// arnes: de="  const ef = e.consentimiento_efectivo;\n"
+// arnes: a="  const ef = e.consentimiento;\n"
 func TestLaPaginaDeFlotaDibujaElEjeDeAcceso(t *testing.T) {
 	b, err := os.ReadFile("assets/flota.html")
 	if err != nil {
@@ -539,6 +545,9 @@ func TestLaPaginaDeFlotaDibujaElEjeDeAcceso(t *testing.T) {
 //
 // Sabotaje que la hace fallar: cerrar los otros cajones al abrir uno; dibujar los servicios sin
 // agrupar; colapsar la ausencia de dato con el cero.
+// arnes: archivo="cmd/musubi/assets/flota.html"
+// arnes: de="  for (const s of svs) (porClase[s.clase || 'sin clase'] ??= []).push(s);\n"
+// arnes: a=""
 func TestElSubPanelPorMaquinaMuestraTodoEnUnLugar(t *testing.T) {
 	b, err := os.ReadFile("assets/flota.html")
 	if err != nil {
@@ -623,6 +632,9 @@ func TestElPanelPideLasSesionesYSuErrorNoBorraLaFlota(t *testing.T) {
 // Sabotaje que la hace fallar: sacar la fila de `procesos`/`RAM libre` de seccionVitales.
 // Sabotaje que la hace fallar: dibujar `mem_libre` con num() en vez de bytes() (un GiB se vería
 // como 1073741824).
+// arnes: archivo="cmd/musubi/assets/flota.html"
+// arnes: de="bytes(e.mem_libre)"
+// arnes: a="num(e.mem_libre, \"\", 0)"
 func TestElPanelDibujaLosProcesosYLaMemoriaLibre(t *testing.T) {
 	p := string(assetsFS(t, "assets/flota.html"))
 	for _, quiero := range []struct{ frag, porque string }{
@@ -664,6 +676,9 @@ func TestElPanelDibujaLosProcesosYLaMemoriaLibre(t *testing.T) {
 //
 // Sabotaje que la hace fallar: sacar rendimientoTexto del título del chip.
 // Sabotaje que la hace fallar: sacar la marca de tasa alta del chip.
+// arnes: archivo="cmd/musubi/assets/flota.html"
+// arnes: de="tasaAlta(s.rendimiento)"
+// arnes: a="false"
 func TestElPanelDibujaElRendimientoDeUnServicio(t *testing.T) {
 	p := string(assetsFS(t, "assets/flota.html"))
 	for _, quiero := range []struct{ frag, porque string }{
@@ -725,6 +740,9 @@ func TestElPanelDibujaElRendimientoDeUnServicio(t *testing.T) {
 // ═════════════════════════════════════════════════════════════════════════════════════════════
 //
 // Sabotaje que la hace fallar: sacar "mem_libre" o "num_procesos" de la lista blanca del proxy.
+// arnes: archivo="cmd/musubi/flota.go"
+// arnes: de="\t\t\t\t\t\"antiguedad_s\", \"num_cpu\", \"mem_libre\", \"num_procesos\",\n"
+// arnes: a="\t\t\t\t\t\"antiguedad_s\", \"num_cpu\",\n"
 func TestElProxyDelPanelEntregaLasMetricasQueElCerebroMando(t *testing.T) {
 	ts := cerebroDeFlotaFalso(t, map[string]string{
 		"musubi_fleet_list": `{"devices":[{"name":"pc","online":true}]}`,
