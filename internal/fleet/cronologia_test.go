@@ -154,6 +154,13 @@ func TestElPlanoDeUnAvisoLoDecideQuienLoEncolo(t *testing.T) {
 //
 // Sabotaje: que ArgvDeBitacora devuelva `argv` tal cual → falla acá, y la cronología entregaría
 // contraseñas de sesión a quien pueda leerla.
+// arnes: archivo="internal/fleet/cronologia.go"
+// EL CORTE SE LLEVA LA DECLARACIÓN DE `id`, y no sólo el return: cortando sólo el return,
+// `id` queda declarada y sin usar, el paquete NO COMPILA y el sabotaje no prueba nada — un
+// rojo por build roto se lee igual que uno por guarda que funciona. Medido: el arnés lo marcó
+// «sin veredicto», que es lo correcto.
+// arnes: de="\tid := \"\"\n\tif len(argv) > 1 {\n\t\tid = argv[1]\n\t}\n\treturn []string{OpPantalla, id, \"[oculto]\"}"
+// arnes: a="\treturn argv"
 func TestElArgvDeBitacoraNuncaLlevaLaContrasena(t *testing.T) {
 	const secreto = "ContraseñaDeSesión123"
 	limpio := ArgvDeBitacora([]string{OpPantalla, "ses-42", secreto, "30m0s"})
@@ -181,6 +188,9 @@ func TestElArgvDeBitacoraNuncaLlevaLaContrasena(t *testing.T) {
 //
 // Sabotaje: usar `!t.After(v.Hasta)` en Contiene → el hecho de las 12:00 cae en las dos ventanas
 // y sumar los dos tramos da un total que no existe.
+// arnes: archivo="internal/fleet/cronologia.go"
+// arnes: de="\treturn !t.Before(v.Desde) && t.Before(v.Hasta)"
+// arnes: a="\treturn !t.Before(v.Desde) && !t.After(v.Hasta)"
 func TestLaVentanaEsSemiabierta(t *testing.T) {
 	base := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	manana := Ventana{Desde: base.Add(-12 * time.Hour), Hasta: base}
@@ -273,6 +283,9 @@ func TestVentanaHastaAplicaLosDefaults(t *testing.T) {
 //
 // Sabotaje: sacar el desempate por referencia → el orden de esos dos depende del orden de lectura
 // y la lista se reordena sola entre llamadas.
+// arnes: archivo="internal/fleet/cronologia.go"
+// arnes: de="\t\treturn hs[i].Referencia < hs[j].Referencia"
+// arnes: a="\t\treturn false"
 func TestOrdenarHechosEsEstableYDelMasNuevoAlMasViejo(t *testing.T) {
 	t0 := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
 	mismo := t0.Add(time.Hour)
@@ -348,6 +361,9 @@ func TestLaCronologiaDeclaraLoQueNoVio(t *testing.T) {
 // cincuenta comandos de diez horas con una vida máxima de quince minutos.
 //
 // Sabotaje: que EstadoActual devuelva `c.Estado` a secas → falla acá.
+// arnes: archivo="internal/fleet/comando.go"
+// arnes: de="\tif c.Vencido(ahora) {\n\t\treturn EstadoExpirado\n\t}"
+// arnes: a="\tif false {\n\t\treturn EstadoExpirado\n\t}"
 func TestUnComandoPendienteYViejoSeMuestraExpirado(t *testing.T) {
 	ahora := time.Date(2026, 8, 30, 5, 0, 0, 0, time.UTC)
 
