@@ -710,7 +710,7 @@ func TestElHelpYElComentarioImprimenElTechoVigenteYNoLaConstante(t *testing.T) {
 
 	help := func(techo int) string {
 		var b strings.Builder
-		renderTruncado(&b, truncadoDeExport{Servicios: techo > 0}, techo)
+		renderTruncado(&b, truncadoDeExport{Servicios: techo > 0}, techo, aprobacionesPorProyectoDefault)
 		lineas := lineasDe(b.String(), "# HELP "+nombreExportTruncado)
 		if len(lineas) != 1 {
 			t.Fatalf("techo %d: se esperaba UN # HELP y salieron %d", techo, len(lineas))

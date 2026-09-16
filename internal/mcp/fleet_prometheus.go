@@ -69,7 +69,7 @@ const proyectosParaExportar = 64
 type vidaDeRedLookup func(deviceID string, ahora time.Time) (fleet.VidaDeRed, bool)
 
 func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time,
-	intervaloSonda time.Duration, versionCerebro string, vidaDe vidaDeRedLookup, techoServicios int) {
+	intervaloSonda time.Duration, versionCerebro string, vidaDe vidaDeRedLookup, techoServicios, techoAprobaciones int) {
 	vistos, truncadoProyectos, ilegible := devicesVisiblesParaMetricas(engine, p)
 	// Los tres hechos viajan JUNTOS en la misma estructura que usa el empuje. Que las dos bocas
 	// compartan el tipo es lo que impide que una empiece a reportar algo que la otra no.
@@ -106,8 +106,11 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 		truncBajas, ilegBajas := renderBajasRecientes(&cuerpo, engine, p, ahora)
 		recorte.Proyectos = recorte.Proyectos || truncBajas
 		recorte.Ilegible = recorte.Ilegible || ilegBajas
-		renderTruncado(b, recorte, techoServicios)
-		renderTechos(b, techoServicios, 0, 0)
+		renderTruncado(b, recorte, techoServicios, techoAprobaciones)
+		// Sin una sola máquina visible no hay proyecto que consultar, así que `Aprobaciones` sigue
+		// en false y eso es correcto: ningún techo de aprobaciones pudo cortar nada. El uso va en
+		// 0 por lo mismo. No es un «no medí» disfrazado: `kind="unreadable"` es el que cubre eso.
+		renderTechos(b, techoServicios, techoAprobaciones, 0, 0, 0)
 		renderReferenciaDeVersion(b, versionCerebro)
 		b.WriteString(cuerpo.String())
 		return
@@ -140,7 +143,9 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 	recorte.Ilegible = recorte.Ilegible || ilegibleSvs
 	// QUIÉN ESTÁ ESPERANDO UN SEGUNDO PAR DE OJOS (Ola 2). Va con las mismas máquinas ya
 	// compuertadas, por lo mismo que servicios.
-	recorte.Ilegible = renderAprobaciones(&cuerpo, engine, vistos, ahora) || recorte.Ilegible
+	ilegAprob, truncAprob, peorAprobaciones := renderAprobaciones(&cuerpo, engine, vistos, ahora, techoAprobaciones)
+	recorte.Aprobaciones = truncAprob
+	recorte.Ilegible = recorte.Ilegible || ilegAprob
 	// SI EL TAILNET VE A LAS QUE NO LATEN (Ola 3). Va con las mismas máquinas ya compuertadas.
 	renderVidaDeRed(&cuerpo, vistos, ahora, vidaDe)
 	// LAS BAJAS RECIENTES, que no están en `vistos` justamente por estar dadas de baja.
@@ -149,10 +154,10 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 	recorte.Ilegible = recorte.Ilegible || ilegBajas
 	recorte.Ilegible = renderRotacionesAbiertas(&cuerpo, engine, p, ahora) || recorte.Ilegible
 
-	renderTruncado(b, recorte, techoServicios)
+	renderTruncado(b, recorte, techoServicios, techoAprobaciones)
 	// EL MARGEN, ANTES DEL CORTE. `export_truncated` avisa cuando un techo YA cortó, o sea
 	// después de perder cobertura; estas dos dicen cuánto falta.
-	renderTechos(b, techoServicios, proyectosDistintos(vistos), peorProyecto)
+	renderTechos(b, techoServicios, techoAprobaciones, proyectosDistintos(vistos), peorProyecto, peorAprobaciones)
 	renderReferenciaDeVersion(b, versionCerebro)
 	b.WriteString(cuerpo.String())
 }
@@ -476,35 +481,36 @@ const (
 	nombreAprobEspera     = "musubi_fleet_approval_wait_seconds"
 )
 
-// topeDeAprobacionesPorProyecto es el TERCER techo del exportador, y el único que sigue sin
-// perilla ni serie propia. Estaba escrito como un `200` pelado adentro de la llamada.
+// aprobacionesPorProyectoDefault es el default del TERCER techo del exportador, que hasta A124
+// era un `200` pelado adentro de la llamada y ahora tiene perilla, serie y aviso.
 //
-// SU DAÑO DEPENDE DE LA COMPUERTA, Y ESO NO ESTABA MEDIDO. Acá decía que pasarse sólo deja el
-// conteo corto y que «la espera más vieja puede no ser la más vieja de verdad». Lo segundo es
-// falso y lo primero es incompleto:
+// LA AUTORIDAD DEL NÚMERO NO ESTÁ ACÁ: está en `FleetConfig.EffectiveApprovalsPerProjectExport`,
+// que es lo que el servidor cablea. Esta constante existe por lo mismo que su hermana
+// `serviciosPorProyectoDefault`: da un valor con nombre a las pruebas, y sirve de CENTINELA para
+// la guarda de cableado —si el export corta por este número en vez de por el campo del servidor,
+// es que alguien pasó la constante donde iba la perilla—.
+//
+// EL DAÑO QUE ESTE TECHO HACÍA NO ERA EL CONTEO CORTO, y por eso fue el último en arreglarse pero
+// el más urgente de los tres:
 //
 //   - `AprobacionesPendientes` pide `ORDER BY creada ASC LIMIT ?` (internal/memory/aprobaciones.go),
-//     así que la más vieja SIEMPRE entra en la página. Con una credencial que ve todo el proyecto
-//     el único daño es el conteo, que se clava en el tope.
+//     así que la más vieja SIEMPRE entra en la página. Con visibilidad total el único daño es que
+//     el conteo se clava en el techo.
 //
 //   - PERO EL TOPE LO APLICA EL ALMACÉN SOBRE EL PROYECTO ENTERO Y LA COMPUERTA CORRE DESPUÉS,
-//     acá abajo, con `visibles[sol.DeviceID]`. Una credencial que ve pocas máquinas de un
-//     proyecto con más de `topeDeAprobacionesPorProyecto` pendientes puede recibir una página
-//     entera de solicitudes que no ve NINGUNA, y entonces sale `musubi_fleet_approval_pending 0`
-//     y `musubi_fleet_approval_wait_seconds 0` — y el HELP de esa serie dice, con todas las
-//     letras, «0 = no hay ninguna esperando». Ahí el techo sí hace desaparecer el hecho: es un
-//     cero que significa «no sé», que es exactamente lo que este archivo existe para no emitir.
+//     abajo, con `visibles[sol.DeviceID]`. Una credencial que ve pocas máquinas de un proyecto
+//     con más pendientes que el techo podía recibir una página entera de solicitudes que no ve
+//     NINGUNA, y entonces salía `musubi_fleet_approval_pending 0` y
+//     `musubi_fleet_approval_wait_seconds 0` — con el HELP de esa serie diciendo, con todas las
+//     letras, «0 = no hay ninguna esperando». Un cero que significa «no sé», que es exactamente
+//     lo que este archivo existe para no emitir.
 //
-// QUEDA ASÍ EN ESTA RONDA, A PROPÓSITO Y ESCRITO: el arreglo no es una guarda, es un cuarto
-// `kind` en `musubi_fleet_export_truncated` con su aviso y su perilla —o mejor, aplicar el tope
-// después de la compuerta— y eso cambia el contrato de /metrics y del empuje OTLP, que no es algo
-// que se cuele en una ronda de guardas. Anotado en specs/control-de-flota/ABIERTO.md como A123.
-//
-// Tener nombre es la mitad barata del arreglo: un `200` adentro de una llamada no se puede ni
-// buscar.
-const topeDeAprobacionesPorProyecto = 200
+// LO QUE LO CIERRA es `kind="approvals"`: cuando la página vuelve LLENA, el 0 de al lado deja de
+// poder leerse como un hecho. No se arregló moviendo la compuerta adentro de la consulta —que
+// sería más correcto— porque eso cambia la API del almacén y su otro llamador; queda anotado.
+const aprobacionesPorProyectoDefault = 200
 
-func renderAprobaciones(b *strings.Builder, engine memory.StorageBackend, vistos []fleet.Device, ahora time.Time) (ilegible bool) {
+func renderAprobaciones(b *strings.Builder, engine memory.StorageBackend, vistos []fleet.Device, ahora time.Time, techo int) (ilegible, truncado bool, peorUso int) {
 	// Los proyectos salen de las máquinas YA compuertadas: preguntarle al almacén por todos los
 	// proyectos sería un segundo recorrido sin compuerta, que es como se exporta de más sin que
 	// nadie lo note.
@@ -539,7 +545,7 @@ func renderAprobaciones(b *strings.Builder, engine memory.StorageBackend, vistos
 		nombreAprobEspera, nombreAprobEspera)
 
 	for _, proy := range orden {
-		pendientes, err := engine.AprobacionesPendientes(proy, ahora, topeDeAprobacionesPorProyecto)
+		pendientes, err := engine.AprobacionesPendientes(proy, ahora, techo)
 		if err != nil {
 			// Un error leyendo esto NO puede romper el scrape entero: la telemetría de la flota
 			// vale más que este contador. Se saltea el proyecto en vez de emitir un cero, que
@@ -553,6 +559,26 @@ func renderAprobaciones(b *strings.Builder, engine memory.StorageBackend, vistos
 				"project", proy, "error", err,
 				"serie", nombreExportTruncado+`{kind="unreadable"}`)
 			continue
+		}
+		// LA PÁGINA VOLVIÓ LLENA ⇒ EL CONTEO DE ABAJO NO ES CONFIABLE, Y HAY QUE DECIRLO.
+		//
+		// El techo lo aplicó el ALMACÉN sobre el proyecto entero; la compuerta por máquina corre
+		// tres líneas más abajo. Con la página llena, el `n` que se emite no es «cuántas hay»
+		// sino «cuántas de las primeras `techo` te tocan», y esas dos cosas se escriben igual.
+		//
+		// SE COMPARA CONTRA `techo` Y NO CONTRA UN LITERAL: el número es configurable, y uno
+		// escrito acá se quedaría viejo la primera vez que alguien mueva la perilla — que es el
+		// defecto que le dio nombre a este cabo, un mensaje nombrando un techo que no cortó.
+		//
+		// `>=` y no `==` porque un almacén que devolviera de más seguiría siendo un recorte, y
+		// una igualdad lo dejaría pasar en silencio.
+		if techo > 0 && len(pendientes) >= techo {
+			truncado = true
+		}
+		// El uso del PEOR proyecto, no el promedio: el techo se aplica por proyecto, así que un
+		// promedio escondería justo al que está por cortar. Mismo criterio que servicios.
+		if len(pendientes) > peorUso {
+			peorUso = len(pendientes)
 		}
 		// La lista viene ordenada por `creada ASC`, así que la primera VISIBLE es la más vieja.
 		n, espera := 0, 0.0
@@ -570,7 +596,7 @@ func renderAprobaciones(b *strings.Builder, engine memory.StorageBackend, vistos
 		fmt.Fprintf(b, "%s{project=%q} %d\n", nombreAprobPendientes, proy, n)
 		fmt.Fprintf(b, "%s{project=%q} %.0f\n", nombreAprobEspera, proy, espera)
 	}
-	return ilegible
+	return ilegible, truncado, peorUso
 }
 
 // nombreExportTruncado es la serie que dice que el exportador dejó cosas afuera. Vale 1 cuando se
@@ -592,13 +618,22 @@ type truncadoDeExport struct {
 	Proyectos bool
 	// Servicios: algún proyecto pasó el techo de servicios exportables.
 	Servicios bool
+	// Aprobaciones: algún proyecto pasó el techo de solicitudes de cuatro ojos exportables.
+	//
+	// ES EL ÚNICO DE LOS TRES TECHOS QUE PUEDE HACER DESAPARECER EL HECHO Y NO SÓLO RECORTARLO.
+	// Los otros dos dejan menos series; éste deja una serie que AFIRMA algo falso: el almacén
+	// aplica el tope sobre el proyecto entero y la compuerta por máquina corre después, así que
+	// una página llena de solicitudes que esta credencial no ve emite `approval_pending 0` — con
+	// su propia ayuda diciendo «0 = no hay ninguna esperando». Mientras esto valga 1, ese 0 es
+	// «no sé» y no un hecho.
+	Aprobaciones bool
 	// Ilegible: parte de la flota NO SE PUDO LEER (la lista de proyectos, las máquinas de un
 	// proyecto, sus servicios o sus aprobaciones). No es un techo: es la ausencia de medición.
 	//
 	// EXISTE PORQUE «FALLÉ» Y «NO HUBO CORTE» ERAN EL MISMO VALOR. Cada uno de esos errores caía
 	// en un `continue` mudo y los dos bools de arriba seguían en false, así que el export
 	// afirmaba `kind="services"} 0` —«medí y no recorté»— sobre proyectos que no había mirado.
-	// El 0 de los otros dos `kind` sólo es una medición cuando éste vale 0.
+	// El 0 de los otros tres `kind` sólo es una medición cuando éste vale 0.
 	Ilegible bool
 }
 
@@ -609,17 +644,18 @@ type truncadoDeExport struct {
 // `fleet.services_per_project_export` vale 300 manda a quien lee la alerta a buscar 2000
 // servicios que no existen. `techoServicios <= 0` es «sin techo», y entonces `kind="services"` no
 // puede valer 1: se dice así en vez de nombrar un número que no rige.
-func renderTruncado(b *strings.Builder, t truncadoDeExport, techoServicios int) {
+func renderTruncado(b *strings.Builder, t truncadoDeExport, techoServicios, techoAprobaciones int) {
 	unoSi := func(v bool) string {
 		if v {
 			return "1"
 		}
 		return "0"
 	}
-	fmt.Fprintf(b, "# HELP %s 1 si el exportador dejó afuera parte de la flota. `kind=projects`: se pasó de %d proyectos por scrape (techo de compilación, ver proyectosParaExportar). `kind=services`: algún proyecto pasó %s. `kind=unreadable`: NO SE PUDO LEER parte de la flota (la lista de proyectos, las máquinas de uno, sus servicios o sus aprobaciones), así que mientras valga 1 el 0 de los otros dos es «no medí» y no «no hubo corte». Lo que queda afuera NO tiene serie, así que sus alertas no pueden dispararse.\n# TYPE %s gauge\n",
-		nombreExportTruncado, proyectosParaExportar, describirTechoDeServicios(techoServicios), nombreExportTruncado)
+	fmt.Fprintf(b, "# HELP %s 1 si el exportador dejó afuera parte de la flota. `kind=projects`: se pasó de %d proyectos por scrape (techo de compilación, ver proyectosParaExportar). `kind=services`: algún proyecto pasó %s. `kind=approvals`: algún proyecto pasó las %d solicitudes de cuatro ojos exportables (perilla `fleet.approvals_per_project_export`), y ahí el 0 de `%s` NO es «no hay nadie esperando» sino «no sé», porque el techo lo aplica el almacén sobre el proyecto entero y la compuerta por máquina corre después. `kind=unreadable`: NO SE PUDO LEER parte de la flota (la lista de proyectos, las máquinas de uno, sus servicios o sus aprobaciones), así que mientras valga 1 el 0 de los otros tres es «no medí» y no «no hubo corte». Lo que queda afuera NO tiene serie, así que sus alertas no pueden dispararse.\n# TYPE %s gauge\n",
+		nombreExportTruncado, proyectosParaExportar, describirTechoDeServicios(techoServicios), techoAprobaciones, nombreAprobPendientes, nombreExportTruncado)
 	fmt.Fprintf(b, "%s{kind=\"projects\"} %s\n", nombreExportTruncado, unoSi(t.Proyectos))
 	fmt.Fprintf(b, "%s{kind=\"services\"} %s\n", nombreExportTruncado, unoSi(t.Servicios))
+	fmt.Fprintf(b, "%s{kind=\"approvals\"} %s\n", nombreExportTruncado, unoSi(t.Aprobaciones))
 	fmt.Fprintf(b, "%s{kind=\"unreadable\"} %s\n", nombreExportTruncado, unoSi(t.Ilegible))
 }
 
@@ -697,8 +733,8 @@ func renderReferenciaDeVersion(b *strings.Builder, versionCerebro string) {
 // `usoProyectos` y `usoServiciosMax` los mide el barrido que acaba de correr: el uso que importa
 // es el del PEOR proyecto, porque el techo se aplica por proyecto y un promedio escondería
 // justamente al que está por cortar.
-func renderTechos(b *strings.Builder, techoServicios, usoProyectos, usoServiciosMax int) {
-	fmt.Fprintf(b, "# HELP %s Techo vigente por dimensión recortable del export. `kind=projects` es una constante de compilación (proyectosParaExportar); `kind=services` es la perilla `fleet.services_per_project_export`; `kind=heartbeat_services` es cuántos servicios acepta UN latido (fleet.ServiciosPorLatido). AUSENTE cuando esa dimensión no tiene techo.\n# TYPE %s gauge\n", nombreTecho, nombreTecho)
+func renderTechos(b *strings.Builder, techoServicios, techoAprobaciones, usoProyectos, usoServiciosMax, usoAprobacionesMax int) {
+	fmt.Fprintf(b, "# HELP %s Techo vigente por dimensión recortable del export. `kind=projects` es una constante de compilación (proyectosParaExportar); `kind=services` es la perilla `fleet.services_per_project_export`; `kind=heartbeat_services` es cuántos servicios acepta UN latido (fleet.ServiciosPorLatido); `kind=approvals` es la perilla `fleet.approvals_per_project_export`, que SIEMPRE está presente porque esa dimensión no se puede desactivar. AUSENTE cuando esa dimensión no tiene techo.\n# TYPE %s gauge\n", nombreTecho, nombreTecho)
 	fmt.Fprintf(b, "%s{kind=\"projects\"} %d\n", nombreTecho, proyectosParaExportar)
 	if techoServicios > 0 {
 		// SE OMITE CUANDO NO HAY TECHO, y no se emite un 0: un 0 se leería como «no entra ni un
@@ -706,10 +742,15 @@ func renderTechos(b *strings.Builder, techoServicios, usoProyectos, usoServicios
 		fmt.Fprintf(b, "%s{kind=\"services\"} %d\n", nombreTecho, techoServicios)
 	}
 	fmt.Fprintf(b, "%s{kind=\"heartbeat_services\"} %d\n", nombreTecho, fleet.ServiciosPorLatido)
+	// SIEMPRE SALE, al revés que `services`. Ese se omite cuando está desactivado; éste no puede
+	// estarlo: `EffectiveApprovalsPerProjectExport` clampea a 200 justamente para que el almacén
+	// no reciba un valor que leería como 50. Una dimensión sin apagado no tiene por qué ausentarse.
+	fmt.Fprintf(b, "%s{kind=\"approvals\"} %d\n", nombreTecho, techoAprobaciones)
 
-	fmt.Fprintf(b, "# HELP %s Uso actual de cada dimensión recortable, contra el techo de %s. `kind=services` es el PEOR proyecto y no el promedio: el techo se aplica por proyecto, así que un promedio escondería justo al que está por cortar.\n# TYPE %s gauge\n", nombreUso, nombreTecho, nombreUso)
+	fmt.Fprintf(b, "# HELP %s Uso actual de cada dimensión recortable, contra el techo de %s. `kind=services` y `kind=approvals` son el PEOR proyecto y no el promedio: el techo se aplica por proyecto, así que un promedio escondería justo al que está por cortar.\n# TYPE %s gauge\n", nombreUso, nombreTecho, nombreUso)
 	fmt.Fprintf(b, "%s{kind=\"projects\"} %d\n", nombreUso, usoProyectos)
 	fmt.Fprintf(b, "%s{kind=\"services\"} %d\n", nombreUso, usoServiciosMax)
+	fmt.Fprintf(b, "%s{kind=\"approvals\"} %d\n", nombreUso, usoAprobacionesMax)
 }
 
 // describirTechoDeServicios pone en palabras el techo VIGENTE, y es la ÚNICA fuente de esa frase.

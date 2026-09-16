@@ -990,6 +990,27 @@ type FleetConfig struct {
 	// cada una tuviera el suyo, truncarían distinto y `musubi_fleet_export_truncated` diría cosas
 	// diferentes según por dónde se mire.
 	ServicesPerProjectExport int `yaml:"services_per_project_export,omitempty"`
+	// ApprovalsPerProjectExport es el techo de solicitudes de cuatro ojos que UN PROYECTO puede
+	// aportar al export de métricas. 0 o negativo ⇒ default (200).
+	//
+	// ESTE ES EL TERCER TECHO DEL EXPORTADOR Y EL ÚLTIMO EN TENER PERILLA. Lo que lo hacía
+	// urgente no era el conteo corto: el almacén aplica el tope sobre el PROYECTO ENTERO y la
+	// compuerta por máquina corre DESPUÉS, ya en el exportador. Una credencial que ve pocas
+	// máquinas de un proyecto con más pendientes que el techo puede recibir una página entera de
+	// solicitudes que no ve NINGUNA, y entonces salía `musubi_fleet_approval_pending 0` — con su
+	// HELP diciendo, con todas las letras, «0 = no hay ninguna esperando». Un cero que significa
+	// «no sé». Ahora, cuando la página vuelve LLENA, se enciende
+	// `musubi_fleet_export_truncated{kind="approvals"}` y ese 0 deja de poder leerse como un hecho.
+	//
+	// NO TIENE «SIN TECHO», Y ESA AUSENCIA ES DELIBERADA — es la diferencia con su hermana de
+	// arriba. `AprobacionesPendientes` (internal/memory/aprobaciones.go) hace `if tope <= 0 { tope
+	// = 50 }`: ahí el 0 NO significa «sin límite», significa 50, que es MÁS APRETADO que el
+	// default. Alguien que escribiera un negativo acá por analogía con
+	// `services_per_project_export` habría bajado el techo de 200 a 50 creyendo que lo apagaba, y
+	// sin una sola línea que lo dijera. Por eso esta función clampea en vez de propagar: el
+	// almacén nunca recibe desde acá un valor que vaya a reinterpretar. Para subirlo se escribe un
+	// número más grande; no hay forma de desactivarlo, y tampoco hace falta.
+	ApprovalsPerProjectExport int `yaml:"approvals_per_project_export,omitempty"`
 	// Policies son las reglas de auto-heal. Vacío ⇒ ninguna, que es el default.
 	Policies []PolicyConfig `yaml:"policies,omitempty"`
 	// OTLP es el EMPUJE de la telemetría de la flota a un receptor OTLP (S11). Nace APAGADO
@@ -1137,6 +1158,23 @@ func (f FleetConfig) EffectiveServicesPerProjectExport() int {
 		return 2000
 	}
 	return f.ServicesPerProjectExport
+}
+
+// EffectiveApprovalsPerProjectExport devuelve el techo de aprobaciones POR PROYECTO del export.
+// 0 o negativo ⇒ 200. NUNCA devuelve <= 0, y eso es lo que la hace distinta de su hermana.
+//
+// El motivo está escrito entero en el campo: el almacén lee un tope <= 0 como «50», no como «sin
+// techo», así que propagar un 0 apretaría el techo en vez de sacarlo. Clampear acá es lo que
+// impide que esa reinterpretación ocurra: el valor sale de esta función directo a la consulta.
+//
+// El default vive acá por lo mismo que el de servicios: si /metrics y el empuje OTLP tuvieran
+// cada uno el suyo, truncarían distinto y la serie de truncado diría cosas diferentes según por
+// dónde se mire.
+func (f FleetConfig) EffectiveApprovalsPerProjectExport() int {
+	if f.ApprovalsPerProjectExport <= 0 {
+		return 200
+	}
+	return f.ApprovalsPerProjectExport
 }
 
 // EffectiveOutputRetentionDays devuelve los días de retención de las salidas. 0 ⇒ sin poda.

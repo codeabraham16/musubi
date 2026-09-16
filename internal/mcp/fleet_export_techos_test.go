@@ -85,7 +85,7 @@ func TestElTechoDeServiciosLoDecideLaConfiguracionYNoLaConstante(t *testing.T) {
 	render := func() string {
 		var b strings.Builder
 		renderFlota(&b, s.engine, ptrPrincipal(principalDePrometheus()), ahora,
-			s.sondaIntervalo, versionDePrueba, nil, s.techoServiciosPorProyecto)
+			s.sondaIntervalo, versionDePrueba, nil, s.techoServiciosPorProyecto, aprobacionesPorProyectoDefault)
 		return b.String()
 	}
 
@@ -152,7 +152,7 @@ func TestElOrdenDeLosProyectosSobreviveAlReagrupadoYNoSoloAlSort(t *testing.T) {
 	render := func() string {
 		var b strings.Builder
 		renderFlota(&b, s.engine, ptrPrincipal(principalDePrometheus()), ahora,
-			s.sondaIntervalo, versionDePrueba, nil, s.techoServiciosPorProyecto)
+			s.sondaIntervalo, versionDePrueba, nil, s.techoServiciosPorProyecto, aprobacionesPorProyectoDefault)
 		return b.String()
 	}
 

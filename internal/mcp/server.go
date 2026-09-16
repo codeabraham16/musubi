@@ -223,6 +223,13 @@ type McpServer struct {
 	// que no puedan truncar distinto, y cuando corta lo dice la serie
 	// `musubi_fleet_export_truncated{kind="services"}`.
 	techoServiciosPorProyecto int
+	// techoAprobacionesPorProyecto acota cuántas solicitudes de cuatro ojos de UN proyecto entran
+	// al export. NUNCA vale <= 0 —`EffectiveApprovalsPerProjectExport` clampea— porque el almacén
+	// leería un 0 como «50» en vez de como «sin techo», y eso APRETARÍA el techo en silencio.
+	// Cuando corta lo dice `musubi_fleet_export_truncated{kind="approvals"}`, y ahí el 0 de
+	// `musubi_fleet_approval_pending` pasa a ser «no sé»: el tope lo aplica el almacén sobre el
+	// proyecto entero y la compuerta por máquina corre después.
+	techoAprobacionesPorProyecto int
 	// politicas son las reglas de auto-heal ya validadas. Vacío = ninguna (I15).
 	politicas []fleet.Politica
 	// buscarPrincipal resuelve un principal POR NOMBRE, sin token. Lo usan las políticas, que no
@@ -531,7 +538,8 @@ func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder emb
 		// servidor que nunca llamó a ConfigurarFlota —un entrypoint sin sección `fleet:`, media
 		// suite de pruebas— exportaría entonces sin ningún límite de cardinalidad, que es
 		// justamente lo que este número existe para evitar.
-		techoServiciosPorProyecto: config.Default().Fleet.EffectiveServicesPerProjectExport(),
+		techoServiciosPorProyecto:    config.Default().Fleet.EffectiveServicesPerProjectExport(),
+		techoAprobacionesPorProyecto: config.Default().Fleet.EffectiveApprovalsPerProjectExport(),
 	}
 	for _, opt := range opts {
 		opt(s)

@@ -113,7 +113,7 @@ func TestConElCerebroSinVersionNoSeMarcaAtrasadaANadie(t *testing.T) {
 	latirConVersion(t, ts.URL, tok, "0.130.0-flota.e140e0c")
 
 	var b strings.Builder
-	renderFlota(&b, s.engine, nil, time.Now(), s.sondaIntervalo, "dev", nil, serviciosPorProyectoDefault)
+	renderFlota(&b, s.engine, nil, time.Now(), s.sondaIntervalo, "dev", nil, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
 	// SE BUSCA LA LÍNEA DE LA SERIE Y NO EL NOMBRE SUELTO. Buscar el nombre en todo el dump la
 	// satisface cualquier `# HELP` de OTRA serie que la mencione — y hay una que la menciona a
 	// propósito, para explicar que su ausencia apaga este eje. Una guarda que se dispara con la

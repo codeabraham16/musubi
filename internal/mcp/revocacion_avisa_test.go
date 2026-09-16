@@ -28,7 +28,7 @@ func TestUnaBajaRecienteSeAnunciaYDespuesDesaparece(t *testing.T) {
 
 	dump := func(ahora time.Time) string {
 		var b strings.Builder
-		renderFlota(&b, s.engine, nil, ahora, s.sondaIntervalo, "0.140.3", nil, serviciosPorProyectoDefault)
+		renderFlota(&b, s.engine, nil, ahora, s.sondaIntervalo, "0.140.3", nil, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
 		return b.String()
 	}
 
@@ -84,7 +84,7 @@ func TestUnaBajaRecienteSeAnunciaYDespuesDesaparece(t *testing.T) {
 		}
 		var b strings.Builder
 		renderFlota(&b, s.engine, p, time.Now().Add(ventanaDeBajaReciente+time.Hour),
-			s.sondaIntervalo, "0.140.3", nil, serviciosPorProyectoDefault)
+			s.sondaIntervalo, "0.140.3", nil, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
 		if strings.Contains(b.String(), nombreBajaReciente+"{") {
 			t.Errorf("con una credencial acotada al proyecto, el aviso de la baja sigue después de "+
 				"la ventana: para ella el proyecto entra siempre, así que el único corte es el "+
@@ -100,7 +100,7 @@ func TestUnaBajaRecienteSeAnunciaYDespuesDesaparece(t *testing.T) {
 			Fleet: map[fleet.Cap][]string{fleet.CapMetrics: {"*"}},
 		}
 		var b strings.Builder
-		renderFlota(&b, s.engine, p, time.Now(), s.sondaIntervalo, "0.140.3", nil, serviciosPorProyectoDefault)
+		renderFlota(&b, s.engine, p, time.Now(), s.sondaIntervalo, "0.140.3", nil, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
 		if !strings.Contains(b.String(), nombreBajaReciente+`{project="casa",device="pc-que-se-va"}`) {
 			t.Errorf("una credencial del proyecto no se entera de la baja de su propia máquina:\n%s", b.String())
 		}

@@ -292,7 +292,7 @@ func TestNingunaSerieDelCerebroCaeEnElDescarteDelScrape(t *testing.T) {
 
 	var render strings.Builder
 	render.WriteString(srv.metrics.render(srv.engine))
-	renderFlota(&render, srv.engine, ptrPrincipal(principalDePrometheus()), ahora, srv.sondaIntervalo, versionDePrueba, nil, serviciosPorProyectoDefault)
+	renderFlota(&render, srv.engine, ptrPrincipal(principalDePrometheus()), ahora, srv.sondaIntervalo, versionDePrueba, nil, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
 	srv.renderEmpuje(&render, ahora)
 
 	// En el formato de exposición el nombre aparece de tres formas: al principio de una muestra,

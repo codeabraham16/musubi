@@ -182,6 +182,16 @@ func armarPayloadOTLP(engine memory.StorageBackend, p *Principal, ahora time.Tim
 	vistos, truncadoProyectos, ilegible := devicesVisiblesParaMetricas(engine, p)
 	truncado.Proyectos = truncadoProyectos
 	truncado.Ilegible = ilegible
+	// `truncado.Aprobaciones` SE QUEDA EN false ACÁ, Y NO HAY UN CUARTO AVISO, A PROPÓSITO.
+	//
+	// Esta boca no exporta las series de aprobaciones —`musubi_fleet_approval_pending` y su
+	// espera salen sólo por el tirón de /metrics—, así que este campo no puede encenderse nunca
+	// en este camino. Un `avisoMientras` sobre una condición imposible no es una guarda de más:
+	// es una señal PLANA, que quien la lee interpreta como «medí y no cortó» cuando en realidad
+	// es «acá no se mide». Es el mismo defecto que el cabo vino a cerrar, del otro lado.
+	//
+	// Si algún día el empuje exporta aprobaciones, lo que hay que agregar es el cálculo Y el
+	// aviso, juntos — nunca el aviso solo.
 	// Mismo criterio que el scrape: un error leyendo las ventanas no apaga las alertas de nadie.
 	enMantenimiento, errMant := engine.DevicesEnMantenimiento(ahora)
 	if errMant != nil {
