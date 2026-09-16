@@ -46,6 +46,9 @@ func TestCadaTipoDeHechoMostrableTieneCapacidadYPlano(t *testing.T) {
 // Sabotaje: en TipoDeArgv, devolver HechoComando en vez de HechoSinClasificar para lo desconocido
 // → una operación nueva del canal se le mostraría a todo el que pueda ejecutar, revelando el
 // plano al que pertenece antes de que nadie haya decidido quién puede verla.
+// arnes: archivo="internal/fleet/cronologia.go"
+// arnes: de="\treturn HechoSinClasificar\n}"
+// arnes: a="\treturn HechoComando\n}"
 func TestUnaOperacionInternaDesconocidaNoSeLeMuestraANadie(t *testing.T) {
 	tipo := TipoDeArgv([]string{"musubi:todavia-no-existe", "x"})
 	if tipo != HechoSinClasificar {
@@ -300,6 +303,9 @@ func TestOrdenarHechosEsEstableYDelMasNuevoAlMasViejo(t *testing.T) {
 // que sigue en curso — el mismo cero mentiroso que persigue todo el track, en el eje del tiempo.
 //
 // Sabotaje: devolver sólo la duración → un comando pendiente se dibuja como instantáneo.
+// arnes: archivo="internal/fleet/cronologia.go"
+// arnes: de="func (h Hecho) Duracion() (time.Duration, bool) {\n\tif h.Termino.IsZero() || h.Termino.Before(h.Cuando) {\n\t\treturn 0, false\n\t}\n\treturn h.Termino.Sub(h.Cuando), true\n}"
+// arnes: a="func (h Hecho) Duracion() (time.Duration, bool) {\n\treturn h.Termino.Sub(h.Cuando), true\n}"
 func TestLaDuracionDiceSiSeSabe(t *testing.T) {
 	inicio := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
 	if _, hay := (Hecho{Cuando: inicio}).Duracion(); hay {
@@ -387,6 +393,9 @@ func TestUnComandoPendienteYViejoSeMuestraExpirado(t *testing.T) {
 //
 // Sabotaje: que `EsAutomatico` devuelva `o != OrigenPersona` (lista NEGRA en vez de blanca) → lo
 // desconocido pasa a contarse como automático, que es la mentira simétrica.
+// arnes: archivo="internal/fleet/comando.go"
+// arnes: de="func (o OrigenComando) EsAutomatico() bool { return o == OrigenPolitica }"
+// arnes: a="func (o OrigenComando) EsAutomatico() bool { return o != OrigenPersona }"
 func TestUnOrigenDesconocidoNoEsPersonaNiAutomatico(t *testing.T) {
 	if OrigenDesconocido.EsAutomatico() {
 		t.Error("lo desconocido no puede contarse como automático")
@@ -409,6 +418,9 @@ func TestUnOrigenDesconocidoNoEsPersonaNiAutomatico(t *testing.T) {
 // ninguna superficie sabe dibujar. Lo desconocido ya tiene significado; lo inventado, no.
 //
 // Sabotaje: que `OrigenValido` devuelva `o` tal cual → falla acá.
+// arnes: archivo="internal/fleet/comando.go"
+// arnes: de="func OrigenValido(o OrigenComando) OrigenComando {\n\tswitch o {\n\tcase OrigenPersona, OrigenPolitica:\n\t\treturn o\n\t}\n\treturn OrigenDesconocido\n}"
+// arnes: a="func OrigenValido(o OrigenComando) OrigenComando {\n\treturn o\n}"
 func TestUnOrigenRaroSeGuardaComoDesconocido(t *testing.T) {
 	for _, raro := range []OrigenComando{"cron", "PERSONA", "politica ", "robot"} {
 		if got := OrigenValido(raro); got != OrigenDesconocido {
@@ -426,6 +438,9 @@ func TestUnOrigenRaroSeGuardaComoDesconocido(t *testing.T) {
 // tabla y no llega a ninguna superficie — que es el patrón de A58, otra vez.
 //
 // Sabotaje: no copiar `Origen` en HechoDeComando → falla acá.
+// arnes: archivo="internal/fleet/cronologia.go"
+// arnes: de="\t\tOrigen:     c.Origen,\n"
+// arnes: a=""
 func TestElHechoArrastraElOrigenDelComando(t *testing.T) {
 	h := HechoDeComando(Comando{Argv: []string{"systemctl", "restart", "nginx"}, Origen: OrigenPolitica}, "pc")
 	if h.Origen != OrigenPolitica {
@@ -445,6 +460,9 @@ func TestElHechoArrastraElOrigenDelComando(t *testing.T) {
 // comando que está corriendo ahora mismo.
 //
 // Sabotaje: sacar la rama de `Perdido` en EstadoActual → falla el primer bloque.
+// arnes: archivo="internal/fleet/comando.go"
+// arnes: de="\tif c.Perdido(ahora) {\n\t\treturn EstadoPerdido\n\t}\n"
+// arnes: a=""
 func TestUnEntregadoQueNuncaReportaSeMuestraPerdido(t *testing.T) {
 	ahora := time.Date(2026, 8, 31, 5, 0, 0, 0, time.UTC)
 
