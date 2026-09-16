@@ -127,6 +127,9 @@ func TestUnaMaquinaNoPuedeReportarLosServiciosDeOtra(t *testing.T) {
 // máquina nueva», que nadie asocia con un índice.
 //
 // Sabotaje: declarar el índice único como (project_id, name) en la migración 36.
+// arnes: archivo="internal/memory/migrations.go"
+// arnes: de="\t\t\t\t_, err := x.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_services_nombre ON services(project_id, device_id, name)`)\n"
+// arnes: a="\t\t\t\t_, err := x.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_services_nombre ON services(project_id, name)`)\n"
 func TestDosMaquinasPuedenTenerCadaUnaSuPostgres(t *testing.T) {
 	e := newTestEngine(t)
 	a, _ := altaDePrueba(t, e, "casa", "maquina-a")
@@ -233,6 +236,9 @@ func TestUnaSaludIlegibleNoRompeElListado(t *testing.T) {
 //
 // Sabotaje: sacar la guarda de `projectID == ""` de ListarServicios; o filtrar con un JOIN a
 // devices en vez de por el project_id denormalizado.
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\tif projectID == \"\" {\n\t\treturn nil, nil\n\t}\n"
+// arnes: a="\tif projectID == \"\" && false {\n\t\treturn nil, nil\n\t}\n"
 func TestListarServiciosAislaPorProyectoYNoDevuelveLasHuerfanas(t *testing.T) {
 	e := newTestEngine(t)
 	casa, _ := altaDePrueba(t, e, "casa", "nas")
@@ -275,6 +281,9 @@ func TestListarServiciosAislaPorProyectoYNoDevuelveLasHuerfanas(t *testing.T) {
 // alguien revoca y después mira.
 //
 // Sabotaje: dejar RevocarDevice como estaba (un UPDATE sobre `devices` y punto).
+// arnes: archivo="internal/memory/devices.go"
+// arnes: de="\tif _, err := tx.Exec(\n\t\t`UPDATE services SET revoked = 1 WHERE device_id = ? AND revoked = 0`, id); err != nil {\n\t\treturn false, fmt.Errorf(\"error al revocar los servicios de %q: %w\", name, err)\n\t}\n"
+// arnes: a=""
 func TestRevocarUnaMaquinaSacaSusServiciosDelListado(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "nas")
@@ -321,6 +330,9 @@ func TestRevocarUnaMaquinaSacaSusServiciosDelListado(t *testing.T) {
 // segundo tramo, «con una lista no vacía sí poda», no podaría nunca y no se notaría.
 //
 // Sabotaje: quitar el early-return de `len(vivos) == 0` de PodarServiciosAusentes.
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\tif len(vivos) == 0 && !vacioAfirma {\n\t\treturn 0, nil\n\t}\n"
+// arnes: a="\tif len(vivos) == 0 && !vacioAfirma && false {\n\t\treturn 0, nil\n\t}\n"
 func TestPodarServiciosAusentesConListaVaciaNoBorraNada(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "nas")
@@ -604,6 +616,9 @@ func TestLoQuePodoLaAusenciaVuelveConLaPresencia(t *testing.T) {
 //
 // Sabotaje que la hace fallar: cambiar el WHERE del UPDATE por `AND (revoked = 0 OR 1 = 1)`, o
 // sea sacarle el `declared = 0` a la condición de resurrección.
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\t\t\t  WHERE name = ? AND device_id = ? AND (revoked = 0 OR declared = 0)`,\n"
+// arnes: a="\t\t\t  WHERE name = ? AND device_id = ? AND (revoked = 0 OR 1 = 1)`,\n"
 func TestElServicioDeclaradoAManoNoResucitaPorqueLaMaquinaLoSigaViendo(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "nas")
@@ -730,6 +745,9 @@ func TestLaVistaUnicaDeSesionesTraeLasDosModalidades(t *testing.T) {
 //
 // Sabotaje que la hace fallar: cambiar el INSERT ... SELECT por un CREATE a secas (se pierden los
 // cooldowns), o dejar la PRIMARY KEY sin `alcance` (la segunda fila del par se rechaza).
+// arnes: archivo="internal/memory/migrations.go"
+// arnes: de="\t\t\t\t\t\tPRIMARY KEY (policy, device_id, alcance)\n"
+// arnes: a="\t\t\t\t\t\tPRIMARY KEY (policy, device_id)\n"
 func TestLaMigracion39ConservaLosCooldownsYPermiteElAlcance(t *testing.T) {
 	e := newTestEngine(t)
 	ahora := time.Now().UTC().Truncate(time.Second)
