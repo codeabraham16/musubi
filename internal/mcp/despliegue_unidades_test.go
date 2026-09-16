@@ -144,3 +144,94 @@ func TestElVerificadorComparaSusPropiasUnidadesInstaladas(t *testing.T) {
 		}
 	})
 }
+
+// UN `ExecStart=` QUE APUNTA A UN ARCHIVO SIN BIT DE EJECUCIÓN NO ARRANCA, Y FALLA RECIÉN EL DÍA
+// QUE ALGUIEN LO INSTALA.
+//
+// MEDIDO EL 2026-09-16, instalando el respaldo off-host de A117:
+// `deploy/systemd/musubi-respaldo-local.service` declara `ExecStart=@REPO@/deploy/musubi-backup.sh`
+// y ese guion estaba en **100644** en git — el único de los cuatro de `deploy/` sin el bit, contra
+// `comparar-y-latir.sh`, `construir.sh` y `verificar-despliegue.sh` que sí lo tienen. Instalada tal
+// como dicen sus propias instrucciones, la unidad contestó `status=203/EXEC` al primer arranque.
+//
+// NADIE LO HABÍA VISTO PORQUE NADIE LA HABÍA INSTALADO: una unidad que no se instala no falla, y su
+// archivo se lee perfecto. Es la misma familia que las pruebas que no compilan — la ausencia se ve
+// idéntica al éxito.
+//
+// EL MODO SE LEE DE GIT Y NO DEL DISCO, y la diferencia no es teórica: un `chmod +x` local hace que
+// esta guarda pase acá y la unidad siga rota en el clone de todos los demás. El modo que viaja es el
+// del índice.
+// Sabotaje: apuntar el `ExecStart=` de una unidad a un archivo del repo que no tenga bit de
+// ejecucion — que es el estado en el que estaba `musubi-backup.sh` hasta hoy.
+// arnes: archivo="deploy/systemd/musubi-respaldo-local.service"
+// arnes: de="ExecStart=@REPO@/deploy/musubi-backup.sh"
+// arnes: a="ExecStart=@REPO@/deploy/musubi-alerts-backup-offhost.yml"
+func TestTodoExecStartDeLasUnidadesApuntaAAlgoEjecutable(t *testing.T) {
+	raiz := filepath.Join("..", "..")
+	salida, err := exec.Command("git", "-C", raiz, "ls-files", "-s", "deploy/").Output()
+	if err != nil {
+		t.Fatalf("no se pudo leer el índice de git: %v", err)
+	}
+	modo := map[string]string{}
+	for _, l := range strings.Split(string(salida), "\n") {
+		campos := strings.Fields(l)
+		if len(campos) >= 4 {
+			modo[campos[3]] = campos[0]
+		}
+	}
+	if len(modo) < 5 {
+		t.Fatalf("el índice devolvió %d archivos de deploy/ y hay muchos más: el parseo dejó de "+
+			"funcionar y esta guarda está midiendo el vacío", len(modo))
+	}
+
+	unidades, _ := filepath.Glob(filepath.Join(raiz, "deploy", "systemd", "*.service"))
+	if len(unidades) == 0 {
+		t.Fatal("no encontré ninguna unidad en deploy/systemd/: el glob dejó de funcionar")
+	}
+	revisados := 0
+	for _, u := range unidades {
+		b, err := os.ReadFile(u)
+		if err != nil {
+			continue
+		}
+		for _, linea := range strings.Split(string(b), "\n") {
+			linea = strings.TrimSpace(linea)
+			if !strings.HasPrefix(linea, "ExecStart=") {
+				continue
+			}
+			cmd := strings.TrimPrefix(linea, "ExecStart=")
+			if i := strings.IndexByte(cmd, ' '); i > 0 {
+				cmd = cmd[:i] // el binario, sin sus argumentos
+			}
+			// Sólo interesan los que apuntan a un archivo DEL REPO: `@REPO@/…` es la plantilla que
+			// el instalador sustituye. Un ExecStart a /usr/bin/algo no es asunto de esta guarda.
+			rel := ""
+			if strings.HasPrefix(cmd, "@REPO@/") {
+				rel = strings.TrimPrefix(cmd, "@REPO@/")
+			} else if strings.HasPrefix(cmd, "deploy/") {
+				rel = cmd
+			}
+			if rel == "" {
+				continue
+			}
+			revisados++
+			m, hay := modo[rel]
+			if !hay {
+				t.Errorf("%s declara `ExecStart=%s` y ese archivo NO está en el repo: la unidad no "+
+					"puede arrancar donde se instale", filepath.Base(u), cmd)
+				continue
+			}
+			if m != "100755" {
+				t.Errorf("%s declara `ExecStart=%s` y ese archivo está en %s (sin bit de ejecución) "+
+					"en el índice de git.\n"+
+					"  Instalada como dicen sus propias instrucciones, la unidad da `status=203/EXEC`\n"+
+					"  al primer arranque, y eso no se descubre leyendo el archivo: sólo instalándola.\n"+
+					"  Se arregla con `git update-index --chmod=+x %s`.", filepath.Base(u), cmd, m, rel)
+			}
+		}
+	}
+	if revisados == 0 {
+		t.Fatal("ninguna unidad de deploy/systemd/ declara un ExecStart al repo: o cambió la forma " +
+			"de escribirlos, o el filtro dejó de reconocerlos — en los dos casos esta guarda dejó de mirar")
+	}
+}
