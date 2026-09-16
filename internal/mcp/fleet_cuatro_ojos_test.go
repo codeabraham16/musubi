@@ -218,12 +218,15 @@ func TestLaAprobacionSeGastaEnUnaSolaSesion(t *testing.T) {
 // arnes: archivo="internal/memory/aprobaciones.go"
 // arnes: de="IN ('pendiente', 'concedida', 'negada')"
 // arnes: a="IN ('pendiente', 'concedida')"
-// `colision_ok` ES UNA POR PAREJA Y NO UNA LISTA, y este corte se pisa con DOS. La clave es un
-// string: repetirla no la vuelve lista, la vuelve ilegible (lo probé, y el censo la denunció). Se
-// contesta la pareja con el de vencimiento, y la otra —la de `TestLaAprobacionDePantallaNoAbreUnaShell`—
-// sigue avisando A PROPÓSITO: su `de` abarca el `WHERE` ENTERO de `AprobacionVigenteDe`, así que se
-// pisa con cualquier corte fino sobre esa consulta. El aviso es correcto y es de esa directiva, no
-// de ésta; callarlo desde acá sería apagar una señal ajena.
+// `colision_ok` ES UNA POR PAREJA Y NO UNA LISTA. La clave es un string: repetirla no la vuelve
+// lista, la vuelve ilegible (lo probé, y el censo la denunció). Este corte se pisaba con DOS
+// sabotajes, y sólo uno se podía declarar acá.
+//
+// La segunda pisada ya no existe, y no se calló: era la de
+// `TestLaAprobacionDePantallaNoAbreUnaShell`, cuyo `de` abarcaba el `WHERE` ENTERO de
+// `AprobacionVigenteDe` y por eso chocaba con cualquier corte fino sobre esa consulta. Se afinó
+// ese corte —ver el comentario de esa prueba—, así que hoy cada directiva toca sólo la cláusula
+// que mide y la única pareja que queda declarada es la de abajo.
 // arnes: colision_ok="TestUnaAprobacionVencidaNoAbreNada"
 func TestUnNoNoSeVuelveAPedirEnElActo(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
@@ -282,8 +285,20 @@ func TestSinLaMismaCapacidadNoSePuedeAprobar(t *testing.T) {
 // Sabotaje: sacar `AND capacidad = ?` de AprobacionVigenteDe.
 //
 // arnes: archivo="internal/memory/aprobaciones.go"
-// arnes: de="  WHERE device_id = ? AND solicitante = ? AND capacidad = ?\n\t\t    AND estado IN ('pendiente', 'concedida', 'negada') AND vence > ?\n\t\t  ORDER BY CASE estado WHEN 'negada' THEN 0 WHEN 'concedida' THEN 1 ELSE 2 END,\n\t\t           creada DESC\n\t\t  LIMIT 1`,\n\t\tdeviceID, solicitante, string(cap), t)"
-// arnes: a="  WHERE device_id = ? AND solicitante = ?\n\t\t    AND estado IN ('pendiente', 'concedida', 'negada') AND vence > ?\n\t\t  ORDER BY CASE estado WHEN 'negada' THEN 0 WHEN 'concedida' THEN 1 ELSE 2 END,\n\t\t           creada DESC\n\t\t  LIMIT 1`,\n\t\tdeviceID, solicitante, t)"
+// EL CORTE ES FINO Y NO EL `WHERE` ENTERO, y la razón no es estética. Un `de` que abarca toda la
+// consulta se PISA con cualquier otro sabotaje sobre cualquiera de sus cláusulas —acá hay tres—,
+// y cada pisada es una advertencia del censo que no se puede contestar: `colision_ok` admite UNA
+// pareja y no una lista. La directiva gruesa fabricaba avisos permanentes sobre guardas ajenas
+// que estaban perfectas.
+//
+// NO SE PUEDE BORRAR LA CLÁUSULA A SECAS, y por eso era gruesa: `AND capacidad = ?` se lleva su
+// `?`, y la lista de argumentos sigue pasando `string(cap)`. Con un placeholder de menos la
+// consulta falla en la base, y la prueba caería por un error de SQL y no por lo que mide — un
+// rojo que no dice nada sobre la capacidad. `OR 1=1` deja el parámetro donde está y anula la
+// comparación, que es exactamente el defecto: la aprobación deja de mirar PARA QUÉ era.
+//
+// arnes: de="AND capacidad = ?"
+// arnes: a="AND (capacidad = ? OR 1=1)"
 func TestLaAprobacionDePantallaNoAbreUnaShell(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	// Tier A, que es el único tier que admite pantalla Y shell a la vez: en B no hay framebuffer.
@@ -632,18 +647,19 @@ func devicePorNombreEnPrueba(t *testing.T, s *McpServer, proyecto, nombre string
 //
 // Sabotaje: sacar `AND solicitante = ?` de AprobacionVigenteDe.
 //
-// PISA AL SABOTAJE DE `TestLaAprobacionDePantallaNoAbreUnaShell`, y son dos de verdad: aquél
-// reescribe el `WHERE` ENTERO de `AprobacionVigenteDe` para sacarle `AND capacidad = ?` —la
-// aprobación de una pantalla abriría una shell—, y éste neutraliza el filtro por solicitante —la
-// aprobación de uno le sirve a otro—. Dos invariantes distintos de la misma consulta.
+// CUATRO SABOTAJES CAEN SOBRE ESTA CONSULTA Y NINGUNO SE PISA CON OTRO, porque cada uno corta
+// SÓLO la cláusula que su prueba mide: el filtro por capacidad (una aprobación de pantalla
+// abriría una shell), éste por solicitante (la de uno le serviría a otro), el `IN` de estados (un
+// «no» se volvería a pedir en el acto) y la vigencia (un «sí» de hace tres días seguiría
+// abriendo). Son cuatro invariantes distintos del mismo `WHERE`.
 //
-// Y conviene saber POR QUÉ se pisan: el `de` de aquél abarca la consulta completa, así que
-// cualquier corte fino sobre ella lo rompe. Los de acá son quirúrgicos justamente para no
-// arrastrarse entre sí.
+// El corte quirúrgico no es prolijidad: un `de` que abarca la consulta entera se rompe con
+// cualquier otro sabotaje sobre ella, y cada pisada es una advertencia del censo que no se puede
+// contestar —`colision_ok` admite UNA pareja, no una lista—. La única pareja que queda declarada
+// es la del `IN` con la vigencia, que sí comparten texto, y se declara del lado del `IN`.
 // arnes: archivo="internal/memory/aprobaciones.go"
 // arnes: de="AND solicitante = ?"
 // arnes: a="AND (solicitante = ? OR 1=1)"
-// arnes: colision_ok="TestLaAprobacionDePantallaNoAbreUnaShell"
 func TestLaAprobacionDeUnoNoLeSirveAOtro(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	pantallaConCuatroOjos(t, s)
@@ -768,7 +784,6 @@ func TestUnaAprobacionUsadaNoSeReanima(t *testing.T) {
 // arnes: archivo="internal/memory/aprobaciones.go"
 // arnes: de="AND estado IN ('pendiente', 'concedida', 'negada') AND vence > ?"
 // arnes: a="AND estado IN ('pendiente', 'concedida', 'negada') AND (vence > ? OR 1=1)"
-// arnes: colision_ok="TestLaAprobacionDePantallaNoAbreUnaShell"
 func TestUnaAprobacionVencidaNoAbreNada(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	pantallaConCuatroOjos(t, s)
