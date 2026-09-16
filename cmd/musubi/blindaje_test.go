@@ -119,6 +119,9 @@ func TestCadaNecesidadDiceComoSeVeSuFalloYComoSeArregla(t *testing.T) {
 // blindaje cuando la ruta no existe manda a alguien a editar una unidad que está bien.
 //
 // Sabotaje que la hace fallar: que Estado() devuelva estadoBloqueada cuando !Existe.
+// arnes: archivo="cmd/musubi/blindaje.go"
+// arnes: de="\tcase !r.Existe:\n\t\treturn estadoAusente"
+// arnes: a="\tcase !r.Existe:\n\t\treturn estadoBloqueada"
 func TestElVerificadorNoLeEchaLaCulpaAlBlindajeCuandoLaRutaNoExiste(t *testing.T) {
 	base := t.TempDir()
 	falta := filepath.Join(base, "no-existe")
@@ -158,6 +161,9 @@ func TestElVerificadorNoLeEchaLaCulpaAlBlindajeCuandoLaRutaNoExiste(t *testing.T
 // Pero si EXISTE y no se alcanza, sí lo es: lo opcional era el existir, nunca el poder.
 //
 // Sabotaje que la hace fallar: devolver estadoOK siempre que Opcional sea true.
+// arnes: archivo="cmd/musubi/blindaje.go"
+// arnes: de="\tcase !r.Existe && r.Opcional:\n\t\treturn estadoOK"
+// arnes: a="\tcase r.Opcional:\n\t\treturn estadoOK"
 func TestLoOpcionalEsElExistirYNuncaElPoder(t *testing.T) {
 	base := t.TempDir()
 	ausente := necesidad{Trabajo: "t", Ruta: filepath.Join(base, "nunca"), Acceso: accesoEscritura,
@@ -204,6 +210,9 @@ func TestLoOpcionalEsElExistirYNuncaElPoder(t *testing.T) {
 // Y NO PUEDE DEJAR BASURA: corre en máquinas ajenas, adentro del store de podman.
 //
 // Sabotaje que la hace fallar: quitar el os.Remove del archivo temporal.
+// arnes: archivo="cmd/musubi/blindaje.go"
+// arnes: de="\t_ = os.Remove(nombre)"
+// arnes: a="\t_ = nombre"
 func TestProbarLaEscrituraNoDejaNadaAtras(t *testing.T) {
 	dir := t.TempDir()
 	antes, err := os.ReadDir(dir)
@@ -333,6 +342,9 @@ func TestLaUnidadNoConcedeRutasQueElAgenteNoPide(t *testing.T) {
 // arreglo el hueco silencioso que el arreglo existe para cerrar.
 //
 // Sabotaje que la hace fallar: volver a `os.Getenv("XDG_RUNTIME_DIR")` pelado.
+// arnes: archivo="cmd/musubi/blindaje.go"
+// arnes: de="\tif uid := os.Getuid(); uid > 0 {\n\t\treturn path.Join(\"/run\", \"user\", strconv.Itoa(uid))\n\t}"
+// arnes: a="\tif uid := os.Getuid(); uid < 0 {\n\t\treturn path.Join(\"/run\", \"user\", strconv.Itoa(uid))\n\t}"
 func TestSinXDGRuntimeDirElVerificadorNoSeQuedaCiego(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "")
 	d := dirDeRuntime()
@@ -390,6 +402,9 @@ func TestSinXDGRuntimeDirElVerificadorNoSeQuedaCiego(t *testing.T) {
 //
 // Sabotaje que la hace fallar: en `revisarBlindajeDelAgente`, `if sistemaDelAgente != "linux"` →
 // `if false` (o borrar el bloque entero, que también compila porque el seam sigue teniendo lector).
+// arnes: archivo="cmd/musubi/blindaje.go"
+// arnes: de="\tif sistemaDelAgente != \"linux\" {"
+// arnes: a="\tif false {"
 func TestElVerificadorSeCallaFueraDeLinux(t *testing.T) {
 	for _, so := range []string{"windows", "darwin"} {
 		t.Run(so, func(t *testing.T) {
