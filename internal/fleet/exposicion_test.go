@@ -82,6 +82,9 @@ func TestElMontajePedidoEsElQueSeMide(t *testing.T) {
 // sana, y el umbral de 95 % que hoy vigila el colector viejo empezaría a sonar sin motivo.
 //
 // Sabotaje que la hace fallar: calcular MemUsada como `MemTotal - MemFree`.
+// arnes: archivo="internal/fleet/exposicion.go"
+// arnes: de="\t\tif disp, hayD := l.Num(ExpMemDisponible); hayD && disp <= total {"
+// arnes: a="\t\tif disp, hayD := l.Num(ExpMemLibre); hayD && disp <= total {"
 func TestLaMemoriaDelEndpointSaleDeAvailableYNoDeFree(t *testing.T) {
 	l, ok := ParsearExposicion(fixtureExposicion(t), "/data")
 	if !ok {
@@ -307,6 +310,9 @@ func TestElPorcentajeDeCPUNecesitaDosLecturas(t *testing.T) {
 // que se filtra por el camino del error es un secreto filtrado igual.
 //
 // Sabotaje que la hace fallar: devolver `err.Error()` crudo en vez de pasar por motivoDeRed.
+// arnes: archivo="internal/fleet/exposicion.go"
+// arnes: de="\t\treturn Muestra{}, fmt.Errorf(\"no se pudo consultar %s: %s\", u.Host, motivoDeRed(err))"
+// arnes: a="\t\treturn Muestra{}, fmt.Errorf(\"no se pudo consultar %s: %v\", u.Host, err)"
 func TestLaCredencialViajaEnElHeaderYNoSeFiltraPorElError(t *testing.T) {
 	var recibido string
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -382,6 +388,9 @@ func TestUnaRedireccionNoSeSigue(t *testing.T) {
 // Por eso se lee un byte de más: es la única forma de distinguir «entró justo» de «se cortó».
 //
 // Sabotaje que la hace fallar: limitar a ExposicionMax exacto y seguir con lo que entró.
+// arnes: archivo="internal/fleet/exposicion.go"
+// arnes: de="\tcuerpo, err := io.ReadAll(io.LimitReader(resp.Body, ExposicionMax+1))"
+// arnes: a="\tcuerpo, err := io.ReadAll(io.LimitReader(resp.Body, ExposicionMax))"
 func TestUnCuerpoDemasiadoGrandeNoSeParseaAMedias(t *testing.T) {
 	const linea = "# ruido para llenar el techo\n"
 	relleno := strings.Repeat(linea, (ExposicionMax/len(linea))+100)
@@ -407,6 +416,9 @@ func TestUnCuerpoDemasiadoGrandeNoSeParseaAMedias(t *testing.T) {
 // token. Es la misma regla que separa «no está instalado» de «está y falló».
 //
 // Sabotaje que la hace fallar: colapsar todos los estados en «contestó HTTP %d».
+// arnes: archivo="internal/fleet/exposicion.go"
+// arnes: de="\t\tswitch resp.StatusCode {\n\t\tcase http.StatusUnauthorized, http.StatusForbidden:\n\t\t\treturn Muestra{}, fmt.Errorf(\"%s rechazó la credencial (HTTP %d): revisá la variable de entorno declarada para este dispositivo\", u.Host, resp.StatusCode)\n\t\tdefault:\n\t\t\treturn Muestra{}, fmt.Errorf(\"%s contestó HTTP %d\", u.Host, resp.StatusCode)\n\t\t}"
+// arnes: a="\t\treturn Muestra{}, fmt.Errorf(\"%s contestó HTTP %d\", u.Host, resp.StatusCode)"
 func TestUn401MandaAMirarLaCredencialYNoLaRed(t *testing.T) {
 	for _, codigo := range []int{http.StatusUnauthorized, http.StatusForbidden} {
 		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
