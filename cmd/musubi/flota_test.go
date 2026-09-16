@@ -55,6 +55,9 @@ func pedirFlota(t *testing.T, relay *relayVivo) flotaRespuesta {
 // las cinco se dibujan igual si lo único que viaja es la lista.
 //
 // Sabotaje que la hace fallar: colapsar los estados en «devolver la lista vacía».
+// arnes: archivo="cmd/musubi/flota.go"
+// arnes: de="\t\tif len(equipos) == 0 {\n"
+// arnes: a="\t\tif false {\n"
 func TestUnaFlotaVaciaDistingueSusCincoCausas(t *testing.T) {
 	// 1 · sin enlace al central.
 	if got := pedirFlota(t, nil); got.Estado != "apagado" || !strings.Contains(got.Detalle, "MUSUBI_BRAIN_URL") {
@@ -145,6 +148,9 @@ func TestElPanelPreguntaPorLasMismasToolsYNoInventaUnaRutaAparte(t *testing.T) {
 // El token NUNCA sale hacia el navegador: viaja del panel al cerebro y nada más.
 //
 // Sabotaje: incluir el token en flotaRespuesta «para que la página pueda refrescar sola».
+// arnes: archivo="cmd/musubi/flota.go"
+// arnes: de="Destino: relay.host(), Equipos: equipos,"
+// arnes: a="Destino: relay.token, Equipos: equipos,"
 func TestElTokenNoViajaAlNavegador(t *testing.T) {
 	ts := cerebroDeFlotaFalso(t, map[string]string{
 		"musubi_fleet_list": `{"devices":[{"name":"pc","online":true}]}`})
@@ -267,12 +273,14 @@ func TestElBundleWebGLNoSabeNadaDeLaFlota(t *testing.T) {
 // A23 — la página dibuja lo que S10 volvió necesario ver, y distingue los tres estados.
 //
 // Sabotaje que la hace fallar: dibujar la columna sin distinguir la política inerte.
+// arnes: archivo="cmd/musubi/assets/flota.html"
+// arnes: de="    const clase = p.puede_actuar ? 'auto' : 'auto inerte';\n"
+// arnes: a="    const clase = 'auto';\n"
 func TestLaPaginaDeFlotaDibujaLoAutomaticoYMarcaLoInerte(t *testing.T) {
 	p := string(assetsFS(t, "assets/flota.html"))
 	for _, quiero := range []struct{ frag, porque string }{
 		{"politicas_activas", "sin el conteo no se distingue una máquina con auto-heal de una sin él"},
 		{"puede_actuar", "una política inerte se ve idéntica a una que funciona si esto no se dibuja"},
-		{"inerte", "el estado inerte necesita su propia marca visual"},
 		{"function esc(", "el nombre y el argv de una política salen de un archivo de configuración y se interpolan en un atributo"},
 	} {
 		if !strings.Contains(p, quiero.frag) {
@@ -281,6 +289,20 @@ func TestLaPaginaDeFlotaDibujaLoAutomaticoYMarcaLoInerte(t *testing.T) {
 	}
 	// Una sola fuente para la columna: si el `⚙` apareciera suelto en el HTML además de en la
 	// función, habría dos formas de dibujar lo mismo y una se quedaría vieja.
+	// `inerte` NO SE BUSCA EN TODO EL ARCHIVO, y es la diferencia entre una guarda que caza y una
+	// que no puede fallar: aparece 4 veces —una regla CSS y dos ramas de pantalla()— así que una
+	// comprobación sobre el archivo entero la satisface un VECINO aunque automatico() deje de marcar
+	// lo inerte, que es exactamente el defecto que este test dice custodiar. Medido: acotado al
+	// cuerpo queda 1 sola ocurrencia, y sacarla pone el test en rojo.
+	if i := strings.Index(p, "function automatico("); i >= 0 {
+		cuerpo := p[i:]
+		if fin := strings.Index(cuerpo, "\nfunction "); fin > 0 {
+			cuerpo = cuerpo[:fin]
+		}
+		if !strings.Contains(cuerpo, "inerte") {
+			t.Error("automatico() no marca lo inerte: una política que no puede actuar se dibuja igual que una que sí")
+		}
+	}
 	if n := strings.Count(p, "function automatico("); n != 1 {
 		t.Errorf("hay %d definiciones de automatico(): tiene que haber exactamente una", n)
 	}
@@ -300,6 +322,9 @@ func assetsFS(t *testing.T, ruta string) []byte {
 // A13 — el panel dibuja si el id de pantalla es de fiar.
 //
 // Sabotaje que la hace fallar: dibujar el id sin distinguir el caso ambiguo.
+// arnes: archivo="cmd/musubi/assets/flota.html"
+// arnes: de="  if (e.rustdesk_id_ambiguo) {\n"
+// arnes: a="  if (false) {\n"
 func TestLaPaginaDeFlotaDistingueUnIdDePantallaAmbiguo(t *testing.T) {
 	p := string(assetsFS(t, "assets/flota.html"))
 	for _, quiero := range []struct{ frag, porque string }{
@@ -328,6 +353,9 @@ func TestLaPaginaDeFlotaDistingueUnIdDePantallaAmbiguo(t *testing.T) {
 // aparecer nunca: es otro motor. La rama tiene que ir ANTES de ese `—`.
 //
 // Sabotaje: quitar la rama de pantalla_sin_motor, o ponerla después del `if (!e.rustdesk_id)`.
+// arnes: archivo="cmd/musubi/assets/flota.html"
+// arnes: de="  if (e.pantalla_sin_motor) {\n"
+// arnes: a="  if (false) {\n"
 func TestLaPaginaDeFlotaDistingueUnaPantallaSinMotor(t *testing.T) {
 	p := string(assetsFS(t, "assets/flota.html"))
 	if !strings.Contains(p, "pantalla_sin_motor") {
@@ -983,6 +1011,9 @@ func leerFuente(t *testing.T, nombre string) []byte {
 //
 // Sabotaje que la hace fallar: sacar el Truncado de la respuesta, o dejar de acumularlo de
 // cualquiera de las cuatro tools.
+// arnes: archivo="cmd/musubi/flota.go"
+// arnes: de="\t\ttruncado := inv[\"proyectos_truncados\"] == true\n"
+// arnes: a="\t\ttruncado := false\n"
 func TestElPanelDiceCuandoLaListaVieneRecortada(t *testing.T) {
 	base := map[string]string{
 		"musubi_fleet_list":     `{"devices":[{"name":"pc","online":true}]}`,
