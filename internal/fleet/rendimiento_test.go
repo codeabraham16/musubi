@@ -96,9 +96,6 @@ func TestLasFallidasNoPuedenSuperarALasAtendidas(t *testing.T) {
 // arnes: archivo="internal/fleet/rendimiento.go"
 // arnes: de="\tif r == nil || r.Atendidas <= 0 {\n\t\treturn 0, false\n\t}"
 // arnes: a="\tif r == nil || r.Atendidas <= 0 {\n\t\treturn 0, true\n\t}"
-// arnes: archivo="internal/fleet/rendimiento.go"
-// arnes: de="\tif r == nil || r.Atendidas <= 0 {\n\t\treturn 0, false\n\t}"
-// arnes: a="\tif r == nil {\n\t\treturn 0, false\n\t}\n\tif r.Atendidas <= 0 {\n\t\treturn 0, true\n\t}"
 func TestNoHayTasaDeErrorSinNadaQueMedir(t *testing.T) {
 	if _, hay := (&Rendimiento{VentanaSeg: 60}).TasaDeError(); hay {
 		t.Error("un servicio que no atendió nada devolvió una tasa de error: un 0 % ahí se lee " +
