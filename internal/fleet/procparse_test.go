@@ -83,6 +83,9 @@ func TestElParseoDeProcProduceLosMismosNumerosVengaDeDondeVenga(t *testing.T) {
 //
 // Sabotaje que la hace fallar: usar MemFree en ParsearMeminfo. Con estos números la diferencia es
 // de 3,5 GB — un Linux sano aparecería al 85 % en vez del 40 %.
+// arnes: archivo="internal/fleet/procparse.go"
+// arnes: de="\t\tdisponible, hay := vals[\"MemAvailable\"]\n\t\tif !hay {\n\t\t\tdisponible = vals[\"MemFree\"] // kernels muy viejos no exponen MemAvailable\n\t\t}"
+// arnes: a="\t\tdisponible, hay := vals[\"MemFree\"]\n\t\tif !hay {\n\t\t\tdisponible = vals[\"MemAvailable\"] // kernels muy viejos no exponen MemAvailable\n\t\t}"
 func TestElParseoRemotoTampocoUsaMemFree(t *testing.T) {
 	var m Muestra
 	ParsearMeminfo(meminfoReal, &m)
@@ -124,6 +127,9 @@ func TestElParseoRemotoTampocoUsaMemFree(t *testing.T) {
 //
 // Sabotaje que la hace fallar: derivar NumProcesos del 4º campo de Loadavg (el denominador, 1181,
 // o el numerador, 5) en vez de contar el listado de /proc.
+// arnes: archivo="internal/fleet/procparse.go"
+// arnes: de="\tm.NumProcesos = ContarPids(l.Procs)"
+// arnes: a="\tm.NumProcesos = len(strings.Fields(l.Loadavg))"
 func TestElConteoDeProcesosNoSaleDelCuartoCampoDeLoadavg(t *testing.T) {
 	// Siete pids de mentira, y de paso la basura que /proc tiene al lado.
 	listado := "1\n2\n847\n1024\n1025\n9931\n94909\nself\nthread-self\ncpuinfo\nmeminfo\nnet\n"
@@ -276,6 +282,9 @@ func TestUnaMuestraSinLosCamposNuevosSeLeeComoNoMedida(t *testing.T) {
 //
 // Sabotaje: devolver ok=true siempre → un router de firmware propietario que responde al ssh
 // aparecería con 0 % de todo, y ese cero se cree.
+// arnes: archivo="internal/fleet/remoto.go"
+// arnes: de="\tif !statOK && mem.MemTotal == 0 {\n\t\treturn LecturasProc{}, false\n\t}"
+// arnes: a="\tif !statOK && mem.MemTotal == 0 && false {\n\t\treturn LecturasProc{}, false\n\t}"
 func TestUnaSalidaQueNoEsLinuxSeRechaza(t *testing.T) {
 	sep := separadorProc
 	completa := statReal + "\n" + sep + "\n" + meminfoReal + "\n" + sep + "\n1.0 2.0 3.0\n" + sep +
