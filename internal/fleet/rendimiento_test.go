@@ -68,6 +68,9 @@ func TestUnRendimientoEnCeroEsUnaMedicionYNoUnaAusencia(t *testing.T) {
 // nombres.
 //
 // Sabotaje que la hace fallar: quitar la comparación Fallidas > Atendidas.
+// arnes: archivo="internal/fleet/rendimiento.go"
+// arnes: de="\tif r.Fallidas > r.Atendidas {"
+// arnes: a="\tif r.Fallidas > r.Atendidas && false {"
 func TestLasFallidasNoPuedenSuperarALasAtendidas(t *testing.T) {
 	r := &Rendimiento{VentanaSeg: 60, Atendidas: 3, Fallidas: 7}
 	err := r.Valida()
