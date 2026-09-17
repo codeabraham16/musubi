@@ -484,7 +484,18 @@ for _u in "$REPO"/deploy/systemd/*.service "$REPO"/deploy/systemd/*.timer; do
   # mirando desde otra carpeta. Al revés —tomar la ruta que la propia unidad declara en
   # `WorkingDirectory=` y devolverla a `@REPO@`— la comparación queda entre dos plantillas y no
   # depende de la ubicación de nadie.
+  # LA PISTA PRIMARIA ES `WorkingDirectory=`, PERO NO TODA UNIDAD DECLARA UNO — y la que no lo
+  # declaraba quedaba condenada a decir «difiere» para siempre. Medido el 2026-09-16:
+  # `musubi-respaldo-local.service` era 1 de 7, la única con `@REPO@` y sin `WorkingDirectory`, y
+  # el vigía la reportaba divergente ESTANDO BIEN INSTALADA. Un aviso que no puede apagarse nunca
+  # es peor que no avisar: enseña a leer el informe salteando los rojos conocidos.
+  #
+  # EL RESPALDO ES `ExecStart=`, que en estas unidades apunta a `<repo>/deploy/<algo>`: se recorta
+  # en `/deploy/` y lo de la izquierda es la raíz. Se toma el PRIMERO, igual que arriba.
   _ruta="$(sed -n "s|^WorkingDirectory=||p" "$_i" | head -1)"
+  if [ -z "$_ruta" ]; then
+    _ruta="$(sed -n "s|^ExecStart=\(.*\)/deploy/.*|\1|p" "$_i" | head -1)"
+  fi
   if [ -n "$_ruta" ]; then
     _norm="$(sed "s|$_ruta|@REPO@|g" "$_i")"
   else
