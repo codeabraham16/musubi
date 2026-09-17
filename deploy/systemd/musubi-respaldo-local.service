@@ -50,6 +50,18 @@ Environment=BACKUP_ALLOW_LOCAL_ONLY=1
 # un borrado accidental, una corrupción de la base y un `rm` desafortunado; NO protege contra
 # perder la máquina. Para eso hace falta un `BACKUP_REMOTE`, y ponerlo acá es una decisión de
 # quien tenga dónde.
+# EL DESTINO OFF-HOST VIVE AFUERA DE LA UNIDAD, en un archivo que no se versiona: el repo no tiene
+# por qué saber a qué máquina respalda cada quien. El `-` hace que su ausencia NO sea un error, así
+# que esta misma unidad sirve igual en una máquina sin destino — que es el caso local-only de
+# arriba. Estaba escrito a mano en la máquina de davantis y por eso el vigía la veía divergente:
+# un punto de extensión que no está declarado obliga a editar la unidad, y una unidad editada a
+# mano sigue corriendo y sólo se nota porque algo deja de pasar.
+EnvironmentFile=-%h/.config/musubi-respaldo.env
+# ESTA UNIDAD NO DECLARA `WorkingDirectory`, Y ASÍ SE QUEDA: no lo necesita para correr, y es el
+# único caso del repo que ejercita el respaldo del verificador —recuperar la raíz desde el
+# `ExecStart`—. Agregárselo haría verde el informe tapando el defecto en vez de arreglarlo, y
+# dejaría ese camino del verificador sin nadie que lo pise.
+Environment=MUSUBI_HOME=@REPO@
 ExecStart=@REPO@/deploy/musubi-backup.sh
 
 StandardOutput=journal
