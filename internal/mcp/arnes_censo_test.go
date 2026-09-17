@@ -159,7 +159,10 @@ import (
 // la deuda. Por eso se baja a 623 y no a 630: cualquier número mayor la devuelve al estado en que
 // se la encontró. Y la regla general, que vale más que este número: cuando el sabotaje mueve el
 // indicador en UNA unidad, cualquier tolerancia > 0 en el umbral vuelve la guarda hueca.
-const anclasEnProsaAlDia = 623
+// BAJÓ DE 623 A 619 EL 2026-09-16, por la misma razón que la vez anterior y el mismo día: #549
+// mecanizó 5 anclas y no ajustó este número, así que la diferencia volvió a ser > 0 y con eso la
+// guarda vuelve a ser hueca (ver el bloque de arriba: su sabotaje suma UNA sola ancla).
+const anclasEnProsaAlDia = 619
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //

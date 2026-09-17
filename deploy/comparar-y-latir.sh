@@ -68,6 +68,44 @@ if [ ! -x "$REPO/deploy/verificar-despliegue.sh" ]; then
   exit 2
 fi
 
+# ── EL CHECKOUT DEL VIGÍA SE PONE AL DÍA SOLO, Y SÓLO SI ES SEGURO MOVERLO ───────────────────
+#
+# `verificar-despliegue.sh` compara producción contra ESTE árbol, así que un checkout que se
+# queda atrás convierte todo su informe en «no puedo certificar» — y eso se ve igual que un
+# despliegue sano. Medido el 2026-09-16: la unidad apuntaba a un árbol compartido parado en una
+# rama 81 commits atrás de main, con 3 commits propios de un PR cerrado. El vigía llevaba quién
+# sabe cuánto contestando `dudoso` todos los días.
+#
+# DARLE UN CHECKOUT DEDICADO NO ALCANZA: con el próximo merge a main queda atrás igual, y el
+# problema vuelve disfrazado de otra cosa. Por eso se pone al día acá.
+#
+# LAS DOS CONDICIONES SON LO QUE HACE QUE ESTO NO SEA PELIGROSO, y son deliberadamente estrictas:
+#
+#   · SIN CAMBIOS SIN COMMITEAR. Si alguien está trabajando ahí, no se toca nada.
+#   · HEAD DESPRENDIDO. Un checkout con una rama es de alguien —tiene un nombre, puede tener
+#     commits que no están en ningún lado—; uno desprendido es un vigía. Mover la rama de otro es
+#     exactamente cómo el árbol compartido terminó parado 81 commits atrás.
+#
+# Cuando no se cumplen, NO se toca y SE DICE por qué: un guion que se salta su propio paso en
+# silencio deja al informe hablando de un árbol que nadie eligió.
+if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
+  _sucio="$(git -C "$REPO" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+  _rama="$(git -C "$REPO" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  if [ "$_sucio" != "0" ]; then
+    printf '▶ el checkout tiene %s archivo(s) sin commitear: NO se actualiza (alguien está trabajando acá)\n' "$_sucio"
+  elif [ -n "$_rama" ]; then
+    printf '▶ el checkout está en la rama «%s», no en HEAD desprendido: NO se actualiza.\n' "$_rama"
+    printf '  Un árbol con rama es de alguien. Para que el vigía se ponga al día solo, dale un checkout propio:\n'
+    printf '    git worktree add --detach <ruta> origin/main   y apuntá WorkingDirectory/ExecStart ahí.\n'
+  elif ! git -C "$REPO" fetch --quiet origin "+refs/heads/main:refs/remotes/origin/main" 2>/dev/null; then
+    printf '▶ no se pudo traer origin/main (sin red o sin remoto): se compara con lo que había\n'
+  elif git -C "$REPO" checkout --quiet --detach origin/main 2>/dev/null; then
+    printf '▶ checkout del vigía al día: origin/main %s\n' "$(git -C "$REPO" rev-parse --short HEAD)"
+  else
+    printf '▶ no se pudo mover el checkout a origin/main: se compara con lo que había\n'
+  fi
+fi
+
 # ── 0 · LA ESPERA DE RED, QUE `After=network-online.target` NO HACE ──────────────────────────
 #
 # EL 2026-09-08 ESTA UNIDAD QUEDÓ `failed` A LOS 4 m 53 s DE UN ARRANQUE. El timer tiene

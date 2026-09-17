@@ -235,3 +235,90 @@ func TestTodoExecStartDeLasUnidadesApuntaAAlgoEjecutable(t *testing.T) {
 			"de escribirlos, o el filtro dejó de reconocerlos — en los dos casos esta guarda dejó de mirar")
 	}
 }
+
+// EL VIGÍA TIENE QUE PODER RECUPERAR LA RAÍZ DEL REPO DE TODA UNIDAD QUE USE `@REPO@`.
+//
+// `verificar-despliegue.sh` compara cada unidad INSTALADA contra su plantilla, y para eso
+// normaliza la instalada «hacia» la plantilla: toma la ruta concreta que la unidad declara y la
+// devuelve a `@REPO@`. Si no puede recuperar esa ruta, la comparación queda entre una plantilla
+// con `@REPO@` y un archivo con una ruta absoluta, o sea que **dice «difiere» siempre**.
+//
+// MEDIDO EL 2026-09-16, Y ERA 1 DE 7: `musubi-respaldo-local.service` usaba `@REPO@` y no declaraba
+// `WorkingDirectory`, que era la única pista que el verificador miraba. El informe la reportaba
+// divergente ESTANDO BIEN INSTALADA. Un aviso que no puede apagarse nunca es peor que no avisar:
+// enseña a leer el informe salteando los rojos conocidos, y el próximo rojo de verdad se pierde ahí.
+//
+// LA GUARDA LLEVA DOS CONTROLES, Y EL SEGUNDO ES EL QUE IMPORTA. El arreglo tenía dos formas: darle
+// un `WorkingDirectory` a esa unidad, o enseñarle al verificador a recuperarse por `ExecStart`. Se
+// eligió la segunda porque arregla la CLASE y no el caso — pero entonces el camino nuevo necesita
+// que alguien lo pise, y la primera forma lo dejaría sin nadie. Por eso se exige que siga habiendo
+// al menos una unidad con `@REPO@` y SIN `WorkingDirectory`: sin eso, el respaldo del verificador
+// sería código muerto y su rotura no la notaría ninguna corrida.
+//
+// Sabotaje que la hace fallar: darle un `WorkingDirectory` a la única unidad que ejercita el
+// respaldo, que es exactamente el arreglo cómodo que taparía el defecto.
+// arnes: archivo="deploy/systemd/musubi-respaldo-local.service"
+// arnes: de="Environment=MUSUBI_HOME=@REPO@"
+// arnes: a="WorkingDirectory=@REPO@\nEnvironment=MUSUBI_HOME=@REPO@"
+func TestElVigiaPuedeRecuperarLaRaizDeTodaUnidadQueUseElMarcador(t *testing.T) {
+	raiz := filepath.Join("..", "..")
+	patron := filepath.Join(raiz, "deploy", "systemd", "*")
+	rutas, err := filepath.Glob(patron)
+	if err != nil {
+		t.Fatalf("glob de deploy/systemd: %v", err)
+	}
+	var conMarcador, sinWorkingDirectory int
+	for _, ruta := range rutas {
+		ext := filepath.Ext(ruta)
+		if ext != ".service" && ext != ".timer" {
+			continue
+		}
+		crudo, err := os.ReadFile(ruta)
+		if err != nil {
+			t.Fatalf("leer %s: %v", ruta, err)
+		}
+		texto := string(crudo)
+		// El marcador del comentario de instalación no cuenta: lo que hay que poder normalizar son
+		// las DIRECTIVAS, y una unidad que sólo lo nombra en una línea `#` no tiene nada que recuperar.
+		var directivas []string
+		for _, l := range strings.Split(texto, "\n") {
+			if l != "" && !strings.HasPrefix(l, "#") {
+				directivas = append(directivas, l)
+			}
+		}
+		cuerpo := strings.Join(directivas, "\n")
+		if !strings.Contains(cuerpo, "@REPO@") {
+			continue
+		}
+		conMarcador++
+		tieneWD := strings.Contains(cuerpo, "\nWorkingDirectory=") || strings.HasPrefix(cuerpo, "WorkingDirectory=")
+		// El respaldo del verificador: `ExecStart=<raíz>/deploy/...`, que se recorta en `/deploy/`.
+		recuperablePorExec := false
+		for _, l := range directivas {
+			if strings.HasPrefix(l, "ExecStart=") && strings.Contains(strings.TrimPrefix(l, "ExecStart="), "/deploy/") {
+				recuperablePorExec = true
+			}
+		}
+		if !tieneWD {
+			sinWorkingDirectory++
+		}
+		if !tieneWD && !recuperablePorExec {
+			t.Errorf("%s usa `@REPO@` en una directiva y el vigía NO puede recuperar la raíz del repo:\n"+
+				"  no declara `WorkingDirectory=` y su `ExecStart=` no pasa por `/deploy/`.\n"+
+				"  Con eso, `verificar-despliegue.sh` compara una plantilla con `@REPO@` contra una ruta\n"+
+				"  absoluta y esta unidad va a decir «difiere» SIEMPRE, aun instalada como corresponde.",
+				filepath.Base(ruta))
+		}
+	}
+	if conMarcador < 2 {
+		t.Fatalf("sólo %d unidad(es) de deploy/systemd/ usan `@REPO@` en una directiva: esta guarda está midiendo el vacío", conMarcador)
+	}
+	if sinWorkingDirectory == 0 {
+		t.Errorf("las %d unidades con `@REPO@` declaran todas un `WorkingDirectory=`, así que NINGUNA ejercita el\n"+
+			"  respaldo por `ExecStart` del verificador. Ese camino existe porque hubo una unidad sin\n"+
+			"  `WorkingDirectory` y el informe la daba por divergente para siempre; si ahora no queda ninguna,\n"+
+			"  el respaldo es código muerto y el día que se rompa no lo va a notar ninguna corrida.\n"+
+			"  Si de verdad ya no hace falta, lo que hay que borrar es el respaldo del verificador, no este control.",
+			conMarcador)
+	}
+}
