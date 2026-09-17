@@ -159,7 +159,7 @@ import (
 // la deuda. Por eso se baja a 623 y no a 630: cualquier número mayor la devuelve al estado en que
 // se la encontró. Y la regla general, que vale más que este número: cuando el sabotaje mueve el
 // indicador en UNA unidad, cualquier tolerancia > 0 en el umbral vuelve la guarda hueca.
-const anclasEnProsaAlDia = 623
+const anclasEnProsaAlDia = 617
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
