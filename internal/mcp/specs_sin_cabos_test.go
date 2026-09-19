@@ -88,6 +88,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // ════════════════════════════════════════════════════════════════════════════════════════════
@@ -1929,4 +1930,119 @@ func TestElEncabezadoNoMienteSobreCuantosCabosHayAbiertos(t *testing.T) {
 			"  FECHA de la bitácora: cada uno es verdadero para su entrada y se clava.",
 			declarado, real, sentido, real)
 	}
+}
+
+// TestNingunTituloDeLaTabla1EmpiezaDeclarandoCierre — la regla 1 tenía guarda y miraba una sola
+// columna.
+//
+// EL DEFECTO, medido el 2026-09-19: SEIS de las treinta y una filas de la tabla 1 abrían su título
+// con «**CERRADO 2026-09-16: …**», y una séptima con «**RESUELTO …**». Estaban ahí en la cara, y
+// `TestNingunaFilaDeLaTabla1SeDeclaraCerrada` en verde — porque esa guarda mira la columna «Slice»
+// y NO el título, y lo hace a propósito: la corrección que la volvió confiable fue justamente dejar
+// de leer donde no se decide, después de que «`VerificarFirma` falla cerrado» la hiciera acusar a
+// A31. O sea que el arreglo de un falso positivo abrió el punto ciego de al lado.
+//
+// ES LA MISMA REGLA, EN LA OTRA COLUMNA, y por eso es una guarda aparte y no un ensanche de la
+// hermana. «Slice» dice DE QUIÉN es el cabo; «Qué falta» dice QUÉ falta. Un título que arranca
+// anunciando el cierre contesta que no falta nada, adentro de la tabla que existe para contestar
+// qué falta — y encima infla el conteo, que es el daño que la regla 1 nombra con números: el
+// 2026-09-10 eran 21 de 48.
+//
+// SE MIRA LA CABEZA Y NO EL TÍTULO ENTERO, y ésa es toda la diferencia entre esta guarda y una que
+// acusa filas sanas. Un título puede NOMBRAR un cierre sin declararse cerrado —A118 cuenta que algo
+// se cerró por otro lado, A122 habla de una pieza ya re-derivada— y eso es historia legítima. Lo
+// que no puede es EMPEZAR con el veredicto. Los dos controles de abajo son las filas reales del
+// árbol, las que estaban mal y las que estaban bien, no ejemplos inventados.
+//
+// Sabotaje que la hace fallar: renombrar la columna del título, que es la forma cómoda de callarla
+// —sin la columna no hay qué leer, y la guarda falla en vez de quedarse muda. El otro camino, el
+// que la hizo existir, se verificó a mano el 2026-09-19: con el título de A128 prefijado con
+// «CERRADO 2026-09-19:» sale roja nombrando la fila. No se mecaniza porque cualquier fila que se
+// elija como corte se va a mudar a la sección 3 el día que su cabo cierre, y la directiva quedaría
+// apuntando a la nada.
+// arnes: archivo="specs/control-de-flota/ABIERTO.md"
+// arnes: de="| # | Qué falta | Por qué no está | Slice |"
+// arnes: a="| # | El asunto | Por qué no está | Slice |"
+func TestNingunTituloDeLaTabla1EmpiezaDeclarandoCierre(t *testing.T) {
+	// CONTROL POSITIVO — LOS SIETE TÍTULOS REALES QUE ESTABAN PUESTOS EL 2026-09-19. Si el
+	// reconocedor deja de ver alguno, se aflojó y esta guarda dejó de poder fallar.
+	for _, real := range []string{
+		"**CERRADO 2026-09-16: el redespliegue que esta fila esperaba ya estaba hecho, y el motivo llega hasta `musubi_fleet_list`**",
+		"**CERRADO 2026-09-16: el redespliegue ya estaba hecho, y la serie que «no leía ninguna alerta» hoy tiene la suya**",
+		"**CERRADO 2026-09-16 por #544, y NO por donde esta fila apuntaba: la salida fue agregar la segunda pregunta, no arreglar los dos comparadores**",
+		"**CERRADO 2026-09-16: las dos mitades estaban arregladas desde el 2026-09-15**",
+		"**CERRADO 2026-09-16: el rescate aguanto, y la unica pieza que quedaba pendiente la re-derivo otro**",
+		"**CERRADO 2026-09-16: el tercer techo tiene perilla, serie y aviso**",
+		"**RESUELTO 2026-09-16: hay respaldo off-host verificado y un timer del REPO que lo sostiene**",
+	} {
+		if !empiezaDeclarandoCierre(real) {
+			t.Fatalf("el reconocedor ya no ve como CIERRE el título %q, que es uno de los que estaba puesto el 2026-09-19.\n  Se aflojó, y con eso esta prueba dejó de poder fallar.", recorte(real, 90))
+		}
+	}
+	// CONTROL NEGATIVO — TÍTULOS REALES QUE NOMBRAN UN CIERRE SIN DECLARARSE CERRADOS. Son historia
+	// legítima y una guarda que los acusa se termina apagando.
+	for _, real := range []string{
+		"**Hay DOS `config.yaml` y manda el del repo**",
+		"**Faltan dos menores del respaldo off-host: que registre identidades cuando haya `principals.yaml`**",
+		"**El detector de alcance de la compuerta de guiones pregunta por CO-OCURRENCIA, no por gateo**",
+		"**`VerificarFirma` falla cerrado y lo dice con todas las letras**",
+		"**Doce guardas derivan su alcance de CAMINAR EL DISCO y no del repo**",
+	} {
+		if empiezaDeclarandoCierre(real) {
+			t.Fatalf("la guarda acusa al título %q, que NO se declara cerrado.\n  Una guarda que acusa filas correctas se termina apagando.", recorte(real, 90))
+		}
+	}
+
+	tab, ok := tablaConColumnas(parseTablasMD(registroDeAbiertos(t)), "#", "qué falta", "por qué no está", "slice")
+	if !ok {
+		t.Fatal("no se encontró la tabla 1 de ABIERTO.md por su encabezado `| # | Qué falta | Por qué no está | Slice |`.\n" +
+			"  Esta guarda pide la columna del título POR SU NOMBRE: si el encabezado cambió, prefiere fallar\n" +
+			"  antes que mirar en silencio la columna de al lado, que es el error que la hizo existir.")
+	}
+	iTitulo := tab.columna("qué falta")
+	if iTitulo < 0 {
+		t.Fatal("la tabla 1 perdió la columna «Qué falta»")
+	}
+	revisadas := 0
+	for _, f := range tab.filas {
+		if !idDeRegistro.MatchString(f.id()) || len(f.celdas) <= iTitulo {
+			continue
+		}
+		revisadas++
+		if empiezaDeclarandoCierre(f.crudas[iTitulo]) {
+			t.Errorf("el título de la fila **%s** (línea %d) EMPIEZA declarando el cierre del cabo:\n    %s\n"+
+				"  Esa columna se llama «Qué falta»: un título que arranca con el veredicto contesta que no\n"+
+				"  falta nada, adentro de la tabla que existe para contestar qué falta — y además infla el conteo.\n"+
+				"  La regla 1 dice que al cerrar un slice se BORRA su línea y su texto baja ENTERO a la sección 3.\n"+
+				"  Si el cabo NO está cerrado del todo, el título tiene que empezar por lo que FALTA y la historia\n"+
+				"  del cierre parcial va detrás o en la columna de al lado.",
+				f.id(), f.linea, recorte(f.celdas[iTitulo], 160))
+		}
+	}
+	if revisadas < 15 {
+		t.Fatalf("sólo se revisaron %d título(s) de la tabla 1: cambió el formato y esta guarda está midiendo el vacío", revisadas)
+	}
+}
+
+// empiezaDeclarandoCierre dice si un título ARRANCA con un veredicto de cierre.
+//
+// Mira la CABEZA y no el texto entero, y eso no es comodidad: un título puede contar que algo se
+// cerró por otro lado sin declararse cerrado él, y ésa es la diferencia que decide. Se toma la
+// primera palabra después de sacarle el énfasis de Markdown.
+func empiezaDeclarandoCierre(titulo string) bool {
+	t := strings.TrimSpace(sinEnfasis(titulo))
+	// La primera palabra, sin la puntuación que suele seguirla (`CERRADO:`, `CERRADO —`).
+	campos := strings.Fields(t)
+	if len(campos) == 0 {
+		return false
+	}
+	primera := strings.ToLower(strings.TrimFunc(campos[0], func(r rune) bool {
+		return !unicode.IsLetter(r)
+	}))
+	switch primera {
+	case "cerrado", "cerrada", "resuelto", "resuelta", "hecho", "hecha", "listo", "lista",
+		"completado", "completada", "terminado", "terminada", "arreglado", "arreglada":
+		return true
+	}
+	return false
 }

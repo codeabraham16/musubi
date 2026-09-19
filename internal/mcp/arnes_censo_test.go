@@ -184,17 +184,26 @@ import (
 // Cuidado con la comodidad que esto abre: declarar `no_mecanizable` baja el número igual que
 // mecanizar, y es mucho más barato. El motivo se escribe para que se pueda discutir.
 //
-// Y DE 610 A LO QUE MIDE HOY, 2026-09-19, mismo commit que mecaniza: las ocho anclas del eje de
-// consentimiento —`internal/fleet/consentimiento_test.go`—, que es lo que se le debe a la persona
-// sentada frente a la máquina cuando alguien abre una sesión. Esa rama había escrito 605 sobre su
-// propio árbol, medido antes de que main bajara de 613 a 610 por otras dos ramas; el número que
-// quedó NO es ninguno de los dos, es el que la herramienta devolvió sobre el árbol ya integrado.
+// Y DE 610 A 609 EL 2026-09-19: se mecanizó el sabotaje de la viñeta del mensaje de alerta, que
+// SÍ es una sustitución de texto en `deploy/prometheus/alertmanager.yml`.
 //
-// Y DE 602 A LO QUE MIDE HOY, EL MISMO DÍA, también en el commit que mecaniza: las ocho del eje de
+// Y DE 609 A LO QUE MIDE HOY, mismo commit que mecaniza: las ocho anclas del eje de
+// consentimiento —`internal/fleet/consentimiento_test.go`—, que es lo que se le debe a la persona
+// sentada frente a la máquina cuando alguien abre una sesión.
+//
+// ESTA RAMA TUVO QUE RECONTAR TRES VECES, y vale más que el número: escribió 605 sobre su propio
+// árbol, 602 después de integrar el main que había bajado a 610, y esto después de integrar el que
+// bajó a 609. No es que las mediciones anteriores estuvieran mal — cada una era correcta sobre el
+// árbol que pudo ver. Es que el techo es un derivado del ÁRBOL ENTERO y nadie puede medir un árbol
+// que todavía no existe. Mientras varias ramas mecanicen a la vez, la última en mergear recuenta,
+// y eso no es un costo evitable: es lo que significa que el número sea derivado.
+//
+// Y DE 601 A LO QUE MIDE HOY, el mismo día y también en el commit que mecaniza: las ocho del eje de
 // AUTORIZACIÓN de flota —`internal/mcp/fleet_authz_test.go`, el slice S3—, que es quién puede
-// pedirle qué a qué máquina. Esta rama había escrito 597 sobre su propio árbol y le pasó lo mismo
-// que a la de arriba, un nivel más abajo: se vuelve a contar sobre el integrado y se escribe eso.
-const anclasEnProsaAlDia = 594
+// pedirle qué a qué máquina. Esta rama había escrito 597 sobre su propio árbol y después 594 sobre
+// el de la rama de arriba: le pasó lo mismo que a ella, un nivel más abajo. Se recuenta sobre el
+// integrado y se escribe eso.
+const anclasEnProsaAlDia = 593
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
