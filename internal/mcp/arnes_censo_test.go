@@ -183,7 +183,10 @@ import (
 // que NADIE puede correr, y una exención declarada con su motivo ya no es una promesa sin dueño.
 // Cuidado con la comodidad que esto abre: declarar `no_mecanizable` baja el número igual que
 // mecanizar, y es mucho más barato. El motivo se escribe para que se pueda discutir.
-const anclasEnProsaAlDia = 610
+//
+// Y DE 610 A 609 EL 2026-09-19: se mecanizó el sabotaje de la viñeta del mensaje de alerta, que
+// SÍ es una sustitución de texto en `deploy/prometheus/alertmanager.yml`.
+const anclasEnProsaAlDia = 609
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
