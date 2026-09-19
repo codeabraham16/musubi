@@ -168,10 +168,28 @@ import (
 // integrado. Un número derivado no se elige entre los dos lados de un conflicto: se vuelve a
 // contar con la herramienta, sobre el árbol ya mergeado.
 //
-// Y DE 613 A 605 EL 2026-09-19, mismo commit que mecaniza: las ocho anclas del eje de
+// Y DE 613 A 612 EL 2026-09-19. Es el caso que A123 tiene escrito como advertencia, visto desde
+// adentro: #553 mecanizó cuatro anclas y bajó el techo a 613 sobre SU árbol, correcto ahí; este
+// commit mecaniza una más y, ya rebasado sobre el main con #553 adentro, el censo da 612. Las dos
+// ramas pasan verdes por separado y la segunda en mergear es la que tiene que volver a contar —no
+// porque la primera se haya equivocado, sino porque el techo es un derivado del ÁRBOL ENTERO y
+// ninguna de las dos pudo medir el árbol que resulta de las dos. Se vuelve a correr `-validar`
+// sobre el árbol rebasado y se escribe lo que dice: 612.
+//
+// Y DE 612 A 610 EL 2026-09-19, y esta vez NO por mecanizar: dos anclas pasaron a
+// `no_mecanizable`. Son las dos guardas del bit de ejecución, cuyo sabotaje es `git update-index
+// --chmod=-x` o borrar un archivo — ninguna de las dos cosas es una sustitución de texto, que es
+// lo único que este arnés sabe aplicar. La deuda baja igual, porque `anclasEnProsaAlDia` cuenta lo
+// que NADIE puede correr, y una exención declarada con su motivo ya no es una promesa sin dueño.
+// Cuidado con la comodidad que esto abre: declarar `no_mecanizable` baja el número igual que
+// mecanizar, y es mucho más barato. El motivo se escribe para que se pueda discutir.
+//
+// Y DE 610 A LO QUE MIDE HOY, 2026-09-19, mismo commit que mecaniza: las ocho anclas del eje de
 // consentimiento —`internal/fleet/consentimiento_test.go`—, que es lo que se le debe a la persona
-// sentada frente a la máquina cuando alguien abre una sesión.
-const anclasEnProsaAlDia = 605
+// sentada frente a la máquina cuando alguien abre una sesión. Esta rama había escrito 605 sobre su
+// propio árbol, medido antes de que main bajara de 613 a 610 por otras dos ramas; el número de
+// acá NO es ninguno de los dos, es el que la herramienta devuelve sobre el árbol ya integrado.
+const anclasEnProsaAlDia = 602
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //

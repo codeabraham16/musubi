@@ -1852,3 +1852,81 @@ func TestTodaFilaDeAbiertoTieneLasCeldasDeSuEncabezado(t *testing.T) {
 			len(sinRevisar), sinRevisar, primera)
 	}
 }
+
+// TestElEncabezadoNoMienteSobreCuantosCabosHayAbiertos — un derivado escrito a mano es una copia,
+// y ésta se pudrió sola.
+//
+// EL DEFECTO, medido el 2026-09-19: el encabezado abría con «29 cabos abiertos» y la tabla 1 tenía
+// 31 filas. No era falso cuando se escribió —el 2026-09-10 eran 29—: se volvió falso cuando se
+// abrieron A124 y A127, porque nadie vuelve al encabezado después de agregar una fila. Es lo
+// primero que lee quien entra al registro, y decía que faltaba menos de lo que falta.
+//
+// POR QUÉ UNA GUARDA Y NO ARREGLAR EL NÚMERO: arreglarlo a mano lo deja pudriéndose de nuevo la
+// próxima vez, que es exactamente cómo llegó hasta acá. Un archivo de specs no puede correr código,
+// así que la única forma de que un número vivo no mienta es que algo lo CRUCE contra su fuente.
+//
+// CRUZAR DOS AFIRMACIONES DEL MISMO ARCHIVO NO ES MEDIRSE A SÍ MISMO. El encabezado dice un número
+// en prosa; la tabla dice otro contándose. Son dos caminos independientes hasta el mismo hecho, y
+// la guarda existe para que no puedan discrepar. Lo que sí sería medirse a sí mismo es derivar el
+// número de la constante que la guarda custodia: acá no hay constante, hay una tabla.
+//
+// LOS NÚMEROS CON FECHA NO SE TOCAN. La bitácora del encabezado está llena de «20 cabos», «21
+// cabos», y cada uno es verdadero para SU entrada: un hecho con fecha se clava. Por eso la guarda
+// NO barre el archivo buscando la forma «N cabos» —eso acusaría a toda la historia—: pide UNA línea
+// canónica, la busca por su prefijo, y exige que haya exactamente una.
+//
+// Sabotaje que la hace fallar: renombrar la línea canónica, que es la forma cómoda de callarla.
+// Sin esa línea la guarda no se queda MUDA: falla. El otro camino —el número equivocado— es el que
+// la hizo existir y se verificó a mano el 2026-09-19: con 29 escrito sale roja nombrando 29 y 31;
+// con 31, verde. Ése no se mecaniza a propósito, porque el corte tendría que llevar el total
+// adentro y se pudriría igual que el número que esta guarda vino a cuidar.
+// arnes: archivo="specs/control-de-flota/ABIERTO.md"
+// arnes: de="**Cabos abiertos hoy: "
+// arnes: a="**Cabos abiertos alguna vez: "
+func TestElEncabezadoNoMienteSobreCuantosCabosHayAbiertos(t *testing.T) {
+	texto := registroDeAbiertos(t)
+
+	reCuenta := regexp.MustCompile(`(?m)^> \*\*Cabos abiertos hoy: (\d+)\.\*\*`)
+	ms := reCuenta.FindAllStringSubmatch(texto, -1)
+	switch {
+	case len(ms) == 0:
+		t.Fatal("ABIERTO.md perdió su línea de cuenta viva (`> **Cabos abiertos hoy: N.**`).\n" +
+			"  Sin ella esta guarda no tiene qué cruzar y se queda MUDA, que desde afuera se ve igual\n" +
+			"  que un registro sano. Si la línea se mueve o se reescribe, movete esta guarda con ella.")
+	case len(ms) > 1:
+		t.Fatalf("ABIERTO.md tiene %d líneas de cuenta viva y tiene que haber UNA.\n"+
+			"  Con dos, la que se actualiza y la que se olvida se ven iguales y el lector cree la primera.", len(ms))
+	}
+	declarado, err := strconv.Atoi(ms[0][1])
+	if err != nil {
+		t.Fatalf("la cuenta viva de ABIERTO.md no es un número: %v", err)
+	}
+
+	tab, ok := tablaConColumnas(parseTablasMD(texto), "#", "qué falta", "por qué no está", "slice")
+	if !ok {
+		t.Fatal("no se encontró la tabla 1 de ABIERTO.md por su encabezado `| # | Qué falta | Por qué no está | Slice |`.\n" +
+			"  Sin la tabla no hay contra qué cruzar la cuenta, y una guarda que no puede medir prefiere fallar.")
+	}
+	real := 0
+	for _, f := range tab.filas {
+		if id := f.id(); strings.HasPrefix(id, "A") && idDeRegistro.MatchString(id) {
+			real++
+		}
+	}
+	if real < 20 {
+		t.Fatalf("sólo se reconocieron %d fila(s) A en la tabla 1 de ABIERTO.md: cambió el formato y este cruce dejó de medir", real)
+	}
+	t.Logf("cuenta viva declarada %d · filas A en la tabla 1: %d", declarado, real)
+
+	if declarado != real {
+		sentido := "promete MÁS trabajo del que hay"
+		if declarado < real {
+			sentido = "promete MENOS trabajo del que hay"
+		}
+		t.Errorf("el encabezado de ABIERTO.md declara **%d cabos abiertos** y la tabla 1 tiene **%d** fila(s).\n"+
+			"  Es lo primero que lee quien entra al registro, y así %s.\n"+
+			"  Arreglo: poné %d en la línea `> **Cabos abiertos hoy: N.**`. No toques los números CON\n"+
+			"  FECHA de la bitácora: cada uno es verdadero para su entrada y se clava.",
+			declarado, real, sentido, real)
+	}
+}
