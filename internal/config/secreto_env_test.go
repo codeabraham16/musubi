@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -480,17 +480,52 @@ func TestNadieDiceQueElArchivoDeTokensTraeElMasNuevoPrimero(t *testing.T) {
 // El bit de ejecución importa tanto como el archivo: una comprobación que hay que invocar con
 // `bash` de por medio se corre menos, y la que no se corre no existe.
 //
-// Sabotaje que la hace fallar: borrar el guion, o quitarle el bit de ejecución.
+// EL MODO SE LE PREGUNTA A GIT, NO AL DISCO (medido el 2026-09-19). La versión anterior leía el
+// bit con `os.Stat`, y con el índice en 100644 y el disco parchado a mano en 775 daba VERDE —
+// mientras `git checkout-index` materializaba el guion en 664, que es lo que recibe cualquier
+// clone. El hermano de `internal/mcp` ya tenía la lección escrita («EL MODO SE LEE DE GIT Y NO DEL
+// DISCO») y este lado no la había aprendido: es la forma dominante de este repo.
+//
+// EL SALTEO DE WINDOWS DESAPARECE, y no por comodidad: el modo del índice es el mismo en las tres
+// plataformas, así que la aserción ya no necesita disculparse por NTFS. Antes se salteaba porque
+// `os.Stat` ahí miente sobre todo archivo regular.
+//
+// Se escribe el parseo acá y no se comparte con el de `internal/mcp`: un helper de prueba no cruza
+// paquetes sin inventar un paquete no-de-prueba para tres líneas, que sale más caro que la copia.
+//
+// Sabotaje que la hace fallar: borrar el guion, o sacarle el bit del índice.
+// arnes: no_mecanizable="el sabotaje es borrar un archivo o cambiarle el MODO en el índice de git (`git update-index --chmod=-x`): ninguna de las dos cosas es una sustitución de texto, que es lo único que este arnés sabe aplicar"
 func TestLaPruebaDeComportamientoDeLaPrecedenciaSigueEnPie(t *testing.T) {
-	ruta := filepath.Join("..", "..", "deploy", "pruebas", "precedencia-del-token.sh")
-	fi, err := os.Stat(ruta)
-	if err != nil {
-		t.Fatalf("falta %s: %v\nSin ella, la precedencia de A101 queda custodiada sólo del lado de Go,\n"+
-			"y la mitad que decidió mal dos veces vive en bash.", ruta, err)
+	const enGit = "deploy/pruebas/precedencia-del-token.sh"
+	if _, err := os.Stat(filepath.Join("..", "..", enGit)); err != nil {
+		t.Fatalf("falta %s en el disco: %v\nSin ella, la precedencia de A101 queda custodiada sólo del lado de Go,\n"+
+			"y la mitad que decidió mal dos veces vive en bash.", enGit, err)
 	}
-	// NTFS no tiene el bit y git en Windows no lo preserva: ahí la aserción sería siempre falsa,
-	// dijera lo que dijera el repo. La que importa —que el guion ESTÉ— corre en las tres.
-	if runtime.GOOS != "windows" && fi.Mode()&0o111 == 0 {
-		t.Errorf("%s no es ejecutable", ruta)
+
+	salida, err := exec.Command("git", "-C", filepath.Join("..", ".."), "ls-files", "-s", "deploy/pruebas/").Output()
+	if err != nil {
+		t.Fatalf("no se pudo leer el índice de git: %v", err)
+	}
+	modo := map[string]string{}
+	for _, l := range strings.Split(string(salida), "\n") {
+		if campos := strings.Fields(l); len(campos) >= 4 {
+			modo[campos[3]] = campos[0]
+		}
+	}
+	if len(modo) < 5 {
+		t.Fatalf("el índice devolvió %d archivo(s) bajo deploy/pruebas/ y hay muchos más: el parseo "+
+			"dejó de funcionar y esta guarda está midiendo el vacío", len(modo))
+	}
+
+	m, ok := modo[enGit]
+	if !ok {
+		t.Fatalf("%s no está en el índice de git: sin `git add` no existe para el repo, así que el "+
+			"clone no la recibe y la mitad de A101 que vive en bash queda sin custodiar allá.", enGit)
+	}
+	if m != "100755" {
+		t.Errorf("%s está versionado como %s y tiene que ser 100755.\n"+
+			"  El disco de esta máquina no dice nada: lo que viaja al clone es el modo del ÍNDICE, y "+
+			"una comprobación que hay que invocar con `bash` de por medio se corre menos.\n"+
+			"  Arreglo: `git update-index --chmod=+x %s`.", enGit, m, enGit)
 	}
 }
