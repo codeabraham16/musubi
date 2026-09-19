@@ -167,7 +167,7 @@ import (
 // número a la vez: 619 y 617 eran los dos correctos EN SU PROPIO ÁRBOL y ninguno lo es en el
 // integrado. Un número derivado no se elige entre los dos lados de un conflicto: se vuelve a
 // contar con la herramienta, sobre el árbol ya mergeado.
-const anclasEnProsaAlDia = 617
+const anclasEnProsaAlDia = 613
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
