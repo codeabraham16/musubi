@@ -175,7 +175,15 @@ import (
 // porque la primera se haya equivocado, sino porque el techo es un derivado del ÁRBOL ENTERO y
 // ninguna de las dos pudo medir el árbol que resulta de las dos. Se vuelve a correr `-validar`
 // sobre el árbol rebasado y se escribe lo que dice: 612.
-const anclasEnProsaAlDia = 612
+//
+// Y DE 612 A 610 EL 2026-09-19, y esta vez NO por mecanizar: dos anclas pasaron a
+// `no_mecanizable`. Son las dos guardas del bit de ejecución, cuyo sabotaje es `git update-index
+// --chmod=-x` o borrar un archivo — ninguna de las dos cosas es una sustitución de texto, que es
+// lo único que este arnés sabe aplicar. La deuda baja igual, porque `anclasEnProsaAlDia` cuenta lo
+// que NADIE puede correr, y una exención declarada con su motivo ya no es una promesa sin dueño.
+// Cuidado con la comodidad que esto abre: declarar `no_mecanizable` baja el número igual que
+// mecanizar, y es mucho más barato. El motivo se escribe para que se pueda discutir.
+const anclasEnProsaAlDia = 610
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //

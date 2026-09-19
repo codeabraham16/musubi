@@ -24,8 +24,9 @@ package mcp
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -164,26 +165,72 @@ func TestElMapaDeCoberturaNoSePoneEnVerdeSinHaberMiradoNada(t *testing.T) {
 // vigila a esta máquina?». Con la primera sola, las 35 reglas cargadas se leen como 35 dimensiones
 // vigiladas en las 4 máquinas — y son 13 de 19 en las Windows.
 //
-// Sabotaje: borrar cualquiera de los dos scripts.
+// EL MODO SE LE PREGUNTA A GIT, NO AL DISCO (medido el 2026-09-19). La versión anterior leía el
+// bit con `os.Stat`, y eso deja pasar el único estado que importa: el índice en 100644 con el disco
+// parchado a mano en 775. Reproducido acá —`git update-index --chmod=-x` sobre los dos guiones— la
+// guarda daba VERDE, y `git checkout-index` materializaba los dos en 664, que es lo que recibe
+// cualquier clone. No es una hipótesis: `deploy/musubi-backup.sh` vivió en 100644 desde el
+// 2026-07-08 y su unidad contestó `status=203/EXEC` al instalarse (ver #542).
+//
+// LA CONSECUENCIA NO ES «EL CLONE SALE ROTO Y NADIE SE ENTERA», Y CONVIENE DECIRLO BIEN: un
+// `actions/checkout` materializa el modo del ÍNDICE, así que en CI el disco llega SIN el bit y la
+// versión vieja también se ponía roja allá. El costo real era otro y es peor de diagnosticar: el
+// rojo llegaba en CI diciendo «no es ejecutable» mientras el `ls -l` de quien lo rompió mostraba
+// `-rwxrwxr-x`, o sea un rojo que no se reproduce en local y cuyo texto apunta al disco, que es
+// justo donde no está el problema. Preguntándole al índice, el rojo aparece donde se rompió y el
+// mensaje regala el comando que lo arregla.
+//
+// SE PREGUNTAN LAS DOS COSAS, y cada una tiene su propio sabotaje: que el guion esté EN EL DISCO
+// (borrarlo rompe el árbol de quien trabaja) y que esté EN EL ÍNDICE con el bit (sin `git add` un
+// archivo no existe para el repo, y sin el bit no se puede ejecutar allá). El modo del índice es
+// independiente de la plataforma, así que desaparece el salteo de Windows: la guarda ahora mide
+// lo mismo en las tres.
+//
+// Sabotaje: borrar cualquiera de los dos scripts, o sacarles el bit del índice.
+// arnes: no_mecanizable="el sabotaje de la mitad nueva es un cambio de MODO en el índice de git (`git update-index --chmod=-x`), y el de la otra mitad es borrar un archivo: ninguno de los dos es una sustitución de texto, que es lo único que este arnés sabe aplicar"
 func TestLasDosVerificacionesDeDespliegueExisten(t *testing.T) {
+	modo := modosDelIndice(t, "deploy/")
 	for _, s := range []string{"verificar-despliegue.sh", "verificar-cobertura.sh"} {
-		ruta := "../../deploy/" + s
-		fi, err := os.Stat(ruta)
-		if err != nil {
-			t.Errorf("falta %s: %v", s, err)
+		if _, err := os.Stat(filepath.Join("..", "..", "deploy", s)); err != nil {
+			t.Errorf("falta deploy/%s en el disco: %v", s, err)
+		}
+		m, ok := modo["deploy/"+s]
+		if !ok {
+			t.Errorf("deploy/%s no está en el índice de git.\n"+
+				"  Sin `git add` no existe para el repo: el clone no lo recibe y la comprobación de "+
+				"despliegue que este guion hace deja de correr allá, aunque acá el archivo esté.", s)
 			continue
 		}
-		// EL BIT EJECUTABLE SÓLO SE PUEDE AFIRMAR DONDE EXISTE. NTFS no lo tiene y git en
-		// Windows no lo preserva, así que ahí os.Stat devuelve un modo sin `x` para todo archivo
-		// regular y esto fallaría siempre, dijera lo que dijera el repo. La aserción que importa
-		// —que los dos guiones ESTÉN, que es el sabotaje nombrado arriba— sigue corriendo en las
-		// tres plataformas.
-		if runtime.GOOS == "windows" {
-			continue
-		}
-		if fi.Mode()&0o111 == 0 {
-			t.Errorf("%s no es ejecutable: una comprobación que hay que invocar con `bash` de por "+
-				"medio se corre menos, y la que no se corre no existe", s)
+		if m != "100755" {
+			t.Errorf("deploy/%s está versionado como %s y tiene que ser 100755.\n"+
+				"  El disco de esta máquina no dice nada: lo que viaja al clone es el modo del ÍNDICE, "+
+				"y sin el bit una comprobación que hay que invocar con `bash` de por medio se corre "+
+				"menos — y la que no se corre no existe.\n"+
+				"  Arreglo: `git update-index --chmod=+x deploy/%s`.", s, m, s)
 		}
 	}
+}
+
+// modosDelIndice devuelve, para cada ruta versionada bajo `prefijo`, el modo con el que git la
+// tiene guardada (`100644`, `100755`, …). Es LA fuente: el modo del disco puede estar parchado a
+// mano mientras el del índice está roto, y es el del índice el que viaja al clone y al CI.
+//
+// Falla en vez de devolver poco: un mapa casi vacío se leería como «ningún archivo incumple».
+func modosDelIndice(t *testing.T, prefijo string) map[string]string {
+	t.Helper()
+	salida, err := exec.Command("git", "-C", filepath.Join("..", ".."), "ls-files", "-s", prefijo).Output()
+	if err != nil {
+		t.Fatalf("no se pudo leer el índice de git para %q: %v", prefijo, err)
+	}
+	modo := map[string]string{}
+	for _, l := range strings.Split(string(salida), "\n") {
+		if campos := strings.Fields(l); len(campos) >= 4 {
+			modo[campos[3]] = campos[0]
+		}
+	}
+	if len(modo) < 5 {
+		t.Fatalf("el índice devolvió %d archivo(s) bajo %q y hay muchos más: el parseo dejó de "+
+			"funcionar y esta guarda está midiendo el vacío", len(modo), prefijo)
+	}
+	return modo
 }
