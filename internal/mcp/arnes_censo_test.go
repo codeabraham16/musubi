@@ -197,7 +197,13 @@ import (
 // árbol que pudo ver. Es que el techo es un derivado del ÁRBOL ENTERO y nadie puede medir un árbol
 // que todavía no existe. Mientras varias ramas mecanicen a la vez, la última en mergear recuenta,
 // y eso no es un costo evitable: es lo que significa que el número sea derivado.
-const anclasEnProsaAlDia = 601
+//
+// Y DE 601 A LO QUE MIDE HOY, el mismo día y también en el commit que mecaniza: las ocho del eje de
+// AUTORIZACIÓN de flota —`internal/mcp/fleet_authz_test.go`, el slice S3—, que es quién puede
+// pedirle qué a qué máquina. Esta rama había escrito 597 sobre su propio árbol y después 594 sobre
+// el de la rama de arriba: le pasó lo mismo que a ella, un nivel más abajo. Se recuenta sobre el
+// integrado y se escribe eso.
+const anclasEnProsaAlDia = 593
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
