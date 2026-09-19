@@ -167,7 +167,15 @@ import (
 // número a la vez: 619 y 617 eran los dos correctos EN SU PROPIO ÁRBOL y ninguno lo es en el
 // integrado. Un número derivado no se elige entre los dos lados de un conflicto: se vuelve a
 // contar con la herramienta, sobre el árbol ya mergeado.
-const anclasEnProsaAlDia = 613
+//
+// Y DE 613 A 612 EL 2026-09-19. Es el caso que A123 tiene escrito como advertencia, visto desde
+// adentro: #553 mecanizó cuatro anclas y bajó el techo a 613 sobre SU árbol, correcto ahí; este
+// commit mecaniza una más y, ya rebasado sobre el main con #553 adentro, el censo da 612. Las dos
+// ramas pasan verdes por separado y la segunda en mergear es la que tiene que volver a contar —no
+// porque la primera se haya equivocado, sino porque el techo es un derivado del ÁRBOL ENTERO y
+// ninguna de las dos pudo medir el árbol que resulta de las dos. Se vuelve a correr `-validar`
+// sobre el árbol rebasado y se escribe lo que dice: 612.
+const anclasEnProsaAlDia = 612
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //

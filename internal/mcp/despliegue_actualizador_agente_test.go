@@ -180,21 +180,65 @@ func TestElActualizadorNoCantaVictoriaSoloPorLaVersionReportada(t *testing.T) {
 // línea del archivo, tirando el formato multi-token que existe para dar fallback a esa rotación.
 // El arreglo estaba en el repo desde hacía tiempo y no había llegado a la máquina.
 //
-// Sabotaje que la hace fallar: sacar el paso que migra el lanzador.
+// PREGUNTABA POR UN TEXTO QUE APARECE EN TRES PASOS AJENOS (medido el 2026-09-19). La primera
+// aserción era `Contains(g, "agente.cmd")` sobre el guion ENTERO, y `agente.cmd` es SUBCADENA de
+// `cambiar-agente.cmd`: de las once ocurrencias que la prueba ve, ocho viven en los pasos 1, 4 y 6
+// —servir el cambiador, refrescarlo, lanzarlo— y no tienen nada que ver con el lanzador. O sea que
+// la aserción quedaba satisfecha por el paso 4 y NO PODÍA FALLAR por un defecto del paso 5, que es
+// el único que dice custodiar. Se midieron las dos direcciones: con el paso 5 borrado entero seguía
+// en verde, y con el paso 5 apuntando a `cambiar-agente.cmd` —la regresión A102 exacta, que deja la
+// credencial en el entorno del proceso— la prueba ENTERA pasaba.
+//
+// LO QUE DECIDE ES EL COMILLADO, y por eso el ancla nueva alcanza sola: `Join-Path $d "agente.cmd"`
+// NO es subcadena de `Join-Path $d "cambiar-agente.cmd"`, porque entre la comilla y la `a` se mete
+// el `cambiar-`. Tampoco la satisfacen los mensajes del propio paso —«no hay agente.cmd en …», «…
+// respaldo en agente.cmd.antes-de-la-ruta»—, que son texto y no eligen ningún archivo.
+//
+// Y LAS TRES PREGUNTAN POR EL MISMO PASO. Se recorta el cuerpo al paso del lanzador antes de
+// buscar: hoy las otras dos cadenas viven sólo ahí —se contó—, pero una prueba que mira el archivo
+// entero vuelve a ser hueca en cuanto alguien nombra `MUSUBI_DEVICE_TOKEN_FILE` en otro paso. El
+// corte se ancla en la PROSA del paso y no en su número, para que renumerar los pasos no la calle;
+// y si el paso desaparece, la guarda falla en vez de quedarse muda.
+//
+// Sabotaje que la hace fallar: que el paso del lanzador apunte al CAMBIADOR en vez de al lanzador.
+// arnes: archivo="deploy/actualizar-agente-windows.sh"
+// arnes: de="Join-Path $d \"agente.cmd\""
+// arnes: a="Join-Path $d \"cambiar-agente.cmd\""
 func TestElActualizadorTambienRefrescaElLanzador(t *testing.T) {
 	g := leerDeploy(t, "actualizar-agente-windows.sh")
-	if !strings.Contains(g, "agente.cmd") {
-		t.Fatal("el actualizador dejó de tocar `agente.cmd`: refresca el binario y el cambiador y\n" +
-			"deja el lanzador viejo, que es donde vive la forma insegura del token (cabo A102)")
+
+	ini := strings.Index(g, "migrando el lanzador")
+	if ini < 0 {
+		t.Fatal("no encuentro el paso que migra el lanzador en `actualizar-agente-windows.sh`.\n" +
+			"  Esta guarda recorta ahí antes de preguntar nada: sin el corte volvería a mirar el archivo\n" +
+			"  entero, que es como no podía fallar. Si el paso se renombró, movete el ancla con él; si se\n" +
+			"  fue, el cabo A102 volvió a quedar sin custodia.")
 	}
-	if !strings.Contains(g, "MUSUBI_DEVICE_TOKEN_FILE") {
-		t.Fatal("el paso del lanzador ya no migra a `MUSUBI_DEVICE_TOKEN_FILE`: sin eso la credencial\n" +
-			"sigue yendo por el entorno y la rotación en caliente no se puede completar")
+	cuerpo := g[ini:]
+	if fin := strings.Index(cuerpo, "\npaso \""); fin >= 0 {
+		cuerpo = cuerpo[:fin]
 	}
-	// El respaldo importa tanto como la migración: se reescribe un archivo que el instalador
-	// generó con valores propios de la máquina.
-	if !strings.Contains(g, "antes-de-la-ruta") {
-		t.Fatal("la migración del lanzador dejó de dejar respaldo antes de reescribirlo")
+
+	for _, c := range []struct{ frag, queja string }{
+		{`Join-Path $d "agente.cmd"`,
+			"el paso del lanzador dejó de apuntar a `agente.cmd`.\n" +
+				"  Si apunta al CAMBIADOR, el lanzador se queda con `set /p MUSUBI_DEVICE_TOKEN=<archivo`:\n" +
+				"  la credencial viaja en el ENTORNO del proceso (mecanismo de A88, donde arreglar el archivo\n" +
+				"  no le llega a un proceso que ya arrancó), `set /p` corre UNA vez al arrancar así que la\n" +
+				"  rotación en caliente vence siempre, y lee sólo la PRIMERA línea, tirando el formato\n" +
+				"  multi-token que existe justamente para dar fallback a esa rotación (A101). Es el estado\n" +
+				"  que se midió en davantis-1 el 2026-09-05 (cabo A102)."},
+		{"MUSUBI_DEVICE_TOKEN_FILE",
+			"el paso del lanzador ya no migra a `MUSUBI_DEVICE_TOKEN_FILE`: sin eso la credencial\n" +
+				"  sigue yendo por el entorno y la rotación en caliente no se puede completar."},
+		// El respaldo importa tanto como la migración: se reescribe un archivo que el instalador
+		// generó con valores propios de la máquina.
+		{"antes-de-la-ruta",
+			"la migración del lanzador dejó de dejar respaldo antes de reescribirlo."},
+	} {
+		if !strings.Contains(cuerpo, c.frag) {
+			t.Errorf("falta `%s` en el paso del lanzador: %s", c.frag, c.queja)
+		}
 	}
 }
 
