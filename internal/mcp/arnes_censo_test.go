@@ -203,7 +203,15 @@ import (
 // pedirle qué a qué máquina. Esta rama había escrito 597 sobre su propio árbol y después 594 sobre
 // el de la rama de arriba: le pasó lo mismo que a ella, un nivel más abajo. Se recuenta sobre el
 // integrado y se escribe eso.
-const anclasEnProsaAlDia = 593
+//
+// Y DE 593 A 581 EL 2026-09-19 — y esta vez el arnés lo cazó EN VIVO, que es la mejor evidencia
+// que hay de que el párrafo de arriba no es teórico. Se mecanizaron las doce anclas del eje de
+// CUATRO OJOS (`internal/mcp/fleet_cuatro_ojos_test.go`) y se corrieron los 67 sabotajes del
+// paquete ANTES de tocar este número: 66 en ROJO y UNO en VERDE, y el verde era ESTA guarda.
+// Con la deuda en 581 y el techo todavía en 593, su sabotaje —que suma UNA sola ancla— llegaba a
+// 582 y no cruzaba nada. O sea que bajar el número no es contabilidad: es lo único que le devuelve
+// el filo, y el instrumento lo demuestra sin que haya que creerle a nadie.
+const anclasEnProsaAlDia = 581
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
