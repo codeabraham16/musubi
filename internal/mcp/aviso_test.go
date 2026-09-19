@@ -81,6 +81,9 @@ func TestUnAgenteViejoQueNoOpinaNoPisaLaCapacidadMedida(t *testing.T) {
 // Sabotaje que la hace fallar: sacar el `case consent.AvisaAlUsuario()` que encola.
 // Sabotaje que la hace fallar: encolar el aviso DESPUÉS de crear la sesión (llega tarde).
 // arnes: no_mecanizable="Regla 4: el sabotaje que esta línea describe —encolar el aviso DESPUÉS de crear la sesión, o sea mover s.encolarAvisoDeAcceso (methods_pantalla.go:189) por debajo del AbrirSesionPantalla (línea 194)— deja TestConUnAgenteQueSabeAvisarElAvisoSeEncola en VERDE. La prueba sólo observa PRESENCIA y TEXTO, nunca orden: toma `antes := comandosEncolados(t, s)`, llama musubi_fleet_screen, y recorre TODOS los `nuevos` buscando cualquier fila con Argv[0] == comandoAviso (aviso_test.go:110-116) para luego exigir que Argv[1] contenga «mirador» y «pantalla». `comandosEncolados` es `s.engine.BitacoraDeComandos(\"casa\", \"\", 50)` (fleet_politicas_test.go:59-66) y no se compara ningún índice ni posición contra el comando de pantalla que encola entregarPantalla, así que el aviso reordenado sigue en la lista con el mismo argv y las cuatro aserciones pasan. Confirmé además que ninguna prueba de internal/mcp mira el orden del aviso (grep de comandoAviso: consentimiento_exec_shell_test.go:129,250,303, aviso_test.go:112,158, consentimiento_matriz_test.go:210, politicas_consentimiento_test.go:84 — todas búsquedas por Argv[0]) y que `encolarAvisoDeAcceso` no recibe la sesión, así que moverlo no cambia nada observable. El «llega tarde» es una propiedad temporal frente a la apertura real de la pantalla que esta prueba no mide; ponerla en rojo exigiría una aserción de orden que hoy no existe, no un reemplazo de literal. (La OTRA línea del mismo comentario, aviso_test.go:81 —«sacar el case consent.AvisaAlUsuario() que encola»— sí es mecanizable y sí pone esta prueba en rojo; el ancla asignada es la 82.)"
+// arnes: archivo="internal/mcp/methods_pantalla.go"
+// arnes: de="\t\ts.encolarAvisoDeAcceso(d, p, avisoPantalla)"
+// arnes: a="\t\t_ = avisoPantalla"
 func TestConUnAgenteQueSabeAvisarElAvisoSeEncola(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	tokenDevice := enrolarConPantalla(t, s, "casa", "pc-gio")
@@ -138,6 +141,9 @@ func TestConUnAgenteQueSabeAvisarElAvisoSeEncola(t *testing.T) {
 // bitácora. Se deja la constancia en el log y listo.
 //
 // Sabotaje que la hace fallar: encolar el aviso sin mirar PuedePreguntar.
+// arnes: archivo="internal/mcp/methods_pantalla.go"
+// arnes: de="\tcase consent.AvisaAlUsuario() && !d.PuedePreguntar:"
+// arnes: a="\tcase consent.AvisaAlUsuario() && !d.PuedePreguntar && false:"
 func TestSinCapacidadDeAvisarNoSeEncolaUnAvisoQueNadieVaAMostrar(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	tokenDevice := enrolarConPantalla(t, s, "casa", "pc-gio")
@@ -347,6 +353,19 @@ func TestLosTresNoSeDistinguenYCadaUnoDiceQueHacer(t *testing.T) {
 // conseguir permiso de entrar a la pantalla de otra.
 //
 // Sabotaje que la hace fallar: sacarle el `AND device_id = ?` a ResponderConsentimiento.
+// NO SE PUEDE SABOTEAR DESDE ACÁ, Y EL MOTIVO ES LA PROPIA DEFENSA EN PROFUNDIDAD QUE MIDE.
+//
+// Medido el 2026-09-16: sacándole el `AND device_id = ?` al UPDATE de ResponderConsentimiento
+// —con `OR 1=1`, para no romper el binding— esta prueba SIGUE EN VERDE. No es que la guarda esté
+// hueca: es que la PRIMERA capa corta antes. `/fleet/result` rechaza con 403 un comando que no es
+// de esta máquina, así que la respuesta ajena nunca llega a tocar la sesión y la segunda capa no
+// se ejercita desde afuera.
+//
+// Sabotear la primera capa tampoco sirve para esta directiva: la prueba caería por su otra
+// aserción —el 403— y el rojo no diría nada sobre el filtro del UPDATE, que es lo que esta línea
+// promete. Un sabotaje que no puede manifestarse se declara, no se corre.
+//
+// arnes: no_mecanizable="la defensa es doble y la primera capa (/fleet/result, 403 por comando ajeno) corta antes, así que el filtro del UPDATE no se puede ejercitar desde una prueba de punta a punta"
 func TestUnaMaquinaNoPuedeContestarPorOtra(t *testing.T) {
 	s, ts, _ := maquinaQuePide(t)
 	// Una segunda máquina, con su propio token.
