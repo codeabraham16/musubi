@@ -167,7 +167,11 @@ import (
 // número a la vez: 619 y 617 eran los dos correctos EN SU PROPIO ÁRBOL y ninguno lo es en el
 // integrado. Un número derivado no se elige entre los dos lados de un conflicto: se vuelve a
 // contar con la herramienta, sobre el árbol ya mergeado.
-const anclasEnProsaAlDia = 613
+//
+// Y DE 613 A 605 EL 2026-09-19, mismo commit que mecaniza: las ocho anclas del eje de
+// consentimiento —`internal/fleet/consentimiento_test.go`—, que es lo que se le debe a la persona
+// sentada frente a la máquina cuando alguien abre una sesión.
+const anclasEnProsaAlDia = 605
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //

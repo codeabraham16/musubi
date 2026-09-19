@@ -16,6 +16,9 @@ import "testing"
 // Acá es un MÁXIMO: una máquina puede endurecer lo que el proyecto dijo, nunca aflojarlo.
 //
 // Sabotaje que la hace fallar: hacer que la última fuente pise a las anteriores.
+// arnes: archivo="internal/fleet/consentimiento.go"
+// arnes: de="\t\tres = MasRestrictivo(res, f)"
+// arnes: a="\t\tres = f"
 func TestGanaLaFuenteMasRestrictivaYNoLaMasEspecifica(t *testing.T) {
 	casos := []struct {
 		nombre  string
@@ -53,8 +56,18 @@ func TestGanaLaFuenteMasRestrictivaYNoLaMasEspecifica(t *testing.T) {
 // vería puesta. Es exactamente la clase de fallo que este track viene persiguiendo: verde por el
 // motivo equivocado.
 //
-// Sabotaje que la hace fallar: devolver `nivel[c]` directo (que da 0, o sea `libre`, para
-// cualquier cosa que no esté en el mapa).
+// Sabotaje que la hace fallar: que un valor ilegible caiga en `libre` y no en el default, dentro
+// de ResolverConsentimiento.
+//
+// LA PROSA DECÍA OTRA COSA Y ESTABA MAL — medido el 2026-09-19, al mecanizarla. Nombraba
+// «devolver `nivel[c]` directo» en `nivelDe`, y ese corte deja esta guarda ENTERA EN VERDE: los 7
+// subtests pasan. Ningún camino de esta prueba llega a `nivelDe` con basura — `ResolverConsentimiento`
+// normaliza la fuente ilegible ANTES de combinar, y `Valido()` pregunta por el mapa sin pasar por
+// ahí. Una promesa de sabotaje apuntada a un lugar que la guarda no toca es un veredicto que nunca
+// se podía cobrar, y mientras siguiera siendo prosa nadie iba a enterarse.
+// arnes: archivo="internal/fleet/consentimiento.go"
+// arnes: de="\t\t\tf = ConsentimientoPorDefecto"
+// arnes: a="\t\t\tf = ConsentimientoLibre"
 func TestUnValorIlegibleNoAbreLaPuerta(t *testing.T) {
 	basura := []Consentimiento{"", "Pide", "ask", "PROHIBIDO", "sí", "libre "}
 	for _, b := range basura {
@@ -89,6 +102,9 @@ func TestUnValorIlegibleNoAbreLaPuerta(t *testing.T) {
 // termina en menos seguridad, no en más.
 //
 // Sabotaje que la hace fallar: mover ConsentimientoPorDefecto a `libre` o a `pide`.
+// arnes: archivo="internal/fleet/consentimiento.go"
+// arnes: de="const ConsentimientoPorDefecto = ConsentimientoAvisa"
+// arnes: a="const ConsentimientoPorDefecto = ConsentimientoLibre"
 func TestElDefaultAvisaYNoBloquea(t *testing.T) {
 	d := ConsentimientoPorDefecto
 	if !d.AvisaAlUsuario() {
@@ -110,6 +126,9 @@ func TestElDefaultAvisaYNoBloquea(t *testing.T) {
 // aparece sin que nada le haya dicho a nadie que iba a aparecer.
 //
 // Sabotaje que la hace fallar: comparar por igualdad con `avisa` en vez de por nivel.
+// arnes: archivo="internal/fleet/consentimiento.go"
+// arnes: de="func (c Consentimiento) AvisaAlUsuario() bool { return nivelDe(c) >= nivel[ConsentimientoAvisa] }"
+// arnes: a="func (c Consentimiento) AvisaAlUsuario() bool { return normalizar(c) == ConsentimientoAvisa }"
 func TestPedirImplicaAvisar(t *testing.T) {
 	if !ConsentimientoPide.AvisaAlUsuario() {
 		t.Error("`pide` no avisa")
@@ -136,6 +155,9 @@ func TestPedirImplicaAvisar(t *testing.T) {
 // arranca en el default— es tan natural que va a volver.
 //
 // Sabotaje que la hace fallar: inicializar el acumulador en ConsentimientoPorDefecto.
+// arnes: archivo="internal/fleet/consentimiento.go"
+// arnes: de="\tvar res Consentimiento\n\tvisto := false"
+// arnes: a="\tres := ConsentimientoPorDefecto\n\tvisto := true"
 func TestLibreEsAlcanzableCuandoTodasLasFuentesLoDicen(t *testing.T) {
 	if got := ResolverConsentimiento(ConsentimientoLibre); got != ConsentimientoLibre {
 		t.Errorf("una sola fuente `libre` resolvió %q: el default está actuando de piso", got)
@@ -158,6 +180,9 @@ func TestLibreEsAlcanzableCuandoTodasLasFuentesLoDicen(t *testing.T) {
 // capacidad nueva no acotaría nada y sería decoración.
 //
 // Sabotaje que la hace fallar: hacer Implica simétrica.
+// arnes: archivo="internal/fleet/device.go"
+// arnes: de="\treturn otorgada == CapScreen && pedida == CapScreenView"
+// arnes: a="\treturn (otorgada == CapScreen && pedida == CapScreenView) || (otorgada == CapScreenView && pedida == CapScreen)"
 func TestMirarNoEsControlarYControlarSiEsMirar(t *testing.T) {
 	if !Implica(CapScreen, CapScreenView) {
 		t.Error("quien controla no puede mirar: la capacidad concedida y la acción negada")
@@ -199,6 +224,9 @@ func TestMirarNoEsControlarYControlarSiEsMirar(t *testing.T) {
 //
 // Sabotaje que la hace fallar: degradar `pide` a `libre` (o a `avisa`) cuando no se puede
 // preguntar.
+// arnes: archivo="internal/fleet/consentimiento.go"
+// arnes: de="\t\treturn ConsentimientoProhibido"
+// arnes: a="\t\treturn ConsentimientoLibre"
 func TestPedirDondeNadiePuedeContestarCierraLaPuerta(t *testing.T) {
 	if got := ConsentimientoPide.AplicarACapacidadDePreguntar(false); got != ConsentimientoProhibido {
 		t.Errorf("`pide` sin interlocutor quedó en %q: la configuración más estricta se volvió la más permisiva", got)
@@ -240,6 +268,9 @@ func TestPedirDondeNadiePuedeContestarCierraLaPuerta(t *testing.T) {
 // el de la credencial y el del aparato. Arreglar sólo uno deja el otro mintiendo.
 //
 // Sabotaje que la hace fallar: volver `Permite` a comparar con `==`.
+// arnes: archivo="internal/fleet/device.go"
+// arnes: de="\t\tif Implica(tiene, c) {"
+// arnes: a="\t\tif tiene == c {"
 func TestElAparatoQueAdmiteControlarAdmiteMirar(t *testing.T) {
 	// Enrolada a la vieja usanza: sólo `screen`, que es como están TODAS las filas existentes.
 	d := Device{Tier: TierAgente, Caps: []Cap{CapMetrics, CapScreen}}
