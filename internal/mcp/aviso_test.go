@@ -141,6 +141,7 @@ func TestConUnAgenteQueSabeAvisarElAvisoSeEncola(t *testing.T) {
 // bitácora. Se deja la constancia en el log y listo.
 //
 // Sabotaje que la hace fallar: encolar el aviso sin mirar PuedePreguntar.
+// arnes: colision_ok="TestConCuatroOjosElPrimerPedidoNoAcunaContrasena"
 // arnes: archivo="internal/mcp/methods_pantalla.go"
 // arnes: de="\tcase consent.AvisaAlUsuario() && !d.PuedePreguntar:"
 // arnes: a="\tcase consent.AvisaAlUsuario() && !d.PuedePreguntar && false:"
