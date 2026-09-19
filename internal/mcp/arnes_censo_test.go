@@ -184,12 +184,20 @@ import (
 // Cuidado con la comodidad que esto abre: declarar `no_mecanizable` baja el número igual que
 // mecanizar, y es mucho más barato. El motivo se escribe para que se pueda discutir.
 //
-// Y DE 610 A LO QUE MIDE HOY, 2026-09-19, mismo commit que mecaniza: las ocho anclas del eje de
+// Y DE 610 A 609 EL 2026-09-19: se mecanizó el sabotaje de la viñeta del mensaje de alerta, que
+// SÍ es una sustitución de texto en `deploy/prometheus/alertmanager.yml`.
+//
+// Y DE 609 A LO QUE MIDE HOY, mismo commit que mecaniza: las ocho anclas del eje de
 // consentimiento —`internal/fleet/consentimiento_test.go`—, que es lo que se le debe a la persona
-// sentada frente a la máquina cuando alguien abre una sesión. Esta rama había escrito 605 sobre su
-// propio árbol, medido antes de que main bajara de 613 a 610 por otras dos ramas; el número de
-// acá NO es ninguno de los dos, es el que la herramienta devuelve sobre el árbol ya integrado.
-const anclasEnProsaAlDia = 602
+// sentada frente a la máquina cuando alguien abre una sesión.
+//
+// ESTA RAMA TUVO QUE RECONTAR TRES VECES, y vale más que el número: escribió 605 sobre su propio
+// árbol, 602 después de integrar el main que había bajado a 610, y esto después de integrar el que
+// bajó a 609. No es que las mediciones anteriores estuvieran mal — cada una era correcta sobre el
+// árbol que pudo ver. Es que el techo es un derivado del ÁRBOL ENTERO y nadie puede medir un árbol
+// que todavía no existe. Mientras varias ramas mecanicen a la vez, la última en mergear recuenta,
+// y eso no es un costo evitable: es lo que significa que el número sea derivado.
+const anclasEnProsaAlDia = 601
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
