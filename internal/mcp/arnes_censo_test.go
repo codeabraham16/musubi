@@ -186,10 +186,15 @@ import (
 //
 // Y DE 610 A LO QUE MIDE HOY, 2026-09-19, mismo commit que mecaniza: las ocho anclas del eje de
 // consentimiento —`internal/fleet/consentimiento_test.go`—, que es lo que se le debe a la persona
-// sentada frente a la máquina cuando alguien abre una sesión. Esta rama había escrito 605 sobre su
-// propio árbol, medido antes de que main bajara de 613 a 610 por otras dos ramas; el número de
-// acá NO es ninguno de los dos, es el que la herramienta devuelve sobre el árbol ya integrado.
-const anclasEnProsaAlDia = 602
+// sentada frente a la máquina cuando alguien abre una sesión. Esa rama había escrito 605 sobre su
+// propio árbol, medido antes de que main bajara de 613 a 610 por otras dos ramas; el número que
+// quedó NO es ninguno de los dos, es el que la herramienta devolvió sobre el árbol ya integrado.
+//
+// Y DE 602 A LO QUE MIDE HOY, EL MISMO DÍA, también en el commit que mecaniza: las ocho del eje de
+// AUTORIZACIÓN de flota —`internal/mcp/fleet_authz_test.go`, el slice S3—, que es quién puede
+// pedirle qué a qué máquina. Esta rama había escrito 597 sobre su propio árbol y le pasó lo mismo
+// que a la de arriba, un nivel más abajo: se vuelve a contar sobre el integrado y se escribe eso.
+const anclasEnProsaAlDia = 594
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
