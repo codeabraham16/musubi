@@ -33,6 +33,9 @@ func altaDePrueba(t *testing.T, e *DbEngine, projectID, name string) (fleet.Devi
 // A1 — el id lo asigna el CEREBRO. Un id declarado por el cliente se ignora.
 // Sabotaje: quitar `d.ID = uuid.NewString()` de AltaDevice → el cliente elige su identidad y
 // puede afirmar ser otra máquina.
+// arnes: archivo="internal/memory/devices.go"
+// arnes: de="\td.ID = uuid.NewString()"
+// arnes: a="\tif strings.TrimSpace(d.ID) == \"\" {\n\t\td.ID = uuid.NewString()\n\t}"
 func TestAltaIgnoraElIDQueDeclaraElCliente(t *testing.T) {
 	e := newTestEngine(t)
 	token, _ := fleet.NuevoToken()
@@ -89,6 +92,9 @@ func TestIdentidadSeDerivaDelToken(t *testing.T) {
 // esa fila a mano para simular exactamente ese error.
 //
 // Sabotaje que la hace fallar: quitar la guarda de token vacío de DevicePorToken.
+// arnes: archivo="internal/memory/devices.go"
+// arnes: de="\tif strings.TrimSpace(token) == \"\" {\n\t\treturn fleet.Device{}, false, nil\n\t}\n\trow := e.db.QueryRow(\n\t\t`SELECT `+columnasDevice+` FROM devices WHERE token_sha256 = ? AND revoked = 0`,"
+// arnes: a="\trow := e.db.QueryRow(\n\t\t`SELECT `+columnasDevice+` FROM devices WHERE token_sha256 = ? AND revoked = 0`,"
 func TestTokenVacioNoAutenticaNiConUnaFilaQueHasheoElVacio(t *testing.T) {
 	e := newTestEngine(t)
 
@@ -125,6 +131,9 @@ func TestTokenVacioNoAutenticaNiConUnaFilaQueHasheoElVacio(t *testing.T) {
 
 // A2 — el token crudo no queda en NINGUNA columna de la fila.
 // Sabotaje: guardar `token` en vez de `fleet.HashToken(token)` en AltaDevice.
+// arnes: archivo="internal/memory/devices.go"
+// arnes: de="\thash := \"\"\n\tif strings.TrimSpace(token) != \"\" {\n\t\thash = fleet.HashToken(token)\n\t}"
+// arnes: a="\thash := \"\"\n\tif strings.TrimSpace(token) != \"\" {\n\t\thash = token\n\t}"
 func TestElTokenCrudoNoSeGuardaEnNingunaColumna(t *testing.T) {
 	e := newTestEngine(t)
 	_, token := altaDePrueba(t, e, "casa", "pc-gio")
@@ -228,6 +237,9 @@ func TestAltaConCapFueraDeTierNoLlegaALaBase(t *testing.T) {
 
 // A7 — el listado aísla por proyecto.
 // Sabotaje: quitar el `WHERE project_id = ?` de ListarDevices.
+// arnes: archivo="internal/memory/devices.go"
+// arnes: de="\tq := `SELECT ` + columnasDevice + ` FROM devices WHERE project_id = ?`"
+// arnes: a="\tq := `SELECT ` + columnasDevice + ` FROM devices WHERE (project_id = ? OR 1=1)`"
 func TestListarAislaPorProyecto(t *testing.T) {
 	e := newTestEngine(t)
 	altaDePrueba(t, e, "casa", "pc-gio")
