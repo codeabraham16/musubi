@@ -171,7 +171,11 @@ import (
 // Y DE 613 A 605 EL 2026-09-19, mismo commit que mecaniza: las ocho anclas del eje de
 // consentimiento —`internal/fleet/consentimiento_test.go`—, que es lo que se le debe a la persona
 // sentada frente a la máquina cuando alguien abre una sesión.
-const anclasEnProsaAlDia = 605
+//
+// Y DE 605 A 597 EL MISMO DÍA, también en el commit que mecaniza: las ocho del eje de
+// AUTORIZACIÓN de flota —`internal/mcp/fleet_authz_test.go`, el slice S3—, que es quién puede
+// pedirle qué a qué máquina. Con ésas la cobertura ejecutable cruza el 30 %.
+const anclasEnProsaAlDia = 597
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
