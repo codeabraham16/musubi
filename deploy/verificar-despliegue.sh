@@ -320,16 +320,15 @@ else
 
     # La edad de la referencia se mide por el último fetch, no por la fecha del commit: un
     # `origin/main` de hace una semana puede apuntar a un commit de hoy y seguir estando viejo.
-    REF_EDAD_H=""
-    GITDIR="$(git -C "$REPO" rev-parse --git-common-dir 2>/dev/null || echo '')"
-    case "$GITDIR" in
-      "") ;;
-      /*) ;;
-      *) GITDIR="$REPO/$GITDIR" ;;
-    esac
-    if [ -n "$GITDIR" ] && [ -f "$GITDIR/FETCH_HEAD" ]; then
-      REF_EDAD_H=$(( ( $(date +%s) - $(stat -c %Y "$GITDIR/FETCH_HEAD" 2>/dev/null || echo 0) ) / 3600 ))
-    fi
+    # LA FRESCURA LA CALCULA UN GUION APARTE, y no es prolijidad: así su arnés
+    # (`deploy/pruebas/frescura-de-la-referencia.sh`) puede ejercitar ESA lógica y no una copia.
+    # El porqué de mirar dos directorios está escrito allá; el resumen es que en un WORKTREE el
+    # `FETCH_HEAD` del árbol y el del directorio común son archivos DISTINTOS, y mirando sólo el
+    # común se mide la frescura del fetch de OTRO.
+    #
+    # VACÍO NO ES CERO: si no hay ningún `FETCH_HEAD`, el guion no imprime nada y acá queda vacío,
+    # que aguas abajo significa «no se pudo medir» y no «se trajo recién».
+    REF_EDAD_H="$(bash "$REPO/deploy/edad-de-la-referencia.sh" "$REPO" 2>/dev/null || echo '')"
 
     if [ "$REF_ATRAS" = "0" ] && [ "$REF_ADELANTE" = "0" ] && [ "$REF_SUCIO" = "0" ]; then
       REF_CONFIABLE=1
