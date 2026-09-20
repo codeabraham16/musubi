@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"musubi/internal/arbol"
 )
 
 // TODO `ssh` DE `deploy/` LLEVA `-n`, SALVO LOS QUE PIDEN stdin A PROPÓSITO — Y ESOS SE DECLARAN.
@@ -64,15 +66,20 @@ func TestTodoSSHDeDespliegueLlevaMenosNSalvoLosQueDeclaranUsarStdin(t *testing.T
 	var faltantes []string
 	revisados := 0
 
-	err := filepath.Walk(raiz, func(ruta string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(ruta, ".sh") {
-			return err
+	// EL ÁRBOL LO DICE GIT Y NO EL DIRECTORIO (A128): un `.sh` sin trackear en el disco de quien
+	// corre esto no viaja al clone y no es de este repo.
+	shs, err := arbol.ConSufijo(filepath.Join("..", ".."), ".sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range shs {
+		if !strings.HasPrefix(rel, "deploy/") {
+			continue
 		}
-		crudo, err := os.ReadFile(ruta)
+		crudo, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(rel)))
 		if err != nil {
-			return err
+			t.Fatalf("no pude leer %s: %v", rel, err)
 		}
-		rel := filepath.ToSlash(filepath.Join("deploy", strings.TrimPrefix(filepath.ToSlash(ruta), filepath.ToSlash(raiz)+"/")))
 
 		for i, linea := range strings.Split(string(crudo), "\n") {
 			// LOS COMENTARIOS SE DESCARTAN ANTES DE MIRAR NADA. Sin esto, la guarda se satisface
@@ -100,10 +107,6 @@ func TestTodoSSHDeDespliegueLlevaMenosNSalvoLosQueDeclaranUsarStdin(t *testing.T
 				faltantes = append(faltantes, rel+":"+strconv.Itoa(i+1)+"  "+strings.TrimSpace(linea))
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("no se pudo barrer %s: %v", raiz, err)
 	}
 
 	// SIN ESTO LA GUARDA SE APAGA SOLA. Si mañana cambia la ruta, el `Walk` no encuentra un solo

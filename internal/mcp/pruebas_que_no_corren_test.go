@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"musubi/internal/arbol"
 )
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════
@@ -79,24 +81,17 @@ func TestNingunaPruebaQuedaFueraDeLaCompilacionSinDecirlo(t *testing.T) {
 
 	revisados := 0
 	var excluidos []string
-	err := filepath.WalkDir(raiz, func(ruta string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil // un directorio ilegible no es asunto de esta prueba
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", ".claude", "vendor", "node_modules", "testdata":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		nombre := d.Name()
-		if !strings.HasSuffix(nombre, "_test.go") {
-			return nil
-		}
+	// EL ÁRBOL LO DICE GIT Y NO EL DIRECTORIO (A128). La lista de carpetas a saltear que había acá
+	// no converge, y `.claude/worktrees/` son copias enteras del repo: esta guarda contaba sus
+	// pruebas como propias y habría acusado restricciones de build de otras ramas.
+	pruebas, err := arbol.ConSufijo(raiz, "_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range pruebas {
+		ruta := filepath.Join(raiz, filepath.FromSlash(rel))
+		nombre := filepath.Base(rel)
 		revisados++
-		rel, _ := filepath.Rel(raiz, ruta)
-		rel = filepath.ToSlash(rel)
 
 		motivo := ""
 		base := strings.TrimSuffix(nombre, "_test.go")
@@ -109,7 +104,7 @@ func TestNingunaPruebaQuedaFueraDeLaCompilacionSinDecirlo(t *testing.T) {
 		if motivo == "" {
 			b, e := os.ReadFile(ruta)
 			if e != nil {
-				return nil
+				t.Fatalf("no pude leer %s: %v", rel, e)
 			}
 			for _, linea := range strings.Split(string(b), "\n") {
 				if strings.HasPrefix(strings.TrimSpace(linea), "package ") {
@@ -134,10 +129,6 @@ func TestNingunaPruebaQuedaFueraDeLaCompilacionSinDecirlo(t *testing.T) {
 				excluidos = append(excluidos, rel+" — "+motivo)
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("no se pudo recorrer el repo: %v", err)
 	}
 
 	// CONTROL DE QUE MIRÓ ALGO: si el filtro se rompiera, la lista quedaría vacía y esto pasaría en
