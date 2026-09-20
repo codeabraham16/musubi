@@ -240,7 +240,13 @@ import (
 // (`internal/memory`: cola, comandos, devices, latido y servicios) — qué se guarda y qué se puede
 // leer de vuelta. Las veinticuatro se midieron aisladas Y con el paquete entero, que es la
 // disciplina que estrenó el lote anterior: una guarda puede dar ROJO con `-run` y VERDE en el CI.
-const anclasEnProsaAlDia = 495
+//
+// Y DE 495 A 470 EL 2026-09-20: las veinticinco anclas de TELEMETRÍA —`fleet_otlp_test.go` y
+// `fleet_metrics_test.go`—, o sea qué mide cada máquina, a quién se le atribuye y cómo sale
+// exportado. SEIS de las veinticinco tenían la prosa mal, el número más alto de la tanda, y una
+// estaba RANCIA: nombraba un `Delete` que ya no existe en el árbol porque el rearme se mudó
+// adentro de otra función. Una promesa en prosa no se entera cuando el código se mueve.
+const anclasEnProsaAlDia = 470
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //

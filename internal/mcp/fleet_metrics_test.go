@@ -41,6 +41,9 @@ func cuerpoConMuestra(t *testing.T, m *fleet.Muestra) string {
 // D5 — el cuerpo trae MEDICIONES y nunca IDENTIDAD. Un `device_id` en el cuerpo no tiene dónde
 // aterrizar: la muestra se atribuye a la máquina del TOKEN.
 // Sabotaje: agregar un campo de identidad a cuerpoLatido y usarlo.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\treturn texto, \"guardada\", notaServicios, notaProtocolo\n"
+// arnes: a="\tvar identidadDelCuerpo struct {\n\t\tDeviceID string `json:\"device_id\"`\n\t}\n\tif jsonpkg.Unmarshal(crudo, &identidadDelCuerpo) == nil && identidadDelCuerpo.DeviceID != \"\" {\n\t\t_, _ = s.engine.LatirDevice(identidadDelCuerpo.DeviceID, time.Now(), texto)\n\t}\n\treturn texto, \"guardada\", notaServicios, notaProtocolo\n"
 func TestLaMuestraSeAtribuyeAlTokenYNoAlCuerpo(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 	otroToken := enrolarDePrueba(t, s, "casa", "servidor-critico")
@@ -98,6 +101,9 @@ func TestUnCuerpoDemasiadoGrandeSeRechazaSinTumbarElLatido(t *testing.T) {
 // puerta.
 //
 // Sabotaje que la hace fallar: cambiar io.LimitReader(r.Body, ...) por r.Body.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="io.LimitReader(r.Body, latidoMaxBytes+1)"
+// arnes: a="r.Body"
 func TestElServidorNoLeeElCuerpoEnteroAMemoria(t *testing.T) {
 	_, ts, tokenDevice, _ := servidorConFlota(t)
 
@@ -162,6 +168,9 @@ func (l *lectorQueCuenta) Leidos() int64 { return l.leidos.Load() }
 // D7 — un cuerpo inválido descarta la MEDICIÓN, no el LATIDO.
 // Sabotaje: devolver 400 ante un JSON roto → un agente con el colector roto desaparece del
 // inventario, que es justo cuando más querés verlo.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\t\tmuestraJSON, notaMuestra, notaServicios, notaProtocolo := s.leerCuerpoDelLatido(r, d)\n"
+// arnes: a="\t\tmuestraJSON, notaMuestra, notaServicios, notaProtocolo := s.leerCuerpoDelLatido(r, d)\n\t\tif strings.Contains(notaMuestra, \"JSON inválido\") {\n\t\t\thttp.Error(w, notaMuestra, http.StatusBadRequest)\n\t\t\treturn\n\t\t}\n"
 func TestUnCuerpoInvalidoNoTumbaElLatido(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 
@@ -227,6 +236,9 @@ func TestSinLaCapacidadMetricsLaMuestraSeDescarta(t *testing.T) {
 // D9 — leer las métricas exige la capacidad, POR MÁQUINA. Primer consumidor real de la
 // compuerta de S3.
 // Sabotaje: quitar el PuedeSobreDevice del filtro de toolFleetMetrics.
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="\t\t\tif !PuedeSobreDevice(p, d, fleet.CapMetrics) {\n\t\t\t\tsinPermiso++\n\t\t\t\tcontinue\n\t\t\t}\n"
+// arnes: a=""
 func TestLeerMetricasExigeLaCapacidadPorMaquina(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ts := servidorHTTP(t, s)
@@ -274,6 +286,9 @@ func TestLeerMetricasExigeLaCapacidadPorMaquina(t *testing.T) {
 
 // D1/D3 — lo desconocido viaja como null, nunca como 0, hasta la respuesta de la tool.
 // Sabotaje: reemplazar los nil por 0 en filaDeMetricas.
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="\tfila[\"cpu_pct\"] = m.CPUPct\n"
+// arnes: a="\tif m.CPUPct != nil {\n\t\tfila[\"cpu_pct\"] = *m.CPUPct\n\t} else {\n\t\tfila[\"cpu_pct\"] = 0.0\n\t}\n"
 func TestLoDesconocidoViajaComoNullHastaLaRespuesta(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ts := servidorHTTP(t, s)
@@ -302,6 +317,10 @@ func TestLoDesconocidoViajaComoNullHastaLaRespuesta(t *testing.T) {
 	//
 	// Sabotaje: poner `fila["num_procesos"] = m.NumProcesos` en filaDeMetricas (aparece
 	// `"num_procesos":0`); o `fila["mem_libre"] = *m.MemLibre` con un nil-check que devuelva 0.
+	// arnes: prueba="TestLoDesconocidoViajaComoNullHastaLaRespuesta"
+	// arnes: archivo="internal/mcp/methods_fleet.go"
+	// arnes: de="\tfila[\"num_procesos\"] = enteroONull(m.NumProcesos)\n"
+	// arnes: a="\tfila[\"num_procesos\"] = m.NumProcesos\n"
 	if !strings.Contains(crudo, `"num_procesos":null`) {
 		t.Errorf("num_procesos no viajó como null: un 0 crudo se lee como «esta máquina no tiene procesos»: %s", crudo)
 	}
@@ -338,6 +357,9 @@ func TestLoDesconocidoViajaComoNullHastaLaRespuesta(t *testing.T) {
 // Un latido SIN muestra no borra la anterior: un colector que se rompe no puede hacer
 // desaparecer la última medición buena.
 // Sabotaje: escribir la columna siempre en LatirDevice.
+// arnes: archivo="internal/memory/devices.go"
+// arnes: de="last_sample = CASE WHEN ?"
+// arnes: a="last_sample = CASE WHEN 1 = 0 AND ?"
 func TestUnLatidoSinMuestraNoBorraLaAnterior(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 
@@ -360,7 +382,17 @@ func TestUnLatidoSinMuestraNoBorraLaAnterior(t *testing.T) {
 // contradice B4/D5: el invariante es que no puede decir QUIÉN ES, no que no pueda decir CÓMO
 // ESTÁ. La fila que toca es la del token presentado y ninguna otra.
 //
-// Sabotaje que la hace fallar: usar un `device_id` del cuerpo en ActualizarAutoreporte.
+// Sabotaje que la hace fallar: AGREGAR una segunda llamada a ActualizarAutoreporte con un
+// `device_id` sacado del cuerpo, conservando la del token.
+//
+// REDIRIGIR LA ÚNICA LLAMADA ENCIENDE LA ASERCIÓN EQUIVOCADA — medido el 2026-09-20. Con el
+// `device_id` del cuerpo EN LUGAR del token, el rojo llega por el control positivo de más abajo
+// («la máquina del token no recibió su autorreporte»), que es el cabo cerrado y no el invariante.
+// El invariante es que NO se toque la fila ajena, así que el sabotaje tiene que AGREGAR la
+// escritura prohibida y dejar la legítima en pie.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\t\t_ = s.engine.ActualizarAutoreporte(d.ID, version, direccion)\n\t}\n"
+// arnes: a="\t\t_ = s.engine.ActualizarAutoreporte(d.ID, version, direccion)\n\t}\n\tvar identidadReportada struct {\n\t\tDeviceID string `json:\"device_id\"`\n\t}\n\tif jsonpkg.Unmarshal(crudo, &identidadReportada) == nil && identidadReportada.DeviceID != \"\" {\n\t\t_ = s.engine.ActualizarAutoreporte(identidadReportada.DeviceID, version, direccion)\n\t}\n"
 func TestElAutorreporteSoloTocaLaFilaDelToken(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 	otroToken := enrolarDePrueba(t, s, "casa", "servidor-critico")
@@ -460,8 +492,15 @@ var paresDeSuperficie = []struct{ serie, campo string }{
 }
 
 // Sabotaje que la hace fallar: copiar `m.NumCPU` crudo a la fila (o `m.UptimeSeg`).
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="enteroONull(m.NumCPU)"
+// arnes: a="m.NumCPU"
 // Sabotaje que la hace fallar: cambiar `siMedido(hayDisco, ...)` por `enteroONull(...)` — un disco
 // LLENO tiene `disco_libre: 0` medido, y el exportador sí emite ese punto.
+// arnes: prueba="TestLaTablaYElExportadorCoincidenEnQueEsNoMedido"
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="siMedido(hayDisco, m.DiscoDisponible)"
+// arnes: a="enteroONull(m.DiscoDisponible)"
 func TestLaTablaYElExportadorCoincidenEnQueEsNoMedido(t *testing.T) {
 	ahora := time.Now().UTC()
 	d := fleet.Device{Name: "x", Tier: fleet.TierAgente, OS: "linux", ProjectID: "casa", LastSeen: ahora}

@@ -323,7 +323,15 @@ func TestArmarPayloadConPrincipalNilNoExporta(t *testing.T) {
 
 // La tenencia gobierna el empuje igual que el scrape.
 //
-// Sabotaje: pasarle nil a armarPayloadOTLP desde empujarUnaVez (aparecen las dos máquinas).
+// Sabotaje que la hace fallar: que el recorrido del payload ignore el alcance del principal.
+//
+// LA PROSA ANTERIOR ESTABA MAL DOS VECES, y las dos se midieron el 2026-09-20. Una: esta prueba
+// NUNCA pasa por `empujarUnaVez` — su cuerpo llama a `armarPayloadOTLP` directo, tres veces, así
+// que un corte en el llamador no se ejercita acá. Dos: con un principal nil `armarPayloadOTLP`
+// devuelve ERROR, no «las dos máquinas»; eso ya lo custodia otra prueba con su propia directiva.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\t\t\tif PuedeSobreDevice(p, d, fleet.CapMetrics) {\n"
+// arnes: a="\t\t\tif true {\n"
 func TestElEmpujeNoCruzaTenants(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()
@@ -369,6 +377,9 @@ func TestElEmpujeNoCruzaTenants(t *testing.T) {
 //
 // Sabotaje: hacer que labelsDeFlota tome el proyecto de algo que reporte la máquina (o agregar un
 // campo `project` a cuerpoLatido y usarlo) — el punto saldría etiquetado con el tenant ajeno.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\t\t{\"project\", d.ProjectID},\n"
+// arnes: a="\t\t{\"project\", d.Emisor},\n"
 func TestElProyectoDeLaSerieSaleDeLaFilaYNoDeLoQueDeclaraLaMaquina(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ts := servidorHTTP(t, s)
@@ -497,6 +508,9 @@ func TestSinEndpointElEmpujeNiSiquieraSeConfigura(t *testing.T) {
 //
 // Sabotaje que la hace fallar: darle al empujador su propio recorrido de devices sin
 // PuedeSobreDevice, o su propia copia de la tabla de series (por ejemplo, sacarle una fila).
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="for _, serie := range seriesDeFlota(ahora, intervaloSonda, versionCerebro, enMantenimiento) {"
+// arnes: a="for _, serie := range seriesDeFlota(ahora, intervaloSonda, versionCerebro, enMantenimiento)[1:] {"
 func TestElEmpujeYElScrapeExportanLasMismasSeriesYLosMismosValores(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()
@@ -543,6 +557,9 @@ func TestElEmpujeYElScrapeExportanLasMismasSeriesYLosMismosValores(t *testing.T)
 
 // Sabotaje: devolver (0, true) en una fila de seriesDeFlota; o emitir la métrica con
 // `"gauge":{"dataPoints":[]}` en vez de saltearla (puntosDelPayload lo caza).
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="return valorDe(m.CPUPct)"
+// arnes: a="return 0, true"
 func TestUnValorDesconocidoNoViajaComoCeroEnElPayload(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()
@@ -583,6 +600,9 @@ func TestUnValorDesconocidoNoViajaComoCeroEnElPayload(t *testing.T) {
 // omitempty en vez de un puntero, el 0 perdería su campo y llegaría un punto SIN VALOR.
 //
 // Sabotaje: cambiar AsDouble de *float64 a float64 con omitempty.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="\t\t\t\tpunto.AsDouble = &valor\n"
+// arnes: a="\t\t\t\tif valor != 0 {\n\t\t\t\t\tpunto.AsDouble = &valor\n\t\t\t\t}\n"
 func TestUnUpEnCeroViajaConSuCero(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()
@@ -615,6 +635,9 @@ func TestUnUpEnCeroViajaConSuCero(t *testing.T) {
 
 // Sabotaje: agregar `agent_version` a atributosOTLP; o renombrar `device` a `hostname` (las 12
 // reglas de alerta siguen evaluándose, no fallan, y no disparan nunca).
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="\tfor _, kv := range labels {\n\t\tout = append(out, atributoStr(kv[0], kv[1]))\n\t}\n"
+// arnes: a="\tfor _, kv := range labels {\n\t\tout = append(out, atributoStr(kv[0], kv[1]))\n\t}\n\tout = append(out, atributoStr(\"agent_version\", d.AgentVer))\n"
 func TestElPayloadNoTomaLabelsDelAutorreporte(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()
@@ -650,7 +673,15 @@ func TestElPayloadNoTomaLabelsDelAutorreporte(t *testing.T) {
 // Un cerebro que se cuelga porque el sistema de métricas no contesta es peor que no tener
 // métricas.
 //
-// Sabotaje: envolver empujarUnaVez en s.dispatchMu.Lock(); o quitarle el Timeout al http.Client.
+// Sabotaje que la hace fallar: envolver empujarUnaVez en s.dispatchMu.Lock().
+//
+// LA SEGUNDA OPCIÓN QUE DECÍA ESTA LÍNEA —quitarle el Timeout al http.Client— NO ENCIENDE ESTA
+// PRUEBA, medido el 2026-09-20: sin candado compartido, el empuje colgado no le hace esperar nada
+// a la tool, así que el techo de latencia no se cruza. Lo que esta guarda custodia es que el
+// empuje no tome el candado del despacho, no que tenga plazo.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="func (s *McpServer) empujarUnaVez(ctx context.Context, ahora time.Time) {\n"
+// arnes: a="func (s *McpServer) empujarUnaVez(ctx context.Context, ahora time.Time) {\n\ts.dispatchMu.Lock()\n\tdefer s.dispatchMu.Unlock()\n"
 func TestUnPrometheusColgadoNoFrenaNingunaTool(t *testing.T) {
 	destino := nuevoReceptor(t, http.StatusOK)
 	destino.bloqueo = make(chan struct{})
@@ -686,6 +717,9 @@ func TestUnPrometheusColgadoNoFrenaNingunaTool(t *testing.T) {
 //
 // Sabotaje: reemplazar el CompareAndSwap de empujeBusy por un `go func()` por tick (llegan dos
 // requests).
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="s.empujeBusy.CompareAndSwap(false, true)"
+// arnes: a="s.empujeBusy.CompareAndSwap(false, false)"
 func TestDosTicksDeEmpujeNoSeSolapan(t *testing.T) {
 	destino := nuevoReceptor(t, http.StatusOK)
 	destino.bloqueo = make(chan struct{})
@@ -716,6 +750,9 @@ func TestDosTicksDeEmpujeNoSeSolapan(t *testing.T) {
 // Por eso el principal se resuelve en cada tick y no se guarda resuelto al arrancar.
 //
 // Sabotaje: guardar el *Principal resuelto en el struct al arrancar y reusarlo en cada tick.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="func (s *McpServer) principalDelEmpuje() (*Principal, bool) {\n\tif s.buscarPrincipal == nil {\n\t\treturn nil, false\n\t}\n\treturn s.buscarPrincipal.porNombre(strings.TrimSpace(s.empujeCfg.Principal))\n}"
+// arnes: a="func (s *McpServer) principalDelEmpuje() (*Principal, bool) {\n\tif v, hay := s.avisosDados.Load(\"empuje_principal_resuelto\"); hay {\n\t\treturn v.(*Principal), true\n\t}\n\tif s.buscarPrincipal == nil {\n\t\treturn nil, false\n\t}\n\tp, ok := s.buscarPrincipal.porNombre(strings.TrimSpace(s.empujeCfg.Principal))\n\tif ok {\n\t\ts.avisosDados.Store(\"empuje_principal_resuelto\", p)\n\t}\n\treturn p, ok\n}"
 func TestRevocarAlPrincipalDelEmpujeLoApagaEnElActo(t *testing.T) {
 	destino := nuevoReceptor(t, http.StatusOK)
 	s := prepararEmpuje(t, destino.URL, registroDePrueba(principalDePrometheus()), nil)
@@ -868,7 +905,17 @@ func TestUnaURLConUserinfoSeRechaza(t *testing.T) {
 // musubi_fleet_policy_actions_total NO lleva etiqueta de máquina a propósito: empujarlas a un
 // store sin credencial deshace esa corrección por la otra puerta.
 //
-// Sabotaje: agregarle al empujador el render de metrics.render(s.engine).
+// Sabotaje que la hace fallar: que el armado del payload emita también una serie del SERVIDOR.
+//
+// «AGREGARLE AL EMPUJADOR EL RENDER» NO SE PUEDE EJECUTAR, y por dos motivos independientes que se
+// midieron el 2026-09-20. Uno: esta prueba NO PASA POR EL EMPUJADOR — llama a `armarPayloadOTLP`
+// directo y nunca a `empujarUnaVez`, así que agregarle algo al empujador la deja VERDE. Dos:
+// `metrics.render` devuelve un string de formato de exposición y el payload es una lista de
+// métricas OTLP; no hay forma de componerlos sin un parser, y además `metrics` es una variable
+// local de otro handler que ni siquiera está en alcance desde acá.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="doc := otlpMetricsDoc{"
+// arnes: a="metricas = append(metricas, otlpMetric{Name: \"musubi_fleet_policy_actions_total\", Gauge: otlpGauge{DataPoints: []otlpDataPoint{{Attributes: []otlpAtributo{atributoStr(\"action\", \"kill\")}, TimeUnixNano: sello, AsInt: &sello}}}})\n\tdoc := otlpMetricsDoc{"
 func TestElEmpujeNoLlevaLasMetricasDelServidor(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()
@@ -898,6 +945,9 @@ func TestElEmpujeNoLlevaLasMetricasDelServidor(t *testing.T) {
 
 // Sabotaje: emitir timeUnixNano como número, o asInt como número — Prometheus contesta 400 y el
 // empuje muere en silencio. puntosDelPayload lo caza por el tipo JSON, no por el valor.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="\treturn cuerpo, puntos, truncado, nil\n"
+// arnes: a="\tcuerpo = bytes.ReplaceAll(cuerpo, []byte(strconv.Quote(sello)), []byte(sello))\n\treturn cuerpo, puntos, truncado, nil\n"
 func TestElSobreOTLPTieneLaFormaDeLaEspecificacion(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()
@@ -988,6 +1038,9 @@ func TestNingunaUnidadRenombraLaSerieEnPrometheus(t *testing.T) {
 
 // Sabotaje: llamar a time.Now() adentro del bucle de puntos, o dos veces (una para decidir `up` y
 // otra para sellar).
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="\tsello := strconv.FormatInt(ahora.UnixNano(), 10)\n"
+// arnes: a="\tsello := strconv.FormatInt(time.Now().UnixNano(), 10)\n"
 func TestElPayloadUsaUnSoloReloj(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
@@ -1062,6 +1115,9 @@ func TestLaFallaDelEmpujeSeVeDesdeMetrics(t *testing.T) {
 // es exactamente el estado en el que estuvo /metrics antes de que alguien lo scrapeara.
 //
 // Sabotaje: sacar la llamada a s.renderEmpuje del handler de /metrics en http.go.
+// arnes: archivo="internal/mcp/http.go"
+// arnes: de="\t\ts.renderEmpuje(&b, ahora)\n"
+// arnes: a=""
 func TestLasSeriesDelEmpujeSalenPorElMetricsDeVerdad(t *testing.T) {
 	destino := nuevoReceptor(t, http.StatusOK)
 	s := prepararEmpuje(t, destino.URL, registroDePrueba(principalDePrometheus()), nil)
@@ -1321,7 +1377,17 @@ func TestUnEmpujeQueNoAlcanzaNingunaMaquinaLoDice(t *testing.T) {
 // El aviso se REARMA cuando el problema se resuelve. Un «avisar una vez» que no se rearma
 // convierte el segundo incidente en silencio total, que es peor que el ruido que evita.
 //
-// Sabotaje: quitar `s.avisosDados.Delete("empuje_sin_concesion")` (o el de "empuje_vacio").
+// Sabotaje que la hace fallar: que la condición del aviso quede siempre activa, con lo cual la
+// rama que rearma no se recorre nunca.
+//
+// LA PROSA ESTABA RANCIA — medido el 2026-09-20: ese `Delete` YA NO EXISTE en el árbol, cero
+// ocurrencias. El rearme se mudó adentro de `avisoMientras`, y el doc de esa función explica que
+// no puede vivir en una rama borrable: es la mitad `else` de una sola función, soldada al armado.
+// O sea que el corte que esta línea nombraba es IRREPRESENTABLE hoy, y no hay ninguno local que
+// mate SÓLO el rearme. El más chico que lo mata es apagar la condición en el sitio que la llama.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="s.avisoMientras(\"empuje_sin_concesion\", sinConcesion, func() {"
+// arnes: a="s.avisoMientras(\"empuje_sin_concesion\", true, func() {"
 func TestElAvisoDelEmpujeMudoSeRearmaCuandoVuelveLaConcesion(t *testing.T) {
 	destino := nuevoReceptor(t, http.StatusOK)
 	sinConcesion := principalDePrometheus()
@@ -1361,15 +1427,21 @@ func TestElAvisoDelEmpujeMudoSeRearmaCuandoVuelveLaConcesion(t *testing.T) {
 // cable entero, pero es opt-in y no corre en CI. Ésta es la de todos los días.
 //
 // Sabotaje que la hace fallar: quitar `req.Header.Set("Content-Type", "application/json")`.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="\treq.Header.Set(\"Content-Type\", \"application/json\")\n"
+// arnes: a="\tif false {\n\t\treq.Header.Set(\"Content-Type\", \"application/json\")\n\t}\n"
 // Sabotaje que la hace fallar: cambiar http.MethodPost por http.MethodPut (o MethodGet).
 // arnes: archivo="internal/mcp/fleet_otlp.go"
 // arnes: de="http.MethodPost"
 // arnes: a="http.MethodPut"
 //
-// SÓLO EL SEGUNDO SABOTAJE ESTÁ MECANIZADO, Y NO ES UN OLVIDO. El alcance de un ancla termina donde
-// empieza la siguiente (ver `arnes.Censar`), y estas dos son renglones pegados: el primero no tiene
-// dónde poner sus propias líneas `arnes:` sin que se las coma el segundo. Mecanizarlo pide separar
-// las dos oraciones, que es un cambio de la prosa de otro y no de esta entrega.
+// LOS DOS ESTÁN MECANIZADOS, Y LA SEPARACIÓN ES LO QUE LO PERMITIÓ. Hasta el 2026-09-20 este
+// bloque decía que sólo el segundo se podía mecanizar, y tenía razón con la forma que tenía: el
+// alcance de un ancla termina donde empieza la siguiente (ver `arnes.Censar`), así que con las dos
+// oraciones pegadas el primero no tenía dónde poner sus líneas `arnes:` sin que se las comiera el
+// segundo. La salida era la que ese párrafo nombraba —separar las oraciones— y es la que se hizo:
+// cada ancla lleva ahora sus propias líneas pegadas a SU oración. Si alguien vuelve a juntarlas,
+// el censo denuncia las claves duplicadas y las dos directivas quedan ilegibles.
 func TestElEmpujeMandaUnPOSTDeJSONAlPathQueSeConfiguro(t *testing.T) {
 	destino := nuevoReceptor(t, http.StatusOK)
 	s := prepararEmpuje(t, destino.URL+"/api/v1/otlp/v1/metrics",
