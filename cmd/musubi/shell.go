@@ -100,7 +100,9 @@ func runShell(args []string) {
 // sesionInteractiva hace todo el trabajo: abre, conecta la terminal y limpia al salir.
 func sesionInteractiva(cerebro, token, maquina, proyecto string) error {
 	base := normalizarBase(cerebro)
-	cli := &http.Client{Timeout: 40 * time.Second} // > la espera del long-poll (25 s), con margen
+	// > la espera del long-poll (25 s), con margen. Con el nombre TLS declarado (A129): este
+	// comando habla con el cerebro igual que el agente.
+	cli := clienteHaciaElCerebro(nombreTLSDelCerebro(), 40*time.Second, nil)
 
 	// ────────────────────────────────────────────────────────────────────────────────────────
 	// LA TERMINAL SE PREPARA ANTES DE ABRIR LA SESIÓN, Y EL ORDEN NO ES CASUAL.

@@ -111,13 +111,13 @@ func nuevoRelay(base, token string) *relayVivo {
 		// un http.Client.Timeout cubre el cuerpo entero, así que la cortaría a mano. Los timeouts
 		// que sí corresponden —establecer la conexión y recibir las cabeceras— van en el
 		// Transport, que es donde acotan lo que hay que acotar.
-		client: &http.Client{
-			Transport: &http.Transport{
-				DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
-				ResponseHeaderTimeout: 15 * time.Second,
-				IdleConnTimeout:       90 * time.Second,
-			},
-		},
+		// El Transport lo arma este llamador —es el único que necesita esta forma— y el nombre TLS
+		// se lo declara `clienteHaciaElCerebro` DESPUÉS, que es lo que impide olvidarlo (A129).
+		client: clienteHaciaElCerebro(nombreTLSDelCerebro(), 0, &http.Transport{
+			DialContext:           (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+			ResponseHeaderTimeout: 15 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+		}),
 		subs:   make(map[int64]chan frame),
 		ring:   make([]frame, relayRing),
 		enlace: estadoEnlace{Estado: "conectando"},

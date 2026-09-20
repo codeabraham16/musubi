@@ -58,7 +58,7 @@ type flotaRespuesta struct {
 // SÓLO LA PRIMERA PUEDE TUMBAR LA PÁGINA. Las otras dos se piden con el error ignorado: perder
 // los números o el inventario es molesto; perder la lista de máquinas es quedarse a oscuras.
 func handlerFlota(relay *relayVivo) http.HandlerFunc {
-	cli := &http.Client{Timeout: 20 * time.Second}
+	cli := clienteHaciaElCerebro(nombreTLSDelCerebro(), 20*time.Second, nil) // A129
 	return func(w http.ResponseWriter, r *http.Request) {
 		responder := func(f flotaRespuesta) {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")

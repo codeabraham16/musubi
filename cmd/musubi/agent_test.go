@@ -208,11 +208,13 @@ func TestElCerebroInalcanzableEsReintentableNoRevocado(t *testing.T) {
 }
 
 // B7 — un cerebro que acepta la conexión y no responde NUNCA no puede colgar el bucle.
-// Sabotaje: quitarle el Timeout a clienteLatido → el agente queda esperando para siempre y la
-// máquina figura viva sin volver a latir jamás.
+// Sabotaje: pasarle espera 0 a `clienteHaciaElCerebro` → el cliente queda sin timeout, el agente
+// espera para siempre y la máquina figura viva sin volver a latir jamás.
+// (La directiva apuntaba a `return &http.Client{Timeout: 10 * time.Second}`; A129 movió el timeout
+// a un parámetro, así que el sabotaje pasó a ser el argumento en vez del literal.)
 // arnes: archivo="cmd/musubi/agent.go"
-// arnes: de="\t\treturn &http.Client{Timeout: 10 * time.Second}"
-// arnes: a="\t\treturn &http.Client{}"
+// arnes: de="\treturn clienteHaciaElCerebro(nombre, 10*time.Second, nil)"
+// arnes: a="\treturn clienteHaciaElCerebro(nombre, 0, nil)"
 func TestElClienteDelLatidoTieneTimeout(t *testing.T) {
 	if clienteLatido.Timeout <= 0 {
 		t.Fatal("clienteLatido no tiene timeout: un cerebro que no responde cuelga el bucle para siempre")

@@ -67,10 +67,9 @@ func clienteCerebro(timeoutSeg, dialSeg int) *http.Client {
 		Timeout:   time.Duration(dialSeg) * time.Second,
 		KeepAlive: 30 * time.Second,
 	}).DialContext
-	return &http.Client{
-		Timeout:   time.Duration(timeoutSeg) * time.Second,
-		Transport: tr,
-	}
+	// El nombre TLS se declara acá y no en el Transport de arriba: este canal disca la IP del
+	// tailnet (con NordVPN el MagicDNS no resuelve) y el certificado no lleva SAN de IP (A129).
+	return clienteHaciaElCerebro(nombreTLSDelCerebro(), time.Duration(timeoutSeg)*time.Second, tr)
 }
 
 func runCerebro(args []string) {

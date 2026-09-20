@@ -56,7 +56,7 @@ const ttlCenso = 60 * time.Second
 // cerebro apagado o viejo es un ESTADO del sistema que el panel tiene que poder dibujar, no un
 // error de la petición del navegador.
 func handlerActores(relay *relayVivo, cache *cacheCenso) http.HandlerFunc {
-	cli := &http.Client{Timeout: 20 * time.Second}
+	cli := clienteHaciaElCerebro(nombreTLSDelCerebro(), 20*time.Second, nil) // A129
 	return func(w http.ResponseWriter, r *http.Request) {
 		responder := func(c censoRespuesta) {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
