@@ -36,7 +36,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
 	"testing"
