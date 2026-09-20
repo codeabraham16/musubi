@@ -33,6 +33,9 @@ func encolarN(t *testing.T, e *DbEngine, deviceID string, n int, creado time.Tim
 // contra una máquina VIVA, todo lo acumulado se ejecuta.
 //
 // Sabotaje: quitar la guarda de EncolarComando → falla acá.
+// arnes: archivo="internal/memory/comandos.go"
+// arnes: de="\tif enCola >= fleet.ColaMaxPorDevice {\n"
+// arnes: a="\tif false {\n"
 func TestLaColaDeUnaMaquinaTieneTecho(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "pc-gio")
@@ -61,6 +64,9 @@ func TestLaColaDeUnaMaquinaTieneTecho(t *testing.T) {
 //
 // Sabotaje: sacar el `AND creado >= ?` del conteo → falla acá, y `gio` (11.007 pendientes viejos)
 // no podría volver a recibir un comando nunca.
+// arnes: archivo="internal/memory/comandos.go"
+// arnes: de="\tvivos := c.Creado.Add(-fleet.ComandoVidaMax).UTC().Format(time.RFC3339)\n"
+// arnes: a="\tvivos := time.Unix(0, 0).UTC().Format(time.RFC3339)\n"
 func TestLoVencidoNoOcupaLugarEnLaCola(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "pc-gio")
@@ -85,6 +91,9 @@ func TestLoVencidoNoOcupaLugarEnLaCola(t *testing.T) {
 // El techo es POR MÁQUINA. Una máquina saturada no puede dejar muda a la de al lado.
 //
 // Sabotaje: sacar el `device_id = ?` del conteo → falla acá.
+// arnes: archivo="internal/memory/comandos.go"
+// arnes: de="\t\t`SELECT COUNT(*) FROM device_commands WHERE device_id = ? AND estado = ? AND creado >= ?`,\n\t\tc.DeviceID, string(fleet.EstadoPendiente), vivos,\n"
+// arnes: a="\t\t`SELECT COUNT(*) FROM device_commands WHERE estado = ? AND creado >= ?`,\n\t\tstring(fleet.EstadoPendiente), vivos,\n"
 func TestElTechoDeLaColaEsPorMaquina(t *testing.T) {
 	e := newTestEngine(t)
 	llena, _ := altaDePrueba(t, e, "casa", "pc-llena")

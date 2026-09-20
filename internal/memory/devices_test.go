@@ -180,6 +180,9 @@ func TestElTokenCrudoNoSeGuardaEnNingunaColumna(t *testing.T) {
 
 // A3 — un token identifica a UN device, y lo impone la BASE.
 // Sabotaje: quitar el índice único parcial de la migración 29.
+// arnes: archivo="internal/memory/migrations.go"
+// arnes: de="CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_token"
+// arnes: a="CREATE INDEX IF NOT EXISTS idx_devices_token"
 func TestDosDevicesNoPuedenCompartirCredencial(t *testing.T) {
 	e := newTestEngine(t)
 	_, token := altaDePrueba(t, e, "casa", "pc-uno")
@@ -194,6 +197,9 @@ func TestDosDevicesNoPuedenCompartirCredencial(t *testing.T) {
 
 // A3 — varios Tier B SIN credencial conviven (el índice único es PARCIAL).
 // Sabotaje: hacer el índice único total → el segundo Tier B no se puede dar de alta.
+// arnes: archivo="internal/memory/migrations.go"
+// arnes: de="WHERE token_sha256 <>"
+// arnes: a="WHERE token_sha256 >="
 func TestVariosTierBSinCredencialConviven(t *testing.T) {
 	e := newTestEngine(t)
 	for _, n := range []string{"router", "nas", "ups"} {
@@ -276,6 +282,9 @@ func TestListarAislaPorProyecto(t *testing.T) {
 // el NOT NULL). Esta versión inserta una a mano para que la guarda tenga algo que tapar.
 //
 // Sabotaje que la hace fallar: quitar la guarda de projectID vacío de ListarDevices.
+// arnes: archivo="internal/memory/devices.go"
+// arnes: de="\tif projectID == \"\" {\n\t\treturn nil, nil\n\t}\n"
+// arnes: a=""
 func TestListarSinProyectoNoDevuelveLasFilasHuerfanas(t *testing.T) {
 	e := newTestEngine(t)
 	altaDePrueba(t, e, "casa", "pc-gio")
@@ -309,6 +318,9 @@ func TestListarSinProyectoNoDevuelveLasFilasHuerfanas(t *testing.T) {
 
 // A8 — «en línea» no se guarda: no hay columna `online`, y el estado sale del latido.
 // Sabotaje: agregar una columna `online` a la migración 29.
+// arnes: archivo="internal/memory/migrations.go"
+// arnes: de="\t\t\t\t\t\tlast_seen     TEXT,\n"
+// arnes: a="\t\t\t\t\t\tlast_seen     TEXT,\n\t\t\t\t\t\tonline        INTEGER NOT NULL DEFAULT 0,\n"
 func TestNoExisteColumnaOnline(t *testing.T) {
 	e := newTestEngine(t)
 	rows, err := e.db.Query(`PRAGMA table_info(devices)`)
@@ -394,6 +406,9 @@ func TestLatidoDeUnDeviceQueYaNoEstaNoEsError(t *testing.T) {
 
 // A9 — revocar corta el acceso en el acto y la fila QUEDA para la auditoría.
 // Sabotaje: cambiar el UPDATE por un DELETE → se pierde a quién pertenecía la telemetría.
+// arnes: archivo="internal/memory/devices.go"
+// arnes: de="\t\treturn false, fmt.Errorf(\"error al revocar el dispositivo %q: %w\", name, err)\n\t}\n"
+// arnes: a="\t\treturn false, fmt.Errorf(\"error al revocar el dispositivo %q: %w\", name, err)\n\t}\n\tif _, err := tx.Exec(`DELETE FROM devices WHERE id = ?`, id); err != nil {\n\t\treturn false, fmt.Errorf(\"error al borrar el dispositivo %q: %w\", name, err)\n\t}\n"
 func TestRevocarCortaElAccesoYConservaLaHistoria(t *testing.T) {
 	e := newTestEngine(t)
 	alta, token := altaDePrueba(t, e, "casa", "pc-gio")
@@ -488,6 +503,10 @@ func nombres(ds []fleet.Device) []string {
 //
 // Sabotaje que lo hace fallar: escribir la columna siempre (sin el CASE), o guardarla en una
 // tabla aparte con su propio INSERT.
+// arnes: colision_ok="TestElLatidoUnificadoConMuestraVaciaNoBorraLaAnterior"
+// arnes: archivo="internal/memory/devices.go"
+// arnes: de=" THEN last_sample ELSE ? END\n\t\t WHERE id = ? AND revoked = 0`,\n\t\tahora.UTC().Format(time.RFC3339), muestra, muestra, id,"
+// arnes: a=" THEN ? ELSE ? END\n\t\t WHERE id = ? AND revoked = 0`,\n\t\tahora.UTC().Format(time.RFC3339), muestra, muestra, muestra, id,"
 func TestLaUltimaMuestraViveEnLaFilaYNoSeBorraSola(t *testing.T) {
 	e := newTestEngine(t)
 	alta, token := altaDePrueba(t, e, "casa", "pc-gio")
