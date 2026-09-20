@@ -8,6 +8,9 @@ import (
 
 // A4 — la matriz del tier es el contrato, y las AUSENCIAS son lo que se prueba.
 // Sabotaje que lo hace fallar: agregar CapScreen a TierProtocolo en capsPorTier.
+// arnes: archivo="internal/fleet/device.go"
+// arnes: de="\tTierProtocolo: {CapMetrics, CapExec, CapShell},"
+// arnes: a="\tTierProtocolo: {CapMetrics, CapExec, CapScreen, CapShell},"
 func TestTierNoAdmiteLoQueSuHardwareNoTiene(t *testing.T) {
 	casos := []struct {
 		tier   Tier
@@ -33,6 +36,9 @@ func TestTierNoAdmiteLoQueSuHardwareNoTiene(t *testing.T) {
 // A4 — conceder fuera de la matriz falla EN EL ALTA, no en el uso.
 // Sabotaje: quitar el bucle de capacidades de ValidarAlta → el alta pasa y el bug aparece
 // recién cuando alguien pide la pantalla de un router.
+// arnes: archivo="internal/fleet/device.go"
+// arnes: de="\tfor _, c := range d.Caps {\n\t\tif !TierAdmite(d.Tier, c) {\n\t\t\treturn fmt.Errorf(\"%w: tier %s no admite %q (admite: %s)\", ErrCapFueraDeTier, d.Tier, c, capsComoTexto(CapsDelTier(d.Tier)))\n\t\t}\n\t}\n"
+// arnes: a=""
 func TestAltaRechazaCapacidadQueElTierNoPuedeCumplir(t *testing.T) {
 	d := Device{Name: "switch-sala", ProjectID: "infra", Tier: TierProtocolo, Caps: []Cap{CapMetrics, CapScreen}}
 	err := ValidarAlta(d)
@@ -48,6 +54,9 @@ func TestAltaRechazaCapacidadQueElTierNoPuedeCumplir(t *testing.T) {
 // A5 — el default es NINGUNA capacidad. Es la valla contra el puente de privilegio:
 // administrar la memoria no puede otorgar control sobre las máquinas.
 // Sabotaje: hacer que Permite devuelva true cuando Caps está vacío.
+// arnes: archivo="internal/fleet/device.go"
+// arnes: de="func (d Device) Permite(c Cap) bool {\n"
+// arnes: a="func (d Device) Permite(c Cap) bool {\n\tif len(d.Caps) == 0 {\n\t\treturn true\n\t}\n"
 func TestDeviceCeroNoPermiteNada(t *testing.T) {
 	var cero Device
 	for _, c := range []Cap{CapMetrics, CapExec, CapScreen} {
@@ -59,6 +68,9 @@ func TestDeviceCeroNoPermiteNada(t *testing.T) {
 
 // A5 — un dispositivo revocado no permite nada, aunque la fila conserve las capacidades.
 // Sabotaje: quitar la guarda `if d.Revoked` de Permite.
+// arnes: archivo="internal/fleet/device.go"
+// arnes: de="func (d Device) Permite(c Cap) bool {\n"
+// arnes: a="func (d Device) Permite(c Cap) bool {\n\td.Revoked = false\n"
 func TestDeviceRevocadoNoPermiteNadaAunqueConserveSusCaps(t *testing.T) {
 	d := Device{Name: "pc-gio", ProjectID: "casa", Tier: TierAgente, Caps: []Cap{CapMetrics, CapExec, CapScreen}, Revoked: true}
 	for _, c := range []Cap{CapMetrics, CapExec, CapScreen} {
@@ -70,6 +82,9 @@ func TestDeviceRevocadoNoPermiteNadaAunqueConserveSusCaps(t *testing.T) {
 
 // A4 (cinturón y tirantes) — una fila escrita a mano o por un binario viejo no elude la matriz.
 // Sabotaje: que Permite devuelva true sin consultar TierAdmite.
+// arnes: archivo="internal/fleet/device.go"
+// arnes: de="\t\t\treturn TierAdmite(d.Tier, c)"
+// arnes: a="\t\t\treturn true"
 func TestFilaConCapImposibleNoLaHonraIgual(t *testing.T) {
 	// Fila corrupta: Tier B con `screen` concedido (ValidarAlta lo habría rechazado).
 	d := Device{Name: "nas", ProjectID: "infra", Tier: TierProtocolo, Caps: []Cap{CapScreen}}
@@ -107,6 +122,9 @@ func TestAltaConTierInventadoFalla(t *testing.T) {
 
 // A8 — «en línea» se deriva, y el umbral lo elige quien pregunta.
 // Sabotaje: devolver true con LastSeen cero → todo device recién dado de alta figura vivo.
+// arnes: archivo="internal/fleet/device.go"
+// arnes: de="func (d Device) EnLinea(ahora time.Time, umbral time.Duration) bool {\n"
+// arnes: a="func (d Device) EnLinea(ahora time.Time, umbral time.Duration) bool {\n\tif d.LastSeen.IsZero() {\n\t\treturn true\n\t}\n"
 func TestEnLineaSeDerivaDelUltimoLatido(t *testing.T) {
 	ahora := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	casos := []struct {
@@ -175,6 +193,9 @@ func TestNormalizarCapsDeduplicaYOrdenaPorPoder(t *testing.T) {
 // Ida y vuelta por la columna CSV. Una capacidad desconocida en la fila se DESCARTA (fail-closed)
 // en vez de romper el listado: no poder listar la flota por un campo ilegible sería peor.
 // Sabotaje: hacer que CapsDesdeTexto devuelva la cap desconocida tal cual.
+// arnes: archivo="internal/fleet/device.go"
+// arnes: de="\t\t\tset[c] = true\n\t\t}\n"
+// arnes: a="\t\t\tset[c] = true\n\t\tdefault:\n\t\t\tset[c] = true\n\t\t}\n"
 func TestCapsIdaYVueltaYBasuraSeDescarta(t *testing.T) {
 	cs := []Cap{CapMetrics, CapExec}
 	if got := CapsDesdeTexto(CapsComoTexto(cs)); len(got) != 2 || got[0] != CapMetrics || got[1] != CapExec {
@@ -191,6 +212,9 @@ func TestCapsIdaYVueltaYBasuraSeDescarta(t *testing.T) {
 
 // La matriz no se puede mutar desde afuera.
 // Sabotaje: devolver el slice interno en vez de una copia.
+// arnes: archivo="internal/fleet/device.go"
+// arnes: de="\tsrc := capsPorTier[t]\n\tout := make([]Cap, len(src))\n\tcopy(out, src)\n\treturn out\n"
+// arnes: a="\treturn capsPorTier[t]\n"
 func TestCapsDelTierDevuelveCopia(t *testing.T) {
 	primera := CapsDelTier(TierAgente)
 	primera[0] = CapExec
@@ -216,6 +240,9 @@ func contiene(s, sub string) bool {
 // umbral. Sin la guarda, un dispositivo que nunca latió se reporta EN LÍNEA.
 //
 // Sabotaje que lo hace fallar: quitar `d.LastSeen.IsZero()` de la condición de EnLinea.
+// arnes: archivo="internal/fleet/device.go"
+// arnes: de="d.LastSeen.IsZero() || "
+// arnes: a=""
 func TestEnLineaConRelojCeroNoInventaVida(t *testing.T) {
 	d := Device{Name: "recien-dado-de-alta", ProjectID: "casa", Tier: TierAgente} // LastSeen cero
 	if d.EnLinea(time.Time{}, time.Minute) {
