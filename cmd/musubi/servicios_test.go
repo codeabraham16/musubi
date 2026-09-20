@@ -97,7 +97,15 @@ func TestUnNombreRepetidoNoSeReportaDosVeces(t *testing.T) {
 // Un servicio en `activating` lleva minutos sin arrancar; uno en `StartPending` igual. Llamarlos
 // «corriendo» los esconde justo cuando hay que mirarlos.
 //
-// Sabotaje que la hace fallar: mandar el `default` de estadoDeSystemd a EstadoCorriendo.
+// Sabotaje que la hace fallar: mandar a EstadoCorriendo el `case` de los estados de transición.
+//
+// EL `default` NO LO RECORREN ESTAS ENTRADAS, medido el 2026-09-20: activating, deactivating y
+// reloading las ataja el `case` explícito de más arriba, que ya devuelve EstadoDesconocido, así que
+// sabotear el `default` deja la prueba EN VERDE. Y además ese literal aparece dos veces en el
+// archivo —estadoDeSystemd y estadoDeWindows—, o sea que ni siquiera sería un corte único.
+// arnes: archivo="cmd/musubi/servicios_parsers.go"
+// arnes: de="\tcase \"activating\", \"deactivating\", \"reloading\":\n\t\treturn fleet.EstadoDesconocido\n"
+// arnes: a="\tcase \"activating\", \"deactivating\", \"reloading\":\n\t\treturn fleet.EstadoCorriendo\n"
 func TestUnEstadoDeTransicionNoEsCorriendo(t *testing.T) {
 	for _, c := range []struct{ activo, sub string }{
 		{"activating", "start-pre"}, {"deactivating", "stop"}, {"reloading", "reload"},
@@ -187,6 +195,9 @@ func TestUnaFechaQueNoSeEntiendeQuedaEnNilYNoEnLaEpoca(t *testing.T) {
 // build tag. Una salida con comas y acentos rompe cualquier partido por espacios.
 //
 // Sabotaje que la hace fallar: partir por comas a mano en vez de usar encoding/csv.
+// arnes: archivo="cmd/musubi/servicios_parsers.go"
+// arnes: de="\tfilas, err := r.ReadAll()\n\tif err != nil || len(filas) < 2 {\n\t\treturn nil\n\t}\n"
+// arnes: a="\tvar filas [][]string\n\tfor _, l := range strings.Split(strings.TrimSpace(strings.ReplaceAll(salida, \"\\r\\n\", \"\\n\")), \"\\n\") {\n\t\tfilas = append(filas, strings.Split(strings.ReplaceAll(l, \"\\\"\", \"\"), \",\"))\n\t}\n\tif len(filas) < 2 {\n\t\treturn nil\n\t}\n"
 func TestElParserDeWindowsSeLeeDesdeLinux(t *testing.T) {
 	csv := "\"Name\",\"State\",\"StartMode\",\"ExitCode\"\n" +
 		"\"SQL Server (MSSQLSERVER), instancia\",\"Running\",\"Auto\",\"0\"\n" +
@@ -216,7 +227,16 @@ func TestElParserDeWindowsSeLeeDesdeLinux(t *testing.T) {
 	// es lo NORMAL. Windows trae cientos. Si el código de salida se mira ANTES de filtrar por
 	// tipo de arranque, todos entran como `fallado` y el canal se llena.
 	//
-	// Sabotaje: mover el filtro de `auto` para DESPUÉS de calcular el estado → falla acá.
+	// Sabotaje: que el filtro mire el ESTADO y deje pasar lo roto, como en la rama de systemd.
+	//
+	// MOVER EL FILTRO, LITERALMENTE, ES UN NO-OP y se midió: `estadoDeWindows` no tiene efectos, así
+	// que el `continue` sigue pasando antes del append y la prueba queda VERDE. Lo que el párrafo de
+	// arriba describe —que el código de salida se mire antes de filtrar por tipo de arranque— es la
+	// forma que sí existe: que el filtro pase a mirar el estado.
+	// arnes: prueba="TestElParserDeWindowsSeLeeDesdeLinux"
+	// arnes: archivo="cmd/musubi/servicios_parsers.go"
+	// arnes: de="\t\tif !strings.HasPrefix(arranque, \"auto\") {\n"
+	// arnes: a="\t\tif !strings.HasPrefix(arranque, \"auto\") && estadoDeWindows(tomar(f, \"state\"), tomar(f, \"exitcode\")) != fleet.EstadoFallado {\n"
 	if _, hay := nombres["Manual nunca arrancado"]; hay {
 		t.Errorf("se reportó un Manual con ExitCode 1077: eso es lo normal en un Manual, y son cientos: %v", nombres)
 	}
@@ -265,7 +285,17 @@ func TestUnAutomaticoQueSeApagoLimpioEsOciosoYNoCaido(t *testing.T) {
 // Si enumerar falla, el agente late IGUAL y sin inventario. Un agente que se calla porque no pudo
 // listar sus units deja a la máquina figurando muerta por un motivo que no tiene nada que ver.
 //
-// Sabotaje que la hace fallar: devolver el error desde serviciosDelLatido en vez de nil.
+// Sabotaje que la hace fallar: invertir la compuerta `if err != nil` que decide si la fuente rota
+// se lleva al latido.
+//
+// LA PROSA ANTERIOR NO SE PODÍA ESCRIBIR, por dos motivos medidos el 2026-09-20. Uno:
+// `serviciosDelLatido` NO devuelve error —su firma es (lista, omitidos, mandar, confirmar)—, así
+// que «devolver el error desde serviciosDelLatido» no nombra nada. Dos: leída como «no te tragues
+// el error», apunta al MISMO `return` que ya mecaniza el ancla de más abajo, y dos directivas con
+// el mismo corte se rompen el ancla entre sí. Por eso el corte sube una línea, a la compuerta.
+// arnes: archivo="cmd/musubi/servicios.go"
+// arnes: de="\tcrudos, err := enumerarConCache()\n\tif err != nil {\n"
+// arnes: a="\tcrudos, err := enumerarConCache()\n\tif err == nil {\n"
 func TestUnaFuenteRotaNoSeLlevaAlLatido(t *testing.T) {
 	anterior := enumerarServicios
 	enumerarServicios = func() ([]fleet.ReporteServicio, error) {
@@ -316,6 +346,9 @@ func TestUnNombreInvalidoNoViajaYNoTumbaAlResto(t *testing.T) {
 //
 // Sabotaje que la hace fallar: devolver `("", false, nil)` en el caso `default` de enumerarFuente,
 // que es exactamente el `continue` de antes.
+// arnes: archivo="cmd/musubi/servicios.go"
+// arnes: de="\t\treturn \"\", true, fmt.Errorf(\"%s está instalado y no se pudo consultar: %w\"+\n"
+// arnes: a="\t\treturn \"\", false, fmt.Errorf(\"%s está instalado y no se pudo consultar: %w\"+\n"
 func TestUnaFuenteRotaNoSeConfundeConUnaQueNoEstaInstalada(t *testing.T) {
 	original := ejecutarParaEnumerar
 	t.Cleanup(func() { ejecutarParaEnumerar = original })
@@ -363,7 +396,17 @@ func TestUnaFuenteRotaNoSeConfundeConUnaQueNoEstaInstalada(t *testing.T) {
 //
 // Sabotaje que la hace fallar: en serviciosDelLatido, devolver `lista` en vez de `nil` cuando
 // enumerarServicios da error.
+// arnes: archivo="cmd/musubi/servicios.go"
+// arnes: de="\t\t\t\"no se pudieron enumerar los servicios de esta máquina: %v\", err)\n\t\treturn nil, 0, false, nil\n"
+// arnes: a="\t\t\t\"no se pudieron enumerar los servicios de esta máquina: %v\", err)\n\t\treturn crudos, 0, false, nil\n"
 func TestUnaListaParcialConErrorNoViajaAlCerebro(t *testing.T) {
+	// SIN ESTE RESET LA GUARDA NO MUERDE, y se midió: `enumerarConCache` guarda un minuto y el
+	// paquete tarda 36 s, así que la hermana de arriba —que corre antes y también stubea
+	// `enumerarServicios`— deja la caché fresca con `lista=nil` y el stub de ACÁ no se consulta
+	// nunca. Con el sabotaje puesto, aislada da ROJO y junto a su hermana da VERDE; o sea que el
+	// arnés, que juzga con `-run`, la certificaba sana mientras en el CI no cubría nada. Sin esta
+	// línea esta prueba es un duplicado exacto de la de arriba y no dice nada sobre listas parciales.
+	olvidarEnumeracion()
 	original := enumerarServicios
 	t.Cleanup(func() { enumerarServicios = original })
 	ultimoInventario.Lock()
@@ -391,6 +434,9 @@ func TestUnaListaParcialConErrorNoViajaAlCerebro(t *testing.T) {
 // afirmación «este contenedor no se reinició nunca» — que apaga la alerta con confianza.
 //
 // Sabotaje que la hace fallar: devolver `0, true` cuando el campo falta o no es un número.
+// arnes: archivo="cmd/musubi/servicios_contenedores.go"
+// arnes: de="\tif len(campos) < 4 {\n\t\treturn 0, false\n\t}\n\tn, err := strconv.Atoi(strings.TrimSpace(campos[3]))\n\tif err != nil || n < 0 {\n\t\treturn 0, false\n\t}\n"
+// arnes: a="\tif len(campos) < 4 {\n\t\treturn 0, true\n\t}\n\tn, err := strconv.Atoi(strings.TrimSpace(campos[3]))\n\tif err != nil || n < 0 {\n\t\treturn 0, true\n\t}\n"
 func TestLosReiniciosDeUnContenedorViajanYSuAusenciaNoEsCero(t *testing.T) {
 	casos := []struct {
 		nombre    string
@@ -432,6 +478,9 @@ func TestLosReiniciosDeUnContenedorViajanYSuAusenciaNoEsCero(t *testing.T) {
 //
 // Sabotaje que la hace fallar: quedarse con un solo formato, o devolver el error del primer
 // intento en vez de seguir con el siguiente.
+// arnes: archivo="cmd/musubi/servicios_contenedores.go"
+// arnes: de="\t\terr = e\n"
+// arnes: a="\t\treturn \"\", true, e\n"
 func TestSiElRuntimeNoEntiendeElFormatoRicoSeUsaElPobre(t *testing.T) {
 	original := ejecutarParaEnumerar
 	t.Cleanup(func() { ejecutarParaEnumerar = original })
@@ -624,6 +673,9 @@ func TestElCodigoDeSalidaDeWindowsViajaConElServicioFallado(t *testing.T) {
 //
 // Sabotaje que la hace fallar: devolver "" en detalleDeSystemd, detalleDeWindows,
 // detalleDeContenedor, o quitar el `salida=` de parsearLaunchctl. Cada uno rompe su propia fila.
+// arnes: archivo="cmd/musubi/servicios_parsers.go"
+// arnes: de="\treturn \"result=\" + res\n"
+// arnes: a="\treturn \"\"\n"
 func TestLasCuatroPlataformasDicenPorQueFalloUnServicio(t *testing.T) {
 	ahora := time.Now()
 	for _, c := range []struct {
@@ -711,7 +763,14 @@ func TestLasCuatroPlataformasDicenPorQueFalloUnServicio(t *testing.T) {
 // que es lo contrario de una lista de las que sí hay que revisar — ahí la quinta nacería sin
 // guarda y en silencio.
 //
-// Sabotaje que la hace fallar: sacar la llamada a `enumerarContenedores` de cualquiera de los tres.
+// Sabotaje que la hace fallar: sacar la llamada a `enumerarContenedores` de cualquiera de los CUATRO.
+//
+// Eran tres cuando se escribió esta línea y son cuatro: el cuerpo de la prueba exige `mirados >= 4`
+// —linux, windows, darwin y el de «el resto»— y el doc de `servicios_otros.go` cuenta que la guarda
+// destapó justamente al cuarto. La prosa del sabotaje se había quedado con el número viejo.
+// arnes: archivo="cmd/musubi/servicios_darwin.go"
+// arnes: de="\tcont, err := enumerarContenedores(ahora)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treturn append(todo, cont...), nil\n"
+// arnes: a="\treturn todo, nil\n"
 func TestTodaPlataformaQueEnumeraServiciosEnumeraSusContenedores(t *testing.T) {
 	archivos, err := filepath.Glob("servicios_*.go")
 	if err != nil {

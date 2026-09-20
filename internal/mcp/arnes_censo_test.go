@@ -228,7 +228,14 @@ import (
 // alertas. Dos de las catorce flotaban adentro del cuerpo de su prueba y llevan `prueba=`.
 // Esta rama había escrito 556 sobre su propio árbol, medido antes de que el lote de dominio de
 // flota bajara el techo a 552. Se recuenta sobre el integrado, como siempre.
-const anclasEnProsaAlDia = 538
+//
+// Y DE 538 A 519 EL 2026-09-20: las diecinueve anclas de `cmd/musubi` —el PANEL de flota y el
+// inventario que el agente mide en la máquina—. Cinco de las diecinueve tenían la prosa MAL, el
+// número más alto de la tanda, y una de ellas destapó un defecto en la propia guarda: le faltaba
+// `olvidarEnumeracion()`, y sin eso la caché que le deja caliente la prueba de al lado se come su
+// stub. Aislada daba ROJO y junto a su hermana VERDE — o sea que el arnés, que juzga con `-run`,
+// la certificaba sana mientras en el CI no cubría nada.
+const anclasEnProsaAlDia = 519
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
