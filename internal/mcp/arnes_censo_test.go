@@ -246,7 +246,12 @@ import (
 // exportado. SEIS de las veinticinco tenían la prosa mal, el número más alto de la tanda, y una
 // estaba RANCIA: nombraba un `Delete` que ya no existe en el árbol porque el rearme se mudó
 // adentro de otra función. Una promesa en prosa no se entera cuando el código se mueve.
-const anclasEnProsaAlDia = 470
+//
+// Y DE 470 A 448 EL 2026-09-20: las veintidós anclas de POLÍTICAS Y BARRIDO —`fleet_politicas_test.go`
+// y `fleet_s10_test.go`—, o sea lo que el sistema hace SOLO sobre una máquina: reiniciar un
+// servicio, podar, sondear al que no tiene agente. Si una de ésas está hueca, el sistema actúa por
+// su cuenta y nada lo atrapa.
+const anclasEnProsaAlDia = 448
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //

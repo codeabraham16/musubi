@@ -52,6 +52,9 @@ func latir(t *testing.T, s *McpServer, deviceID string, m fleet.Muestra, cuando 
 //
 // Sabotaje que la hace fallar: evaluar argvPermitido ANTES de PuedeSobreDevice, o hacer que un
 // argvPermitido positivo saltee la compuerta.
+// arnes: archivo="internal/mcp/methods_exec.go"
+// arnes: de="\t\treturn nil, rpcErrorf(codeUnauthorized,\n\t\t\t\"no podés ejecutar en %q: o no existe en el proyecto %q, o tu credencial no tiene la capacidad `exec` sobre esa máquina (ver la sección `fleet:` de principals.yaml)\", nombre, proyecto)\n"
+// arnes: a="\t\tif !existe || !argvPermitido(p, d, args.Argv) {\n\t\t\treturn nil, rpcErrorf(codeUnauthorized,\n\t\t\t\t\"no podés ejecutar en %q: o no existe en el proyecto %q, o tu credencial no tiene la capacidad `exec` sobre esa máquina (ver la sección `fleet:` de principals.yaml)\", nombre, proyecto)\n\t\t}\n"
 func TestLaAllowlistNoLeDaExecAQuienNoLoTenia(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConExec(t, s, "casa", "pc-gio")
@@ -79,6 +82,9 @@ func TestLaAllowlistNoLeDaExecAQuienNoLoTenia(t *testing.T) {
 //
 // Sabotaje que la hace fallar: devolver true en el paso 4 de argvPermitido (máquina sin entrada
 // y sin "*").
+// arnes: archivo="internal/mcp/fleet_authz.go"
+// arnes: de="\treturn false // 4\n"
+// arnes: a="\treturn true // 4\n"
 func TestUnaMaquinaQueLaAllowlistNoNombraNoPermiteNada(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConExec(t, s, "casa", "nas")
@@ -106,8 +112,16 @@ func TestUnaMaquinaQueLaAllowlistNoNombraNoPermiteNada(t *testing.T) {
 // La entrada VACÍA apaga exec sobre una máquina puntual sin sacarla de la concesión — y no puede
 // confundirse con «no hay entrada».
 //
-// Sabotaje que la hace fallar: descartar en el parser las claves con lista vacía (con "*"
-// presente, la máquina caería en el comodín y quedaría permitida).
+// Sabotaje que la hace fallar: que la entrada vacía de una máquina caiga al comodín en vez de
+// cerrar.
+//
+// ESTA PRUEBA NO PASA POR EL PARSER, medido el 2026-09-20, así que el corte que decía esta línea es
+// un no-op: el principal se arma A MANO con el ayudante de acá y se mete al contexto directo, sin
+// leer ningún `principals.yaml`. `parsearExecAllow` sólo lo llama el cargador del registro, que en
+// estas pruebas no corre. El corte que sí la enciende vive en la decisión, no en el parseo.
+// arnes: archivo="internal/mcp/fleet_authz.go"
+// arnes: de="\tif lista, hay := p.ExecAllow[d.Name]; hay {\n\t\treturn fleet.PermiteArgv(lista, argv) // 2\n\t}\n"
+// arnes: a="\tif lista, hay := p.ExecAllow[d.Name]; hay && len(lista) > 0 {\n\t\treturn fleet.PermiteArgv(lista, argv) // 2\n\t}\n"
 func TestUnaEntradaVaciaApagaLaMaquinaAunqueHayaComodin(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConExec(t, s, "casa", "nas")
@@ -167,6 +181,9 @@ func TestElRechazoPorAllowlistSeMideAparteDelDeAuthz(t *testing.T) {
 // alguien silencie la alerta y, con ella, todas las demás.
 //
 // Sabotaje que la hace fallar: devolver umbralEnLineaDefault para todos los tiers.
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="\tif u < umbralEnLineaDefault {\n"
+// arnes: a="\tif u >= 0 {\n"
 func TestUnTierBSondeadoNoFiguraCaidoEntreDosSondeos(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	s.sondaIntervalo = 5 * time.Minute
@@ -200,6 +217,9 @@ func TestUnTierBSondeadoNoFiguraCaidoEntreDosSondeos(t *testing.T) {
 // Tier A NO se afloja. Un agente que late cada 30 s y lleva 2 min callado está caído, sondeo o no.
 //
 // Sabotaje que la hace fallar: derivar el umbral del intervalo de sondeo también para Tier A.
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="\tif d.Tier == fleet.TierAgente {\n\t\treturn umbralEnLineaDefault // late solo: 3 × 30 s\n\t}\n"
+// arnes: a=""
 func TestElUmbralDelTierANoSeAflojaPorElSondeo(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	s.sondaIntervalo = 5 * time.Minute
@@ -237,6 +257,9 @@ func TestElUmbralDelTierANoSeAflojaPorElSondeo(t *testing.T) {
 // S5, estaba probada, y no la llamaba nadie).
 //
 // Sabotaje que la hace fallar: quitar el UPDATE, o hacer que borre la fila.
+// arnes: archivo="internal/memory/comandos.go"
+// arnes: de="\tn, err := res.RowsAffected()\n\tif err != nil {\n\t\treturn 0, fmt.Errorf(\"error al leer el resultado de la poda: %w\", err)\n\t}\n"
+// arnes: a="\tn, err := res.RowsAffected()\n\tif err != nil {\n\t\treturn 0, fmt.Errorf(\"error al leer el resultado de la poda: %w\", err)\n\t}\n\t_, _ = e.db.Exec(\"DELETE FROM device_commands WHERE creado < ?\", limite)\n"
 func TestLaPodaVaciaLaSalidaYConservaLaBitacora(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	s.retencionSalidasDias = 30
@@ -276,6 +299,9 @@ func TestLaPodaVaciaLaSalidaYConservaLaBitacora(t *testing.T) {
 // A11 — EL CABO SUELTO ERA QUE NADIE LA LLAMABA.
 //
 // Sabotaje que la hace fallar: quitar la llamada a podarSalidasSiToca de barrerFlotaUnaVez.
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\tpodadas := s.podarSalidasSiToca(time.Now())"
+// arnes: a="\tvar podadas int64"
 func TestElBarridoDeFlotaLlamaALaPoda(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	s.retencionSalidasDias = 30
@@ -293,6 +319,9 @@ func TestElBarridoDeFlotaLlamaALaPoda(t *testing.T) {
 // el tick es de minutos; una vez por hora alcanza de sobra para una retención en días.
 //
 // Sabotaje que la hace fallar: quitar la guarda de podaCadaTanto.
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\tif !s.ultimaPoda.IsZero() && ahora.Sub(s.ultimaPoda) < podaCadaTanto {\n\t\treturn 0\n\t}\n"
+// arnes: a=""
 func TestLaPodaNoCorreEnCadaTick(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	s.retencionSalidasDias = 30
@@ -334,6 +363,9 @@ func ptrInt(v int) *int { return &v }
 // posible es que vayamos a buscarlo.
 //
 // Sabotaje que la hace fallar: quitar sondearProyecto del barrido.
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\t\tok, mal := s.sondearProyecto(ctx, proy)"
+// arnes: a="\t\tok, mal := 0, 0"
 func TestElBarridoSaleASondearALosQueNoTienenAgente(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	s.sondaIntervalo = 5 * time.Minute
@@ -365,6 +397,9 @@ func TestElBarridoSaleASondearALosQueNoTienenAgente(t *testing.T) {
 // hay por dónde entrarle) y nunca uno al que no se le concedió `metrics`.
 //
 // Sabotaje que la hace fallar: quitar el filtro de tier, o el de Permite(metrics).
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\t\tif d.Tier == fleet.TierAgente {\n\t\t\tcontinue\n\t\t}\n"
+// arnes: a=""
 func TestElBarridoNoSondeaNiAlTierANiAQuienNoTieneMetrics(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	s.sondaIntervalo = 5 * time.Minute
@@ -400,6 +435,9 @@ func TestElBarridoNoSondeaNiAlTierANiAQuienNoTieneMetrics(t *testing.T) {
 // solapados son 80 conexiones; y si un tick tarda más que el intervalo, solaparse es la regla.
 //
 // Sabotaje que la hace fallar: quitar el CompareAndSwap de flotaBusy.
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\tif !s.flotaBusy.CompareAndSwap(false, true) {\n\t\tlogx.Warn(\"flota: el barrido anterior sigue corriendo; se saltea este tick (¿el intervalo es más corto que lo que tarda un barrido?)\")\n\t\treturn\n\t}\n"
+// arnes: a=""
 func TestDosBarridosNoSeSolapan(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	s.retencionSalidasDias = 30
