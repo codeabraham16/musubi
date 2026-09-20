@@ -12,7 +12,8 @@ import (
 // wireResult describe qué pasó con el .mcp.json del proyecto.
 type wireResult struct {
 	path    string
-	changed bool // ¿el contenido quedó distinto de lo que había? (idempotencia)
+	changed bool   // ¿el contenido quedó distinto de lo que había? (idempotencia)
+	aviso   string // algo que el operador tiene que saber aunque el paso haya salido bien
 }
 
 // wireMCPJSON cablea (idempotente) el .mcp.json de projectDir con DOS entradas: la LOCAL
@@ -40,7 +41,21 @@ func wireMCPJSON(projectDir, brain, tokenEnv, exePath string, dryRun bool) (wire
 	}
 
 	// Entrada CEREBRO (remota http): bearer por referencia a la env var (nunca el secreto).
-	remote := bootstrap.RemoteEntry("http://"+brain+"/mcp", tokenEnv)
+	// LA URL SALE DEL NORMALIZADOR y no de un literal, porque esto se ESCRIBE EN DISCO: lo que
+	// quede acá es lo que va a usar esa máquina para siempre. Con el esquema clavado en
+	// `http://`, cada proyecto aprovisionado se llevaba una URL en claro adentro del
+	// .mcp.json, y el día que el cerebro deje de escuchar en claro ninguno de ellos conecta.
+	//
+	// Y SE VALIDA ANTES DE ESCRIBIR: una dirección que no sirve, escrita en disco, falla mucho
+	// después y en otra máquina, con un error que no nombra la causa.
+	baseDelCerebro, _, ok := direccionDelCerebro(brain)
+	if !ok {
+		return res, fmt.Errorf("la dirección del cerebro no es usable y no se escribe nada: %q (se espera host:port, http://host:port o https://host:port)", brain)
+	}
+	if elCertificadoNoVaAServirParaUnaIP(baseDelCerebro) {
+		res.aviso = "ojo: " + baseDelCerebro + " es https contra una IP pelada, y el certificado del tailnet lleva sólo el NOMBRE como SAN. El host MCP que lee este archivo no declara ServerName, así que no va a poder validarlo: usá el nombre del tailnet en vez de la IP"
+	}
+	remote := bootstrap.RemoteEntry(baseDelCerebro+"/mcp", tokenEnv)
 	merged, err = bootstrap.MergeRemoteMCPServer(merged, "musubi-cerebro", remote)
 	if err != nil {
 		return res, err

@@ -358,7 +358,8 @@ func nuevoEmpujadorOTLP(cfg config.OTLPPushConfig) (*empujadorOTLP, error) {
 	return &empujadorOTLP{
 		url:   u.String(),
 		token: token,
-		http:  &http.Client{Timeout: cfg.EffectiveTimeout()},
+		// no habla con el cerebro: empuja metricas por OTLP al colector, que es otro servicio, otra URL y otra credencial.
+		http: &http.Client{Timeout: cfg.EffectiveTimeout()},
 	}, nil
 }
 

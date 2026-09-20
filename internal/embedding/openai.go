@@ -44,7 +44,8 @@ func NewOpenAIProvider(baseURL, model, apiKey string, dim int) *OpenAIProvider {
 		model:   model,
 		apiKey:  apiKey,
 		dim:     dim,
-		client:  &http.Client{Timeout: 30 * time.Second},
+		// no habla con el cerebro: este cliente va a la API de embeddings de OpenAI, un servicio externo con su propio certificado.
+		client: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 

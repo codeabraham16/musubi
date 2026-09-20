@@ -19,7 +19,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,6 +34,7 @@ import (
 	"time"
 
 	"musubi/internal/buildid"
+	"musubi/internal/cerebro"
 	"musubi/internal/fleet"
 )
 
@@ -124,23 +124,11 @@ const (
 	// unit. Leyéndolo del archivo se va el wrapper y se va esa exposición.
 	envTokenFile = "MUSUBI_DEVICE_TOKEN_FILE"
 
-	// envNombreTLS existe por un choque de dos cosas que las dos son ciertas (Ola 0 del plan
-	// empresa, 2026-09-03).
-	//
-	// El cerebro puede servir HTTPS con un certificado de `tailscale cert`, que Let's Encrypt
-	// emite para el NOMBRE del nodo en la malla (`musubi-server.tail89e295.ts.net`) y para
-	// ningún otro. Pero los agentes laten contra la IP del tailnet a propósito: con NordVPN
-	// activo el DNS de la malla NO resuelve los nombres MagicDNS, y eso está escrito en
-	// `deploy/README.md` porque costó encontrarlo.
-	//
-	// Las dos cosas juntas son un certificado que no valida: se disca una IP y el certificado
-	// dice un nombre. La salida NO es apagar la verificación —eso convierte el TLS en teatro y
-	// deja pasar a cualquiera que se meta en el medio—: es discar la IP y verificar el
-	// certificado contra el nombre, que es exactamente para lo que existe ServerName.
-	//
-	// Vacío ⇒ comportamiento de siempre: el nombre sale de la URL. Sólo hace falta cuando la
-	// URL trae una IP y el certificado trae un nombre.
-	envNombreTLS = "MUSUBI_BRAIN_TLS_NAME"
+	// envNombreTLS se DERIVA del paquete que arma el cliente, no se vuelve a escribir: dos
+	// literales iguales en dos paquetes son una copia, y las copias divergen calladas. El
+	// porqué de esta variable —certificado por nombre contra IP discada— vive junto al
+	// constructor, en internal/cerebro.
+	envNombreTLS = cerebro.EnvNombreTLS
 )
 
 // runAgent es el punto de entrada de `musubi agent`.
@@ -471,7 +459,7 @@ func clienteParaElCerebro(nombre string) *http.Client {
 // Está aparte para que la guarda de alcance pueda preguntar una sola cosa —«¿alguien más lee esta
 // variable?»— en vez de perseguir cada cliente. Un segundo lector es un segundo lugar donde
 // olvidarse.
-func nombreTLSDelCerebro() string { return strings.TrimSpace(os.Getenv(envNombreTLS)) }
+func nombreTLSDelCerebro() string { return cerebro.NombreTLS() }
 
 // clienteHaciaElCerebro arma EL cliente con el que se le habla al cerebro central.
 //
@@ -487,21 +475,7 @@ func nombreTLSDelCerebro() string { return strings.TrimSpace(os.Getenv(envNombre
 // default del stdlib siga siendo el default: un Transport clonado que nadie necesita es una
 // superficie donde mañana alguien mete un flag.
 func clienteHaciaElCerebro(nombre string, espera time.Duration, tr *http.Transport) *http.Client {
-	nombre = strings.TrimSpace(nombre)
-	if nombre == "" && tr == nil {
-		return &http.Client{Timeout: espera}
-	}
-	if tr == nil {
-		tr = http.DefaultTransport.(*http.Transport).Clone()
-	}
-	if nombre != "" {
-		if tr.TLSClientConfig == nil {
-			tr.TLSClientConfig = &tls.Config{}
-		}
-		tr.TLSClientConfig.ServerName = nombre
-		tr.TLSClientConfig.MinVersion = tls.VersionTLS12
-	}
-	return &http.Client{Timeout: espera, Transport: tr}
+	return cerebro.Cliente(nombre, espera, tr)
 }
 
 // latir hace UN POST, con la muestra si hay. El cuerpo lleva MEDICIONES y nunca IDENTIDAD: no

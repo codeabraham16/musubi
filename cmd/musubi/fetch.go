@@ -40,8 +40,14 @@ func fetch(raw string, out io.Writer) error {
 	// Anti-SSRF en redirects: allowedFetchURL sólo valida la URL INICIAL. Sin esto un host
 	// del tailnet podría redirigir (3xx) a una IP pública/link-local (metadata de cloud, LAN)
 	// y `fetch` la seguiría, anulando la garantía "sólo tailnet". Revalidamos cada salto.
-	// no habla con el cerebro: `musubi ingest` baja una URL cualquiera de internet, y declararle
-	// el ServerName del tailnet le haría fallar el handshake contra todos los demás destinos
+	// LA MARCA DE ABAJO DECÍA «una URL cualquiera de internet» Y ERA FALSA, medido el 2026-09-20:
+	// `allowedFetchURL` exige una IP del tailnet o loopback y RECHAZA cualquier nombre, así que
+	// esto nunca sale a internet — y el cerebro, que es una IP del tailnet, es un destino
+	// perfectamente alcanzable por acá. Una marca que afirma lo contrario de lo que hace el
+	// código apaga la alarma para siempre, que es peor que no tenerla.
+	//
+	// no habla con el cerebro: baja de CUALQUIER host del tailnet discado por IP, y clavarle el
+	// nombre de uno solo le rompería el handshake contra todos los otros
 	client := &http.Client{
 		Timeout: 120 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {

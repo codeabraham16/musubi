@@ -161,6 +161,7 @@ func ipv4FallbackClient(timeout time.Duration) *http.Client {
 		}
 		return nil, err
 	}
+	// no habla con el cerebro: `musubi embed pull` baja los archivos del modelo de un mirror publico, no del cerebro.
 	return &http.Client{Timeout: timeout, Transport: tr}
 }
 

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"musubi/internal/cerebro"
 	"musubi/internal/config"
 	"musubi/internal/logx"
 	"musubi/internal/memory"
@@ -88,7 +89,12 @@ func NewSyncClient(cfg config.SyncConfig) (*SyncClient, error) {
 	return &SyncClient{
 		url:   base + "/mcp",
 		token: token,
-		http:  &http.Client{Timeout: time.Duration(timeout) * time.Second},
+		// EL CLIENTE SALE DEL CONSTRUCTOR COMPARTIDO, y no es cosmética: este es el cliente
+		// que usan TODOS los daemons de todas las sesiones, y era el que faltaba cuando el
+		// 2026-09-20 se arreglaron los seis de cmd/musubi. Sin ServerName, el día que
+		// central_url pase a https contra una IP el sync muere con un error de certificado
+		// que no nombra la causa — y el outbox deja de drenar en silencio.
+		http: cerebro.Cliente(cerebro.NombreTLS(), time.Duration(timeout)*time.Second, nil),
 	}, nil
 }
 

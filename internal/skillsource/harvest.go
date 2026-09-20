@@ -145,6 +145,7 @@ func FetchMarketplaceCatalog(ctx context.Context, url string) (MarketplaceCatalo
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "musubi/skillsource")
 
+	// no habla con el cerebro: consulta la API de GitHub para cosechar skills de repositorios publicos.
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return MarketplaceCatalog{}, fmt.Errorf("skillsource: GET catálogo de marketplace %s: %w", url, err)

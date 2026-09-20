@@ -429,6 +429,7 @@ type DestinoExposicion struct {
 // credencial. Peor: un redirect a una dirección interna convierte este raspado en un SSRF con
 // nuestras propias credenciales. Un endpoint de métricas no tiene por qué redirigir; si lo hace,
 // que se note.
+// no habla con el cerebro: raspa el endpoint de metricas que declara cada dispositivo en su configuracion, no el cerebro.
 var clienteExposicion = &http.Client{
 	CheckRedirect: func(*http.Request, []*http.Request) error {
 		return errors.New("el endpoint redirige y esto no sigue redirecciones: apuntá a la URL final")

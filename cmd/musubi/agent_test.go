@@ -737,10 +737,16 @@ func TestElAgenteUsaLaRutaCorrectaParaCadaCosa(t *testing.T) {
 //
 // Esta prueba custodia la FORMA del arreglo: se declara el nombre, y nada mas.
 //
-// Sabotaje que la hace fallar: poner `InsecureSkipVerify: true` en clienteParaElCerebro, bajar
+// EL CONSTRUCTOR SE MUDO A internal/cerebro el 2026-09-20, y esta prueba se queda aca a proposito:
+// entra por `clienteParaElCerebro`, que es el camino que usan de verdad los clientes de este
+// paquete. La directiva de abajo apunta al archivo NUEVO porque el sabotaje tiene que tocar el
+// codigo que corre, no el envoltorio — un `de` que apunta al envoltorio se aplica, no cambia nada
+// y su verde se lee como «la guarda cubre».
+//
+// Sabotaje que la hace fallar: poner `InsecureSkipVerify: true` en cerebro.Cliente, bajar
 // MinVersion, o devolver un Transport propio cuando el nombre viene vacio.
-// arnes: archivo="cmd/musubi/agent.go"
-// arnes: de="\ttr.TLSClientConfig.MinVersion = tls.VersionTLS12"
+// arnes: archivo="internal/cerebro/cliente.go"
+// arnes: de="\t\ttr.TLSClientConfig.MinVersion = tls.VersionTLS12"
 // arnes: a="\ttr.TLSClientConfig.InsecureSkipVerify = true"
 func TestElClienteDelLatidoDeclaraElNombreYNoApagaLaVerificacion(t *testing.T) {
 	// Sin nombre: el cliente de siempre, SIN Transport propio. Que el default del stdlib siga

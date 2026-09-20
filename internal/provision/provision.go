@@ -155,13 +155,22 @@ func tailscaleStep(nc NetworkConfigurator, opts Options) StepResult {
 
 // mcpStep traduce el resultado del cableado a un StepResult.
 func mcpStep(wr wireResult, dryRun bool) StepResult {
+	// EL AVISO VIAJA CON EL PASO Y NO POR STDERR. Un paso que sale `done` y deja un archivo que no
+	// va a servir es peor que uno que falla: el operador se va convencido. Si hay algo que saber,
+	// se dice en el mismo renglón que dice «listo».
+	con := func(d string) string {
+		if wr.aviso == "" {
+			return d
+		}
+		return d + " — " + wr.aviso
+	}
 	switch {
 	case dryRun && wr.changed:
-		return StepResult{Name: "mcp.json", Status: StatusTodo, Detail: "cablearía musubi + musubi-cerebro en " + wr.path}
+		return StepResult{Name: "mcp.json", Status: StatusTodo, Detail: con("cablearía musubi + musubi-cerebro en " + wr.path)}
 	case !wr.changed:
-		return StepResult{Name: "mcp.json", Status: StatusOK, Detail: "ya cableado (sin cambios): " + wr.path}
+		return StepResult{Name: "mcp.json", Status: StatusOK, Detail: con("ya cableado (sin cambios): " + wr.path)}
 	default:
-		return StepResult{Name: "mcp.json", Status: StatusDone, Detail: "cableado musubi + musubi-cerebro en " + wr.path}
+		return StepResult{Name: "mcp.json", Status: StatusDone, Detail: con("cableado musubi + musubi-cerebro en " + wr.path)}
 	}
 }
 

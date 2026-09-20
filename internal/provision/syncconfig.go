@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	"musubi/internal/config"
 )
@@ -20,8 +21,19 @@ var syncBlockRe = regexp.MustCompile(`(?m)^sync:.*(?:\n[ \t]+.*)*\n?`)
 // daemon LOCAL suba solo la memoria `shared` al cerebro central (outbox de F2). Sin esto, el
 // `.mcp.json` conecta pero el auto-sync local→central queda apagado (era el hueco que hacía
 // falta un paso manual). Idempotente: si el bloque ya está, no lo pisa. Incluye
-// `allow_insecure_token: true` porque el central es http:// sobre el tailnet (WireGuard ya
-// cifra el transporte) y el cliente de sync es fail-closed sin ese opt-in.
+// `allow_insecure_token` SÓLO cuando la base quedó en http:// —el central sobre el tailnet, donde
+// WireGuard ya cifra el transporte y el cliente de sync es fail-closed sin ese opt-in—. Con una
+// base https no hace falta, y escribirlo igual dejaría puesto un permiso para volver a texto
+// plano sin que nada lo note.
+//
+// EL ESQUEMA SALE DEL NORMALIZADOR, y hasta el 2026-09-20 estaba escrito a máquina acá. Éste era
+// el CUARTO sitio: los otros tres se migraron y éste se escapó porque su literal no es
+// `"http://" + brain` sino `http://%s` adentro de un formato más grande, así que no lo
+// encontraba el grep que buscaba la forma. Con `--brain https://host:10000` la MISMA corrida
+// dejaba un .mcp.json correcto y un config.yaml con `central_url: http://https://host:10000` —
+// que `url.Parse` acepta, que `NewSyncClient` acepta por empezar con http://, y que recién
+// revienta en el primer drain como error de RED, o sea transitorio: la fila vuelve a pending
+// con backoff para siempre, sin dead-letter, mientras el paso se reporta `done`.
 func ensureSyncConfig(projectDir, brain, tokenEnv string, dryRun bool) StepResult {
 	cfgPath := filepath.Join(projectDir, ".musubi", "config.yaml")
 
@@ -37,14 +49,23 @@ func ensureSyncConfig(projectDir, brain, tokenEnv string, dryRun bool) StepResul
 		return StepResult{Name: "sync-config", Status: StatusOK, Detail: "sync ya habilitado hacia " + cfg.Sync.CentralURL}
 	}
 
+	base, _, ok := direccionDelCerebro(brain)
+	if !ok {
+		return StepResult{Name: "sync-config", Status: StatusError,
+			Detail: "la dirección del cerebro no es usable y no se escribe nada: " + brain + " (se espera host:port, http://host:port o https://host:port)"}
+	}
+	lineaInsegura := ""
+	if strings.HasPrefix(base, "http://") {
+		lineaInsegura = "  allow_insecure_token: true  # http sobre el tailnet (WireGuard ya cifra el transporte)\n"
+	}
 	block := fmt.Sprintf("# Sync saliente del cerebro híbrido: sube solo la memoria 'shared' al cerebro central.\n"+
 		"sync:\n"+
 		"  enabled: true\n"+
-		"  central_url: http://%s\n"+
+		"  central_url: %s\n"+
 		"  auth_token_env: %s\n"+
 		"  drain_interval_seconds: 30\n"+
-		"  allow_insecure_token: true  # http sobre el tailnet (WireGuard ya cifra el transporte)\n",
-		brain, tokenEnv)
+		"%s",
+		base, tokenEnv, lineaInsegura)
 
 	if dryRun {
 		return StepResult{Name: "sync-config", Status: StatusTodo, Detail: "habilitaría el sync saliente (auto-sube 'shared' al cerebro) en " + cfgPath}
