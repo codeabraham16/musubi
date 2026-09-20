@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
@@ -104,7 +103,7 @@ func bloqueDelWatchdog(t *testing.T) string {
 // sobre el commit anterior: destino ajeno + `WD_YO` vacío -> OK. O sea que el modo de falla que
 // este bloque existe para cazar pasaba por bueno cada vez que fallaba el ssh.
 func TestElBloqueDelWatchdogDecideCorriendo(t *testing.T) {
-	guiones.Exigir(t, "corre el bloque del watchdog de deploy/verificar-despliegue.sh contra destinos de prueba, y ese guion es de un servidor Linux", "bash")
+	compuerta := guiones.Exigir(t, "corre el bloque del watchdog de deploy/verificar-despliegue.sh contra destinos de prueba, y ese guion es de un servidor Linux", "bash")
 
 	bloque := bloqueDelWatchdog(t)
 
@@ -138,7 +137,7 @@ func TestElBloqueDelWatchdogDecideCorriendo(t *testing.T) {
 			// bloque llama a algo inventado, bash lo dice y el `not found` de abajo lo caza.
 			guion := stubsDeLosVeredictos(t) +
 				"WD_HOST=" + shQuote(c.host) + "\nWD_YO=" + shQuote(c.yo) + "\n" + bloque
-			salida, err := exec.Command("bash", "-c", guion).CombinedOutput()
+			salida, err := compuerta.Comando("bash", "-c", guion).CombinedOutput()
 			if err != nil {
 				t.Fatalf("el bloque del watchdog no corrió: %v\n%s", err, salida)
 			}

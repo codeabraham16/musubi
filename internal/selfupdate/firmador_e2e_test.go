@@ -37,7 +37,7 @@ func TestElFirmadorCorreDePuntaAPunta(t *testing.T) {
 	// borraría justo la cobertura que lo justifica. Portable no saltea: si falta bash, MUERE —
 	// el `t.Skip` que había acá contestaba «no pude medir» con el mismo verde que «medí y está
 	// bien», que es el defecto que este repo viene pagando.
-	guiones.Portable(t, "corre deploy/firmar-release.sh de punta a punta, y dos de sus tres defectos sólo aparecen en Windows", "bash")
+	compuerta := guiones.Portable(t, "corre deploy/firmar-release.sh de punta a punta, y dos de sus tres defectos sólo aparecen en Windows", "bash")
 	if !hayPythonQueEjecuta(t) {
 		t.Skipf("no hay un python que ejecute (probé python3 y python): el guión no puede correr acá")
 	}
@@ -61,7 +61,7 @@ func TestElFirmadorCorreDePuntaAPunta(t *testing.T) {
 		t.Fatalf("escribir la clave: %v", err)
 	}
 
-	salida, err := exec.Command("bash", guion, "0.140.0", clave, dir).CombinedOutput()
+	salida, err := compuerta.Comando("bash", guion, "0.140.0", clave, dir).CombinedOutput()
 	texto := string(salida)
 
 	// El manifiesto se escribe ANTES de firmar, así que se puede exigir aunque falte `cryptography`.
@@ -112,7 +112,7 @@ func hayPythonQueEjecuta(t *testing.T) bool {
 		// Se le PIDE QUE EJECUTE algo: en Windows `python3` existe como alias de la Store y
 		// LookPath lo encuentra igual. Preguntar si el archivo existe es la comprobación que
 		// dejó pasar el defecto original.
-		if err := exec.Command(c, "-c", "import sys").Run(); err == nil {
+		if err := guiones.Herramienta(t, c, "-c", "import sys").Run(); err == nil {
 			return true
 		}
 	}

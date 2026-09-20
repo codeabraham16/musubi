@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -28,12 +27,12 @@ import (
 func TestLaPodaDePuntosDeRetornoHaceLoQueDice(t *testing.T) {
 	// El `t.Skipf` de `exec.LookPath("bash")` que había acá salteaba TAMBIÉN EN LINUX: sin bash esta
 	// guarda no existía y `go test` contestaba `ok`. La compuerta lo convierte en un fallo.
-	guiones.Exigir(t, "corre deploy/pruebas/poda-puntos-de-retorno.sh contra el guion de "+
+	compuerta := guiones.Exigir(t, "corre deploy/pruebas/poda-puntos-de-retorno.sh contra el guion de "+
 		"redespliegue, que es de un servidor Linux", "bash", "awk", "sed", "grep", "touch")
 
 	arnes := filepath.Join("..", "..", "deploy", "pruebas", "poda-puntos-de-retorno.sh")
 	guion := filepath.Join("..", "..", "deploy", "redesplegar-cerebro.sh")
-	salida, err := exec.Command("bash", arnes, guion).CombinedOutput()
+	salida, err := compuerta.Comando("bash", arnes, guion).CombinedOutput()
 	if err != nil {
 		t.Fatalf("la poda de puntos de retorno falló:\n%s", salida)
 	}

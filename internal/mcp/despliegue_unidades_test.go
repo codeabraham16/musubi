@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -59,9 +58,9 @@ func instalar(t *testing.T, repoUnits, instaladas, extra string) {
 	}
 }
 
-func correrVerificadorConUnidades(t *testing.T, raiz, unidades string) string {
+func correrVerificadorConUnidades(t *testing.T, compuerta guiones.Compuerta, raiz, unidades string) string {
 	t.Helper()
-	cmd := exec.Command("bash", filepath.Join(raiz, "deploy", "verificar-despliegue.sh"))
+	cmd := compuerta.Comando("bash", filepath.Join(raiz, "deploy", "verificar-despliegue.sh"))
 	cmd.Dir = raiz
 	cmd.Env = append(os.Environ(),
 		"MUSUBI_SIN_FETCH=1",
@@ -88,7 +87,7 @@ func seccionDeUnidades(t *testing.T, salida string) string {
 }
 
 func TestElVerificadorComparaSusPropiasUnidadesInstaladas(t *testing.T) {
-	guiones.Unix(t, "corre la sección de unidades de deploy/verificar-despliegue.sh contra unidades "+
+	compuerta := guiones.Unix(t, "corre la sección de unidades de deploy/verificar-despliegue.sh contra unidades "+
 		"instaladas de mentira; se mide también en macOS porque su bash 3.2 es donde aparecen "+
 		"los defectos de expansión que en Linux son invisibles",
 		"bash", "git", "python3")
@@ -97,7 +96,7 @@ func TestElVerificadorComparaSusPropiasUnidadesInstaladas(t *testing.T) {
 		raiz := prepararRepoDePrueba(t)
 		repoUnits, instaladas := armarUnidades(t, raiz)
 		instalar(t, repoUnits, instaladas, "")
-		sec := seccionDeUnidades(t, correrVerificadorConUnidades(t, raiz, instaladas))
+		sec := seccionDeUnidades(t, correrVerificadorConUnidades(t, compuerta, raiz, instaladas))
 		if !strings.Contains(sec, "musubi-prueba.service coincide") {
 			t.Errorf("la unidad instalada es la plantilla con su ruta sustituida: tiene que dar verde sin importar dónde esté el repo.\nSección:\n%s", sec)
 		}
@@ -109,7 +108,7 @@ func TestElVerificadorComparaSusPropiasUnidadesInstaladas(t *testing.T) {
 		// El sabotaje es lo que de verdad pasa: alguien agrega una línea a la unidad instalada
 		// para probar algo y se olvida de sacarla.
 		instalar(t, repoUnits, instaladas, "Environment=DEBUG=1\n")
-		sec := seccionDeUnidades(t, correrVerificadorConUnidades(t, raiz, instaladas))
+		sec := seccionDeUnidades(t, correrVerificadorConUnidades(t, compuerta, raiz, instaladas))
 		if !strings.Contains(sec, "difiere") {
 			t.Errorf("una unidad instalada con una línea de más tiene que reportarse.\nSección:\n%s", sec)
 		}
@@ -129,7 +128,7 @@ func TestElVerificadorComparaSusPropiasUnidadesInstaladas(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(instaladas, "musubi-ajeno.service"), []byte(ajena), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		sec := seccionDeUnidades(t, correrVerificadorConUnidades(t, raiz, instaladas))
+		sec := seccionDeUnidades(t, correrVerificadorConUnidades(t, compuerta, raiz, instaladas))
 		if strings.Contains(sec, "musubi-ajeno") {
 			t.Errorf("una unidad que el repo NO declara no es deriva de Musubi, y nombrarla enseña a ignorar el informe.\nSección:\n%s", sec)
 		}
@@ -138,7 +137,7 @@ func TestElVerificadorComparaSusPropiasUnidadesInstaladas(t *testing.T) {
 	t.Run("ninguna instalada no se confunde con ninguna declarada", func(t *testing.T) {
 		raiz := prepararRepoDePrueba(t)
 		_, instaladas := armarUnidades(t, raiz) // el repo declara una, no se instala ninguna
-		sec := seccionDeUnidades(t, correrVerificadorConUnidades(t, raiz, instaladas))
+		sec := seccionDeUnidades(t, correrVerificadorConUnidades(t, compuerta, raiz, instaladas))
 		if !strings.Contains(sec, "?") {
 			t.Errorf("con unidades declaradas y ninguna instalada, el timer podría no existir y esto sólo correría cuando alguien se acuerde: no es un verde.\nSección:\n%s", sec)
 		}

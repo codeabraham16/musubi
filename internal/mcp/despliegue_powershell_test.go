@@ -6,13 +6,14 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 // EN UNA CADENA DE POWERSHELL, `\"` NO ESCAPA NADA — Y EL MISMO PAR ES CORRECTO EN BASH.
@@ -487,7 +488,7 @@ func enCarpetaDeGuiones(rel string) bool {
 // de abajo.
 func archivosDelRepo(t *testing.T, raiz string) []string {
 	t.Helper()
-	salida, err := exec.Command("git", "-C", raiz, "ls-files", "-z").Output()
+	salida, err := guiones.Herramienta(t, "git", "-C", raiz, "ls-files", "-z").Output()
 	if err != nil {
 		t.Fatalf("no pude preguntarle a git qué trackea desde %s: %v — no medí nada", raiz, err)
 	}

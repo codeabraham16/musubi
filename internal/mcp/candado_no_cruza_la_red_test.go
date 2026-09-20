@@ -9,13 +9,14 @@ import (
 	"go/types"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"musubi/internal/guiones"
 )
 
 // TODA TOOL QUE PUEDA LLEGAR A UNA LLAMADA DE RED TIENE QUE DECLARAR `lockSelf`, Y AL REVÉS.
@@ -523,7 +524,7 @@ type analisisDeCandado struct {
 func grafoDeLlamadas(t *testing.T, fset *token.FileSet, imp types.Importer, pkgPath string,
 	salidasFleet map[string]bool) (map[string]map[string]bool, map[string]string, int, []*ast.File) {
 	t.Helper()
-	out, err := exec.Command("go", "list", "-json", pkgPath).Output()
+	out, err := guiones.Herramienta(t, "go", "list", "-json", pkgPath).Output()
 	if err != nil {
 		t.Fatalf("go list %s: %v — no medí nada", pkgPath, err)
 	}
@@ -658,7 +659,7 @@ func analizarCandado(t *testing.T) analisisDeCandado {
 	t.Helper()
 	fset := token.NewFileSet()
 	lookup := func(path string) (io.ReadCloser, error) {
-		out, err := exec.Command("go", "list", "-export", "-f", "{{.Export}}", path).Output()
+		out, err := guiones.Herramienta(t, "go", "list", "-export", "-f", "{{.Export}}", path).Output()
 		if err != nil {
 			return nil, err
 		}

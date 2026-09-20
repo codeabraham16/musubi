@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -93,7 +92,7 @@ func TestElVerificadorDistingueExigirTLSDeAceptarElTransporte(t *testing.T) {
 // declarar cerrada sin estarlo, y mientras tanto la unidad quedaría en rojo todos los días por una
 // postura que está decidida, que es cómo se apaga un canal.
 func TestLaPerillaDeTLSDecideCorriendo(t *testing.T) {
-	guiones.Exigir(t, "corre el bloque de postura TLS de deploy/verificar-despliegue.sh contra configuraciones de prueba, y ese guion es de un servidor Linux", "bash", "grep")
+	compuerta := guiones.Exigir(t, "corre el bloque de postura TLS de deploy/verificar-despliegue.sh contra configuraciones de prueba, y ese guion es de un servidor Linux", "bash", "grep")
 
 	guion := leerDeploy(t, "verificar-despliegue.sh")
 	i := strings.Index(guion, `if [ -z "$POSTURA_TLS" ]; then`)
@@ -139,7 +138,7 @@ func TestLaPerillaDeTLSDecideCorriendo(t *testing.T) {
 				"PROXY_TLS=" + shQuote(c.proxy) + "\nADDR_CEREBRO=" + shQuote(c.addr) +
 				"\nPUERTO_CEREBRO=" + shQuote(c.addr[strings.LastIndex(c.addr, ":")+1:]) + "\n" +
 				"MUSUBI_EXIGIR_TLS=" + shQuote(c.perilla) + "\n" + bloque
-			salida, err := exec.Command("bash", "-c", completo).CombinedOutput()
+			salida, err := compuerta.Comando("bash", "-c", completo).CombinedOutput()
 			if err != nil {
 				t.Fatalf("el bloque de postura TLS no corrió: %v\n%s", err, salida)
 			}

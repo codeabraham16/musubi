@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -94,12 +93,12 @@ func TestLaVersionQueEmiteConstruirEsSiempreParseable(t *testing.T) {
 	// activarse. Acá había tres `t.Skipf` propios, y los dos de `exec.LookPath` salteaban TAMBIÉN
 	// EN LINUX: sin bash o sin go, esta guarda no existía y `go test` contestaba `ok`. Ahora eso
 	// muere, que es lo que corresponde cuando no se pudo medir.
-	guiones.Exigir(t, "corre deploy/pruebas/version-parseable.sh, que ejercita el guion de "+
+	compuerta := guiones.Exigir(t, "corre deploy/pruebas/version-parseable.sh, que ejercita el guion de "+
 		"construcción de un servidor Linux y compila con go", "bash", "go", "awk", "sed", "grep")
 
 	arnes := filepath.Join("..", "..", "deploy", "pruebas", "version-parseable.sh")
 	raiz := filepath.Join("..", "..")
-	salida, err := exec.Command("bash", arnes, raiz).CombinedOutput()
+	salida, err := compuerta.Comando("bash", arnes, raiz).CombinedOutput()
 	if err != nil {
 		t.Fatalf("el arnés de la versión falló:\n%s", salida)
 	}

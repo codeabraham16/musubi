@@ -3,7 +3,6 @@ package mcp
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -50,9 +49,9 @@ func armarBancoDelLatido(t *testing.T, cuerpoDelVerificador string) (string, str
 	return raiz, captura
 }
 
-func correrLatido(t *testing.T, raiz string) {
+func correrLatido(t *testing.T, compuerta guiones.Compuerta, raiz string) {
 	t.Helper()
-	cmd := exec.Command("bash", filepath.Join(raiz, "deploy", "comparar-y-latir.sh"))
+	cmd := compuerta.Comando("bash", filepath.Join(raiz, "deploy", "comparar-y-latir.sh"))
 	cmd.Dir = raiz
 	cmd.Env = append(os.Environ(),
 		"PATH="+filepath.Join(raiz, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -116,7 +115,7 @@ func nombresDeMetricas(t *testing.T, sobre map[string]any) map[string]float64 {
 const serieReferencia = "musubi_verificacion_referencia_confiable"
 
 func TestElLatidoDiceContraQueReferenciaSeComparo(t *testing.T) {
-	guiones.Unix(t, "corre deploy/comparar-y-latir.sh para leer el latido que emite; se mide también en "+
+	compuerta := guiones.Unix(t, "corre deploy/comparar-y-latir.sh para leer el latido que emite; se mide también en "+
 		"macOS porque su bash 3.2 es donde aparecen los defectos de expansión que en Linux son "+
 		"invisibles",
 		"bash")
@@ -133,7 +132,7 @@ func TestElLatidoDiceContraQueReferenciaSeComparo(t *testing.T) {
 
 	t.Run("comparó contra origin/main limpio: la serie sale en 1", func(t *testing.T) {
 		raiz, captura := armarBancoDelLatido(t, verificadorQueDeclara("1"))
-		correrLatido(t, raiz)
+		correrLatido(t, compuerta, raiz)
 		metricas := nombresDeMetricas(t, sobreCapturado(t, captura))
 		v, ok := metricas[serieReferencia]
 		if !ok {
@@ -146,7 +145,7 @@ func TestElLatidoDiceContraQueReferenciaSeComparo(t *testing.T) {
 
 	t.Run("comparó contra otro árbol: la serie sale en 0", func(t *testing.T) {
 		raiz, captura := armarBancoDelLatido(t, verificadorQueDeclara("0"))
-		correrLatido(t, raiz)
+		correrLatido(t, compuerta, raiz)
 		metricas := nombresDeMetricas(t, sobreCapturado(t, captura))
 		v, ok := metricas[serieReferencia]
 		if !ok {
@@ -163,7 +162,7 @@ func TestElLatidoDiceContraQueReferenciaSeComparo(t *testing.T) {
 	// real. La regla del export de este repo es que lo desconocido NO SE EMITE.
 	t.Run("un verificador que no declara la referencia NO produce un cero inventado", func(t *testing.T) {
 		raiz, captura := armarBancoDelLatido(t, "#!/usr/bin/env bash\nexit 0\n")
-		correrLatido(t, raiz)
+		correrLatido(t, compuerta, raiz)
 		metricas := nombresDeMetricas(t, sobreCapturado(t, captura))
 		if v, ok := metricas[serieReferencia]; ok {
 			t.Errorf("el verificador no dijo nada de la referencia y el latido igual mandó %s=%v: "+

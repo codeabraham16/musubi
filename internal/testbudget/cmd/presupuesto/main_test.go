@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"musubi/internal/guiones"
 	"musubi/internal/testbudget"
 )
 
@@ -156,7 +157,7 @@ func TestExitCode(t *testing.T) {
 // correrComoProceso relanza este binario de test en modo comando y devuelve su código real.
 func correrComoProceso(t *testing.T, args []string) (int, string, string) {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], args...)
+	cmd := guiones.Herramienta(t, os.Args[0], args...)
 	cmd.Env = append(os.Environ(), varSubproceso+"=1")
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb

@@ -114,12 +114,12 @@ func ultimaSeccionQueDeclaraElGuion(t *testing.T, guion string) string {
 // arnes: de="  dudoso \"no se compararon las reglas archivo por archivo"
 // arnes: a="  exit 2\n  dudoso \"no se compararon las reglas archivo por archivo"
 func TestElInformeLlegaHastaElFinalAunqueNadieConteste(t *testing.T) {
-	guiones.Unix(t, "corre deploy/verificar-despliegue.sh entero contra un repo de prueba con las dos "+
+	compuerta := guiones.Unix(t, "corre deploy/verificar-despliegue.sh entero contra un repo de prueba con las dos "+
 		"APIs cerradas, que es la corrida que este guion tiene que sobrevivir de punta a punta",
 		"bash", "git", "python3")
 
 	ultima := ultimaSeccionQueDeclaraElGuion(t, leerDeploy(t, "verificar-despliegue.sh"))
-	salida := correrVerificador(t, prepararRepoDePrueba(t))
+	salida := correrVerificador(t, compuerta, prepararRepoDePrueba(t))
 	limpia := sinColores(salida)
 
 	if !strings.Contains(limpia, ultima) {
@@ -315,7 +315,7 @@ func TestNingunaSeccionDelInformePuedeTerminarLaCorrida(t *testing.T) {
 // arnes: de="if [ \"$AM_VIVO\" != si ]; then"
 // arnes: a="if false; then"
 func TestUnServicioMudoNoSeCuentaComoDivergencia(t *testing.T) {
-	guiones.Unix(t, "corre deploy/verificar-despliegue.sh contra un repo de prueba con Prometheus y "+
+	compuerta := guiones.Unix(t, "corre deploy/verificar-despliegue.sh contra un repo de prueba con Prometheus y "+
 		"Alertmanager cerrados, para medir qué veredicto emite sobre un servicio que nunca contestó",
 		"bash", "git", "python3")
 
@@ -330,7 +330,7 @@ func TestUnServicioMudoNoSeCuentaComoDivergencia(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	secciones := seccionesDelInforme(correrVerificador(t, raiz))
+	secciones := seccionesDelInforme(correrVerificador(t, compuerta, raiz))
 
 	// EL CONTROL, Y ES LA MITAD DE LA GUARDA: si el informe dejara de traer estas secciones —que es
 	// justo lo que pasaba antes de A126— el bucle de abajo no encontraría un solo `✘` y esto pasaría
