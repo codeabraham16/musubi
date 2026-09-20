@@ -102,8 +102,13 @@ func TestTodoClienteDelCerebroPasaPorElConstructor(t *testing.T) {
 			"  O el reconocedor de literales se rompió, o el de la marca. En los dos casos el cero " +
 			"de culpables de abajo no significa «no hay»: significa «no estoy mirando».")
 	}
-	t.Logf("%d archivos de cmd/musubi; %d cliente(s) declarados ajenos al cerebro; %d sin declarar",
-		archivos, len(marcados), len(culpables))
+	// EL CENSO NO LLEVA EL NÚMERO QUE EL SABOTAJE MUEVE, y es a propósito. Cuando llevaba también
+	// los «sin declarar», esta línea CAMBIABA con el defecto puesto, así que el arnés la elegía como
+	// «el motivo del rojo» —siendo un `t.Logf` y no una aserción— y cada corrida del paquete salía
+	// con el aviso «el motivo es un t.Log, compara por lo que la prueba IMPRIME». El aviso era
+	// cierto y no se podía contestar, que es como se entrena a ignorar los avisos. Los culpables se
+	// cuentan solos: uno por `t.Errorf`, abajo.
+	t.Logf("%d archivos de cmd/musubi; %d cliente(s) declarados ajenos al cerebro", archivos, len(marcados))
 
 	for _, x := range culpables {
 		t.Errorf("UN `http.Client` ARMADO A MANO EN %s.\n"+

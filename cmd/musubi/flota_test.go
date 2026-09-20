@@ -103,6 +103,9 @@ func TestUnaFlotaVaciaDistingueSusCincoCausas(t *testing.T) {
 // ver, el panel no lo ve.
 //
 // Sabotaje: agregar un endpoint «para el panel» que se saltee la compuerta.
+// arnes: archivo="cmd/musubi/flota.go"
+// arnes: de="relay.base+\"/mcp\""
+// arnes: a="relay.base+\"/panel/flota\""
 func TestElPanelPreguntaPorLasMismasToolsYNoInventaUnaRutaAparte(t *testing.T) {
 	var pedidas []string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -166,6 +169,9 @@ func TestElTokenNoViajaAlNavegador(t *testing.T) {
 //
 // Sabotaje: propagar el error de fleet_metrics → un problema de permisos de métricas borra la
 // flota entera de la pantalla.
+// arnes: archivo="cmd/musubi/flota.go"
+// arnes: de="\t\tif met, err := llamarToolDelCerebro(r, cli, relay, \"musubi_fleet_metrics\", map[string]any{}); err == nil {"
+// arnes: a="\t\tif met, err := llamarToolDelCerebro(r, cli, relay, \"musubi_fleet_metrics\", map[string]any{}); err != nil {\n\t\t\tresponder(flotaRespuesta{Estado: \"caido\", Destino: relay.host(), Detalle: err.Error()})\n\t\t\treturn\n\t\t} else {"
 func TestSiFallanLasMetricasIgualSeVeLaFlota(t *testing.T) {
 	// Sólo responde fleet_list; fleet_metrics devuelve error.
 	ts := cerebroDeFlotaFalso(t, map[string]string{
@@ -248,6 +254,9 @@ func TestLaPaginaDeFlotaNoDependeDelBundleWebGL(t *testing.T) {
 // bundle»— era simplemente incorrecto.)
 //
 // Sabotaje que la hace fallar: sacar el enlace de dashboard.html.
+// arnes: archivo="cmd/musubi/assets/dashboard.html"
+// arnes: de="class=\"pill nav\" href=\"/flota\""
+// arnes: a="class=\"pill nav\""
 func TestSePuedeLlegarALaFlotaYVolverSinEscribirLaURL(t *testing.T) {
 	ida := string(assetsFS(t, "assets/dashboard.html"))
 	if !strings.Contains(ida, `href="/flota"`) {
@@ -262,7 +271,15 @@ func TestSePuedeLlegarALaFlotaYVolverSinEscribirLaURL(t *testing.T) {
 // El bundle WebGL NO se toca para nada de esto. La CI ya lo verifica reconstruyéndolo, pero esta
 // prueba corre en cada `go test` y falla en el momento, no veinte minutos después en el pipeline.
 //
-// Sabotaje que la hace fallar: meter la navegación dentro del bundle.
+// Sabotaje que la hace fallar: meterle al bundle un fetch a `/api/flota`.
+//
+// «METER LA NAVEGACIÓN» NO LA ENCIENDE, y se midió el 2026-09-20 al mecanizarla: esta guarda es
+// NEGATIVA y mira dos literales, `/api/flota` y `politicas_activas`. Un enlace de navegación puro
+// mete `/flota` y no `/api/flota`, así que pasa por debajo. Lo que la guarda custodia de verdad no
+// es que el bundle no NAVEGUE a la flota, es que no hable con su RUTA DE DATOS.
+// arnes: archivo="cmd/musubi/assets/dashboard.bundle.js"
+// arnes: de="requestAnimationFrame(u_);})();"
+// arnes: a="requestAnimationFrame(u_);})();\nfetch(\"/api/flota\").then(r=>r.json());"
 func TestElBundleWebGLNoSabeNadaDeLaFlota(t *testing.T) {
 	b := string(assetsFS(t, "assets/dashboard.bundle.js"))
 	if strings.Contains(b, "/api/flota") || strings.Contains(b, "politicas_activas") {
@@ -380,6 +397,9 @@ func TestLaPaginaDeFlotaDistingueUnaPantallaSinMotor(t *testing.T) {
 // haría que un problema de permisos sobre los servicios borre la FLOTA entera de la pantalla.
 //
 // Sabotaje que la hace fallar: propagar el error de la tercera llamada desde handlerFlota.
+// arnes: archivo="cmd/musubi/flota.go"
+// arnes: de="\t\tif svc, err := llamarToolDelCerebro(r, cli, relay, \"musubi_fleet_services\", map[string]any{}); err == nil {"
+// arnes: a="\t\tif svc, err := llamarToolDelCerebro(r, cli, relay, \"musubi_fleet_services\", map[string]any{}); err != nil {\n\t\t\tresponder(flotaRespuesta{Estado: \"caido\", Destino: relay.host(), Detalle: err.Error()})\n\t\t\treturn\n\t\t} else {"
 func TestSiFallaLaToolDeServiciosIgualSeVeLaFlota(t *testing.T) {
 	// El cerebro responde list y metrics; fleet_services devuelve error.
 	ts := cerebroDeFlotaFalso(t, map[string]string{
@@ -630,6 +650,9 @@ func TestElSubPanelPorMaquinaMuestraTodoEnUnLugar(t *testing.T) {
 // métricas ya evitó, y que se repite con cada llamada nueva si nadie lo cuida.
 //
 // Sabotaje que la hace fallar: propagar el error de fleet_sessions al estado de la respuesta.
+// arnes: archivo="cmd/musubi/flota.go"
+// arnes: de="\t\tif ses, err := llamarToolDelCerebro(r, cli, relay, \"musubi_fleet_sessions\", map[string]any{}); err == nil {"
+// arnes: a="\t\tses, err := llamarToolDelCerebro(r, cli, relay, \"musubi_fleet_sessions\", map[string]any{})\n\t\tif err != nil {\n\t\t\tresponder(flotaRespuesta{Estado: \"caido\", Destino: relay.host(), Detalle: err.Error()})\n\t\t\treturn\n\t\t}\n\t\t{"
 func TestElPanelPideLasSesionesYSuErrorNoBorraLaFlota(t *testing.T) {
 	b, err := os.ReadFile("flota.go")
 	if err != nil {
@@ -658,6 +681,9 @@ func TestElPanelPideLasSesionesYSuErrorNoBorraLaFlota(t *testing.T) {
 // datos guardados que ninguna interfaz muestra.
 //
 // Sabotaje que la hace fallar: sacar la fila de `procesos`/`RAM libre` de seccionVitales.
+// arnes: archivo="cmd/musubi/assets/flota.html"
+// arnes: de="num(e.num_procesos"
+// arnes: a="num(null"
 // Sabotaje que la hace fallar: dibujar `mem_libre` con num() en vez de bytes() (un GiB se vería
 // como 1073741824).
 // arnes: archivo="cmd/musubi/assets/flota.html"
@@ -703,6 +729,9 @@ func TestElPanelDibujaLosProcesosYLaMemoriaLibre(t *testing.T) {
 // guardado y nadie lo ve — el patrón exacto que este track persigue.
 //
 // Sabotaje que la hace fallar: sacar rendimientoTexto del título del chip.
+// arnes: archivo="cmd/musubi/assets/flota.html"
+// arnes: de="${rendimientoTexto(s.rendimiento)}"
+// arnes: a=""
 // Sabotaje que la hace fallar: sacar la marca de tasa alta del chip.
 // arnes: archivo="cmd/musubi/assets/flota.html"
 // arnes: de="tasaAlta(s.rendimiento)"
@@ -818,6 +847,9 @@ var origenDeclaradoDeLosCampos = map[string]string{
 // porque no hay error ni log — es exactamente lo que le pasó a A38 durante todo un track.
 //
 // Sabotaje que la hace fallar: agregar un `${e.lo_que_sea}` a flota.html sin tocar nada más.
+// arnes: archivo="cmd/musubi/assets/flota.html"
+// arnes: de="${seccionVitales(e)}"
+// arnes: a="${seccionVitales(e)}\n    ${e.lo_que_sea}"
 func TestNingunaCeldaDelPanelSeLlenaSola(t *testing.T) {
 	pagina := string(assetsFS(t, "assets/flota.html"))
 	// La lista blanca del proxy, leída del código en vez de repetida acá: si se repitiera, esta
