@@ -167,7 +167,56 @@ import (
 // número a la vez: 619 y 617 eran los dos correctos EN SU PROPIO ÁRBOL y ninguno lo es en el
 // integrado. Un número derivado no se elige entre los dos lados de un conflicto: se vuelve a
 // contar con la herramienta, sobre el árbol ya mergeado.
-const anclasEnProsaAlDia = 617
+//
+// Y DE 613 A 612 EL 2026-09-19. Es el caso que A123 tiene escrito como advertencia, visto desde
+// adentro: #553 mecanizó cuatro anclas y bajó el techo a 613 sobre SU árbol, correcto ahí; este
+// commit mecaniza una más y, ya rebasado sobre el main con #553 adentro, el censo da 612. Las dos
+// ramas pasan verdes por separado y la segunda en mergear es la que tiene que volver a contar —no
+// porque la primera se haya equivocado, sino porque el techo es un derivado del ÁRBOL ENTERO y
+// ninguna de las dos pudo medir el árbol que resulta de las dos. Se vuelve a correr `-validar`
+// sobre el árbol rebasado y se escribe lo que dice: 612.
+//
+// Y DE 612 A 610 EL 2026-09-19, y esta vez NO por mecanizar: dos anclas pasaron a
+// `no_mecanizable`. Son las dos guardas del bit de ejecución, cuyo sabotaje es `git update-index
+// --chmod=-x` o borrar un archivo — ninguna de las dos cosas es una sustitución de texto, que es
+// lo único que este arnés sabe aplicar. La deuda baja igual, porque `anclasEnProsaAlDia` cuenta lo
+// que NADIE puede correr, y una exención declarada con su motivo ya no es una promesa sin dueño.
+// Cuidado con la comodidad que esto abre: declarar `no_mecanizable` baja el número igual que
+// mecanizar, y es mucho más barato. El motivo se escribe para que se pueda discutir.
+//
+// Y DE 610 A 609 EL 2026-09-19: se mecanizó el sabotaje de la viñeta del mensaje de alerta, que
+// SÍ es una sustitución de texto en `deploy/prometheus/alertmanager.yml`.
+//
+// Y DE 609 A LO QUE MIDE HOY, mismo commit que mecaniza: las ocho anclas del eje de
+// consentimiento —`internal/fleet/consentimiento_test.go`—, que es lo que se le debe a la persona
+// sentada frente a la máquina cuando alguien abre una sesión.
+//
+// ESTA RAMA TUVO QUE RECONTAR TRES VECES, y vale más que el número: escribió 605 sobre su propio
+// árbol, 602 después de integrar el main que había bajado a 610, y esto después de integrar el que
+// bajó a 609. No es que las mediciones anteriores estuvieran mal — cada una era correcta sobre el
+// árbol que pudo ver. Es que el techo es un derivado del ÁRBOL ENTERO y nadie puede medir un árbol
+// que todavía no existe. Mientras varias ramas mecanicen a la vez, la última en mergear recuenta,
+// y eso no es un costo evitable: es lo que significa que el número sea derivado.
+//
+// Y DE 601 A LO QUE MIDE HOY, el mismo día y también en el commit que mecaniza: las ocho del eje de
+// AUTORIZACIÓN de flota —`internal/mcp/fleet_authz_test.go`, el slice S3—, que es quién puede
+// pedirle qué a qué máquina. Esta rama había escrito 597 sobre su propio árbol y después 594 sobre
+// el de la rama de arriba: le pasó lo mismo que a ella, un nivel más abajo. Se recuenta sobre el
+// integrado y se escribe eso.
+//
+// Y DE 593 A 581 EL 2026-09-19 — y esta vez el arnés lo cazó EN VIVO, que es la mejor evidencia
+// que hay de que el párrafo de arriba no es teórico. Se mecanizaron las doce anclas del eje de
+// CUATRO OJOS (`internal/mcp/fleet_cuatro_ojos_test.go`) y se corrieron los 67 sabotajes del
+// paquete ANTES de tocar este número: 66 en ROJO y UNO en VERDE, y el verde era ESTA guarda.
+// Con la deuda en 581 y el techo todavía en 593, su sabotaje —que suma UNA sola ancla— llegaba a
+// 582 y no cruzaba nada. O sea que bajar el número no es contabilidad: es lo único que le devuelve
+// el filo, y el instrumento lo demuestra sin que haya que creerle a nadie.
+//
+// Y DE 581 A 570 EL 2026-09-19: las once anclas del eje de EJECUCIÓN REMOTA
+// (`internal/mcp/fleet_exec_test.go`), que es la superficie más cara del sistema — correr un
+// comando en la máquina de otro. Bajado en el MISMO commit, por lo que dice el párrafo de arriba:
+// la vez anterior el arnés cazó a esta guarda en verde por no hacerlo, y no hace falta repetirlo.
+const anclasEnProsaAlDia = 570
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //

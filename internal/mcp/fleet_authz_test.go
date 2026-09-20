@@ -22,6 +22,9 @@ func devicePrueba(nombre, proyecto string) fleet.Device {
 //
 // Sabotaje que la hace fallar: agregar `if p.isAdmin() { return true }` a PuedeSobreDevice —
 // exactamente la "simplificación" que alguien va a proponer.
+// arnes: archivo="internal/mcp/fleet_authz.go"
+// arnes: de="\tif p == nil {\n\t\treturn true\n\t}\n"
+// arnes: a="\tif p == nil || p.isAdmin() {\n\t\treturn true\n\t}\n"
 func TestElRolDeMemoriaNoOtorgaCapacidadesDeFlota(t *testing.T) {
 	d := devicePrueba("pc-gio", "casa")
 
@@ -42,6 +45,9 @@ func TestElRolDeMemoriaNoOtorgaCapacidadesDeFlota(t *testing.T) {
 
 // C2 — la concesión es POR CAPACIDAD: tener metrics no da exec.
 // Sabotaje: que tieneGrant ignore la capacidad y mire cualquier entrada del mapa.
+// arnes: archivo="internal/mcp/fleet_authz.go"
+// arnes: de="\tfor otorgada, selectores := range p.Fleet {\n\t\tif !fleet.Implica(otorgada, c) {\n\t\t\tcontinue\n\t\t}\n"
+// arnes: a="\tfor _, selectores := range p.Fleet {\n"
 func TestLaConcesionEsPorCapacidadYNoUnBooleano(t *testing.T) {
 	d := devicePrueba("servidor", "casa")
 	observador := &Principal{
@@ -61,6 +67,9 @@ func TestLaConcesionEsPorCapacidadYNoUnBooleano(t *testing.T) {
 
 // C3 — la concesión es POR MÁQUINA.
 // Sabotaje: que tieneGrant devuelva true si la lista no está vacía, sin mirar el nombre.
+// arnes: archivo="internal/mcp/fleet_authz.go"
+// arnes: de="\t\tfor _, selector := range selectores {\n\t\t\tif selector == comodinFlota || selector == nombreDevice {\n\t\t\t\treturn true\n\t\t\t}\n\t\t}"
+// arnes: a="\t\tif len(selectores) > 0 {\n\t\t\treturn true\n\t\t}"
 func TestLaConcesionEsPorMaquina(t *testing.T) {
 	p := &Principal{
 		Name: "op", Role: RoleWriter, Read: ReadOwn, ProjectID: "casa",
@@ -108,6 +117,9 @@ func TestElGrantNoEsUnaPuertaLateralALaTenencia(t *testing.T) {
 
 // C5 — el aparato también tiene que poder: un grant no le da pantalla a un router.
 // Sabotaje: quitar la llamada a d.Permite de PuedeSobreDevice.
+// arnes: archivo="internal/mcp/fleet_authz.go"
+// arnes: de="\tif !d.Permite(c) {\n\t\treturn false\n\t}\n"
+// arnes: a=""
 func TestUnGrantNoLeDaPantallaAUnRouter(t *testing.T) {
 	todopoderoso := &Principal{
 		Name: "root", Role: RoleAdmin, Read: ReadAll, ProjectID: "infra",
@@ -136,6 +148,9 @@ func TestUnGrantNoLeDaPantallaAUnRouter(t *testing.T) {
 // C6 — revocar la máquina gana sobre cualquier concesión.
 // Sabotaje: quitar la guarda de Revoked de fleet.Device.Permite (ya cubierto en S1, pero el
 // kill-switch tiene que valer también DESDE ACÁ: es la ruta por la que va a pasar exec).
+// arnes: archivo="internal/fleet/device.go"
+// arnes: de="\tif d.Revoked {\n\t\treturn false\n\t}\n"
+// arnes: a=""
 func TestRevocarLaMaquinaGanaSobreElComodin(t *testing.T) {
 	root := &Principal{
 		Name: "root", Role: RoleAdmin, Read: ReadAll, ProjectID: "casa",
@@ -184,6 +199,9 @@ func TestStdioLocalConservaAccesoPleno(t *testing.T) {
 //
 // Sabotaje que la hace fallar: sacar CapScreenView de la lista de `todas` en capsQuePuede, o
 // ponerlo después de CapScreen.
+// arnes: archivo="internal/mcp/fleet_authz.go"
+// arnes: de="\ttodas := []fleet.Cap{fleet.CapMetrics, fleet.CapExec, fleet.CapScreenView, fleet.CapScreen, fleet.CapShell}"
+// arnes: a="\ttodas := []fleet.Cap{fleet.CapMetrics, fleet.CapExec, fleet.CapScreen, fleet.CapScreenView, fleet.CapShell}"
 func TestCapsQuePuedeEsLaInterseccionEnOrden(t *testing.T) {
 	d := devicePrueba("pc-gio", "casa")
 	p := &Principal{
@@ -219,6 +237,9 @@ func TestCapsQuePuedeEsLaInterseccionEnOrden(t *testing.T) {
 // C7 — el escalamiento que cierra: alguien con exec sobre dos máquinas NOMBRADAS no puede
 // mintear una tercera con exec.
 // Sabotaje: que puedeOtorgar acepte cualquier selector (no sólo el comodín).
+// arnes: archivo="internal/mcp/fleet_authz.go"
+// arnes: de="\tfor _, selector := range p.Fleet[c] {\n\t\tif selector == comodinFlota {\n\t\t\treturn true\n\t\t}\n\t}"
+// arnes: a="\tif len(p.Fleet[c]) > 0 {\n\t\treturn true\n\t}"
 func TestNoSePuedeOtorgarLoQueNoSeTiene(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 
@@ -362,6 +383,10 @@ func TestElYamlDeGrantsEsFailClosed(t *testing.T) {
 
 	// Una capacidad inventada es ERROR DE ARRANQUE, no un permiso que se descarta en silencio.
 	// Sabotaje: que parsearFleet ignore las claves desconocidas → alguien cree que otorgó `root`.
+	// arnes: prueba="TestElYamlDeGrantsEsFailClosed"
+	// arnes: archivo="internal/mcp/principals.go"
+	// arnes: de="\t\t\treturn nil, fmt.Errorf(\"principal %q: capacidad de flota inválida %q (usá metrics, exec o screen)\", nombrePrincipal, clave)"
+	// arnes: a="\t\t\tcontinue"
 	t.Run("capacidad desconocida ⇒ el servidor no arranca", func(t *testing.T) {
 		body := base + "    fleet:\n      root: [\"*\"]\n"
 		if _, err := loadPrincipals(writeRegistry(t, body), ""); err == nil {

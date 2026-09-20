@@ -164,31 +164,75 @@ func TestUnaAlertaResueltaNoSeLeeIgualQueUnaQueEmpieza(t *testing.T) {
 // la cabecera entera cada vez: cuatro servicios caídos eran cuatro bloques donde sólo variaba una
 // línea, y dieciséis eran un muro que nadie lee.
 //
-// Sabotaje: volver a envolver todo el cuerpo en un `range .Alerts` → falla acá.
+// EL FIXTURE LE PASABA LA RESPUESTA A LA GUARDA (medido el 2026-09-19). El `summary` de cada alerta
+// decía «El servicio sppsvc de gio no está corriendo», o sea que repetía el nombre del servicio que
+// la aserción de abajo busca. Con eso, cambiar la viñeta de `{{ .Labels.service }}` a
+// `{{ .Annotations.summary }}` —que es exactamente el muro que esta prueba existe para prohibir—
+// dejaba la guarda en VERDE: el nombre aparecía igual, por el otro camino. La guarda no distinguía
+// «imprimió la ETIQUETA» de «imprimió la ANOTACIÓN», que es la única diferencia que le importa.
+//
+// Ahora el `summary` no nombra el servicio. Es un fixture saneado aguas arriba al revés: no hay que
+// sembrar el dato en dos lugares y esperar que la aserción adivine cuál leyó.
+//
+// Y SE EJERCITA LA RAMA DE `policy`, que no la miraba nadie. La viñeta tiene tres caminos —
+// `.Labels.service`, `.Labels.policy`, y el `summary` como último recurso— y sólo el primero estaba
+// cubierto. `musubi_fleet_policy_actions_total` no lleva `device` ni `project` a propósito, así que
+// `policy` es la ÚNICA etiqueta que distingue dos alertas de política en un grupo.
+//
+// Sabotaje que la hace fallar: que la viñeta imprima el `summary` en vez de la etiqueta que
+// distingue. El otro, que ya estaba declarado acá, sigue valiendo y no se mecaniza porque es
+// estructural: volver a envolver todo el cuerpo en un `range .Alerts`.
+// arnes: archivo="deploy/prometheus/alertmanager.yml"
+// arnes: de="{{ if .Labels.service }}{{ .Labels.service }}{{ else if .Labels.policy }}{{ .Labels.policy }}{{ else }}{{ .Annotations.summary }}{{ end }}"
+// arnes: a="{{ .Annotations.summary }}"
 func TestUnGrupoNoRepiteLaCabeceraPorCadaAlerta(t *testing.T) {
 	tpl := plantillaDeTelegram(t)
 	inicio := time.Date(2026, 9, 2, 3, 12, 0, 0, time.UTC)
 
-	var as []alertaDePrueba
-	servicios := []string{"sppsvc", "MapsBroker", "edgeupdate", "GoogleUpdaterService152.0.7933.0"}
-	for _, s := range servicios {
-		as = append(as, alertaDePrueba{Status: "firing", StartsAt: inicio,
-			Labels:      map[string]string{"alertname": "ServicioCaido", "device": "gio", "service": s, "severity": "warning"},
-			Annotations: map[string]string{"summary": "El servicio " + s + " de gio no está corriendo.", "runbook": "deploy/RUNBOOK.md#serviciocaido"}})
-	}
-	out := rendir(t, tpl, datosDeAlerta{Status: "firing",
-		GroupLabels: map[string]string{"alertname": "ServicioCaido", "device": "gio"}, Alerts: as})
+	for _, caso := range []struct {
+		alerta   string
+		etiqueta string
+		valores  []string
+		runbook  string
+		resumen  string
+	}{
+		{"ServicioCaido", "service",
+			[]string{"sppsvc", "MapsBroker", "edgeupdate", "GoogleUpdaterService152.0.7933.0"},
+			"deploy/RUNBOOK.md#serviciocaido",
+			// NO nombra el servicio: si lo nombrara, la aserción de abajo no podría distinguir
+			// la etiqueta de la anotación, que es justo lo que se está midiendo.
+			"Un servicio de gio no está corriendo."},
+		{"PoliticaFrenadaPorConsentimiento", "policy",
+			[]string{"vaciar-journal", "reiniciar-relay"},
+			"deploy/RUNBOOK.md#politicafrenadaporconsentimiento",
+			"Una política no actúa sobre alguna máquina porque su dueño no lo permite."},
+	} {
+		t.Run(caso.alerta, func(t *testing.T) {
+			var as []alertaDePrueba
+			for _, v := range caso.valores {
+				as = append(as, alertaDePrueba{Status: "firing", StartsAt: inicio,
+					Labels:      map[string]string{"alertname": caso.alerta, "device": "gio", caso.etiqueta: v, "severity": "warning"},
+					Annotations: map[string]string{"summary": caso.resumen, "runbook": caso.runbook}})
+			}
+			out := rendir(t, tpl, datosDeAlerta{Status: "firing",
+				GroupLabels: map[string]string{"alertname": caso.alerta, "device": "gio"}, Alerts: as})
 
-	if n := strings.Count(out, "ServicioCaido"); n != 1 {
-		t.Errorf("el nombre de la alerta aparece %d veces en un grupo de %d: la cabecera se está repitiendo:\n%s",
-			n, len(as), out)
-	}
-	// PERO CADA CASO TIENE QUE VERSE. Un mensaje que agrupa y no dice QUÉ agrupó es peor que la
-	// repetición: obliga a ir al panel para saber qué servicios son.
-	for _, s := range servicios {
-		if !strings.Contains(out, s) {
-			t.Errorf("el grupo no nombra a %q: hay que ir al panel para saber qué se cayó:\n%s", s, out)
-		}
+			if n := strings.Count(out, caso.alerta); n != 1 {
+				t.Errorf("el nombre de la alerta aparece %d veces en un grupo de %d: la cabecera se está repitiendo:\n%s",
+					n, len(as), out)
+			}
+			// PERO CADA CASO TIENE QUE VERSE. Un mensaje que agrupa y no dice QUÉ agrupó es peor
+			// que la repetición: obliga a ir al panel para saber de qué está hablando. Y el
+			// `summary` del fixture NO lleva estos valores, así que esto sólo puede pasar si la
+			// plantilla imprimió la etiqueta.
+			for _, v := range caso.valores {
+				if !strings.Contains(out, v) {
+					t.Errorf("el grupo no nombra a %q: la viñeta dejó de imprimir `.Labels.%s` y hay que\n"+
+						"ir al panel para saber a qué se refiere. Dos alertas de esta familia en la misma\n"+
+						"máquina se leen idénticas.\n%s", v, caso.etiqueta, out)
+				}
+			}
+		})
 	}
 }
 

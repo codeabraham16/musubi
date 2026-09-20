@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"musubi/internal/arbol"
 )
 
 // UN COMENTARIO QUE DICE EN PRESENTE QUE UN CABO SIGUE ABIERTO TIENE QUE CITAR UNO QUE LO ESTÉ.
@@ -50,19 +52,29 @@ func TestNingunComentarioAfirmaQueUnCaboCerradoSigueAbierto(t *testing.T) {
 
 	revisados, citas := 0, 0
 	raiz := filepath.Join("..", "..")
-	for _, dir := range []string{"internal", "cmd", "deploy"} {
-		_ = filepath.Walk(filepath.Join(raiz, dir), func(ruta string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
-				return nil
-			}
-			switch filepath.Ext(ruta) {
-			case ".go", ".sh", ".yml":
-			default:
-				return nil
-			}
-			crudo, err := os.ReadFile(ruta)
+	// EL ÁRBOL LO DICE GIT Y NO EL DIRECTORIO (A128): recorrer el disco metía adentro las copias
+	// enteras del repo que viven en `.claude/worktrees/`, y con ellas comentarios de otras ramas
+	// que este árbol no contiene.
+	archivos, err := arbol.Archivos(raiz)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range archivos {
+		dir, _, _ := strings.Cut(rel, "/")
+		switch dir {
+		case "internal", "cmd", "deploy":
+		default:
+			continue
+		}
+		switch filepath.Ext(rel) {
+		case ".go", ".sh", ".yml":
+		default:
+			continue
+		}
+		{
+			crudo, err := os.ReadFile(filepath.Join(raiz, filepath.FromSlash(rel)))
 			if err != nil {
-				return nil
+				continue
 			}
 			revisados++
 			for n, linea := range strings.Split(string(crudo), "\n") {
@@ -87,7 +99,6 @@ func TestNingunComentarioAfirmaQueUnCaboCerradoSigueAbierto(t *testing.T) {
 					if vivos[id] {
 						continue
 					}
-					rel, _ := filepath.Rel(raiz, ruta)
 					t.Errorf("%s:%d afirma en presente que **%s** sigue abierto, y no está en la "+
 						"tabla viva de ABIERTO.md.\n    %s\n"+
 						"  Estos comentarios no describen: RAZONAN. Una cita vieja hace que quien la "+
@@ -96,8 +107,7 @@ func TestNingunComentarioAfirmaQueUnCaboCerradoSigueAbierto(t *testing.T) {
 						"abierto»—; lo que no puede es decir que sigue abierto.", rel, n+1, id, d, id)
 				}
 			}
-			return nil
-		})
+		}
 	}
 	if revisados < 100 {
 		t.Fatalf("sólo se revisaron %d archivos y son muchos más: cambió dónde viven y esta guarda "+

@@ -168,21 +168,9 @@ func TestElVerificadorComparaSusPropiasUnidadesInstaladas(t *testing.T) {
 // arnes: a="ExecStart=@REPO@/deploy/musubi-alerts-backup-offhost.yml"
 func TestTodoExecStartDeLasUnidadesApuntaAAlgoEjecutable(t *testing.T) {
 	raiz := filepath.Join("..", "..")
-	salida, err := exec.Command("git", "-C", raiz, "ls-files", "-s", "deploy/").Output()
-	if err != nil {
-		t.Fatalf("no se pudo leer el índice de git: %v", err)
-	}
-	modo := map[string]string{}
-	for _, l := range strings.Split(string(salida), "\n") {
-		campos := strings.Fields(l)
-		if len(campos) >= 4 {
-			modo[campos[3]] = campos[0]
-		}
-	}
-	if len(modo) < 5 {
-		t.Fatalf("el índice devolvió %d archivos de deploy/ y hay muchos más: el parseo dejó de "+
-			"funcionar y esta guarda está midiendo el vacío", len(modo))
-	}
+	// El parseo del índice vive en `modosDelIndice` (despliegue_cobertura_test.go): esta guarda lo
+	// estrenó y después lo necesitó otra, así que se sacó de acá en vez de copiarlo.
+	modo := modosDelIndice(t, "deploy/")
 
 	unidades, _ := filepath.Glob(filepath.Join(raiz, "deploy", "systemd", "*.service"))
 	if len(unidades) == 0 {

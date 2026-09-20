@@ -2,13 +2,14 @@ package config
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+
+	"musubi/internal/arbol"
 )
 
 // fijarHome apunta el home del proceso a `dir` EN TODAS LAS PLATAFORMAS.
@@ -234,34 +235,25 @@ func TestNadieLeeUnTokenNombradoSinElRespaldoDelArchivo(t *testing.T) {
 	var revisados int
 	var culpables []string
 
+	// EL ÁRBOL LO DICE GIT Y NO EL DIRECTORIO (A128). Acá había un `WalkDir` con exclusiones a
+	// mano, y sus propios comentarios contaban por qué: `.claude/worktrees/` guarda copias enteras
+	// del repo de sesiones viejas y daba 129 «culpables» que no existen en el árbol de verdad; y el
+	// filtro de ocultos casi saltea el repo ENTERO, porque la raíz se pasa como `../..` y su
+	// `Name()` es `..`, que empieza con punto. Las dos trampas desaparecen al preguntarle a git:
+	// una copia sin trackear no es del repo, y no hay nombres de carpeta que adivinar.
 	raiz := filepath.Join("..", "..")
-	err := filepath.WalkDir(raiz, func(ruta string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	gos, err := arbol.ConSufijo(raiz, ".go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range gos {
+		if strings.HasSuffix(rel, "_test.go") {
+			continue
 		}
-		if d.IsDir() {
-			// Los directorios ocultos se saltean ENTEROS: `.claude/worktrees/` guarda copias
-			// completas del repo de sesiones viejas, y revisarlas daba 129 «culpables» que no
-			// existen en el árbol de verdad. Una guarda que grita sobre código que nadie despliega
-			// se desactiva sola.
-			// `ruta != raiz` importa: la raíz se pasa como "../.." y su Name() es "..", que empieza
-			// con punto — sin esta condición el recorrido se saltea el repo ENTERO y revisa cero
-			// archivos. Lo cazó el control de «miró algo» de abajo, que es exactamente para esto.
-			if ruta != raiz && strings.HasPrefix(d.Name(), ".") {
-				return filepath.SkipDir
-			}
-			switch d.Name() {
-			case "node_modules", "vendor", "testdata":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), ".go") || strings.HasSuffix(d.Name(), "_test.go") {
-			return nil
-		}
+		ruta := filepath.Join(raiz, filepath.FromSlash(rel))
 		b, err := os.ReadFile(ruta)
 		if err != nil {
-			return err
+			t.Fatalf("no pude leer %s: %v", rel, err)
 		}
 		revisados++
 		for i, linea := range strings.Split(string(b), "\n") {
@@ -271,12 +263,8 @@ func TestNadieLeeUnTokenNombradoSinElRespaldoDelArchivo(t *testing.T) {
 			if !strings.Contains(linea, "AuthTokenEnv") && !strings.Contains(linea, "TokenEnv") {
 				continue
 			}
-			culpables = append(culpables, fmt.Sprintf("%s:%d — %s", ruta, i+1, strings.TrimSpace(linea)))
+			culpables = append(culpables, fmt.Sprintf("%s:%d — %s", rel, i+1, strings.TrimSpace(linea)))
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("no pude recorrer el repo: %v", err)
 	}
 
 	// CONTROL DE «MIRÓ ALGO». El modo de falla más común de una guarda como ésta no es una
@@ -424,36 +412,29 @@ func TestNadieDiceQueElArchivoDeTokensTraeElMasNuevoPrimero(t *testing.T) {
 	revisados := 0
 	var culpables []string
 
-	err := filepath.WalkDir(raiz, func(ruta string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		// Los ocultos se saltean, PERO nunca la raíz: se pasa como `../..`, cuyo `Name()` es
-		// `..` y empieza con punto — el filtro ingenuo se saltaba el repo entero y la guarda
-		// revisaba CERO archivos en verde. Ya pasó el 2026-09-05 en la prueba de al lado.
-		if d.IsDir() {
-			if ruta != raiz && strings.HasPrefix(d.Name(), ".") {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		switch filepath.Ext(ruta) {
+	// EL ÁRBOL LO DICE GIT (A128). Acá había un `WalkDir` que salteaba los ocultos, con el cuidado
+	// —escrito en su propio comentario— de no saltear la raíz: se pasa como `../..`, cuyo `Name()`
+	// empieza con punto, y el filtro ingenuo se comía el repo ENTERO en verde. Preguntándole a git
+	// esa trampa no existe: lo que no está trackeado no es del repo, y la raíz no es una carpeta a
+	// clasificar.
+	archivos, err := arbol.Archivos(raiz)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range archivos {
+		switch filepath.Ext(rel) {
 		case ".go", ".md", ".sh", ".yml", ".ps1", ".cmd":
 		default:
-			return nil
+			continue
 		}
-		crudo, err := os.ReadFile(ruta)
+		crudo, err := os.ReadFile(filepath.Join(raiz, filepath.FromSlash(rel)))
 		if err != nil {
-			return nil
+			continue
 		}
 		revisados++
 		if strings.Contains(string(crudo), frase) {
-			culpables = append(culpables, ruta)
+			culpables = append(culpables, rel)
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("no se pudo recorrer el repo: %v", err)
 	}
 	// CONTROL DE «MIRÓ ALGO»: sin esto, un recorrido que no llega da verde sobre la nada.
 	if revisados < 100 {
@@ -480,17 +461,52 @@ func TestNadieDiceQueElArchivoDeTokensTraeElMasNuevoPrimero(t *testing.T) {
 // El bit de ejecución importa tanto como el archivo: una comprobación que hay que invocar con
 // `bash` de por medio se corre menos, y la que no se corre no existe.
 //
-// Sabotaje que la hace fallar: borrar el guion, o quitarle el bit de ejecución.
+// EL MODO SE LE PREGUNTA A GIT, NO AL DISCO (medido el 2026-09-19). La versión anterior leía el
+// bit con `os.Stat`, y con el índice en 100644 y el disco parchado a mano en 775 daba VERDE —
+// mientras `git checkout-index` materializaba el guion en 664, que es lo que recibe cualquier
+// clone. El hermano de `internal/mcp` ya tenía la lección escrita («EL MODO SE LEE DE GIT Y NO DEL
+// DISCO») y este lado no la había aprendido: es la forma dominante de este repo.
+//
+// EL SALTEO DE WINDOWS DESAPARECE, y no por comodidad: el modo del índice es el mismo en las tres
+// plataformas, así que la aserción ya no necesita disculparse por NTFS. Antes se salteaba porque
+// `os.Stat` ahí miente sobre todo archivo regular.
+//
+// Se escribe el parseo acá y no se comparte con el de `internal/mcp`: un helper de prueba no cruza
+// paquetes sin inventar un paquete no-de-prueba para tres líneas, que sale más caro que la copia.
+//
+// Sabotaje que la hace fallar: borrar el guion, o sacarle el bit del índice.
+// arnes: no_mecanizable="el sabotaje es borrar un archivo o cambiarle el MODO en el índice de git (`git update-index --chmod=-x`): ninguna de las dos cosas es una sustitución de texto, que es lo único que este arnés sabe aplicar"
 func TestLaPruebaDeComportamientoDeLaPrecedenciaSigueEnPie(t *testing.T) {
-	ruta := filepath.Join("..", "..", "deploy", "pruebas", "precedencia-del-token.sh")
-	fi, err := os.Stat(ruta)
-	if err != nil {
-		t.Fatalf("falta %s: %v\nSin ella, la precedencia de A101 queda custodiada sólo del lado de Go,\n"+
-			"y la mitad que decidió mal dos veces vive en bash.", ruta, err)
+	const enGit = "deploy/pruebas/precedencia-del-token.sh"
+	if _, err := os.Stat(filepath.Join("..", "..", enGit)); err != nil {
+		t.Fatalf("falta %s en el disco: %v\nSin ella, la precedencia de A101 queda custodiada sólo del lado de Go,\n"+
+			"y la mitad que decidió mal dos veces vive en bash.", enGit, err)
 	}
-	// NTFS no tiene el bit y git en Windows no lo preserva: ahí la aserción sería siempre falsa,
-	// dijera lo que dijera el repo. La que importa —que el guion ESTÉ— corre en las tres.
-	if runtime.GOOS != "windows" && fi.Mode()&0o111 == 0 {
-		t.Errorf("%s no es ejecutable", ruta)
+
+	salida, err := exec.Command("git", "-C", filepath.Join("..", ".."), "ls-files", "-s", "deploy/pruebas/").Output()
+	if err != nil {
+		t.Fatalf("no se pudo leer el índice de git: %v", err)
+	}
+	modo := map[string]string{}
+	for _, l := range strings.Split(string(salida), "\n") {
+		if campos := strings.Fields(l); len(campos) >= 4 {
+			modo[campos[3]] = campos[0]
+		}
+	}
+	if len(modo) < 5 {
+		t.Fatalf("el índice devolvió %d archivo(s) bajo deploy/pruebas/ y hay muchos más: el parseo "+
+			"dejó de funcionar y esta guarda está midiendo el vacío", len(modo))
+	}
+
+	m, ok := modo[enGit]
+	if !ok {
+		t.Fatalf("%s no está en el índice de git: sin `git add` no existe para el repo, así que el "+
+			"clone no la recibe y la mitad de A101 que vive en bash queda sin custodiar allá.", enGit)
+	}
+	if m != "100755" {
+		t.Errorf("%s está versionado como %s y tiene que ser 100755.\n"+
+			"  El disco de esta máquina no dice nada: lo que viaja al clone es el modo del ÍNDICE, y "+
+			"una comprobación que hay que invocar con `bash` de por medio se corre menos.\n"+
+			"  Arreglo: `git update-index --chmod=+x %s`.", enGit, m, enGit)
 	}
 }

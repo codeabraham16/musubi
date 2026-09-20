@@ -583,7 +583,7 @@ groups:
         for: 6h
         labels: { severity: info }
         annotations:
-          summary: "Una política no actúa sobre alguna máquina porque su dueño no lo permite."
+          summary: "La política {{ $labels.policy }} no actúa sobre alguna máquina porque su dueño no lo permite."
           nota: "El eje funcionó: `prohibido` o `pide` frenaron el auto-heal. Lo que hay que resolver es la CONTRADICCIÓN entre una política que apunta a esa máquina y un grado que no la deja: o el dueño la baja a `avisa`, o la política deja de incluirla. Mientras siga así, esa máquina no se auto-cura y nadie más lo va a notar."
           runbook: "deploy/RUNBOOK.md#politicafrenadaporconsentimiento"
 

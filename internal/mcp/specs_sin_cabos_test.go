@@ -80,7 +80,6 @@ package mcp
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -88,6 +87,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
+
+	"musubi/internal/arbol"
 )
 
 // ════════════════════════════════════════════════════════════════════════════════════════════
@@ -416,7 +418,6 @@ type cabo struct {
 // barridos» y el cabo estaba en el 42.
 func specsDelTrack(t *testing.T) []string {
 	t.Helper()
-	raiz := filepath.Join("..", "..", "specs")
 	// EL GLOB ERA CIEGO A `control-de-flota/`, que es la carpeta del PROPIO track.
 	//
 	// `flota-*` no matchea `control-de-flota`, así que un `## Lo que queda fuera` escrito en el
@@ -426,26 +427,24 @@ func specsDelTrack(t *testing.T) []string {
 	//
 	// `ABIERTO.md` se excluye porque ES el registro: barrerlo sería preguntarle al registro si
 	// está registrado.
-	dirs, err := filepath.Glob(filepath.Join(raiz, "flota-*"))
+	// EL ÁRBOL LO DICE GIT Y NO EL DIRECTORIO (A128): un borrador `.md` bajo `specs/` que alguien
+	// dejó sin `git add` no está en el repo, y sin embargo hacía que esta lista creciera y que las
+	// guardas que cuelgan de acá acusaran cabos que el clone no contiene.
+	mds, err := arbol.ConSufijo(filepath.Join("..", ".."), ".md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	dirs = append(dirs, filepath.Join(raiz, "control-de-flota"))
 	var out []string
-	for _, d := range dirs {
-		err := filepath.WalkDir(d, func(p string, e fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".md") &&
-				e.Name() != "ABIERTO.md" {
-				out = append(out, p)
-			}
-			return nil
-		})
-		if err != nil {
-			t.Fatal(err)
+	for _, rel := range mds {
+		dir := filepath.ToSlash(filepath.Dir(rel))
+		if !strings.HasPrefix(dir, "specs/flota-") && dir != "specs/control-de-flota" &&
+			!strings.HasPrefix(dir, "specs/control-de-flota/") {
+			continue
 		}
+		if filepath.Base(rel) == "ABIERTO.md" {
+			continue
+		}
+		out = append(out, filepath.Join("..", "..", filepath.FromSlash(rel)))
 	}
 	sort.Strings(out)
 	return out
@@ -1384,31 +1383,25 @@ func pruebasDelArbol(t *testing.T) map[string]bool {
 	t.Helper()
 	out := map[string]bool{}
 	raiz := filepath.Join("..", "..")
-	err := filepath.WalkDir(raiz, func(p string, e fs.DirEntry, err error) error {
+	// EL ÁRBOL LO DICE GIT Y NO EL DIRECTORIO, Y ACÁ LA DIRECCIÓN DEL DAÑO ES LA PEOR (A128).
+	//
+	// Esta lista es la que decide si una cita del registro apunta a una prueba que EXISTE. Al
+	// caminar el disco, el nombre de una prueba borrada seguía apareciendo mientras viviera en una
+	// copia del repo bajo `.claude/worktrees/` — así que la cita fantasma pasaba en VERDE. No es el
+	// falso rojo de las otras guardas de esta familia: es un falso verde sobre la pregunta que esta
+	// función existe para contestar, y sólo en la máquina que tuviera esa copia.
+	pruebas, err := arbol.ConSufijo(raiz, "_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range pruebas {
+		crudo, err := os.ReadFile(filepath.Join(raiz, filepath.FromSlash(rel)))
 		if err != nil {
-			return nil // un directorio ilegible no puede dar por buena una cita
-		}
-		if e.IsDir() {
-			switch e.Name() {
-			case ".git", "node_modules", "vendor":
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(e.Name(), "_test.go") {
-			return nil
-		}
-		crudo, err := os.ReadFile(p)
-		if err != nil {
-			return nil
+			t.Fatalf("no pude leer %s: %v", rel, err)
 		}
 		for _, m := range definicionDePrueba.FindAllStringSubmatch(string(crudo), -1) {
 			out[m[1]] = true
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("no se pudo caminar el repo buscando pruebas: %v", err)
 	}
 	// CERO PRUEBAS ENCONTRADAS SERÍA «NO PUDE MIRAR» CON CARA DE «TODAS LAS CITAS SON FALSAS».
 	if len(out) < 500 {
@@ -1851,4 +1844,197 @@ func TestTodaFilaDeAbiertoTieneLasCeldasDeSuEncabezado(t *testing.T) {
 			"adentro de la celda de su fila, nunca como bloque suelto entre filas.",
 			len(sinRevisar), sinRevisar, primera)
 	}
+}
+
+// TestElEncabezadoNoMienteSobreCuantosCabosHayAbiertos — un derivado escrito a mano es una copia,
+// y ésta se pudrió sola.
+//
+// EL DEFECTO, medido el 2026-09-19: el encabezado abría con «29 cabos abiertos» y la tabla 1 tenía
+// 31 filas. No era falso cuando se escribió —el 2026-09-10 eran 29—: se volvió falso cuando se
+// abrieron A124 y A127, porque nadie vuelve al encabezado después de agregar una fila. Es lo
+// primero que lee quien entra al registro, y decía que faltaba menos de lo que falta.
+//
+// POR QUÉ UNA GUARDA Y NO ARREGLAR EL NÚMERO: arreglarlo a mano lo deja pudriéndose de nuevo la
+// próxima vez, que es exactamente cómo llegó hasta acá. Un archivo de specs no puede correr código,
+// así que la única forma de que un número vivo no mienta es que algo lo CRUCE contra su fuente.
+//
+// CRUZAR DOS AFIRMACIONES DEL MISMO ARCHIVO NO ES MEDIRSE A SÍ MISMO. El encabezado dice un número
+// en prosa; la tabla dice otro contándose. Son dos caminos independientes hasta el mismo hecho, y
+// la guarda existe para que no puedan discrepar. Lo que sí sería medirse a sí mismo es derivar el
+// número de la constante que la guarda custodia: acá no hay constante, hay una tabla.
+//
+// LOS NÚMEROS CON FECHA NO SE TOCAN. La bitácora del encabezado está llena de «20 cabos», «21
+// cabos», y cada uno es verdadero para SU entrada: un hecho con fecha se clava. Por eso la guarda
+// NO barre el archivo buscando la forma «N cabos» —eso acusaría a toda la historia—: pide UNA línea
+// canónica, la busca por su prefijo, y exige que haya exactamente una.
+//
+// Sabotaje que la hace fallar: renombrar la línea canónica, que es la forma cómoda de callarla.
+// Sin esa línea la guarda no se queda MUDA: falla. El otro camino —el número equivocado— es el que
+// la hizo existir y se verificó a mano el 2026-09-19: con 29 escrito sale roja nombrando 29 y 31;
+// con 31, verde. Ése no se mecaniza a propósito, porque el corte tendría que llevar el total
+// adentro y se pudriría igual que el número que esta guarda vino a cuidar.
+// arnes: archivo="specs/control-de-flota/ABIERTO.md"
+// arnes: de="**Cabos abiertos hoy: "
+// arnes: a="**Cabos abiertos alguna vez: "
+func TestElEncabezadoNoMienteSobreCuantosCabosHayAbiertos(t *testing.T) {
+	texto := registroDeAbiertos(t)
+
+	reCuenta := regexp.MustCompile(`(?m)^> \*\*Cabos abiertos hoy: (\d+)\.\*\*`)
+	ms := reCuenta.FindAllStringSubmatch(texto, -1)
+	switch {
+	case len(ms) == 0:
+		t.Fatal("ABIERTO.md perdió su línea de cuenta viva (`> **Cabos abiertos hoy: N.**`).\n" +
+			"  Sin ella esta guarda no tiene qué cruzar y se queda MUDA, que desde afuera se ve igual\n" +
+			"  que un registro sano. Si la línea se mueve o se reescribe, movete esta guarda con ella.")
+	case len(ms) > 1:
+		t.Fatalf("ABIERTO.md tiene %d líneas de cuenta viva y tiene que haber UNA.\n"+
+			"  Con dos, la que se actualiza y la que se olvida se ven iguales y el lector cree la primera.", len(ms))
+	}
+	declarado, err := strconv.Atoi(ms[0][1])
+	if err != nil {
+		t.Fatalf("la cuenta viva de ABIERTO.md no es un número: %v", err)
+	}
+
+	tab, ok := tablaConColumnas(parseTablasMD(texto), "#", "qué falta", "por qué no está", "slice")
+	if !ok {
+		t.Fatal("no se encontró la tabla 1 de ABIERTO.md por su encabezado `| # | Qué falta | Por qué no está | Slice |`.\n" +
+			"  Sin la tabla no hay contra qué cruzar la cuenta, y una guarda que no puede medir prefiere fallar.")
+	}
+	real := 0
+	for _, f := range tab.filas {
+		if id := f.id(); strings.HasPrefix(id, "A") && idDeRegistro.MatchString(id) {
+			real++
+		}
+	}
+	if real < 20 {
+		t.Fatalf("sólo se reconocieron %d fila(s) A en la tabla 1 de ABIERTO.md: cambió el formato y este cruce dejó de medir", real)
+	}
+	t.Logf("cuenta viva declarada %d · filas A en la tabla 1: %d", declarado, real)
+
+	if declarado != real {
+		sentido := "promete MÁS trabajo del que hay"
+		if declarado < real {
+			sentido = "promete MENOS trabajo del que hay"
+		}
+		t.Errorf("el encabezado de ABIERTO.md declara **%d cabos abiertos** y la tabla 1 tiene **%d** fila(s).\n"+
+			"  Es lo primero que lee quien entra al registro, y así %s.\n"+
+			"  Arreglo: poné %d en la línea `> **Cabos abiertos hoy: N.**`. No toques los números CON\n"+
+			"  FECHA de la bitácora: cada uno es verdadero para su entrada y se clava.",
+			declarado, real, sentido, real)
+	}
+}
+
+// TestNingunTituloDeLaTabla1EmpiezaDeclarandoCierre — la regla 1 tenía guarda y miraba una sola
+// columna.
+//
+// EL DEFECTO, medido el 2026-09-19: SEIS de las treinta y una filas de la tabla 1 abrían su título
+// con «**CERRADO 2026-09-16: …**», y una séptima con «**RESUELTO …**». Estaban ahí en la cara, y
+// `TestNingunaFilaDeLaTabla1SeDeclaraCerrada` en verde — porque esa guarda mira la columna «Slice»
+// y NO el título, y lo hace a propósito: la corrección que la volvió confiable fue justamente dejar
+// de leer donde no se decide, después de que «`VerificarFirma` falla cerrado» la hiciera acusar a
+// A31. O sea que el arreglo de un falso positivo abrió el punto ciego de al lado.
+//
+// ES LA MISMA REGLA, EN LA OTRA COLUMNA, y por eso es una guarda aparte y no un ensanche de la
+// hermana. «Slice» dice DE QUIÉN es el cabo; «Qué falta» dice QUÉ falta. Un título que arranca
+// anunciando el cierre contesta que no falta nada, adentro de la tabla que existe para contestar
+// qué falta — y encima infla el conteo, que es el daño que la regla 1 nombra con números: el
+// 2026-09-10 eran 21 de 48.
+//
+// SE MIRA LA CABEZA Y NO EL TÍTULO ENTERO, y ésa es toda la diferencia entre esta guarda y una que
+// acusa filas sanas. Un título puede NOMBRAR un cierre sin declararse cerrado —A118 cuenta que algo
+// se cerró por otro lado, A122 habla de una pieza ya re-derivada— y eso es historia legítima. Lo
+// que no puede es EMPEZAR con el veredicto. Los dos controles de abajo son las filas reales del
+// árbol, las que estaban mal y las que estaban bien, no ejemplos inventados.
+//
+// Sabotaje que la hace fallar: renombrar la columna del título, que es la forma cómoda de callarla
+// —sin la columna no hay qué leer, y la guarda falla en vez de quedarse muda. El otro camino, el
+// que la hizo existir, se verificó a mano el 2026-09-19: con el título de A128 prefijado con
+// «CERRADO 2026-09-19:» sale roja nombrando la fila. No se mecaniza porque cualquier fila que se
+// elija como corte se va a mudar a la sección 3 el día que su cabo cierre, y la directiva quedaría
+// apuntando a la nada.
+// arnes: archivo="specs/control-de-flota/ABIERTO.md"
+// arnes: de="| # | Qué falta | Por qué no está | Slice |"
+// arnes: a="| # | El asunto | Por qué no está | Slice |"
+func TestNingunTituloDeLaTabla1EmpiezaDeclarandoCierre(t *testing.T) {
+	// CONTROL POSITIVO — LOS SIETE TÍTULOS REALES QUE ESTABAN PUESTOS EL 2026-09-19. Si el
+	// reconocedor deja de ver alguno, se aflojó y esta guarda dejó de poder fallar.
+	for _, real := range []string{
+		"**CERRADO 2026-09-16: el redespliegue que esta fila esperaba ya estaba hecho, y el motivo llega hasta `musubi_fleet_list`**",
+		"**CERRADO 2026-09-16: el redespliegue ya estaba hecho, y la serie que «no leía ninguna alerta» hoy tiene la suya**",
+		"**CERRADO 2026-09-16 por #544, y NO por donde esta fila apuntaba: la salida fue agregar la segunda pregunta, no arreglar los dos comparadores**",
+		"**CERRADO 2026-09-16: las dos mitades estaban arregladas desde el 2026-09-15**",
+		"**CERRADO 2026-09-16: el rescate aguanto, y la unica pieza que quedaba pendiente la re-derivo otro**",
+		"**CERRADO 2026-09-16: el tercer techo tiene perilla, serie y aviso**",
+		"**RESUELTO 2026-09-16: hay respaldo off-host verificado y un timer del REPO que lo sostiene**",
+	} {
+		if !empiezaDeclarandoCierre(real) {
+			t.Fatalf("el reconocedor ya no ve como CIERRE el título %q, que es uno de los que estaba puesto el 2026-09-19.\n  Se aflojó, y con eso esta prueba dejó de poder fallar.", recorte(real, 90))
+		}
+	}
+	// CONTROL NEGATIVO — TÍTULOS REALES QUE NOMBRAN UN CIERRE SIN DECLARARSE CERRADOS. Son historia
+	// legítima y una guarda que los acusa se termina apagando.
+	for _, real := range []string{
+		"**Hay DOS `config.yaml` y manda el del repo**",
+		"**Faltan dos menores del respaldo off-host: que registre identidades cuando haya `principals.yaml`**",
+		"**El detector de alcance de la compuerta de guiones pregunta por CO-OCURRENCIA, no por gateo**",
+		"**`VerificarFirma` falla cerrado y lo dice con todas las letras**",
+		"**Doce guardas derivan su alcance de CAMINAR EL DISCO y no del repo**",
+	} {
+		if empiezaDeclarandoCierre(real) {
+			t.Fatalf("la guarda acusa al título %q, que NO se declara cerrado.\n  Una guarda que acusa filas correctas se termina apagando.", recorte(real, 90))
+		}
+	}
+
+	tab, ok := tablaConColumnas(parseTablasMD(registroDeAbiertos(t)), "#", "qué falta", "por qué no está", "slice")
+	if !ok {
+		t.Fatal("no se encontró la tabla 1 de ABIERTO.md por su encabezado `| # | Qué falta | Por qué no está | Slice |`.\n" +
+			"  Esta guarda pide la columna del título POR SU NOMBRE: si el encabezado cambió, prefiere fallar\n" +
+			"  antes que mirar en silencio la columna de al lado, que es el error que la hizo existir.")
+	}
+	iTitulo := tab.columna("qué falta")
+	if iTitulo < 0 {
+		t.Fatal("la tabla 1 perdió la columna «Qué falta»")
+	}
+	revisadas := 0
+	for _, f := range tab.filas {
+		if !idDeRegistro.MatchString(f.id()) || len(f.celdas) <= iTitulo {
+			continue
+		}
+		revisadas++
+		if empiezaDeclarandoCierre(f.crudas[iTitulo]) {
+			t.Errorf("el título de la fila **%s** (línea %d) EMPIEZA declarando el cierre del cabo:\n    %s\n"+
+				"  Esa columna se llama «Qué falta»: un título que arranca con el veredicto contesta que no\n"+
+				"  falta nada, adentro de la tabla que existe para contestar qué falta — y además infla el conteo.\n"+
+				"  La regla 1 dice que al cerrar un slice se BORRA su línea y su texto baja ENTERO a la sección 3.\n"+
+				"  Si el cabo NO está cerrado del todo, el título tiene que empezar por lo que FALTA y la historia\n"+
+				"  del cierre parcial va detrás o en la columna de al lado.",
+				f.id(), f.linea, recorte(f.celdas[iTitulo], 160))
+		}
+	}
+	if revisadas < 15 {
+		t.Fatalf("sólo se revisaron %d título(s) de la tabla 1: cambió el formato y esta guarda está midiendo el vacío", revisadas)
+	}
+}
+
+// empiezaDeclarandoCierre dice si un título ARRANCA con un veredicto de cierre.
+//
+// Mira la CABEZA y no el texto entero, y eso no es comodidad: un título puede contar que algo se
+// cerró por otro lado sin declararse cerrado él, y ésa es la diferencia que decide. Se toma la
+// primera palabra después de sacarle el énfasis de Markdown.
+func empiezaDeclarandoCierre(titulo string) bool {
+	t := strings.TrimSpace(sinEnfasis(titulo))
+	// La primera palabra, sin la puntuación que suele seguirla (`CERRADO:`, `CERRADO —`).
+	campos := strings.Fields(t)
+	if len(campos) == 0 {
+		return false
+	}
+	primera := strings.ToLower(strings.TrimFunc(campos[0], func(r rune) bool {
+		return !unicode.IsLetter(r)
+	}))
+	switch primera {
+	case "cerrado", "cerrada", "resuelto", "resuelta", "hecho", "hecha", "listo", "lista",
+		"completado", "completada", "terminado", "terminada", "arreglado", "arreglada":
+		return true
+	}
+	return false
 }

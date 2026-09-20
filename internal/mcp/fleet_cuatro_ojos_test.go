@@ -94,6 +94,9 @@ func TestNadieApruebaSuPropiaSolicitud(t *testing.T) {
 // estuviera después de entregarPantalla, la credencial ya estaría hecha.
 //
 // Sabotaje: mover la llamada a puertaDeCuatroOjos después de AbrirSesionPantalla.
+// arnes: archivo="internal/mcp/methods_pantalla.go"
+// arnes: de="\tif resp, rpcErr := s.puertaDeCuatroOjos(d, p, proyecto, fleet.CapScreen, args.Motivo, ahora); rpcErr != nil || resp != nil {\n\t\treturn resp, rpcErr\n\t}\n\n\t// `pide` SE REPARTE ANTES DEL AVISO: PREGUNTAR YA ES AVISAR.\n\t//\n\t// Estaba después, así que una máquina en `pide` recibía las DOS cosas: un «alguien está por\n\t// entrar» y, encima, el diálogo que pregunta. Es ruido sobre el mismo hecho, y el ruido es lo\n\t// que enseña a apretar «permitir» sin leer — que es justo lo que este eje viene a evitar.\n\t//\n\t// Lo encontró la matriz de caminos × grados al comparar con la shell: si acá quedaba el aviso\n\t// de más y allá no, se creaba una asimetría nueva del mismo tipo que la que se estaba\n\t// cerrando.\n\tif consent := d.ConsentimientoEfectivo(); consent == fleet.ConsentimientoPide {\n\t\treturn s.pedirPermisoParaPantalla(d, p, proyecto, ttl, ahora)\n\t}\n\n\t// LOS AVISOS, RECIÉN ACÁ: ya sabemos que esta sesión se va a abrir. Un `pide` no llega hasta\n\t// este punto — se repartió arriba, y su pregunta ya cumple la función de avisar.\n\tswitch consent := d.ConsentimientoEfectivo(); {\n\tcase consent.AvisaAlUsuario() && !d.PuedePreguntar:\n\t\t// SE ABRE, Y SE DICE QUE EL AVISO NO SE PUDO ENTREGAR. Prometer una notificación que el\n\t\t// agente de ESTA máquina no sabe dar sería exactamente lo que este eje viene a evitar:\n\t\t// una configuración que se ve puesta y no lo está. Bloquear tampoco: `avisa` no bloquea,\n\t\t// y hacerlo cerraría el acceso por una capacidad que esa máquina puede no tener nunca\n\t\t// —un servidor sin escritorio— por razones que no son de seguridad.\n\t\ts.avisarUnaVezPorDevice(d.ID, nombre, \"pantalla\", consent)\n\tcase consent.AvisaAlUsuario():\n\t\t// EL AGENTE SABE AVISAR: se le encola el aviso (A57). El aviso dice «alguien está por\n\t\t// entrar», así que entregarlo después de que la pantalla ya está abierta lo convertiría\n\t\t// en una notificación de algo que ya pasó. El agente lo recoge en su próximo latido\n\t\t// —hasta 30 s— y esa demora es el precio de no ponerlo a escuchar un puerto.\n\t\ts.encolarAvisoDeAcceso(d, p, avisoPantalla)\n\t}\n\n\t// G7 — la sesión se registra ANTES de acuñar nada. Que alguien haya INTENTADO mirar una\n\t// pantalla es información de auditoría tanto como que lo haya logrado.\n\tses, err := s.engine.AbrirSesionPantalla(fleet.SesionPantalla{\n\t\tDeviceID: d.ID, ProjectID: proyecto, Principal: nombrePrincipal(p),\n\t\tCreada: ahora, Vence: ahora.Add(ttl),\n\t})\n\tif err != nil {\n\t\treturn nil, rpcErrorf(codeInternalError, \"%v\", err)\n\t}"
+// arnes: a="\t// `pide` SE REPARTE ANTES DEL AVISO: PREGUNTAR YA ES AVISAR.\n\t//\n\t// Estaba después, así que una máquina en `pide` recibía las DOS cosas: un «alguien está por\n\t// entrar» y, encima, el diálogo que pregunta. Es ruido sobre el mismo hecho, y el ruido es lo\n\t// que enseña a apretar «permitir» sin leer — que es justo lo que este eje viene a evitar.\n\t//\n\t// Lo encontró la matriz de caminos × grados al comparar con la shell: si acá quedaba el aviso\n\t// de más y allá no, se creaba una asimetría nueva del mismo tipo que la que se estaba\n\t// cerrando.\n\tif consent := d.ConsentimientoEfectivo(); consent == fleet.ConsentimientoPide {\n\t\treturn s.pedirPermisoParaPantalla(d, p, proyecto, ttl, ahora)\n\t}\n\n\t// LOS AVISOS, RECIÉN ACÁ: ya sabemos que esta sesión se va a abrir. Un `pide` no llega hasta\n\t// este punto — se repartió arriba, y su pregunta ya cumple la función de avisar.\n\tswitch consent := d.ConsentimientoEfectivo(); {\n\tcase consent.AvisaAlUsuario() && !d.PuedePreguntar:\n\t\t// SE ABRE, Y SE DICE QUE EL AVISO NO SE PUDO ENTREGAR. Prometer una notificación que el\n\t\t// agente de ESTA máquina no sabe dar sería exactamente lo que este eje viene a evitar:\n\t\t// una configuración que se ve puesta y no lo está. Bloquear tampoco: `avisa` no bloquea,\n\t\t// y hacerlo cerraría el acceso por una capacidad que esa máquina puede no tener nunca\n\t\t// —un servidor sin escritorio— por razones que no son de seguridad.\n\t\ts.avisarUnaVezPorDevice(d.ID, nombre, \"pantalla\", consent)\n\tcase consent.AvisaAlUsuario():\n\t\t// EL AGENTE SABE AVISAR: se le encola el aviso (A57). El aviso dice «alguien está por\n\t\t// entrar», así que entregarlo después de que la pantalla ya está abierta lo convertiría\n\t\t// en una notificación de algo que ya pasó. El agente lo recoge en su próximo latido\n\t\t// —hasta 30 s— y esa demora es el precio de no ponerlo a escuchar un puerto.\n\t\ts.encolarAvisoDeAcceso(d, p, avisoPantalla)\n\t}\n\n\t// G7 — la sesión se registra ANTES de acuñar nada. Que alguien haya INTENTADO mirar una\n\t// pantalla es información de auditoría tanto como que lo haya logrado.\n\tses, err := s.engine.AbrirSesionPantalla(fleet.SesionPantalla{\n\t\tDeviceID: d.ID, ProjectID: proyecto, Principal: nombrePrincipal(p),\n\t\tCreada: ahora, Vence: ahora.Add(ttl),\n\t})\n\tif err != nil {\n\t\treturn nil, rpcErrorf(codeInternalError, \"%v\", err)\n\t}\n\n\tif resp, rpcErr := s.puertaDeCuatroOjos(d, p, proyecto, fleet.CapScreen, args.Motivo, ahora); rpcErr != nil || resp != nil {\n\t\treturn resp, rpcErr\n\t}"
 func TestConCuatroOjosElPrimerPedidoNoAcunaContrasena(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	pantallaConCuatroOjos(t, s)
@@ -171,7 +174,17 @@ func TestConLaAprobacionDeOtroLaSesionAbre(t *testing.T) {
 // LA APROBACIÓN ES DE UN SOLO USO. Un permiso reusable no es cuatro ojos: es una llave que la
 // segunda persona entregó una vez y que después abre siempre.
 //
-// Sabotaje: que ConsumirAprobacion devuelva true sin tocar la fila.
+// Sabotaje: que el UPDATE de ConsumirAprobacion no marque la fila como `usada`.
+//
+// LA MITAD QUE IMPORTA DE ESA FRASE ES «SIN TOCAR LA FILA», Y LA OTRA MITAD NO ENCIENDE NADA —
+// medido el 2026-09-19 al mecanizarla. Hacer que devuelva `true` a secas, conservando el UPDATE,
+// deja esta guarda EN VERDE: la fila igual queda `usada`, `AprobacionVigenteDe` ya no la ve
+// vigente, el tercer pedido abre una solicitud nueva y no entrega contraseña, que es el
+// comportamiento sano. Lo que la enciende es que el estado NO pase a `usada`: ahí el segundo
+// pedido vuelve a encontrarla vigente y entrega una segunda contraseña.
+// arnes: archivo="internal/memory/aprobaciones.go"
+// arnes: de="SET estado = 'usada', usada = ?"
+// arnes: a="SET usada = ?"
 func TestLaAprobacionSeGastaEnUnaSolaSesion(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	pantallaConCuatroOjos(t, s)
@@ -255,6 +268,9 @@ func TestUnNoNoSeVuelveAPedirEnElActo(t *testing.T) {
 // puede avalar una sesión de pantalla: la barra es «podrías haberlo hecho vos».
 //
 // Sabotaje: cambiar sol.Capacidad por fleet.CapMetrics en la comprobación de toolFleetApprove.
+// arnes: archivo="internal/mcp/methods_aprobacion.go"
+// arnes: de="!existe || !PuedeSobreDevice(p, d, sol.Capacidad)"
+// arnes: a="!existe || !PuedeSobreDevice(p, d, fleet.CapMetrics)"
 func TestSinLaMismaCapacidadNoSePuedeAprobar(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	pantallaConCuatroOjos(t, s)
@@ -400,6 +416,10 @@ func TestOmitirRequerirEsUnErrorYNoUnApagado(t *testing.T) {
 // se saltea cualquier allowlist de comandos.
 //
 // Sabotaje: sacar la llamada a puertaDeCuatroOjos de toolFleetShell.
+// arnes: colision_ok="TestLosCuatroOjosVanAntesDeGastarleElSiAlDuenoDeLaMaquina"
+// arnes: archivo="internal/mcp/methods_shell.go"
+// arnes: de="\tif resp, rpcErr := s.puertaDeCuatroOjos(d, p, proyecto, fleet.CapShell, args.Motivo, ahora); rpcErr != nil || resp != nil {\n\t\treturn resp, rpcErr\n\t}\n\n"
+// arnes: a=""
 func TestLaShellTambienExigeCuatroOjos(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConShell(t, s, "casa", "nas")
@@ -472,6 +492,9 @@ func TestLaListaDeAprobacionesDiceLoQueNoMuestra(t *testing.T) {
 // que no tiene ninguna sobre esa máquina.
 //
 // Sabotaje: volver a interpolar sol.Capacidad en el mensaje de toolFleetApprove.
+// arnes: archivo="internal/mcp/methods_aprobacion.go"
+// arnes: de="\t\t\t\t\"la capacidad que esa sesión pide. Aprobar exige LA MISMA capacidad que la sesión —no \"+\n\t\t\t\t\"`admin`—: la barra es «podrías haberlo hecho vos», así que aprobar no te concede nada \"+\n\t\t\t\t\"que no tuvieras.\", id)"
+// arnes: a="\t\t\t\t\"la capacidad %q que esa sesión pide. Aprobar exige LA MISMA capacidad que la sesión —no \"+\n\t\t\t\t\"`admin`—: la barra es «podrías haberlo hecho vos», así que aprobar no te concede nada \"+\n\t\t\t\t\"que no tuvieras.\", id, string(sol.Capacidad))"
 func TestElRechazoDeAprobarNoDistingueSiLaSolicitudExiste(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	pantallaConCuatroOjos(t, s)
@@ -512,6 +535,9 @@ func TestElRechazoDeAprobarNoDistingueSiLaSolicitudExiste(t *testing.T) {
 // evitando.
 //
 // Sabotaje: contar len(pendientes) en vez de filtrar por `visibles`.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="nombreAprobPendientes, proy, n)"
+// arnes: a="nombreAprobPendientes, proy, len(pendientes))"
 func TestElConteoDeAprobacionesRespetaLaCompuertaPorMaquina(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()
@@ -550,6 +576,10 @@ func TestElConteoDeAprobacionesRespetaLaCompuertaPorMaquina(t *testing.T) {
 // El campo existía en el dominio, en el INSERT y en la lista, y NINGÚN camino lo escribía.
 //
 // Sabotaje: dejar de pasar `motivo` en la llamada a puertaDeCuatroOjos.
+// arnes: colision_ok="TestConCuatroOjosElPrimerPedidoNoAcunaContrasena"
+// arnes: archivo="internal/mcp/methods_pantalla.go"
+// arnes: de="fleet.CapScreen, args.Motivo, ahora)"
+// arnes: a="fleet.CapScreen, \"\", ahora)"
 func TestElMotivoLlegaAQuienAprueba(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	pantallaConCuatroOjos(t, s)
@@ -583,6 +613,9 @@ func TestElMotivoLlegaAQuienAprueba(t *testing.T) {
 // abría otra solicitud: la persona rebotaba entre dos esperas y la sesión no se abría NUNCA.
 //
 // Sabotaje: volver a consumir la aprobación dentro de puertaDeCuatroOjos.
+// arnes: archivo="internal/mcp/methods_aprobacion.go"
+// arnes: de="\t\t\treturn nil, nil"
+// arnes: a="\t\t\tif _, err := s.engine.ConsumirAprobacion(sol.ID, ahora); err != nil {\n\t\t\t\treturn nil, rpcErrorf(codeInternalError, \"%v\", err)\n\t\t\t}\n\t\t\treturn nil, nil"
 func TestPideMasCuatroOjosNoSeTrabaEnUnBucle(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	tok := enrolarConPantalla(t, s, "casa", "pc-gio")
@@ -702,6 +735,9 @@ func TestLaAprobacionDeUnoNoLeSirveAOtro(t *testing.T) {
 // pendiente posterior escondía la negativa.
 //
 // Sabotaje: volver el ORDER BY a `creada DESC` sin la precedencia por estado.
+// arnes: archivo="internal/memory/aprobaciones.go"
+// arnes: de="ORDER BY CASE estado WHEN 'negada' THEN 0 WHEN 'concedida' THEN 1 ELSE 2 END,\n\t\t           creada DESC"
+// arnes: a="ORDER BY creada DESC"
 func TestUnNoNoLoTapaUnaSolicitudPosterior(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	pantallaConCuatroOjos(t, s)
@@ -854,6 +890,9 @@ func TestConsumirDosVecesElMismoPermisoFallaLaSegunda(t *testing.T) {
 // regla que musubi_fleet_export_truncated.
 //
 // Sabotaje: emitir las series sólo cuando len(pendientes) > 0.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\t\tn, espera := 0, 0.0\n"
+// arnes: a="\t\tif len(pendientes) == 0 {\n\t\t\tcontinue\n\t\t}\n\t\tn, espera := 0, 0.0\n"
 func TestLasSeriesDeAprobacionSalenEnCeroCuandoNoHayNadieEsperando(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()
@@ -949,6 +988,9 @@ func TestApagarElControlDevuelveElAcceso(t *testing.T) {
 //
 // Sabotaje verificado que la pone en rojo: mover `puertaDeCuatroOjos` ARRIBA del chequeo de
 // consentimiento, en cualquiera de los dos caminos.
+// arnes: archivo="internal/mcp/methods_shell.go"
+// arnes: de="\tif consent := d.ConsentimientoEfectivo(); consent.Bloquea() {\n"
+// arnes: a="\tif resp, rpcErr := s.puertaDeCuatroOjos(d, p, proyecto, fleet.CapShell, args.Motivo, time.Now()); rpcErr != nil || resp != nil {\n\t\treturn resp, rpcErr\n\t}\n\tif consent := d.ConsentimientoEfectivo(); consent.Bloquea() {\n"
 func TestUnProhibidoNoLeHaceGastarElTiempoAlSegundoParDeOjos(t *testing.T) {
 	for _, c := range []struct {
 		camino string
@@ -1059,6 +1101,9 @@ func TestConLaMaquinaEnLibreLosCuatroOjosSiPidenAprobacion(t *testing.T) {
 // miraba no coincidían»— sólo que un eje más allá.
 //
 // Sabotaje verificado: mover `puertaDeCuatroOjos` DEBAJO de la rama de `pide`.
+// arnes: archivo="internal/mcp/methods_shell.go"
+// arnes: de="\tif resp, rpcErr := s.puertaDeCuatroOjos(d, p, proyecto, fleet.CapShell, args.Motivo, ahora); rpcErr != nil || resp != nil {\n"
+// arnes: a="\tif consent := d.ConsentimientoEfectivo(); consent == fleet.ConsentimientoPide {\n\t\treturn s.pedirPermisoParaShell(d, p, proyecto, ahora)\n\t}\n\tif resp, rpcErr := s.puertaDeCuatroOjos(d, p, proyecto, fleet.CapShell, args.Motivo, ahora); rpcErr != nil || resp != nil {\n"
 func TestLosCuatroOjosVanAntesDeGastarleElSiAlDuenoDeLaMaquina(t *testing.T) {
 	for _, c := range []struct {
 		camino string
