@@ -134,8 +134,33 @@ func TestElCambiadorNoTocaLaTareaAntesDeConfirmarQueEsLaCarpetaDelAgente(t *test
 
 // El cambiador es ASCII puro a propósito (lo dice su propia cabecera): cmd.exe y PowerShell 5.1
 // con UTF-8 sin BOM ya rompieron una vez. Un comentario nuevo con acentos lo vuelve a romper.
+//
+// SE LEE CRUDO, Y ES LA ÚNICA GUARDA DE ESTE ARCHIVO QUE LO HACE ────────────────────────────
+//
+// Leía con `leerDeploy`, que BLANQUEA las líneas `REM`. O sea que estaba ciega exactamente donde
+// un acento se cuela más fácil —un comentario—, que es el caso que la línea de arriba nombra como
+// el motivo de existir de la guarda. Estuvo en verde todo el tiempo sin poder fallar por ese caso.
+//
+// Y no hay que deducirlo: `despliegue_alertas_test.go` ya lo tenía escrito al crear el lector
+// crudo — «`leerDeployCrudo`, que existe para las pocas guardas que de verdad miran la prosa (la
+// pureza ASCII del cambiador mira TODOS los bytes, comentarios incluidos)». La documentación decía
+// una cosa y el código hacía la otra.
+//
+// MEDIDO el 2026-09-19 poniendo `REM ASCII púro` en deploy/cambiar-agente.cmd:
+//
+//	con leerDeploy (filtrado) → PASS, con un byte no-ASCII adentro del archivo
+//	con leerDeployCrudo       → FAIL, que es lo que corresponde
+//
+// De paso arregla el mensaje: `i` es el offset EN BYTES de la cadena que se recorre, así que
+// leyendo filtrado la «posición» era la del texto blanqueado y mandaba a mirar un byte que en el
+// archivo no existe.
+//
+// Sabotaje que la hace fallar: ponerle un acento a cualquier comentario `REM` del cambiador.
+// arnes: archivo="deploy/cambiar-agente.cmd"
+// arnes: de="REM ASCII puro, sin acentos"
+// arnes: a="REM ASCII púro, sin acentos"
 func TestElCambiadorSigueSiendoAsciiPuro(t *testing.T) {
-	for i, r := range leerDeploy(t, "cambiar-agente.cmd") {
+	for i, r := range leerDeployCrudo(t, "cambiar-agente.cmd") {
 		if r > 127 {
 			t.Fatalf("byte no-ASCII en la posición %d (%q): el cambiador declara ASCII puro porque\n"+
 				"cmd.exe ya rompió una vez con UTF-8 sin BOM", i, r)
@@ -365,6 +390,61 @@ func TestLaClasificacionVeTambienAlZombiDelBinarioRenombrado(t *testing.T) {
 			t.Fatalf("la clasificación volvió a filtrar por nombre de proceso:\n  %s\n"+
 				"El proceso que corre `musubi.exe.viejo` se llama `musubi.exe`, no `musubi`, así que\n"+
 				"`Get-Process musubi` no lo devuelve. Se enumera por RUTA.", strings.TrimSpace(linea))
+		}
+	}
+}
+
+// EL CARET ADENTRO DE COMILLAS NO ES UN ESCAPE: ES UN ARGUMENTO.
+//
+// El paso [1] del cambiador mata a los zombis del agente con un `powershell -NoProfile -Command
+// "..."`, y esa línea venía escrita `Get-Process ^| Where-Object { ... } ^| Stop-Process`. cmd.exe
+// consume el caret SÓLO fuera de comillas: adentro de una cadena entre comillas dobles el pipe ya
+// es literal, así que el `^` no hacía falta y viajaba entero hasta PowerShell, que corta con
+// «A positional parameter cannot be found that accepts argument '^'».
+//
+// O sea que el matador de zombis estuvo DEFINIDO Y DESCONECTADO desde el día que se escribió —la
+// misma forma de defecto que custodia el resto de este archivo, una vuelta más adentro—. Y no es
+// un paso decorativo: existe porque `schtasks /end` termina la TAREA y no necesariamente al hijo
+// que el envoltorio oculto dejó vivo, que sigue latiendo con la imagen vieja desde
+// `musubi.exe.viejo` y toma el archivo que el paso [2] necesita borrar.
+//
+// Medido el 2026-09-19 en davantis-1, con dos .cmd idénticos salvo el caret:
+//
+//	con caret → Where-Object : A positional parameter cannot be found that accepts argument '^'
+//	sin caret → Count : 0, o sea que corre y filtra
+//
+// El `cambio.log` de esa misma máquina lo tenía escrito desde el 2026-09-11, justo arriba del
+// «LISTO: agente actualizado» que lo tapaba: el guion cantó victoria con su propia guarda muerta.
+//
+// LA GUARDA MIRA ADENTRO DE LAS COMILLAS, NO EL CARET SUELTO. Afuera el escape SÍ es correcto:
+// `musubi-setup.bat:15` escribe `echo Instala Musubi ^(scripts/install.ps1^)` y está bien. Una
+// guarda que prohibiera todo caret daría un falso positivo ahí, y una guarda que grita donde no
+// hay daño es una guarda que alguien termina apagando.
+//
+// La columna se informa en bytes, que acá coinciden con los caracteres porque
+// `TestElCambiadorSigueSiendoAsciiPuro` custodia justamente eso.
+//
+// Sabotaje que la hace fallar: reponer el `^` delante de cualquiera de los dos pipes de esa línea.
+// arnes: archivo="deploy/cambiar-agente.cmd"
+// arnes: de="Get-Process | Where-Object"
+// arnes: a="Get-Process ^| Where-Object"
+func TestElCambiadorNoEscapaConCaretDentroDeComillas(t *testing.T) {
+	for i, linea := range strings.Split(leerDeploy(t, "cambiar-agente.cmd"), "\n") {
+		dentro := false
+		for col, r := range linea {
+			if r == '"' {
+				dentro = !dentro
+				continue
+			}
+			if r == '^' && dentro {
+				t.Fatalf("caret adentro de comillas en cambiar-agente.cmd:%d (columna %d):\n"+
+					"  %s\n\n"+
+					"cmd.exe no consume el `^` adentro de una cadena entre comillas dobles: lo pasa\n"+
+					"literal al programa invocado. Si ese programa es PowerShell, corta con\n"+
+					"«A positional parameter cannot be found that accepts argument '^'» y el paso\n"+
+					"NO CORRE, sin que el guion se entere. Adentro de comillas el `|` ya es literal:\n"+
+					"sacá el caret.", i+1, col+1, strings.TrimSpace(linea))
+			}
 		}
 	}
 }
