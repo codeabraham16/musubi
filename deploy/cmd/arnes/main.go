@@ -82,6 +82,7 @@
 //	go run ./deploy/cmd/arnes -correr                  # corre TODOS los mecanizados
 //	go run ./deploy/cmd/arnes -correr -paquete ./internal/mcp
 //	go run ./deploy/cmd/arnes -correr -limite 5
+//	go run ./deploy/cmd/arnes -correr -paquete ./internal/mcp -desde 127   # reanudar donde murió
 //
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // POR QUÉ EL MUTADOR SE INVOCA POR LA RUTA DEL BINARIO Y NO CON `go run`
@@ -124,6 +125,7 @@ func main() {
 		correr     = flag.Bool("correr", false, "correr los sabotajes mecanizados vía deploy/pruebas/sabotaje.sh")
 		overlay    = flag.Bool("overlay", false, "correr cada sabotaje SIN tocar el disco (go test -overlay) y marcar los que quedan VERDES: un rojo que sólo aparece al escribir el archivo depende del disco, no del comportamiento")
 		paquete    = flag.String("paquete", "", "correr sólo los de este paquete (ej ./internal/mcp)")
+		desde      = flag.Int("desde", 0, "empezar en el N-ésimo (1-based, el número que imprime la corrida); 0 = desde el principio")
 		limite     = flag.Int("limite", 0, "correr como máximo N (0 = todos)")
 		insertar   = flag.String("insertar", "", "ruta a un JSON con directivas a escribir en los comentarios")
 		aplicar    = flag.Bool("aplicar", false, "modo interno: aplicar un reemplazo en un archivo")
@@ -273,7 +275,7 @@ func main() {
 			}
 		}
 		if *correr && len(males) == 0 {
-			if rc := correrTodos(*raiz, censo, *paquete, *limite); rc != 0 {
+			if rc := correrTodos(*raiz, censo, *paquete, *desde, *limite); rc != 0 {
 				salida = rc
 			}
 		} else if *correr {
@@ -281,7 +283,7 @@ func main() {
 				"directiva rota mide otra cosa y su resultado se lee como si midiera ésta.")
 		}
 		if *overlay && len(males) == 0 {
-			if rc := contraOverlay(*raiz, censo, *paquete, *limite); rc != 0 {
+			if rc := contraOverlay(*raiz, censo, *paquete, *desde, *limite); rc != 0 {
 				salida = rc
 			}
 		} else if *overlay {
@@ -593,7 +595,34 @@ func elOverlayPuedeTocar(archivo string) bool {
 //
 // NO REIMPLEMENTA NINGUNA DE LAS OCHO COMPROBACIONES DE `sabotaje.sh`: no es un veredicto, es un
 // bit por directiva para cruzar contra el veredicto que ya dio el guion.
-func contraOverlay(raiz string, c arnes.Censo, soloPaquete string, limite int) int {
+// tramoACorrer dice QUÉ PEDAZO de la lista ya filtrada por paquete hay que correr.
+//
+// POR QUÉ EXISTE `-desde` Y NO ALCANZABA CON `-limite`: un barrido de `./internal/mcp` son ~165
+// sabotajes y dos horas, y no se puede reanudar. El 2026-09-20 uno murió en el 126 por falta de
+// memoria —había un reparto de agentes compilando al mismo tiempo— y recuperar los últimos 39
+// obligó a repetir los 126 anteriores. `-limite N` corre los PRIMEROS N; lo que faltaba era poder
+// empezar en el que quedó.
+//
+// LOS DOS SON 1-BASED PORQUE ESE ES EL NÚMERO QUE LA CORRIDA IMPRIME. `-desde 127` arranca en el
+// que salió como «══ 127». Que el número impreso sea la POSICIÓN en la lista y no el orden de
+// corrida es justamente lo que hace que se puedan pegar las dos mitades: si imprimiera el orden,
+// la segunda mitad empezaría en 1 y nadie podría cruzarla con la primera.
+func tramoACorrer(total, desde, limite int) (inicio, fin int) {
+	inicio = 0
+	if desde > 1 {
+		inicio = desde - 1
+	}
+	if inicio > total {
+		inicio = total
+	}
+	fin = total
+	if limite > 0 && inicio+limite < fin {
+		fin = inicio + limite
+	}
+	return inicio, fin
+}
+
+func contraOverlay(raiz string, c arnes.Censo, soloPaquete string, desde, limite int) int {
 	tmp, err := os.MkdirTemp("", "arnes-overlay-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -609,16 +638,20 @@ func contraOverlay(raiz string, c arnes.Censo, soloPaquete string, limite int) i
 
 	var corridas, rojos, verdes, errores, nogo int
 	var candidatos []string
+	var delPaquete []arnes.Ancla
 	for _, a := range c.Mecanizadas() {
-		d := a.Directiva
-		if soloPaquete != "" && d.Paquete != soloPaquete {
+		if soloPaquete != "" && a.Directiva.Paquete != soloPaquete {
 			continue
 		}
-		if limite > 0 && corridas >= limite {
-			break
-		}
+		delPaquete = append(delPaquete, a)
+	}
+	inicio, fin := tramoACorrer(len(delPaquete), desde, limite)
+	for i := inicio; i < fin; i++ {
+		a := delPaquete[i]
+		d := a.Directiva
+		pos := i + 1
 		corridas++
-		fmt.Printf("\n══ %d · %s:%d · %s\n", corridas, a.Archivo, a.Linea, d.Prueba)
+		fmt.Printf("\n══ %d · %s:%d · %s\n", pos, a.Archivo, a.Linea, d.Prueba)
 
 		// SI EL BLANCO NO ES UN `.go`, ESTE MODO NO PUEDE MEDIR, Y DECIRLO IMPORTA MÁS QUE MEDIRLO.
 		//
@@ -956,7 +989,7 @@ func primerasRunas(s string, n int) string {
 // EL VEREDICTO QUE IMPORTA ES EL VERDE: una guarda que queda en verde sobre su propio defecto
 // declarado es una red que no está, y su prosa enseña a confiar en ella. Ése es el número que este
 // comando existe para producir.
-func correrTodos(raiz string, c arnes.Censo, soloPaquete string, limite int) int {
+func correrTodos(raiz string, c arnes.Censo, soloPaquete string, desde, limite int) int {
 	guion := filepath.Join(raiz, "deploy", "pruebas", "sabotaje.sh")
 	if _, err := os.Stat(guion); err != nil {
 		fmt.Fprintln(os.Stderr, "no encuentro deploy/pruebas/sabotaje.sh:", err)
@@ -989,18 +1022,22 @@ func correrTodos(raiz string, c arnes.Censo, soloPaquete string, limite int) int
 	motivos := map[string][]string{}
 	var sospechas []string
 	var huecas []string
+	var delPaquete []arnes.Ancla
 	for _, a := range c.Mecanizadas() {
-		d := a.Directiva
-		if soloPaquete != "" && d.Paquete != soloPaquete {
+		if soloPaquete != "" && a.Directiva.Paquete != soloPaquete {
 			continue
 		}
-		if limite > 0 && corridas >= limite {
-			break
-		}
+		delPaquete = append(delPaquete, a)
+	}
+	inicio, fin := tramoACorrer(len(delPaquete), desde, limite)
+	for i := inicio; i < fin; i++ {
+		a := delPaquete[i]
+		d := a.Directiva
+		pos := i + 1
 		corridas++
-		fmt.Printf("\n══ %d · %s:%d · %s\n", corridas, a.Archivo, a.Linea, d.Prueba)
+		fmt.Printf("\n══ %d · %s:%d · %s\n", pos, a.Archivo, a.Linea, d.Prueba)
 
-		cmdSab, err := comandoMutador(yo, tmp, fmt.Sprintf("%d", corridas), d.De, d.A)
+		cmdSab, err := comandoMutador(yo, tmp, fmt.Sprintf("%d", pos), d.De, d.A)
 		if err != nil {
 			fmt.Println("   ✗ no pude preparar el sabotaje:", err)
 			errores++
@@ -1008,7 +1045,7 @@ func correrTodos(raiz string, c arnes.Censo, soloPaquete string, limite int) int
 		}
 		args := []string{d.Paquete, "^" + d.Prueba + "$", d.Archivo, cmdSab}
 		if d.ArregloDe != "" {
-			cmdArr, err := comandoMutador(yo, tmp, fmt.Sprintf("%d-arreglo", corridas), d.ArregloDe, d.ArregloA)
+			cmdArr, err := comandoMutador(yo, tmp, fmt.Sprintf("%d-arreglo", pos), d.ArregloDe, d.ArregloA)
 			if err != nil {
 				fmt.Println("   ✗ no pude preparar el arreglo:", err)
 				errores++
