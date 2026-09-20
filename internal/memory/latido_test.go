@@ -20,8 +20,19 @@ import (
 // transacción en vez de abandonarla— una máquina dada de baja hace treinta segundos se llevaría
 // el `systemctl` que quedó encolado, y el kill-switch dejaría de ser un kill-switch.
 //
-// Sabotaje que la hace fallar: en internal/memory/latido.go, mover el `tomarComandosEnTx` ARRIBA
-// del `if !vivo` (o borrar ese `if`) → el comando vuelve entregado y la fila queda marcada.
+// Sabotaje que la hace fallar: que la guarda de `!vivo` entregue la cola igual, conservando el
+// `vivo = false` que la prueba también comprueba.
+//
+// LAS DOS FORMAS QUE DECÍA ANTES FALLAN, y se midieron el 2026-09-20. MOVER el `tomarComandosEnTx`
+// arriba del `if !vivo` deja la prueba VERDE: el `if` sigue devolviendo temprano, corre el
+// `defer tx.Rollback()` y la entrega se deshace sola — ni comandos entregados ni fila marcada.
+// BORRAR el `if` sí la pone roja, pero por la aserción VECINA: al caerse la guarda la función
+// vuelve por el camino del commit y contesta `vivo=true`, así que el motivo es «el latido de una
+// máquina revocada dijo que actualizó» y no el de la cola. El corte que enciende ESTA aserción es
+// el que entrega la cola y deja `vivo` en false.
+// arnes: archivo="internal/memory/latido.go"
+// arnes: de="\tif !vivo {\n\t\treturn false, nil, nil\n\t}\n"
+// arnes: a="\tif !vivo {\n\t\tentregados, _ := tomarComandosEnTx(tx, id, ahora, tope)\n\t\t_ = tx.Commit()\n\t\treturn false, entregados, nil\n\t}\n"
 func TestElLatidoDeUnaMaquinaRevocadaNoLeEntregaLaCola(t *testing.T) {
 	e := newTestEngine(t)
 	alta, _ := altaDePrueba(t, e, "casa", "pc-gio")
@@ -68,6 +79,10 @@ func TestElLatidoDeUnaMaquinaRevocadaNoLeEntregaLaCola(t *testing.T) {
 //
 // Sabotaje que la hace fallar: en internal/memory/devices.go, sacarle el CASE a latirDeviceCon y
 // escribir `last_sample = ?` pelado.
+// arnes: colision_ok="TestLaUltimaMuestraViveEnLaFilaYNoSeBorraSola"
+// arnes: archivo="internal/memory/devices.go"
+// arnes: de="\t\tahora.UTC().Format(time.RFC3339), muestra, muestra, id,\n"
+// arnes: a="\t\tahora.UTC().Format(time.RFC3339), id, muestra, id,\n"
 func TestElLatidoUnificadoConMuestraVaciaNoBorraLaAnterior(t *testing.T) {
 	e := newTestEngine(t)
 	alta, token := altaDePrueba(t, e, "casa", "pc-gio")
@@ -101,6 +116,9 @@ func TestElLatidoUnificadoConMuestraVaciaNoBorraLaAnterior(t *testing.T) {
 //
 // Sabotaje que la hace fallar: quitar el UPDATE de vencimiento de tomarComandosEnTx
 // (internal/memory/comandos.go).
+// arnes: archivo="internal/memory/latido.go"
+// arnes: de="\tpendientes, errCola := tomarComandosEnTx(tx, id, ahora, tope)\n"
+// arnes: a="\tpendientes, errCola := tomarComandosEnTx(tx, id, ahora.Add(-100*365*24*time.Hour), tope)\n"
 func TestElLatidoUnificadoNoEntregaLoQueYaVencio(t *testing.T) {
 	e := newTestEngine(t)
 	alta, _ := altaDePrueba(t, e, "casa", "pc-gio")

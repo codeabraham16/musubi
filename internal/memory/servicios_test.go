@@ -24,6 +24,9 @@ func saludDePrueba(estado fleet.EstadoServicio) fleet.SaludServicio {
 //
 // Sabotaje que la hace fallar: en AltaServicio, copiar `s.ProjectID` del argumento en vez de
 // resolver el device y tomar `d.ProjectID`.
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\ts.ProjectID = d.ProjectID\n"
+// arnes: a=""
 func TestElProyectoDelServicioSaleDelDeviceYNoDelPedido(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "nas")
@@ -55,6 +58,9 @@ func TestElProyectoDelServicioSaleDelDeviceYNoDelPedido(t *testing.T) {
 // vive una capa más arriba, en la tool, y tiene su propia prueba allá.)
 //
 // Sabotaje: devolver «esa máquina está revocada» cuando el device existe y está de baja.
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\t\treturn fleet.Servicio{}, fmt.Errorf(\"no hay una máquina activa con ese identificador: dala de alta con musubi_fleet_enroll, o revisá el nombre\")\n"
+// arnes: a="\t\tif d.Revoked {\n\t\t\treturn fleet.Servicio{}, fmt.Errorf(\"esa máquina está revocada: volvé a darla de alta con musubi_fleet_enroll\")\n\t\t}\n\t\treturn fleet.Servicio{}, fmt.Errorf(\"no hay una máquina activa con ese identificador: dala de alta con musubi_fleet_enroll, o revisá el nombre\")\n"
 func TestElAltaSobreUnaMaquinaRevocadaNoRevelaQueExistio(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "nas")
@@ -86,6 +92,10 @@ func TestElAltaSobreUnaMaquinaRevocadaNoRevelaQueExistio(t *testing.T) {
 //
 // Sabotaje: sacar el `AND device_id = ?` del UPDATE de ReportarServicios → el reporte de A pisa
 // la salud del servicio de B.
+// arnes: colision_ok="TestElServicioDeclaradoAManoNoResucitaPorqueLaMaquinaLoSigaViendo"
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\t\t\t  WHERE name = ? AND device_id = ? AND (revoked = 0 OR declared = 0)`,\n\t\t\tahora.UTC().Format(time.RFC3339), salud, salud, r.Clase, r.Clase, r.Nombre, deviceID)\n"
+// arnes: a="\t\t\t  WHERE name = ? AND (revoked = 0 OR declared = 0)`,\n\t\t\tahora.UTC().Format(time.RFC3339), salud, salud, r.Clase, r.Clase, r.Nombre)\n"
 func TestUnaMaquinaNoPuedeReportarLosServiciosDeOtra(t *testing.T) {
 	e := newTestEngine(t)
 	a, _ := altaDePrueba(t, e, "casa", "maquina-a")
@@ -383,6 +393,9 @@ func TestPodarServiciosAusentesConListaVaciaNoBorraNada(t *testing.T) {
 // no debería ver nunca.
 //
 // Sabotaje: reemplazar el UPDATE-y-si-no-INSERT por un INSERT a secas.
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\t\tif n > 0 {\n"
+// arnes: a="\t\t_ = n\n\t\tif false {\n"
 func TestUnServicioReportadoSeCreaUnaVezYDespuesSeActualiza(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "nas")
@@ -419,6 +432,9 @@ func TestUnServicioReportadoSeCreaUnaVezYDespuesSeActualiza(t *testing.T) {
 // raro borre de la pantalla el inventario entero de esa máquina.
 //
 // Sabotaje: devolver error desde ReportarServicios cuando un reporte no valida.
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\t\t\tcontinue // uno inválido se saltea; no tumba a los demás\n"
+// arnes: a="\t\t\treturn 0, 0, fmt.Errorf(\"el reporte del servicio %q no valida\", r.Nombre)\n"
 func TestUnReporteInvalidoNoSeLlevaPuestosALosDemas(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "nas")
@@ -509,6 +525,9 @@ func TestUnServicioRevocadoNoResucitaNiSigueRecibiendoTelemetria(t *testing.T) {
 // nombre de 4 KiB ensuciaría una columna que después se dibuja en una tabla.
 //
 // Sabotaje: sacar el RecortarReporte del lazo de ReportarServicios.
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\tnuevos, actualizados := 0, 0\n\tfor _, r := range reportes {\n\t\tr = fleet.RecortarReporte(r)\n"
+// arnes: a="\tnuevos, actualizados := 0, 0\n\tfor _, r := range reportes {\n"
 func TestLoQueReportaLaMaquinaSeAcotaAlGuardarlo(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "nas")
@@ -545,6 +564,9 @@ func TestLoQueReportaLaMaquinaSeAcotaAlGuardarlo(t *testing.T) {
 //
 // Sabotaje que la hace fallar: devolver el UPDATE a `WHERE name = ? AND device_id = ? AND
 // revoked = 0` y sacarle el `revoked = 0` del SET.
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\t\t\t        revoked     = 0\n"
+// arnes: a="\t\t\t        revoked     = revoked\n"
 func TestLoQuePodoLaAusenciaVuelveConLaPresencia(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "nas")
@@ -616,6 +638,7 @@ func TestLoQuePodoLaAusenciaVuelveConLaPresencia(t *testing.T) {
 //
 // Sabotaje que la hace fallar: cambiar el WHERE del UPDATE por `AND (revoked = 0 OR 1 = 1)`, o
 // sea sacarle el `declared = 0` a la condición de resurrección.
+// arnes: colision_ok="TestUnaMaquinaNoPuedeReportarLosServiciosDeOtra"
 // arnes: archivo="internal/memory/servicios.go"
 // arnes: de="\t\t\t  WHERE name = ? AND device_id = ? AND (revoked = 0 OR declared = 0)`,\n"
 // arnes: a="\t\t\t  WHERE name = ? AND device_id = ? AND (revoked = 0 OR 1 = 1)`,\n"
@@ -661,6 +684,9 @@ func TestElServicioDeclaradoAManoNoResucitaPorqueLaMaquinaLoSigaViendo(t *testin
 //  3. El nombre de la máquina no viaja. Una lista de ids opacos no la lee nadie.
 //
 // Sabotaje que la hace fallar: leer una sola de las dos tablas; sacar el desempate por id.
+// arnes: archivo="internal/memory/sesiones_vivas.go"
+// arnes: de="\tshells, err := e.BitacoraDeShell(projectID, deviceID, tope)\n\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"error al leer las sesiones de shell: %w\", err)\n\t}\n\tfor _, s := range shells {\n\t\tout = append(out, fleet.DesdeSesionShell(s, nombre[s.DeviceID]))\n\t}\n"
+// arnes: a=""
 func TestLaVistaUnicaDeSesionesTraeLasDosModalidades(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "nas")
@@ -807,6 +833,9 @@ func TestLaMigracion39ConservaLosCooldownsYPermiteElAlcance(t *testing.T) {
 //
 // Sabotaje: pasar `vacioAfirma` a false → no poda nada. O sacarle el `AND declared = 0` al UPDATE
 // → se lleva puesto el servicio declarado.
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="func (e *DbEngine) PodarServiciosAusentes(deviceID string, vivos []string, vacioAfirma bool) (int64, error) {\n"
+// arnes: a="func (e *DbEngine) PodarServiciosAusentes(deviceID string, vivos []string, vacioAfirma bool) (int64, error) {\n\tvacioAfirma = false\n"
 func TestUnaListaVaciaAutorizadaPodaTodoMenosLoDeclarado(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "nas")

@@ -31,6 +31,9 @@ func argvCrudoEnLaBase(t *testing.T, e *DbEngine, id string) string {
 // que recibirla: es la única forma de que llegue a la máquina.
 //
 // Sabotaje que la hace fallar: quitar la llamada a taparArgvConSecreto del lazo de entrega.
+// arnes: archivo="internal/memory/comandos.go"
+// arnes: de="\t\tif err := taparArgvConSecreto(tx, out[i].ID, out[i].Argv); err != nil {\n\t\t\treturn nil, err\n\t\t}\n"
+// arnes: a=""
 func TestAlEntregarUnaPantallaLaContrasenaSeTapaEnLaBase(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "pc-gio")
@@ -79,7 +82,18 @@ func TestAlEntregarUnaPantallaLaContrasenaSeTapaEnLaBase(t *testing.T) {
 // EL CONTROL: tapar es sólo para lo que lleva secreto. Un comando común conserva su argv intacto
 // después de entregarse — la bitácora tiene que decir QUÉ se corrió, y eso es el argv.
 //
-// Sabotaje: ampliar la guarda de taparArgvConSecreto a cualquier argv → falla acá.
+// Sabotaje: que el tapado reescriba la fila con el argv YA tapado por fleet.ArgvDeBitacora,
+// para cualquier argv y no sólo para una pantalla.
+//
+// «AMPLIAR LA GUARDA» NO ALCANZA, y se midió el 2026-09-20 al mecanizarla: hay una SEGUNDA
+// COMPUERTA con la MISMA pregunta un piso más abajo. `fleet.ArgvDeBitacora` arranca con su propio
+// `argv[0] != OpPantalla` y devuelve el argv TAL CUAL, así que ampliar sólo la de acá reescribe la
+// fila con el mismo texto —un cambio invisible— y la prueba queda VERDE. Ampliar sólo la de
+// `fleet` tampoco: ahí ataja ésta y la fila ni se toca. Con un archivo por directiva, el corte
+// tiene que caer donde las dos preguntas se resuelven en una.
+// arnes: archivo="internal/memory/comandos.go"
+// arnes: de="\tif len(argv) == 0 || argv[0] != fleet.OpPantalla {\n\t\treturn nil\n\t}\n\ttexto, err := fleet.ArgvComoTexto(fleet.ArgvDeBitacora(argv))\n"
+// arnes: a="\tif len(argv) == 0 {\n\t\treturn nil\n\t}\n\tsesion := \"\"\n\tif len(argv) > 1 {\n\t\tsesion = argv[1]\n\t}\n\ttexto, err := fleet.ArgvComoTexto([]string{argv[0], sesion, \"[oculto]\"})\n"
 func TestUnComandoComunConservaSuArgvTrasEntregarse(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "pc-gio")
@@ -109,6 +123,9 @@ func TestUnComandoComunConservaSuArgvTrasEntregarse(t *testing.T) {
 // servir a nadie: se tapa en el mismo barrido que la vence.
 //
 // Sabotaje: quitar taparPantallasPendientesVencidas de TomarComandos → falla acá.
+// arnes: archivo="internal/memory/comandos.go"
+// arnes: de="\tif err := taparPantallasPendientesVencidas(tx, deviceID, limite); err != nil {\n\t\treturn nil, err\n\t}\n"
+// arnes: a=""
 func TestUnaPantallaVencidaSinEntregarTambienSeTapa(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "pc-gio")

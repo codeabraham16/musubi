@@ -235,7 +235,12 @@ import (
 // `olvidarEnumeracion()`, y sin eso la caché que le deja caliente la prueba de al lado se come su
 // stub. Aislada daba ROJO y junto a su hermana VERDE — o sea que el arnés, que juzga con `-run`,
 // la certificaba sana mientras en el CI no cubría nada.
-const anclasEnProsaAlDia = 519
+//
+// Y DE 519 A 495 EL 2026-09-20: las veinticuatro anclas de la PERSISTENCIA de flota
+// (`internal/memory`: cola, comandos, devices, latido y servicios) — qué se guarda y qué se puede
+// leer de vuelta. Las veinticuatro se midieron aisladas Y con el paquete entero, que es la
+// disciplina que estrenó el lote anterior: una guarda puede dar ROJO con `-run` y VERDE en el CI.
+const anclasEnProsaAlDia = 495
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
