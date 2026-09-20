@@ -430,7 +430,7 @@ func (r resultadoLatido) describir() string {
 // —un proxy a medio caer, un tailnet que se degradó— colgaría el bucle entero y la máquina
 // figuraría viva por el resto de la eternidad sin volver a latir jamás. El timeout tiene que ser
 // menor que el intervalo, o los latidos se apilan.
-var clienteLatido = clienteParaElCerebro(os.Getenv(envNombreTLS))
+var clienteLatido = clienteParaElCerebro(nombreTLSDelCerebro())
 
 // clienteParaElCerebro arma el cliente del latido, con el nombre contra el que verificar el
 // certificado si hace falta declararlo aparte de la URL.
@@ -440,17 +440,68 @@ var clienteLatido = clienteParaElCerebro(os.Getenv(envNombreTLS))
 // candado del panel dice que está seguro. Con `nombre` vacío devuelve el cliente de siempre,
 // sin Transport propio, para que el default del stdlib siga siendo el default.
 func clienteParaElCerebro(nombre string) *http.Client {
+	return clienteHaciaElCerebro(nombre, 10*time.Second, nil)
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// A129 · EL NOMBRE TLS LO LLEVABA UN CLIENTE DE SIETE
+//
+// `MUSUBI_BRAIN_TLS_NAME` existe porque el certificado del tailnet NO tiene SAN de IP y las
+// máquinas Windows discan la IP (con NordVPN el MagicDNS no resuelve el nombre). Sin declarar el
+// nombre, el handshake verifica contra la IP y falla.
+//
+// EL HERMANO, MEDIDO EL 2026-09-20: de los siete clientes de este paquete que le hablan al cerebro
+// central, el nombre lo llevaba UNO —el del latido—. Los otros seis construían su `http.Client` a
+// mano: `musubi cerebro` (el canal MCP), `musubi shell`, el canal de shell del agente, el relay
+// del panel y sus dos handlers. Todos habrían fallado el día que el cerebro pase a HTTPS por IP,
+// y el síntoma —un error de certificado— no habla de la causa.
+//
+// POR QUÉ NO ALCANZABA CON `clienteParaElCerebro`: cada uno de esos seis necesita su propia forma
+// de Transport (timeout de discado corto en el canal MCP; SIN timeout global en el stream, porque
+// abre una conexión que por diseño no termina). Un constructor que impusiera su forma no servía, y
+// por eso cada uno se armaba el suyo —y se olvidaba del nombre—.
+//
+// LA SALIDA ES QUE EL NOMBRE SE APLIQUE AL FINAL Y NO SE PUEDA OLVIDAR: quien llama trae su
+// Transport ya ajustado, y `clienteHaciaElCerebro` le declara el nombre DESPUÉS. La forma la
+// decide el llamador; el nombre lo decide este paquete, una sola vez.
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+
+// nombreTLSDelCerebro es EL ÚNICO lugar donde se lee `MUSUBI_BRAIN_TLS_NAME`.
+//
+// Está aparte para que la guarda de alcance pueda preguntar una sola cosa —«¿alguien más lee esta
+// variable?»— en vez de perseguir cada cliente. Un segundo lector es un segundo lugar donde
+// olvidarse.
+func nombreTLSDelCerebro() string { return strings.TrimSpace(os.Getenv(envNombreTLS)) }
+
+// clienteHaciaElCerebro arma EL cliente con el que se le habla al cerebro central.
+//
+//   - `tr` es el Transport que el llamador ya ajustó a su necesidad, o nil si le sirve el default.
+//   - el ServerName se declara DESPUÉS de ese ajuste, así que no hay forma de pisarlo sin querer.
+//   - `espera` en 0 significa sin timeout global, que es lo que necesita el stream del panel.
+//
+// SÓLO toca ServerName y MinVersion. No apaga la verificación, no cambia el pool de raíces: un
+// cliente que "arregla" el TLS relajándolo es peor que no tener TLS, porque el candado del panel
+// dice que está seguro.
+//
+// CON NOMBRE VACÍO Y SIN TRANSPORT DEVUELVE EL CLIENTE PELADO, sin Transport propio, para que el
+// default del stdlib siga siendo el default: un Transport clonado que nadie necesita es una
+// superficie donde mañana alguien mete un flag.
+func clienteHaciaElCerebro(nombre string, espera time.Duration, tr *http.Transport) *http.Client {
 	nombre = strings.TrimSpace(nombre)
-	if nombre == "" {
-		return &http.Client{Timeout: 10 * time.Second}
+	if nombre == "" && tr == nil {
+		return &http.Client{Timeout: espera}
 	}
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	if tr.TLSClientConfig == nil {
-		tr.TLSClientConfig = &tls.Config{}
+	if tr == nil {
+		tr = http.DefaultTransport.(*http.Transport).Clone()
 	}
-	tr.TLSClientConfig.ServerName = nombre
-	tr.TLSClientConfig.MinVersion = tls.VersionTLS12
-	return &http.Client{Timeout: 10 * time.Second, Transport: tr}
+	if nombre != "" {
+		if tr.TLSClientConfig == nil {
+			tr.TLSClientConfig = &tls.Config{}
+		}
+		tr.TLSClientConfig.ServerName = nombre
+		tr.TLSClientConfig.MinVersion = tls.VersionTLS12
+	}
+	return &http.Client{Timeout: espera, Transport: tr}
 }
 
 // latir hace UN POST, con la muestra si hay. El cuerpo lleva MEDICIONES y nunca IDENTIDAD: no

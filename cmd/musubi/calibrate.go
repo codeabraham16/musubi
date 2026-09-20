@@ -122,6 +122,8 @@ func runCalibrate(args []string) {
 		fmt.Println("  Tiene que ser el MISMO modelo que consume esta memoria, o los divisores quedan sesgados.")
 	}
 
+	// no habla con el cerebro: este cliente va a la API de Anthropic para contar tokens, y el
+	// nombre TLS del tailnet no tiene nada que hacer contra api.anthropic.com
 	client := &http.Client{Timeout: 30 * time.Second}
 	var counts []memory.TextCount
 	for _, txt := range texts {
