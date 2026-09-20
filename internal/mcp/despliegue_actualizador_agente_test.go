@@ -134,8 +134,33 @@ func TestElCambiadorNoTocaLaTareaAntesDeConfirmarQueEsLaCarpetaDelAgente(t *test
 
 // El cambiador es ASCII puro a propósito (lo dice su propia cabecera): cmd.exe y PowerShell 5.1
 // con UTF-8 sin BOM ya rompieron una vez. Un comentario nuevo con acentos lo vuelve a romper.
+//
+// SE LEE CRUDO, Y ES LA ÚNICA GUARDA DE ESTE ARCHIVO QUE LO HACE ────────────────────────────
+//
+// Leía con `leerDeploy`, que BLANQUEA las líneas `REM`. O sea que estaba ciega exactamente donde
+// un acento se cuela más fácil —un comentario—, que es el caso que la línea de arriba nombra como
+// el motivo de existir de la guarda. Estuvo en verde todo el tiempo sin poder fallar por ese caso.
+//
+// Y no hay que deducirlo: `despliegue_alertas_test.go` ya lo tenía escrito al crear el lector
+// crudo — «`leerDeployCrudo`, que existe para las pocas guardas que de verdad miran la prosa (la
+// pureza ASCII del cambiador mira TODOS los bytes, comentarios incluidos)». La documentación decía
+// una cosa y el código hacía la otra.
+//
+// MEDIDO el 2026-09-19 poniendo `REM ASCII púro` en deploy/cambiar-agente.cmd:
+//
+//	con leerDeploy (filtrado) → PASS, con un byte no-ASCII adentro del archivo
+//	con leerDeployCrudo       → FAIL, que es lo que corresponde
+//
+// De paso arregla el mensaje: `i` es el offset EN BYTES de la cadena que se recorre, así que
+// leyendo filtrado la «posición» era la del texto blanqueado y mandaba a mirar un byte que en el
+// archivo no existe.
+//
+// Sabotaje que la hace fallar: ponerle un acento a cualquier comentario `REM` del cambiador.
+// arnes: archivo="deploy/cambiar-agente.cmd"
+// arnes: de="REM ASCII puro, sin acentos"
+// arnes: a="REM ASCII púro, sin acentos"
 func TestElCambiadorSigueSiendoAsciiPuro(t *testing.T) {
-	for i, r := range leerDeploy(t, "cambiar-agente.cmd") {
+	for i, r := range leerDeployCrudo(t, "cambiar-agente.cmd") {
 		if r > 127 {
 			t.Fatalf("byte no-ASCII en la posición %d (%q): el cambiador declara ASCII puro porque\n"+
 				"cmd.exe ya rompió una vez con UTF-8 sin BOM", i, r)

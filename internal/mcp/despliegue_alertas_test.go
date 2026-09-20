@@ -741,7 +741,14 @@ func TestElScriptDeCambioDeAgenteNoDependeDeQuienLoEjecuta(t *testing.T) {
 	}
 	// ASCII PURO, por lo mismo que el instalador: PowerShell 5.1 y cmd.exe con UTF-8 sin BOM ya
 	// rompieron una vez en este repo.
-	for i, r := range cmd {
+	//
+	// SE RELEE CRUDO A PROPÓSITO, y no se reusa `cmd`: ese viene de `leerArchivoDeDespliegue`, que
+	// blanquea los `REM`. Las aserciones de ARRIBA quieren el texto filtrado —lo que custodian es
+	// código, y un comentario que nombre `%~dp0` no debe satisfacerlas—, pero la pureza ASCII es
+	// una propiedad del texto ENTERO. Con `cmd` esta guarda no podía fallar por un acento en un
+	// comentario, que es de donde vienen casi todos. Medido el 2026-09-19: con `REM ASCII púro` en
+	// el cambiador, esta prueba pasaba en verde.
+	for i, r := range leerDeployCrudo(t, "cambiar-agente.cmd") {
 		if r > 127 {
 			t.Fatalf("byte no-ASCII en la posición %d (%q): cmd.exe lo va a leer mal", i, r)
 		}
