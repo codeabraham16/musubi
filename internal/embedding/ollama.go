@@ -37,6 +37,7 @@ func NewOllamaProvider(baseURL, model string, dim int) *OllamaProvider {
 		// Un Timeout acá se aplicaría por igual al pedido de un renglón y al de un dossier, que es
 		// justo el defecto que se está sacando. Ningún pedido sale sin vencimiento: EmbedBatch le
 		// pone uno al contexto cuando el caller no trajo el suyo.
+		// no habla con el cerebro: este cliente va al servidor de embeddings de Ollama, no al cerebro central de musubi.
 		client: &http.Client{},
 	}
 }

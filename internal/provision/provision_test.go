@@ -294,3 +294,103 @@ func TestRunEmptyTokenSkipsAuth(t *testing.T) {
 		t.Fatal("sin auth verificada no hay conexión confirmada")
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// A129 · LOS DOS ARTEFACTOS DE UNA MISMA CORRIDA DICEN LA MISMA DIRECCIÓN
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+// TestUnBrainConEsquemaLlegaIgualALosDosArtefactos — la guarda del cuarto sitio.
+//
+// EL DEFECTO, MEDIDO EL 2026-09-20. `provision` escribe la dirección del cerebro en DOS archivos:
+// el `.mcp.json` (lo lee el host MCP) y el `.musubi/config.yaml` (lo lee el daemon). Tres de los
+// cuatro sitios que la arman pasaron por el normalizador y el cuarto —`ensureSyncConfig`— quedó
+// con `http://%s` y el brain crudo. Con `--brain https://host:10000` la MISMA corrida dejaba el
+// .mcp.json bien y el config.yaml con `central_url: http://https://host:10000`.
+//
+// Y ESO NO FALLA RUIDOSO, QUE ES LO PEOR. `url.Parse` acepta esa cadena, `NewSyncClient` la acepta
+// porque empieza con `http://`, y el error llega recién en el primer drain como fallo de RED — o
+// sea transitorio: la fila vuelve a `pending` con backoff, sin dead-letter, mientras el paso se
+// reporta `done`. Un sync que no sube nada y no se queja.
+//
+// POR QUÉ LA SUITE NO LO VEÍA: los seis tests del paquete usan `Brain: "1.2.3.4:7717"`, el ÚNICO
+// input donde `"http://" + brain` y `direccionDelCerebro(brain)` dan el mismo byte. Este test
+// entra por el otro lado.
+//
+// Sabotaje que lo hace fallar: devolverle a `ensureSyncConfig` su `"  central_url: http://%s\n"`.
+// arnes: archivo="internal/provision/syncconfig.go"
+// arnes: de="\t\t\"  central_url: %s\\n\"+"
+// arnes: a="\t\t\"  central_url: http://%s\\n\"+"
+func TestUnBrainConEsquemaLlegaIgualALosDosArtefactos(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PROV_TOKEN", "secreto")
+	const destino = "https://musubi-server.tail89e295.ts.net:10000"
+	opts := Options{Brain: destino, ProjectDir: dir, TokenEnv: "PROV_TOKEN"}
+	deps := Deps{Prober: &fakeProber{public: true, tailnet: true}, Verifier: &fakeVerifier{reach: true, auth: true}, NetworkConfigurator: &fakeNetwork{present: true, joined: true}, ExePath: "musubi"}
+
+	if _, err := Run(opts, deps); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	cfg, err := os.ReadFile(filepath.Join(dir, ".musubi", "config.yaml"))
+	if err != nil {
+		t.Fatalf("no se escribió .musubi/config.yaml: %v", err)
+	}
+	mcp, err := os.ReadFile(filepath.Join(dir, ".mcp.json"))
+	if err != nil {
+		t.Fatalf("no se escribió .mcp.json: %v", err)
+	}
+
+	// EL CONTROL QUE CAZA LA FORMA ROTA, y es distinto de «contiene la buena»: `http://https://…`
+	// CONTIENE la cadena buena como sufijo, así que un Contains a secas pasaría con el defecto puesto.
+	if strings.Contains(string(cfg), "http://https://") || strings.Contains(string(mcp), "http://https://") {
+		t.Fatalf("un esquema quedó pegado a otro — el brain se usó crudo en algún sitio:\nconfig.yaml:\n%s\n.mcp.json:\n%s", cfg, mcp)
+	}
+	if !strings.Contains(string(cfg), "central_url: "+destino) {
+		t.Fatalf("el config.yaml no lleva la dirección tal como se pidió (%s):\n%s", destino, cfg)
+	}
+	if !strings.Contains(string(mcp), destino+"/mcp") {
+		t.Fatalf("el .mcp.json no lleva la dirección tal como se pidió (%s):\n%s", destino, mcp)
+	}
+
+	// Con una base https, el opt-in a texto plano NO se escribe: dejarlo puesto es autorizar de
+	// antemano una vuelta atrás que después nadie nota.
+	if strings.Contains(string(cfg), "allow_insecure_token") {
+		t.Errorf("con central_url https se escribió allow_insecure_token, y eso deja permitido volver a texto plano:\n%s", cfg)
+	}
+
+	// Y el control de siempre: el secreto no toca el disco.
+	if strings.Contains(string(cfg), "secreto") || strings.Contains(string(mcp), "secreto") {
+		t.Fatal("FUGA: el token no debe aparecer en ningún archivo generado")
+	}
+}
+
+// TestUnaDireccionInservibleNoSeEscribeEnDisco — lo que no sirve no se persiste.
+//
+// Antes, un esquema que no fuera http(s) se devolvía tal cual y los llamadores lo ESCRIBÍAN: el
+// error aparecía mucho después, en otra máquina y sin la causa a la vista.
+//
+// Sabotaje: hacer que `direccionDelCerebro` devuelva ok=true para cualquier esquema.
+// arnes: archivo="internal/provision/probe.go"
+// arnes: de="\t\tif esquema != \"http\" && esquema != \"https\" {"
+// arnes: a="\t\tif false {"
+func TestUnaDireccionInservibleNoSeEscribeEnDisco(t *testing.T) {
+	for _, brain := range []string{"ftp://100.79.126.62:10000", "://roto", ""} {
+		dir := t.TempDir()
+		t.Setenv("PROV_TOKEN", "secreto")
+		opts := Options{Brain: brain, ProjectDir: dir, TokenEnv: "PROV_TOKEN"}
+		deps := Deps{Prober: &fakeProber{public: true, tailnet: true}, Verifier: &fakeVerifier{reach: true, auth: true}, NetworkConfigurator: &fakeNetwork{present: true, joined: true}, ExePath: "musubi"}
+
+		rep, err := Run(opts, deps)
+		if err != nil {
+			continue // rechazado antes de escribir: es la respuesta correcta
+		}
+		if data, rerr := os.ReadFile(filepath.Join(dir, ".musubi", "config.yaml")); rerr == nil {
+			if strings.Contains(string(data), "central_url: "+brain) || strings.Contains(string(data), "http://"+brain) {
+				t.Errorf("con brain %q se escribió una central_url inservible en disco:\n%s", brain, data)
+			}
+		}
+		if st, ok := stepByName(rep, "sync-config"); ok && st.Status == StatusDone {
+			t.Errorf("con brain %q el paso sync-config se reportó DONE; un valor que no sirve no puede salir bien", brain)
+		}
+	}
+}

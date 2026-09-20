@@ -40,7 +40,8 @@ func NewOpenAICompatProvider(endpoint, model, apiKey string, timeout time.Durati
 		endpoint: endpoint,
 		model:    model,
 		apiKey:   apiKey,
-		client:   &http.Client{Timeout: timeout},
+		// no habla con el cerebro: este cliente va al endpoint de cognicion compatible con OpenAI, que es un LLM de afuera.
+		client: &http.Client{Timeout: timeout},
 	}
 }
 

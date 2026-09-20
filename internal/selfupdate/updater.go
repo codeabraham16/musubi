@@ -31,7 +31,8 @@ func New(owner, repo string) *Updater {
 		Repo:    repo,
 		APIBase: "https://api.github.com",
 		DLBase:  "https://github.com",
-		HTTP:    &http.Client{Timeout: 30 * time.Second},
+		// no habla con el cerebro: consulta la API de GitHub para buscar e instalar releases nuevas de musubi.
+		HTTP: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 

@@ -93,6 +93,7 @@ func FetchCatalog(ctx context.Context, url string) (Catalog, error) {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "musubi/skillsource")
 
+	// no habla con el cerebro: baja el catalogo de reglas de la URL que trae la fuente, que es un host de internet.
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return Catalog{}, fmt.Errorf("skillsource: GET %s: %w", url, err)

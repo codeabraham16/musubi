@@ -94,6 +94,7 @@ func safeHTTPClient(timeout time.Duration) *http.Client {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
+	// no habla con el cerebro: es el cliente con guarda anti-SSRF para bajar URLs arbitrarias que trae el usuario.
 	return &http.Client{
 		Timeout:   timeout,
 		Transport: tr,

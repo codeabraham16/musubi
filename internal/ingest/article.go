@@ -55,6 +55,7 @@ type ArticleExtractor struct {
 
 // NewArticleExtractor arma el extractor con un cliente HTTP con timeout razonable.
 func NewArticleExtractor() *ArticleExtractor {
+	// no habla con el cerebro: baja el articulo de una URL cualquiera de internet para ingestarlo a la memoria.
 	return &ArticleExtractor{Client: &http.Client{Timeout: 20 * time.Second}}
 }
 

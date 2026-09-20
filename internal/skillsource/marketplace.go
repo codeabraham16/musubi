@@ -129,6 +129,7 @@ func FetchMarketplaceSkills(ctx context.Context, baseURL, apiKey, query string, 
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
+	// no habla con el cerebro: habla con el marketplace de Agent Skills (skillsmp.com), un servicio de afuera.
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("skillsource: GET marketplace: %w", err)
