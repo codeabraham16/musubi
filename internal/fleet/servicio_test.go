@@ -15,6 +15,9 @@ import (
 // saldría a arreglar algo que nunca se rompió.
 //
 // Sabotaje que la hace fallar: en EstadoActual, devolver EstadoDetenido cuando Salud es nil.
+// arnes: archivo="internal/fleet/servicio.go"
+// arnes: de="\tif s.Salud == nil {\n\t\treturn EstadoDesconocido\n\t}"
+// arnes: a="\tif s.Salud == nil {\n\t\treturn EstadoDetenido\n\t}"
 func TestUnServicioSinSaludEstaDesconocidoYNoDetenido(t *testing.T) {
 	s := Servicio{Nombre: "postgres", Salud: nil}
 	if got := s.EstadoActual(); got != EstadoDesconocido {
@@ -37,6 +40,9 @@ func TestUnServicioSinSaludEstaDesconocidoYNoDetenido(t *testing.T) {
 // error, dar de alta un servicio y listarlo antes del primer latido rompería.
 //
 // Sabotaje: hacer que SaludDesdeTexto("") devuelva un error en vez de (nil, nil).
+// arnes: archivo="internal/fleet/servicio.go"
+// arnes: de="\tif strings.TrimSpace(txt) == \"\" {\n\t\treturn nil, nil\n\t}\n"
+// arnes: a=""
 func TestUnServicioDeclaradoYSinMedirEsUnEstadoLegitimo(t *testing.T) {
 	salud, err := SaludDesdeTexto("")
 	if err != nil {
@@ -61,6 +67,9 @@ func TestUnServicioDeclaradoYSinMedirEsUnEstadoLegitimo(t *testing.T) {
 // informaría fresco ante un reloj sin inicializar.
 //
 // Sabotaje: sacar `s.UltimoReporte.IsZero()` de Fresco.
+// arnes: archivo="internal/fleet/servicio.go"
+// arnes: de="s.Revocado || s.UltimoReporte.IsZero() || umbral <= 0"
+// arnes: a="s.Revocado || umbral <= 0"
 func TestFrescoConRelojCeroNoInventaVida(t *testing.T) {
 	nunca := Servicio{Nombre: "x"}
 	if nunca.Fresco(time.Time{}, time.Minute) {
@@ -88,6 +97,9 @@ func TestFrescoConRelojCeroNoInventaVida(t *testing.T) {
 // mentiroso de siempre: un servicio detenido manda null.
 //
 // Sabotaje: sacar la comprobación de Tomada.IsZero() de Valida.
+// arnes: archivo="internal/fleet/servicio.go"
+// arnes: de="\tif s.Tomada.IsZero() {\n\t\treturn errors.New(\"la salud no dice cuándo se tomó: sin `tomada` no hay forma de saber si es de hace un minuto o de hace una semana\")\n\t}\n"
+// arnes: a=""
 func TestUnaSaludSinFechaOConPidCeroSeRechaza(t *testing.T) {
 	cero := 0
 	casos := []struct {
@@ -161,6 +173,9 @@ func TestElReporteSeRecortaPorRunasYNoSeRechaza(t *testing.T) {
 //
 // Sabotaje: agregarle a ReporteServicio un campo `DeviceID string \`json:"device_id"\“ — el
 // barrido de claves de acá lo caza, y el de cmd/musubi/agent_test.go lo caza de nuevo.
+// arnes: archivo="internal/fleet/servicio.go"
+// arnes: de="\tSalud  SaludServicio `json:\"salud\"`"
+// arnes: a="\tSalud  SaludServicio `json:\"salud\"`\n\tDeviceID string `json:\"device_id\"`"
 func TestUnReporteDeServicioNoTienePorDondePasarIdentidad(t *testing.T) {
 	crudo := mustJSON(t, ReporteServicio{Nombre: "postgres", Salud: SaludServicio{Estado: EstadoCorriendo, Tomada: time.Now()}})
 	var claves map[string]any
@@ -187,6 +202,9 @@ func TestUnReporteDeServicioNoTienePorDondePasarIdentidad(t *testing.T) {
 // los tenants, que es la falla A6 con otra ropa.
 //
 // Sabotaje: sacar la comprobación de ProjectID vacío de ValidarAltaServicio.
+// arnes: archivo="internal/fleet/servicio.go"
+// arnes: de="\tif strings.TrimSpace(s.ProjectID) == \"\" {\n\t\treturn fmt.Errorf(\"%w (servicio %q)\", ErrSinProyecto, s.Nombre)\n\t}\n"
+// arnes: a=""
 func TestElAltaDeUnServicioEsFailClosed(t *testing.T) {
 	base := Servicio{Nombre: "postgres", ProjectID: "casa", DeviceID: "dev-1", Clase: "systemd"}
 	if err := ValidarAltaServicio(base); err != nil {
@@ -220,6 +238,9 @@ func TestElAltaDeUnServicioEsFailClosed(t *testing.T) {
 // true para siempre cuando la cosa muere de golpe.
 //
 // Sabotaje: agregarle a Servicio un campo `Sano bool` (o `Activo`, `Up`, `Online`, `Healthy`).
+// arnes: archivo="internal/fleet/servicio.go"
+// arnes: de="\tDeclarado bool\n}"
+// arnes: a="\tDeclarado bool\n\tSano bool\n}"
 func TestElServicioNoGuardaUnEstadoDerivable(t *testing.T) {
 	crudo := mustJSON(t, Servicio{Nombre: "x"})
 	for _, prohibido := range []string{"sano", "activo", "up", "online", "healthy", "status"} {
@@ -248,6 +269,9 @@ func mustJSON(t *testing.T, v any) []byte {
 // nuevo y olvida la clase, se pone roja acá en vez de perderse el dato en producción.
 //
 // Sabotaje que la hace fallar: sacar "podman" de clasesConocidas.
+// arnes: archivo="internal/fleet/servicio.go"
+// arnes: de="\"podman\": true, "
+// arnes: a=""
 func TestLasClasesCubrenLoQueLosEnumeradoresEmiten(t *testing.T) {
 	// Cada una la emite un enumerador de cmd/musubi: systemd y podman/docker en Linux,
 	// windows en Windows, launchd en macOS.
@@ -274,6 +298,9 @@ func TestLasClasesCubrenLoQueLosEnumeradoresEmiten(t *testing.T) {
 // piso, y las 54 filas de musubi-server salieron todas con `fresco: false`.
 //
 // Sabotaje que la hace fallar: poner UmbralInventario = InventarioCada.
+// arnes: archivo="internal/fleet/servicio.go"
+// arnes: de="\tUmbralInventario = 2 * InventarioCada"
+// arnes: a="\tUmbralInventario = InventarioCada"
 func TestElUmbralDeFrescuraAguantaElRitmoDelInventario(t *testing.T) {
 	if UmbralInventario <= InventarioCada {
 		t.Fatalf("UmbralInventario (%s) no le gana al piso de reenvío (%s): todo servicio se leería viejo para siempre",

@@ -43,8 +43,18 @@ func saludViva(estado fleet.EstadoServicio) fleet.SaludServicio {
 // simplemente no aparece. El texto igual se compara palabra por palabra, porque es fácil
 // «mejorar» el mensaje y contar de más.
 //
-// Sabotaje que la hace fallar: resolver el device con DevicePorID (o sin el proyecto), o devolver
-// «esa máquina es del proyecto %q» cuando existe y es ajena.
+// Sabotaje que la hace fallar: resolver el device con el proyecto QUE DIJO EL LLAMADOR en vez del
+// que selló writeOriginFor; o devolver «esa máquina es del proyecto %q» cuando existe y es ajena.
+//
+// EL «DevicePorID» QUE DECÍA ESTA LÍNEA ENCIENDE LA ASERCIÓN VECINA Y NO ÉSTA — medido el
+// 2026-09-20 al mecanizarla. `args.Device` es un NOMBRE, así que resolver por ID no encuentra ni
+// la máquina ajena ni la propia: los dos rechazos siguen siendo idénticos, el oráculo nunca se
+// abre, y el rojo llega por el control del final —«no pudo declarar en su propia máquina»—, que
+// es otra guarda. La cara que sí abre el oráculo es la del paréntesis: pasarle el `project` del
+// cliente, con lo cual la máquina de la víctima se encuentra y la declaración PROSPERA.
+// arnes: archivo="internal/mcp/methods_servicios.go"
+// arnes: de="DevicePorNombre(proyecto, args.Device)"
+// arnes: a="DevicePorNombre(args.Project, args.Device)"
 func TestDeclararUnServicioEnLaMaquinaDeOtroTenantNoRevelaQueExiste(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarDePrueba(t, s, "web", "servidor-de-web") // la máquina de la víctima
@@ -98,6 +108,9 @@ func TestDeclararUnServicioEnLaMaquinaDeOtroTenantNoRevelaQueExiste(t *testing.T
 //
 // Sabotaje: hacer que filaDeServicio devuelva EstadoDetenido cuando Salud es nil; o serializar
 // UltimoReporte cero como fecha en vez de null.
+// arnes: archivo="internal/mcp/methods_servicios.go"
+// arnes: de="\tif sv.Salud != nil {\n"
+// arnes: a="\tif sv.Salud == nil {\n\t\tfila[\"estado\"] = string(fleet.EstadoDetenido)\n\t}\n\tif sv.Salud != nil {\n"
 func TestUnServicioSinSaludSeInformaDesconocidoYNoDetenido(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarDePrueba(t, s, "casa", "nas")
@@ -146,6 +159,9 @@ func TestUnServicioSinSaludSeInformaDesconocidoYNoDetenido(t *testing.T) {
 //
 // Sabotaje: filtrar sólo por proyecto y no llamar a PuedeSobreDevice — el principal sin
 // concesiones ve los dos servicios.
+// arnes: archivo="internal/mcp/methods_servicios.go"
+// arnes: de="puede := PuedeSobreDevice(p, d, fleet.CapMetrics)"
+// arnes: a="puede := true"
 func TestUnPrincipalSinMetricsNoVeLosServiciosDeEsaMaquina(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarDePrueba(t, s, "casa", "nas")
@@ -196,6 +212,9 @@ func TestUnPrincipalSinMetricsNoVeLosServiciosDeEsaMaquina(t *testing.T) {
 //
 // Sabotaje: sacar el `s.guardarServiciosDelLatido` del camino del latido → el agente reporta y no
 // pasa nada, sin un solo error.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\tnotaServicios = s.guardarServiciosDelLatido(d, cuerpo.Servicios, cuerpo.ServiciosOmitidos)\n"
+// arnes: a=""
 func TestElLatidoRegistraLosServiciosDeSuPropiaMaquina(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 
@@ -348,6 +367,9 @@ func TestUnaMaquinaSinMetricsNoRegistraServiciosPeroLateIgual(t *testing.T) {
 //
 // Sabotaje: llamar a PodarServiciosAusentes con la lista vacía cuando no vino el bloque (o sacarle
 // al almacén el early-return de `len(vivos) == 0`).
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\t\treturn \"\"\n"
+// arnes: a="\t\treportes = []fleet.ReporteServicio{}\n"
 func TestLaPodaPorAusenciaCorreDesdeElLatidoYUnLatidoMudoNoVaciaNada(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 
@@ -390,6 +412,10 @@ func TestLaPodaPorAusenciaCorreDesdeElLatidoYUnLatidoMudoNoVaciaNada(t *testing.
 	//
 	// Sabotaje: volver el corte de arriba a `len(reportes) == 0` → `[]` y ausente se confunden y
 	// esto queda en 2.
+	// arnes: prueba="TestLaPodaPorAusenciaCorreDesdeElLatidoYUnLatidoMudoNoVaciaNada"
+	// arnes: archivo="internal/mcp/fleet_http.go"
+	// arnes: de="\tif reportes == nil {"
+	// arnes: a="\tif len(reportes) == 0 {"
 	if code, b := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, `{"version":"0.1.0","servicios":[]}`); code != http.StatusOK {
 		t.Fatalf("%d %s", code, b)
 	}
@@ -423,6 +449,10 @@ func TestLaPodaPorAusenciaCorreDesdeElLatidoYUnLatidoMudoNoVaciaNada(t *testing.
 	// después de filtrarla, y sin este tramo esa distinción no la custodiaba nadie.
 	//
 	// Sabotaje: `vacioAfirma := true` en guardarServiciosDelLatido → esto vacía el inventario.
+	// arnes: prueba="TestLaPodaPorAusenciaCorreDesdeElLatidoYUnLatidoMudoNoVaciaNada"
+	// arnes: archivo="internal/mcp/fleet_http.go"
+	// arnes: de="\tvacioAfirma := len(reportes) == 0\n"
+	// arnes: a="\tvacioAfirma := true\n"
 	if code, b := postCon(t, ts.URL+fleetHeartbeatPath, tokenDevice, cuerpoDeServicios(
 		fleet.ReporteServicio{Nombre: "   ", Salud: saludViva(fleet.EstadoCorriendo)},
 		fleet.ReporteServicio{Nombre: "\x01\x02", Salud: saludViva(fleet.EstadoCorriendo)},
@@ -573,6 +603,9 @@ func nombresDeServiciosDeCasa(t *testing.T, s *McpServer) map[string]bool {
 //
 // Sabotaje: hacer que filaDeServicio devuelva `desconocido` cuando el reporte es viejo; o que
 // `fresco` sea siempre true mientras haya salud.
+// arnes: archivo="internal/mcp/methods_servicios.go"
+// arnes: de="\tif sv.UltimoReporte.IsZero() {\n"
+// arnes: a="\tif !sv.Fresco(ahora, fleet.UmbralInventario) {\n\t\tfila[\"estado\"] = string(fleet.EstadoDesconocido)\n\t}\n\tif sv.UltimoReporte.IsZero() {\n"
 func TestUnServicioConNoticiasViejasDejaDeEstarFrescoSinCambiarDeEstado(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarDePrueba(t, s, "casa", "nas")
@@ -613,6 +646,9 @@ func TestUnServicioConNoticiasViejasDejaDeEstarFrescoSinCambiarDeEstado(t *testi
 // qué máquinas hay en el proyecto de al lado.
 //
 // Sabotaje: devolver rpcErrorf("no hay una máquina llamada %q") cuando el filtro no resuelve.
+// arnes: archivo="internal/mcp/methods_servicios.go"
+// arnes: de="\t\t\tcontinue\n\t\t}\n"
+// arnes: a="\t\t\treturn nil, rpcErrorf(codeInvalidParams, \"no hay una máquina llamada %q\", filtro)\n\t\t}\n"
 func TestFiltrarPorUnaMaquinaQueNoVesRespondeVacioYNoUnError(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarDePrueba(t, s, "web", "servidor-de-web")
@@ -677,9 +713,17 @@ func TestDeclararUnServicioExigeAdmin(t *testing.T) {
 // sobrado, y el que sí guardó. Si el primero y el segundo no dijeran nada, se verían iguales entre
 // sí Y iguales a no haber mandado nada.
 //
-// Sabotaje que la hace fallar: que guardarServiciosDelLatido devuelva "" en la rama de la
-// capacidad que falta (o en la del techo) — el latido responde 200 y el agente no tiene forma de
-// saber que su inventario no llegó.
+// Sabotaje que la hace fallar: que guardarServiciosDelLatido devuelva la cadena vacía en la rama
+// de los reportes GUARDADOS — el latido responde 200 y el agente no tiene forma de saber que su
+// inventario sí llegó.
+//
+// LAS DOS RAMAS QUE DECÍA ANTES —la de la capacidad que falta y la del techo— TAMBIÉN LA PONEN
+// ROJA, pero no se pueden mecanizar desde acá: esos dos literales YA SON el `de` de otras dos
+// directivas de este mismo archivo, y un `de` repetido le rompe el ancla al otro al aplicarse.
+// La rama de los reportes guardados es la única de las cuatro aserciones que no cubre nadie más.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\treturn fmt.Sprintf(\"guardados: %d nuevo(s), %d actualizado(s), %d dado(s) de baja por ausencia\",\n\t\tnuevos, actualizados, podados)\n"
+// arnes: a="\treturn \"\"\n"
 func TestElAgenteSeEnteraDeQuePasoConSuInventario(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ts := servidorHTTPDeFlota(t, s)
@@ -787,6 +831,9 @@ func nombresDeServicios(t *testing.T, res interface{}) []string {
 // Una auditoría que nadie puede leer no es una auditoría.
 //
 // Sabotaje que la hace fallar: volver a `PuedeSobreDevice` en la rama de `IncluirRevocados`.
+// arnes: archivo="internal/mcp/methods_servicios.go"
+// arnes: de="puede = PuedeVerHistorialDeDevice"
+// arnes: a="puede = PuedeSobreDevice"
 func TestElHistorialDeUnaMaquinaRevocadaSePuedeAuditar(t *testing.T) {
 	s := maquinaRevocadaConServicios(t)
 	auditor := principalDeFlota("auditor", "casa", map[fleet.Cap][]string{fleet.CapMetrics: {"*"}})
@@ -830,6 +877,9 @@ func TestElHistorialDeUnaMaquinaRevocadaSePuedeAuditar(t *testing.T) {
 //
 // Sabotaje que la hace fallar: que PuedeVerHistorialDeDevice devuelva true directamente, o que
 // saltee alcanzaElProyecto / tieneGrant en vez de delegar en PuedeSobreDevice.
+// arnes: archivo="internal/mcp/fleet_authz.go"
+// arnes: de="\treturn PuedeSobreDevice(p, d, c)\n"
+// arnes: a="\treturn d.Permite(c)\n"
 func TestAuditarUnaMaquinaRevocadaSigueExigiendoLaConcesionYLaTenencia(t *testing.T) {
 	s := maquinaRevocadaConServicios(t)
 
@@ -884,6 +934,9 @@ func TestAuditarUnaMaquinaRevocadaSigueExigiendoLaConcesionYLaTenencia(t *testin
 // shell pasan por PuedeSobreDevice, donde el kill-switch manda (C6).
 //
 // Sabotaje que la hace fallar: mover el `d.Revoked = false` adentro de PuedeSobreDevice.
+// arnes: archivo="internal/mcp/fleet_authz.go"
+// arnes: de="func PuedeSobreDevice(p *Principal, d fleet.Device, c fleet.Cap) bool {\n"
+// arnes: a="func PuedeSobreDevice(p *Principal, d fleet.Device, c fleet.Cap) bool {\n\td.Revoked = false\n"
 func TestAuditarNoAflojaElKillSwitchParaOperar(t *testing.T) {
 	s := maquinaRevocadaConServicios(t)
 	d, ok, err := s.engine.DevicePorNombre("casa", "pc-gio")
@@ -995,6 +1048,9 @@ func TestUnServicioOciosoNoEmiteLaSerieDeUp(t *testing.T) {
 // correcta de contar una ausencia — no un 0 con cara de dato.
 //
 // Sabotaje: devolver (0, true) para EstadoDesconocido en seriesDeServicio.
+// arnes: archivo="internal/mcp/fleet_prometheus_servicios.go"
+// arnes: de="\t\t\t\t\t// falta o crece, que es la forma correcta de contar una ausencia.\n\t\t\t\t\treturn 0, false"
+// arnes: a="\t\t\t\t\t// falta o crece, que es la forma correcta de contar una ausencia.\n\t\t\t\t\treturn 0, true"
 func TestUnServicioDesconocidoNoEmiteLaSerieDeUp(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 
