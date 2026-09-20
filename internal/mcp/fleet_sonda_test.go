@@ -38,6 +38,9 @@ func conMetrics(proyecto string) *Principal {
 // La sonda mide un Tier B por SSH y GUARDA lo que trae, estampando la señal de vida.
 //
 // Sabotaje: no llamar a LatirDevice → el dispositivo queda medido pero figurando caído.
+// arnes: archivo="internal/mcp/methods_sonda.go"
+// arnes: de="\ts.withWriteLock(func() { _, errLatido = s.engine.LatirDevice(d.ID, ahora, texto) })"
+// arnes: a="\t_ = texto"
 func TestLaSondaMideUnTierBYGuardaLaMuestra(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
@@ -86,6 +89,9 @@ func TestLaSondaMideUnTierBYGuardaLaMuestra(t *testing.T) {
 // no lo permite.
 //
 // Sabotaje que la hace fallar: quitar la guarda EsIOS de sondearUno.
+// arnes: archivo="internal/mcp/methods_sonda.go"
+// arnes: de="\tif fleet.EsIOS(d.OS) {\n\t\tfila[\"ok\"] = false\n\t\tfila[\"transporte\"] = \"ninguno\"\n\t\tfila[\"error\"] = fleet.ErrIOSNoSeMide.Error()\n\t\treturn fila\n\t}\n"
+// arnes: a=""
 func TestUnIPhoneNoSeIntentaSondearYSeDicePorQue(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
@@ -117,6 +123,9 @@ func TestUnIPhoneNoSeIntentaSondearYSeDicePorQue(t *testing.T) {
 //
 // Sabotaje: sondear también los Tier A → el cerebro intentaría abrir un ssh contra un portátil
 // detrás de un NAT, por cada llamada.
+// arnes: archivo="internal/mcp/methods_sonda.go"
+// arnes: de="\t\tif d.Tier == fleet.TierAgente {\n\t\t\tsinAgente++\n\t\t\tcontinue\n\t\t}\n"
+// arnes: a=""
 func TestLosTierANoSeSondean(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarDePrueba(t, s, "casa", "pc-gio") // Tier A
@@ -139,6 +148,9 @@ func TestLosTierANoSeSondean(t *testing.T) {
 // La compuerta manda: sondear es MEDIR, así que exige `metrics` por máquina.
 //
 // Sabotaje: quitar el PuedeSobreDevice de toolFleetProbe.
+// arnes: archivo="internal/mcp/methods_sonda.go"
+// arnes: de="\t\tif !PuedeSobreDevice(p, d, fleet.CapMetrics) {\n\t\t\tsinPermiso++\n\t\t\tcontinue\n\t\t}\n"
+// arnes: a=""
 func TestSondearExigeLaCapacidadMetrics(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
@@ -252,8 +264,21 @@ func lecturaProcCompleta() string {
 // —`mem_libre` y `num_procesos`— se agregaron en U1 y NINGUNA prueba los miraba en esta fila: el
 // verificador borró la línea de uno y crudificó el otro, y la suite quedó en `ok`.
 //
-// Sabotaje que la hace fallar: borrar `fila["mem_libre"] = m.MemLibre` de sondearUno.
-// Sabotaje que la hace fallar: cambiar `enteroONull(m.NumProcesos)` por `m.NumProcesos`.
+// Sabotaje que la hace fallar: borrar `fila["mem_libre"] = m.MemLibre` de la fila del sondeo.
+// arnes: archivo="internal/mcp/methods_sonda.go"
+// arnes: de="fila[\"mem_libre\"] = m.MemLibre"
+// arnes: a=""
+// Sabotaje que la hace fallar: publicar el conteo de procesos bajo otra clave.
+// arnes: prueba="TestLaFilaDelSondeoTraeMemoriaLibreYProcesos"
+// arnes: archivo="internal/mcp/methods_sonda.go"
+// arnes: de="fila[\"num_procesos\"] ="
+// arnes: a="fila[\"num_procs\"] ="
+//
+// EL SEGUNDO DECÍA «cambiar `enteroONull(m.NumProcesos)` por el crudo» Y NO ENCIENDE ESTA PRUEBA
+// —medido el 2026-09-20—, aunque sí enciende la de más abajo. El motivo es el fixture: acá la
+// máquina mide 42 procesos, y `enteroONull` deja pasar cualquier valor mayor que cero, así que las
+// dos ramas publican el mismo 42. Ese corte sirve donde el conteo es CERO, que es el caso que
+// custodia `TestUnaMaquinaQueNoCuentaProcesosMandaNullYNoCero`.
 func TestLaFilaDelSondeoTraeMemoriaLibreYProcesos(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
@@ -311,6 +336,9 @@ func TestLaFilaDelSondeoTraeMemoriaLibreYProcesos(t *testing.T) {
 // apendea la de `/proc` al final justamente para no romperlo— y un macOS por SSH, que no la mide.
 //
 // Sabotaje que la hace fallar: cambiar `enteroONull(m.NumProcesos)` por `m.NumProcesos`.
+// arnes: archivo="internal/mcp/methods_sonda.go"
+// arnes: de="enteroONull(m.NumProcesos)"
+// arnes: a="m.NumProcesos"
 func TestUnaMaquinaQueNoCuentaProcesosMandaNullYNoCero(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
@@ -364,6 +392,9 @@ func TestUnaMaquinaQueNoCuentaProcesosMandaNullYNoCero(t *testing.T) {
 // cuál es «no medido», y ahora una que se olvide rompe la suite.
 //
 // Sabotaje que la hace fallar: devolver `m.UptimeSeg` crudo en sondearUno (o `m.NumCPU`).
+// arnes: archivo="internal/mcp/methods_sonda.go"
+// arnes: de="enteroONull(m.UptimeSeg)"
+// arnes: a="m.UptimeSeg"
 func TestLaFilaDelSondeoYLaDeMetricasCoincidenEnQueEsNoMedido(t *testing.T) {
 	ahora := time.Now().UTC()
 	d := fleet.Device{Name: "altura-db", Tier: fleet.TierProtocolo, OS: "linux", ProjectID: "infra"}
@@ -427,7 +458,15 @@ func TestLaFilaDelSondeoYLaDeMetricasCoincidenEnQueEsNoMedido(t *testing.T) {
 // alguien agrega un campo a la fila del sondeo y no acá, la comparación deja de cubrirlo en
 // silencio. Se compara la LISTA de campos que sondearUno publica contra la que la prueba conoce.
 //
-// Sabotaje que la hace fallar: agregarle un campo nuevo a sondearUno sin sumarlo a esta lista.
+// Sabotaje que la hace fallar: agregarle un campo nuevo a `completarFilaDeSondeo` sin sumarlo a
+// esta lista.
+//
+// EL NOMBRE DE LA FUNCIÓN IMPORTA Y ESTABA MAL, medido el 2026-09-20. La guarda lee este archivo
+// del DISCO y recorta el tramo de `completarFilaDeSondeo`, no el de `sondearUno`: un campo agregado
+// en `sondearUno` queda FUERA del tramo que mira, y la prueba pasa en verde.
+// arnes: archivo="internal/mcp/methods_sonda.go"
+// arnes: de="\tfila[\"num_cpu\"] = enteroONull(m.NumCPU)\n"
+// arnes: a="\tfila[\"num_cpu\"] = enteroONull(m.NumCPU)\n\tfila[\"disco_libre\"] = m.DiscoDisponible\n"
 func TestLaGuardaDelSondeoConoceTodosLosCamposQueSondearUnoPublica(t *testing.T) {
 	crudo, err := os.ReadFile("methods_sonda.go")
 	if err != nil {

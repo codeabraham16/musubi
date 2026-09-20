@@ -57,8 +57,15 @@ func contextoDe(t *testing.T, s *McpServer, p *Principal, args map[string]any) m
 // incomparable. Presentadas iguales, cualquier coincidencia temporal se lee como una pista.
 //
 // Sabotaje: rotular todo `ventana` → falla acá.
+// arnes: archivo="internal/mcp/methods_contexto.go"
+// arnes: de="\t\t\t\"enlace\":    string(h.enlace),"
+// arnes: a="\t\t\t\"enlace\":    string(fleet.EnlacePorVentana),"
 // Sabotaje: recorrer la ventana ANTES que los términos → la nota que nombra el servicio queda
 // rotulada `ventana` y pierde justo el peso que la hace útil.
+// arnes: prueba="TestElEnlacePorTerminoNoSeConfundeConElDeVentana"
+// arnes: archivo="internal/mcp/methods_contexto.go"
+// arnes: de="\tfor _, t := range terminos {\n\t\t// Como FRASE y no como el OR de sus tokens (ver buildFTSFrase): con OR, un servicio\n\t\t// llamado `cognicion-db` enlazaría cualquier nota que diga «db», y el enlace `termino`\n\t\t// pasaría de ser evidencia a ser evidencia INVENTADA.\n\t\tobs, err := s.engine.ObservacionesQueNombran(memCtx, t.Texto, fleet.ContextoTopeMemoria)\n\t\tif err != nil {\n\t\t\treturn nil, rpcErrorf(codeInternalError, \"%v\", err)\n\t\t}\n\t\tfor _, o := range obs {\n\t\t\tif _, ya := porID[o.ID]; !ya {\n\t\t\t\tporID[o.ID] = hallazgo{obs: o, enlace: fleet.EnlacePorTermino, termino: t.Texto}\n\t\t\t}\n\t\t}\n\t}\n\tenVentana, err := s.engine.ObservacionesEnVentana(memCtx, ventana, fleet.ContextoTopeMemoria)\n\tif err != nil {\n\t\treturn nil, rpcErrorf(codeInternalError, \"%v\", err)\n\t}\n\tfor _, o := range enVentana {\n\t\tif _, ya := porID[o.ID]; !ya {\n\t\t\tporID[o.ID] = hallazgo{obs: o, enlace: fleet.EnlacePorVentana}\n\t\t}\n\t}"
+// arnes: a="\tenVentana, err := s.engine.ObservacionesEnVentana(memCtx, ventana, fleet.ContextoTopeMemoria)\n\tif err != nil {\n\t\treturn nil, rpcErrorf(codeInternalError, \"%v\", err)\n\t}\n\tfor _, o := range enVentana {\n\t\tif _, ya := porID[o.ID]; !ya {\n\t\t\tporID[o.ID] = hallazgo{obs: o, enlace: fleet.EnlacePorVentana}\n\t\t}\n\t}\n\tfor _, t := range terminos {\n\t\tobs, err := s.engine.ObservacionesQueNombran(memCtx, t.Texto, fleet.ContextoTopeMemoria)\n\t\tif err != nil {\n\t\t\treturn nil, rpcErrorf(codeInternalError, \"%v\", err)\n\t\t}\n\t\tfor _, o := range obs {\n\t\t\tif _, ya := porID[o.ID]; !ya {\n\t\t\t\tporID[o.ID] = hallazgo{obs: o, enlace: fleet.EnlacePorTermino, termino: t.Texto}\n\t\t\t}\n\t\t}\n\t}"
 func TestElEnlacePorTerminoNoSeConfundeConElDeVentana(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	sembrarContexto(t, s)
@@ -131,6 +138,9 @@ func contextoRes(t *testing.T, s *McpServer, p *Principal, args map[string]any) 
 //
 // Sabotaje: armar los términos de servicio sin preguntar por `metrics` → falla acá, y la tool se
 // convierte en un enumerador de servicios que esquiva su propia compuerta.
+// arnes: archivo="internal/mcp/methods_contexto.go"
+// arnes: de="\tif PuedeVerHistorialDeDevice(p, device, fleet.CapMetrics) {"
+// arnes: a="\tif true {"
 func TestLosTerminosDeServicioSeCompuertanConMetrics(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	sembrarContexto(t, s)
@@ -182,6 +192,9 @@ func TestLosTerminosDeServicioSeCompuertanConMetrics(t *testing.T) {
 // algo de otro mundo, y encima con el sello de una herramienta que dice haber correlacionado.
 //
 // Sabotaje: usar `s.scopedCtx(ctx)` en vez de fijar el proyecto del device → falla acá.
+// arnes: archivo="internal/mcp/methods_contexto.go"
+// arnes: de="\tmemCtx := memory.WithProjectScope(ctx, memory.ProjectScope{ProjectID: proyecto, Federate: false})"
+// arnes: a="\tmemCtx := s.scopedCtx(ctx)"
 func TestElContextoSaleDeLaMemoriaDeLaMaquinaYNoDeLaDeQuienPregunta(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	sembrarContexto(t, s)
@@ -236,6 +249,9 @@ func TestLaActividadDelContextoSeCompuertaComoLaCronologia(t *testing.T) {
 // límites al lado se lee como una explicación.
 //
 // Sabotaje: devolver nil desde HuecosDelContexto → falla acá.
+// arnes: archivo="internal/mcp/methods_contexto.go"
+// arnes: de="\"no_visto\": append(fleet.HuecosDelContexto(),"
+// arnes: a="\"no_visto\": append([]string(nil),"
 func TestElContextoDeclaraQueEsCorrelacionYNoCausa(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	sembrarContexto(t, s)
@@ -342,6 +358,9 @@ func TestUnaVentanaVaciaSigueDiciendoQueNoMiro(t *testing.T) {
 // decisiones de roadmap enlazada a `avahi-daemon`.
 //
 // Sabotaje: volver a `SearchObservationsFTS` (que une los tokens con OR) → falla acá.
+// arnes: archivo="internal/memory/contexto.go"
+// arnes: de="\tfrase := buildFTSFrase(termino)"
+// arnes: a="\tfrase := buildFTSQuery(termino)"
 func TestElEnlacePorTerminoBuscaLaFraseYNoSusPedazos(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")
@@ -383,6 +402,9 @@ func TestElEnlacePorTerminoBuscaLaFraseYNoSusPedazos(t *testing.T) {
 // entraban `avahi-daemon` y `NetworkManager-wait-online`.
 //
 // Sabotaje: mandar todos los servicios a `reportados` sin mirar `sv.Declarado` → falla acá.
+// arnes: archivo="internal/mcp/methods_contexto.go"
+// arnes: de="\t\t\tif sv.Declarado {\n\t\t\t\tdeclarados = append(declarados, sv.Nombre)\n\t\t\t} else {\n\t\t\t\treportados = append(reportados, sv.Nombre)\n\t\t\t}"
+// arnes: a="\t\t\treportados = append(reportados, sv.Nombre)"
 func TestElServicioDeclaradoLlegaALosTerminosAunqueElHostEnumereMuchos(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")
@@ -429,6 +451,9 @@ func TestElServicioDeclaradoLlegaALosTerminosAunqueElHostEnumereMuchos(t *testin
 // que no se puede comprobar hay que creerla, que es justo lo que la tool existe para no pedir.
 //
 // Sabotaje: volver a `o.content` en el SELECT (el principio de la nota) → falla acá.
+// arnes: archivo="internal/memory/contexto.go"
+// arnes: de="o.topic_key, snippet(observations_fts, 1, "
+// arnes: a="o.topic_key, coalesce(o.content, "
 func TestElFragmentoMuestraDondeAparecioElTermino(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")
