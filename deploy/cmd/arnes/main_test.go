@@ -578,3 +578,76 @@ func TestElAvisoDeTagsHeredadosMiraElFlagYNoUnaSubcadena(t *testing.T) {
 		}
 	}
 }
+
+// EL TRAMO A CORRER, Y LA PROPIEDAD QUE DE VERDAD IMPORTA: LAS DOS MITADES PARTICIONAN.
+//
+// `-desde` nació de una corrida muerta: un barrido de `./internal/mcp` son ~165 sabotajes y dos
+// horas, se murió en el 126 por falta de memoria, y con sólo `-limite` —que corre los PRIMEROS N—
+// recuperar los últimos 39 obligaba a repetir los 126 anteriores.
+//
+// Por eso la guarda no enumera casos: comprueba que para CUALQUIER corte, `-limite k` y
+// `-desde k+1` cubran la lista entera, cada elemento EXACTAMENTE UNA VEZ. Un off-by-one deja un
+// hueco (un sabotaje que nadie corrió y que el informe da por corrido) o un solapamiento (uno
+// contado dos veces), y las dos cosas son mentiras sobre la cobertura, que es lo único que este
+// programa produce.
+//
+// Sabotaje que la hace fallar: volver `inicio = desde - 1` a `inicio = desde`.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\t\tinicio = desde - 1\n"
+// arnes: a="\t\tinicio = desde\n"
+func TestLasDosMitadesDeUnBarridoCortadoCubrenTodoUnaSolaVez(t *testing.T) {
+	const total = 165
+	// EL CORTE ARRANCA EN 1 Y NO EN 0, Y NO ES PARA AFLOJAR LA GUARDA: `-limite 0` significa
+	// «todos», que es la semántica que ese flag ya tenía antes de que `-desde` existiera. Un
+	// barrido que murió ANTES del primer sabotaje no tiene dos mitades que pegar — se vuelve a
+	// correr entero, sin flags. La propiedad se comprueba en todo el dominio donde reanudar
+	// significa algo.
+	for corte := 1; corte <= total; corte++ {
+		visto := make([]int, total)
+
+		// La primera mitad: como si hubiera muerto en `corte`.
+		i1, f1 := tramoACorrer(total, 0, corte)
+		for i := i1; i < f1; i++ {
+			visto[i]++
+		}
+		// Y la segunda, reanudando en el siguiente. `corte+1` es 1-based: el número impreso.
+		i2, f2 := tramoACorrer(total, corte+1, 0)
+		for i := i2; i < f2; i++ {
+			visto[i]++
+		}
+
+		for i, n := range visto {
+			if n != 1 {
+				t.Fatalf("cortando en %d, el sabotaje en la posición %d se corrió %d veces "+
+					"(se esperaba exactamente 1): un hueco es un sabotaje que nadie corrió y que "+
+					"el informe da por corrido; un repetido infla la cobertura", corte, i+1, n)
+			}
+		}
+	}
+}
+
+// `-desde` Y `-limite` SE COMPONEN, Y EL LÍMITE CUENTA DESDE EL ARRANQUE Y NO DESDE EL PRINCIPIO.
+//
+// Es el error cómodo: aplicar el techo sobre la lista entera en vez de sobre el tramo. Con eso
+// `-desde 127 -limite 10` correría los primeros diez y no los diez que siguen al 126, o sea que
+// reanudar devolvería lo que ya se había corrido.
+//
+// Sabotaje que la hace fallar: contar el límite desde el principio de la lista.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\tif limite > 0 && inicio+limite < fin {\n\t\tfin = inicio + limite\n\t}\n"
+// arnes: a="\tif limite > 0 && limite < fin {\n\t\tfin = limite\n\t}\n"
+func TestElLimiteCuentaDesdeDondeArrancaYNoDesdeElPrincipio(t *testing.T) {
+	inicio, fin := tramoACorrer(165, 127, 10)
+	if inicio != 126 || fin != 136 {
+		t.Errorf("`-desde 127 -limite 10` dio [%d,%d), se esperaba [126,136): reanudar tiene que "+
+			"traer los DIEZ QUE SIGUEN, no los diez del principio", inicio, fin)
+	}
+	// Y el techo no se puede pasar del final.
+	if _, f := tramoACorrer(165, 160, 50); f != 165 {
+		t.Errorf("el tramo terminó en %d y la lista tiene 165", f)
+	}
+	// Un `desde` más grande que la lista no corre nada, y no explota.
+	if i, f := tramoACorrer(165, 900, 0); i != f {
+		t.Errorf("un `-desde` más allá del final devolvió [%d,%d), se esperaba un tramo vacío", i, f)
+	}
+}
