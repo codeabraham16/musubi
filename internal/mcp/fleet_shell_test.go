@@ -71,7 +71,15 @@ func TestExecNoOtorgaShellNiSiquieraConAccesoTotal(t *testing.T) {
 
 // El caso concreto que motivó T1, escrito entero: la allowlist tiene que seguir significando algo.
 //
-// Sabotaje que la hace fallar: el mismo de arriba.
+// Sabotaje que la hace fallar: que la CONCESIÓN de `exec` alcance también para una shell.
+//
+// NO ES EL MISMO DE ARRIBA, aunque sea el mismo defecto. El de T1 corta la capacidad que se pide en
+// `toolFleetShell`, y ese literal YA ES el `de` de aquella directiva: copiarlo acá le rompería el
+// ancla. Éste baja una capa y corta el tercer lado de `PuedeSobreDevice` —la concesión—, que estaba
+// libre. Enciende la misma aserción: quien sólo puede correr un comando se lleva un prompt.
+// arnes: archivo="internal/mcp/fleet_authz.go"
+// arnes: de="\treturn tieneGrant(p, c, d.Name)"
+// arnes: a="\treturn tieneGrant(p, c, d.Name) || tieneGrant(p, fleet.CapExec, d.Name)"
 func TestUnaAllowlistDeUnComandoNoSeSalteaPidiendoUnaShell(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConShell(t, s, "casa", "nas")
@@ -119,6 +127,9 @@ func TestTierCNoAdmiteShellYElAltaLoRechaza(t *testing.T) {
 //
 // Sabotaje que la hace fallar: hacer que Permite consulte sólo la matriz del tier y no las caps
 // concedidas al device.
+// arnes: archivo="internal/fleet/device.go"
+// arnes: de="\tfor _, tiene := range d.Caps {"
+// arnes: a="\tfor _, tiene := range []Cap{c} {"
 func TestUnaMaquinaViejaNoGanaShellPorQueLaCapacidadExista(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	// Alta SIN shell, como todas las que existían antes de este slice.
@@ -139,7 +150,15 @@ func TestUnaMaquinaViejaNoGanaShellPorQueLaCapacidadExista(t *testing.T) {
 // Que alguien haya INTENTADO abrir una shell en un servidor es información de auditoría tanto
 // como que lo haya logrado. Misma regla que F1 de S5 y G7 de S6.
 //
-// Sabotaje que la hace fallar: abrir el canal antes de escribir la fila.
+// Sabotaje que la hace fallar: que la fila de la bitácora se escriba DESPUÉS de conectar.
+//
+// «ABRIR EL CANAL ANTES» ES UN NO-OP EN ESTA PRUEBA, medido el 2026-09-20: el doble de SSH que el
+// test instala ARRANCA bien y muere después, y `AbrirShellPorSSH` sólo devuelve error si el destino
+// está vacío o si el proceso no arranca. O sea que adelantar la apertura no cambia nada y la prueba
+// queda VERDE. Lo que esta guarda custodia es el ORDEN de la escritura, no el de la apertura.
+// arnes: archivo="internal/mcp/methods_shell.go"
+// arnes: de="\tses, err := s.engine.AbrirSesionShell(fleet.SesionShell{\n\t\tDeviceID: d.ID, ProjectID: proyecto, Principal: nombrePrincipal(p),\n\t})\n\tif err != nil {\n\t\treturn nil, rpcErrorf(codeInternalError, \"%v\", err)\n\t}\n"
+// arnes: a="\tses := fleet.SesionShell{DeviceID: d.ID, ProjectID: proyecto, Principal: nombrePrincipal(p)}\n"
 func TestUnaShellQueNoLlegaAConectarQuedaAuditadaIgual(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConShell(t, s, "casa", "nas")
@@ -171,6 +190,9 @@ func TestUnaShellQueNoLlegaAConectarQuedaAuditadaIgual(t *testing.T) {
 // shell. Si alguien "arreglara" esto marcando readOnly a musubi_fleet_shell, acá se cae.
 //
 // Sabotaje que la hace fallar: quitarle `readOnly: true` a musubi_fleet_shell_log en el registro.
+// arnes: archivo="internal/mcp/registry.go"
+// arnes: de="un olvido.\n\t\t\treadOnly: true,"
+// arnes: a="un olvido."
 func TestLaBitacoraDeShellLaLeeUnaCabinaSinEscritura(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConShell(t, s, "casa", "nas")
@@ -207,6 +229,9 @@ func TestLaBitacoraDeShellLaLeeUnaCabinaSinEscritura(t *testing.T) {
 // vivo durante dos horas.
 //
 // Sabotaje que la hace fallar: quitar cualquiera de los dos de SesionShell.Vencida.
+// arnes: archivo="internal/fleet/shell.go"
+// arnes: de="\tif !s.Vence.IsZero() && ahora.After(s.Vence) {\n\t\treturn true, fmt.Sprintf(\"la sesión alcanzó su vida máxima (%s)\", ShellVidaMax)\n\t}\n"
+// arnes: a=""
 func TestUnaSesionMuereTantoPorViejaComoPorAbandonada(t *testing.T) {
 	base := time.Now()
 	viva := fleet.SesionShell{
@@ -249,6 +274,9 @@ func TestUnaSesionMuereTantoPorViejaComoPorAbandonada(t *testing.T) {
 //
 // Sabotaje que la hace fallar: quitar el chequeo `ses.Principal != nombrePrincipal(p)` de
 // autorizarShell.
+// arnes: archivo="internal/mcp/shell_relay.go"
+// arnes: de=" || ses.Principal != nombrePrincipal(p)"
+// arnes: a=""
 func TestElIdDeSesionNoAlcanzaParaHablarleAlStream(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := enrolarConShell(t, s, "casa", "nas")
@@ -278,6 +306,9 @@ func TestElIdDeSesionNoAlcanzaParaHablarleAlStream(t *testing.T) {
 //
 // Sabotaje que la hace fallar: quitar el PuedeSobreDevice de autorizarShell (autorizar sólo al
 // abrir).
+// arnes: archivo="internal/mcp/shell_relay.go"
+// arnes: de="\tif !PuedeSobreDevice(p, d, fleet.CapShell) {"
+// arnes: a="\tif !PuedeSobreDevice(p, d, fleet.CapExec) {"
 func TestRevocarLaConcesionCortaElPromptQueYaEstabaAbierto(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := enrolarConShell(t, s, "casa", "nas")
@@ -414,6 +445,9 @@ func TestElRelayDistingueTokenMaloDeSesionMuertaYDeConcesionRevocada(t *testing.
 // pueda volver a ella y cerrarla.
 //
 // Sabotaje que la hace fallar: quitar la consulta a SesionShellAbiertaDe.
+// arnes: archivo="internal/mcp/methods_shell.go"
+// arnes: de="\tif previa, hay, err := s.engine.SesionShellAbiertaDe(nombrePrincipal(p), d.ID, ahora); err == nil && hay {\n\t\treturn jsonResult(respuestaShell(previa, d, \"ya tenías una sesión abierta en esta máquina; se devuelve ésa. Cerrala si querés una nueva.\"))\n\t}\n"
+// arnes: a=""
 func TestAbrirDosVecesDevuelveLaMismaSesion(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConShell(t, s, "casa", "nas")

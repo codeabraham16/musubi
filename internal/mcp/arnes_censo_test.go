@@ -251,7 +251,13 @@ import (
 // y `fleet_s10_test.go`—, o sea lo que el sistema hace SOLO sobre una máquina: reiniciar un
 // servicio, podar, sondear al que no tiene agente. Si una de ésas está hueca, el sistema actúa por
 // su cuenta y nada lo atrapa.
-const anclasEnProsaAlDia = 448
+//
+// Y DE 448 A 423 EL 2026-09-20, el commit que cruza la MITAD del corpus: las veinticinco anclas de
+// SHELL, SONDA y CONTEXTO —las dos superficies que quedan con acceso directo a una máquina, más lo
+// que el cerebro le cuenta a quien pregunta por una—. Cuatro de las veinticinco tenían la prosa mal,
+// y una de ellas de una forma nueva: DOS anclas del mismo bloque declaraban el MISMO corte, y sólo
+// enciende en una de las dos, porque el fixture de la otra mide un valor que la guarda deja pasar.
+const anclasEnProsaAlDia = 423
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
