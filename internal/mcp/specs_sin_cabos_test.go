@@ -80,7 +80,6 @@ package mcp
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -89,6 +88,8 @@ import (
 	"strings"
 	"testing"
 	"unicode"
+
+	"musubi/internal/arbol"
 )
 
 // ════════════════════════════════════════════════════════════════════════════════════════════
@@ -417,7 +418,6 @@ type cabo struct {
 // barridos» y el cabo estaba en el 42.
 func specsDelTrack(t *testing.T) []string {
 	t.Helper()
-	raiz := filepath.Join("..", "..", "specs")
 	// EL GLOB ERA CIEGO A `control-de-flota/`, que es la carpeta del PROPIO track.
 	//
 	// `flota-*` no matchea `control-de-flota`, así que un `## Lo que queda fuera` escrito en el
@@ -427,26 +427,24 @@ func specsDelTrack(t *testing.T) []string {
 	//
 	// `ABIERTO.md` se excluye porque ES el registro: barrerlo sería preguntarle al registro si
 	// está registrado.
-	dirs, err := filepath.Glob(filepath.Join(raiz, "flota-*"))
+	// EL ÁRBOL LO DICE GIT Y NO EL DIRECTORIO (A128): un borrador `.md` bajo `specs/` que alguien
+	// dejó sin `git add` no está en el repo, y sin embargo hacía que esta lista creciera y que las
+	// guardas que cuelgan de acá acusaran cabos que el clone no contiene.
+	mds, err := arbol.ConSufijo(filepath.Join("..", ".."), ".md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	dirs = append(dirs, filepath.Join(raiz, "control-de-flota"))
 	var out []string
-	for _, d := range dirs {
-		err := filepath.WalkDir(d, func(p string, e fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), ".md") &&
-				e.Name() != "ABIERTO.md" {
-				out = append(out, p)
-			}
-			return nil
-		})
-		if err != nil {
-			t.Fatal(err)
+	for _, rel := range mds {
+		dir := filepath.ToSlash(filepath.Dir(rel))
+		if !strings.HasPrefix(dir, "specs/flota-") && dir != "specs/control-de-flota" &&
+			!strings.HasPrefix(dir, "specs/control-de-flota/") {
+			continue
 		}
+		if filepath.Base(rel) == "ABIERTO.md" {
+			continue
+		}
+		out = append(out, filepath.Join("..", "..", filepath.FromSlash(rel)))
 	}
 	sort.Strings(out)
 	return out
@@ -1385,31 +1383,25 @@ func pruebasDelArbol(t *testing.T) map[string]bool {
 	t.Helper()
 	out := map[string]bool{}
 	raiz := filepath.Join("..", "..")
-	err := filepath.WalkDir(raiz, func(p string, e fs.DirEntry, err error) error {
+	// EL ÁRBOL LO DICE GIT Y NO EL DIRECTORIO, Y ACÁ LA DIRECCIÓN DEL DAÑO ES LA PEOR (A128).
+	//
+	// Esta lista es la que decide si una cita del registro apunta a una prueba que EXISTE. Al
+	// caminar el disco, el nombre de una prueba borrada seguía apareciendo mientras viviera en una
+	// copia del repo bajo `.claude/worktrees/` — así que la cita fantasma pasaba en VERDE. No es el
+	// falso rojo de las otras guardas de esta familia: es un falso verde sobre la pregunta que esta
+	// función existe para contestar, y sólo en la máquina que tuviera esa copia.
+	pruebas, err := arbol.ConSufijo(raiz, "_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range pruebas {
+		crudo, err := os.ReadFile(filepath.Join(raiz, filepath.FromSlash(rel)))
 		if err != nil {
-			return nil // un directorio ilegible no puede dar por buena una cita
-		}
-		if e.IsDir() {
-			switch e.Name() {
-			case ".git", "node_modules", "vendor":
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(e.Name(), "_test.go") {
-			return nil
-		}
-		crudo, err := os.ReadFile(p)
-		if err != nil {
-			return nil
+			t.Fatalf("no pude leer %s: %v", rel, err)
 		}
 		for _, m := range definicionDePrueba.FindAllStringSubmatch(string(crudo), -1) {
 			out[m[1]] = true
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("no se pudo caminar el repo buscando pruebas: %v", err)
 	}
 	// CERO PRUEBAS ENCONTRADAS SERÍA «NO PUDE MIRAR» CON CARA DE «TODAS LAS CITAS SON FALSAS».
 	if len(out) < 500 {
