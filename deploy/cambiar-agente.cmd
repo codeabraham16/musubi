@@ -104,7 +104,25 @@ if errorlevel 1 goto rollback
 echo [4] probando el nuevo EN SU RUTA DEFINITIVA >> "%LOG%"
 REM La RUTA del token y no su contenido: el `set /p` de antes metia la credencial en el entorno
 REM de este proceso, y ademas probaba un camino distinto del que usa el lanzador de la tarea.
-set MUSUBI_BRAIN_URL=http://100.79.126.62:7717
+REM EL ENTORNO SE DERIVA DEL LANZADOR, NO SE COPIA. Aca estaba la direccion del cerebro
+REM escrita a mano, con su IP y su puerto, y era una copia de la que vive en `agente.cmd`, que
+REM es el archivo que la Tarea Programada usa DE VERDAD. Dos copias de una direccion se
+REM contradicen el dia que una cambia: el dia que el cerebro pase a HTTPS en otro puerto
+REM (A129), esta prueba iba a seguir discando el viejo, fallar, y disparar el rollback acusando
+REM al binario nuevo de no latir. El binario estaria sano y nadie miraria aca.
+REM Leer las lineas `set MUSUBI_` del lanzador trae tambien MUSUBI_BRAIN_TLS_NAME y
+REM MUSUBI_ALCANCE si estan, sin tener que enumerarlas aca.
+set MUSUBI_BRAIN_URL=
+for /f "usebackq delims=" %%L in (`findstr /b /c:"set MUSUBI_" "%DIR%agente.cmd"`) do %%L
+
+REM Y SI NO SE PUDO LEER, ES ROJO Y NO UN DEFAULT. Un `agent --once` sin URL no prueba nada:
+REM fallaria por falta de configuracion y el rollback culparia al binario. "No pude leer el
+REM lanzador" y "el agente nuevo no late" son cosas distintas y tienen que decirse distinto.
+if not defined MUSUBI_BRAIN_URL (
+  echo FALLO: no pude leer MUSUBI_BRAIN_URL de "%DIR%agente.cmd" >> "%LOG%"
+  echo        sin la direccion del cerebro esta prueba no mide nada, asi que no se acepta el nuevo >> "%LOG%"
+  goto rollback
+)
 set MUSUBI_DEVICE_TOKEN_FILE=%DIR%\device.token
 "%DIR%\musubi.exe" agent --once >> "%LOG%" 2>&1
 if errorlevel 1 goto rollback
