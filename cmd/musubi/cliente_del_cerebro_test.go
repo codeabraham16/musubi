@@ -258,15 +258,6 @@ func clientesArmadosAMano(f *ast.File) []ast.Node {
 	return out
 }
 
-func dentroDe(f *ast.File, n ast.Node, nombre string) bool {
-	for _, fn := range funcionesDe(f) {
-		if fn.Name.Name == nombre && fn.Pos() <= n.Pos() && n.End() <= fn.End() {
-			return true
-		}
-	}
-	return false
-}
-
 // motivoCerca mira las líneas de comentario INMEDIATAMENTE anteriores al literal. No se busca en
 // todo el archivo a propósito: un comentario en otra función no declara nada sobre éste, y esa
 // confusión —el texto que está donde no decide— ya costó siete guardas verdes en este repo.
