@@ -44,6 +44,11 @@
   Sin la ventana de consola (recomendado en un escritorio):
     .\agente-windows.ps1 -BrainUrl "..." -DeviceToken "..." -Oculto
 
+  Contra un cerebro por HTTPS (A129). El nombre NO es decorativo: se disca la IP porque con
+  NordVPN el MagicDNS del tailnet no resuelve, y el certificado lleva SOLO el nombre como SAN,
+  asi que sin declararlo el handshake verifica contra la IP y falla:
+    .\agente-windows.ps1 -BrainUrl "https://<ip>:10000" -DeviceToken "..." -TlsName "<nombre del tailnet>"
+
   Para desinstalar:
     Unregister-ScheduledTask -TaskName "Musubi Agente de Flota" -Confirm:$false
 #>
@@ -55,6 +60,18 @@ param(
   # "nadie le pidio que mirara" no es "no llega". Es el unico punto de vista que puede responder
   # si un cliente alcanza el relay; el sondeo desde el servidor mira el lugar donde siempre anda.
   [string]$Alcance = "",
+  # Nombre contra el que verificar el certificado del cerebro (MUSUBI_BRAIN_TLS_NAME, A129).
+  #
+  # HACE FALTA CUANDO LA URL ES UNA IP Y EL ESQUEMA ES HTTPS, que es el caso de este tailnet: el
+  # certificado no lleva SAN de IP. Va VACIO por default a proposito — mientras el cerebro escuche
+  # HTTP, declarar un ServerName no rompe nada pero tampoco dice nada, y un default inventado
+  # seria una direccion mas escrita a mano.
+  #
+  # SE ESCRIBE EN EL LANZADOR *Y* SE USA EN LA PRUEBA DE LATIDO DE ESTE MISMO GUION. Las dos
+  # cosas, o ninguna: si solo fuera al lanzador, la prueba de abajo discaria la IP sin declarar
+  # el nombre, fallaria el handshake, y el instalador abortaria ANTES de crear la tarea, con un
+  # mensaje hablando del certificado y no del instalador.
+  [string]$TlsName = "",
   [string]$ExePath = "",
   [string]$InstallDir = "$env:LOCALAPPDATA\Musubi",
   [switch]$SkipFirewall,
@@ -168,6 +185,7 @@ if ($AlArranque) {
 # que se le agrega al ACL mas arriba.
 Paso "probando un latido contra $BrainUrl ..."
 $env:MUSUBI_BRAIN_URL  = $BrainUrl
+$env:MUSUBI_BRAIN_TLS_NAME = $TlsName
 $env:MUSUBI_DEVICE_TOKEN_FILE = $tokenFile
 $env:MUSUBI_DEVICE_TOKEN = ""
 & $destino agent --once
@@ -263,6 +281,11 @@ $lanzador = Join-Path $InstallDir "agente.cmd"
 # variable definida y vacia, que el agente tendria que distinguir de ausente. Mejor no escribirla.
 $lineaAlcance = ""
 if ($Alcance -ne "") { $lineaAlcance = "`r`nset MUSUBI_ALCANCE=$Alcance" }
+# El nombre TLS viaja al lanzador por el mismo camino que el alcance (A129). Sin esta linea, una
+# reinstalacion revierte la migracion a HTTPS EN SILENCIO: el agente vuelve a arrancar sin
+# declarar el ServerName y deja de latir, y el sintoma es indistinguible de una maquina apagada.
+$lineaTls = ""
+if ($TlsName -ne "") { $lineaTls = "`r`nset MUSUBI_BRAIN_TLS_NAME=$TlsName" }
 # LA RUTA DEL TOKEN, NO SU CONTENIDO. Antes era `set /p MUSUBI_DEVICE_TOKEN=<"$tokenFile"`, y eso
 # metia la credencial en el ENTORNO del proceso: cualquier proceso del mismo usuario la lee, y en
 # Windows tambien la ve un Get-Process -IncludeUserName con las herramientas adecuadas. Peor: el
@@ -274,7 +297,7 @@ if ($Alcance -ne "") { $lineaAlcance = "`r`nset MUSUBI_ALCANCE=$Alcance" }
 # que el agente no puede endurecerlo por su cuenta.
 @"
 @echo off
-set MUSUBI_BRAIN_URL=$BrainUrl$lineaAlcance
+set MUSUBI_BRAIN_URL=$BrainUrl$lineaTls$lineaAlcance
 set MUSUBI_DEVICE_TOKEN_FILE=$tokenFile
 "$destino" agent
 "@ | Set-Content -Encoding ASCII $lanzador
