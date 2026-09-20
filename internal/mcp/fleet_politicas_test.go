@@ -150,6 +150,9 @@ func TestUnaPoliticaRespetaLaAllowlistDeSuPrincipal(t *testing.T) {
 // de un segundo lugar.
 //
 // Sabotaje que la hace fallar: resolver el principal UNA vez al arranque y guardarlo.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="if s.buscarPrincipal == nil {\n\t\treturn false\n\t}\n\tpr, existe := s.buscarPrincipal.porNombre(pol.Principal)"
+// arnes: a="if s.buscarPrincipal == nil {\n\t\treturn false\n\t}\n\tpr, existe := s.buscarPrincipal.porNombre(pol.Principal)\n\tif v, hay := s.avisosDados.Load(\"politica_principal_resuelto\"); hay {\n\t\tpr, existe = v.(*Principal), true\n\t} else if existe {\n\t\ts.avisosDados.Store(\"politica_principal_resuelto\", pr)\n\t}"
 func TestRevocarAlPrincipalApagaLaPolitica(t *testing.T) {
 	s, d := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal()))
 	ahora := time.Now()
@@ -198,6 +201,9 @@ func politicaDeMemoria2() fleet.Politica {
 // umbral. Una política sin esta guarda actuaría para siempre sobre una máquina muerta.
 //
 // Sabotaje que la hace fallar: quitar el chequeo de EnLinea / de la edad de la muestra.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="\tumbral := s.umbralEnLinea(d)\n"
+// arnes: a="\tumbral := 24 * time.Hour\n"
 func TestUnaPoliticaNoActuaSobreUnaMuestraRancia(t *testing.T) {
 	s, d := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal()))
 	ahora := time.Now()
@@ -214,6 +220,9 @@ func TestUnaPoliticaNoActuaSobreUnaMuestraRancia(t *testing.T) {
 // late, así que figura en línea, pero su última muestra envejece sin parar.
 //
 // Sabotaje que la hace fallar: chequear sólo EnLinea y no la edad de la muestra.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="\tif ahora.Sub(d.UltimaMuestra.Tomada) > umbral {\n"
+// arnes: a="\tif ahora.Sub(d.UltimaMuestra.Tomada) > 24*time.Hour {\n"
 func TestUnaMaquinaQueLateSinMedirNoDisparaPoliticas(t *testing.T) {
 	s, d := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal()))
 	ahora := time.Now()
@@ -282,8 +291,17 @@ func latir2(s *McpServer, deviceID string, m fleet.Muestra, cuando time.Time) {
 // Un segundo registro de auditoría «para lo automático» es cómo se llega a auditar sólo la mitad
 // de lo que pasa. Y la mitad automática es justo la que nadie miró ejecutarse.
 //
-// Sabotaje que la hace fallar: encolar el comando sin pasar por EncolarComando, o estampar el
-// principal como "sistema" en vez del de la política.
+// Sabotaje que la hace fallar: encolar el comando sin pasar por EncolarComando.
+//
+// LA SEGUNDA CARA QUE DECÍA ESTA LÍNEA DEJA LA PRUEBA EN VERDE, medido el 2026-09-20. Estampar el
+// principal como "sistema" aplica y compila, y la guarda no se entera: antes del comando de la
+// política, `actuarSiCorresponde` encola un `musubi:avisar` CON el principal de la política, y la
+// aserción es un `Contains` sobre el JSON ENTERO de la bitácora. La fila del AVISO le contesta la
+// pregunta aunque la fila de la POLÍTICA diga otra cosa. Es la cara conocida de un `Contains` que
+// no puede fallar por un defecto de un sitio: hay dos ocurrencias y sólo una decide.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="Argv:   pol.Hacer,"
+// arnes: a="Argv:   []string{\"uptime\"},"
 func TestLaAccionDeUnaPoliticaQuedaEnLaMismaBitacoraQueLasPersonas(t *testing.T) {
 	s, d := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal()))
 	ahora := time.Now()
@@ -347,6 +365,9 @@ func TestUnaPoliticaSoloTocaLasMaquinasQueNombra(t *testing.T) {
 // que está muerta es peor que no tener alarma.
 //
 // Sabotaje que la hace fallar: hacer que vincularRegistroDeFlota logee en vez de devolver error.
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="if err := s.validarPrincipalDePolitica(pol, lookup); err != nil {\n\t\t\treturn err\n\t\t}"
+// arnes: a="if err := s.validarPrincipalDePolitica(pol, lookup); err != nil {\n\t\t\tlogx.Warn(\"política mal configurada: se arranca igual\", \"error\", err)\n\t\t}"
 func TestUnaPoliticaSinPrincipalUsableNoDejaArrancar(t *testing.T) {
 	casos := []struct {
 		nombre string
@@ -415,8 +436,17 @@ func TestSinPoliticasElBarridoNoActuaSobreNadie(t *testing.T) {
 // Lo destapó el e2e: 17 avisos idénticos en un minuto. La MÉTRICA sí cuenta cada evaluación,
 // porque de ella vive la alerta PoliticaSinPermiso: lo que se acota es el ruido, no la señal.
 //
-// Sabotaje que la hace fallar: quitar avisarUnaVez y logear directo (el contador de avisos
-// crecería con cada evaluación).
+// Sabotaje que la hace fallar: que el aviso se rearme en cada evaluación en vez de darse una vez.
+//
+// EL PARÉNTESIS QUE DECÍA ESTA LÍNEA ESTABA AL REVÉS, medido el 2026-09-20. Quitar `avisarUnaVez`
+// y logear directo SÍ pone la prueba roja, pero con «se emitió el aviso 0 veces en 10
+// evaluaciones»: el instrumento que el test cuenta es `s.avisosDados`, y quien la llena es
+// justamente `avisarUnaVez`. Sacarlo APAGA EL CONTADOR mientras el log sale las diez veces. O sea
+// que el rojo llega por el control positivo apagado —«lo legítimo dejó de pasar»— y encima el
+// número miente sobre lo que pasó. El sabotaje que enciende el invariante es el contrario.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="s.avisarUnaVez(\"sin_principal:\"+pol.Nombre, func() {"
+// arnes: a="s.avisarUnaVez(\"sin_principal:\"+pol.Nombre+ahora.String(), func() {"
 func TestUnFalloDeConfiguracionDeUnaPoliticaSeAvisaUnaVezYSeCuentaSiempre(t *testing.T) {
 	s, d := prepararPolitica(t, politicaDeMemoria(), registroDePrueba()) // registro VACÍO
 	ahora := time.Now()
@@ -572,6 +602,9 @@ func TestPodarElEstadoDePoliticasConListaVaciaNoBorraNada(t *testing.T) {
 // aparecía en ningún lado salvo hurgando la bitácora DESPUÉS del hecho.
 //
 // Sabotaje que la hace fallar: no agregar `politicas`/`politicas_activas` al inventario.
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="\t\t\t\tfila[\"politicas_activas\"] = total\n"
+// arnes: a=""
 func TestElInventarioDiceQueActuaSoloSobreCadaMaquina(t *testing.T) {
 	s, d := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal()))
 	_ = d
@@ -612,6 +645,9 @@ func TestElInventarioDiceQueActuaSoloSobreCadaMaquina(t *testing.T) {
 //
 // Sabotaje que la hace fallar: devolver `puede_actuar: true` fijo, o calcularlo con una cadena de
 // guardas distinta de la que usa evaluarPolitica.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de=" && argvPermitido(pr, d, pol.Hacer)"
+// arnes: a=""
 func TestUnaPoliticaInerteSeDistingueDeUnaQueFunciona(t *testing.T) {
 	// El principal existe y tiene exec, pero el comando de la política NO está en su allowlist.
 	tullido := autoHeal()
@@ -643,6 +679,9 @@ func TestUnaPoliticaInerteSeDistingueDeUnaQueFunciona(t *testing.T) {
 // pista de por qué.
 //
 // Sabotaje que la hace fallar: mandar el detalle a todo el mundo, o esconder también el conteo.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="verDetalle := PuedeSobreDevice(p, d, fleet.CapExec)"
+// arnes: a="verDetalle := true"
 func TestSinExecSeVeQueHayAlgoAutomaticoPeroNoQueHace(t *testing.T) {
 	s, _ := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal()))
 	soloMetrics := &Principal{
@@ -699,6 +738,9 @@ func registroQuePermiteSystemctl() *PrincipalRegistry {
 // sigue mandando su inventario de servicios, y ahí es donde uno quiere que algo actúe.
 //
 // Sabotaje que la hace fallar: mandar las políticas de servicio por el camino de la muestra.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="if pol.EsDeServicio() {"
+// arnes: a="if false {"
 func TestUnaPoliticaDeServicioActuaSinTelemetriaDelHost(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarDePrueba(t, s, "casa", "pc-gio")
@@ -775,6 +817,9 @@ func TestUnaPoliticaDeServicioActuaSinTelemetriaDelHost(t *testing.T) {
 // un host donde alguien escribió mal el nombre del servicio, y lo hace en silencio y para siempre.
 //
 // Sabotaje que la hace fallar: devolver true cuando el servicio no aparece en el inventario.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="\t// existe es la que se lleva puesto un host donde alguien escribió mal el nombre.\n\treturn false\n"
+// arnes: a="\t// existe es la que se lleva puesto un host donde alguien escribió mal el nombre.\n\treturn true\n"
 func TestUnServicioAusenteDelInventarioNoDisparaLaPolitica(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarDePrueba(t, s, "casa", "pc-gio")
