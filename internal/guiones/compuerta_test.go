@@ -25,6 +25,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"musubi/internal/arbol"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -409,25 +411,20 @@ func TestElSalteoEstaAcotadoALasPruebasQueCorrenUnaShell(t *testing.T) {
 	porNombre := map[string]map[string]*funcDePrueba{} // pkg -> nombre -> func
 	archivos := 0
 
-	err := filepath.WalkDir(raiz, func(ruta string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", ".claude", "vendor", "node_modules", "testdata":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), "_test.go") {
-			return nil
-		}
+	// EL ÁRBOL LO DICE GIT Y NO EL DIRECTORIO (A128): la lista de carpetas a saltear que había acá
+	// —`.git`, `.claude`, `vendor`, `node_modules`, `testdata`— no converge, y `.claude/worktrees/`
+	// son copias enteras del repo que esta guarda contaba como pruebas de este árbol.
+	pruebas, err := arbol.ConSufijo(raiz, "_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range pruebas {
+		ruta := filepath.Join(raiz, filepath.FromSlash(rel))
 		f, e := parser.ParseFile(fset, ruta, nil, 0)
 		if e != nil {
 			t.Errorf("%s no parsea (%v): esta guarda no puede mirar lo que no puede leer, y un archivo "+
 				"invisible acá es una prueba sin compuerta que nadie va a reclamar", ruta, e)
-			return nil
+			continue
 		}
 		archivos++
 		pkg := filepath.ToSlash(filepath.Dir(ruta)) + "|" + f.Name.Name
@@ -451,10 +448,6 @@ func TestElSalteoEstaAcotadoALasPruebasQueCorrenUnaShell(t *testing.T) {
 			analizarCuerpo(fd, alias, esLaCompuerta, info)
 			porNombre[pkg][info.nombre] = info
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("no se pudo recorrer el repo: %v", err)
 	}
 
 	// CONTROL DE QUE MIRÓ ALGO. Si el recorrido o el parseo se rompieran, las dos listas quedarían
@@ -574,24 +567,20 @@ func TestSoloLasPruebasImportanLaCompuerta(t *testing.T) {
 	raiz := filepath.Join("..", "..")
 	fset := token.NewFileSet()
 	revisados := 0
-	err := filepath.WalkDir(raiz, func(ruta string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
+	// El árbol lo dice git y no el directorio (A128), por lo mismo que arriba.
+	gos, err := arbol.ConSufijo(raiz, ".go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range gos {
+		if strings.HasSuffix(rel, "_test.go") {
+			continue
 		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", ".claude", "vendor", "node_modules", "testdata":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), ".go") || strings.HasSuffix(d.Name(), "_test.go") {
-			return nil
-		}
+		ruta := filepath.Join(raiz, filepath.FromSlash(rel))
 		revisados++
 		f, e := parser.ParseFile(fset, ruta, nil, parser.ImportsOnly)
 		if e != nil {
-			return nil
+			continue
 		}
 		for _, imp := range f.Imports {
 			v, _ := strconv.Unquote(imp.Path.Value)
@@ -602,10 +591,6 @@ func TestSoloLasPruebasImportanLaCompuerta(t *testing.T) {
 					"producto.", filepath.ToSlash(ruta), rutaDeLaCompuerta)
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("no se pudo recorrer el repo: %v", err)
 	}
 	if revisados < 50 {
 		t.Fatalf("se revisaron %d archivos .go que no son de prueba y el repo tiene muchos más: el "+

@@ -34,6 +34,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"musubi/internal/arbol"
 )
 
 // archivoDeReglas es la forma mínima de un archivo de reglas de Prometheus.
@@ -1185,25 +1187,23 @@ func TestNadieLeDiceAlOperadorQueDecideElDirectorioDeTrabajo(t *testing.T) {
 	// Un literal de cadena de Go, en una línea que no es comentario.
 	reLiteral := regexp.MustCompile(`"[^"]*"`)
 
+	// EL ÁRBOL LO DICE GIT Y NO EL DIRECTORIO (A128). Acá había una lista de carpetas a saltear
+	// —`.git`, `node_modules`, `worktrees`, `.claude`— que no converge: la copia de repo que
+	// aparezca mañana con otro nombre entra sola, y esta guarda acusaría literales de otra rama.
 	raiz := filepath.Join("..", "..")
+	gos, err := arbol.ConSufijo(raiz, ".go")
+	if err != nil {
+		t.Fatal(err)
+	}
 	revisados := 0
-	err := filepath.WalkDir(raiz, func(ruta string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
+	for _, rel := range gos {
+		if strings.HasSuffix(rel, "_test.go") {
+			continue
 		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "node_modules", "worktrees", ".claude":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), ".go") || strings.HasSuffix(d.Name(), "_test.go") {
-			return nil
-		}
+		ruta := filepath.Join(raiz, filepath.FromSlash(rel))
 		b, e := os.ReadFile(ruta)
 		if e != nil {
-			return nil
+			t.Fatalf("no pude leer %s: %v", rel, e)
 		}
 		revisados++
 		var literales []string
@@ -1229,13 +1229,9 @@ func TestNadieLeDiceAlOperadorQueDecideElDirectorioDeTrabajo(t *testing.T) {
 					"puede cambiar— en vez de la variable, que decide.\n"+
 					"Arreglo: nombrá la raíz resuelta y de dónde salió (`workspaceDirConOrigen`), o "+
 					"apuntá a donde eso se dice, en vez de afirmar una causa que este código no conoce.",
-					ruta, primera, m)
+					rel, primera, m)
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("recorriendo el repo: %v", err)
 	}
 	if revisados < 50 {
 		t.Fatalf("sólo se revisaron %d archivos .go: el recorrido no está mirando el repo y esta "+

@@ -66,7 +66,24 @@ REM
 REM POR RUTA EXACTA Y NO POR NOMBRE DE IMAGEN: en estas maquinas tambien corre la app de
 REM escritorio en AppData\Local\Programs\musubi\musubi.exe. Un `taskkill /IM musubi.exe`
 REM la cerraria de un saque, y el usuario no entenderia por que.
-powershell -NoProfile -Command "Get-Process ^| Where-Object { $_.Path -eq '%DIR%\musubi.exe' -or $_.Path -eq '%DIR%\musubi.exe.viejo' } ^| Stop-Process -Force -ErrorAction SilentlyContinue" >> "%LOG%" 2>&1
+REM EL CARET NO VA ADENTRO DE COMILLAS, Y ESTA LINEA LO APRENDIO A LOS GOLPES.
+REM
+REM cmd.exe consume el caret como escape SOLO fuera de comillas. Adentro de una cadena entre
+REM comillas dobles el pipe ya es literal, asi que el caret no hace falta -- y peor: viaja
+REM literal hasta PowerShell, que corta con: A positional parameter cannot be found that
+REM accepts argument, y ahi imprime el caret. O sea que este paso NO CORRIA: el matador de
+REM zombis estaba definido y desconectado desde el dia que se escribio, y el zombi que existe
+REM para matar quedaba vivo latiendo con la imagen vieja.
+REM
+REM Medido el 2026-09-19 en davantis-1 con dos .cmd identicos salvo el caret:
+REM   con caret --> PowerShell corta con el error de arriba y no mata a nadie
+REM   sin caret --> Count : 0, o sea que corre y filtra
+REM El cambio.log de esa misma maquina lo tenia escrito desde el 2026-09-11, justo arriba del
+REM LISTO: agente actualizado que lo tapaba.
+REM
+REM Sabotaje que lo vuelve a romper: reponer el caret delante de cualquiera de los dos pipes.
+REM Lo cubre TestElCambiadorNoEscapaConCaretDentroDeComillas.
+powershell -NoProfile -Command "Get-Process | Where-Object { $_.Path -eq '%DIR%\musubi.exe' -or $_.Path -eq '%DIR%\musubi.exe.viejo' } | Stop-Process -Force -ErrorAction SilentlyContinue" >> "%LOG%" 2>&1
 REM Un momento para que suelte el archivo. Windows deja RENOMBRAR un exe en uso, pero no
 REM sobreescribirlo, y el proceso tarda en morir.
 ping -n 6 127.0.0.1 >nul

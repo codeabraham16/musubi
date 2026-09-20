@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"musubi/internal/arbol"
 	"musubi/internal/config"
 )
 
@@ -194,41 +195,39 @@ func esquemaDe(t *testing.T, e *DbEngine) map[string]string {
 // arranque», que suena razonable— el servidor empezaría a abrir bases que nunca migró, y esta
 // optimización de PRUEBAS se volvería una decisión de PRODUCCIÓN que nadie tomó.
 //
-// Se comprueba barriendo el árbol y no confiando en que se acuerden.
+// Se comprueba barriendo el árbol y no confiando en que se acuerden — y el árbol lo dice GIT y no
+// el directorio: un `.go` sin trackear en el disco de quien corre esto no es del repo, y la lista
+// de carpetas a saltear que había acá («.git», «node_modules», «vendor») no converge nunca (A128).
 //
 // Sabotaje que la hace fallar: llamar a SembrarPlantillaDePruebas desde cualquier archivo que no
 // sea de prueba.
 func TestLaPlantillaDePruebasNoTieneLlamadorDeProduccion(t *testing.T) {
 	raiz := filepath.Join("..", "..")
+	gos, err := arbol.ConSufijo(raiz, ".go")
+	if err != nil {
+		t.Fatal(err)
+	}
 	vistos := 0
-	err := filepath.WalkDir(raiz, func(ruta string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	for _, rel := range gos {
+		if strings.HasSuffix(rel, "_test.go") {
+			continue
 		}
-		if d.IsDir() {
-			if n := d.Name(); n == ".git" || n == "node_modules" || n == "vendor" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(ruta, ".go") || strings.HasSuffix(ruta, "_test.go") {
-			return nil
-		}
+		ruta := filepath.Join(raiz, filepath.FromSlash(rel))
 		crudo, err := os.ReadFile(ruta)
 		if err != nil {
-			return err
+			t.Fatalf("no pude leer %s: %v", rel, err)
 		}
 		vistos++
 		texto := string(crudo)
 		if !strings.Contains(texto, "SembrarPlantillaDePruebas") {
-			return nil
+			continue
 		}
 		// El propio archivo que la define y el envoltorio `memtest` son los dos únicos lugares
 		// legítimos fuera de las pruebas. Se comparan por nombre de archivo para que mover la
 		// función a otro lado rompa la guarda en vez de aflojarla en silencio.
 		base := filepath.Base(ruta)
 		if base == "plantilla.go" || base == "memtest.go" {
-			return nil
+			continue
 		}
 		// Una MENCIÓN en un comentario no es una llamada; lo que se busca es la invocación.
 		if strings.Contains(texto, "SembrarPlantillaDePruebas(") {
@@ -238,10 +237,6 @@ func TestLaPlantillaDePruebasNoTieneLlamadorDeProduccion(t *testing.T) {
 				"  producción convertiría una optimización de PRUEBAS en una decisión de\n"+
 				"  PRODUCCIÓN que nadie tomó: el servidor abriría bases que nunca migró.", ruta)
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	// Si el barrido deja de encontrar archivos, pasaría vacío y en verde.
 	if vistos < 50 {

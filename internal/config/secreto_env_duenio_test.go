@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"musubi/internal/arbol"
 )
 
 // LA REGLA `<VAR>_FILE` TIENE DUEÑO: NADIE LEE UNA CREDENCIAL CON `os.Getenv` PELADO.
@@ -74,34 +76,35 @@ func TestNadieLeeUnaCredencialConGetenvPelado(t *testing.T) {
 	// `.musubi/backups/` —copias de rescate de worktrees, que no son codigo de esta rama— y de
 	// cualquier otro artefacto que caiga en el arbol. Un ofensor falso gasta el mismo tiempo que
 	// uno real y ademas ensena a ignorar la guarda.
-	raices := []string{filepath.Join("..", "..", "internal"), filepath.Join("..", "..", "cmd")}
+	// EL ÁRBOL LO DICE GIT Y NO EL DIRECTORIO (A128). Acá había un `filepath.Walk` sobre dos raíces
+	// con una lista de carpetas a saltear, y el comentario que la acompañaba decía el porqué: el
+	// árbol de worktrees de agentes es una COPIA del repo y multiplicaba cada hallazgo por 33. Esa
+	// lista no converge —hay que acordarse de la carpeta nueva que aparezca— mientras que
+	// «¿está trackeado?» ya lo contesta `.gitignore`. Una copia sin trackear deja de existir sola.
+	raiz := filepath.Join("..", "..")
+	gos, err := arbol.ConSufijo(raiz, ".go")
+	if err != nil {
+		t.Fatal(err)
+	}
 	var ofensores []string
 	archivosMirados := 0
 
-	for _, raiz := range raices {
-		err := filepath.Walk(raiz, func(ruta string, info os.FileInfo, err error) error {
+	for _, rel := range gos {
+		// Se miran los mismos dos árboles que antes, y ahora se dice en una condición en vez de
+		// en dos raíces con exclusiones: el resto del repo no es código Go de este programa.
+		if !strings.HasPrefix(rel, "internal/") && !strings.HasPrefix(rel, "cmd/") {
+			continue
+		}
+		if strings.HasSuffix(rel, "_test.go") {
+			continue
+		}
+		if _, ok := exentos[rel]; ok {
+			continue
+		}
+		{
+			crudo, err := os.ReadFile(filepath.Join(raiz, filepath.FromSlash(rel)))
 			if err != nil {
-				return nil // un directorio ilegible no puede apagar la guarda: sigue
-			}
-			if info.IsDir() {
-				// El árbol de worktrees de agentes es una copia del repo: mirarlo multiplicaría
-				// cada hallazgo por 33 y haría fallar por archivos que no son de esta rama.
-				base := info.Name()
-				if base == ".git" || base == ".claude" || base == "node_modules" || base == "specs" {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !strings.HasSuffix(ruta, ".go") || strings.HasSuffix(ruta, "_test.go") {
-				return nil
-			}
-			rel := filepath.ToSlash(strings.TrimPrefix(filepath.ToSlash(ruta), "../../"))
-			if _, ok := exentos[rel]; ok {
-				return nil
-			}
-			crudo, err := os.ReadFile(ruta)
-			if err != nil {
-				return nil
+				continue
 			}
 			archivosMirados++
 			for i, linea := range strings.Split(string(crudo), "\n") {
@@ -117,10 +120,6 @@ func TestNadieLeeUnaCredencialConGetenvPelado(t *testing.T) {
 					ofensores = append(ofensores, rel+":"+itoaLocal(i+1)+"  "+recortada)
 				}
 			}
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("no se pudo barrer %s: %v", raiz, err)
 		}
 	}
 
