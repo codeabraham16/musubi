@@ -39,6 +39,9 @@ func conExec(proyecto string) *Principal {
 // nunca responde, si la máquina se apaga: el PEDIDO queda auditado igual.
 //
 // Sabotaje que la hace fallar: encolar recién al recibir el resultado.
+// arnes: archivo="internal/mcp/methods_exec.go"
+// arnes: de="\ts.withWriteLock(func() {\n\t\tcmd, err = s.engine.EncolarComando(fleet.Comando{\n\t\t\tDeviceID: d.ID, ProjectID: proyecto, Principal: nombrePrincipal(p),\n\t\t\tOrigen: fleet.OrigenPersona,\n\t\t\tArgv:   args.Argv, Timeout: timeout,\n\t\t})\n\t})\n"
+// arnes: a=""
 func TestElPedidoQuedaAuditadoAunqueNadieLoEjecute(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConExec(t, s, "casa", "pc-gio")
@@ -70,6 +73,9 @@ func TestElPedidoQuedaAuditadoAunqueNadieLoEjecute(t *testing.T) {
 
 // F4 — sin `CapExec` sobre ESA máquina no se encola.
 // Sabotaje: quitar el PuedeSobreDevice de toolFleetExec.
+// arnes: archivo="internal/mcp/methods_exec.go"
+// arnes: de="!existe || !PuedeSobreDevice(p, d, fleet.CapExec)"
+// arnes: a="!existe"
 func TestSinCapacidadExecNoSeEncolaNada(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConExec(t, s, "casa", "pc-gio")
@@ -144,6 +150,9 @@ func TestElRechazoDeExecNoRevelaSiLaMaquinaExiste(t *testing.T) {
 
 // F5 — un comando se entrega SÓLO a la máquina a la que fue dirigido.
 // Sabotaje: que TomarComandos ignore el device_id.
+// arnes: archivo="internal/memory/comandos.go"
+// arnes: de="\t\t  WHERE device_id = ? AND estado = ? ORDER BY creado LIMIT ?`,\n\t\tdeviceID, string(fleet.EstadoPendiente), tope)"
+// arnes: a="\t\t  WHERE estado = ? ORDER BY creado LIMIT ?`,\n\t\tstring(fleet.EstadoPendiente), tope)"
 func TestUnComandoSoloLlegaASuMaquina(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	tokA := enrolarConExec(t, s, "casa", "maquina-a")
@@ -170,6 +179,9 @@ func TestUnComandoSoloLlegaASuMaquina(t *testing.T) {
 
 // F3 — el resultado sólo lo puede reportar la máquina dueña del comando.
 // Sabotaje: quitar la comparación de device_id en GuardarResultado.
+// arnes: archivo="internal/memory/comandos.go"
+// arnes: de="\tif dueno != deviceID {\n\t\treturn ErrComandoAjeno\n\t}\n"
+// arnes: a=""
 func TestUnaMaquinaNoPuedeEscribirLaBitacoraDeOtra(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConExec(t, s, "casa", "maquina-a")
@@ -196,7 +208,25 @@ func TestUnaMaquinaNoPuedeEscribirLaBitacoraDeOtra(t *testing.T) {
 }
 
 // F6 — revocar corta la cola. Es la ruta más peligrosa del track: el kill-switch tiene que valer.
-// Sabotaje: que el handler entregue la cola antes de resolver el token.
+// Sabotaje: que el UPDATE de RevocarDevice no toque ninguna fila.
+//
+// LA PROSA DECÍA OTRA COSA Y NO ENCIENDE NADA — medido el 2026-09-19 al mecanizarla. Nombraba
+// «que el handler entregue la cola antes de resolver el token», y neutralizar el `if !ok` del
+// latido deja esta guarda EN VERDE: hay una SEGUNDA compuerta más abajo (`if !actualizado`) que
+// la ataja. Las dos leen `revoked = 0` de la base, así que ningún corte en el handler la puede
+// encender: el único sitio es deshacer la ESCRITURA de la baja. Y hacen falta sus dos mitades —
+// dejar `revoked = 1` sola filtra igual, y dejar el token borrado solo tampoco resuelve—, por eso
+// el corte va sobre el WHERE y no sobre el SET.
+//
+// EL CORTE EVITA LAS COMILLAS SIMPLES, A PROPÓSITO, como el de `rotacion_vencida_sin_barrido_test.go`:
+// el `de` natural incluiría el campo del hash del token igualado a la cadena vacía, que en SQL se
+// escribe con dos comillas simples seguidas — y gofmt las convierte, adentro de un comentario de
+// doc, en una comilla tipográfica. La directiva quedaría apuntando a un literal que no existe, y
+// nadie lo vería: el censo valida el `de` contra el disco DESPUÉS de que gofmt ya pasó. Esta misma
+// advertencia se escribió primero con el literal adentro, y gofmt se lo comió en el acto.
+// arnes: archivo="internal/memory/devices.go"
+// arnes: de="revoked_at = ? WHERE id = ?"
+// arnes: a="revoked_at = ? WHERE id = ? AND 1 = 0"
 func TestUnDeviceRevocadoNoRecibeComandos(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	tok := enrolarConExec(t, s, "casa", "pc-gio")
@@ -221,6 +251,9 @@ func TestUnDeviceRevocadoNoRecibeComandos(t *testing.T) {
 // F10 — un comando VIEJO no se ejecuta. El peor pie de bala de una cola: el reinicio pedido en
 // una emergencia, ejecutándose una semana después sobre un estado distinto.
 // Sabotaje: quitar el UPDATE de vencimiento de TomarComandos.
+// arnes: archivo="internal/memory/comandos.go"
+// arnes: de="\tif _, err := tx.Exec(\n\t\t`UPDATE device_commands SET estado = ?, terminado = ?, error = ?\n\t\t  WHERE device_id = ? AND estado = ? AND creado < ?`,\n\t\tstring(fleet.EstadoExpirado), ahora.UTC().Format(time.RFC3339),\n\t\t\"venció antes de que el agente lo levantara\", deviceID, string(fleet.EstadoPendiente), limite,\n\t); err != nil {\n\t\treturn nil, fmt.Errorf(\"error al vencer comandos viejos: %w\", err)\n\t}\n"
+// arnes: a=""
 func TestUnComandoViejoVenceYNoSeEntrega(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	tok := enrolarConExec(t, s, "casa", "pc-gio")
@@ -293,6 +326,9 @@ func TestDosLatidosNoSeLlevanElMismoComando(t *testing.T) {
 
 // F2 — la bitácora es PERMANENTE, la salida CADUCA.
 // Sabotaje: que la poda borre la fila en vez de vaciar las columnas.
+// arnes: archivo="internal/memory/comandos.go"
+// arnes: de="UPDATE device_commands SET stdout"
+// arnes: a="DELETE FROM device_commands -- stdout"
 func TestLaPodaBorraLaSalidaYConservaLaBitacora(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	tok := enrolarConExec(t, s, "casa", "pc-gio")
@@ -374,6 +410,9 @@ func idsDeComandos(resp string) []string {
 // lee como «el cerebro no anda» cuando todo funciona.
 //
 // Sabotaje que la hace fallar: subir esperaMaxExec por encima del deadline del transporte.
+// arnes: archivo="internal/mcp/methods_exec.go"
+// arnes: de="const esperaMaxExec = 45 * time.Second"
+// arnes: a="const esperaMaxExec = 90 * time.Second"
 func TestLaEsperaDeExecNoSuperaAlTransporte(t *testing.T) {
 	const deadlineDelTransporte = 60 * time.Second // config service.request_timeout_seconds
 	if esperaMaxExec >= deadlineDelTransporte {
@@ -384,6 +423,9 @@ func TestLaEsperaDeExecNoSuperaAlTransporte(t *testing.T) {
 
 // Una máquina CAÍDA no hace esperar al llamador: se dice y se encola.
 // Sabotaje: quitar la guarda de EnLinea → un exec sobre una máquina apagada bloquea 45 s.
+// arnes: archivo="internal/mcp/methods_exec.go"
+// arnes: de="\tif !d.EnLinea(time.Now(), s.umbralEnLinea(d)) {\n\t\treturn encolarYVolver(\"la máquina no está latiendo, así que nadie va a levantar el comando ahora mismo. Queda encolado y vence en 15 min si el agente no vuelve.\")\n\t}\n"
+// arnes: a=""
 func TestExecSobreUnaMaquinaCaidaVuelveEnseguida(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConExec(t, s, "casa", "pc-apagada") // nunca latió
@@ -441,6 +483,9 @@ func TestUnTimeoutLargoSeEncolaEnVezDeBloquear(t *testing.T) {
 //
 // Sabotaje que la hace fallar: no rutear por tier → el comando se encola esperando un agente que
 // nunca va a existir.
+// arnes: archivo="internal/mcp/methods_exec.go"
+// arnes: de="\tif d.Tier == fleet.TierProtocolo {\n\t\treturn s.ejecutarEnTierB(d, cmd, timeout, base)\n\t}\n"
+// arnes: a=""
 func TestUnTierBSeEjecutaPorSSHYNoSeEncola(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
@@ -550,6 +595,9 @@ func TestUnTierBInalcanzableNoFiguraVivo(t *testing.T) {
 // funciona de uno que se ignora.
 //
 // Sabotaje que la hace fallar: volver a pasar `args.Device` en vez del id resuelto.
+// arnes: archivo="internal/mcp/methods_exec.go"
+// arnes: de="\tcrudos, err := s.engine.BitacoraDeComandos(proyecto, filtroID, tope*4)\n"
+// arnes: a="\tcrudos, err := s.engine.BitacoraDeComandos(proyecto, args.Device, tope*4)\n"
 func TestElFiltroPorMaquinaDeLaBitacoraDejaAfueraLaOtra(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConExec(t, s, "casa", "pc-gio")

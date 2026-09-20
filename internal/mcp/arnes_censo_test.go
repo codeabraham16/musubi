@@ -211,7 +211,12 @@ import (
 // Con la deuda en 581 y el techo todavía en 593, su sabotaje —que suma UNA sola ancla— llegaba a
 // 582 y no cruzaba nada. O sea que bajar el número no es contabilidad: es lo único que le devuelve
 // el filo, y el instrumento lo demuestra sin que haya que creerle a nadie.
-const anclasEnProsaAlDia = 581
+//
+// Y DE 581 A 570 EL 2026-09-19: las once anclas del eje de EJECUCIÓN REMOTA
+// (`internal/mcp/fleet_exec_test.go`), que es la superficie más cara del sistema — correr un
+// comando en la máquina de otro. Bajado en el MISMO commit, por lo que dice el párrafo de arriba:
+// la vez anterior el arnés cazó a esta guarda en verde por no hacerlo, y no hace falta repetirlo.
+const anclasEnProsaAlDia = 570
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
