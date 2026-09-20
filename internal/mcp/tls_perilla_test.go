@@ -108,23 +108,36 @@ func TestLaPerillaDeTLSDecideCorriendo(t *testing.T) {
 	}
 	bloque := resto[:j+4]
 
+	const hayProxy = `"Proxy":"http://127.0.0.1:7717"`
 	for _, c := range []struct {
-		nombre, postura, perilla, espera, porque string
+		nombre, postura, proxy, addr, perilla, espera, porque string
 	}{
-		{"no se pudo leer la config", "", "0", "DUDOSO",
+		{"no se pudo leer la config", "", "", "0.0.0.0:7717", "0", "DUDOSO",
 			"no saber qué sirve el cerebro no es «sirve TLS» ni «no sirve»: es no saber, y se arregla mirando"},
-		{"hay certificado configurado", "tls_cert_file:/etc/musubi/cert.pem", "0", "VERDE",
+		{"hay certificado configurado", "tls_cert_file:/etc/musubi/cert.pem", "", "0.0.0.0:7717", "0", "VERDE",
 			"con certificado el bearer viaja cifrado de extremo a extremo, y eso es el objetivo de la migración"},
-		{"claro, con la perilla APAGADA", "allow_insecure_token:true", "0", "TIBIO",
+		{"claro, con la perilla APAGADA", "allow_insecure_token:true", "", "0.0.0.0:7717", "0", "TIBIO",
 			"el estado de HOY está decidido y aceptado: reportarlo como divergencia dejaría la unidad en rojo todos los días por algo que nadie va a cambiar hoy"},
-		{"claro, con la perilla PRENDIDA", "allow_insecure_token:true", "1", "ROJO",
+		{"claro, con la perilla PRENDIDA", "allow_insecure_token:true", "", "0.0.0.0:7717", "1", "ROJO",
 			"ésta es la razón de ser de la perilla: prenderla convierte «el bearer viaja en claro» de salvedad de postura en DIVERGENCIA. Si acá no sale rojo, la perilla no cambia nada y la migración se puede declarar cerrada sin estarlo"},
-		{"claro desactivado sin certificado", "allow_insecure_token:false", "1", "VERDE",
+		{"claro desactivado sin certificado", "allow_insecure_token:false", "", "0.0.0.0:7717", "1", "VERDE",
 			"la rama de cierre tiene que seguir existiendo: sin ella el bloque sólo sabría acusar"},
+
+		// ── EL TLS TERMINADO POR DELANTE, que es el mundo REAL de musubi-server y que este bloque
+		// no veía hasta el 2026-09-19. Las tres posturas son distintas entre sí y ninguna se
+		// deduce de las de arriba.
+		{"proxy por delante y el cerebro SÓLO en loopback", "allow_insecure_token:true", hayProxy, "127.0.0.1:7717", "1", "VERDE",
+			"el bearer viaja cifrado y el puerto en claro NO SALE de la máquina: es el final de la migración, y tiene que dar verde incluso con la perilla prendida o prenderla sería imposible"},
+		{"proxy por delante pero el claro sigue abierto, perilla APAGADA", "allow_insecure_token:true", hayProxy, "0.0.0.0:7717", "0", "TIBIO",
+			"hay TLS disponible y el claro sigue abierto al tailnet: no es el estado inicial (ya hay por dónde migrar) ni el final (usar el proxy todavía es optativo). Si esto diera VERDE, una migración a medias se vería igual que una completa"},
+		{"proxy por delante pero el claro sigue abierto, perilla PRENDIDA", "allow_insecure_token:true", hayProxy, "0.0.0.0:7717", "1", "ROJO",
+			"exigir TLS con el puerto en claro todavía abierto es exactamente la divergencia que la perilla existe para nombrar: un agente sin migrar sigue mandando el bearer en claro y nada lo distingue de uno migrado"},
 	} {
 		t.Run(c.nombre, func(t *testing.T) {
 			completo := "rojo(){ echo ROJO; }\nverde(){ echo VERDE; }\ntibio(){ echo TIBIO; }\ndudoso(){ echo DUDOSO; }\n" +
 				"POSTURA_TLS=" + shQuote(c.postura) + "\nCFG_REMOTO=/etc/musubi/config.yaml\n" +
+				"PROXY_TLS=" + shQuote(c.proxy) + "\nADDR_CEREBRO=" + shQuote(c.addr) +
+				"\nPUERTO_CEREBRO=" + shQuote(c.addr[strings.LastIndex(c.addr, ":")+1:]) + "\n" +
 				"MUSUBI_EXIGIR_TLS=" + shQuote(c.perilla) + "\n" + bloque
 			salida, err := exec.Command("bash", "-c", completo).CombinedOutput()
 			if err != nil {
@@ -132,8 +145,8 @@ func TestLaPerillaDeTLSDecideCorriendo(t *testing.T) {
 			}
 			dicho := strings.TrimSpace(string(salida))
 			if dicho != c.espera {
-				t.Errorf("con POSTURA_TLS=%q y MUSUBI_EXIGIR_TLS=%q el bloque contestó %q y tiene que contestar %q.\n  %s",
-					c.postura, c.perilla, dicho, c.espera, c.porque)
+				t.Errorf("con POSTURA_TLS=%q, PROXY_TLS=%q, ADDR_CEREBRO=%q y MUSUBI_EXIGIR_TLS=%q el bloque contestó %q y tiene que contestar %q.\n  %s",
+					c.postura, c.proxy, c.addr, c.perilla, dicho, c.espera, c.porque)
 			}
 		})
 	}

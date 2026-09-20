@@ -1148,15 +1148,49 @@ if [ -n "$SSH_HOST" ]; then
 else
   POSTURA_TLS="$(grep -E '^[[:space:]]*(allow_insecure_token|tls_cert_file|tls_key_file)[[:space:]]*:' "$CFG_REMOTO" 2>/dev/null | tr -d ' ' || true)"
 fi
+# EL TLS PUEDE ESTAR TERMINADO POR DELANTE, Y ESTE CHEQUEO NO LO VEÍA (medido el 2026-09-19).
+#
+# Mirar sólo el config del cerebro contesta «¿el cerebro habla TLS?», y ésa NO es la pregunta: la
+# pregunta es si el bearer viaja cifrado. En `musubi-server` ya lo viaja desde hace tiempo —
+# `tailscale serve` sirve HTTPS en el 10000 y reenvía a `http://127.0.0.1:7717`, con el certificado
+# del tailnet que se renueva solo— y este bloque lo reportaba como transporte en claro.
+#
+# Peor: el propio mensaje de abajo mandaba a poner `tls_cert_file` en el cerebro, o sea que el
+# instrumento que MIDE la postura también RECOMENDABA la salida, y su recomendación heredaba su
+# punto ciego. Se planeó un proxy que ya estaba puesto.
+#
+# PERO UN PROXY POR DELANTE NO ALCANZA SOLO, y por eso se recolectan DOS cosas. Mientras el cerebro
+# siga escuchando en una dirección que no es loopback, el puerto en claro sigue abierto al tailnet y
+# cualquier agente puede seguir usándolo: el proxy es una opción, no una obligación. El verde llega
+# cuando el claro ya no sale de la máquina.
+ADDR_CEREBRO="$(corre_alla "grep -E '^[[:space:]]*addr[[:space:]]*:' $(printf '%q' "$CFG_REMOTO") 2>/dev/null | head -1 | tr -d ' \"'" | sed 's/^addr://')"
+PUERTO_CEREBRO="${ADDR_CEREBRO##*:}"
+# Se busca un handler de `tailscale serve` que reenvíe al puerto del cerebro en loopback. Se mira
+# el JSON y no la salida humana: la humana lista los puertos que sirven y NO a dónde reenvían, así
+# que no distingue el proxy del cerebro de cualquier otro proxy del nodo.
+PROXY_TLS=""
+if [ -n "$PUERTO_CEREBRO" ]; then
+  PROXY_TLS="$(corre_alla 'tailscale serve status --json 2>/dev/null' \
+    | tr -d ' ' | grep -o "\"Proxy\":\"http://127\.0\.0\.1:$PUERTO_CEREBRO\"" | head -1)"
+fi
+
 if [ -z "$POSTURA_TLS" ]; then
   dudoso "no se pudo leer $CFG_REMOTO: no sé si el cerebro sirve TLS (probá MUSUBI_CFG=<ruta>)"
 elif printf '%s' "$POSTURA_TLS" | grep -q '^tls_cert_file:.\+'; then
   verde "el cerebro tiene certificado configurado — el bearer viaja cifrado de extremo a extremo"
 elif printf '%s' "$POSTURA_TLS" | grep -q '^allow_insecure_token:true'; then
-  if [ "${MUSUBI_EXIGIR_TLS:-0}" = "1" ]; then
+  if [ -n "$PROXY_TLS" ] && printf '%s' "$ADDR_CEREBRO" | grep -qE '^(127\.0\.0\.1|localhost|\[::1\]):'; then
+    verde "el TLS lo termina un proxy por delante y el cerebro escucha SÓLO en loopback ($ADDR_CEREBRO) — el puerto en claro no sale de la máquina"
+  elif [ -n "$PROXY_TLS" ]; then
+    if [ "${MUSUBI_EXIGIR_TLS:-0}" = "1" ]; then
+      rojo "hay TLS por delante, pero el cerebro sigue escuchando en claro en $ADDR_CEREBRO y con MUSUBI_EXIGIR_TLS=1 eso es divergencia: mientras el puerto en claro esté abierto al tailnet, usar el proxy es optativo y un agente sin migrar no se distingue de uno migrado"
+    else
+      tibio "el TLS ya está terminado por delante (un proxy reenvía al $PUERTO_CEREBRO en loopback), pero el cerebro sigue escuchando en claro en $ADDR_CEREBRO. Falta lo último: migrar los agentes a la URL https del proxy con MUSUBI_BRAIN_TLS_NAME, atar el cerebro a 127.0.0.1 y recién ahí prender MUSUBI_EXIGIR_TLS=1"
+    fi
+  elif [ "${MUSUBI_EXIGIR_TLS:-0}" = "1" ]; then
     rojo 'allow_insecure_token: true con MUSUBI_EXIGIR_TLS=1 — se exigió TLS y el cerebro sirve HTTP en claro'
   else
-    tibio 'allow_insecure_token: true — el bearer viaja en texto plano (lo cifra el tailnet, no el transporte). Migrar: `tailscale cert` en el nodo, tls_cert_file/tls_key_file en el config, MUSUBI_BRAIN_TLS_NAME en los agentes, y prender MUSUBI_EXIGIR_TLS=1 acá'
+    tibio 'allow_insecure_token: true — el bearer viaja en texto plano (lo cifra el tailnet, no el transporte). Migrar: poner TLS por delante (`tailscale serve`) o un certificado en el cerebro, MUSUBI_BRAIN_TLS_NAME en los agentes, atar el cerebro a loopback, y prender MUSUBI_EXIGIR_TLS=1 acá'
   fi
 else
   verde 'allow_insecure_token no está en true'
