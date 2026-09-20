@@ -222,7 +222,13 @@ import (
 // la derivación de «en línea» y la forma de un reporte de servicio. Se eligió este paquete y no el
 // archivo más gordo de `internal/mcp` por una razón de instrumento: acá el arnés corre en segundos
 // y allá en minutos, así que las dieciocho se pudieron MEDIR una por una antes de escribirlas.
-const anclasEnProsaAlDia = 552
+//
+// Y DE 552 A LO QUE MIDE HOY, el mismo día: las catorce anclas del INVENTARIO DE SERVICIOS
+// (`internal/mcp/servicios_test.go`) — qué corre en cada máquina, que es de donde salen las
+// alertas. Dos de las catorce flotaban adentro del cuerpo de su prueba y llevan `prueba=`.
+// Esta rama había escrito 556 sobre su propio árbol, medido antes de que el lote de dominio de
+// flota bajara el techo a 552. Se recuenta sobre el integrado, como siempre.
+const anclasEnProsaAlDia = 538
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
