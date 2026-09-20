@@ -2,7 +2,6 @@ package fleet
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -311,7 +310,7 @@ func TestLoQueLlegaALaShellRemotaEsEjecutable(t *testing.T) {
 	// siempre hay un Linux (o un Android). Reemplaza a un `t.Skip` que saltaba también EN LINUX:
 	// sin bash, `go test` contestaba `ok` y el `--` de más habría vuelto a pasar sin que nadie se
 	// entere, que es exactamente el defecto que esta prueba existe para cazar.
-	guiones.Exigir(t, "reproduce lo que el sshd del otro lado le entrega a la shell de login, que en "+
+	compuerta := guiones.Exigir(t, "reproduce lo que el sshd del otro lado le entrega a la shell de login, que en "+
 		"esta flota es siempre un Linux o un Android", "bash")
 	const destino = "gio@nas"
 	casos := []struct {
@@ -343,7 +342,7 @@ func TestLoQueLlegaALaShellRemotaEsEjecutable(t *testing.T) {
 			}
 			// Exactamente lo que hace ssh con lo que sigue al destino.
 			remoto := strings.Join(args[i+1:], " ")
-			out, err := exec.Command("bash", "-c", remoto).CombinedOutput()
+			out, err := compuerta.Comando("bash", "-c", remoto).CombinedOutput()
 			if err != nil {
 				t.Fatalf("la shell remota NO pudo ejecutar %q: %v\nsalida: %s", remoto, err, out)
 			}

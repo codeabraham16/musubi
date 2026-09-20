@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,12 +52,12 @@ import (
 func TestUnBinarioConCodigoSinCommitearLoDiceEnSuVersion(t *testing.T) {
 	// Los dos `t.Skipf` de `exec.LookPath` que había acá salteaban TAMBIÉN EN LINUX: sin bash o sin
 	// go esta guarda no existía y `go test` contestaba `ok`. La compuerta los convierte en un fallo.
-	guiones.Exigir(t, "corre deploy/pruebas/sufijo-sucio.sh, que ejercita el guion de "+
+	compuerta := guiones.Exigir(t, "corre deploy/pruebas/sufijo-sucio.sh, que ejercita el guion de "+
 		"construcción de un servidor Linux y compila con go", "bash", "go", "awk", "sed", "grep")
 
 	arnes := filepath.Join("..", "..", "deploy", "pruebas", "sufijo-sucio.sh")
 	raiz := filepath.Join("..", "..")
-	salida, err := exec.Command("bash", arnes, raiz).CombinedOutput()
+	salida, err := compuerta.Comando("bash", arnes, raiz).CombinedOutput()
 	if err != nil {
 		t.Fatalf("el arnés del sufijo falló:\n%s", salida)
 	}

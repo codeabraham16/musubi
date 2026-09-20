@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -43,7 +42,7 @@ import (
 // arnes: arreglo_de="\" · \" linea; got=1"
 // arnes: arreglo_a="\" · \" substr(linea,1); got=1"
 func TestElMotivoSeComparaEnteroYNoPorSusPrimeros150(t *testing.T) {
-	guiones.Portable(t, "corre deploy/pruebas/motivo.awk con bash, igual que sabotaje.sh, y no saltea en ningún sistema", "bash")
+	compuerta := guiones.Portable(t, "corre deploy/pruebas/motivo.awk con bash, igual que sabotaje.sh, y no saltea en ningún sistema", "bash")
 
 	dir := t.TempDir()
 	escribir := func(nombre, cuerpo string) string {
@@ -65,7 +64,7 @@ func TestElMotivoSeComparaEnteroYNoPorSusPrimeros150(t *testing.T) {
 	motivoDe := func(cola string) string {
 		con := escribir("con-"+strings.Trim(cola, "*.")+".txt",
 			"--- FAIL: TestX (0.00s)\n    x_test.go:5: "+logDeControl+"\n    x_test.go:9: "+prefijo+cola+"\nFAIL\n")
-		out, err := exec.Command("bash", "-c", `awk -f "$0" "$1" "$2"`,
+		out, err := compuerta.Comando("bash", "-c", `awk -f "$0" "$1" "$2"`,
 			programa, filepath.ToSlash(base), filepath.ToSlash(con)).CombinedOutput()
 		if err != nil {
 			t.Fatalf("motivo.awk no corrió: %v\n%s", err, out)

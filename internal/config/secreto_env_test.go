@@ -3,13 +3,13 @@ package config
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
 	"musubi/internal/arbol"
+	"musubi/internal/guiones"
 )
 
 // fijarHome apunta el home del proceso a `dir` EN TODAS LAS PLATAFORMAS.
@@ -483,7 +483,7 @@ func TestLaPruebaDeComportamientoDeLaPrecedenciaSigueEnPie(t *testing.T) {
 			"y la mitad que decidió mal dos veces vive en bash.", enGit, err)
 	}
 
-	salida, err := exec.Command("git", "-C", filepath.Join("..", ".."), "ls-files", "-s", "deploy/pruebas/").Output()
+	salida, err := guiones.Herramienta(t, "git", "-C", filepath.Join("..", ".."), "ls-files", "-s", "deploy/pruebas/").Output()
 	if err != nil {
 		t.Fatalf("no se pudo leer el índice de git: %v", err)
 	}

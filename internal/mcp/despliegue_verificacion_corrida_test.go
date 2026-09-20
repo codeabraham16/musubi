@@ -43,7 +43,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -101,7 +100,7 @@ func (c corridaDeBloque) instaloEn(destino string) bool {
 func (c corridaDeBloque) instaloAlgo() bool { return len(c.instalados) > 0 }
 
 // correrArnes escribe y corre un guion de arnés en un directorio propio.
-func correrArnes(t *testing.T, dir string, lineas []string, entorno []string) corridaDeBloque {
+func correrArnes(t *testing.T, compuerta guiones.Compuerta, dir string, lineas []string, entorno []string) corridaDeBloque {
 	t.Helper()
 	caja := filepath.Join(dir, "caja")
 	if err := os.MkdirAll(caja, 0o755); err != nil {
@@ -111,7 +110,7 @@ func correrArnes(t *testing.T, dir string, lineas []string, entorno []string) co
 	if err := os.WriteFile(arnesP, []byte(strings.Join(lineas, "\n")+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("bash", arnesP)
+	cmd := compuerta.Comando("bash", arnesP)
 	cmd.Env = append(os.Environ(), append([]string{"CAJA=" + caja}, entorno...)...)
 	var salida bytes.Buffer
 	cmd.Stdout = &salida
@@ -234,7 +233,7 @@ func arnesDelPaso1(t *testing.T, dir, destino, stubs string) (string, string) {
 //
 // El hermano es MODO_SHA=otro: el .sha256 baja, tiene forma de sha256 y NO es el del binario.
 func TestNingunaVariableDeEntornoSalteaLaVerificacionDelBinario(t *testing.T) {
-	guiones.Exigir(t, "barre el paso 1 de deploy/install-musubi-brain.sh corriéndolo, y ese guion instala el binario del cerebro en un servidor Linux", "bash", "sha256sum", "install", "mktemp", "awk", "tr")
+	compuerta := guiones.Exigir(t, "barre el paso 1 de deploy/install-musubi-brain.sh corriéndolo, y ese guion instala el binario del cerebro en un servidor Linux", "bash", "sha256sum", "install", "mktemp", "awk", "tr")
 	const carga = "#!/bin/sh\necho \"musubi 0.0.0-de-prueba\"\n"
 	shaCarga := fmt.Sprintf("%x", sha256.Sum256([]byte(carga)))
 
@@ -258,7 +257,7 @@ func TestNingunaVariableDeEntornoSalteaLaVerificacionDelBinario(t *testing.T) {
 	// arnés roto daría verde en toda la barrida sin haber instalado nunca nada.
 	t.Run("control: con el checksum bueno instala", func(t *testing.T) {
 		dir, destino, prologo, bloque := preparar(t)
-		c := correrArnes(t, dir, []string{prologo, bloque},
+		c := correrArnes(t, compuerta, dir, []string{prologo, bloque},
 			[]string{"MODO_SHA=bueno", "SHA_BUENO=" + shaCarga, "CARGA=" + filepath.Join(dir, "carga")})
 		if _, err := os.Stat(destino); err != nil {
 			t.Fatalf("el camino verificado no instaló nada: el arnés está roto y los rojos de abajo no "+
@@ -280,7 +279,7 @@ func TestNingunaVariableDeEntornoSalteaLaVerificacionDelBinario(t *testing.T) {
 			for _, valor := range valoresDeEncendido {
 				t.Run(m.modo+"/"+v+"="+valor, func(t *testing.T) {
 					dir, destino, prologo, bloque := preparar(t)
-					c := correrArnes(t, dir, []string{prologo, bloque}, []string{
+					c := correrArnes(t, compuerta, dir, []string{prologo, bloque}, []string{
 						"MODO_SHA=" + m.modo,
 						"SHA_BUENO=" + shaCarga,
 						"CARGA=" + filepath.Join(dir, "carga"),
@@ -328,7 +327,7 @@ var losDosCaminosQueFrenan = []struct{ modo, porque string }{
 // forma de sha256 que no es el del zip es «medí y NO coincide», que es otra rama del guion. Barrer
 // una sola deja la otra sin nadie mirando.
 func TestNingunaVariableDeEntornoSalteaLaVerificacionDelRelay(t *testing.T) {
-	guiones.Exigir(t, "barre el bloque de binarios de deploy/rustdesk/install-rustdesk-relay.sh corriéndolo, y ese guion deja hbbs/hbbr como unidades systemd de un servidor Linux",
+	compuerta := guiones.Exigir(t, "barre el bloque de binarios de deploy/rustdesk/install-rustdesk-relay.sh corriéndolo, y ese guion deja hbbs/hbbr como unidades systemd de un servidor Linux",
 		"bash", "sha256sum", "unzip", "install", "mktemp", "awk", "find")
 	const rel = "rustdesk/install-rustdesk-relay.sh"
 	guion := leerGuionDeDespliegue(t, rel)
@@ -371,7 +370,7 @@ cp `+shQuote(cargaP)+` "$destino"
 	t.Run("control: con el sha del operador instala", func(t *testing.T) {
 		dir, destino, prologo := preparar(t, "9.9.9-sin-fila")
 		sha := fmt.Sprintf("%x", sha256.Sum256(zipFalso))
-		correrArnes(t, dir, []string{prologo, bloque}, []string{"RUSTDESK_SHA256=" + sha})
+		correrArnes(t, compuerta, dir, []string{prologo, bloque}, []string{"RUSTDESK_SHA256=" + sha})
 		if _, err := os.Stat(filepath.Join(destino, "hbbs")); err != nil {
 			t.Fatalf("el camino verificado no instaló hbbs: el arnés está roto y los rojos de abajo no "+
 				"valdrían nada: %v", err)
@@ -402,7 +401,7 @@ cp `+shQuote(cargaP)+` "$destino"
 			for _, valor := range valoresDeEncendido {
 				t.Run(cam.nombre+"/"+v+"="+valor, func(t *testing.T) {
 					dir, destino, prologo := preparar(t, "9.9.9-sin-fila")
-					r := correrArnes(t, dir, []string{prologo, bloque},
+					r := correrArnes(t, compuerta, dir, []string{prologo, bloque},
 						append(append([]string{}, cam.antes...), v+"="+valor))
 					if _, err := os.Stat(filepath.Join(destino, "hbbs")); err == nil {
 						t.Errorf("con %s=%s y %s, hbbs quedó INSTALADO sin que nadie comparara nada — y "+
@@ -433,7 +432,7 @@ cp `+shQuote(cargaP)+` "$destino"
 // camino de «no coincide» — o sea, calculó el sha de un binario que nunca debió tocar y le contó
 // al operador la historia equivocada.
 func TestCuandoNoPudoMedirElGuionFrenaAntesDeMirarElBinario(t *testing.T) {
-	guiones.Exigir(t, "corre el paso 1 de deploy/install-musubi-brain.sh para leer el diagnóstico que imprime, y ese guion es de un servidor Linux", "bash", "sha256sum", "install", "mktemp", "awk", "tr")
+	compuerta := guiones.Exigir(t, "corre el paso 1 de deploy/install-musubi-brain.sh para leer el diagnóstico que imprime, y ese guion es de un servidor Linux", "bash", "sha256sum", "install", "mktemp", "awk", "tr")
 	const carga = "#!/bin/sh\necho \"musubi 0.0.0-de-prueba\"\n"
 	shaCarga := fmt.Sprintf("%x", sha256.Sum256([]byte(carga)))
 	const shaCeros = "0000000000000000000000000000000000000000000000000000000000000000"
@@ -501,7 +500,7 @@ func TestCuandoNoPudoMedirElGuionFrenaAntesDeMirarElBinario(t *testing.T) {
 			if c.binSha != "" {
 				entorno = append(entorno, "MUSUBI_BIN_SHA256="+c.binSha)
 			}
-			r := correrArnes(t, dir, []string{prologo, bloque}, entorno)
+			r := correrArnes(t, compuerta, dir, []string{prologo, bloque}, entorno)
 
 			if _, err := os.Stat(destino); err == nil {
 				t.Fatalf("el binario quedó instalado y no había con qué verificarlo:\n%s", r.salida)
@@ -565,7 +564,7 @@ func losGuionesDerivados() []guionDerivado {
 // Acá se corre el bloque de verdad. El archivo bueno es el del repo —cuyo sha ES el pin, y eso lo
 // custodian las otras dos pruebas—, y el malo es ese mismo archivo con un byte más.
 func TestLosGuionesDerivadosNoSeInstalanSinVerificar(t *testing.T) {
-	guiones.Exigir(t, "corre los pasos 5b y 5c de deploy/install-musubi-brain.sh, que instalan guiones y unidades systemd en un servidor Linux", "bash", "sha256sum", "mktemp", "awk", "tr")
+	compuerta := guiones.Exigir(t, "corre los pasos 5b y 5c de deploy/install-musubi-brain.sh, que instalan guiones y unidades systemd en un servidor Linux", "bash", "sha256sum", "mktemp", "awk", "tr")
 	const rel = "install-musubi-brain.sh"
 	guion := leerGuionDeDespliegue(t, rel)
 
@@ -647,7 +646,7 @@ cp `+shQuote(cuerpo)+` "$destino"
 						"BACKUP_TIMER=" + shQuote(filepath.Join(dir, "musubi-backup.timer")),
 					}, "\n")
 
-					r := correrArnes(t, dir, []string{prologo, bloque}, nil)
+					r := correrArnes(t, compuerta, dir, []string{prologo, bloque}, nil)
 
 					if r.instaloEn(destino) != c.instala {
 						t.Errorf("%s\n  %s\n  se instaló: %v (se esperaba %v)\n  el guion salió con: %v\n  salida:\n%s",
@@ -714,7 +713,7 @@ func tarDePrometheus(t *testing.T, nombre string) []byte {
 // la comparación; y con el `die` borrado se instala igual. Un vacío tiene que significar «no pude
 // medir», nunca «medí y está bien».
 func TestPrometheusNoSeInstalaSinVerificar(t *testing.T) {
-	guiones.Exigir(t, "corre el paso 2 de deploy/prometheus/install-musubi-prometheus.sh, que instala prometheus/promtool como servicio de un servidor Linux", "bash", "sha256sum", "tar", "mktemp", "awk")
+	compuerta := guiones.Exigir(t, "corre el paso 2 de deploy/prometheus/install-musubi-prometheus.sh, que instala prometheus/promtool como servicio de un servidor Linux", "bash", "sha256sum", "tar", "mktemp", "awk")
 	const rel = "prometheus/install-musubi-prometheus.sh"
 	guion := leerGuionDeDespliegue(t, rel)
 	bloque := bloqueEntreMarcas(t, guion, rel, "# ── 2. Binarios de Prometheus", "# ── 3. Directorios")
@@ -788,7 +787,7 @@ esac
 				"ARCH=" + arch,
 			}, "\n")
 
-			r := correrArnes(t, dir, []string{prologo, bloque},
+			r := correrArnes(t, compuerta, dir, []string{prologo, bloque},
 				[]string{"PAQUETE=" + paqueteP, "SUMAS=" + sumasP})
 
 			if r.instaloAlgo() != c.instala {
@@ -823,7 +822,7 @@ esac
 // exigencia de root (`[[ $EUID -eq 0 ]]`), que no se puede satisfacer en una prueba y no decide
 // nada sobre el checksum. La consecuencia que se mide es si el guion SIGUE: si sigue, despliega.
 func TestElRedespliegueNoAceptaUnShaQueSaleDelBinarioQueVerifica(t *testing.T) {
-	guiones.Exigir(t, "corre el tramo de argumentos de deploy/redesplegar-cerebro.sh, que reemplaza como root el binario del cerebro en un servidor Linux", "bash", "sha256sum", "cut")
+	compuerta := guiones.Exigir(t, "corre el tramo de argumentos de deploy/redesplegar-cerebro.sh, que reemplaza como root el binario del cerebro en un servidor Linux", "bash", "sha256sum", "cut")
 	const rel = "redesplegar-cerebro.sh"
 	guion := leerGuionDeDespliegue(t, rel)
 	argumentos := bloqueEntreMarcas(t, guion, rel, `NUEVO="${1:-}"`, `DESTINO=`)
@@ -877,7 +876,7 @@ func TestElRedespliegueNoAceptaUnShaQueSaleDelBinarioQueVerifica(t *testing.T) {
 			if err := os.WriteFile(arnesP, []byte(strings.Join(arnes, "\n")+"\n"), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.Command("bash", append([]string{arnesP}, args...)...)
+			cmd := compuerta.Comando("bash", append([]string{arnesP}, args...)...)
 			var salida bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &salida, &salida
 			err := cmd.Run()

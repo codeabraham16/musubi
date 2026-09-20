@@ -8,6 +8,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **La compuerta de guiones ahora CONSTRUYE el comando, y con eso la guarda de alcance pasó de
+  preguntar N cosas a preguntar una** (A127, cerrado). Las dos mitades de la equivalencia —quien
+  ejecuta una shell pasa por la compuerta, y quien pasa por la compuerta ejecuta una shell— se
+  contestaban leyendo el árbol sintáctico, y eso obliga a reconocer «esta llamada arranca una
+  shell» en cualquiera de las infinitas formas de escribir el nombre de un programa en Go: una
+  ronda anterior cerró once formas y aparecieron catorce. `Exigir`, `Portable` y `Unix` devuelven
+  ahora una `Compuerta`, y el `*exec.Cmd` de una shell **sólo** se consigue como método de ella;
+  `guiones.Herramienta` cubre lo que no es shell (`git`, `go`, `df`, el propio binario de prueba).
+  Así, «¿pasó por la compuerta?» deja de tener respuesta negativa escribible —la compuerta viaja
+  con el comando— y «¿es una shell?» se contesta en runtime, con el string en la mano, donde da
+  igual si vino de un literal, de un `const`, de un campo o de una concatenación. A la guarda le
+  queda `TestNingunaPruebaLanzaUnProcesoPorFueraDeLaCompuerta`, que pregunta si alguien nombró
+  `exec.Command` y **no interpreta ni un argumento**. *Las tres fugas del cabo se midieron una por
+  una: el `if false` es hoy un **error de compilación**; la shell por `const` de paquete y la shell
+  adentro de una tabla `map[string]func(*testing.T)` se sembraron en un `_test.go` real y quedaron
+  **nombradas con archivo y línea**.* Medido: 50 llamadas directas a `exec.Command`/`CommandContext`
+  en pruebas → **0**; 665 archivos parseados, 39 lanzamientos por el ayudante, en 33 archivos. El
+  detector viejo —grafo de llamadas, dominancia, `esLiteralDeShell`— se borró entero.
 - **La guarda de alcance de la compuerta de guiones preguntaba si la compuerta ESTABA ESCRITA, no
   si gateaba** (A127, primera mitad). `TestElSalteoEstaAcotadoALasPruebasQueCorrenUnaShell` arma el
   grafo de llamadas y exige que toda prueba que ejecute una shell pase por `guiones.Exigir`,
@@ -21,7 +39,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   la regla pedía que la compuerta fuera sentencia del primer nivel del cuerpo y acusaba a **once
   llamadas sanas** —las sondas de la propia compuerta, que la ponen adentro de su `t.Run` junto con
   la shell—: se corrigió la regla en vez de exceptuarlas.* Sigue abierto en A127 que una shell
-  nombrada por un `const` de paquete es invisible para el detector, medido con el mismo control.
+  nombrada por un `const` de paquete era invisible para el detector; eso lo cierra la entrada de
+  arriba, que reemplazó al detector entero.
 - **`verificar-despliegue.sh` se terminaba a la mitad cuando Prometheus no contestaba, y con él se
   iban cinco secciones y el veredicto entero** (A126). La sección «reglas de alerta» salía con
   `exit 2` si no podía leer las reglas cargadas. El veredicto era el correcto —«no vi» no es «está

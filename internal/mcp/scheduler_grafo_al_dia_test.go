@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -13,6 +12,7 @@ import (
 
 	"musubi/internal/config"
 	"musubi/internal/embedding"
+	"musubi/internal/guiones"
 	"musubi/internal/memory"
 	"musubi/internal/memory/memtest"
 )
@@ -367,7 +367,7 @@ func TestElSelloDelCommitNoAvanzaConFallidos(t *testing.T) {
 
 func commitCorto(t *testing.T, dir string) string {
 	t.Helper()
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "--short", "HEAD").Output()
+	out, err := guiones.Herramienta(t, "git", "-C", dir, "rev-parse", "--short", "HEAD").Output()
 	if err != nil {
 		t.Fatalf("git rev-parse: %v", err)
 	}

@@ -36,11 +36,12 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"musubi/internal/guiones"
 )
 
 // transporte devuelve la función que entrega un cuerpo JSON-RPC y trae la respuesta cruda. Dos
@@ -59,7 +60,7 @@ func transporte(t *testing.T, url, token string) func([]byte) ([]byte, error) {
 				return nil, err
 			}
 			f.Close()
-			cmd := exec.CommandContext(t.Context(), curl, "--max-time", "90", "-s", "-X", "POST", url+"/mcp",
+			cmd := guiones.HerramientaCtx(t.Context(), t, curl, "--max-time", "90", "-s", "-X", "POST", url+"/mcp",
 				"-H", "Content-Type: application/json", "-H", "Authorization: Bearer "+token, "-d", "@"+f.Name())
 			out, err := cmd.Output()
 			if err != nil {

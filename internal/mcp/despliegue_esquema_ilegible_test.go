@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -55,7 +54,7 @@ import (
 // no coincide y SÍ tiene que volver atrás), una guarda que impidiera volver atrás SIEMPRE pasaría
 // por buena, y eso sería mucho peor que el defecto que cierra.
 func TestNoPoderLeerElEsquemaNoTiraAbajoElDespliegue(t *testing.T) {
-	guiones.Exigir(t, "corre el tramo de verificación de migración de deploy/redesplegar-cerebro.sh, que decide si se RESTAURA la base del cerebro central sobre un servidor Linux", "bash")
+	compuerta := guiones.Exigir(t, "corre el tramo de verificación de migración de deploy/redesplegar-cerebro.sh, que decide si se RESTAURA la base del cerebro central sobre un servidor Linux", "bash")
 
 	const rel = "redesplegar-cerebro.sh"
 	guion := leerGuionDeDespliegue(t, rel)
@@ -137,7 +136,7 @@ func TestNoPoderLeerElEsquemaNoTiraAbajoElDespliegue(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			salida, _ := exec.Command("bash", arnesP).CombinedOutput()
+			salida, _ := compuerta.Comando("bash", arnesP).CombinedOutput()
 			_, err := os.Stat(marca)
 			volvio := err == nil
 

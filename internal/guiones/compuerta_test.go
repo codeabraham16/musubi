@@ -18,7 +18,6 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -104,9 +103,9 @@ func TestLosSistemasDondeCadaModoMideSonLosQueSeDeclaran(t *testing.T) {
 func TestLaCompuertaNuncaSalteaEnLinux(t *testing.T) {
 	siguio := false
 	t.Run("sonda", func(t *testing.T) {
-		Exigir(t, "la sonda de la propia compuerta ejecuta bash para comprobar que no saltea", "bash")
+		c := Exigir(t, "la sonda de la propia compuerta ejecuta bash para comprobar que no saltea", "bash")
 		siguio = true
-		if err := exec.Command("bash", "-c", ":").Run(); err != nil {
+		if err := c.Comando("bash", "-c", ":").Run(); err != nil {
 			t.Fatalf("la compuerta dejó pasar y bash no se pudo ejecutar: %v", err)
 		}
 	})
@@ -161,9 +160,9 @@ func elArnesSeSostieneAca() bool {
 func TestLaCompuertaUnixNoSalteaDondeElArnesSeSostiene(t *testing.T) {
 	siguio := false
 	t.Run("sonda", func(t *testing.T) {
-		Unix(t, "la sonda del modo Unix ejecuta bash para comprobar que no saltea ni en linux ni en macOS", "bash")
+		c := Unix(t, "la sonda del modo Unix ejecuta bash para comprobar que no saltea ni en linux ni en macOS", "bash")
 		siguio = true
-		if err := exec.Command("bash", "-c", ":").Run(); err != nil {
+		if err := c.Comando("bash", "-c", ":").Run(); err != nil {
 			t.Fatalf("la compuerta dejó pasar y bash no se pudo ejecutar: %v", err)
 		}
 	})
@@ -218,13 +217,27 @@ func TestAyudanteDeUsoIndebido(t *testing.T) {
 		Unix(t, "declara una herramienta inexistente en primer lugar para que saltearse el principio de la lista se vea", "musubi-herramienta-inexistente-zz", "bash")
 	case "unix-falta-la-ultima":
 		Unix(t, "declara una herramienta inexistente en último lugar para que saltearse el final de la lista se vea", "bash", "musubi-herramienta-inexistente-zz")
+	// LOS CUATRO DE A127. La equivalencia que antes se perseguía por AST —quien ejecuta una shell
+	// pasa por la compuerta, y quien pasa por la compuerta ejecuta una shell— hoy se contesta acá,
+	// sobre el valor y al final de la prueba. Si estos `t.Fatalf` fueran decorativos, la mudanza
+	// del AST al runtime habría cambiado una pregunta que no converge por ninguna pregunta.
+	case "comando-no-es-shell":
+		c := Exigir(t, "le pide a la compuerta un comando que no es una shell, que es para lo que existe Herramienta", "bash")
+		c.Comando("git", "status")
+	case "comando-no-declarada":
+		c := Exigir(t, "ejecuta una shell que la compuerta nunca declaró, así que su promesa no cubre nada", "bash")
+		c.Comando("sh", "-c", ":")
+	case "herramienta-es-shell":
+		Herramienta(t, "bash", "-c", ":")
+	case "compuerta-sin-usar":
+		Exigir(t, "llama a la compuerta y no ejecuta ningún guion, que es el t.Skip disfrazado", "bash")
 	default:
 		// En una corrida normal pasa por la compuerta y ejecuta una shell como cualquiera de las
 		// pruebas que ésta custodia. No es adorno: así queda del lado correcto de la guarda de
 		// alcance de más abajo SIN NECESITAR UNA EXCEPCIÓN, y una lista de excepciones es
 		// exactamente por donde una guarda como ésta se vacía con el tiempo.
-		Exigir(t, "el ayudante ejecuta bash igual que las pruebas que esta compuerta custodia", "bash")
-		if err := exec.Command("bash", "-c", ":").Run(); err != nil {
+		c := Exigir(t, "el ayudante ejecuta bash igual que las pruebas que esta compuerta custodia", "bash")
+		if err := c.Comando("bash", "-c", ":").Run(); err != nil {
 			t.Fatalf("no se pudo ejecutar bash: %v", err)
 		}
 	}
@@ -291,10 +304,23 @@ func TestUnUsoIndebidoDeLaCompuertaEsUnFallo(t *testing.T) {
 			"guiones.Unix no miró la PRIMERA herramienta declarada", dondeMideUnix},
 		{"Unix saltea el final de la lista", "unix-falta-la-ultima", "musubi-herramienta-inexistente-zz",
 			"guiones.Unix no miró la ÚLTIMA herramienta declarada", dondeMideUnix},
+		// A127 · LAS DOS MITADES DE LA EQUIVALENCIA, YA NO POR AST SINO SOBRE EL VALOR.
+		{"la compuerta construye algo que no es una shell", "comando-no-es-shell", "NO es una shell",
+			"la compuerta construyó un comando que no es una shell. Es la mitad que impide que se " +
+				"la use para acotar a linux una prueba que no corre ningún guion", dondeMideExigir},
+		{"la compuerta construye una shell que no declaró", "comando-no-declarada", "NO declaró",
+			"la compuerta ejecutó una shell que no estaba en sus herramientas. Lo que promete es " +
+				"que en esta plataforma existe lo que la prueba usa, y así no cubre nada", dondeMideExigir},
+		{"el ayudante sin compuerta acepta una shell", "herramienta-es-shell", "ES una shell",
+			"guiones.Herramienta dejó lanzar una shell sin gatear: sería la puerta de atrás para " +
+				"saltarse la compuerta, y la dejaría existiendo de adorno", siempre},
+		{"la compuerta se llama y no se usa", "compuerta-sin-usar", "NINGÚN guion se ejecutó",
+			"se llamó a la compuerta sin ejecutar ningún guion y nadie dijo nada: es el t.Skip de " +
+				"propósito general disfrazado, que apaga windows y macOS a cambio de nada", dondeMideExigir},
 	}
 	for _, c := range casos {
 		t.Run(c.nombre, func(t *testing.T) {
-			cmd := exec.Command(os.Args[0], "-test.run=^TestAyudanteDeUsoIndebido$", "-test.v")
+			cmd := Herramienta(t, os.Args[0], "-test.run=^TestAyudanteDeUsoIndebido$", "-test.v")
 			cmd.Env = append(os.Environ(), sobreUsoIndebido+"="+c.valor)
 			salida, err := cmd.CombinedOutput()
 
@@ -328,234 +354,215 @@ func TestUnUsoIndebidoDeLaCompuertaEsUnFallo(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// (3) EL ALCANCE: quien saltea corre una shell, y quien corre una shell saltea
+// (3) EL ALCANCE: NINGUNA PRUEBA LANZA UN PROCESO POR FUERA DE ESTE PAQUETE
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-// shells — los nombres de programa que SON una shell. Lo que decide es el nombre base del
-// ejecutable que se le pasa a exec.Command, no un comentario ni el nombre de la prueba.
-var shells = map[string]bool{
-	"sh": true, "bash": true, "dash": true, "zsh": true, "ksh": true, "ash": true,
-}
+// losLanzadores son las funciones de `os/exec` que CONSTRUYEN un proceso. La lista es corta
+// porque la stdlib es la que es, y está MEDIDA sobre este repo: no hay `os.StartProcess`, ni
+// `syscall.Exec`, ni literales `exec.Cmd{}` en ninguna prueba.
+//
+// ES UNA ENUMERACIÓN Y ACÁ SÍ CONVERGE, que es la distinción que costó A127. Enumerar «las formas
+// de escribir el nombre de una shell en Go» no converge: son infinitas, y una ronda que cerró
+// once destapó catorce. Enumerar «las funciones de la stdlib que lanzan un proceso» sí: es un
+// hecho del mundo, no una sintaxis. Si Go agrega una, la agrega una vez y para siempre.
+var losLanzadores = []string{"Command", "CommandContext"}
 
-const rutaDeLaCompuerta = "musubi/internal/guiones"
+// TestNingunaPruebaLanzaUnProcesoPorFueraDeLaCompuerta — la guarda de alcance, y ahora pregunta
+// UNA SOLA COSA.
+//
+// LO QUE HABÍA ANTES, Y POR QUÉ NO PODÍA FUNCIONAR. Esta guarda armaba el grafo de llamadas de
+// cada paquete y exigía la equivalencia en los dos sentidos: quien ejecuta una shell llama a la
+// compuerta, y quien llama a la compuerta ejecuta una shell. Las dos mitades apoyaban en la misma
+// pregunta —«¿ESTA llamada arranca una shell?»— contestada sobre el árbol sintáctico, y esa
+// pregunta no converge. Tres fugas quedaron medidas con control positivo: la compuerta adentro de
+// un `if false`, la shell nombrada por un `const` de paquete, y la shell adentro de una tabla
+// `map[string]func(*testing.T)`. La primera se cerró enseñándole DOMINANCIA; las otras dos no,
+// porque la salida no era la forma número N+1.
+//
+// LO QUE CAMBIÓ NO ES LA RESPUESTA SINO DÓNDE VIVE LA PREGUNTA (ver el bloque A127 de
+// compuerta.go). Hoy el `*exec.Cmd` de una shell sólo se consigue como método de lo que la
+// compuerta DEVUELVE, así que «¿esto pasó por la compuerta?» ya no se contesta: no hay dónde
+// escribir un no. Y «¿esto es una shell?» se contesta en runtime, con el string en la mano, donde
+// da igual si vino de un literal, de un `const`, de un campo o de una concatenación.
+//
+// A ESTA GUARDA LE QUEDA LO QUE SÍ ES SINTÁCTICO: que nadie nombre `exec.Command` en una prueba.
+// No hay que interpretar ni un argumento. Y no hay excepciones que enumerar —ni siquiera para
+// este paquete—, porque el ayudante vive en `compuerta.go`, que no es un `_test.go`.
+//
+// EL CONTROL QUE NO PUEDE ENMUDECER NO DEPENDE DEL ÁRBOL. Una guarda que espera CERO tiene el
+// problema de que «medí y no hay» y «no pude medir» se escriben igual. Acá el reconocedor se
+// prueba a sí mismo contra dos fuentes de mentira que viven en esta misma función: una que lanza
+// procesos —tiene que encontrar los dos— y una que usa el ayudante —no tiene que encontrar
+// ninguno—. Si el reconocedor se rompe, esa comprobación se cae aunque el repo esté impecable.
+//
+// Sabotaje verificado que la pone roja: devolverle a una prueba su `exec.Command` directo. Se
+// eligió `firmador_e2e_test.go` porque SIGUE IMPORTANDO `os/exec` para un `LookPath`, así que la
+// mutación COMPILA — un sabotaje que no compila da rojo por el build y no por esta guarda.
+// arnes: archivo="internal/selfupdate/firmador_e2e_test.go"
+// arnes: de="salida, err := compuerta.Comando(\"bash\", guion, \"0.140.0\", clave, dir).CombinedOutput()"
+// arnes: a="salida, err := exec.Command(\"bash\", guion, \"0.140.0\", clave, dir).CombinedOutput()"
+func TestNingunaPruebaLanzaUnProcesoPorFueraDeLaCompuerta(t *testing.T) {
+	// EL RECONOCEDOR SE PRUEBA ANTES DE CREERLE, y contra fuentes que no salen del disco: si esto
+	// pasara por el árbol real, un árbol vacío dejaría el control tan mudo como a la guarda.
+	const fuenteQueLanza = `package x
+import "os/exec"
+func A() { _ = exec.Command("bash", "-c", ":") }
+func B() { _ = exec.CommandContext(nil, "sh", "-c", ":") }
+`
+	const fuenteSana = `package x
+import "musubi/internal/guiones"
+func A(c guiones.Compuerta, t T) { _ = c.Comando("bash", "-c", ":"); _ = guiones.Herramienta(t, "git", "status") }
+`
+	ctrl := token.NewFileSet()
+	for _, caso := range []struct {
+		nombre    string
+		fuente    string
+		esperados int
+	}{
+		{"una fuente que lanza procesos", fuenteQueLanza, 2},
+		{"una fuente que usa el ayudante", fuenteSana, 0},
+	} {
+		f, err := parser.ParseFile(ctrl, "control.go", caso.fuente, 0)
+		if err != nil {
+			t.Fatalf("el control %q no parsea: %v", caso.nombre, err)
+		}
+		if n := len(lanzamientosDirectos(ctrl, f)); n != caso.esperados {
+			t.Fatalf("EL RECONOCEDOR DE ESTA GUARDA ESTÁ ROTO: sobre %s encontró %d lanzamiento(s) y "+
+				"tenían que ser %d.\n"+
+				"  Sin esto, un repo impecable y un reconocedor ciego dan el mismo verde. Arreglá "+
+				"`lanzamientosDirectos` antes de creerle a nada de lo que sigue.",
+				caso.nombre, n, caso.esperados)
+		}
+	}
 
-// losModosDeLaCompuerta son los nombres que cuentan como «esta prueba pasó por la compuerta».
-//
-// ESTÁ ESCRITO UNA SOLA VEZ a propósito. Cuando eran dos, la lista vivía en cuatro lados —dos
-// condiciones del detector, el comentario del campo y el mensaje de error— y agregar el tercero
-// habría dejado tres de esos cuatro mintiendo: el detector no lo reconocería y seguiría pidiendo
-// compuerta a pruebas que ya la tienen. Es la forma exacta que este repo persigue con nombre
-// propio: la regla escrita en N lugares envejece en N-1.
-var losModosDeLaCompuerta = []string{"Exigir", "Portable", "Unix"}
-
-// funcDePrueba — lo que la guarda sabe de una función de un paquete de prueba.
-type funcDePrueba struct {
-	pkg      string // directorio + paquete: el ámbito donde se resuelven las llamadas
-	nombre   string
-	pos      string
-	esTest   bool
-	shell    bool // ejecuta una shell EN SU PROPIO cuerpo
-	compuert bool // la compuerta GATEA: sentencia incondicional del cuerpo y antes de la shell
-	gateEsc  bool // la compuerta está ESCRITA en alguna parte del cuerpo, gatee o no
-	llama    []string
-}
-
-// TestElSalteoEstaAcotadoALasPruebasQueCorrenUnaShell — la guarda de alcance, en los dos sentidos.
-//
-// EL PROBLEMA QUE RESUELVE: una compuerta de salteo es una herramienta afilada. Mañana alguien
-// tiene una prueba que falla en macOS por un motivo REAL —un bug del producto en darwin— y la
-// forma más corta de ponerla en verde es llamar a `guiones.Exigir`. Eso taparía un defecto de
-// verdad, y el mensaje del salteo hablaría con toda seguridad de guiones de shell que esa prueba
-// nunca ejecutó.
-//
-// NO SE PREGUNTA POR UN TEXTO. Este repo ya se comió siete guardas de grep satisfechas por un
-// comentario, un mensaje de error o la línea vecina. Acá se PARSEA el paquete, se arma el grafo de
-// llamadas y se pregunta por lo que DECIDE: ¿hay, alcanzable desde esta prueba, un
-// `exec.Command` cuyo programa es una shell?
-//
-// Y SE EXIGE LA EQUIVALENCIA, no la implicación. El sentido «quien corre una shell llama a la
-// compuerta» es el que caza al HERMANO —el defecto dominante de este repo: la guarda puesta en N-1
-// de N caminos—. Cuando mañana alguien agregue la prueba número 15 que ejecuta un guion, esta
-// guarda se la va a pedir sin que nadie se acuerde.
-//
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-// A127 · Y SE PREGUNTA SI LA COMPUERTA GATEA, NO SI ESTÁ ESCRITA.
-//
-// Hasta el 2026-09-15 alcanzaba con que el identificador APARECIERA en el cuerpo. Medido con
-// control positivo sobre `TestLaPodaDePuntosDeRetornoHaceLoQueDice`: envolver su
-// `guiones.Exigir` en un `if false { … }` dejaba esta guarda EN VERDE mientras la prueba corría
-// `deploy/pruebas/poda-puntos-de-retorno.sh` afuera del `if`. El control —borrar la compuerta— sí
-// salía rojo, o sea que la guarda funcionaba para la forma que entendía y era ciega a ésta.
-//
-// Hoy la pregunta es si la compuerta DOMINA a la shell (ver `analizarCuerpo`), y con eso caen las
-// dos formas: la compuerta en una rama que no encierra al `exec`, y la escrita DESPUÉS de él.
-//
-// LO QUE SIGUE ABIERTO, Y SE DICE ACÁ PARA QUE NADIE LO DESCUBRA DE NUEVO. `esLiteralDeShell`
-// sólo entiende un `*ast.BasicLit` —o un identificador que venga de un `exec.LookPath("bash")` en
-// el mismo cuerpo—, así que una shell nombrada por un `const` de paquete le es INVISIBLE. Medido
-// el mismo día, con el mismo control: la guarda queda verde. No se cerró acá porque el arreglo de
-// fondo no es enseñarle la forma número N+1 —una ronda anterior cerró once y aparecieron catorce—
-// sino hacer imposible ejecutar una shell sin pasar por la compuerta, y eso alcanza a las 25
-// llamadas de 18 archivos: es un refactor, no una entrega. Sigue anotado en A127.
-//
-// Sabotaje que la pone roja: envolver la compuerta de esa prueba en un `if false`, que la deja
-// escrita y sin gatear.
-// arnes: archivo="internal/mcp/despliegue_poda_test.go"
-// arnes: de="\tguiones.Exigir(t, \"corre deploy/pruebas/poda-puntos-de-retorno.sh contra el guion de \"+\n\t\t\"redespliegue, que es de un servidor Linux\", \"bash\", \"awk\", \"sed\", \"grep\", \"touch\")\n"
-// arnes: a="\tif false {\n\tguiones.Exigir(t, \"corre deploy/pruebas/poda-puntos-de-retorno.sh contra el guion de \"+\n\t\t\"redespliegue, que es de un servidor Linux\", \"bash\", \"awk\", \"sed\", \"grep\", \"touch\")\n\t}\n"
-// ─────────────────────────────────────────────────────────────────────────────────────────────
-func TestElSalteoEstaAcotadoALasPruebasQueCorrenUnaShell(t *testing.T) {
 	raiz := filepath.Join("..", "..")
 	fset := token.NewFileSet()
 
-	porNombre := map[string]map[string]*funcDePrueba{} // pkg -> nombre -> func
-	archivos := 0
-
-	// EL ÁRBOL LO DICE GIT Y NO EL DIRECTORIO (A128): la lista de carpetas a saltear que había acá
-	// —`.git`, `.claude`, `vendor`, `node_modules`, `testdata`— no converge, y `.claude/worktrees/`
-	// son copias enteras del repo que esta guarda contaba como pruebas de este árbol.
+	// El árbol lo dice git y no el directorio (A128): `.claude/worktrees/` son copias enteras del
+	// repo, y contarlas haría que esta guarda acusara el mismo archivo muchas veces.
 	pruebas, err := arbol.ConSufijo(raiz, "_test.go")
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	var culpables []string
+	archivos, usosDelAyudante := 0, 0
 	for _, rel := range pruebas {
 		ruta := filepath.Join(raiz, filepath.FromSlash(rel))
 		f, e := parser.ParseFile(fset, ruta, nil, 0)
 		if e != nil {
 			t.Errorf("%s no parsea (%v): esta guarda no puede mirar lo que no puede leer, y un archivo "+
-				"invisible acá es una prueba sin compuerta que nadie va a reclamar", ruta, e)
+				"invisible acá es una prueba que lanza procesos y nadie le va a reclamar", ruta, e)
 			continue
 		}
 		archivos++
-		pkg := filepath.ToSlash(filepath.Dir(ruta)) + "|" + f.Name.Name
-		if porNombre[pkg] == nil {
-			porNombre[pkg] = map[string]*funcDePrueba{}
-		}
-		alias := aliasDeLaCompuerta(f)
-		esLaCompuerta := f.Name.Name == "guiones"
-
-		for _, decl := range f.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Body == nil || fd.Recv != nil {
-				continue
-			}
-			info := &funcDePrueba{
-				pkg:    pkg,
-				nombre: fd.Name.Name,
-				pos:    filepath.ToSlash(ruta) + ":" + strconv.Itoa(fset.Position(fd.Pos()).Line),
-				esTest: strings.HasPrefix(fd.Name.Name, "Test"),
-			}
-			analizarCuerpo(fd, alias, esLaCompuerta, info)
-			porNombre[pkg][info.nombre] = info
-		}
+		culpables = append(culpables, lanzamientosDirectos(fset, f)...)
+		usosDelAyudante += contarUsosDelAyudante(f)
 	}
 
-	// CONTROL DE QUE MIRÓ ALGO. Si el recorrido o el parseo se rompieran, las dos listas quedarían
-	// vacías y esta guarda pasaría en verde sin haber comprobado un solo archivo — que es la forma
-	// exacta de fallo que persigue. Un cero acá significa «no pude medir».
+	// CONTROL DE QUE MIRÓ ALGO.
 	if archivos < 100 {
 		t.Fatalf("se parsearon %d archivos `_test.go` y el repo tiene cientos: el recorrido dejó de "+
 			"mirar y esta guarda estaría en verde sin haber comprobado nada", archivos)
 	}
 
-	// Cierre transitivo dentro de cada paquete.
-	for _, fs := range porNombre {
-		for cambio := true; cambio; {
-			cambio = false
-			for _, f := range fs {
-				for _, n := range f.llama {
-					g, ok := fs[n]
-					if !ok {
-						continue
-					}
-					if g.shell && !f.shell {
-						f.shell, cambio = true, true
-					}
-					if g.compuert && !f.compuert {
-						f.compuert, cambio = true, true
-					}
-					if g.gateEsc && !f.gateEsc {
-						f.gateEsc, cambio = true, true
-					}
-				}
+	// CONTROL DE QUE EL REFACTOR SIGUE EN PIE. No es el número exacto de hoy —eso obligaría a tocar
+	// esta guarda cada vez que se agrega una prueba, y una guarda que estorba se apaga—; es la
+	// comprobación de que las pruebas siguen lanzando procesos POR ACÁ. Si alguien revirtiera el
+	// refactor y a la vez rompiera el reconocedor, este piso lo dice.
+	if usosDelAyudante < 25 {
+		t.Fatalf("sólo %d prueba(s) lanzan procesos por el ayudante de este paquete, y son más de "+
+			"treinta. O el refactor de A127 se revirtió, o este barrido dejó de ver el árbol: en los "+
+			"dos casos el cero de arriba no significa «no hay», significa «no pude medir».",
+			usosDelAyudante)
+	}
+	t.Logf("%d archivos de prueba parseados, %d lanzamientos por el ayudante, %d directos",
+		archivos, usosDelAyudante, len(culpables))
+
+	sort.Strings(culpables)
+	for _, x := range culpables {
+		t.Errorf("UNA PRUEBA LANZA UN PROCESO POR FUERA DE LA COMPUERTA: %s\n"+
+			"  Este repo tiene UN solo lugar donde una prueba construye un proceso, y es este\n"+
+			"  paquete. No es estilo: mientras `exec.Command` esté disponible, la pregunta «¿esto\n"+
+			"  arranca una shell?» hay que contestarla mirando la sintaxis, y ésa es exactamente la\n"+
+			"  pregunta que no converge (A127: once formas cerradas, catorce aparecidas).\n"+
+			"  Arreglo, y son dos casos:\n"+
+			"    · ejecuta un GUION DE SHELL -> gatéalo y pedile el comando a la compuerta:\n"+
+			"        c := guiones.Exigir(t, \"<qué guion corre y por qué es de linux>\", \"bash\", ...)\n"+
+			"        c.Comando(\"bash\", ruta).CombinedOutput()\n"+
+			"      (o `guiones.Unix` si también se mide en macOS, o `guiones.Portable` en las tres.)\n"+
+			"    · ejecuta OTRA COSA (`git`, `go`, el propio binario de prueba) -> no hay nada que\n"+
+			"      gatear, pero pasa igual por acá para que esta guarda pueda preguntar una sola cosa:\n"+
+			"        guiones.Herramienta(t, \"git\", \"-C\", dir, \"status\")\n"+
+			"      Si resulta ser una shell, se entera ahí mismo y en runtime.", x)
+	}
+}
+
+// lanzamientosDirectos devuelve las llamadas REALES a `os/exec` que construyen un proceso.
+//
+// Mira el árbol y no el texto: los `exec.Command` que hay en comentarios y en literales de este
+// repo —hay nueve, casi todos en la guarda de PowerShell, que los cita para explicarse— no son
+// llamadas y no tienen por qué serlo.
+func lanzamientosDirectos(fset *token.FileSet, f *ast.File) []string {
+	alias := aliasDeOsExec(f)
+	if alias == "" {
+		return nil
+	}
+	var out []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		c, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		for _, lanzador := range losLanzadores {
+			if esSelector(c.Fun, alias, lanzador) {
+				p := fset.Position(c.Pos())
+				out = append(out, filepath.ToSlash(p.Filename)+":"+strconv.Itoa(p.Line)+
+					" (`"+alias+"."+lanzador+"`)")
 			}
 		}
-	}
+		return true
+	})
+	return out
+}
 
-	var sinCompuerta, noGatea, fueraDeAlcance []string
-	conShell := 0
-	for _, fs := range porNombre {
-		for _, f := range fs {
-			if !f.esTest {
-				continue
-			}
-			switch {
-			case f.shell && f.compuert:
-				conShell++
-			case f.shell && f.gateEsc:
-				// La compuerta ESTÁ escrita y no gatea. Se cuenta aparte porque el remedio es otro:
-				// mandarlo al mensaje de «falta la compuerta» diría que agregue una que ya tiene.
-				conShell++
-				noGatea = append(noGatea, f.pos+" "+f.nombre)
-			case f.shell:
-				conShell++
-				sinCompuerta = append(sinCompuerta, f.pos+" "+f.nombre)
-			case f.gateEsc:
-				fueraDeAlcance = append(fueraDeAlcance, f.pos+" "+f.nombre)
-			}
+// aliasDeOsExec devuelve con qué nombre este archivo llama a `os/exec`, o "" si no lo importa.
+//
+// Un import con punto rompería la pregunta —la llamada quedaría `Command(...)` a secas— así que
+// no se lo interpreta: no hay ninguno, y si aparece uno, que se entere quien lo escriba.
+func aliasDeOsExec(f *ast.File) string {
+	for _, im := range f.Imports {
+		if im.Path == nil || im.Path.Value != `"os/exec"` {
+			continue
 		}
+		if im.Name == nil {
+			return "exec"
+		}
+		return im.Name.Name
 	}
-	sort.Strings(sinCompuerta)
-	sort.Strings(noGatea)
-	sort.Strings(fueraDeAlcance)
+	return ""
+}
 
-	// El piso NO es el número exacto de pruebas de hoy —eso obligaría a tocar esta guarda cada vez
-	// que se agrega una, y una guarda que estorba se apaga—; es la comprobación de que el análisis
-	// SIGUE VIENDO el grafo. Si el detector de `exec.Command` se rompiera, este número se cae a 0.
-	if conShell < 10 {
-		t.Fatalf("el análisis encontró sólo %d prueba(s) que ejecutan una shell, y en este repo hay "+
-			"más de una docena (los arneses de deploy/ en internal/mcp y los dos de internal/fleet). "+
-			"El detector del grafo de llamadas se rompió, y con él los dos sentidos de esta guarda: "+
-			"estaría en verde sin haber mirado nada", conShell)
-	}
-	t.Logf("pruebas que ejecutan una shell, detectadas por el grafo de llamadas: %d", conShell)
-
-	for _, x := range sinCompuerta {
-		t.Errorf("EL HERMANO SIN LA COMPUERTA: %s ejecuta una shell y NO pasa por la compuerta.\n"+
-			"  En Windows esa prueba no mide el guion: mide el runner. El arnés escribe stubs\n"+
-			"  ejecutables y los antepone al PATH con `:` — medido, en windows el stub no se toma y el\n"+
-			"  guion sale a la URL real del release.\n"+
-			"  Arreglo, y son TRES casos distintos. Elegí por lo que el guion NECESITA, no por dónde\n"+
-			"  te molesta que falle:\n"+
-			"    · sólo corre en linux    -> `guiones.Exigir(t, \"<qué guion corre y por qué es de linux>\", \"bash\", ...)`\n"+
-			"    · linux y macOS, no Win  -> `guiones.Unix(t, \"<qué guion corre y por qué se mide en los dos>\", \"bash\", ...)`\n"+
-			"    · corre en las tres      -> `guiones.Portable(t, \"<qué guion corre y por qué vale en las tres>\", \"bash\", ...)`\n"+
-			"      (Portable NO saltea: exige que las herramientas estén en TODAS las plataformas.)\n"+
-			"  como primera línea. En linux NINGUNO saltea, así que no perdés nada donde importa.\n"+
-			"  Y OJO CON ELEGIR `Exigir` POR COMODIDAD: el defecto de `${VAR}` pegada a un carácter\n"+
-			"  no-ASCII que mata el guion en el bash 3.2 de macOS es INVISIBLE en Linux. Para una\n"+
-			"  prueba que caza eso, `Exigir` no acota el alcance: lo apaga. Ésa es `Unix`.", x)
-	}
-	for _, x := range noGatea {
-		t.Errorf("LA COMPUERTA ESTÁ ESCRITA Y NO GATEA: %s ejecuta una shell y su llamada a la\n"+
-			"  compuerta no la protege — está adentro de un `if`, de un `for`, de un `t.Run` o de otra\n"+
-			"  función literal, o escrita DESPUÉS del `exec`.\n"+
-			"  La prueba corre el guion igual en la plataforma donde el arnés no se sostiene, y el\n"+
-			"  identificador ahí parado hace creer a cualquiera que la lea —y hasta hoy también a esta\n"+
-			"  guarda— que está cubierta. Es peor que no tenerla: una compuerta que no gatea es la\n"+
-			"  forma exacta de un falso verde.\n"+
-			"  Arreglo: subila a ser la PRIMERA sentencia del cuerpo de la prueba, incondicional y\n"+
-			"  antes de cualquier `exec`. Si lo que querés es gatear sólo un subtest, la compuerta va\n"+
-			"  en el cuerpo de ESE subtest, que también es una prueba.", x)
-	}
-	for _, x := range fueraDeAlcance {
-		t.Errorf("COMPUERTA FUERA DE ALCANCE: %s llama a guiones.Exigir y NO ejecuta ninguna shell.\n"+
-			"  Eso es un t.Skip de propósito general disfrazado, y el mensaje que imprime habla de\n"+
-			"  guiones de shell que esta prueba nunca corre: taparía un fallo REAL del producto en esa\n"+
-			"  plataforma mientras dice que salteó por el arnés.\n"+
-			"  Si la prueba falla en darwin/windows por un motivo del producto, ése es el defecto y hay\n"+
-			"  que arreglarlo o declararlo donde corresponda; no acá.", x)
-	}
+// contarUsosDelAyudante cuenta las llamadas que lanzan un proceso POR este paquete. Es el control
+// de que el refactor sigue en pie, no una aserción sobre nadie en particular.
+func contarUsosDelAyudante(f *ast.File) int {
+	n := 0
+	ast.Inspect(f, func(nd ast.Node) bool {
+		c, ok := nd.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := c.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		switch sel.Sel.Name {
+		case "Comando", "ComandoCtx", "Herramienta", "HerramientaCtx":
+			n++
+		}
+		return true
+	})
+	return n
 }
 
 // TestSoloLasPruebasImportanLaCompuerta — que el paquete no se filtre al producto.
@@ -602,175 +609,8 @@ func TestSoloLasPruebasImportanLaCompuerta(t *testing.T) {
 // El análisis
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-// aliasDeLaCompuerta devuelve con qué nombre este archivo se refiere al paquete de la compuerta,
-// o "" si no lo importa.
-func aliasDeLaCompuerta(f *ast.File) string {
-	for _, imp := range f.Imports {
-		v, _ := strconv.Unquote(imp.Path.Value)
-		if v != rutaDeLaCompuerta {
-			continue
-		}
-		if imp.Name != nil {
-			return imp.Name.Name
-		}
-		return "guiones"
-	}
-	return ""
-}
-
-// analizarCuerpo llena `info` mirando el cuerpo de fd (incluidas las funciones literales de
-// adentro, que es donde viven los `t.Run`).
-func analizarCuerpo(fd *ast.FuncDecl, alias string, esLaCompuerta bool, info *funcDePrueba) {
-	// Nombres de variables que salieron de un exec.LookPath("bash") y compañía: es la forma
-	// `bash, err := exec.LookPath("bash"); exec.Command(bash, ...)` que usan cuatro arneses.
-	deShell := map[string]bool{}
-	ast.Inspect(fd.Body, func(n ast.Node) bool {
-		as, ok := n.(*ast.AssignStmt)
-		if !ok {
-			return true
-		}
-		for _, r := range as.Rhs {
-			c, ok := r.(*ast.CallExpr)
-			if !ok || !esSelector(c.Fun, "exec", "LookPath") || len(c.Args) == 0 {
-				continue
-			}
-			if !esLiteralDeShell(c.Args[0]) {
-				continue
-			}
-			if len(as.Lhs) > 0 {
-				if id, ok := as.Lhs[0].(*ast.Ident); ok {
-					deShell[id.Name] = true
-				}
-			}
-		}
-		return true
-	})
-
-	// ════════════════════════════════════════════════════════════════════════════════════════
-	// LA COMPUERTA GATEA SI DOMINA A LA SHELL, y eso se contesta por BLOQUES.
-	//
-	// Hasta A127 alcanzaba con que el identificador APARECIERA en el cuerpo. Medido el 2026-09-15
-	// con control positivo: un `if false { guiones.Exigir(t, …) }` dejaba esta guarda EN VERDE
-	// mientras la prueba corría el guion afuera del `if`. O sea que lo que se medía era
-	// co-ocurrencia, no que la compuerta protegiera nada.
-	//
-	// EL PRIMER INTENTO FUE «SENTENCIA DEL PRIMER NIVEL DEL CUERPO» Y ACUSABA A ONCE LLAMADAS
-	// SANAS, las once de este mismo archivo: las sondas de `Exigir` y `Unix` ponen la compuerta
-	// como primera sentencia del closure de su `t.Run` —y ejecutan la shell ahí adentro—, y el
-	// ayudante de uso indebido la pone en el brazo del `switch` que corre bash. Las once dominan a
-	// su shell; lo que no hacen es vivir en el primer nivel. Una guarda que castiga el código
-	// correcto se termina apagando, así que la regla se corrigió en vez de exceptuarlas.
-	//
-	// LA PREGUNTA, UNA SOLA: ¿hay una compuerta que sea sentencia DIRECTA de un bloque que ENCIERRA
-	// a esta shell, y que esté ANTES? El `if false` no la contesta —el bloque del `if` no encierra
-	// al `exec` de afuera— y una compuerta escrita después del `exec` tampoco.
-	//
-	// SE RESUELVE POR CONTENCIÓN DE POSICIONES Y NO CON UNA PILA: `ast.Inspect` llama con `nil` al
-	// salir de CADA nodo, no sólo de los que uno empujaría, así que una pila se desincroniza sin
-	// avisar. `Pos()`/`End()` de un bloque dan el rango exacto y no hay estado que mantener.
-	// ════════════════════════════════════════════════════════════════════════════════════════
-	type compuertaEnBloque struct{ ini, fin, gate token.Pos }
-	var dominios []compuertaEnBloque
-
-	gatesDirectosDe := func(n ast.Node, sts []ast.Stmt) {
-		for _, st := range sts {
-			es, ok := st.(*ast.ExprStmt)
-			if !ok {
-				continue
-			}
-			c, ok := es.X.(*ast.CallExpr)
-			if !ok || !esLlamadaALaCompuerta(c, alias, esLaCompuerta) {
-				continue
-			}
-			dominios = append(dominios, compuertaEnBloque{n.Pos(), n.End(), c.Pos()})
-		}
-	}
-	ast.Inspect(fd.Body, func(n ast.Node) bool {
-		switch b := n.(type) {
-		case *ast.BlockStmt:
-			gatesDirectosDe(b, b.List)
-		case *ast.CaseClause:
-			gatesDirectosDe(b, b.Body)
-		case *ast.CommClause:
-			gatesDirectosDe(b, b.Body)
-		}
-		return true
-	})
-	// `domina` contesta si alguna de esas compuertas encierra a la shell de la posición p y está
-	// antes que ella.
-	domina := func(p token.Pos) bool {
-		for _, d := range dominios {
-			if d.ini <= p && p <= d.fin && d.gate < p {
-				return true
-			}
-		}
-		return false
-	}
-
-	shellSinDominar := 0
-	ast.Inspect(fd.Body, func(n ast.Node) bool {
-		c, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		// ¿ejecuta una shell?
-		prog := -1
-		switch {
-		case esSelector(c.Fun, "exec", "Command"):
-			prog = 0
-		case esSelector(c.Fun, "exec", "CommandContext"):
-			prog = 1
-		}
-		if prog >= 0 && len(c.Args) > prog {
-			a := c.Args[prog]
-			corre := esLiteralDeShell(a)
-			if id, ok := a.(*ast.Ident); ok && deShell[id.Name] {
-				corre = true
-			}
-			if corre {
-				info.shell = true
-				if !domina(c.Pos()) {
-					shellSinDominar++
-				}
-			}
-		}
-		// ¿llama a la compuerta? (esté donde esté: esto es lo que distingue «no la escribió» de «la
-		// escribió y no gatea», que se arreglan distinto)
-		if esLlamadaALaCompuerta(c, alias, esLaCompuerta) {
-			info.gateEsc = true
-		}
-		// ¿llama a otra función del mismo paquete?
-		if id, ok := c.Fun.(*ast.Ident); ok {
-			info.llama = append(info.llama, id.Name)
-		}
-		return true
-	})
-
-	// GATEA si hay alguna compuerta incondicional Y ninguna shell de este cuerpo quedó sin dominar.
-	// Cuando el cuerpo no ejecuta ninguna shell —el caso de una prueba que delega en un ayudante—
-	// alcanza con que la compuerta esté: quien ejecuta es otro, y el cierre transitivo de más
-	// arriba se encarga de juntarlos.
-	info.compuert = len(dominios) > 0 && shellSinDominar == 0
-}
-
-// esLlamadaALaCompuerta reconoce los tres modos, tanto por el alias del import como sin calificar
-// —que es como los llama el paquete de la compuerta en sus propias pruebas—.
-//
-// Existe como función y no repetido en dos lados porque ya pasó: la lista de modos vivía en cuatro
-// lugares y agregar el tercero dejó tres mintiendo (ver `losModosDeLaCompuerta`).
-func esLlamadaALaCompuerta(c *ast.CallExpr, alias string, esLaCompuerta bool) bool {
-	for _, modo := range losModosDeLaCompuerta {
-		if alias != "" && esSelector(c.Fun, alias, modo) {
-			return true
-		}
-		if esLaCompuerta {
-			if id, ok := c.Fun.(*ast.Ident); ok && id.Name == modo {
-				return true
-			}
-		}
-	}
-	return false
-}
+// rutaDeLaCompuerta es el import path de este paquete.
+const rutaDeLaCompuerta = "musubi/internal/guiones"
 
 func esSelector(e ast.Expr, x, sel string) bool {
 	s, ok := e.(*ast.SelectorExpr)
@@ -779,18 +619,4 @@ func esSelector(e ast.Expr, x, sel string) bool {
 	}
 	id, ok := s.X.(*ast.Ident)
 	return ok && id.Name == x
-}
-
-// esLiteralDeShell mira el NOMBRE BASE del programa: `"bash"`, `"/bin/sh"` y `"/usr/bin/env"` no
-// son lo mismo, y lo que decide es qué se ejecuta.
-func esLiteralDeShell(e ast.Expr) bool {
-	l, ok := e.(*ast.BasicLit)
-	if !ok || l.Kind != token.STRING {
-		return false
-	}
-	v, err := strconv.Unquote(l.Value)
-	if err != nil {
-		return false
-	}
-	return shells[filepath.Base(filepath.ToSlash(v))]
 }

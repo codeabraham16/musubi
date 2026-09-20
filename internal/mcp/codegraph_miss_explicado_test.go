@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 // codegraph_miss_explicado_test.go custodia que un MISS del grafo de código diga POR QUÉ.
@@ -316,7 +318,7 @@ func gitInit(t *testing.T, dir string) {
 		{"-c", "commit.gpgsign=false", "commit", "-qm", "inicial"},
 	}
 	for _, p := range pasos {
-		cmd := exec.Command("git", append([]string{"-C", dir}, p...)...)
+		cmd := guiones.Herramienta(t, "git", append([]string{"-C", dir}, p...)...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			// Si el andamio no se puede armar, lo que sigue no mide nada. Eso es un fallo del
 			// entorno, no un permiso para pasar en verde sin haber ejercitado el camino.

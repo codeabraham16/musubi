@@ -39,7 +39,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -163,7 +162,7 @@ cp "$CARGA" "$destino"
 // revertido (el `if` sin `else`), los cuatro casos que no pueden verificar instalan igual y esta
 // prueba se pone roja en los cuatro.
 func TestElBinarioDelCerebroNoSeInstalaSinVerificar(t *testing.T) {
-	guiones.Exigir(t, "corre el paso 1 de deploy/install-musubi-brain.sh, que instala el binario del "+
+	compuerta := guiones.Exigir(t, "corre el paso 1 de deploy/install-musubi-brain.sh, que instala el binario del "+
 		"cerebro en un servidor Linux con systemd", "bash", "sha256sum", "install", "mktemp", "awk", "tr")
 	const rel = "install-musubi-brain.sh"
 	guion := leerGuionDeDespliegue(t, rel)
@@ -233,7 +232,7 @@ func TestElBinarioDelCerebroNoSeInstalaSinVerificar(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			cmd := exec.Command("bash", arnesP)
+			cmd := compuerta.Comando("bash", arnesP)
 			cmd.Env = append(os.Environ(),
 				"MODO_SHA="+c.modoSha,
 				"SHA_BUENO="+shaCarga,
@@ -280,7 +279,7 @@ func TestElBinarioDelCerebroNoSeInstalaSinVerificar(t *testing.T) {
 // La prueba corre el bloque de binarios con `curl`/`useradd`/`chown` simulados y `unzip`,
 // `sha256sum`, `find` e `install` de verdad, y mira si `hbbs` apareció en el destino.
 func TestElRelayDeRustdeskNoSeInstalaSinVerificar(t *testing.T) {
-	guiones.Exigir(t, "corre el bloque de binarios de deploy/rustdesk/install-rustdesk-relay.sh, que "+
+	compuerta := guiones.Exigir(t, "corre el bloque de binarios de deploy/rustdesk/install-rustdesk-relay.sh, que "+
 		"deja hbbs/hbbr como unidades systemd de un servidor Linux",
 		"bash", "sha256sum", "unzip", "install", "mktemp", "awk", "find")
 	const rel = "rustdesk/install-rustdesk-relay.sh"
@@ -360,7 +359,7 @@ cp "$CARGA" "$destino"
 				t.Fatal(err)
 			}
 
-			cmd := exec.Command("bash", arnesP)
+			cmd := compuerta.Comando("bash", arnesP)
 			cmd.Env = append(os.Environ(), "CARGA="+cargaP, "MARCA_CURL="+marca, "MARCA_UNAME="+marcaUname)
 			if c.sha != "" {
 				cmd.Env = append(cmd.Env, "RUSTDESK_SHA256="+c.sha)

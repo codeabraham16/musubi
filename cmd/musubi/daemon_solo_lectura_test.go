@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +13,7 @@ import (
 	"musubi/internal/memory"
 
 	_ "modernc.org/sqlite"
+	"musubi/internal/guiones"
 )
 
 // R8 — EL DAEMON SIRVE LECTURAS SOBRE UNA BASE QUE NO PUEDE ESCRIBIR.
@@ -78,7 +78,7 @@ func TestR8ElDaemonSirveLecturasSobreUnaBaseQueNoPuedeEscribir(t *testing.T) {
 		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"musubi_save_observation","arguments":{"topic_key":"t/no","content":"esto no tiene que entrar"}}}`,
 	}, "\n") + "\n"
 
-	cmd := exec.Command(os.Args[0], "-test.run=TestHelperDaemonSoloLectura")
+	cmd := guiones.Herramienta(t, os.Args[0], "-test.run=TestHelperDaemonSoloLectura")
 	cmd.Env = append(os.Environ(), "GO_QUIERO_SER_DAEMON_RO=1", "MUSUBI_HOME="+dir)
 	cmd.Stdin = strings.NewReader(entrada)
 	var errBuf strings.Builder

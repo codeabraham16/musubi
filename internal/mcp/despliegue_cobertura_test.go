@@ -24,11 +24,12 @@ package mcp
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 // selectoresDelVerificador saca el vocabulario del PROPIO script, y no de una copia acá.
@@ -218,7 +219,7 @@ func TestLasDosVerificacionesDeDespliegueExisten(t *testing.T) {
 // Falla en vez de devolver poco: un mapa casi vacío se leería como «ningún archivo incumple».
 func modosDelIndice(t *testing.T, prefijo string) map[string]string {
 	t.Helper()
-	salida, err := exec.Command("git", "-C", filepath.Join("..", ".."), "ls-files", "-s", prefijo).Output()
+	salida, err := guiones.Herramienta(t, "git", "-C", filepath.Join("..", ".."), "ls-files", "-s", prefijo).Output()
 	if err != nil {
 		t.Fatalf("no se pudo leer el índice de git para %q: %v", prefijo, err)
 	}

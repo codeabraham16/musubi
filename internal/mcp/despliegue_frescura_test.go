@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -40,12 +39,12 @@ import (
 func TestLaFrescuraDeLaReferenciaSeMideEnElArbolQueFetchea(t *testing.T) {
 	// El salteo de fuera de linux vive en UN solo lugar. Sin estas herramientas la guarda no
 	// existe, y eso tiene que MORIR, no contestar `ok`.
-	guiones.Exigir(t, "corre deploy/pruebas/frescura-de-la-referencia.sh, que arma un clon con "+
+	compuerta := guiones.Exigir(t, "corre deploy/pruebas/frescura-de-la-referencia.sh, que arma un clon con "+
 		"worktree y hace fetch de verdad", "bash", "git", "stat", "touch", "date")
 
 	arnes := filepath.Join("..", "..", "deploy", "pruebas", "frescura-de-la-referencia.sh")
 	raiz := filepath.Join("..", "..")
-	salida, err := exec.Command("bash", arnes, raiz).CombinedOutput()
+	salida, err := compuerta.Comando("bash", arnes, raiz).CombinedOutput()
 	if err != nil {
 		t.Fatalf("el arnés de la frescura falló:\n%s", salida)
 	}

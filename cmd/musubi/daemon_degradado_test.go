@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +13,7 @@ import (
 	"musubi/internal/memory"
 
 	_ "modernc.org/sqlite"
+	"musubi/internal/guiones"
 )
 
 // D5 — EL DAEMON NO SE MUERE MUDO CUANDO LA MEMORIA NO ABRE.
@@ -83,7 +83,7 @@ func TestD5ElDaemonSirveProtocoloAunqueLaMemoriaNoAbra(t *testing.T) {
 		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"musubi_recall","arguments":{"query_text":"x"}}}`,
 	}, "\n") + "\n"
 
-	cmd := exec.Command(os.Args[0], "-test.run=TestHelperDaemonDegradado")
+	cmd := guiones.Herramienta(t, os.Args[0], "-test.run=TestHelperDaemonDegradado")
 	cmd.Env = append(os.Environ(), "GO_QUIERO_SER_DAEMON=1", "MUSUBI_HOME="+dir)
 	cmd.Stdin = strings.NewReader(entrada)
 	var errBuf strings.Builder

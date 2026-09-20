@@ -30,7 +30,6 @@ package fleet
 
 import (
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -113,14 +112,14 @@ func TestElGuionRealCorridoContraEsteLinuxNoCruzaLasSecciones(t *testing.T) {
 	// salteaban TAMBIÉN EN LINUX —sin `sh`, o con `/proc` ilegible, `go test` contestaba `ok` y esta
 	// guarda no existía—; acá eso es un fallo, porque «no pude medir» no puede contestar lo mismo
 	// que «medí y está bien».
-	guiones.Exigir(t, "corre el guion de lectura de /proc que viaja del otro lado de ssh y de adb, "+
+	compuerta := guiones.Exigir(t, "corre el guion de lectura de /proc que viaja del otro lado de ssh y de adb, "+
 		"que siempre es un Linux o un Android", "sh")
 	if _, err := os.Stat("/proc/meminfo"); err != nil {
 		t.Fatalf("estamos en linux y /proc/meminfo no se puede leer (%v): esta prueba compara el guion "+
 			"contra la máquina que la corre, así que sin /proc no mide nada — y un salteo acá se leería "+
 			"como que el guion y el parser siguen entendiéndose", err)
 	}
-	salida, err := exec.Command("sh", "-c", guionLecturaProc).Output()
+	salida, err := compuerta.Comando("sh", "-c", guionLecturaProc).Output()
 	if err != nil {
 		t.Fatalf("el guion no corrió en esta máquina: %v", err)
 	}

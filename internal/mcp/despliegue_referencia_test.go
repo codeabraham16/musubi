@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,7 +40,7 @@ func prepararRepoDePrueba(t *testing.T) string {
 	}
 	git := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		cmd := guiones.Herramienta(t, "git", args...)
 		cmd.Dir = raiz
 		// Un `user.name` global ausente en CI haría fallar el commit por un motivo que no es el
 		// que se está probando, así que la identidad va acá y no se hereda.
@@ -65,9 +64,9 @@ func prepararRepoDePrueba(t *testing.T) string {
 // correrVerificador corre el guion y devuelve su salida combinada. No se mira el código de salida:
 // sin Prometheus del otro lado el guion sale 2 en los dos casos, así que el código no distingue
 // nada y creerle sería la clase de aserción que pasa por el motivo equivocado.
-func correrVerificador(t *testing.T, raiz string) string {
+func correrVerificador(t *testing.T, compuerta guiones.Compuerta, raiz string) string {
 	t.Helper()
-	cmd := exec.Command("bash", filepath.Join(raiz, "deploy", "verificar-despliegue.sh"))
+	cmd := compuerta.Comando("bash", filepath.Join(raiz, "deploy", "verificar-despliegue.sh"))
 	cmd.Dir = raiz
 	cmd.Env = append(os.Environ(),
 		// Sin fetch: el repo de prueba no tiene remoto. Ejercita además esa rama del guion.
@@ -97,14 +96,14 @@ func seccionDeLaReferencia(t *testing.T, salida string) string {
 }
 
 func TestElVerificadorDiceContraQueArbolCompara(t *testing.T) {
-	guiones.Unix(t, "corre la sección de la referencia de deploy/verificar-despliegue.sh contra un repo de "+
+	compuerta := guiones.Unix(t, "corre la sección de la referencia de deploy/verificar-despliegue.sh contra un repo de "+
 		"prueba; se mide también en macOS porque su bash 3.2 es donde aparecen los defectos de "+
 		"expansión que en Linux son invisibles",
 		"bash", "git", "python3")
 
 	t.Run("un árbol que ES origin/main y está limpio se declara como tal", func(t *testing.T) {
 		raiz := prepararRepoDePrueba(t)
-		sec := seccionDeLaReferencia(t, correrVerificador(t, raiz))
+		sec := seccionDeLaReferencia(t, correrVerificador(t, compuerta, raiz))
 		if !strings.Contains(sec, "el árbol es origin/main exacto") {
 			t.Errorf("un checkout limpio de origin/main tiene que declararse como referencia buena.\nSección:\n%s", sec)
 		}
@@ -121,7 +120,7 @@ func TestElVerificadorDiceContraQueArbolCompara(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(raiz, "VERSION"), []byte("9.9.10\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		cmd := exec.Command("git", "commit", "--quiet", "-am", "bump")
+		cmd := guiones.Herramienta(t, "git", "commit", "--quiet", "-am", "bump")
 		cmd.Dir = raiz
 		cmd.Env = append(os.Environ(),
 			"GIT_AUTHOR_NAME=prueba", "GIT_AUTHOR_EMAIL=prueba@local",
@@ -130,7 +129,7 @@ func TestElVerificadorDiceContraQueArbolCompara(t *testing.T) {
 		if salida, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("no se pudo adelantar el árbol: %v\n%s", err, salida)
 		}
-		sec := seccionDeLaReferencia(t, correrVerificador(t, raiz))
+		sec := seccionDeLaReferencia(t, correrVerificador(t, compuerta, raiz))
 		if !strings.Contains(sec, "el árbol NO es origin/main") {
 			t.Errorf("un árbol con un commit que origin/main no tiene NO puede declararse referencia buena: es el caso que dejó ciega la corrida del 2026-09-10.\nSección:\n%s", sec)
 		}
@@ -146,7 +145,7 @@ func TestElVerificadorDiceContraQueArbolCompara(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(raiz, "deploy", "regla-nueva.yml"), []byte("- alert: X\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		sec := seccionDeLaReferencia(t, correrVerificador(t, raiz))
+		sec := seccionDeLaReferencia(t, correrVerificador(t, compuerta, raiz))
 		if !strings.Contains(sec, "el árbol NO es origin/main") {
 			t.Errorf("un archivo sin commitear cambia lo que el verificador compara, así que el árbol no es la referencia.\nSección:\n%s", sec)
 		}

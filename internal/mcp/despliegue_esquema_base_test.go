@@ -3,7 +3,6 @@ package mcp
 import (
 	"encoding/binary"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -70,9 +69,9 @@ func seccionDelEsquema(t *testing.T, salida string) string {
 	return resto
 }
 
-func correrVerificadorConEsquema(t *testing.T, raiz, bin, db string) string {
+func correrVerificadorConEsquema(t *testing.T, compuerta guiones.Compuerta, raiz, bin, db string) string {
 	t.Helper()
-	cmd := exec.Command("bash", filepath.Join(raiz, "deploy", "verificar-despliegue.sh"))
+	cmd := compuerta.Comando("bash", filepath.Join(raiz, "deploy", "verificar-despliegue.sh"))
 	cmd.Dir = raiz
 	cmd.Env = append(os.Environ(),
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
@@ -87,7 +86,7 @@ func correrVerificadorConEsquema(t *testing.T, raiz, bin, db string) string {
 }
 
 func TestElVerificadorComparaElEsquemaDeLaBaseContraElBinario(t *testing.T) {
-	guiones.Unix(t, "corre la sección del esquema de deploy/verificar-despliegue.sh, que compara el "+
+	compuerta := guiones.Unix(t, "corre la sección del esquema de deploy/verificar-despliegue.sh, que compara el "+
 		"`user_version` de la base contra el binario; se mide también en macOS porque su bash "+
 		"3.2 es donde aparecen los defectos de expansión que en Linux son invisibles",
 		"bash", "git", "python3", "od")
@@ -105,7 +104,7 @@ func TestElVerificadorComparaElEsquemaDeLaBaseContraElBinario(t *testing.T) {
 
 	t.Run("los dos números coinciden: verde", func(t *testing.T) {
 		raiz, bin, db := preparar(t, "53", 53)
-		sec := seccionDelEsquema(t, correrVerificadorConEsquema(t, raiz, bin, db))
+		sec := seccionDelEsquema(t, correrVerificadorConEsquema(t, compuerta, raiz, bin, db))
 		if !strings.Contains(sec, "esquema 53") || strings.Contains(sec, "apunta al esquema") {
 			t.Errorf("con los dos números en 53 la sección tiene que declararlo al día.\nSección:%s", sec)
 		}
@@ -115,7 +114,7 @@ func TestElVerificadorComparaElEsquemaDeLaBaseContraElBinario(t *testing.T) {
 	// mismo binario— y sin esto nadie lo vería.
 	t.Run("la migración no llegó a la base: lo dice, y dice los dos números", func(t *testing.T) {
 		raiz, bin, db := preparar(t, "53", 47)
-		sec := seccionDelEsquema(t, correrVerificadorConEsquema(t, raiz, bin, db))
+		sec := seccionDelEsquema(t, correrVerificadorConEsquema(t, compuerta, raiz, bin, db))
 		if !strings.Contains(sec, "53") || !strings.Contains(sec, "47") {
 			t.Errorf("tienen que salir LOS DOS números: sin ellos no se puede decidir si falta migrar o falta un checkpoint.\nSección:%s", sec)
 		}
@@ -129,7 +128,7 @@ func TestElVerificadorComparaElEsquemaDeLaBaseContraElBinario(t *testing.T) {
 	// migración pendiente y mandaría a correr una migración que no hace falta.
 	t.Run("un binario que no sabe decir su esquema no se lee como base atrasada", func(t *testing.T) {
 		raiz, bin, db := preparar(t, "", 47)
-		sec := seccionDelEsquema(t, correrVerificadorConEsquema(t, raiz, bin, db))
+		sec := seccionDelEsquema(t, correrVerificadorConEsquema(t, compuerta, raiz, bin, db))
 		if !strings.Contains(sec, "no supo decir") {
 			t.Errorf("tiene que decir que el BINARIO no contestó, no que la base esté atrasada.\nSección:%s", sec)
 		}

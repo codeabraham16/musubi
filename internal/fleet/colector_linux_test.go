@@ -4,11 +4,12 @@ package fleet
 
 import (
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"musubi/internal/guiones"
 )
 
 // D1 — LA PRIMERA MUESTRA NO TIENE PORCENTAJE DE CPU.
@@ -306,7 +307,7 @@ func relativa(a, b uint64) float64 {
 // leerDf pregunta al `df` del sistema, que es la referencia contra la que se contrasta statfs.
 func leerDf(t *testing.T) (total, usado, disponible uint64) {
 	t.Helper()
-	out, err := exec.Command("df", "-B1", "--output=size,used,avail", "/").Output()
+	out, err := guiones.Herramienta(t, "df", "-B1", "--output=size,used,avail", "/").Output()
 	if err != nil {
 		t.Skipf("sin df: %v", err)
 	}

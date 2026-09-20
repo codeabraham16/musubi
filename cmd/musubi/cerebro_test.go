@@ -6,9 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 // `musubi cerebro` existe porque el cliente MCP-sobre-HTTP de Claude Code NO manda los `headers`
@@ -38,7 +39,7 @@ func stubCerebro(t *testing.T, capturado *string) *httptest.Server {
 func correrCerebro(t *testing.T, url, token string, entrada string) []string {
 	t.Helper()
 	// -run con un test inexistente: el binario de test se re-ejecuta a sí mismo como helper.
-	cmd := exec.Command(os.Args[0], "-test.run=TestHelperCerebro")
+	cmd := guiones.Herramienta(t, os.Args[0], "-test.run=TestHelperCerebro")
 	cmd.Env = append(os.Environ(),
 		"GO_QUIERO_SER_CEREBRO=1",
 		"MUSUBI_CENTRAL_URL="+url,
