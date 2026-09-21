@@ -26,6 +26,9 @@ func parDePrueba(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 // entrega una máquina, entrega la flota, con exec y shell sobre todas.
 //
 // Sabotaje que la hace fallar: que VerificarFirma devuelva nil sin llamar a ed25519.Verify.
+// arnes: archivo="internal/selfupdate/firma.go"
+// arnes: de="\tif !ed25519.Verify(pub, manifiesto, firma) {"
+// arnes: a="\tif false && !ed25519.Verify(pub, manifiesto, firma) {"
 func TestUnManifiestoConFirmaAjenaNoVerifica(t *testing.T) {
 	pub, priv := parDePrueba(t)
 	otraPub, otraPriv := parDePrueba(t)
@@ -64,6 +67,9 @@ func TestUnManifiestoConFirmaAjenaNoVerifica(t *testing.T) {
 // ahora existe una función de verificación que da tranquilidad y no verifica nada.
 //
 // Sabotaje: que VerificarFirma devuelva nil cuando la clave está vacía.
+// arnes: archivo="internal/selfupdate/firma.go"
+// arnes: de="\tif len(pub) != ed25519.PublicKeySize {\n\t\treturn fmt.Errorf(\"este binario no trae una clave pública de release válida (%d bytes)"
+// arnes: a="\tif len(pub) != ed25519.PublicKeySize {\n\t\treturn nil\n\t}\n\tif false {\n\t\treturn fmt.Errorf(\"este binario no trae una clave pública de release válida (%d bytes)"
 func TestSinClaveEmbebidaLaVerificacionFalla(t *testing.T) {
 	m := Manifiesto{Version: "1.2.3", Assets: map[string]string{"x": strings.Repeat("b", 64)}}
 	datos, _ := json.Marshal(m)
@@ -98,6 +104,7 @@ func TestSinClaveEmbebidaLaVerificacionFalla(t *testing.T) {
 // Sabotaje que todavía vale: hacer que VerificarFirma parsee y vuelva a serializar el manifiesto
 // antes de comprobar la firma. TestUnManifiestoConFirmaAjenaNoVerifica no lo caza, pero un release
 // real deja de instalarse — por eso el aviso está escrito en el doc de VerificarFirma.
+// arnes: no_mecanizable="LA PROSA DE ARRIBA YA LO DICE, y se confirmó con el arnés: «TestUnManifiestoConFirmaAjenaNoVerifica no lo caza». Se mecanizó igual —insertando un parseo y re-serialización del manifiesto antes de comprobar la firma— y el barrido devolvió VERDE, como estaba anunciado. NINGUNA prueba de este paquete cubre este sabotaje: los fixtures firman y verifican el MISMO arreglo de bytes, así que una re-serialización que reordena las claves no cambia nada para ellos; lo que rompe es un release REAL, donde el firmador emite `assets` primero y el tipo declara `version` primero. La red contra esto es el aviso escrito en el doc de VerificarFirma, no una guarda. Medido el 2026-09-21."
 
 // UN ASSET QUE NO ESTÁ EN EL MANIFIESTO FIRMADO NO SE INSTALA.
 //
@@ -105,6 +112,9 @@ func TestSinClaveEmbebidaLaVerificacionFalla(t *testing.T) {
 // no firmamos, y «seguir sin verificar» sería dejar el agujero abierto justo en el caso raro.
 //
 // Sabotaje: que ShaDeAsset devuelva ("", nil) para un asset ausente.
+// arnes: archivo="internal/selfupdate/firma.go"
+// arnes: de="\tif !hay || strings.TrimSpace(sha) == \"\" {"
+// arnes: a="\tif !hay && false {"
 func TestUnAssetFueraDelManifiestoSeRechaza(t *testing.T) {
 	m := Manifiesto{Version: "1.2.3", Assets: map[string]string{"musubi-linux-amd64": strings.Repeat("a", 64)}}
 	if _, err := m.ShaDeAsset("musubi-linux-amd64"); err != nil {
