@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -112,17 +113,39 @@ func TestElSyncDeclaraElNombreTLSDeSuConfig(t *testing.T) {
 	})
 }
 
-// TestElSyncLlegaAlCentralPorIPConElNombreDeSuConfig — el handshake de punta a punta.
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// EL HANDSHAKE DE PUNTA A PUNTA: UNA PRUEBA CON LA FORMA DE PRODUCCIÓN Y UNA POR CADA CAUSA
+//
+// En producción el sync por IP muere por DOS causas independientes, y cualquiera de las dos
+// alcanza:
+//
+//  1. EL SERVIDOR CORTA SIN SNI. `tailscale serve` elige el certificado por el SNI; a un
+//     ClientHello sin SNI le contesta con la alerta 80 («remote error: tls: internal error») y el
+//     cliente nunca llega a ver un certificado.
+//  2. EL CERTIFICADO NO TIENE SAN DE IP. Aunque el servidor lo entregara, el cliente lo verifica
+//     contra la IP que discó, y el de `tailscale cert` sólo nombra al nodo.
+//
+// El arreglo —declarar el ServerName— cubre las dos a la vez: manda el SNI y verifica contra el
+// nombre. La primera versión de estas pruebas medía las dos JUNTAS con un solo doble, y un revisor
+// le desactivó la guarda de SNI (`if false && h.ServerName != …`) y la prueba siguió en VERDE: sin
+// ServerName el cliente fallaba igual por la causa 2, así que el «sin la clave tiene que fallar»
+// se cumplía por la razón que no se estaba mirando. Un rojo que tiene dos motivos posibles no
+// prueba ninguno de los dos. Por eso cada causa tiene ahora su prueba, con la OTRA apagada: el
+// doble de la causa 1 lleva un certificado que SÍ valida por IP, y el de la causa 2 entrega su
+// certificado a cualquier ClientHello.
+
+// TestElSyncLlegaAlCentralPorIPConElNombreDeSuConfig — la forma de producción, las dos causas juntas.
 //
 // El doble hace lo que hace `tailscale serve` en :10000: tiene UN certificado, emitido sólo para el
 // nombre y sin SAN de IP, y a un ClientHello sin SNI le corta el handshake con «internal error».
 // Se disca 127.0.0.1, que para Go es tan IP como la del tailnet: no manda SNI salvo que el cliente
 // declare el ServerName.
 //
-// LAS DOS MITADES SE MIDEN, porque un verde solo no distingue «el nombre anda» de «el doble no
-// exige nada». Sin la clave, la misma entrega tiene que caer como transitoria —que es exactamente
-// la forma del defecto en producción: pending para siempre— y el doble tiene que haber visto el
-// ClientHello sin SNI.
+// Sin la clave la entrega tiene que caer transitoria —que es la forma del defecto en producción:
+// pending para siempre— y con el MISMO texto que se midió contra el cerebro. El texto no es
+// decorativo: con las dos causas puestas el servidor corta ANTES de que el cliente vea un
+// certificado, así que «tls: internal error» es la causa 1 hablando. Qué causa sostiene sola ese
+// rojo lo dicen las dos pruebas de abajo, no ésta.
 //
 // Sabotaje que la hace fallar: que la clave del config se valide y después se descarte.
 // arnes: archivo="internal/mcp/syncclient.go"
@@ -131,82 +154,120 @@ func TestElSyncDeclaraElNombreTLSDeSuConfig(t *testing.T) {
 func TestElSyncLlegaAlCentralPorIPConElNombreDeSuConfig(t *testing.T) {
 	t.Setenv(cerebro.EnvNombreTLS, "")
 
-	cert, raices := certificadoSoloParaElNombre(t, elNombreDelCerebro)
+	cert, raices := certificadoParaElNombre(t, elNombreDelCerebro)
+	d := levantarElDoble(t, cert, true)
 
-	var mu sync.Mutex
-	var snis []string
-	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"obs-tls","result":{"content":[{"type":"text","text":"ok"}]}}`))
-	}))
-	srv.TLS = &tls.Config{
-		// SIN Certificates a propósito: con la lista vacía el servidor le pregunta SIEMPRE a
-		// GetCertificate, también cuando el ClientHello no trae SNI. Con un certificado en la lista,
-		// un hello sin SNI se lo llevaría igual y el doble dejaría de parecerse a tailscale serve.
-		GetCertificate: func(h *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			mu.Lock()
-			snis = append(snis, h.ServerName)
-			mu.Unlock()
-			if h.ServerName != elNombreDelCerebro {
-				return nil, fmt.Errorf("no hay certificado para el SNI %q", h.ServerName)
-			}
-			return &cert, nil
-		},
-		MinVersion: tls.VersionTLS12,
-	}
-	// El ClientHello sin SNI de la segunda mitad es ESPERADO: su «TLS handshake error» no es ruido
-	// que valga la pena leer en la salida de la suite.
-	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
-	// StartTLS completa Certificates con el suyo cuando la lista viene vacía, y eso desarmaría el
-	// doble: se arranca a mano sobre un listener TLS propio.
-	srv.Listener = tls.NewListener(srv.Listener, srv.TLS)
-	srv.Start()
-	defer srv.Close()
-	url := "https://" + srv.Listener.Addr().String()
-	if !strings.HasPrefix(url, "https://127.0.0.1:") {
-		t.Fatalf("el doble no escucha en una IP: %s", url)
-	}
-
-	vistos := func() []string {
-		mu.Lock()
-		defer mu.Unlock()
-		out := append([]string(nil), snis...)
-		snis = nil
-		return out
-	}
-	item := memory.OutboxItem{ObsID: "obs-tls", TopicKey: "t", Content: "c", Importance: 0.5}
-
-	// ── CON LA CLAVE ─────────────────────────────────────────────────────────────────────────
-	con, err := NewSyncClient(cfgSyncPorIP(url, elNombreDelCerebro))
-	if err != nil {
-		t.Fatalf("NewSyncClient: %v", err)
-	}
-	confiarEnLaRaizDePrueba(con, raices)
-	if err := con.Push(item); err != nil {
+	con, sin := entregarConYSinLaClave(t, d, raices)
+	if con.err != nil {
 		t.Fatalf("con sync.tls_server_name puesto la entrega por IP falló: %v\n  SNI visto por el "+
 			"servidor: %q. Sin SNI, tailscale serve corta el handshake y la fila queda pending para "+
-			"siempre.", err, vistos())
+			"siempre.", con.err, con.snis)
 	}
-	if v := vistos(); len(v) == 0 || v[0] != elNombreDelCerebro {
-		t.Errorf("el servidor vio SNI %q, esperaba %q", v, elNombreDelCerebro)
+	if len(con.snis) == 0 || con.snis[0] != elNombreDelCerebro {
+		t.Errorf("el servidor vio SNI %q, esperaba %q", con.snis, elNombreDelCerebro)
 	}
+	if sin.err == nil {
+		t.Fatal("SIN nombre la entrega por IP pasó igual: el doble no reproduce a tailscale serve y el " +
+			"verde de arriba no prueba nada")
+	}
+	if !errors.Is(sin.err, errTransient) {
+		t.Errorf("sin nombre el fallo no es transitorio (%v): el doble dejó de reproducir la forma del defecto", sin.err)
+	}
+	if !strings.Contains(sin.err.Error(), "tls: internal error") {
+		t.Errorf("sin nombre el fallo no es el que se midió contra el cerebro («remote error: tls: internal "+
+			"error»): %v", sin.err)
+	}
+	if len(sin.snis) == 0 || sin.snis[0] != "" {
+		t.Errorf("sin nombre el servidor vio SNI %q, esperaba un ClientHello sin SNI", sin.snis)
+	}
+}
 
-	// ── SIN LA CLAVE: el control que prueba que el doble exige el nombre ─────────────────────
-	sin, err := NewSyncClient(cfgSyncPorIP(url, ""))
-	if err != nil {
-		t.Fatalf("NewSyncClient: %v", err)
+// TestSinNombreElServidorCortaElHandshakePorFaltaDeSNI — la causa 1, SOLA.
+//
+// El certificado de este doble SÍ trae SAN de IP (127.0.0.1): la causa 2 está apagada a propósito,
+// y un cliente sin ServerName podría verificarlo perfectamente. Lo único que queda para hacer
+// fallar la entrega sin la clave es que el servidor exija el SNI. Si esa guarda del doble se apaga,
+// la entrega sin la clave PASA y esta prueba se pone roja: es la que el revisor no encontró.
+//
+// Y la mitad CON la clave dice que el arreglo cubre esta causa por sí solo: el nombre viaja en el
+// ClientHello y el servidor lo ve.
+//
+// Sabotaje que la hace fallar: apagar la guarda de SNI del doble.
+// arnes: archivo="internal/mcp/syncclient_nombre_tls_test.go"
+// arnes: de="\t\t\tif h.ServerName != elNombreDelCerebro {"
+// arnes: a="\t\t\tif false && h.ServerName != elNombreDelCerebro {"
+func TestSinNombreElServidorCortaElHandshakePorFaltaDeSNI(t *testing.T) {
+	t.Setenv(cerebro.EnvNombreTLS, "")
+
+	cert, raices := certificadoParaElNombre(t, elNombreDelCerebro, net.IPv4(127, 0, 0, 1))
+	d := levantarElDoble(t, cert, true)
+
+	con, sin := entregarConYSinLaClave(t, d, raices)
+	if con.err != nil {
+		t.Fatalf("con la clave la entrega falló contra un doble que sólo exige SNI: %v (SNI visto %q)", con.err, con.snis)
 	}
-	confiarEnLaRaizDePrueba(sin, raices)
-	err = sin.Push(item)
-	if err == nil {
-		t.Fatal("SIN nombre la entrega por IP pasó igual: el doble no exige SNI y el verde de arriba no " +
-			"prueba nada")
+	if len(con.snis) == 0 || con.snis[0] != elNombreDelCerebro {
+		t.Errorf("con la clave el servidor vio SNI %q, esperaba %q: el nombre no viajó en el ClientHello",
+			con.snis, elNombreDelCerebro)
 	}
-	if !errors.Is(err, errTransient) {
-		t.Errorf("sin nombre el fallo no es transitorio (%v): el doble dejó de reproducir la forma del defecto", err)
+	if sin.err == nil {
+		t.Fatal("SIN la clave la entrega pasó: el doble no exige SNI, así que nada de esta prueba mide la " +
+			"causa 1 (el servidor que corta el handshake sin SNI)")
 	}
-	if v := vistos(); len(v) == 0 || v[0] != "" {
-		t.Errorf("sin nombre el servidor vio SNI %q, esperaba un ClientHello sin SNI", v)
+	if !strings.Contains(sin.err.Error(), "tls: internal error") {
+		t.Errorf("sin la clave falló, pero no porque el servidor cortara el handshake: %v", sin.err)
+	}
+	if !errors.Is(sin.err, errTransient) {
+		t.Errorf("sin la clave el fallo no es transitorio (%v)", sin.err)
+	}
+	if len(sin.snis) == 0 || sin.snis[0] != "" {
+		t.Errorf("sin la clave el servidor vio SNI %q, esperaba un ClientHello sin SNI", sin.snis)
+	}
+}
+
+// TestSinNombreElClienteRechazaElCertificadoPorFaltaDeSANDeIP — la causa 2, SOLA.
+//
+// Este doble NO exige SNI: le entrega su certificado a cualquier ClientHello, así que la causa 1
+// está apagada. El certificado es el de `tailscale cert`, con el nombre y ninguna IP, y lo único que
+// queda para hacer fallar la entrega sin la clave es que el CLIENTE lo verifique contra la IP que
+// discó. Si el certificado gana un SAN de IP, la entrega sin la clave PASA y esta prueba se pone
+// roja.
+//
+// La mitad CON la clave dice que el arreglo cubre también esta causa: con el ServerName declarado
+// el cliente verifica contra el nombre, no contra la IP, y la verificación sigue ENTERA (la raíz de
+// prueba es la única en la que se confía).
+//
+// Sabotaje que la hace fallar: darle al certificado del cerebro un SAN de IP.
+// arnes: archivo="internal/mcp/syncclient_nombre_tls_test.go"
+// arnes: de="\tcertSinIP, raices := certificadoParaElNombre(t, elNombreDelCerebro)\n"
+// arnes: a="\tcertSinIP, raices := certificadoParaElNombre(t, elNombreDelCerebro, net.IPv4(127, 0, 0, 1))\n"
+func TestSinNombreElClienteRechazaElCertificadoPorFaltaDeSANDeIP(t *testing.T) {
+	t.Setenv(cerebro.EnvNombreTLS, "")
+
+	certSinIP, raices := certificadoParaElNombre(t, elNombreDelCerebro)
+	d := levantarElDoble(t, certSinIP, false)
+
+	con, sin := entregarConYSinLaClave(t, d, raices)
+	if con.err != nil {
+		t.Fatalf("con la clave la entrega falló contra un doble que no exige SNI: %v", con.err)
+	}
+	if sin.err == nil {
+		t.Fatal("SIN la clave la entrega pasó: el cliente aceptó por IP un certificado que tendría que " +
+			"nombrar sólo al nodo, así que nada de esta prueba mide la causa 2 (el SAN de IP que falta)")
+	}
+	if !strings.Contains(sin.err.Error(), "doesn't contain any IP SANs") {
+		t.Errorf("sin la clave falló, pero no porque el certificado no tenga SAN de IP: %v", sin.err)
+	}
+	if strings.Contains(sin.err.Error(), "tls: internal error") {
+		t.Errorf("sin la clave el servidor cortó el handshake, y este doble no exige SNI: la causa 1 se "+
+			"coló en la prueba de la causa 2: %v", sin.err)
+	}
+	if !errors.Is(sin.err, errTransient) {
+		t.Errorf("sin la clave el fallo no es transitorio (%v)", sin.err)
+	}
+	// El servidor entregó el certificado igual: el ClientHello sin SNI llegó y no se cortó.
+	if len(sin.snis) == 0 || sin.snis[0] != "" {
+		t.Errorf("sin la clave el servidor vio SNI %q, esperaba un ClientHello sin SNI", sin.snis)
 	}
 }
 
@@ -241,9 +302,96 @@ func TestElSyncRechazaUnNombreTLSConEsquemaOPuerto(t *testing.T) {
 	}
 }
 
-// certificadoSoloParaElNombre emite un certificado autofirmado cuyo ÚNICO SAN es `nombre`, igual
-// que el de `tailscale cert`, y devuelve el pool que lo reconoce como raíz.
-func certificadoSoloParaElNombre(t *testing.T, nombre string) (tls.Certificate, *x509.CertPool) {
+// dobleDelCerebro es un servidor HTTPS en 127.0.0.1 que anota el SNI de cada ClientHello.
+type dobleDelCerebro struct {
+	url  string
+	mu   sync.Mutex
+	snis []string
+}
+
+// vistos devuelve los SNI anotados desde la última llamada y vacía la lista.
+func (d *dobleDelCerebro) vistos() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := d.snis
+	d.snis = nil
+	return out
+}
+
+// levantarElDoble arranca el doble con UN certificado. Con `exigeSNI` se porta como `tailscale
+// serve`: a un ClientHello cuyo SNI no es el nombre del cerebro le corta el handshake, y el cliente
+// ve la alerta 80 («remote error: tls: internal error»). Sin `exigeSNI` le entrega el certificado a
+// cualquiera, que es lo que hace falta para medir la causa del SAN de IP sin la otra encima.
+func levantarElDoble(t *testing.T, cert tls.Certificate, exigeSNI bool) *dobleDelCerebro {
+	t.Helper()
+	d := &dobleDelCerebro{}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"obs-tls","result":{"content":[{"type":"text","text":"ok"}]}}`))
+	}))
+	srv.TLS = &tls.Config{
+		// SIN Certificates a propósito: con la lista vacía el servidor le pregunta SIEMPRE a
+		// GetCertificate, también cuando el ClientHello no trae SNI. Con un certificado en la lista,
+		// un hello sin SNI se lo llevaría igual y la guarda de abajo no existiría.
+		GetCertificate: func(h *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			d.mu.Lock()
+			d.snis = append(d.snis, h.ServerName)
+			d.mu.Unlock()
+			if !exigeSNI {
+				return &cert, nil
+			}
+			// LA GUARDA DE SNI DEL DOBLE. Apagarla es el sabotaje de
+			// TestSinNombreElServidorCortaElHandshakePorFaltaDeSNI.
+			if h.ServerName != elNombreDelCerebro {
+				return nil, fmt.Errorf("no hay certificado para el SNI %q", h.ServerName)
+			}
+			return &cert, nil
+		},
+		MinVersion: tls.VersionTLS12,
+	}
+	// Los ClientHello rechazados de las mitades «sin la clave» son ESPERADOS: su «TLS handshake
+	// error» no es ruido que valga la pena leer en la salida de la suite.
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	// StartTLS completa Certificates con el suyo cuando la lista viene vacía, y eso desarmaría el
+	// doble: se arranca a mano sobre un listener TLS propio.
+	srv.Listener = tls.NewListener(srv.Listener, srv.TLS)
+	srv.Start()
+	t.Cleanup(srv.Close)
+	d.url = "https://" + srv.Listener.Addr().String()
+	if !strings.HasPrefix(d.url, "https://127.0.0.1:") {
+		t.Fatalf("el doble no escucha en una IP: %s", d.url)
+	}
+	return d
+}
+
+// entrega es lo que pasó con UNA entrega: el error de Push y los SNI que vio el servidor.
+type entrega struct {
+	err  error
+	snis []string
+}
+
+// entregarConYSinLaClave empuja la misma fila dos veces contra el doble: una con
+// `sync.tls_server_name` puesta y otra sin ella. Los dos clientes salen de NewSyncClient, que es lo
+// que se mide; la prueba sólo les agrega la raíz de confianza del certificado de prueba.
+func entregarConYSinLaClave(t *testing.T, d *dobleDelCerebro, raices *x509.CertPool) (con, sin entrega) {
+	t.Helper()
+	item := memory.OutboxItem{ObsID: "obs-tls", TopicKey: "t", Content: "c", Importance: 0.5}
+	empujar := func(nombre string) entrega {
+		c, err := NewSyncClient(cfgSyncPorIP(d.url, nombre))
+		if err != nil {
+			t.Fatalf("NewSyncClient(tls_server_name=%q): %v", nombre, err)
+		}
+		confiarEnLaRaizDePrueba(c, raices)
+		d.vistos()
+		err = c.Push(item)
+		return entrega{err: err, snis: d.vistos()}
+	}
+	return empujar(elNombreDelCerebro), empujar("")
+}
+
+// certificadoParaElNombre emite un certificado autofirmado para `nombre` y, si se piden, para las
+// `ips` —el de `tailscale cert` NO trae ninguna—, y devuelve el pool que lo reconoce como raíz.
+func certificadoParaElNombre(t *testing.T, nombre string, ips ...net.IP) (tls.Certificate, *x509.CertPool) {
 	t.Helper()
 	clave, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -253,6 +401,7 @@ func certificadoSoloParaElNombre(t *testing.T, nombre string) (tls.Certificate, 
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: nombre},
 		DNSNames:              []string{nombre},
+		IPAddresses:           ips,
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
@@ -268,8 +417,8 @@ func certificadoSoloParaElNombre(t *testing.T, nombre string) (tls.Certificate, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hoja.IPAddresses) != 0 {
-		t.Fatalf("el certificado de prueba trae SAN de IP %v: el test dejaría de reproducir el defecto", hoja.IPAddresses)
+	if len(hoja.IPAddresses) != len(ips) {
+		t.Fatalf("pedí %d SAN de IP y el certificado trae %v: el doble no es el que la prueba cree", len(ips), hoja.IPAddresses)
 	}
 	raices := x509.NewCertPool()
 	raices.AddCert(hoja)

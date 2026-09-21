@@ -25,13 +25,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
   La clave gana; sin ella sigue valiendo `MUSUBI_BRAIN_TLS_NAME` (leída por su único lector,
   `cerebro.NombreTLS`), y sin ninguna de las dos el nombre sale del host de la URL, como siempre.
-  Sólo se toca `ServerName`: la verificación sigue entera. Un valor con esquema, puerto o barra
-  (`https://nodo…`, `nodo…:10000`) se rechaza al construir el cliente como error **permanente**, en
-  vez de fallar en cada handshake como error de red. El `doctor` compara también esta clave entre
-  el config que gobierna y su sombra. *Medido con un doble que se porta como `tailscale serve`
-  —certificado sólo para el nombre, handshake cortado sin SNI— discando `127.0.0.1`: sin la clave la
-  entrega cae transitoria con el mismo `tls: internal error` y el servidor ve un ClientHello sin SNI;
-  con la clave pasa y ve el nombre.*
+  Con un nombre declarado, `cerebro.Cliente` fija dos cosas y nada más: `ServerName` y un piso de
+  TLS 1.2 (`MinVersion`). La verificación sigue entera: ni `InsecureSkipVerify` ni otro pool de
+  raíces. Un valor con esquema, puerto o barra (`https://nodo…`, `nodo…:10000`) se rechaza al
+  construir el cliente como error **permanente**, en vez de fallar en cada handshake como error de
+  red. El `doctor` compara también esta clave entre el config que gobierna y su sombra. *Medido con dobles de `tailscale serve` discando `127.0.0.1`, una prueba por causa, porque
+  son dos y cada una alcanza sola: el servidor que corta el handshake sin SNI (`remote error: tls:
+  internal error`), y el certificado sin SAN de IP que el cliente rechaza al verificar por IP. Cada
+  doble apaga la causa que no mide, y con la clave las dos entregas pasan. Una sola prueba con las
+  dos causas juntas seguía en verde con la guarda de SNI del doble apagada.*
 - **La compuerta de guiones ahora CONSTRUYE el comando, y con eso la guarda de alcance pasó de
   preguntar N cosas a preguntar una** (A127, cerrado). Las dos mitades de la equivalencia —quien
   ejecuta una shell pasa por la compuerta, y quien pasa por la compuerta ejecuta una shell— se
