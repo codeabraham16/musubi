@@ -36,7 +36,17 @@ func boolPtr(b bool) *bool { return &b }
 // un `pide` a `prohibido`, esa confusión cerraría el acceso por pantalla a máquinas que quizás sí
 // pueden, sin que nada lo dijera. La primera flota con agentes mezclados se rompería callada.
 //
-// Sabotaje que la hace fallar: cambiar PuedePreguntar de *bool a bool en cuerpoLatido.
+// EL CORTE LITERAL NO COMPILA, Y SE MIDIÓ. Cambiar el campo de `*bool` a `bool` deja
+// `cuerpo.PuedePreguntar != nil` sin sentido en fleet_http.go y el paquete no arma — y un sabotaje
+// que no compila no prueba nada, porque `go test` sale distinto de cero pase lo que pase. Se corta
+// la CONSECUENCIA, que es lo que el puntero existe para impedir: que «no opinó» se vuelva «opinó
+// que no».
+//
+// Sabotaje que la hace fallar: que un `puede_preguntar` ausente se trate como un `false` explícito
+// al entrar por el latido.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\tif cuerpo.PuedePreguntar != nil {"
+// arnes: a="\tif cuerpo.PuedePreguntar == nil {\n\t\tno := false\n\t\tcuerpo.PuedePreguntar = &no\n\t}\n\tif cuerpo.PuedePreguntar != nil {"
 func TestUnAgenteViejoQueNoOpinaNoPisaLaCapacidadMedida(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 	id := idDeDevice(t, s, "pc-gio")
@@ -79,11 +89,14 @@ func TestUnAgenteViejoQueNoOpinaNoPisaLaCapacidadMedida(t *testing.T) {
 // EL AVISO SE ENCOLA CUANDO EL AGENTE SABE DARLO, y es lo que `avisa` prometía y no entregaba.
 //
 // Sabotaje que la hace fallar: sacar el `case consent.AvisaAlUsuario()` que encola.
-// Sabotaje que la hace fallar: encolar el aviso DESPUÉS de crear la sesión (llega tarde).
-// arnes: no_mecanizable="Regla 4: el sabotaje que esta línea describe —encolar el aviso DESPUÉS de crear la sesión, o sea mover s.encolarAvisoDeAcceso (methods_pantalla.go:189) por debajo del AbrirSesionPantalla (línea 194)— deja TestConUnAgenteQueSabeAvisarElAvisoSeEncola en VERDE. La prueba sólo observa PRESENCIA y TEXTO, nunca orden: toma `antes := comandosEncolados(t, s)`, llama musubi_fleet_screen, y recorre TODOS los `nuevos` buscando cualquier fila con Argv[0] == comandoAviso (aviso_test.go:110-116) para luego exigir que Argv[1] contenga «mirador» y «pantalla». `comandosEncolados` es `s.engine.BitacoraDeComandos(\"casa\", \"\", 50)` (fleet_politicas_test.go:59-66) y no se compara ningún índice ni posición contra el comando de pantalla que encola entregarPantalla, así que el aviso reordenado sigue en la lista con el mismo argv y las cuatro aserciones pasan. Confirmé además que ninguna prueba de internal/mcp mira el orden del aviso (grep de comandoAviso: consentimiento_exec_shell_test.go:129,250,303, aviso_test.go:112,158, consentimiento_matriz_test.go:210, politicas_consentimiento_test.go:84 — todas búsquedas por Argv[0]) y que `encolarAvisoDeAcceso` no recibe la sesión, así que moverlo no cambia nada observable. El «llega tarde» es una propiedad temporal frente a la apertura real de la pantalla que esta prueba no mide; ponerla en rojo exigiría una aserción de orden que hoy no existe, no un reemplazo de literal. (La OTRA línea del mismo comentario, aviso_test.go:81 —«sacar el case consent.AvisaAlUsuario() que encola»— sí es mecanizable y sí pone esta prueba en rojo; el ancla asignada es la 82.)"
+// La de abajo es OTRA ancla y su respuesta es la exención: el alcance de un ancla termina donde
+// empieza la siguiente, así que estas tres líneas tenían que ir ACÁ y no después.
 // arnes: archivo="internal/mcp/methods_pantalla.go"
 // arnes: de="\t\ts.encolarAvisoDeAcceso(d, p, avisoPantalla)"
 // arnes: a="\t\t_ = avisoPantalla"
+// arnes: colision_ok="TestConCuatroOjosElPrimerPedidoNoAcunaContrasena"
+// Sabotaje que la hace fallar: encolar el aviso DESPUÉS de crear la sesión (llega tarde).
+// arnes: no_mecanizable="Regla 4: el sabotaje que esta línea describe —encolar el aviso DESPUÉS de crear la sesión, o sea mover s.encolarAvisoDeAcceso (methods_pantalla.go:189) por debajo del AbrirSesionPantalla (línea 194)— deja TestConUnAgenteQueSabeAvisarElAvisoSeEncola en VERDE. La prueba sólo observa PRESENCIA y TEXTO, nunca orden: toma `antes := comandosEncolados(t, s)`, llama musubi_fleet_screen, y recorre TODOS los `nuevos` buscando cualquier fila con Argv[0] == comandoAviso (aviso_test.go:110-116) para luego exigir que Argv[1] contenga «mirador» y «pantalla». `comandosEncolados` es `s.engine.BitacoraDeComandos(\"casa\", \"\", 50)` (fleet_politicas_test.go:59-66) y no se compara ningún índice ni posición contra el comando de pantalla que encola entregarPantalla, así que el aviso reordenado sigue en la lista con el mismo argv y las cuatro aserciones pasan. Confirmé además que ninguna prueba de internal/mcp mira el orden del aviso (grep de comandoAviso: consentimiento_exec_shell_test.go:129,250,303, aviso_test.go:112,158, consentimiento_matriz_test.go:210, politicas_consentimiento_test.go:84 — todas búsquedas por Argv[0]) y que `encolarAvisoDeAcceso` no recibe la sesión, así que moverlo no cambia nada observable. El «llega tarde» es una propiedad temporal frente a la apertura real de la pantalla que esta prueba no mide; ponerla en rojo exigiría una aserción de orden que hoy no existe, no un reemplazo de literal. (La OTRA línea del mismo comentario, aviso_test.go:81 —«sacar el case consent.AvisaAlUsuario() que encola»— sí es mecanizable y sí pone esta prueba en rojo; el ancla asignada es la 82.)"
 func TestConUnAgenteQueSabeAvisarElAvisoSeEncola(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	tokenDevice := enrolarConPantalla(t, s, "casa", "pc-gio")
@@ -199,7 +212,16 @@ func maquinaQuePide(t *testing.T) (*McpServer, *httptest.Server, string) {
 // es una credencial que se puede filtrar, aunque nadie la use, y no se sabe si van a decir que sí.
 //
 // Sabotaje que la hace fallar: seguir el camino normal cuando el consentimiento es `pide`.
-// Sabotaje que la hace fallar: acuñar la contraseña antes de preguntar.
+// arnes: archivo="internal/mcp/methods_pantalla.go"
+// arnes: de="\tif consent := d.ConsentimientoEfectivo(); consent == fleet.ConsentimientoPide {"
+// arnes: a="\tif consent := d.ConsentimientoEfectivo(); false && consent == fleet.ConsentimientoPide {"
+// arnes: colision_ok="TestConCuatroOjosElPrimerPedidoNoAcunaContrasena"
+// LA OTRA MITAD ES LA MISMA GUARDA, Y SE MIDIÓ. «Acuñar la contraseña antes de preguntar» se
+// mecanizó —metiendo una clave recién acuñada en la respuesta del `pide`— y el arnés devolvió
+// `motivos repetidos: 1`: cae en la misma línea y con el mismo texto que el corte de arriba. Es
+// esperable: esta prueba observa UNA cosa —que la respuesta no traiga contraseña— así que los dos
+// caminos de acuñarla de más son indistinguibles desde acá. Queda mecanizada la de arriba, que
+// corta la rama entera del `pide`.
 func TestUnPideDevuelveLaEsperaYNoUnaContrasena(t *testing.T) {
 	s, _, _ := maquinaQuePide(t)
 
@@ -243,6 +265,9 @@ func TestUnPideDevuelveLaEsperaYNoUnaContrasena(t *testing.T) {
 // contraseña.
 //
 // Sabotaje que la hace fallar: no registrar la respuesta en registrarRespuestaDePermiso.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\t\ts.registrarRespuestaDePermiso(d.ID, cuerpo)\n"
+// arnes: a=""
 // Sabotaje que la hace fallar: que `concedida` cierre la sesión en vez de dejarla `solicitada`.
 func TestElCircuitoCompletoDeUnPideConcedido(t *testing.T) {
 	s, ts, tokDev := maquinaQuePide(t)
@@ -308,8 +333,16 @@ func TestElCircuitoCompletoDeUnPideConcedido(t *testing.T) {
 // quizás no debería estar en `pide`; «no había con qué preguntar» dice que le falta software o le
 // sobra aislamiento. Los tres cierran, y confundirlos manda a arreglar la cosa equivocada.
 //
-// Sabotaje que la hace fallar: guardar la respuesta en `error` en vez de en su columna.
+// ESTA MITAD Y LA DE ABAJO SON UNA SOLA GUARDA, Y SE MIDIÓ. Se mecanizaron las dos —una
+// corrompiendo la columna donde se guarda la respuesta, la otra colapsando explicarSinPermiso—
+// y el arnés devolvió `motivos repetidos: 1`: las dos caen en la MISMA línea con el MISMO texto
+// («el mensaje no distingue este caso»). Es esperable y no es un defecto: esta prueba sólo lee
+// el MENSAJE, así que no puede separar «la respuesta no se guardó bien» de «el mensaje no la
+// mira». Queda mecanizada la de abajo, que es la que nombra el sitio donde el mensaje se arma.
 // Sabotaje que la hace fallar: devolver el mismo mensaje para los tres.
+// arnes: archivo="internal/mcp/methods_pantalla.go"
+// arnes: de="\tbase := fmt.Sprintf(\"no se abre la pantalla de %q: \", d.Name)"
+// arnes: a="\treturn fmt.Sprintf(\"no se abre la pantalla de %q\", d.Name)\n}\n\nfunc explicarSinPermisoViejo(d fleet.Device, ses fleet.SesionPantalla) string {\n\tbase := fmt.Sprintf(\"no se abre la pantalla de %q: \", d.Name)"
 func TestLosTresNoSeDistinguenYCadaUnoDiceQueHacer(t *testing.T) {
 	casos := []struct {
 		respuesta fleet.RespuestaAviso
