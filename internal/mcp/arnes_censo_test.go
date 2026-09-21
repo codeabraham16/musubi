@@ -656,7 +656,34 @@ import (
 // sobre `Muestra` que falla si el campo no está. Vale anotarlo porque abre una forma que estaba
 // sin usar: cuando el defecto no existe como línea, el arnés igual lo puede fabricar como bloque,
 // y eso es preferible a declarar `no_mecanizable`, que baja el número igual y es mucho más barato.
-const anclasEnProsaAlDia = 171
+// Y DE 171 A 163 EL 2026-09-21, que es donde el corpus cruza el 80 %: las ocho del VENCIMIENTO DE
+// UNA CREDENCIAL —`principals_expires_test.go` y `principals_vencimiento_politicas_test.go`—, o sea
+// hasta cuándo vale una identidad y quién se acuerda de mirarlo. 8 de 8 en rojo.
+//
+// DOS DE LAS OCHO PROMETEN EL MISMO CORTE y el instrumento probó que son dos guardas. Las dos dicen
+// «sacar el `p.Vencida(...)` de porNombre», la misma línea de `principals.go`, así que el validador
+// las denuncia como colisión. Declarar `colision_ok` AFIRMA que son dos, y eso no se sabe hasta
+// correrlas: lo decide si los motivos difieren. Difieren —«el indicador dice que una credencial
+// VENCIDA puede actuar» contra «el empuje OTLP sigue exportando la telemetría de la flota con una
+// credencial VENCIDA»— y el censo cerró con `motivos repetidos: 0`. Si hubieran salido iguales, lo
+// que había que cambiar era el corte de una de las dos, no la declaración.
+//
+// Y HAY UNA TERCERA SOBRE LA MISMA GUARDA que NO colisiona, porque ataca otro eslabón: el
+// envoltorio recargable (`principals_reload.go`), donde el sabotaje hace que `rr.porNombre` delegue
+// en `reg.porNombreAunqueVencida`. Su motivo lo dice con todas las letras —«POR EL ENVOLTORIO DE
+// PRODUCCIÓN el indicador dice que una credencial VENCIDA puede actuar»— y es la distinción que
+// importa: el registro de abajo puede estar sano y el envoltorio que usa producción, no.
+//
+// EL AVISO DE COLISIÓN TRAE EL NOMBRE DE LA PRUEBA; NO SE ESCRIBE DE MEMORIA. Las dos `colision_ok`
+// de este lote entraron mal la primera vez porque las deduje de la prosa, y el validador contestó
+// las dos cosas por separado: que la respuesta quedaba RANCIA («un "esto ya se miró" sobre algo que
+// nadie miró es peor que el aviso») y, aparte, la colisión real con el nombre exacto listo para
+// copiar. Se corre `-validar` y se copia lo que imprime.
+//
+// EL LOTE SE CORTÓ EN OCHO dejando afuera `internal/config/secreto_env_test.go`, que tiene cuatro:
+// dos de las suyas BARREN EL REPO buscando una frase en vez de sabotear una línea de código, y eso
+// pide leerlas con calma en vez de apurarlas al final de un lote.
+const anclasEnProsaAlDia = 163
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
