@@ -61,6 +61,9 @@ func TestLaVueltaAtrasRestauraLaBaseYNoSoloElBinario(t *testing.T) {
 // buena hasta el día que se la necesita.
 //
 // Sabotaje que la hace fallar: cambiar el respaldo por `cp -a "$BASE" "$RESPALDO"`.
+// arnes: archivo="deploy/redesplegar-cerebro.sh"
+// arnes: de="python3 - \"$BASE\" \"$RESPALDO\" <<'PY' || die \"no se pudo respaldar la base. SIN RESPALDO NO SE SIGUE.\"\nimport sqlite3, sys\nsrc, dst = sys.argv[1], sys.argv[2]\ns = sqlite3.connect(src); d = sqlite3.connect(dst)\ns.backup(d); d.close(); s.close()\nPY\n"
+// arnes: a="cp -a \"$BASE\" \"$RESPALDO\" || die \"no se pudo respaldar la base. SIN RESPALDO NO SE SIGUE.\"\n"
 func TestElRespaldoSeSacaANTESDeTocarNada(t *testing.T) {
 	texto := leerRedespliegue(t)
 	posRespaldo := strings.Index(texto, "s.backup(d)")
@@ -150,6 +153,9 @@ func TestSeVerificaElINODOYNoElIsActive(t *testing.T) {
 // cada corrida.
 //
 // Sabotaje que la hace fallar: volver a poner el `sed -i '/^service:/,$d'`.
+// arnes: archivo="deploy/install-musubi-brain.sh"
+// arnes: de="awk '\n  /^service:/ { dentro=1; next }\n  dentro && /^[^[:space:]#]/ { dentro=0 }\n  !dentro\n' \"$CFG\" > \"$CFG.sin-service\"\n# `cat >` y no `mv`: conserva el inodo y la etiqueta del archivo. Es la leccion de A82 y la de\n# SELinux -- un `mv` crea una entrada nueva y le cambia el contexto al destino.\ncat \"$CFG.sin-service\" > \"$CFG\"\nrm -f \"$CFG.sin-service\"\n"
+// arnes: a="sed -i '/^service:/,$d' \"$CFG\"\n"
 func TestElInstaladorDelCerebroNoSeComeLoQueVieneDespuesDeService(t *testing.T) {
 	guion := leerDeploy(t, "install-musubi-brain.sh")
 

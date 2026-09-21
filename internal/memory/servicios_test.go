@@ -564,6 +564,7 @@ func TestLoQueReportaLaMaquinaSeAcotaAlGuardarlo(t *testing.T) {
 //
 // Sabotaje que la hace fallar: devolver el UPDATE a `WHERE name = ? AND device_id = ? AND
 // revoked = 0` y sacarle el `revoked = 0` del SET.
+// arnes: colision_ok="TestUnServicioDeclaradoQueLaMaquinaReportaSigueSiendoDeclarado"
 // arnes: archivo="internal/memory/servicios.go"
 // arnes: de="\t\t\t        revoked     = 0\n"
 // arnes: a="\t\t\t        revoked     = revoked\n"

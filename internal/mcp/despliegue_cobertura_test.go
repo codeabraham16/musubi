@@ -66,6 +66,9 @@ func selectoresDelVerificador(t *testing.T) []string {
 // qué, así que el informe deja de ser accionable y a las dos semanas nadie lo lee.
 //
 // Sabotaje: poner `ausente_en: "so=windows — ..."` o quitarle la razón a una cláusula.
+// arnes: archivo="deploy/musubi-alerts-flota.yml"
+// arnes: de="          ausente_en: \"os=windows — el load average es un concepto de UNIX y ahí no existe; emitir un 0 lo haría indistinguible de una máquina ociosa.\""
+// arnes: a="          ausente_en: \"so=windows — el load average es un concepto de UNIX y ahí no existe; emitir un 0 lo haría indistinguible de una máquina ociosa.\""
 func TestCadaHuecoDeclaradoUsaUnSelectorQueElVerificadorEntiende(t *testing.T) {
 	validos := selectoresDelVerificador(t)
 	esValido := func(sel string) bool {
@@ -136,6 +139,9 @@ func TestCadaHuecoDeclaradoUsaUnSelectorQueElVerificadorEntiende(t *testing.T) {
 // nada. Es la enfermedad que este verificador vino a cazar, cometida por el verificador.
 //
 // Sabotaje: borrar el bloque `if aplicables == 0` de verificar-cobertura.sh.
+// arnes: archivo="deploy/verificar-cobertura.sh"
+// arnes: de="if aplicables == 0:"
+// arnes: a="if aplicables < 0:"
 func TestElMapaDeCoberturaNoSePoneEnVerdeSinHaberMiradoNada(t *testing.T) {
 	script := leerDeploy(t, "verificar-cobertura.sh")
 	for _, guarda := range []string{"if not maquinas:", "aplicables == 0"} {

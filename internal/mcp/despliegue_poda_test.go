@@ -24,6 +24,10 @@ import (
 //   - cambiar el `| sort` por un orden por mtime (`-printf '%T@ %f\n' | sort -n`): borra los tres
 //     equivocados, y además mete el punto de retorno de la corrida actual en la lista de borrado;
 //   - quitar la guarda `[[ "$dir/$f" == "$actual" ]]`: con retención 0 se lleva la vuelta atrás.
+//
+// arnes: archivo="deploy/redesplegar-cerebro.sh"
+// arnes: de="    if [[ \"$dir/$f\" == \"$actual\" ]]; then\n      aviso \"$etiqueta: NO se borra el de esta corrida ($f)\"\n      continue\n    fi\n    rm -f -- \"$dir/$f\" && n=$(( n + 1 ))\n"
+// arnes: a="    rm -f -- \"$dir/$f\" && n=$(( n + 1 ))\n"
 func TestLaPodaDePuntosDeRetornoHaceLoQueDice(t *testing.T) {
 	// El `t.Skipf` de `exec.LookPath("bash")` que había acá salteaba TAMBIÉN EN LINUX: sin bash esta
 	// guarda no existía y `go test` contestaba `ok`. La compuerta lo convierte en un fallo.
@@ -59,6 +63,9 @@ var (
 //
 // Sabotaje que la hace fallar: agregar `OTRO_VOLCADO="$HOME_CEREBRO/algo-$SELLO.db"` sin sumarle
 // su llamada a `podar_puntos_de_retorno`.
+// arnes: archivo="deploy/redesplegar-cerebro.sh"
+// arnes: de="BIN_VIEJO=\"/usr/local/bin/musubi.antes-de-$SELLO\"\n"
+// arnes: a="BIN_VIEJO=\"/usr/local/bin/musubi.antes-de-$SELLO\"\nOTRO_VOLCADO=\"$HOME_CEREBRO/algo-$SELLO.db\"\n"
 func TestTodoArtefactoPorCorridaDelRedespliegueSePoda(t *testing.T) {
 	guion := leerDeploy(t, "redesplegar-cerebro.sh")
 

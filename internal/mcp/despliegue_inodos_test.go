@@ -98,6 +98,9 @@ func TestTodoMountDePrometheusEstaClasificado(t *testing.T) {
 //
 // Sabotaje que la hace fallar: volver a `install -m 0644 ... "$DEST/prometheus.yml"`, o al
 // `mv "$TOKEN_FILE.tmp" "$TOKEN_FILE"` que estuvo hasta hoy.
+// arnes: archivo="deploy/docker/preparar.sh"
+// arnes: de="\tprintf '%s' \"$TOK\" > \"$TOKEN_FILE\"  # MISMO INODO, sin `mv`\n"
+// arnes: a="\tprintf '%s' \"$TOK\" > \"$TOKEN_FILE.tmp\"\n\tmv \"$TOKEN_FILE.tmp\" \"$TOKEN_FILE\"\n"
 func TestPrepararNoLeReemplazaElInodoAUnMountDeArchivo(t *testing.T) {
 	guion := leerDeploy(t, "docker", "preparar.sh")
 	lineas := strings.Split(guion, "\n")
@@ -168,6 +171,9 @@ func TestPrepararNoLeReemplazaElInodoAUnMountDeArchivo(t *testing.T) {
 // forma en vez del efecto manda a envolver código que ya estaba bien.
 //
 // Sabotaje que la hace fallar: borrar cualquiera de los tres `poner`, o el `printf > "$TOKEN_FILE"`.
+// arnes: archivo="deploy/docker/preparar.sh"
+// arnes: de="poner \"$REPO/deploy/prometheus/prometheus.yml\"   \"$DEST/prometheus.yml\"\nponer \"$REPO/deploy/prometheus/alertmanager.yml\" \"$DEST/alertmanager.yml\"\n"
+// arnes: a="poner \"$REPO/deploy/prometheus/alertmanager.yml\" \"$DEST/alertmanager.yml\"\n"
 func TestLosTresMountsDeArchivoSeEscribenSinCambiarElInodo(t *testing.T) {
 	guion := leerDeploy(t, "docker", "preparar.sh")
 	if !strings.Contains(guion, "\nponer() {") {

@@ -487,6 +487,7 @@ func TestLaPodaPorAusenciaCorreDesdeElLatidoYUnLatidoMudoNoVaciaNada(t *testing.
 // El `de` arrastra el `AND revoked = 0` de al lado porque `AND declared = 0` solo aparece DOS
 // veces en el archivo —la otra está en la prosa que explica la guarda—, y un `de` repetido no
 // identifica nada.
+// arnes: colision_ok="TestLaPodaPorAusenciaNoSeLlevaLoDeclaradoAMano"
 // arnes: archivo="internal/memory/servicios.go"
 // arnes: de="WHERE device_id = ? AND revoked = 0 AND declared = 0"
 // arnes: a="WHERE device_id = ? AND revoked = 0"

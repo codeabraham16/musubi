@@ -23,15 +23,15 @@ import (
 // Sabotaje que la hace fallar: registrar la plantilla SIN cerrar el engine antes. Con la base
 // abierta el archivo principal son 4 KB y el esquema entero vive en el `-wal`; la copia llega con
 // `user_version` en 0. Ejecutado: la prueba dice exactamente eso.
-// arnes: prueba="TestLaPlantillaLlegaConElEsquemaAlDia"
-// arnes: archivo="internal/memory/plantilla.go"
-// arnes: de="\teng.Close()\n"
-// arnes: a="\t_ = eng\n"
 //
 // NO hay un sabotaje sobre un `wal_checkpoint` explícito, porque no hay tal llamada: se probó
 // quitarla y la suite quedó verde —SQLite hace checkpoint solo al cerrar la última conexión— así
 // que la llamada se sacó en vez de dejarla con un comentario que decía que era imprescindible.
 // Lo que se custodia acá es la PROPIEDAD (el archivo copiado está al día), no el mecanismo.
+// arnes: prueba="TestLaPlantillaLlegaConElEsquemaAlDia"
+// arnes: archivo="internal/memory/plantilla.go"
+// arnes: de="\teng.Close()\n"
+// arnes: a="\t_ = eng\n"
 func TestLaPlantillaLlegaConElEsquemaAlDia(t *testing.T) {
 	dir := t.TempDir()
 	if err := SembrarPlantillaDePruebas(dir); err != nil {
@@ -79,6 +79,9 @@ func TestLaPlantillaLlegaConElEsquemaAlDia(t *testing.T) {
 //
 // Sabotaje que la hace fallar: sembrar con una base sin migrar (o borrar el archivo sembrado
 // antes de abrir).
+// arnes: archivo="internal/memory/plantilla.go"
+// arnes: de="\treturn copiarArchivo(plantillaRuta, destino)\n"
+// arnes: a="\tif err := copiarArchivo(plantillaRuta, destino); err != nil {\n\t\treturn err\n\t}\n\treturn os.Truncate(destino, 0)\n"
 func TestAbrirSobreLaPlantillaNoMigraNada(t *testing.T) {
 	dir := t.TempDir()
 	if err := SembrarPlantillaDePruebas(dir); err != nil {
@@ -128,6 +131,9 @@ func versionDeArchivo(t *testing.T, ruta string) int {
 // columna o en una PK haría que las pruebas validen un esquema que el servidor no tiene.
 //
 // Sabotaje que la hace fallar: hacer que la plantilla se construya con una migración de menos.
+// arnes: archivo="internal/memory/plantilla.go"
+// arnes: de="\truta := filepath.Join(dir, config.DirName, config.DBFile)\n"
+// arnes: a="\truta := filepath.Join(dir, config.DirName, config.DBFile)\n\tif _, err := eng.db.Exec(`DROP INDEX IF EXISTS idx_services_device`); err != nil {\n\t\tplantillaErr = err\n\t\treturn\n\t}\n"
 func TestLaBaseSembradaEsIdenticaALaMigradaDeCero(t *testing.T) {
 	sembrada := t.TempDir()
 	if err := SembrarPlantillaDePruebas(sembrada); err != nil {
@@ -201,6 +207,9 @@ func esquemaDe(t *testing.T, e *DbEngine) map[string]string {
 //
 // Sabotaje que la hace fallar: llamar a SembrarPlantillaDePruebas desde cualquier archivo que no
 // sea de prueba.
+// arnes: archivo="internal/memory/codepath.go"
+// arnes: de="\tsum := sha256.Sum256(data)\n\treturn hex.EncodeToString(sum[:]), nil\n}\n"
+// arnes: a="\tsum := sha256.Sum256(data)\n\treturn hex.EncodeToString(sum[:]), nil\n}\n\n// acelerarArranqueDeLaMemoria deja la base ya migrada antes de abrirla.\nfunc acelerarArranqueDeLaMemoria(dir string) error {\n\treturn SembrarPlantillaDePruebas(dir)\n}\n"
 func TestLaPlantillaDePruebasNoTieneLlamadorDeProduccion(t *testing.T) {
 	raiz := filepath.Join("..", "..")
 	gos, err := arbol.ConSufijo(raiz, ".go")
@@ -259,6 +268,9 @@ func TestLaPlantillaDePruebasNoTieneLlamadorDeProduccion(t *testing.T) {
 // existe para otra cosa. Esta prueba lo atrapa de frente.
 //
 // Sabotaje que la hace fallar: mover cualquier migración de lugar en el slice.
+// arnes: archivo="internal/memory/migrations.go"
+// arnes: de="\t\t\tversion:        57,\n\t\t\tname:           \"expansion_como_relevancia_elegida\",\n"
+// arnes: a="\t\t\tversion:        39,\n\t\t\tname:           \"expansion_como_relevancia_elegida\",\n"
 func TestLasMigracionesEstanEnOrdenAscendenteYSinHuecos(t *testing.T) {
 	ms := schemaMigrations()
 	if len(ms) < 30 {

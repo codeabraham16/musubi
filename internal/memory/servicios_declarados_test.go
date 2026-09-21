@@ -36,6 +36,10 @@ import (
 //
 // Sabotaje que la hace fallar (VERIFICADO): sacarle el `AND declared = 0` al UPDATE de
 // PodarServiciosAusentes. El bot desaparece del inventario en el primer latido.
+// arnes: colision_ok="TestElLatidoNoPodaLoQueSeDeclaroAMano"
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\tconsulta := `UPDATE services SET revoked = 1 WHERE device_id = ? AND revoked = 0 AND declared = 0`\n"
+// arnes: a="\tconsulta := `UPDATE services SET revoked = 1 WHERE device_id = ? AND revoked = 0`\n"
 func TestLaPodaPorAusenciaNoSeLlevaLoDeclaradoAMano(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "pc-gio")
@@ -83,6 +87,10 @@ func TestLaPodaPorAusenciaNoSeLlevaLoDeclaradoAMano(t *testing.T) {
 //
 // Sabotaje que la hace fallar: poner `declared = 0` en el UPDATE de ReportarServicios (o sumarlo
 // al CASE de kind), y después podar sin ese nombre.
+// arnes: colision_ok="TestLoQuePodoLaAusenciaVuelveConLaPresencia"
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\t\t\t        revoked     = 0\n\t\t\t  WHERE name = ? AND device_id = ? AND (revoked = 0 OR declared = 0)`,\n"
+// arnes: a="\t\t\t        revoked     = 0,\n\t\t\t        declared    = 0\n\t\t\t  WHERE name = ? AND device_id = ? AND (revoked = 0 OR declared = 0)`,\n"
 func TestUnServicioDeclaradoQueLaMaquinaReportaSigueSiendoDeclarado(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "pc-gio")
@@ -118,6 +126,9 @@ func TestUnServicioDeclaradoQueLaMaquinaReportaSigueSiendoDeclarado(t *testing.T
 //
 // Sabotaje que la hace fallar: devolver ErrServicioDuplicado en cuanto el INSERT choca, sin mirar
 // si la fila que ocupa el nombre está revocada.
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\t\t\treturn e.revivirServicioDeclarado(s, d)\n"
+// arnes: a="\t\t\treturn fleet.Servicio{}, fmt.Errorf(\"%w: %q ya existe\", fleet.ErrServicioDuplicado, s.Nombre)\n"
 func TestRedeclararUnServicioDadoDeBajaLoTraeDeVuelta(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "pc-gio")

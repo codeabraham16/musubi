@@ -31,6 +31,9 @@ func servidorConMarca(t *testing.T, tenant, texto string) *McpServer {
 // correcta era la de Altura, que existe con el tenant en minúscula.
 //
 // SABOTAJE: sacar el ToLower de brandScopeFor ⇒ la variante con mayúscula vuelve a perder la marca.
+// arnes: archivo="internal/mcp/methods_design.go"
+// arnes: de="\tif argBrand = strings.ToLower(strings.TrimSpace(argBrand)); argBrand != \"\" && brandArgAllowed(p) {"
+// arnes: a="\tif argBrand = strings.TrimSpace(argBrand); argBrand != \"\" && brandArgAllowed(p) {"
 func TestMarcaNoSePierdePorUnaMayuscula(t *testing.T) {
 	const texto = "MARCA DE PRUEBA — el acento es el ámbar y la elevación es plana."
 	s := servidorConMarca(t, "altura", texto)
@@ -54,6 +57,9 @@ func TestMarcaNoSePierdePorUnaMayuscula(t *testing.T) {
 // un solo indicio de que la marca que pidió nunca se encontró.
 //
 // SABOTAJE: devolver "" siempre en avisoDeMarca ⇒ el dedazo vuelve a ser indistinguible.
+// arnes: archivo="internal/mcp/methods_design.go"
+// arnes: de="\tif !brandPedidaNoExiste(argBrand, source) {"
+// arnes: a="\tif brandPedidaNoExiste(argBrand, source) {"
 func TestMarcaPedidaQueNoExisteSeDeclara(t *testing.T) {
 	s := servidorConMarca(t, "altura", "MARCA DE PRUEBA")
 	admin := &Principal{Name: "sala", ProjectID: "musubi", Read: "all", Write: "all"}

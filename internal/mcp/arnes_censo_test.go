@@ -709,7 +709,43 @@ import (
 // tener su sabotaje escrito en el repo. Queda `no_mecanizable` con eso como motivo — no por
 // comodidad, que es el riesgo que esta constante ya se anotó más arriba, sino porque el camino malo
 // es irrepresentable.
-const anclasEnProsaAlDia = 159
+// Y DE 159 A 83 EL 2026-09-21, EL SALTO MÁS GRANDE DEL TRINQUETE: setenta y ocho anclas de seis
+// superficies a la vez —alertas y reglas, export de flota y sus techos, la memoria, el eje de
+// diseño, el despliegue del cerebro y la CLI—. 87 sabotajes corridos (las 78 más nueve vecinas
+// que caían en el rango): 87 en ROJO, 0 verdes, 0 sin veredicto, 0 motivos repetidos, 0 rojos
+// sospechosos, y los cuatro árboles de barrido restaurados.
+//
+// EL DISEÑO SE HIZO EN PARALELO Y CADA CORTE TUVO UN REFUTADOR PROPIO, que es lo que volvió
+// abordable un lote de este tamaño. Seis agentes leyeron una superficie cada uno y propusieron 80
+// cortes; después un agente por corte intentó DEMOSTRAR QUE NO SERVÍA, midiendo sobre el árbol.
+// Cayeron dos, y los dos por razones que costaban una vuelta de barrido cada una: un literal que
+// aparecía CERO veces porque las líneas reales van indentadas dentro de una función, y un corte
+// que era copia exacta —mismo archivo, mismo `de`, mismo `a`— de una directiva que ya existía.
+// Después volví a verificar los 78 por mi cuenta: las 78 anclas y los 78 `de`, presentes y únicos.
+//
+// LO QUE EL DISEÑO NO PUEDE VER SE DESTAPA AL ESCRIBIR, y fueron tres cosas:
+//
+//	· 39 de 78 quedaron encajadas A MITAD DE FRASE. La prosa de estas superficies es multilínea, a
+//	  diferencia de los lotes anteriores; las directivas van al FINAL del bloque, pegadas al `func`.
+//	  Y si el bloque termina en lista con viñetas, gofmt exige una línea `//` sola antes.
+//	· dos quedaron ILEGIBLES: su ancla vive ADENTRO del cuerpo de la prueba, así que el arnés no
+//	  puede derivar qué test correr. Se declara `prueba=` y listo — la denuncia es correcta.
+//	· y dos quedaron HUÉRFANAS, que es el hallazgo. Su frase de sabotaje está A MITAD DE LÍNEA
+//	  («… las dos bocas). Sabotaje que la pone roja: …»), así que NUNCA fueron ancla para el censo.
+//	  O sea que la deuda medida SUBESTIMA: hay promesas que ni se reclaman porque el instrumento no
+//	  las ve. Una de ellas documenta un sabotaje que la versión ANTERIOR de su guarda dejaba pasar
+//	  en verde. Se les dio línea propia; nacen mecanizadas, así que suben `anclas encontradas` y no
+//	  mueven esta deuda. Se buscan comparando `grep "Sabotaje"` contra `grep "^// *Sabotaje"`.
+//
+// SOBRE LAS COLISIONES, Y ES UNA CORRECCIÓN AL PÁRRAFO DE ARRIBA: el censo denunció 18 pares. Leí
+// los DOS motivos de cada uno, midiéndolos —incluidas seis guardas preexistentes que hubo que
+// barrer sólo para poder compararlas—, y en todos los casos son distintos: «el argv pasó por una
+// shell» contra «el timeout no lo mató»; «nadie lee la serie» contra «el umbral no puede cruzarse
+// nunca»; la ventana contra el tenant sobre el MISMO `WHERE` de la cronología. Se declaró
+// `colision_ok` de los dos lados donde se pudo y quedaron 5 pares sin contestar, porque
+// `ColisionOk` es UN string: un ancla que se pisa con tres sólo puede nombrar a una. No es
+// negligencia — es el techo de la clave, y el resto queda como el aviso que esta guarda quiere.
+const anclasEnProsaAlDia = 83
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
