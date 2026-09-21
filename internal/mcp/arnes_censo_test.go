@@ -519,7 +519,23 @@ import (
 // porque no podía aislar un motivo propio. El corte correcto es el que la prosa pedía literalmente
 // —devolver nil— y da un rojo limpio. Un pánico no es una guarda contestando: es el proceso
 // muriéndose antes de que la guarda hable.
-const anclasEnProsaAlDia = 235
+//
+// Y DE 235 A 230 EL 2026-09-21: las cinco anclas del REGISTRO DE CABOS
+// (`internal/mcp/specs_sin_cabos_test.go`), y con ellas el arnés estrena un objetivo nuevo: sabotea
+// TABLAS DE MARKDOWN de `specs/control-de-flota/ABIERTO.md`. Ya cortaba Go, fixtures JSON, compose,
+// shell, PowerShell, `.cmd` y Python; ahora también documentación. 7 de 7 en rojo al cierre.
+//
+// LAS TRES QUE FALLARON PRIMERO ERAN TODAS EL MISMO ERROR MÍO, Y ES UNO QUE VALE ANOTAR: APUNTARLE
+// A LA PRUEBA EQUIVOCADA. Estas anclas FLOTAN —viven en bloques de doc entre funciones, no pegadas
+// a un `func Test…`— así que el lector devuelve la prueba vacía y hay que declarar `prueba=` a mano.
+// Declararla mirando el bloque de arriba NO alcanza: el bloque explica un invariante y la prueba que
+// lo custodia puede estar cien líneas más abajo y llamarse distinto. Una quedó apuntando a un nombre
+// que ni siquiera existe, y ahí el arnés no dice VERDE sino algo mejor: «EL PATRÓN NO SELECCIONA
+// NINGUNA PRUEBA… un verde de cero pruebas es indistinguible de un verde de mil».
+//
+// LA RECETA, para las que queden: buscar el `func Test…` cuyo CUERPO hace la aserción que el
+// sabotaje rompería, no el que está más cerca del comentario.
+const anclasEnProsaAlDia = 230
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
