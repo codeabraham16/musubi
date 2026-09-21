@@ -36,6 +36,12 @@ type DbEngine struct {
 	lifecycleMu sync.Mutex
 	closed      bool
 	bgWG        sync.WaitGroup
+	// incrMu + incrCorriendo + incrOtraVuelta coalescen IncrementalEmbedBackfill: a lo sumo UNA
+	// corrida en vuelo, y un pedido que llega mientras corre se cobra como UNA vuelta más al
+	// terminar (ver embed_backfill.go).
+	incrMu         sync.Mutex
+	incrCorriendo  bool
+	incrOtraVuelta bool
 	// projectID es el proyecto de origen que se estampa en cada observación guardada
 	// (columna project_id) para la memoria híbrida local+central. Lo inyecta el
 	// entrypoint tras cargar la config (ver SetProjectID). "" = sin atribución (NULL-like).

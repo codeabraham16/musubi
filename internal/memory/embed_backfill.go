@@ -3,6 +3,7 @@ package memory
 import (
 	"fmt"
 
+	"musubi/internal/config"
 	"musubi/internal/logx"
 )
 
@@ -154,11 +155,7 @@ func (e *DbEngine) embedBackfill(embed func([]string) ([][]float32, error), toda
 
 	// Observaciones ACTIVAS sin vector de la procedencia actual: sin fila en embeddings (LEFT JOIN
 	// nulo) o con model_id distinto (vector de otro modelo, excluido del recall por homogeneidad).
-	consulta := `
-		SELECT o.id, o.content
-		FROM observations o
-		LEFT JOIN embeddings em ON o.id = em.observation_id
-		WHERE ` + stalePredicate()
+	consulta := consultaPendientes
 	args := []any{e.vectorModelID}
 	if todas {
 		// Sin la condición de procedencia: entran también las que YA tienen vector del modelo
@@ -169,26 +166,70 @@ func (e *DbEngine) embedBackfill(embed func([]string) ([][]float32, error), toda
 		WHERE ` + visibleObsPredicate
 		args = nil
 	}
+	todo, err := e.listarParaEmbeber(consulta, args...)
+	if err != nil {
+		return res, err
+	}
+	res.Scanned = len(todo)
+
+	// Sin callback de índice: el backfill completo reconstruye el IVF UNA vez al final, que para
+	// una base entera es más barato que un Add por vector.
+	if err := e.embeberYGuardar(embed, todo, &res, nil); err != nil {
+		return res, err
+	}
+
+	// Reconstruir el índice IVF una sola vez (si hay índice) para que los vectores nuevos entren al
+	// candidateo, y persistir la marca de modelo para que WarnOnEmbedModelSwitch no vuelva a avisar.
+	if res.Embedded > 0 {
+		if err := e.rebuildVectorIndex(); err != nil {
+			return res, fmt.Errorf("re-embedding OK pero falló el rebuild del índice: %w", err)
+		}
+	}
+	if err := e.SetMeta(MetaEmbedModel, e.vectorModelID); err != nil {
+		return res, fmt.Errorf("re-embedding OK pero falló al persistir la marca de modelo: %w", err)
+	}
+	return res, nil
+}
+
+// consultaPendientes lista las observaciones PENDIENTES de (re)embedding (ver stalePredicate). La
+// comparten el backfill completo y el incremental: si divergieran, uno podría dar por vacía una
+// cola que el otro todavía ve llena.
+var consultaPendientes = `
+		SELECT o.id, o.content
+		FROM observations o
+		LEFT JOIN embeddings em ON o.id = em.observation_id
+		WHERE ` + stalePredicate()
+
+// listarParaEmbeber corre una consulta que devuelve (id, content) y la materializa ENTERA antes de
+// embeber: el embebedor puede tardar segundos por lote y un cursor abierto durante ese tiempo
+// retendría la conexión de lectura.
+func (e *DbEngine) listarParaEmbeber(consulta string, args ...any) ([]obsPendiente, error) {
 	rows, err := e.db.Query(consulta, args...)
 	if err != nil {
-		return res, fmt.Errorf("error al listar observaciones a re-embeber: %w", err)
+		return nil, fmt.Errorf("error al listar observaciones a re-embeber: %w", err)
 	}
+	defer rows.Close()
 	var todo []obsPendiente
 	for rows.Next() {
 		var p obsPendiente
 		if err := rows.Scan(&p.id, &p.content); err != nil {
-			rows.Close()
-			return res, fmt.Errorf("error al escanear observación pendiente: %w", err)
+			return nil, fmt.Errorf("error al escanear observación pendiente: %w", err)
 		}
 		todo = append(todo, p)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
-		return res, fmt.Errorf("error al iterar observaciones pendientes: %w", err)
+		return nil, fmt.Errorf("error al iterar observaciones pendientes: %w", err)
 	}
-	rows.Close()
-	res.Scanned = len(todo)
+	return todo, nil
+}
 
+// embeberYGuardar embebe todo en lotes de embedBatchSize y persiste cada vector con la procedencia
+// actual, acumulando en res. alGuardar, si no es nil, se llama tras persistir cada vector (el
+// backfill incremental lo usa para mantener el índice IVF con Add en vez de reconstruirlo entero).
+// Es el cuerpo que comparten el backfill completo y el incremental, con sus dos garantías: una
+// observación imposible cuesta sólo su propio lugar (embedUnoAUno) y un lote que devuelve de menos
+// aborta antes de aparear vectores con observaciones equivocadas.
+func (e *DbEngine) embeberYGuardar(embed func([]string) ([][]float32, error), todo []obsPendiente, res *EmbedBackfillResult, alGuardar func(id string, vec []float32)) error {
 	for inicio := 0; inicio < len(todo); inicio += embedBatchSize {
 		fin := min(inicio+embedBatchSize, len(todo))
 		lote := todo[inicio:fin]
@@ -209,7 +250,7 @@ func (e *DbEngine) embedBackfill(embed func([]string) ([][]float32, error), toda
 			vecs, fallos, err = embedUnoAUno(embed, lote, err)
 			if err != nil {
 				// Acá sí se aborta, con el progreso ya persistido: la corrida es resumible.
-				return res, fmt.Errorf("error al embeber el lote que empieza en %s: %w", lote[0].id, err)
+				return fmt.Errorf("error al embeber el lote que empieza en %s: %w", lote[0].id, err)
 			}
 		}
 
@@ -226,7 +267,7 @@ func (e *DbEngine) embedBackfill(embed func([]string) ([][]float32, error), toda
 		// semánticamente barajada, el recall empieza a traer cosas ajenas, y no hay ningún error
 		// en ningún log que lo explique. Se aborta antes de escribir una sola fila.
 		if len(vecs) != len(lote) {
-			return res, fmt.Errorf("el embebedor devolvió %d vectores para un lote de %d (desde %s): se aborta antes de aparear vectores con observaciones equivocadas",
+			return fmt.Errorf("el embebedor devolvió %d vectores para un lote de %d (desde %s): se aborta antes de aparear vectores con observaciones equivocadas",
 				len(vecs), len(lote), lote[0].id)
 		}
 
@@ -246,29 +287,21 @@ func (e *DbEngine) embedBackfill(embed func([]string) ([][]float32, error), toda
 			}
 			vectorBytes, err := Float32ToBytes(vecs[i])
 			if err != nil {
-				return res, fmt.Errorf("error al serializar el vector de %s: %w", p.id, err)
+				return fmt.Errorf("error al serializar el vector de %s: %w", p.id, err)
 			}
 			if _, err := e.db.Exec(
 				`INSERT OR REPLACE INTO embeddings (observation_id, vector, model_id) VALUES (?, ?, ?)`,
 				p.id, vectorBytes, e.vectorModelID,
 			); err != nil {
-				return res, fmt.Errorf("error al guardar el embedding de %s: %w", p.id, err)
+				return fmt.Errorf("error al guardar el embedding de %s: %w", p.id, err)
 			}
 			res.Embedded++
+			if alGuardar != nil {
+				alGuardar(p.id, vecs[i])
+			}
 		}
 	}
-
-	// Reconstruir el índice IVF una sola vez (si hay índice) para que los vectores nuevos entren al
-	// candidateo, y persistir la marca de modelo para que WarnOnEmbedModelSwitch no vuelva a avisar.
-	if res.Embedded > 0 {
-		if err := e.rebuildVectorIndex(); err != nil {
-			return res, fmt.Errorf("re-embedding OK pero falló el rebuild del índice: %w", err)
-		}
-	}
-	if err := e.SetMeta(MetaEmbedModel, e.vectorModelID); err != nil {
-		return res, fmt.Errorf("re-embedding OK pero falló al persistir la marca de modelo: %w", err)
-	}
-	return res, nil
+	return nil
 }
 
 // countStaleEmbeddings cuenta las observaciones PENDIENTES de (re)embedding (ver stalePredicate).
@@ -365,4 +398,115 @@ func (e *DbEngine) AutoEmbedBackfill(embed func([]string) ([][]float32, error)) 
 		logx.Info("re-embedding automático completo",
 			"embebidas", res.Embedded, "omitidas", res.Skipped, "modelo", res.ModelID)
 	})
+}
+
+// IncrementalEmbedBackfill vectoriza en BACKGROUND lo que quedó pendiente (stalePredicate) sin
+// esperar al próximo arranque. Lo dispara el sync ENTRANTE tras cada pull que ingirió filas.
+//
+// ⚠️ EL HUECO QUE CIERRA ES MEDIDO, NO TEÓRICO. IngestShared inserta lo que baja del central SIN
+// vector (el primitivo es léxico a propósito) y AutoEmbedBackfill corre UNA sola vez, al arrancar.
+// Entre arranques la memoria bajada quedaba invisible para la búsqueda semántica: 0 pendientes tras
+// un reinicio, 4 un rato después, 21 al día siguiente, y sólo un `musubi embed backfill` a mano las
+// llevaba a 0.
+//
+// Por qué TODAS las pendientes y no sólo las filas recién bajadas: si el embebedor falla en un
+// pull, esas filas tienen que reintentarse en el próximo, no esperar al reinicio — que es el hueco
+// que esto viene a cerrar. Una observación imposible no frena a las demás (embeberYGuardar la
+// aísla con embedUnoAUno), así que retomar la cola entera no puede atascarse detrás de ella.
+//
+// Tres diferencias con AutoEmbedBackfill, las tres porque esto corre MUCHAS veces y no una:
+//   - Mantiene el índice IVF con Add por vector + el rebuild ESPACIADO (maybeRebuildVectorIndexWith),
+//     igual que un save normal, en vez de reconstruirlo entero en cada pull.
+//   - No toca MetaEmbedModel: esa marca dice «la base entera migró a este modelo», y la declaran
+//     el backfill completo y el manual, no una pasada disparada por un pull.
+//   - COALESCE: si ya hay una corrida en vuelo, no lanza otra — le pide UNA vuelta más al terminar,
+//     porque las filas que bajaron después de su SELECT no las vio. Nunca hay dos a la vez por esta
+//     puerta, y ningún pedido se pierde.
+//
+// Degrada, no tumba: un error del embebedor se loguea y la cola queda para el próximo disparo; un
+// panic del callback se recupera (una goroutine de fondo que entra en pánico mata el PROCESO).
+// Sin embebedor nombrado (Noop/none ⇒ vectorModelID vacío) es un no-op que no lanza nada.
+func (e *DbEngine) IncrementalEmbedBackfill(embed func([]string) ([][]float32, error)) {
+	if e.vectorModelID == "" || embed == nil {
+		return
+	}
+	e.incrMu.Lock()
+	if e.incrCorriendo {
+		e.incrOtraVuelta = true
+		e.incrMu.Unlock()
+		return
+	}
+	e.incrCorriendo = true
+	e.incrMu.Unlock()
+
+	// La config del índice se copia ACÁ, en la goroutine del caller: las de fondo no leen
+	// e.vindexCfg (ver el comentario del campo).
+	cfg := e.vindexCfg
+	lanzada := e.spawnBackground(func() {
+		for {
+			e.pasadaIncremental(embed, cfg)
+			e.incrMu.Lock()
+			if !e.incrOtraVuelta {
+				e.incrCorriendo = false
+				e.incrMu.Unlock()
+				return
+			}
+			e.incrOtraVuelta = false
+			e.incrMu.Unlock()
+		}
+	})
+	if !lanzada {
+		// El engine se está cerrando: liberar el guard para no dejarlo tomado.
+		e.incrMu.Lock()
+		e.incrCorriendo = false
+		e.incrMu.Unlock()
+	}
+}
+
+// pasadaIncremental es UNA vuelta de IncrementalEmbedBackfill. Va en su propia función para que el
+// recover cubra exactamente una pasada y el bucle de afuera siga pudiendo soltar el guard.
+func (e *DbEngine) pasadaIncremental(embed func([]string) ([][]float32, error), cfg config.VectorIndexConfig) {
+	defer func() {
+		if r := recover(); r != nil {
+			logx.Error("el embebedor entró en pánico durante el backfill incremental; la memoria queda pendiente para el próximo disparo",
+				"panic", r)
+		}
+	}()
+	res, err := e.embedBackfillIncremental(embed, cfg)
+	switch {
+	case err != nil:
+		logx.Warn("no se pudo vectorizar la memoria pendiente; queda para el próximo pull",
+			"error", err, "embebidas", res.Embedded, "modelo", res.ModelID)
+	case res.Failed > 0:
+		logx.Warn("memoria pendiente vectorizada, pero el embebedor rechazó algunas observaciones",
+			"embebidas", res.Embedded, "fallidas", res.Failed, "omitidas", res.Skipped, "modelo", res.ModelID)
+	case res.Embedded > 0:
+		logx.Info("memoria pendiente vectorizada tras el pull",
+			"embebidas", res.Embedded, "omitidas", res.Skipped, "modelo", res.ModelID)
+	}
+}
+
+// embedBackfillIncremental es el cuerpo síncrono de una pasada: la MISMA selección que EmbedBackfill
+// (consultaPendientes) y el mismo embeberYGuardar, con el índice mantenido de a un vector.
+func (e *DbEngine) embedBackfillIncremental(embed func([]string) ([][]float32, error), cfg config.VectorIndexConfig) (EmbedBackfillResult, error) {
+	res := EmbedBackfillResult{ModelID: e.vectorModelID}
+	todo, err := e.listarParaEmbeber(consultaPendientes, e.vectorModelID)
+	if err != nil {
+		return res, err
+	}
+	res.Scanned = len(todo)
+	if len(todo) == 0 {
+		return res, nil
+	}
+	var alGuardar func(string, []float32)
+	if e.index != nil && cfg.Enabled {
+		alGuardar = e.index.Add
+	}
+	err = e.embeberYGuardar(embed, todo, &res, alGuardar)
+	if res.Embedded > 0 && alGuardar != nil {
+		// También tras un error a mitad: lo que ya se persistió y se sumó al índice cuenta para el
+		// dirty, y el rebuild espaciado es el que corrige el drift de centroides.
+		e.maybeRebuildVectorIndexWith(cfg)
+	}
+	return res, err
 }
