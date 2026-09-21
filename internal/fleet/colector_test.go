@@ -13,6 +13,9 @@ import (
 //
 // Sabotaje que la hace fallar: que un colector devuelva `Muestra{}, nil` en vez de un error, que
 // es exactamente el atajo que pintaría toda una flota al 0 % de CPU.
+// arnes: archivo="internal/fleet/colector_linux.go"
+// arnes: de="func (c *colectorLinux) Tomar() (Muestra, error) {"
+// arnes: a="func (c *colectorLinux) Tomar() (Muestra, error) {\n\treturn Muestra{}, nil\n}\n\nfunc (c *colectorLinux) TomarViejo() (Muestra, error) {"
 func TestTodaPlataformaTieneColectorYNingunoMienteConCeros(t *testing.T) {
 	c := NuevoColector()
 	if c == nil {
@@ -52,6 +55,10 @@ func TestTodaPlataformaTieneColectorYNingunoMienteConCeros(t *testing.T) {
 // como «esta máquina no usa memoria».
 //
 // Sabotaje: fijar MemTotal sin MemUsada en cualquier colector.
+// arnes: archivo="internal/fleet/procparse.go"
+// arnes: de="\t\t\tm.MemTotal, m.MemUsada = total, total-disponible"
+// arnes: a="\t\t\tm.MemTotal = total"
+// arnes: colision_ok="TestLaMemoriaUsadaSaleDeMemAvailableYNoDeMemFree"
 func TestLaReglaDeLosParesSeRespetaEnEstaPlataforma(t *testing.T) {
 	m, err := NuevoColector().Tomar()
 	if err != nil {
@@ -200,6 +207,10 @@ func TestLoQueCadaPlataformaMideEstaDeclarado(t *testing.T) {
 	//
 	// Sabotaje que la hace fallar: poner tempPosible:true en darwin, o devolver un valor fuera de
 	// rango desde cualquier colector.
+	// arnes: prueba="TestLoQueCadaPlataformaMideEstaDeclarado"
+	// arnes: archivo="internal/fleet/procparse.go"
+	// arnes: de="\tm.TempC = ElegirTemperatura(l.TempMil)"
+	// arnes: a="\tmenos243 := -243.0\n\tm.TempC = &menos243"
 	if !quiero.tempPosible {
 		if m.TempC != nil {
 			t.Errorf("%s: reportó temperatura (%.1f °C) y la tabla dice que este SO no tiene cómo leerla — "+

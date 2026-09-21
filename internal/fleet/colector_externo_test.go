@@ -87,6 +87,9 @@ var identidadQueNoSeAbsorbe = map[string]string{
 // vaciar el archivo entero a `{"total_campos": 0, "campos": []}`; o escribir el destino
 // "mem_free" en vez de "mem_libre" (no existe ese tag json en fleet.Muestra, y el mensaje nombra
 // el campo culpable).
+// arnes: archivo="internal/fleet/testdata/colector-externo.json"
+// arnes: de="    {\"campo\": \"mem_free\",      \"destino\": \"mem_libre\",        \"motivo\": \"\"},"
+// arnes: a="    {\"campo\": \"mem_free\",      \"destino\": \"mem_free\",        \"motivo\": \"\"},"
 func TestNingunCampoDelColectorExternoSePierdeSinMotivo(t *testing.T) {
 	b, err := os.ReadFile("testdata/colector-externo.json")
 	if err != nil {
@@ -176,6 +179,9 @@ func TestNingunCampoDelColectorExternoSePierdeSinMotivo(t *testing.T) {
 // que sigan siendo campos MEDIDOS, que es lo que U1 se comprometió a hacer.
 //
 // Sabotaje que la hace fallar: cambiarle el destino a "procs" por un motivo de exclusión.
+// arnes: archivo="internal/fleet/testdata/colector-externo.json"
+// arnes: de="    {\"campo\": \"procs\",         \"destino\": \"num_procesos\",     \"motivo\": \"\"},"
+// arnes: a="    {\"campo\": \"procs\",         \"destino\": \"\",     \"motivo\": \"excluido a proposito, para el arnes\"},"
 func TestLosDosCamposAbsorbidosSiguenTeniendoDestino(t *testing.T) {
 	b, err := os.ReadFile("testdata/colector-externo.json")
 	if err != nil {
@@ -212,6 +218,9 @@ func TestLosDosCamposAbsorbidosSiguenTeniendoDestino(t *testing.T) {
 // Sabotaje que la hace fallar (VERIFICADO tal cual): ponerle a "hostname" un destino cualquiera
 // que exista en la Muestra —se probó con "num_cpu"— y vaciarle el motivo. Ahí la máquina pasaría a
 // poder decir algo sobre su identidad, y ninguna otra prueba de este paquete lo notaría.
+// arnes: archivo="internal/fleet/testdata/colector-externo.json"
+// arnes: de="    {\"campo\": \"hostname\",      \"destino\": \"\", \"motivo\": \"Identidad, y la identidad sale del TOKEN, nunca del cuerpo (invariante B4/D5). agent_test.go prohíbe la subcadena 'hostname' en el JSON entero del latido.\"},"
+// arnes: a="    {\"campo\": \"hostname\",      \"destino\": \"\", \"motivo\": \"\"},"
 func TestLaIdentidadNoSeAbsorbeDelColectorExterno(t *testing.T) {
 	b, err := os.ReadFile("testdata/colector-externo.json")
 	if err != nil {
