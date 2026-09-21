@@ -559,6 +559,15 @@ type SyncConfig struct {
 	// CentralURL es la base del cerebro central, https://host:port SIN /mcp (el cliente le
 	// agrega el path). Vacío ⇒ no se drena aunque enabled sea true.
 	CentralURL string `yaml:"central_url"`
+	// TLSServerName es el nombre contra el que se verifica el certificado del central cuando
+	// CentralURL trae una IP. Vive JUNTO a la URL a propósito: el certificado de `tailscale cert`
+	// lleva sólo el NOMBRE del nodo como SAN, y con NordVPN el MagicDNS no resuelve, así que la
+	// URL se escribe con la IP del tailnet. Discando una IP, Go no manda SNI y `tailscale serve`
+	// corta el handshake con «tls: internal error» — un error de red, o sea transitorio: las filas
+	// 'shared' quedan pending para siempre sin pasar a dead. Es un nombre de host pelado, sin
+	// esquema ni puerto. Vacío ⇒ MUSUBI_BRAIN_TLS_NAME si está puesta, y si no el host de la URL,
+	// que es el comportamiento de siempre.
+	TLSServerName string `yaml:"tls_server_name"`
 	// AuthTokenEnv es el NOMBRE de la env var con el bearer token del central (patrón de
 	// EmbeddingConfig.APIKeyEnv: el secreto NUNCA va en el YAML ni se loguea).
 	AuthTokenEnv string `yaml:"auth_token_env"`

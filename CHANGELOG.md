@@ -8,6 +8,34 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
+  de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
+  sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,
+  así que `sync.central_url` se escribe con la IP. Discando una IP, Go no manda SNI y `tailscale
+  serve` corta el handshake con `remote error: tls: internal error`; el fallo se clasifica
+  transitorio y las filas `shared` quedan `pending` para siempre, sin pasar nunca a dead. El sync
+  saca su URL **sólo** de `.musubi/config.yaml`, y el nombre sólo podía venir de
+  `MUSUBI_BRAIN_TLS_NAME`, una variable que el daemon hereda o no según quién lo lanzó. Ahora:
+
+  ```yaml
+  sync:
+    central_url: https://100.79.126.62:10000
+    tls_server_name: musubi-server.tail89e295.ts.net
+  ```
+
+  La clave gana; sin ella sigue valiendo `MUSUBI_BRAIN_TLS_NAME` (leída por su único lector,
+  `cerebro.NombreTLS`), y sin ninguna de las dos el nombre sale del host de la URL, como siempre.
+  Con un nombre declarado, `cerebro.Cliente` fija dos cosas y nada más: `ServerName` y un piso de
+  TLS 1.2 (`MinVersion`). La verificación sigue entera: ni `InsecureSkipVerify` ni otro pool de
+  raíces. Un valor con esquema, puerto o barra (`https://nodo…`, `nodo…:10000`) se rechaza al
+  construir el cliente como error **permanente**, en vez de fallar en cada handshake como error de
+  red. Pasa por la misma validación venga de la clave o de `MUSUBI_BRAIN_TLS_NAME`, y el error
+  nombra de dónde salió. El `doctor` compara también esta clave entre el config que gobierna y su
+  sombra. *Medido con dobles de `tailscale serve` discando `127.0.0.1`, una prueba por causa, porque
+  son dos y cada una alcanza sola: el servidor que corta el handshake sin SNI (`remote error: tls:
+  internal error`), y el certificado sin SAN de IP que el cliente rechaza al verificar por IP. Cada
+  doble apaga la causa que no mide, y con la clave las dos entregas pasan. Una sola prueba con las
+  dos causas juntas seguía en verde con la guarda de SNI del doble apagada.*
 - **La compuerta de guiones ahora CONSTRUYE el comando, y con eso la guarda de alcance pasó de
   preguntar N cosas a preguntar una** (A127, cerrado). Las dos mitades de la equivalencia —quien
   ejecuta una shell pasa por la compuerta, y quien pasa por la compuerta ejecuta una shell— se
