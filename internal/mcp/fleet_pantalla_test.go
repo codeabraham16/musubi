@@ -95,6 +95,7 @@ func TestUnTierBNuncaTienePantalla(t *testing.T) {
 // G1 — LA GARANTÍA CENTRAL: la contraseña se devuelve UNA vez y NO queda en ningún lado.
 //
 // Sabotaje: agregarle una columna a screen_sessions y guardarla ahí.
+// arnes: no_mecanizable="son CUATRO sitios que no se tocan —migración, struct, INSERT y lectura— y el arnés sólo sabe sustituir texto. Y hay una razón estructural más fuerte que eso, medida al intentarlo: la sesión se PERSISTE antes de que la contraseña exista. AbrirSesionPantalla la escribe en el llamador y entregarPantalla —la única función que acuña la clave— RECIBE la fila ya creada, así que no hay un solo punto del programa donde la contraseña y la fila coexistan. La ausencia estructural (que no exista un campo donde ponerla) la custodia TestLaSesionNoTieneDondeGuardarLaContrasena en internal/fleet; esta prueba custodia las SALIDAS, y ésas sí están mecanizadas en las anclas de abajo."
 func TestLaContrasenaNoQuedaEnNingunaTabla(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	out := abrirSesion(t, s, conPantalla("casa"))
@@ -131,6 +132,9 @@ func TestLaContrasenaNoQuedaEnNingunaTabla(t *testing.T) {
 // cualquiera que pueda leerla — y la garantía G1 se cae sin que nadie toque la tabla de sesiones.
 //
 // Sabotaje que la hace fallar: quitar `ocultarArgvDePantalla` de toolFleetLog.
+// arnes: archivo="internal/mcp/methods_exec.go"
+// arnes: de="\t\t\t\"argv\":   ocultarArgvDePantalla(c.Argv),"
+// arnes: a="\t\t\t\"argv\":   c.Argv,"
 func TestLaBitacoraDeComandosNoFiltraLaContrasenaDePantalla(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	// El mirador necesita también `exec` para poder LEER la bitácora de comandos: es el caso
@@ -163,6 +167,9 @@ func TestLaBitacoraDeComandosNoFiltraLaContrasenaDePantalla(t *testing.T) {
 // acuñarse una sesión sin tener `screen`.
 //
 // Sabotaje: quitar la guarda de prefijo `musubi:` de toolFleetExec.
+// arnes: archivo="internal/mcp/methods_exec.go"
+// arnes: de="\tif len(args.Argv) > 0 && strings.HasPrefix(strings.TrimSpace(args.Argv[0]), \"musubi:\") {"
+// arnes: a="\tif false && len(args.Argv) > 0 && strings.HasPrefix(strings.TrimSpace(args.Argv[0]), \"musubi:\") {"
 func TestConExecNoSePuedeFabricarUnaSesionDePantalla(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	tok := enrolarConPantalla(t, s, "casa", "pc-gio")
@@ -248,6 +255,9 @@ func TestNoSeAbreSesionSobreUnaMaquinaCaida(t *testing.T) {
 // pudo» es inútil justo cuando alguien dice «no me deja entrar».
 //
 // Sabotaje que la hace fallar: quitar marcarSesionSiEsDePantalla del handler de resultados.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\t\ts.marcarSesionSiEsDePantalla(d.ID, cuerpo)\n"
+// arnes: a=""
 func TestLaSesionPasaAActivaCuandoLaMaquinaConfirma(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	tok := enrolarConPantalla(t, s, "casa", "pc-gio")
@@ -349,6 +359,10 @@ func enrolarMovil(t *testing.T, s *McpServer, proyecto, nombre string) string {
 // igual dejó rastro acuñado sería el mismo daño con mejor cara.
 //
 // Sabotaje: quitar la guarda de fleet.MotorDePantalla en toolFleetScreen.
+// arnes: archivo="internal/mcp/methods_pantalla.go"
+// arnes: de="\tif _, hayMotor := fleet.MotorDePantalla(d.Tier); !hayMotor {"
+// arnes: a="\tif _, hayMotor := fleet.MotorDePantalla(d.Tier); false && !hayMotor {"
+// arnes: colision_ok="TestLaFaltaDeMotorSeDiceAntesQueElSilencio"
 func TestUnAndroidNoAcunaContrasenaDePantalla(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	tok := enrolarMovil(t, s, "casa", "telefono")
@@ -381,6 +395,9 @@ func TestUnAndroidNoAcunaContrasenaDePantalla(t *testing.T) {
 // depurar una sonda que anda perfecto, y la razón verdadera no aparecería nunca.
 //
 // Sabotaje: mover la guarda de MotorDePantalla debajo de la de EnLinea.
+// arnes: archivo="internal/mcp/methods_pantalla.go"
+// arnes: de="\tif _, hayMotor := fleet.MotorDePantalla(d.Tier); !hayMotor {"
+// arnes: a="\tif !d.EnLinea(time.Now(), s.umbralEnLinea(d)) {\n\t\treturn nil, rpcErrorf(codeInvalidParams, \"la maquina no esta en linea\")\n\t}\n\tif _, hayMotor := fleet.MotorDePantalla(d.Tier); !hayMotor {"
 func TestLaFaltaDeMotorSeDiceAntesQueElSilencio(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarMovil(t, s, "casa", "telefono-apagado") // NUNCA late
@@ -404,6 +421,9 @@ func TestLaFaltaDeMotorSeDiceAntesQueElSilencio(t *testing.T) {
 // real—, así que sin esta marca las dos filas se leen igual.
 //
 // Sabotaje: quitar el bloque de pantalla_sin_motor del inventario.
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="\t\t\t\t\tfila[\"pantalla_sin_motor\"] = true"
+// arnes: a="\t\t\t\t\t_ = d"
 func TestElInventarioMarcaLaPantallaSinMotor(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarMovil(t, s, "casa", "telefono")

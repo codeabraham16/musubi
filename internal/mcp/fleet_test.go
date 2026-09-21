@@ -76,8 +76,16 @@ func postCon(t *testing.T, url, auth, body string) (int, string) {
 // Si esto dejara de valer, comprometer cualquier máquina de la flota —la superficie más expuesta
 // del sistema— entregaría musubi_recall sobre la memoria de toda la empresa.
 //
-// Sabotaje que la hace fallar: hacer que el handler de /mcp caiga a DevicePorToken cuando el
-// registro de principals no resuelve (el "unifiquemos los lookups" que alguien va a proponer).
+// EL CORTE MECANIZADO NO ES LITERAL, Y LA DIFERENCIA ES UNA GARANTÍA. `autenticarPersona` no tiene
+// el motor a mano —recibe `httpOptions`, que sólo trae el registro de principals—, así que la puerta
+// de /mcp NI SIQUIERA PODRÍA consultar la tabla de dispositivos sin cambiarle la firma. Lo que se
+// corta es la propiedad que esta prueba afirma de verdad: que una credencial que el resolutor propio
+// NO reconoce no entra igual.
+//
+// Sabotaje que la hace fallar: que /mcp acepte igual cuando el registro de principals no resuelve.
+// arnes: archivo="internal/mcp/http.go"
+// arnes: de="\tcase opt.registry != nil:\n\t\tp, ok = opt.registry.resolve(bearer)"
+// arnes: a="\tcase opt.registry != nil:\n\t\tp, ok = opt.registry.resolve(bearer)\n\t\tif !ok && bearer != \"\" {\n\t\t\tp, ok = &Principal{Name: \"dispositivo\"}, true\n\t\t}"
 func TestTokenDeDispositivoNoAbreElMCP(t *testing.T) {
 	_, ts, tokenDevice, tokenPersona := servidorConFlota(t)
 	const rpc = `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
@@ -97,7 +105,14 @@ func TestTokenDeDispositivoNoAbreElMCP(t *testing.T) {
 // Si valiera, `last_seen` sería escribible por cualquiera con una credencial de lectura y el
 // panel mostraría vivas máquinas apagadas.
 //
-// Sabotaje: resolver también contra opt.registry en handlerLatido.
+// MISMA ASIMETRÍA QUE LA DE ARRIBA, Y POR ESO EL CORTE TAMPOCO ES LITERAL: `handlerLatido` no tiene
+// el registro de personas a mano. Lo que se corta es lo que la prueba afirma: que una credencial que
+// el resolutor de DISPOSITIVOS no reconoce no late igual.
+//
+// Sabotaje: que el latido acepte igual una credencial que DevicePorTokenConRotacion no resolvió.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\t\td, conElNuevo, ok, err := s.engine.DevicePorTokenConRotacion(token, time.Now())"
+// arnes: a="\t\td, conElNuevo, ok, err := s.engine.DevicePorTokenConRotacion(token, time.Now())\n\t\tif !ok && token != \"\" {\n\t\t\tok = true\n\t\t}"
 func TestTokenDePersonaNoLate(t *testing.T) {
 	_, ts, tokenDevice, tokenPersona := servidorConFlota(t)
 
@@ -150,6 +165,10 @@ func TestElRechazoNoDiceCualExistio(t *testing.T) {
 
 // B4 — el cuerpo del POST no puede cambiar quién es el dispositivo.
 // Sabotaje: leer un `device_id` del cuerpo y usarlo en vez del token.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\t\tmuestraJSON, notaMuestra, notaServicios, notaProtocolo := s.leerCuerpoDelLatido(r, d)"
+// arnes: a="\t\tif b, _ := io.ReadAll(io.LimitReader(r.Body, latidoMaxBytes+1)); len(b) > 0 {\n\t\t\tvar sup struct {\n\t\t\t\tDeviceID string `json:\"device_id\"`\n\t\t\t}\n\t\t\tif jsonpkg.Unmarshal(b, &sup) == nil && sup.DeviceID != \"\" {\n\t\t\t\tif otro, hay, e := s.engine.DevicePorID(sup.DeviceID); e == nil && hay {\n\t\t\t\t\td = otro\n\t\t\t\t}\n\t\t\t}\n\t\t\tr.Body = io.NopCloser(bytes.NewReader(b))\n\t\t}\n\t\tmuestraJSON, notaMuestra, notaServicios, notaProtocolo := s.leerCuerpoDelLatido(r, d)"
+// arnes: colision_ok="TestElServidorNoLeeElCuerpoEnteroAMemoria"
 func TestElCuerpoDelLatidoNoPuedeSuplantar(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 	otroToken := enrolarDePrueba(t, s, "casa", "servidor-critico")
@@ -203,6 +222,7 @@ func TestElLatidoSeVeEnElInventario(t *testing.T) {
 // B6 — el lockout anti fuerza-bruta cubre la puerta nueva.
 // Sabotaje: quitar el limiter de handlerLatido → la tabla de dispositivos queda como oráculo de
 // fuerza bruta sin costo.
+// arnes: no_mecanizable="el bloque del limiter —y el comentario de veinte líneas que lo precede— está repetido byte por byte en las TRES puertas (handlerLatido, handlerResultado y handlerSaludDeServicios), así que ningún corte cerca de esta decisión es único: medido, el `de` más chico que lo sería es exactamente el que ya usa la directiva de TestElRechazoNoDiceCualExistio. Cortar el authLimiter en su propio archivo SÍ es único y está descartado a propósito: apaga el lockout de las tres puertas, o sea que probaría «el limiter funciona» —lo que ya mide authlimit_test.go— y no «esta puerta lo usa», que es lo que afirma esta guarda. El razonamiento completo está arriba."
 //
 // NO SE MECANIZÓ, Y NO ES POR FALTA DE GANAS: no hay ancla única cerca de esta decisión. El bloque
 // del limiter —y TAMBIÉN el comentario de veinte líneas que lo precede— está repetido byte por byte
@@ -445,6 +465,9 @@ func servidorHTTP(t *testing.T, s *McpServer) *httptest.Server {
 // versión— se lee como «no se pudo averiguar», que es otra cosa.
 //
 // Sabotaje que la hace fallar: sacar el campo de la fila, o escribirlo siempre incluso vacío.
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="\t\t\tif d.AgentVer != \"\" {\n\t\t\t\tfila[\"agent_version\"] = d.AgentVer\n\t\t\t}"
+// arnes: a="\t\t\tfila[\"agent_version\"] = d.AgentVer"
 func TestElInventarioDiceQueBinarioCorreCadaMaquina(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 
@@ -485,6 +508,9 @@ func TestElInventarioDiceQueBinarioCorreCadaMaquina(t *testing.T) {
 // el aislamiento entre tenants—: es enumerar los proyectos y consultar cada uno POR SEPARADO.
 //
 // Sabotaje que la hace fallar: volver `proyectosParaLeer` a `fleetReadScopeFor` a secas.
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="\t}\n\n\tproyectos, truncado, vacioLegitimo := s.proyectosParaLeer(p, args.Project)"
+// arnes: a="\t}\n\n\tproyectos, truncado, vacioLegitimo := []string{fleetReadScopeFor(p, args.Project)}, false, false"
 func TestUnPanelSinProyectoPropioVeTodoLoQueSuCredencialConcede(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarDePrueba(t, s, "casa", "pc-gio")
@@ -539,6 +565,9 @@ func TestUnPanelSinProyectoPropioVeTodoLoQueSuCredencialConcede(t *testing.T) {
 // dos secciones que el usuario pidió —los servicios y el estado— seguirían vacías, sin error.
 //
 // Sabotaje que la hace fallar: dejar `fleetReadScopeFor` en toolFleetServices o en toolFleetMetrics.
+// arnes: archivo="internal/mcp/methods_servicios.go"
+// arnes: de="\tproyectos, truncado, vacioLegitimo := s.proyectosParaLeer(p, args.Project)"
+// arnes: a="\tproyectos, truncado, vacioLegitimo := []string{fleetReadScopeFor(p, args.Project)}, false, false"
 func TestElPanelTambienVeLosServiciosYLasMetricasDeTodosLosProyectos(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	// enrolarDePrueba devuelve el TOKEN, no el id: los servicios se reportan contra el device_id,
@@ -602,7 +631,15 @@ func TestElPanelTambienVeLosServiciosYLasMetricasDeTodosLosProyectos(t *testing.
 // Y el mensaje tiene que mandar a mirar el lugar correcto: si dijera «sin permiso» a secas,
 // alguien revisaría `principals.yaml` durante media hora buscando algo que ya está.
 //
-// Sabotaje que la hace fallar: sacar el `switch consent` de toolFleetScreen.
+// LA PROSA DECÍA `switch` Y LA GUARDA QUE DECIDE ES UN `if`. En toolFleetScreen hay dos
+// lecturas del consentimiento: el `if ... consent.Bloquea()` que RECHAZA —el de esta prueba— y,
+// treinta líneas más abajo, un `switch consent` que sólo elige cómo AVISAR de una sesión que ya
+// se va a abrir. Cortar el switch no bloquea nada.
+//
+// Sabotaje que la hace fallar: sacar el `if consent.Bloquea()` de toolFleetScreen.
+// arnes: archivo="internal/mcp/methods_pantalla.go"
+// arnes: de="\tif consent := d.ConsentimientoEfectivo(); consent.Bloquea() {"
+// arnes: a="\tif consent := d.ConsentimientoEfectivo(); false && consent.Bloquea() {"
 func TestElConsentimientoProhibidoPesaMasQueLaCapacidadConcedida(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	// SE ENROLA CON `screen` DE VERDAD: el punto de la prueba es que la capacidad esté
@@ -644,6 +681,9 @@ func TestElConsentimientoProhibidoPesaMasQueLaCapacidadConcedida(t *testing.T) {
 // la misma razón por la que `fleet_service_declare` es admin — escribe en el plano de control.
 //
 // Sabotaje que la hace fallar: cambiar la guarda de `isAdmin` por PuedeSobreDevice(CapScreen).
+// arnes: archivo="internal/mcp/methods_pantalla.go"
+// arnes: de="func (s *McpServer) toolFleetConsent(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {\n\tp := principalFrom(ctx)\n\tif !p.isAdmin() {"
+// arnes: a="func (s *McpServer) toolFleetConsent(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {\n\tp := principalFrom(ctx)\n\tif false {"
 func TestLaPoliticaDeConsentimientoNoLaAflojaQuienEntra(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarDePrueba(t, s, "casa", "pc-gio")
@@ -699,6 +739,9 @@ func TestLaPoliticaDeConsentimientoNoLaAflojaQuienEntra(t *testing.T) {
 // error visible, y que sólo se nota leyendo la respuesta con cuidado.
 //
 // Sabotaje que la hace fallar: usar la misma capacidad para las dos modalidades en toolFleetSessions.
+// arnes: archivo="internal/mcp/methods_pantalla.go"
+// arnes: de="\t\tif m == fleet.ModalidadShell {\n\t\t\treturn PuedeSobreDevice(p, d, fleet.CapShell)\n\t\t}"
+// arnes: a="\t\t_ = m"
 func TestLaBitacoraDeSesionesSeCompuertaPorModalidad(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
@@ -828,6 +871,9 @@ func TestLaPoliticaDeConsentimientoSeVeEnElInventario(t *testing.T) {
 // propósito, porque no pertenece a ningún tenant.
 //
 // Sabotaje que la hace fallar: volver cualquiera de las cuatro a `fleetReadScopeFor` a secas.
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="\t}\n\tproyectos, truncado, vacioLegitimo := s.proyectosParaLeer(p, args.Project)"
+// arnes: a="\t}\n\tproyectos, truncado, vacioLegitimo := []string{fleetReadScopeFor(p, args.Project)}, false, false"
 func TestNingunaToolDeLecturaDeFlotaSeQuedaSinProyecto(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarDePrueba(t, s, "casa", "pc-gio")

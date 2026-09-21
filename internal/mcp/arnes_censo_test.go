@@ -377,7 +377,38 @@ import (
 // (`total > Atendidas` en rendimiento.go) la custodian el DOMINIO —TestElDesgloseSumaMenosOIgualPeroNuncaMas—
 // y el CONTRATO DEL RELAY, que manda un reporte donde el desglose IGUALA a las sondas. Las dos
 // cubren la línea de verdad y sus motivos difieren, así que `colision_ok` de los dos lados.
-const anclasEnProsaAlDia = 326
+//
+// Y DE 326 A 308 EL 2026-09-21: las dieciocho anclas de LA PUERTA DE LA FLOTA y la PANTALLA
+// —`fleet_test.go` y `fleet_pantalla_test.go`—: quién entra por dónde, de qué tenant se lee, qué
+// pesa más que una capacidad concedida, y el plano de pantalla entero. Dieciséis con directiva, DOS
+// declaradas `no_mecanizable`, ninguna hueca: 23 de 23 en rojo.
+//
+// LAS DOS EXENTAS LO SON POR RAZONES ESTRUCTURALES, Y LAS DOS SON MEJORES QUE LA GUARDA.
+//
+// La del LOCKOUT ya traía su razonamiento escrito con mediciones desde antes —el bloque del limiter
+// está repetido byte por byte en las tres puertas, así que ningún corte cerca es único— y lo único
+// que le faltaba era la CLAVE. Estuvo contada como deuda sin serlo.
+//
+// La de la CONTRASEÑA DE PANTALLA se midió acá: la sesión se PERSISTE antes de que la contraseña
+// exista. `AbrirSesionPantalla` la escribe en el llamador y `entregarPantalla` —la única función que
+// acuña la clave— RECIBE la fila ya creada, así que no hay un solo punto del programa donde la
+// contraseña y la fila coexistan. Guardarla exigiría cuatro sitios: migración, struct, INSERT y
+// lectura. Eso no es una guarda que falta: es un invariante que el diseño hace irrepresentable.
+//
+// DOS PROSAS APUNTABAN AL SITIO EQUIVOCADO, y las dos por la misma razón: nombraban el bloque que
+// se ve primero. «Sacar el `switch consent` de toolFleetScreen» corta el switch que elige cómo
+// AVISAR de una sesión que YA se va a abrir; el que RECHAZA es un `if consent.Bloquea()` treinta
+// líneas más arriba. Y las de /mcp y del latido prometían «caer a DevicePorToken» y «resolver contra
+// opt.registry»: ninguna de las dos puertas tiene el otro resolutor a mano —`autenticarPersona`
+// recibe `httpOptions`, que sólo trae el registro de personas— así que el corte literal exigiría
+// cambiar una firma. Se mecanizó la propiedad que la prueba afirma de verdad: que una credencial
+// que el resolutor PROPIO no reconoce no entra igual.
+//
+// Y LA COLISIÓN DIRECCIONAL, por tercera vez en la campaña: se declararon dos `colision_ok` que el
+// censo devolvió por RANCIOS. Un `a` que CONSERVA su propio `de` no rompe a nadie, así que la
+// colisión existe en un solo sentido y contestarla de los dos sobra. Vale como regla: antes de
+// declarar la pareja, mirar si el `a` preserva el literal.
+const anclasEnProsaAlDia = 308
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
