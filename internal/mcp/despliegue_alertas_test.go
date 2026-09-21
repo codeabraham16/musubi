@@ -289,6 +289,9 @@ func TestElInstaladorDeWindowsEsAsciiConBOM(t *testing.T) {
 // Sabotaje que la hace fallar: agregar el flag sólo al unit systemd; o encender el push sin dejar
 // la receta escrita en prometheus.yml.
 // ────────────────────────────────────────────────────────────────────────────────────────────
+// arnes: archivo="deploy/docker/compose.yml"
+// arnes: de="      - --web.enable-otlp-receiver\n"
+// arnes: a=""
 func TestElReceptorOTLPSeHabilitaEnLosDosLugaresYLaDuplicacionEstaDeclarada(t *testing.T) {
 	const flag = "--web.enable-otlp-receiver"
 
@@ -376,6 +379,9 @@ func TestElReceptorOTLPSeHabilitaEnLosDosLugaresYLaDuplicacionEstaDeclarada(t *t
 // Sabotaje que la hace fallar: sacar el bloque metric_relabel_configs de prometheus.yml,
 // borrar las tres alertas del empujador de musubi-alerts.yml, o —el que costó descubrir—
 // ENSANCHAR el drop de vuelta a `musubi_fleet_.*`.
+// arnes: archivo="deploy/prometheus/prometheus.yml"
+// arnes: de="    metric_relabel_configs:\n      - source_labels: [__name__]\n        regex: \"musubi_fleet_(device|service)_.*\"\n        action: drop\n"
+// arnes: a=""
 func TestElScrapeYElEmpujeNoTraenLoMismo(t *testing.T) {
 	prom, err := leerArchivoDeDespliegue("../../deploy/prometheus/prometheus.yml")
 	if err != nil {
@@ -454,6 +460,14 @@ func TestElScrapeYElEmpujeNoTraenLoMismo(t *testing.T) {
 // aviso que explica qué pasa si la máquina se reinicia.
 // bloqueQueEncierra devuelve el índice de la línea que ABRE el bloque `{ ... }` donde vive
 // `lineas[idx]`, o -1 si no está adentro de ninguno.
+// arnes: prueba="TestElAgenteDeWindowsNoCorreComoSystemSinQueAlguienLoPida"
+// arnes: archivo="deploy/agente-windows.ps1"
+// EL `de` VA EN UNA SOLA LÍNEA A PROPÓSITO: `agente-windows.ps1` tiene terminadores CRLF, así
+// que un literal multilínea con `\n` NO matchea nunca — el arnés lo denuncia como «el `de` ya no
+// está», que es cierto y confunde. Se abre un bloque en la misma línea para que el registro como
+// SYSTEM quede encerrado por un `if` que NO menciona $AlArranque, que es lo que la prueba mira.
+// arnes: de="  $gatillo   = New-ScheduledTaskTrigger -AtStartup"
+// arnes: a="  if ($true) { $gatillo   = New-ScheduledTaskTrigger -AtStartup"
 //
 // EXISTE PORQUE `strings.Index` ANCLA EN LA PRIMERA OCURRENCIA, Y ESO NO ES UNA ESTRUCTURA.
 //
@@ -564,6 +578,9 @@ func TestElAgenteDeWindowsNoCorreComoSystemSinQueAlguienLoPida(t *testing.T) {
 //
 // Sabotaje que la hace fallar: sacar el job `alertmanager` de prometheus.yml, o la regla de
 // musubi-alerts.yml.
+// arnes: archivo="deploy/prometheus/prometheus.yml"
+// arnes: de="  - job_name: alertmanager"
+// arnes: a="  - job_name: vigilante-de-la-cadena"
 func TestLaCadenaDeAlertasSeVigilaASiMisma(t *testing.T) {
 	cfg, err := leerArchivoDeDespliegue("../../deploy/prometheus/prometheus.yml")
 	if err != nil {
@@ -619,6 +636,9 @@ func TestLaCadenaDeAlertasSeVigilaASiMisma(t *testing.T) {
 // archivo de la máquina. Lo único que lograba era romper el arranque.
 //
 // Sabotaje: borrar la regla de SYSTEM del bloque `if ($AlArranque)` → falla acá.
+// arnes: archivo="deploy/agente-windows.ps1"
+// arnes: de="    \"NT AUTHORITY"
+// arnes: a="    \"NT NADIE"
 func TestSiLaTareaCorreComoSystemEntoncesSystemPuedeLeerElToken(t *testing.T) {
 	b, err := leerArchivoDeDespliegue("../../deploy/agente-windows.ps1")
 	if err != nil {
@@ -702,6 +722,9 @@ func TestSiLaTareaCorreComoSystemEntoncesSystemPuedeLeerElToken(t *testing.T) {
 // saque. Es el mismo nombre de imagen y una cosa completamente distinta.
 //
 // Sabotajes: volver a `%LOCALAPPDATA%`, sacar el Stop-Process, o cambiarlo por `/IM`.
+// arnes: archivo="deploy/cambiar-agente.cmd"
+// arnes: de="Stop-Process -Force -ErrorAction SilentlyContinue"
+// arnes: a="Out-Null"
 func TestElScriptDeCambioDeAgenteNoDependeDeQuienLoEjecuta(t *testing.T) {
 	b, err := leerArchivoDeDespliegue("../../deploy/cambiar-agente.cmd")
 	if err != nil {

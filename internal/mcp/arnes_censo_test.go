@@ -535,7 +535,24 @@ import (
 //
 // LA RECETA, para las que queden: buscar el `func Test…` cuyo CUERPO hace la aserción que el
 // sabotaje rompería, no el que está más cerca del comentario.
-const anclasEnProsaAlDia = 230
+//
+// Y DE 230 A 218 EL 2026-09-21: las doce anclas del CANAL DE SHELL DEL AGENTE y de las ALERTAS DEL
+// DESPLIEGUE. 13 de 13 en rojo al cierre, pero tres fallaron primero y la tercera destapó un tope
+// del arnés que no estaba escrito.
+//
+// UN `de` MULTILÍNEA NO MATCHEA EN UN ARCHIVO CON CRLF. `deploy/agente-windows.ps1` tiene
+// terminadores CRLF —es un guion de Windows— y el `\n` de una directiva produce LF solo, así que un
+// literal de dos líneas NO SE ENCUENTRA NUNCA. El censo lo denuncia con «el `de` de este sabotaje YA
+// NO ESTÁ», que es cierto y manda a buscar el texto nuevo cuando el texto está intacto y lo que
+// falla es el salto de línea. LA SALIDA: en un archivo CRLF, el `de` va en UNA SOLA LÍNEA. Si hace
+// falta abrir un bloque, se abre en la misma línea (`if ($true) { $x = …`).
+//
+// LAS OTRAS DOS FUERON MÍAS Y SON LA MISMA FAMILIA QUE YA ESTÁ ESCRITA: apuntar al archivo o al
+// texto equivocado. Una cortaba `prometheus.yml` cuando la prueba lee el INSTALADOR y el COMPOSE;
+// la otra renombraba el job a `alertmanager-apagado`, que SIGUE CONTENIENDO «alertmanager» — y la
+// prueba busca por subcadena. Un renombre no es un borrado si el nombre viejo sobrevive adentro del
+// nuevo.
+const anclasEnProsaAlDia = 218
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
