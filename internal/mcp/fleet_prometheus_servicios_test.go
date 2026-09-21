@@ -24,6 +24,9 @@ import (
 //
 // Sabotaje que la hace fallar: en serviciosVisiblesParaMetricas, exportar el servicio cuando su
 // device no está en `porID` en vez de saltearlo.
+// arnes: archivo="internal/mcp/fleet_prometheus_servicios.go"
+// arnes: de="\t\t\td, ok := porID[sv.DeviceID]\n\t\t\tif !ok {"
+// arnes: a="\t\t\td, ok := porID[sv.DeviceID]\n\t\t\tif false && !ok {"
 func TestLosServiciosDeUnaMaquinaQueNoVeoNoSeExportan(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	sembrarServicios(t, s, "nas", "samba")
@@ -73,6 +76,10 @@ func TestLosServiciosDeUnaMaquinaQueNoVeoNoSeExportan(t *testing.T) {
 // los declarados de los que no se sabe nada.
 //
 // Sabotaje que la hace fallar: devolver (0, true) para lo desconocido en cualquiera de las tres.
+// arnes: archivo="internal/mcp/fleet_prometheus_servicios.go"
+// arnes: de="\t\t\t\t\t// Que no se sepa NO queda callado: `musubi_fleet_service_last_report_seconds`\n\t\t\t\t\t// falta o crece, que es la forma correcta de contar una ausencia.\n\t\t\t\t\treturn 0, false"
+// arnes: a="\t\t\t\t\t// Que no se sepa NO queda callado: `musubi_fleet_service_last_report_seconds`\n\t\t\t\t\t// falta o crece, que es la forma correcta de contar una ausencia.\n\t\t\t\t\treturn 0, true"
+// arnes: colision_ok="TestUnServicioDesconocidoNoEmiteLaSerieDeUp"
 func TestLoQueNoSeSabeDeUnServicioNoViajaComoCero(t *testing.T) {
 	ahora := time.Now()
 	sinNada := fleet.Servicio{Nombre: "declarado-y-sin-medir"} // UltimoReporte cero, Salud nil
@@ -106,6 +113,9 @@ func TestLoQueNoSeSabeDeUnServicioNoViajaComoCero(t *testing.T) {
 // Es la forma más común de matar un Prometheus, y no da ningún error mientras pasa.
 //
 // Sabotaje que la hace fallar: agregar {"pid", ...} a labelsDeServicio.
+// arnes: archivo="internal/mcp/fleet_prometheus_servicios.go"
+// arnes: de="\treturn append(out, [2]string{\"service\", sv.Nombre}, [2]string{\"class\", sv.Clase})"
+// arnes: a="\treturn append(out, [2]string{\"service\", sv.Nombre}, [2]string{\"class\", sv.Clase}, [2]string{\"pid\", \"1234\"})"
 func TestNingunaEtiquetaDeServicioRota(t *testing.T) {
 	pid := 4242
 	sv := fleet.Servicio{Nombre: "postgres", Clase: "systemd",
@@ -132,6 +142,9 @@ func TestNingunaEtiquetaDeServicioRota(t *testing.T) {
 //
 // Sabotaje que la hace fallar: sacar el bloque de servicios de armarPayloadOTLP, o el
 // renderServicios de renderFlota.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\ttruncadoSvs, ilegibleSvs, peorProyecto := renderServicios(&cuerpo, engine, vistos, ahora, techoServicios)"
+// arnes: a="\ttruncadoSvs, ilegibleSvs, peorProyecto := false, false, 0\n\t_ = renderServicios"
 func TestElScrapeYElEmpujeExportanLosMismosServicios(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	sembrarServicios(t, s, "nas", "samba", "postgres")
@@ -179,6 +192,9 @@ func TestElScrapeYElEmpujeExportanLosMismosServicios(t *testing.T) {
 // sabotaje. El que SÍ rompe es el de abajo, y está ejecutado.
 //
 // Sabotaje que la hace fallar: escribir el valor crudo (`b.WriteString(kv[1])`) sin citar.
+// arnes: archivo="internal/mcp/fleet_prometheus_servicios.go"
+// arnes: de="\t\tb.WriteString(citarLabel(kv[1]))"
+// arnes: a="\t\tb.WriteString(kv[1])"
 func TestElNombreDeUnServicioSeCitaYNoSeMutila(t *testing.T) {
 	d := fleet.Device{Name: "nas", ProjectID: "casa"}
 

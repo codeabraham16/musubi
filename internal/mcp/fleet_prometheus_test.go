@@ -27,6 +27,10 @@ func exportar(t *testing.T, s *McpServer, p *Principal) string {
 // cpu_percent 0 en el primer latido de cada agente pintaría una caída a cero en cada reinicio.
 //
 // Sabotaje que la hace fallar: devolver (0, true) en vez de (0, false) cuando CPUPct es nil.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\t\t\t\"%\", false, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return valorDe(m.CPUPct) })},"
+// arnes: a="\t\t\t\"%\", false, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { v, _ := valorDe(m.CPUPct); return v, true })},"
+// arnes: colision_ok="TestUnValorDesconocidoNoViajaComoCeroEnElPayload"
 func TestUnValorDesconocidoNoSeExportaComoCero(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ts := servidorHTTP(t, s)
@@ -52,6 +56,10 @@ func TestUnValorDesconocidoNoSeExportaComoCero(t *testing.T) {
 	// Sabotaje: devolver (0, true) en la fila de la tabla de series (por ejemplo, poner
 	// `float64(m.NumProcesos), true` en musubi_fleet_device_processes). La línea aparece con un 0
 	// y en Prometheus dibuja una caída a cero en cada máquina que no cuenta procesos.
+	// arnes: prueba="TestUnValorDesconocidoNoSeExportaComoCero"
+	// arnes: archivo="internal/mcp/fleet_prometheus.go"
+	// arnes: de="\t\t\t\"\", true, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return float64(m.NumProcesos), m.NumProcesos > 0 })},"
+	// arnes: a="\t\t\t\"\", true, deLaMuestra(func(m *fleet.Muestra) (float64, bool) { return float64(m.NumProcesos), true })},"
 	if strings.Contains(out, "musubi_fleet_device_memory_free_bytes") {
 		t.Errorf("se exportó mem_libre sin haberla medido: un 0 se lee «no le queda RAM libre»:\n%s", out)
 	}
@@ -99,6 +107,10 @@ func TestUnValorDesconocidoNoSeExportaComoCero(t *testing.T) {
 //
 // Sabotaje: quitar el PuedeSobreDevice del filtro → el token de Prometheus se convierte en una
 // puerta trasera que sortea el eje de capacidades entero.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\t\t\tif PuedeSobreDevice(p, d, fleet.CapMetrics) {"
+// arnes: a="\t\t\tif true {"
+// arnes: colision_ok="TestElEmpujeNoCruzaTenants"
 func TestElScrapeExportaSoloLoQueEsaCredencialPuedeVer(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ts := servidorHTTP(t, s)
@@ -127,6 +139,9 @@ func TestElScrapeExportaSoloLoQueEsaCredencialPuedeVer(t *testing.T) {
 // lo DICE en vez de quedarse muda.
 //
 // Sabotaje: hacer que renderFlota trate al admin como federado con acceso pleno.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\t\tb.WriteString(\"# musubi_fleet: ninguna máquina visible para esta credencial.\\n\")\n"
+// arnes: a=""
 func TestUnAdminSinGrantsNoExportaNadaYLoDice(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ts := servidorHTTP(t, s)
@@ -178,6 +193,9 @@ func TestElScrapeNoCruzaTenants(t *testing.T) {
 // serie. Los nombres los escribe un administrador, así que es alcanzable.
 //
 // Sabotaje: interpolar el nombre sin citarLabel.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="func citarLabel(s string) string {\n\tr := strings.NewReplacer("
+// arnes: a="func citarLabel(s string) string {\n\tr := strings.NewReplacer(\"zzz\", \"zzz\")\n\t_ = strings.NewReplacer("
 func TestUnNombreConComillasNoCorrompeElScrape(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ts := servidorHTTP(t, s)

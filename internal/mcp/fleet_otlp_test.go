@@ -332,6 +332,7 @@ func TestArmarPayloadConPrincipalNilNoExporta(t *testing.T) {
 // arnes: archivo="internal/mcp/fleet_prometheus.go"
 // arnes: de="\t\t\tif PuedeSobreDevice(p, d, fleet.CapMetrics) {\n"
 // arnes: a="\t\t\tif true {\n"
+// arnes: colision_ok="TestElScrapeExportaSoloLoQueEsaCredencialPuedeVer"
 func TestElEmpujeNoCruzaTenants(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()
@@ -560,6 +561,7 @@ func TestElEmpujeYElScrapeExportanLasMismasSeriesYLosMismosValores(t *testing.T)
 // arnes: archivo="internal/mcp/fleet_prometheus.go"
 // arnes: de="return valorDe(m.CPUPct)"
 // arnes: a="return 0, true"
+// arnes: colision_ok="TestUnValorDesconocidoNoSeExportaComoCero"
 func TestUnValorDesconocidoNoViajaComoCeroEnElPayload(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()

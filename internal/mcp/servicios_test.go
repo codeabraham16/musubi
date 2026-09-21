@@ -1051,6 +1051,7 @@ func TestUnServicioOciosoNoEmiteLaSerieDeUp(t *testing.T) {
 // arnes: archivo="internal/mcp/fleet_prometheus_servicios.go"
 // arnes: de="\t\t\t\t\t// falta o crece, que es la forma correcta de contar una ausencia.\n\t\t\t\t\treturn 0, false"
 // arnes: a="\t\t\t\t\t// falta o crece, que es la forma correcta de contar una ausencia.\n\t\t\t\t\treturn 0, true"
+// arnes: colision_ok="TestLoQueNoSeSabeDeUnServicioNoViajaComoCero"
 func TestUnServicioDesconocidoNoEmiteLaSerieDeUp(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 
