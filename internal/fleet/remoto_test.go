@@ -47,6 +47,9 @@ func sshFalso(t *testing.T, cuerpo string) {
 // ande», y por eso tiene su propia prueba.
 //
 // Sabotaje que la hace fallar: cambiarlo a `no` o `accept-new`.
+// arnes: archivo="internal/fleet/remoto.go"
+// arnes: de="\t\t\"-o\", \"StrictHostKeyChecking=yes\","
+// arnes: a="\t\t\"-o\", \"StrictHostKeyChecking=accept-new\","
 func TestNuncaSeDesactivaLaVerificacionDeHostKey(t *testing.T) {
 	// SE LEE LA FUNCIÓN PURA, NO UN EXEC. Lo que esta prueba afirma —qué flags se le pasan a
 	// ssh— lo decide argumentosSSH y nada más; hacerlo pasar por un doble ejecutable metía una
@@ -74,6 +77,9 @@ func TestNuncaSeDesactivaLaVerificacionDeHostKey(t *testing.T) {
 // mantenimiento en un incidente.
 //
 // Sabotaje que la hace fallar: pasar el argv sin citarParaShell.
+// arnes: archivo="internal/fleet/remoto.go"
+// arnes: de="\t\targs = append(args, citarParaShell(a))\n\t}\n\treturn args\n}\n\n// citarParaShell"
+// arnes: a="\t\targs = append(args, a)\n\t}\n\treturn args\n}\n\n// citarParaShell"
 func TestElArgvSeCitaParaLaShellRemota(t *testing.T) {
 	// Misma razón que arriba: el citado lo hace argumentosSSH, así que se lo pregunta a él.
 	args := argumentosSSH("host", []string{"echo", "$HOME y *", "un'apostrofe"}, 10*time.Second)
@@ -116,6 +122,9 @@ func TestElCitadoNeutralizaLaShell(t *testing.T) {
 // alguien a depurar el comando cuando el problema es la conexión.
 //
 // Sabotaje: tratar el 255 como exit code normal.
+// arnes: archivo="internal/fleet/remoto.go"
+// arnes: de="\t\t\tif code == 255 {"
+// arnes: a="\t\t\tif false && code == 255 {"
 func TestEl255DeSSHEsFalloDeCanalNoResultado(t *testing.T) {
 	sshFalso(t, "echo 'ssh: connect to host router.local port 22: Connection refused' >&2; exit 255")
 	res := EjecutarPorSSH("router.local", []string{"uptime"}, 5*time.Second)
@@ -144,6 +153,9 @@ func TestEl255DeSSHEsFalloDeCanalNoResultado(t *testing.T) {
 // la gente a buscar `StrictHostKeyChecking=no` en internet — que es la peor solución posible.
 //
 // Sabotaje: devolver el stderr crudo de ssh sin traducirlo.
+// arnes: archivo="internal/fleet/remoto.go"
+// arnes: de="func explicarFalloSSH(destino, stderr string) string {\n\ts := strings.ToLower(stderr)"
+// arnes: a="func explicarFalloSSH(destino, stderr string) string {\n\treturn stderr\n}\n\nfunc explicarFalloSSHViejo(destino, stderr string) string {\n\ts := strings.ToLower(stderr)"
 func TestElErrorDeHostKeyMandaALaSolucionBuenaYNoALaMala(t *testing.T) {
 	sshFalso(t, "echo 'Host key verification failed.' >&2; exit 255")
 	res := EjecutarPorSSH("gio@router.local", []string{"uptime"}, 5*time.Second)
@@ -215,6 +227,9 @@ func TestLaSalidaRemotaSeAcota(t *testing.T) {
 // perfecto. Y mover el 22 es lo primero que hace cualquiera con un NAS expuesto.
 //
 // Sabotaje que la hace fallar: devolver (destino, "") siempre.
+// arnes: archivo="internal/fleet/remoto.go"
+// arnes: de="func destinoYPuertoSSH(destino string) (host, puerto string) {\n\tdestino = strings.TrimSpace(destino)"
+// arnes: a="func destinoYPuertoSSH(destino string) (host, puerto string) {\n\treturn destino, \"\"\n}\n\nfunc destinoYPuertoSSHViejo(destino string) (host, puerto string) {\n\tdestino = strings.TrimSpace(destino)"
 func TestUnTierBEnUnPuertoNoEstandarSeAlcanza(t *testing.T) {
 	casos := []struct {
 		address, host, puerto string
@@ -250,6 +265,9 @@ func TestUnTierBEnUnPuertoNoEstandarSeAlcanza(t *testing.T) {
 // ejecutar comandos y no para abrir una terminal, sin ninguna pista de por qué.
 //
 // Sabotaje que la hace fallar: arreglar sólo argumentosSSH y dejar argumentosShellSSH.
+// arnes: archivo="internal/fleet/shell_ssh.go"
+// arnes: de="\thost, puerto := destinoYPuertoSSH(destino)\n\tif puerto != \"\" {\n\t\targs = append(args, \"-p\", puerto)\n\t}"
+// arnes: a="\thost := destino"
 func TestElPuertoLlegaALaLineaDeComandoEnLosDosCaminos(t *testing.T) {
 	tiene := func(args []string, quiero ...string) bool {
 		for i := 0; i+len(quiero) <= len(args); i++ {

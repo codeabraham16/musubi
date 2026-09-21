@@ -48,7 +48,11 @@ func TestElParseoDeProcProduceLosMismosNumerosVengaDeDondeVenga(t *testing.T) {
 		t.Errorf("MemTotal = %d, esperaba %d", m.MemTotal, quiero)
 	}
 	// I3 — MemLibre ES MemFree, no otra cosa: el número crudo del fixture, en bytes.
-	// Sabotaje: no asignar MemFree en ParsearMeminfo (queda nil y esta rama lo dice).
+	// ESE CORTE YA TIENE DUEÑO, Y SON DOS. Borrar la asignación de MemFree la custodia
+	// TestLoQueCadaPlataformaMideEstaDeclarado (colector_test.go) y su opuesta —inventar un 0—
+	// la custodia TestUnaLecturaIncompletaNoInventaNumeros, más abajo en este archivo; las dos
+	// ya se leyeron una contra la otra y la colisión está contestada. Una tercera promesa sobre
+	// la misma línea no agrega red: agrega la ilusión de que hay más.
 	if m.MemLibre == nil {
 		t.Error("MemLibre = nil con un meminfo que trae MemFree: no se está absorbiendo")
 	} else if quiero := uint64(1204168) * 1024; *m.MemLibre != quiero {
@@ -102,8 +106,9 @@ func TestElParseoRemotoTampocoUsaMemFree(t *testing.T) {
 	// «tiene» que ser MemTotal - MemLibre, dice la intuición. No lo es, y la distancia entre las
 	// dos cuentas se mide en GIGABYTES, no en ruido.
 	//
-	// Sabotaje: en ParsearMeminfo, calcular MemUsada con vals["MemFree"] en vez de con
-	// `disponible`.
+	// ESE CORTE YA ESTÁ MECANIZADO ARRIBA, en el doc de esta misma prueba: la directiva que cae
+	// sobre el bloque de `disponible` hace exactamente esto. Repetir la promesa adentro del
+	// cuerpo no la custodia dos veces — la cuenta dos veces.
 	if m.MemLibre == nil {
 		t.Fatal("MemLibre = nil: sin el campo, esta guarda no custodia nada")
 	}
@@ -160,6 +165,9 @@ func TestElConteoDeProcesosNoSaleDelCuartoCampoDeLoadavg(t *testing.T) {
 // filtra nada.
 //
 // Sabotaje: cambiar el filtro por strings.HasPrefix con un dígito, o por «no contiene /».
+// arnes: archivo="internal/fleet/procparse.go"
+// arnes: de="\t\tfor _, r := range nombre {"
+// arnes: a="\t\tfor _, r := range nombre[:1] {"
 func TestContarPidsIgnoraLoQueNoEsUnPid(t *testing.T) {
 	if n := ContarPids("1\n2\n1234\nself\nthread-self\ncpuinfo\nnet\n12ab\n"); n != 3 {
 		t.Errorf("ContarPids = %d, esperaba 3: sólo 1, 2 y 1234 son pids ("+
@@ -221,6 +229,10 @@ func TestUnaLecturaIncompletaNoInventaNumeros(t *testing.T) {
 	// — el cero mentiroso contra el que existe todo el diseño.
 	//
 	// Sabotaje que la hace fallar: fijar m.MemTotal fuera del `if` que exige el disponible.
+	// arnes: prueba="TestUnaLecturaIncompletaNoInventaNumeros"
+	// arnes: archivo="internal/fleet/procparse.go"
+	// arnes: de="\t\tif total >= disponible && disponible > 0 {"
+	// arnes: a="\t\tm.MemTotal = total\n\t\tif total >= disponible && disponible > 0 {"
 	var parcial Muestra
 	ParsearMeminfo("MemTotal:        7843996 kB\nBuffers:          123456 kB", &parcial)
 	if parcial.MemTotal != 0 || parcial.MemUsada != 0 {
@@ -250,6 +262,9 @@ func TestUnaLecturaIncompletaNoInventaNumeros(t *testing.T) {
 //
 // Sabotaje: hacer que MuestraDesdeTexto exija los campos (o que el JSON los rellene con ceros al
 // deserializar, que es el mismo bug con otra cara).
+// arnes: archivo="internal/fleet/muestra.go"
+// arnes: de="\t\treturn nil, fmt.Errorf(\"muestra guardada ilegible: %w\", err)\n\t}\n\treturn &m, nil"
+// arnes: a="\t\treturn nil, fmt.Errorf(\"muestra guardada ilegible: %w\", err)\n\t}\n\tif m.MemLibre == nil {\n\t\treturn nil, fmt.Errorf(\"la muestra guardada no trae mem_libre\")\n\t}\n\treturn &m, nil"
 func TestUnaMuestraSinLosCamposNuevosSeLeeComoNoMedida(t *testing.T) {
 	vieja := `{"tomada":"2026-08-01T10:00:00Z","cpu_pct":12.5,"num_cpu":8,` +
 		`"mem_total":8589934592,"mem_usada":4294967296,"swap_total":0,"swap_usada":0,` +
@@ -315,6 +330,10 @@ func TestUnaSalidaQueNoEsLinuxSeRechaza(t *testing.T) {
 	// Sabotaje que la hace fallar (VERIFICADO): correr los índices de `tomar()` en
 	// ParsearLecturaRemota —leer NumCPU de tomar(5) y Procs de tomar(6), por ejemplo—. Ahí la
 	// memoria se lee como carga y la temperatura como conteo de procesadores.
+	// arnes: prueba="TestUnaSalidaQueNoEsLinuxSeRechaza"
+	// arnes: archivo="internal/fleet/remoto.go"
+	// arnes: de="\tl.Procs = tomar(7) //"
+	// arnes: a="\tl.Procs = tomar(6) //"
 	conProcs := completa + "\n" + sep + "\n1\n2\n1234\nself\ncpuinfo\n"
 	l8, ok := ParsearLecturaRemota(conProcs)
 	if !ok {

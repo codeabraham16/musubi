@@ -326,7 +326,34 @@ import (
 // El criterio, que vale para todo lo que viene: `colision_ok` se declara cuando las dos guardas
 // cubren la línea de verdad. Si una de las dos está prometiendo el trabajo de la otra, declararla
 // sería apagar el aviso en vez de contestarlo.
-const anclasEnProsaAlDia = 364
+//
+// Y DE 364 A 340 EL 2026-09-21: las veinticuatro anclas de LA CAPA DE MEDICIÓN —cómo se alcanza una
+// máquina ajena por SSH (`remoto_test.go`), qué se absorbe de su colector (`colector_externo_test.go`)
+// y cómo se mide una máquina de verdad (`procparse_test.go`, `colector_linux_test.go`,
+// `colector_test.go`)—. El barrido corrió sobre el paquete entero: 104 de 104 en rojo.
+//
+// LA ÚLTIMA PROSA RANCIA DEL CORPUS, y se buscó a propósito. `colector_linux_test.go` prometía
+// «usar MemFree en leerMemoria» y `leerMemoria` YA NO EXISTE: el parseo se disolvió adentro de
+// ParsearMeminfo. Se barrieron las 364 anclas en prosa buscando símbolos nombrados ahí y ausentes
+// del árbol, y ésta era la única.
+//
+// EL BARRIDO SE ENCONTRABA A SÍ MISMO, y esa es la lección del instrumento. La primera corrida dio
+// CERO rancias: buscaba cada símbolo con `git grep -- '*.go'`, que incluye el archivo donde vive la
+// prosa, así que todo símbolo se hallaba a sí mismo en su propia promesa. Hay que excluir el
+// archivo del ancla Y descartar los hits que caen en comentarios. Es la familia «la guarda se
+// detecta a sí misma», esta vez del lado de la herramienta que audita.
+//
+// TRES PROMESAS NO SE MECANIZARON PORQUE EL CORTE YA TENÍA DUEÑO. La asignación de MemFree en
+// ParsearMeminfo ya la custodian DOS guardas con su colisión contestada —una borra la asignación,
+// la otra inventa un 0— y encima había otras tres anclas prometiendo lo mismo desde otros archivos.
+// Se fusionaron con una nota que dice dónde vive la red. Una tercera promesa sobre la misma línea
+// no agrega red: agrega la ilusión de que hay más.
+//
+// Y UN `colision_ok` QUE SOBRABA: dos cortes míos declaraban pisarse y el censo contestó que NO se
+// pisan, porque el `a` de los dos CONSERVA su propio `de` (insertan un return y renombran la
+// función vieja). Un `a` que preserva el `de` no rompe a nadie. La herramienta caza la respuesta
+// rancia igual que caza la promesa rancia.
+const anclasEnProsaAlDia = 340
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //

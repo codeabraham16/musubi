@@ -20,6 +20,9 @@ import (
 //
 // Sabotaje que la hace fallar: inicializar `tienePrevio: true` con ceros, o devolver 0 cuando no
 // hay previo.
+// arnes: archivo="internal/fleet/cpudelta.go"
+// arnes: de="\tif !tenia || total <= previoTotal || ocupado < previoOcupado {\n\t\treturn nil\n\t}"
+// arnes: a="\tif !tenia {\n\t\tz := 0.0\n\t\treturn &z\n\t}\n\tif total <= previoTotal || ocupado < previoOcupado {\n\t\treturn nil\n\t}"
 func TestLaPrimeraMuestraNoInventaUnPorcentajeDeCPU(t *testing.T) {
 	c := NuevoColector()
 	m1, err := c.Tomar()
@@ -46,6 +49,9 @@ func TestLaPrimeraMuestraNoInventaUnPorcentajeDeCPU(t *testing.T) {
 
 // El colector mide de verdad: los números coinciden con lo que dice /proc, no son constantes.
 // Sabotaje: devolver una Muestra vacía → todos los contrastes fallan.
+// arnes: archivo="internal/fleet/colector_linux.go"
+// arnes: de="func (c *colectorLinux) Tomar() (Muestra, error) {"
+// arnes: a="func (c *colectorLinux) Tomar() (Muestra, error) {\n\treturn Muestra{}, nil\n}\n\nfunc (c *colectorLinux) TomarViejo() (Muestra, error) {"
 func TestElColectorMidePorDeVerdadYNoDevuelveCeros(t *testing.T) {
 	m, err := NuevoColector().Tomar()
 	if err != nil {
@@ -67,8 +73,11 @@ func TestElColectorMidePorDeVerdadYNoDevuelveCeros(t *testing.T) {
 	// abajo: entre las dos lecturas la memoria se mueve, y comparar al byte dos lecturas
 	// independientes de una cantidad que cambia es flaky por construcción.
 	//
-	// Sabotaje: dejar de asignar MemFree en ParsearMeminfo — MemLibre queda nil y la primera rama
-	// lo dice.
+	// ESE CORTE YA TIENE DUEÑO, Y SON DOS: TestLoQueCadaPlataformaMideEstaDeclarado lo corta por
+	// el lado de borrar la asignación y TestUnaLecturaIncompletaNoInventaNumeros por el opuesto,
+	// con la colisión contestada entre ellas. Lo que ESTA rama agrega es otra cosa y vale por sí
+	// sola: contrasta el valor contra /proc/meminfo con tolerancia, o sea que caza un MemFree mal
+	// leído y no sólo uno ausente. Eso no se puede cortar sin pisar a las otras dos.
 	libreKB := leerUnaClaveDeMeminfo(t, "MemFree")
 	if m.MemLibre == nil {
 		t.Error("MemLibre = nil en Linux: /proc/meminfo SIEMPRE trae MemFree, así que esto es que no se parsea")
@@ -84,6 +93,10 @@ func TestElColectorMidePorDeVerdadYNoDevuelveCeros(t *testing.T) {
 	// la que vive el bug —confundir procesos con HILOS da 3 a 5 veces más—, no más fina.
 	//
 	// Sabotaje: dejar listarProc() devolviendo "" (NumProcesos queda en 0 y la primera rama lo dice).
+	// arnes: prueba="TestElColectorMidePorDeVerdadYNoDevuelveCeros"
+	// arnes: archivo="internal/fleet/colector_linux.go"
+	// arnes: de="func listarProc() string {\n\tentradas, err := os.ReadDir(\"/proc\")"
+	// arnes: a="func listarProc() string {\n\treturn \"\"\n}\n\nfunc listarProcViejo() string {\n\tentradas, err := os.ReadDir(\"/proc\")"
 	propios := contarPidsDeProcAMano(t)
 	if m.NumProcesos == 0 {
 		t.Error("NumProcesos = 0 en Linux: /proc siempre tiene pids, así que esto es que no se listó")
@@ -128,7 +141,17 @@ func TestElColectorMidePorDeVerdadYNoDevuelveCeros(t *testing.T) {
 // libre como page cache, y con MemFree aparecería al ~95 % permanentemente hasta que nadie
 // vuelva a mirar la métrica.
 //
-// Sabotaje que la hace fallar: usar MemFree en leerMemoria.
+// LA PROSA ESTABA RANCIA: nombraba `leerMemoria`, una función que YA NO EXISTE en el árbol —se
+// disolvió adentro de ParsearMeminfo, que es donde vive hoy la cuenta y donde está el corte—.
+// Un nombre viejo en una promesa no se pone rojo solo: se queda ahí mandando a buscar a alguien
+// a un archivo que no tiene nada. Es la única prosa rancia que quedaba en el corpus: se barrió
+// entero buscando símbolos nombrados en prosa y ausentes del árbol, y ésta era la última.
+//
+// Sabotaje que la hace fallar: usar MemFree en vez de MemAvailable dentro de ParsearMeminfo.
+// arnes: archivo="internal/fleet/procparse.go"
+// arnes: de="\t\t\tm.MemTotal, m.MemUsada = total, total-disponible"
+// arnes: a="\t\t\tm.MemTotal, m.MemUsada = total, total-vals[\"MemFree\"]"
+// arnes: colision_ok="TestLaReglaDeLosParesSeRespetaEnEstaPlataforma"
 func TestLaMemoriaUsadaSaleDeMemAvailableYNoDeMemFree(t *testing.T) {
 	total := leerUnaClaveDeMeminfo(t, "MemTotal")
 	disponible := leerUnaClaveDeMeminfo(t, "MemAvailable")
@@ -203,6 +226,10 @@ func TestElDiscoUsadoCoincideConDf(t *testing.T) {
 
 	// Y la razón de que sean TRES: la reserva de root hace que no cierren en dos.
 	// Sabotaje que lo hace fallar: calcular Disponible como Total-Usado.
+	// arnes: prueba="TestElDiscoUsadoCoincideConDf"
+	// arnes: archivo="internal/fleet/colector_linux.go"
+	// arnes: de="\tm.DiscoTotal, m.DiscoUsado, m.DiscoDisponible = col.Total, col.Usado, col.Disponible"
+	// arnes: a="\tm.DiscoTotal, m.DiscoUsado, m.DiscoDisponible = col.Total, col.Usado, col.Total-col.Usado"
 	if m.DiscoUsado+m.DiscoDisponible >= m.DiscoTotal {
 		t.Errorf("usado (%d) + disponible (%d) >= total (%d): la reserva de root desapareció, "+
 			"así que uno de los dos números está derivado del otro en vez de medido",
