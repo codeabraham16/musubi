@@ -121,13 +121,20 @@ func NewSyncClient(cfg config.SyncConfig) (*SyncClient, error) {
 // Un valor con esquema, puerto o barra se RECHAZA como permanente, y no por prolijidad: un
 // `tls_server_name: https://nodo…` llegaría al handshake como nombre imposible, fallaría como error
 // de red y se reintentaría para siempre. Rechazado acá, el arranque del daemon lo grita una vez.
+//
+// LA VALIDACIÓN CORRE SOBRE EL NOMBRE QUE GANÓ, VENGA DE DONDE VENGA. La primera versión validaba
+// sólo la clave del config y dejaba pasar el respaldo de la variable tal cual: un
+// `MUSUBI_BRAIN_TLS_NAME=https://nodo…` llegaba al handshake sin mirar y reproducía exactamente el
+// defecto que la validación existe para cortar. El error nombra el ORIGEN, porque «arreglá la
+// clave» cuando lo malo es la variable manda a editar el archivo equivocado.
 func nombreTLSDelSync(cfg config.SyncConfig) (string, error) {
+	origen := "sync.tls_server_name"
 	n := strings.TrimSpace(cfg.TLSServerName)
 	if n == "" {
-		return cerebro.NombreTLS(), nil
+		origen, n = cerebro.EnvNombreTLS, cerebro.NombreTLS()
 	}
 	if strings.ContainsAny(n, ":/ \t") {
-		return "", fmt.Errorf("%w: sync.tls_server_name tiene que ser un nombre de host pelado, sin esquema ni puerto (ej. musubi-server.tail89e295.ts.net): %q", errPermanent, cfg.TLSServerName)
+		return "", fmt.Errorf("%w: %s tiene que ser un nombre de host pelado, sin esquema ni puerto (ej. musubi-server.tail89e295.ts.net): %q", errPermanent, origen, n)
 	}
 	return n, nil
 }

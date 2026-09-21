@@ -302,6 +302,48 @@ func TestElSyncRechazaUnNombreTLSConEsquemaOPuerto(t *testing.T) {
 	}
 }
 
+// TestElSyncRechazaUnNombreTLSMalEscritoEnLaVariable — el respaldo pasa por la misma aduana.
+//
+// Sin la clave del config, el nombre sale de MUSUBI_BRAIN_TLS_NAME. La primera versión validaba
+// sólo la clave, y el valor de la variable llegaba al handshake tal cual: un `https://nodo…` en el
+// entorno reproducía el defecto entero —error de red, transitorio, pending para siempre— con la
+// validación «puesta». El error tiene que nombrar a la VARIABLE: mandar a corregir la clave cuando
+// lo malo es el entorno es mandar a editar el archivo equivocado.
+//
+// Y la otra mitad: con la clave puesta la variable no llega al handshake del sync, así que su valor
+// no lo frena. Validar lo que no se usa convertiría el entorno sucio de OTRO cliente en un sync
+// apagado.
+//
+// Sabotaje que la hace fallar: que el respaldo de la variable vuelva a salir sin validar.
+// arnes: archivo="internal/mcp/syncclient.go"
+// arnes: de="\t\torigen, n = cerebro.EnvNombreTLS, cerebro.NombreTLS()\n"
+// arnes: a="\t\treturn cerebro.NombreTLS(), nil\n"
+func TestElSyncRechazaUnNombreTLSMalEscritoEnLaVariable(t *testing.T) {
+	for _, malo := range []string{
+		"https://" + elNombreDelCerebro,
+		elNombreDelCerebro + ":10000",
+		elNombreDelCerebro + "/mcp",
+		"musubi server",
+	} {
+		t.Setenv(cerebro.EnvNombreTLS, malo)
+		_, err := NewSyncClient(cfgSyncPorIP("https://100.79.126.62:10000", ""))
+		if err == nil {
+			t.Errorf("%s=%q se aceptó sin tls_server_name en el config: llega al handshake y falla como "+
+				"error de red, para siempre", cerebro.EnvNombreTLS, malo)
+			continue
+		}
+		if !errors.Is(err, errPermanent) || !strings.Contains(err.Error(), cerebro.EnvNombreTLS) {
+			t.Errorf("%s=%q: el error tiene que ser permanente y nombrar a la VARIABLE, dijo: %v",
+				cerebro.EnvNombreTLS, malo, err)
+		}
+	}
+
+	t.Setenv(cerebro.EnvNombreTLS, "https://"+elNombreDelCerebro)
+	if _, err := NewSyncClient(cfgSyncPorIP("https://100.79.126.62:10000", elNombreDelCerebro)); err != nil {
+		t.Errorf("con la clave puesta la variable no llega al handshake del sync, y aun así lo frenó: %v", err)
+	}
+}
+
 // dobleDelCerebro es un servidor HTTPS en 127.0.0.1 que anota el SNI de cada ClientHello.
 type dobleDelCerebro struct {
 	url  string

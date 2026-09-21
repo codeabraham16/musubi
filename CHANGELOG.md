@@ -29,7 +29,9 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   TLS 1.2 (`MinVersion`). La verificación sigue entera: ni `InsecureSkipVerify` ni otro pool de
   raíces. Un valor con esquema, puerto o barra (`https://nodo…`, `nodo…:10000`) se rechaza al
   construir el cliente como error **permanente**, en vez de fallar en cada handshake como error de
-  red. El `doctor` compara también esta clave entre el config que gobierna y su sombra. *Medido con dobles de `tailscale serve` discando `127.0.0.1`, una prueba por causa, porque
+  red. Pasa por la misma validación venga de la clave o de `MUSUBI_BRAIN_TLS_NAME`, y el error
+  nombra de dónde salió. El `doctor` compara también esta clave entre el config que gobierna y su
+  sombra. *Medido con dobles de `tailscale serve` discando `127.0.0.1`, una prueba por causa, porque
   son dos y cada una alcanza sola: el servidor que corta el handshake sin SNI (`remote error: tls:
   internal error`), y el certificado sin SAN de IP que el cliente rechaza al verificar por IP. Cada
   doble apaga la causa que no mide, y con la clave las dos entregas pasan. Una sola prueba con las
