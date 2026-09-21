@@ -252,8 +252,8 @@ func TestElActualizadorNoCantaVictoriaSoloPorLaVersionReportada(t *testing.T) {
 //
 // Sabotaje que la hace fallar: que el paso del lanzador apunte al CAMBIADOR en vez de al lanzador.
 // arnes: archivo="deploy/actualizar-agente-windows.sh"
-// arnes: de="Join-Path $d \"agente.cmd\""
-// arnes: a="Join-Path $d \"cambiar-agente.cmd\""
+// arnes: de="$lan = Join-Path $d \"agente.cmd\""
+// arnes: a="$lan = Join-Path $d \"cambiar-agente.cmd\""
 func TestElActualizadorTambienRefrescaElLanzador(t *testing.T) {
 	g := leerDeploy(t, "actualizar-agente-windows.sh")
 
@@ -265,13 +265,33 @@ func TestElActualizadorTambienRefrescaElLanzador(t *testing.T) {
 			"  fue, el cabo A102 volvió a quedar sin custodia.")
 	}
 	cuerpo := g[ini:]
-	if fin := strings.Index(cuerpo, "\npaso \""); fin >= 0 {
-		cuerpo = cuerpo[:fin]
+	// EL SEGUNDO RECORTE TAMBIÉN TIENE QUE PODER FALLAR, Y NO PODÍA. Estaba escrito
+	// `if fin := ...; fin >= 0 { cuerpo = cuerpo[:fin] }`: con −1 la ventana se quedaba EN SILENCIO
+	// con todo el resto del archivo, que es exactamente la forma que hacía hueca a la versión de
+	// antes de #557. Hoy el paso 6 empieza con `paso "` en la columna cero y el corte acierta, pero
+	// eso es una propiedad del archivo, no de la guarda: medido el 2026-09-21, si el fragmento
+	// vuelve a aparecer después del paso 5 —y el paso 6 ya trae `Join-Path $d "cambiar-agente.cmd"`,
+	// así que basta con que alguien lo indente— la guarda queda VERDE sobre el defecto A102 real.
+	// Una rama que no se toma no se distingue de una que no hacía falta.
+	fin := strings.Index(cuerpo, "\npaso \"")
+	if fin < 0 {
+		t.Fatal("el paso del lanzador no termina en otro `paso \"`: sin ese corte la ventana es TODO\n" +
+			"  el resto del guion, y el paso 6 ya nombra `Join-Path $d \"cambiar-agente.cmd\"`. La guarda\n" +
+			"  volvería a mirar de más y a no poder fallar, que es el defecto de A102 entrando de nuevo\n" +
+			"  por la puerta del recorte. Si el guion cambió de forma, movete el corte con él.")
 	}
+	cuerpo = cuerpo[:fin]
 
 	for _, c := range []struct{ frag, queja string }{
-		{`Join-Path $d "agente.cmd"`,
-			"el paso del lanzador dejó de apuntar a `agente.cmd`.\n" +
+		// SE PIDE LA ASIGNACIÓN A `$lan`, NO QUE EL LITERAL APAREZCA. Preguntar por la aparición
+		// deja pasar el defecto con una línea muerta al lado, medido el 2026-09-21:
+		//     $ignorado = Join-Path $d "agente.cmd"
+		//     $lan      = Join-Path $d "cambiar-agente.cmd"
+		// El literal está, la guarda queda verde y el lanzador apunta al cambiador igual. Es la
+		// misma clase que el `Contains` del guion entero que #557 vino a cerrar, sólo más angosta:
+		// lo que decide es a QUÉ se le asigna, y eso es lo que hay que preguntar.
+		{`$lan = Join-Path $d "agente.cmd"`,
+			"el paso del lanzador dejó de ASIGNARLE `agente.cmd` a `$lan`.\n" +
 				"  Si apunta al CAMBIADOR, el lanzador se queda con `set /p MUSUBI_DEVICE_TOKEN=<archivo`:\n" +
 				"  la credencial viaja en el ENTORNO del proceso (mecanismo de A88, donde arreglar el archivo\n" +
 				"  no le llega a un proceso que ya arrancó), `set /p` corre UNA vez al arrancar así que la\n" +
