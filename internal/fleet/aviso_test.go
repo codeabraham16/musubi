@@ -16,6 +16,9 @@ import (
 // respuestas que no son ni sí ni no: el plazo vencido y «no había con qué preguntar».
 //
 // Sabotaje que la hace fallar: implementar Concede como `r != RespuestaNegada`.
+// arnes: archivo="internal/fleet/aviso.go"
+// arnes: de="\treturn r == RespuestaConcedida"
+// arnes: a="\treturn r != RespuestaNegada"
 func TestSoloLaRespuestaConcedidaAbreLaPuerta(t *testing.T) {
 	if !RespuestaConcedida.Concede() {
 		t.Error("una respuesta concedida no abre: el eje quedaría inutilizable")
@@ -40,6 +43,12 @@ func TestSoloLaRespuestaConcedidaAbreLaPuerta(t *testing.T) {
 // estado separado nadie se enteraría nunca.
 //
 // Sabotaje que la hace fallar: hacer que RespuestaSinRespuesta sea un alias de RespuestaNegada.
+// El corte convierte la constante en VARIABLE, y no es capricho: con las dos constantes
+// iguales, el `case` de Valida que las lista juntas deja de compilar («duplicate case»), y un
+// sabotaje que no compila no prueba nada. Como variable, el switch la acepta. Se midió.
+// arnes: archivo="internal/fleet/aviso.go"
+// arnes: de="\tRespuestaSinRespuesta RespuestaAviso = \"sin_respuesta\"\n\t// RespuestaNoSePudo es que no había con qué preguntar. Distinta de las tres anteriores\n\t// porque no la produce el usuario ni el reloj sino la máquina, y su arreglo es otro.\n\tRespuestaNoSePudo RespuestaAviso = \"no_se_pudo\"\n)"
+// arnes: a="\t// RespuestaNoSePudo es que no había con qué preguntar. Distinta de las tres anteriores\n\t// porque no la produce el usuario ni el reloj sino la máquina, y su arreglo es otro.\n\tRespuestaNoSePudo RespuestaAviso = \"no_se_pudo\"\n)\n\n// alias para el sabotaje: como VARIABLE, el switch de Valida no ve un `case` duplicado.\nvar RespuestaSinRespuesta = RespuestaNegada"
 func TestSinRespuestaSeDistingueDeUnaNegativa(t *testing.T) {
 	if RespuestaSinRespuesta == RespuestaNegada {
 		t.Fatal("«nadie contestó» y «me dijeron que no» son el mismo valor: el diagnóstico se " +
@@ -61,6 +70,9 @@ func TestSinRespuestaSeDistingueDeUnaNegativa(t *testing.T) {
 // agente está hablando un protocolo que este cerebro no conoce.
 //
 // Sabotaje que la hace fallar: que Valida devuelva true siempre.
+// arnes: archivo="internal/fleet/aviso.go"
+// arnes: de="\tcase RespuestaConcedida, RespuestaNegada, RespuestaSinRespuesta, RespuestaNoSePudo:\n\t\treturn true\n\t}\n\treturn false"
+// arnes: a="\tcase RespuestaConcedida, RespuestaNegada, RespuestaSinRespuesta, RespuestaNoSePudo:\n\t\treturn true\n\t}\n\treturn true"
 func TestUnaRespuestaDesconocidaNoSeInterpretaSola(t *testing.T) {
 	for _, r := range []RespuestaAviso{RespuestaConcedida, RespuestaNegada, RespuestaSinRespuesta, RespuestaNoSePudo} {
 		if !r.Valida() {
@@ -77,6 +89,9 @@ func TestUnaRespuestaDesconocidaNoSeInterpretaSola(t *testing.T) {
 // EL PLAZO ES EL QUE SE DECIDIÓ, y está en el dominio y no repartido por los llamadores.
 //
 // Sabotaje que la hace fallar: cambiar AvisoTimeout, o dejar que un llamador use su propio número.
+// arnes: archivo="internal/fleet/aviso.go"
+// arnes: de="\tAvisoTimeout = 60 * time.Second"
+// arnes: a="\tAvisoTimeout = 5 * time.Second"
 func TestElPlazoDelDialogoEsElDecidido(t *testing.T) {
 	if AvisoTimeout != 60*time.Second {
 		t.Errorf("AvisoTimeout = %v; se decidió 60 s el 2026-08-29, con los dos costos escritos: "+
@@ -98,6 +113,7 @@ func TestElPlazoDelDialogoEsElDecidido(t *testing.T) {
 // distinto.
 //
 // Sabotaje que la hace fallar: sacarle el campo Motivo a CapacidadDeAvisar.
+// arnes: no_mecanizable="quitar el campo no es una sustitución de texto sino una refactorización: lo usa ESTA MISMA prueba —que construye `CapacidadDeAvisar{Motivo: ...}` y después lee `c.Motivo`— y también el resto del árbol, así que el paquete no compila y el arnés lo reporta como «sin veredicto», que no es un verde. Y no hay otro corte que la ponga en rojo: el valor se fija en el literal de la prueba, así que nada de producción puede alterarlo. Lo que esta guarda custodia es la FORMA del tipo —que el campo exista—, y esa clase de invariante la sostiene el compilador, no el arnés. Medido el 2026-09-21."
 func TestLaCapacidadDeAvisarLlevaSuMotivo(t *testing.T) {
 	c := CapacidadDeAvisar{Motivo: "el agente no está en una sesión gráfica"}
 	if c.Puede {

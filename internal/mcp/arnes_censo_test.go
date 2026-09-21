@@ -471,7 +471,31 @@ import (
 // MARKDOWN del registro de cabos, con filas de miles de caracteres y `|`, `**` y backticks adentro.
 // Es un objetivo nuevo para el arnés y merece su propio cuidado con los escapes, no el final de una
 // tanda larga.
-const anclasEnProsaAlDia = 264
+//
+// Y DE 264 A 249 EL 2026-09-21: las quince anclas de las POLÍTICAS y los AVISOS del dominio
+// —`internal/fleet/politica_test.go`, `politica_servicio_test.go` y `aviso_test.go`—: las reglas
+// que el sistema aplica SOLO sobre una máquina, y lo que le dice a quien la está usando. Catorce
+// con directiva, UNA exenta, 16 de 16 en rojo al cierre.
+//
+// UNA GUARDA HUECA QUE NO ERA UNA PROMESA FALSA SINO UN FIXTURE FLOJO, y es una cara nueva.
+// `TestDosServiciosDeLaMismaMaquinaNoCompartenEnfriamiento` compara las claves de cooldown de dos
+// políticas sobre `nginx` y sobre `postgres` — pero les da NOMBRES DISTINTOS, y el nombre ya entra
+// en la clave. Sacarle el servicio a `ClaveDeCooldown` la dejaba VERDE: lo que separaba las claves
+// era el nombre, no el servicio. Se agregó la mitad que faltaba —la MISMA política sobre dos
+// servicios— que es exactamente el caso que el comentario de `ClaveDeCooldown` describe. Acá no
+// alcanzaba con anotar el hallazgo: la guarda no cubría su invariante y ahora sí.
+//
+// LA CUARTA CARA DE «EL SABOTAJE NO COMPILA»: `duplicate case`. Hacer que dos constantes de un enum
+// sean iguales rompe el `switch` que las lista JUNTAS en un mismo `case`. El corte que sí compila
+// convierte una de las dos en VARIABLE — un `case` no constante no dispara la comprobación de
+// duplicados— y de paso el sabotaje sigue diciendo lo que prometía.
+//
+// Y LA EXENTA ES LA MISMA FAMILIA QUE LAS DOS ANTERIORES: «sacarle el campo Motivo a
+// CapacidadDeAvisar» lo usa LA PROPIA PRUEBA, que construye el struct con ese campo y después lo
+// lee. Quitarlo no es una sustitución sino una refactorización, y no hay otro corte que la ponga en
+// rojo porque el valor se fija en el literal del test. Lo que custodia es la FORMA del tipo, y esa
+// clase de invariante la sostiene el compilador.
+const anclasEnProsaAlDia = 249
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //

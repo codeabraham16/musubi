@@ -30,12 +30,28 @@ func politicaDeServicio(nombre, servicio string, c Condicion) Politica {
 // Peor que no tener la política: da la sensación de que algo vigila.
 //
 // Sabotaje que la hace fallar: sacar el servicio de ClaveDeCooldown.
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="func (p Politica) ClaveDeCooldown(deviceID string) string {"
+// arnes: a="func (p Politica) ClaveDeCooldown(deviceID string) string {\n\tp.Servicio = \"\""
 func TestDosServiciosDeLaMismaMaquinaNoCompartenEnfriamiento(t *testing.T) {
 	nginx := politicaDeServicio("revivir-nginx", "nginx", CondServicioCaido)
 	postgres := politicaDeServicio("revivir-postgres", "postgres", CondServicioCaido)
 
 	if nginx.ClaveDeCooldown("d1") == postgres.ClaveDeCooldown("d1") {
 		t.Fatal("dos políticas sobre servicios distintos de la misma máquina comparten clave")
+	}
+	// LA MITAD QUE FALTABA, Y SIN ELLA ESTA GUARDA ERA HUECA — medido con el arnés el 2026-09-21.
+	//
+	// Las dos políticas de arriba tienen NOMBRES distintos, así que sus claves se separan solas: el
+	// sabotaje que esta prueba declara —sacarle el servicio a ClaveDeCooldown— la dejaba en VERDE.
+	// Lo que de verdad obliga a que el servicio entre en la clave es el MISMO nombre sobre dos
+	// servicios, que es exactamente el caso que el comentario de ClaveDeCooldown describe.
+	unaSola := politicaDeServicio("revivir", "nginx", CondServicioCaido)
+	laMisma := politicaDeServicio("revivir", "postgres", CondServicioCaido)
+	if unaSola.ClaveDeCooldown("d1") == laMisma.ClaveDeCooldown("d1") {
+		t.Fatal("la misma política sobre dos servicios de la misma máquina comparte enfriamiento: " +
+			"reiniciar uno deja MUDO al otro durante todo el cooldown, y el segundo se queda caído " +
+			"justo por haber actuado sobre el primero")
 	}
 	// Y la MISMA política sobre dos máquinas tampoco se cruza: eso ya andaba y no se puede
 	// romper al agregar el servicio.
@@ -63,6 +79,9 @@ func TestDosServiciosDeLaMismaMaquinaNoCompartenEnfriamiento(t *testing.T) {
 //
 // Sabotaje que la hace fallar: aceptar `servicio` vacío en una condición de servicio, o aceptarlo
 // no vacío en una de host.
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="\tcase CondServicioCaido, CondServicioReinicios:\n\t\tif servicio == \"\" {"
+// arnes: a="\tcase CondServicioCaido, CondServicioReinicios:\n\t\tif false {"
 func TestLaCondicionDecideSiElServicioEsObligatorioOProhibido(t *testing.T) {
 	sinServicio := politicaDeServicio("revivir", "", CondServicioCaido)
 	sinServicio.Hacer = []string{"systemctl", "restart", "nginx"}
@@ -97,6 +116,9 @@ func TestLaCondicionDecideSiElServicioEsObligatorioOProhibido(t *testing.T) {
 // falta».
 //
 // Sabotaje que la hace fallar: sacar la llamada a NombreDeServicioValido.
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="\t\tif !NombreDeServicioValido(servicio) {"
+// arnes: a="\t\tif false {"
 func TestElNombreDelServicioDeLaPoliticaSeValida(t *testing.T) {
 	for _, malo := range []string{strings.Repeat("x", NombreServicioMax+10), "con espacio\ty tab", "\x00nulo"} {
 		p := politicaDeServicio("revivir", malo, CondServicioCaido)
@@ -149,6 +171,9 @@ func TestUnServicioDesconocidoNoDisparaUnaPolitica(t *testing.T) {
 // reiniciar servicios porque el agente no pudo enumerarlos.
 //
 // Sabotaje que la hace fallar: ignorar `fresco` en DisparaSobreServicio.
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="\tif sv.Revocado || !fresco {"
+// arnes: a="\tif sv.Revocado {"
 func TestUnaPoliticaNoActuaSobreUnInventarioViejo(t *testing.T) {
 	pol := politicaDeServicio("revivir-nginx", "nginx", CondServicioCaido)
 	caido := Servicio{Nombre: "nginx", Salud: &SaludServicio{Estado: EstadoFallado}}
@@ -177,6 +202,9 @@ func TestUnaPoliticaNoActuaSobreUnInventarioViejo(t *testing.T) {
 // en el panel, que no vigila nada.
 //
 // Sabotaje que la hace fallar: usar 0 cuando Reinicios es nil.
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="\t\tif sv.Salud == nil || sv.Salud.Reinicios == nil {\n\t\t\treturn nil, false\n\t\t}"
+// arnes: a="\t\tif sv.Salud == nil || sv.Salud.Reinicios == nil {\n\t\t\tcero := 0.0\n\t\t\treturn &cero, cero > p.Supera\n\t\t}"
 func TestUnContadorDeReiniciosAusenteNoCuentaComoCero(t *testing.T) {
 	pol := politicaDeServicio("nginx-a-los-tumbos", "nginx", CondServicioReinicios)
 	pol.Supera = 5
@@ -224,6 +252,9 @@ func TestUnContadorDeReiniciosAusenteNoCuentaComoCero(t *testing.T) {
 //
 // Sabotaje que la hace fallar: agregar `case CondServicioCaido:` al switch de `Dispara` (el de
 // métricas del host) mapeándolo a cualquier campo de la muestra.
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="\tcase CondTempC:\n\t\tv = m.TempC\n\t}"
+// arnes: a="\tcase CondTempC:\n\t\tv = m.TempC\n\tcase CondServicioCaido, CondServicioReinicios:\n\t\talto := 100.0\n\t\tv = &alto\n\t}"
 //
 // SOBRE LA GUARDA DE `EsDeServicio`: sacarla NO hace fallar esta prueba, y conviene decirlo en vez
 // de anotar un sabotaje que no ocurre. La protección real son los DOS switches, que son

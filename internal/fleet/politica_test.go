@@ -16,6 +16,9 @@ import (
 // el nombre correcto.
 //
 // Sabotaje que la hace fallar: comparar filepath.Base(limpio[0]) contra filepath.Base(p).
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="\t\tif strings.TrimSpace(p) == limpio[0] {"
+// arnes: a="\t\tif filepath.Base(strings.TrimSpace(p)) == filepath.Base(limpio[0]) {"
 func TestLaAllowlistNoSeSaltaConUnaRutaQueTermineIgual(t *testing.T) {
 	permitidos := []string{"systemctl", "journalctl"}
 
@@ -41,6 +44,9 @@ func TestLaAllowlistNoSeSaltaConUnaRutaQueTermineIgual(t *testing.T) {
 // allowlist significa. Acá es un caso con nombre propio para que nadie lo "arregle".
 //
 // Sabotaje que la hace fallar: devolver true cuando len(permitidos) == 0.
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="func PermiteArgv(permitidos []string, argv []string) bool {"
+// arnes: a="func PermiteArgv(permitidos []string, argv []string) bool {\n\tif len(permitidos) == 0 {\n\t\treturn true\n\t}"
 func TestUnaAllowlistVaciaNoPermiteNada(t *testing.T) {
 	if PermiteArgv(nil, []string{"uptime"}) {
 		t.Error("una allowlist nil no puede permitir un comando: «sin restricción» se expresa NO teniendo lista, y eso lo decide quien llama")
@@ -87,6 +93,9 @@ func TestSeReconoceAlInterpreteQueAnulaLaAllowlist(t *testing.T) {
 //
 // Sabotaje que la hace fallar: en CondDiscoLibrePct, devolver 0 en vez de (0,false) cuando
 // PctUsado da nil.
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="\t\t\treturn *libre, *libre < p.Supera\n\t\t}\n\t\treturn 0, false"
+// arnes: a="\t\t\treturn *libre, *libre < p.Supera\n\t\t}\n\t\treturn 0, true"
 func TestUnDiscoQueNuncaSeMidioNoDisparaLaLimpieza(t *testing.T) {
 	// Un OS sin colector de disco: los tres campos en cero. La muestra es VÁLIDA.
 	sinDisco := &Muestra{Tomada: time.Now(), NumCPU: 4, MemTotal: 8 << 30, MemUsada: 1 << 30}
@@ -114,6 +123,9 @@ func TestUnDiscoQueNuncaSeMidioNoDisparaLaLimpieza(t *testing.T) {
 //
 // Sabotaje que la hace fallar: reemplazar los punteros por su valor con default 0 Y bajar el
 // umbral, o derivar carga_por_core sin chequear NumCPU > 0.
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="\tif v == nil {\n\t\treturn 0, false\n\t}\n\treturn *v, *v > p.Supera"
+// arnes: a="\tif v == nil {\n\t\treturn 0, true\n\t}\n\treturn *v, *v > p.Supera"
 func TestUnaMetricaAusenteNoCuentaComoCeroMedido(t *testing.T) {
 	// Una máquina Windows: sin load, sin sensor térmico, y la CPU todavía sin derivada.
 	windows := &Muestra{
