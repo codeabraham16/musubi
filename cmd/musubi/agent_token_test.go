@@ -45,7 +45,21 @@ func credConArchivo(t *testing.T, tokens ...string) (*credencial, string) {
 // respuesta del latido y el struct del agente no tenía el campo, así que encoding/json lo tiraba
 // en silencio. La rotación vencía siempre, y ABIERTO.md la describía como si funcionara.
 //
-// Sabotaje que la hace fallar: borrar el campo TokenNuevo del struct de la respuesta en latir().
+// ESA PROMESA ERA FALSA Y SE MIDIÓ. La prosa decía «borrar el campo TokenNuevo del struct de la
+// respuesta en latir()»: se aplicó el corte y esta prueba quedó VERDE. No toca latir() en ningún
+// momento —ejercita el llavero en aislamiento— y el único que lo caza es
+// TestElLatidoTraeElTokenDeUnaRotacionEnCurso, ahí abajo, que es justamente por qué existe. El
+// archivo ya lo decía 170 líneas más abajo; ahora está medido y anotado donde se lee primero.
+//
+// Y de paso quedó RANCIA: hoy no hay struct local en latir(). La respuesta se decodifica con el
+// tipo compartido fleet.RespuestaLatido, así que el campo ya no se puede «borrar del struct» sin
+// romper también el lado del cerebro.
+//
+// Sabotaje que la hace fallar: que Sumar persista el token nuevo y NO lo seleccione (dejar `c.i`
+// donde estaba) → la rotación se guarda y no se estrena, y la ventana vence igual.
+// arnes: archivo="cmd/musubi/agent_token.go"
+// arnes: de="\tc.i = len(c.tokens) - 1\n\treturn nil"
+// arnes: a="\treturn nil"
 func TestElAgenteGuardaElTokenNuevoYLoEstrena(t *testing.T) {
 	c, ruta := credConArchivo(t, "viejo")
 
@@ -78,6 +92,9 @@ func TestElAgenteGuardaElTokenNuevoYLoEstrena(t *testing.T) {
 //
 // Sabotaje que la hace fallar: quitar el `if cred.Rechazado()` del case res.revocado del bucle, o
 // hacer que Rechazado devuelva siempre false.
+// arnes: archivo="cmd/musubi/agent_token.go"
+// arnes: de="\t\tif !c.probado[j] {"
+// arnes: a="\t\tif !c.probado[j] && false {"
 func TestTrasUnCorteElAgenteSeRecuperaConElOtroTokenDelLlavero(t *testing.T) {
 	c, _ := credConArchivo(t, "viejo", "nuevo")
 
@@ -101,6 +118,9 @@ func TestTrasUnCorteElAgenteSeRecuperaConElOtroTokenDelLlavero(t *testing.T) {
 //
 // Sabotaje que la hace fallar: exigir un formato nuevo (JSON, dos líneas obligatorias) en
 // tokensDeArchivo.
+// arnes: archivo="cmd/musubi/agent_token.go"
+// arnes: de="func tokensDeArchivo(s string) []string {\n\tvar out []string"
+// arnes: a="func tokensDeArchivo(s string) []string {\n\tvar out []string\n\tif len(s) > 0 && s[len(s)-1] != 10 {\n\t\treturn nil\n\t}"
 func TestElArchivoDeUnaLineaSigueSiendoValidoYSinSaltoFinalTambien(t *testing.T) {
 	ruta := filepath.Join(t.TempDir(), "token")
 	// SIN salto final, que es lo que deja un `printf '%s'` del instalador.
@@ -136,6 +156,9 @@ func TestElArchivoDeUnaLineaSigueSiendoValidoYSinSaltoFinalTambien(t *testing.T)
 // vale. Fallar y decirlo deja la rotación sin completar, que es un no-evento.
 //
 // Sabotaje que la hace fallar: que Sumar devuelva nil cuando ruta == "".
+// arnes: archivo="cmd/musubi/agent_token.go"
+// arnes: de="\tif c.ruta == \"\" {\n\t\treturn fmt.Errorf("
+// arnes: a="\tif c.ruta == \"\" {\n\t\treturn nil\n\t}\n\tif false {\n\t\treturn fmt.Errorf("
 func TestSinArchivoLaRotacionNoSeAdoptaEnSilencio(t *testing.T) {
 	c := credDePrueba("el-de-la-env")
 	err := c.Sumar("el-nuevo")
@@ -159,6 +182,9 @@ func TestSinArchivoLaRotacionNoSeAdoptaEnSilencio(t *testing.T) {
 // y es del instalador, no de esto.
 //
 // Sabotaje que la hace fallar: quitar el os.Chmod de escribirTokens.
+// arnes: archivo="cmd/musubi/agent_token.go"
+// arnes: de="\tif err := os.Chmod(nombre, modo); err != nil {\n\t\treturn fmt.Errorf(\"no se pudo fijar el modo del token: %w\", err)\n\t}"
+// arnes: a="\t_ = modo"
 func TestColapsarElLlaveroNoAflojaElModoDelArchivo(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("NTFS no mapea los bits de modo POSIX; acá el permiso lo da la ACL del directorio")
@@ -193,6 +219,9 @@ func TestColapsarElLlaveroNoAflojaElModoDelArchivo(t *testing.T) {
 // recibirlo, mata el viejo, y el próximo arranque lee del disco uno que ya no vale.
 //
 // Sabotaje que la hace fallar: que Sumar se trague el error de apendarToken y devuelva nil.
+// arnes: archivo="cmd/musubi/agent_token.go"
+// arnes: de="\tif err := apendarToken(c.ruta, nuevo); err != nil {\n\t\treturn err\n\t}"
+// arnes: a="\tif err := apendarToken(c.ruta, nuevo); err != nil {\n\t\treturn nil\n\t}"
 func TestUnaCredencialNoEscribibleNoSeTragaLaRotacion(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("hace falta que los bits del inodo frenen la escritura: ni root ni una plataforma sin modo POSIX")
@@ -226,6 +255,9 @@ func TestUnaCredencialNoEscribibleNoSeTragaLaRotacion(t *testing.T) {
 //
 // Sabotaje que la hace fallar: borrar el campo TokenNuevo del struct de la respuesta en latir(), o
 // no propagarlo a resultadoLatido.
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="\t\treturn resultadoLatido{ok: true, motivo: motivo, comandos: r.Comandos, tokenNuevo: r.TokenNuevo}"
+// arnes: a="\t\treturn resultadoLatido{ok: true, motivo: motivo, comandos: r.Comandos}"
 func TestElLatidoTraeElTokenDeUnaRotacionEnCurso(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -289,6 +321,9 @@ func leer(t *testing.T, ruta string) string {
 //
 // Sabotaje verificado: `if cred.Rechazado()` → `if false` en el `case res.revocado` de
 // bucleDeLatidos. Con eso el bucle se da de baja en el PRIMER 401 y nunca presenta el segundo token.
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="\t\t\tif cred.Rechazado() {"
+// arnes: a="\t\t\tif false {"
 func TestElBucleProbaraElOtroTokenAntesDeDarseDeBaja(t *testing.T) {
 	c, _ := credConArchivo(t, "msb_viejo", "msb_nuevo")
 
