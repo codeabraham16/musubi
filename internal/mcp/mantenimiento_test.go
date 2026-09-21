@@ -34,6 +34,10 @@ func servidorConMaquina(t *testing.T) (*McpServer, fleet.Device) {
 //
 // Sabotaje que la hace fallar: sacar el `if enMantenimiento[d.ID] { continue }` de
 // aplicarPoliticas.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="\t\t\tif enMantenimiento[d.ID] {"
+// arnes: a="\t\t\tif false && enMantenimiento[d.ID] {"
+// arnes: colision_ok="TestElSchedulerNoAplicaPoliticasSobreUnaMaquinaEnVentana"
 func TestLasPoliticasNoActuanSobreUnaMaquinaEnMantenimiento(t *testing.T) {
 	s, d := servidorConMaquina(t)
 	ahora := time.Now().UTC()
@@ -90,6 +94,9 @@ func TestLasPoliticasNoActuanSobreUnaMaquinaEnMantenimiento(t *testing.T) {
 //
 // Sabotaje: en internal/memory/mantenimiento.go, cambiar `hasta > ?` por `hasta >= ?`, o
 // `desde <= ?` por `desde < ?`.
+// arnes: archivo="internal/memory/mantenimiento.go"
+// arnes: de="\t\t  WHERE cancelada = 0 AND desde <= ? AND hasta > ?`, t, t)"
+// arnes: a="\t\t  WHERE cancelada = 0 AND desde <= ? AND hasta >= ?`, t, t)"
 func TestLaVentanaEmpiezaInclusiveYTerminaExclusive(t *testing.T) {
 	s, d := servidorConMaquina(t)
 	desde := time.Date(2026, 9, 3, 10, 0, 0, 0, time.UTC)
@@ -138,6 +145,9 @@ func TestLaVentanaEmpiezaInclusiveYTerminaExclusive(t *testing.T) {
 // expresar.
 //
 // Sabotaje: sacar la comparación contra MantenimientoMax de ValidarMantenimiento.
+// arnes: archivo="internal/fleet/mantenimiento.go"
+// arnes: de="\tif d := m.Hasta.Sub(m.Desde); d > MantenimientoMax {"
+// arnes: a="\tif d := m.Hasta.Sub(m.Desde); false && d > MantenimientoMax {"
 func TestUnaVentanaMasLargaQueElTechoSeRechaza(t *testing.T) {
 	base := fleet.Mantenimiento{DeviceID: "d1", Principal: "gio", Desde: time.Now()}
 
@@ -176,6 +186,9 @@ func TestUnaVentanaMasLargaQueElTechoSeRechaza(t *testing.T) {
 //
 // Sabotaje: sacar el `PuedeSobreDevice` de toolFleetMaintenance, o dejar que `minutos` pase sin
 // que el dominio lo valide.
+// arnes: archivo="internal/mcp/methods_mantenimiento.go"
+// arnes: de="\t\tDesde: ahora, Hasta: ahora.Add(time.Duration(args.Minutos) * time.Minute),"
+// arnes: a="\t\tDesde: ahora, Hasta: ahora.Add(time.Duration(min(args.Minutos, 60)) * time.Minute),"
 func TestLaToolDeMantenimientoRespetaElTechoYDevuelveLaVentana(t *testing.T) {
 	s, _ := servidorConMaquina(t)
 	ctx := context.Background()
@@ -218,6 +231,9 @@ func TestLaToolDeMantenimientoRespetaElTechoYDevuelveLaVentana(t *testing.T) {
 // oráculo de qué máquinas hay en un proyecto que no ves, igual que en exec y en shell.
 //
 // Sabotaje que la hace fallar: cambiar `if !existe || !PuedeSobreDevice(...)` por `if !existe`.
+// arnes: archivo="internal/mcp/methods_mantenimiento.go"
+// arnes: de="\tif !existe || !PuedeSobreDevice(p, d, fleet.CapMetrics) {"
+// arnes: a="\tif !existe {"
 func TestLaToolDeMantenimientoExigeMetricsSobreEsaMaquina(t *testing.T) {
 	s, _ := servidorConMaquina(t)
 	// Un principal SIN ninguna concesión de flota: el rol no otorga flota, y la ausencia no
@@ -252,6 +268,10 @@ func TestLaToolDeMantenimientoExigeMetricsSobreEsaMaquina(t *testing.T) {
 //
 // Sabotaje que la hace fallar: sacar (o neutralizar) el `if enMantenimiento[d.ID] { continue }`
 // de aplicarPoliticas.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="\t\t\tif enMantenimiento[d.ID] {"
+// arnes: a="\t\t\tif enMantenimiento[d.ID] && false {"
+// arnes: colision_ok="TestLasPoliticasNoActuanSobreUnaMaquinaEnMantenimiento"
 func TestElSchedulerNoAplicaPoliticasSobreUnaMaquinaEnVentana(t *testing.T) {
 	ahora := time.Now()
 
@@ -300,6 +320,9 @@ func TestElSchedulerNoAplicaPoliticasSobreUnaMaquinaEnVentana(t *testing.T) {
 //
 // Sabotaje que lo hace fallar: sacar `device_id`/`project_id` del WHERE de
 // CancelarMantenimiento, o pasarle el id sin el dueño desde methods_mantenimiento.go.
+// arnes: archivo="internal/memory/mantenimiento.go"
+// arnes: de="\t\t  WHERE id = ? AND device_id = ? AND project_id = ? AND cancelada = 0`,\n\t\tid, deviceID, projectID)"
+// arnes: a="\t\t  WHERE id = ? AND cancelada = 0`,\n\t\tid)"
 func TestCancelarMantenimientoNoAlcanzaLaVentanaDeOtroTenant(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolar := func(nombre, proyecto string) fleet.Device {

@@ -408,7 +408,30 @@ import (
 // censo devolvió por RANCIOS. Un `a` que CONSERVA su propio `de` no rompe a nadie, así que la
 // colisión existe en un solo sentido y contestarla de los dos sobra. Vale como regla: antes de
 // declarar la pareja, mirar si el `a` preserva el literal.
-const anclasEnProsaAlDia = 308
+//
+// Y DE 308 A 294 EL 2026-09-21: las catorce anclas de AVISOS y MANTENIMIENTO —lo que el sistema le
+// dice a quien usa la máquina antes de entrarle, y lo que decide NO hacer mientras está en ventana—.
+// Ninguna hueca al cierre: 13 de 13 en rojo. Pero el camino hasta ahí dejó cuatro cosas escritas.
+//
+// UNA DIRECTIVA EN EL ANCLA EQUIVOCADA, Y ESCONDIDA DETRÁS DE UNA EXENCIÓN. En aviso_test.go el
+// bloque de dos sabotajes tenía la segunda línea declarada `no_mecanizable` —con un motivo largo y
+// medido— y el `archivo`/`de`/`a` del PRIMERO caído DEBAJO, o sea dentro del alcance de la exenta.
+// El alcance de un ancla termina donde empieza la siguiente: la primera figuraba como deuda sin
+// serlo y la segunda cargaba una directiva que no le tocaba. Y al repararlo apareció una COLISIÓN
+// real que la exención venía tapando — el censo no mira las directivas de un ancla exenta.
+//
+// UN SABOTAJE QUE NO COMPILA NO PRUEBA NADA, y el arnés lo dice aparte de los verdes: «sin
+// veredicto». La prosa pedía cambiar `PuedePreguntar` de `*bool` a `bool`; el árbol entero lo trata
+// como puntero y el paquete no arma. Se corta la CONSECUENCIA —que un campo ausente se vuelva un
+// `false` explícito— que es exactamente lo que el puntero existe para impedir.
+//
+// Y DOS PARES DE «MOTIVOS REPETIDOS», los dos legítimos y los dos anotados en vez de forzados. Una
+// prueba que observa UNA cosa no puede separar dos caminos que llegan a esa cosa: «acuñar la clave
+// antes de preguntar» y «seguir el camino normal en un `pide`» caen en la misma línea con el mismo
+// texto, y lo mismo pasa con «guardar la respuesta en la columna equivocada» y «devolver el mismo
+// mensaje para los tres». En los dos casos queda mecanizado el corte más estructural y ESCRITA la
+// medición que dice por qué el otro no agrega red.
+const anclasEnProsaAlDia = 294
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
