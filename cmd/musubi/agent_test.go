@@ -92,6 +92,10 @@ func TestElInventarioNoViajaEnCadaLatido(t *testing.T) {
 	// SIN CONFIRMAR TODAVÍA NO SE SELLÓ, y eso es la mitad de A78: el sello dice «el cerebro se lo
 	// llevó», no «yo lo armé». Un latido que se armó y no llegó tiene que volver a intentarlo.
 	// Sabotaje: sellar dentro de serviciosDelLatido, como antes → esto pasa a devolver nil.
+	// arnes: prueba="TestElInventarioNoViajaEnCadaLatido"
+	// arnes: archivo="cmd/musubi/servicios.go"
+	// arnes: de="\tultimoInventario.Lock()\n\tdefer ultimoInventario.Unlock()"
+	// arnes: a="\tultimoInventario.Lock()\n\tdefer ultimoInventario.Unlock()\n\tdefer func() {\n\t\tultimoInventario.huella = huella\n\t\tultimoInventario.enviado = time.Now()\n\t}()"
 	if _, _, otraVez, _ := serviciosDelLatido(); !otraVez {
 		t.Error("el inventario se dio por enviado ANTES de que el cerebro lo aceptara: si ese latido falla, el inventario no vuelve a viajar hasta que cambie")
 	}
@@ -189,6 +193,9 @@ func TestUn401SeClasificaComoRevocadoYNoComoFalloTransitorio(t *testing.T) {
 // B7 — el cerebro inalcanzable NO mata al agente: se clasifica como reintentable.
 // Sabotaje: devolver revocado=true ante un error de red → una caída de red da de baja
 // permanentemente a toda la flota hasta que alguien la levante a mano, máquina por máquina.
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="\t\treturn resultadoLatido{motivo: fmt.Sprintf(\"no se pudo alcanzar el cerebro: %v\", err)}"
+// arnes: a="\t\treturn resultadoLatido{revocado: true, motivo: fmt.Sprintf(\"no se pudo alcanzar el cerebro: %v\", err)}"
 func TestElCerebroInalcanzableEsReintentableNoRevocado(t *testing.T) {
 	// Un servidor que ya cerró: la conexión se rechaza.
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
@@ -267,9 +274,16 @@ func TestElBackoffTieneTecho(t *testing.T) {
 // SEGUNDO, escalón tras escalón. Con el seam clavado, la espera es una función y se puede
 // medir exacta: en el extremo bajo 0,8×, en el medio 1×, en el alto 1,2×.
 //
+// De los tres sabotajes que esta prosa nombra, el del TECHO ya lo custodia un hermano
+// —TestElBackoffTieneTecho, con la misma directiva— así que el corte mecanizado acá es el del
+// JITTER, que es lo único que esta prueba mira y aquélla no.
+//
 // Sabotaje que la hace fallar: volver esperaMaxima a 5 min → rojo por el techo. Hacer que
 // conJitter devuelva `espera` sin tocarla → rojo porque el extremo bajo y el alto coinciden.
 // Subir jitterDeEspera a 0,5 → rojo porque se sale de ±20 %.
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="\tfactor := 1 - jitterDeEspera + 2*jitterDeEspera*azarDelAgente()"
+// arnes: a="\tfactor := 1.0\n\t_ = azarDelAgente"
 func TestElBackoffTieneTechoDeDosMinutosYJitterDeVeintePorCiento(t *testing.T) {
 	if esperaMaxima != 2*time.Minute {
 		t.Errorf("el techo del backoff es %s, esperaba 2 min: la cuenta contra MaquinaCaida está sobre esperaMaxima", esperaMaxima)
@@ -345,6 +359,10 @@ func TestElPrimerLatidoSeDesfasaAlAzarHastaTreintaSegundos(t *testing.T) {
 //
 // Sabotaje que la hace fallar: volver a `time.NewTimer(0)` en bucleDeLatidos, ignorando el
 // parámetro → el latido llega en el acto y la prueba lo ve.
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="\ttick := nuevoTimer(desfase)"
+// arnes: a="\ttick := nuevoTimer(0)"
+// arnes: colision_ok="TestElBucleEsperaElDesfaseAntesDelPrimerLatido"
 func TestElBucleEsperaElDesfaseAntesDelPrimerLatido(t *testing.T) {
 	// SE MIRA LA ESPERA QUE SE PIDE, NO LA QUE SE SUFRE.
 	//
@@ -355,6 +373,11 @@ func TestElBucleEsperaElDesfaseAntesDelPrimerLatido(t *testing.T) {
 	//
 	// Sabotaje que la hace fallar: en bucleDeLatidos, `nuevoTimer(0)` en vez de
 	// `nuevoTimer(desfase)` — o pasarle el intervalo, que es el otro error plausible.
+	// arnes: prueba="TestElBucleEsperaElDesfaseAntesDelPrimerLatido"
+	// arnes: archivo="cmd/musubi/agent.go"
+	// arnes: de="nuevoTimer(desfase) //"
+	// arnes: a="nuevoTimer(intervalo) //"
+	// arnes: colision_ok="TestElBucleEsperaElDesfaseAntesDelPrimerLatido"
 	const desfase = 7 * time.Second // grande a propósito: si se durmiera de verdad, se notaría
 	var pedidas []time.Duration
 	anterior := nuevoTimer
@@ -465,6 +488,10 @@ func capturarSalida(t *testing.T, f func()) string {
 // Sabotaje que la hace fallar: agregar cualquier campo de identidad al JSON que arma latir().
 // clavesPermitidasDelLatido es la lista blanca del invariante B4/D5: TODO lo que un dispositivo
 // puede mandar en el cuerpo de su latido.
+// arnes: prueba="TestElCuerpoNoLlevaIdentidadNunca"
+// arnes: archivo="internal/fleet/protocolo.go"
+// arnes: de="type CuerpoLatido struct {"
+// arnes: a="type CuerpoLatido struct {\n\tHostname string `json:\"hostname\"`"
 //
 // VIVE EN UNA SOLA FUNCIÓN PORQUE ESTABA ESCRITA DOS VECES, Y ESO YA COSTÓ.
 // `TestElCuerpoNoLlevaIdentidadNunca` y `TestUnCuerpoConServiciosSigueSinLlevarIdentidad` tenían
@@ -585,6 +612,9 @@ func TestElCuerpoNoLlevaIdentidadNunca(t *testing.T) {
 //
 // Sabotaje que la hace fallar: renombrar el tag de fleet.ReporteServicio.Nombre de `nombre` a
 // `name` (o agregarle un `device_id`).
+// arnes: archivo="internal/fleet/servicio.go"
+// arnes: de="\tNombre string        `json:\"nombre\"`"
+// arnes: a="\tNombre string        `json:\"name\"`"
 func TestUnCuerpoConServiciosSigueSinLlevarIdentidad(t *testing.T) {
 	pid := 4242
 	carga := map[string]any{
@@ -679,6 +709,9 @@ func TestLaDireccionReportadaNoEsLoopback(t *testing.T) {
 // resultado de cada comando se perdía.
 //
 // Sabotaje que la hace fallar: concatenar la ruta a una base que ya la tiene.
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="func rutaLatido(base string) string { return normalizarBase(base) + \"/fleet/heartbeat\" }"
+// arnes: a="func rutaLatido(base string) string { return base + \"/fleet/heartbeat\" }"
 func TestLasDosRutasSeDerivanDeLaBase(t *testing.T) {
 	casos := []string{
 		"http://127.0.0.1:7717",

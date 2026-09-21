@@ -279,7 +279,32 @@ import (
 // camino con dos guardas en serie, o con la escritura y la lectura separadas, no se corta por
 // cualquiera de sus mitades — y la prosa, que se escribe mirando el código una vez, elige casi
 // siempre la mitad que se ve primero.
-const anclasEnProsaAlDia = 395
+//
+// Y DE 395 A 379 EL 2026-09-20: las dieciséis anclas del AGENTE —`cmd/musubi/agent_test.go` y
+// `agent_token_test.go`—, o sea la mitad que corre EN la máquina: cómo late, cómo aguanta un
+// cerebro caído y cómo sostiene su credencial mientras rota. Una estaba hueca y dos eran una
+// guarda contada dos veces.
+//
+// LA HUECA ERA RANCIA ADEMÁS, y es la primera de la campaña que estaba DENUNCIADA en su propio
+// archivo sin que nadie corrigiera el ancla. `TestElAgenteGuardaElTokenNuevoYLoEstrena` prometía
+// «borrar el campo TokenNuevo del struct de la respuesta en latir()»; se aplicó el corte y quedó
+// VERDE, porque esa prueba no toca latir() en ningún momento. Ciento setenta líneas más abajo, el
+// bloque de `TestElLatidoTraeElTokenDeUnaRotacionEnCurso` ya lo decía con todas las letras —«se
+// verificó saboteándolo: quitar el campo del struct las deja TODAS en verde»— y el ancla de arriba
+// siguió prometiendo lo contrario. Y hoy ni siquiera hay struct local en latir(): la respuesta se
+// decodifica con `fleet.RespuestaLatido`, el tipo compartido.
+//
+// LO QUE ESO ENSEÑA: una medición escrita en el archivo NO corrige el ancla que la contradice. Las
+// dos conviven, y la que se lee primero es la de arriba. Mecanizar es lo que las obliga a
+// encontrarse.
+//
+// LAS DOS CONTADAS DOS VECES las destapó el censo solo, como COLISIÓN de directivas: el techo del
+// backoff ya lo custodiaba `TestElBackoffTieneTecho` con exactamente el mismo corte, y el sello del
+// inventario tenía dos hermanas sobre las mismas líneas de `servicios.go`. En los dos casos la
+// respuesta NO fue declarar `colision_ok` sino elegir el corte que esta prueba y sólo ésta mira:
+// el jitter en un caso, el punto del sello en el otro. `colision_ok` es para cuando las dos
+// guardas cubren la línea de verdad; acá una de las dos estaba prometiendo el trabajo de la otra.
+const anclasEnProsaAlDia = 379
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
