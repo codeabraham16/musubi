@@ -20,6 +20,9 @@ import (
 // Ausente no es falso: es la misma regla que gobierna el track desde S4.
 //
 // Sabotaje: devolver (0, true) cuando `len(m.Alcance) == 0` → falla acá.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\t\t\t\tif len(m.Alcance) == 0 {\n\t\t\t\t\treturn 0, false\n\t\t\t\t}"
+// arnes: a="\t\t\t\tif len(m.Alcance) == 0 {\n\t\t\t\t\treturn 0, true\n\t\t\t\t}"
 func TestUnaMaquinaSinDestinosNoEmiteLaSerieDeAlcance(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ts := servidorHTTP(t, s)
@@ -42,6 +45,9 @@ func TestUnaMaquinaSinDestinosNoEmiteLaSerieDeAlcance(t *testing.T) {
 // `musubi_fleet_list`, donde una entrada más cuesta una columna y no una serie por máquina.
 //
 // Sabotaje: devolver 1 aunque alguna sonda falle → falla la primera mitad.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\t\t\t\tfor _, s := range m.Alcance {\n\t\t\t\t\tif !s.Alcanza {\n\t\t\t\t\t\treturn 0, true\n\t\t\t\t\t}\n\t\t\t\t}\n"
+// arnes: a=""
 func TestElAlcanceFallaEnLaSerieYSeDetallaEnLaTool(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ts := servidorHTTP(t, s)
@@ -91,6 +97,9 @@ func TestElAlcanceFallaEnLaSerieYSeDetallaEnLaTool(t *testing.T) {
 //
 // Sabotaje: hacer `Alcance` obligatorio en el JSON (sacarle `omitempty` no alcanza; habría que
 // fallar el parseo si falta) → falla acá.
+// arnes: archivo="internal/fleet/muestra.go"
+// arnes: de="type Muestra struct {"
+// arnes: a="func (m *Muestra) UnmarshalJSON(b []byte) error {\n\ttype crudo Muestra\n\tvar c crudo\n\tif err := json.Unmarshal(b, &c); err != nil {\n\t\treturn err\n\t}\n\tif len(c.Alcance) == 0 {\n\t\treturn errors.New(\"falta el campo alcance\")\n\t}\n\t*m = Muestra(c)\n\treturn nil\n}\n\ntype Muestra struct {"
 func TestUnaMuestraSinElCampoDeAlcanceSeSigueLeyendo(t *testing.T) {
 	var m fleet.Muestra
 	viejo := `{"tomada":"2026-08-01T10:00:00Z","num_cpu":4,"mem_total":100,"mem_usada":25}`

@@ -20,6 +20,9 @@ import (
 // una nueva — o sea que un error de entorno inutilizaba la máquina por un cuarto de hora.
 //
 // Sabotaje que la hace fallar: volver a abrir la sesión antes de preparar la terminal.
+// arnes: archivo="cmd/musubi/shell.go"
+// arnes: de="\trestaurar, err := ponerTerminalEnCrudo()"
+// arnes: a="\tf0, c0 := tamanoDeLaTerminal()\n\t_, _ = abrirSesionRemota(cli, base, token, maquina, proyecto, f0, c0)\n\trestaurar, err := ponerTerminalEnCrudo()"
 func TestSinTerminalDeVerdadNoSeAbreNingunaSesion(t *testing.T) {
 	// Un cerebro que registra si alguien le pidió abrir algo. Si la CLI lo llama, falló el orden.
 	llamado := false
@@ -62,6 +65,9 @@ func servidorQueRegistra(llamado *bool) *httptest.Server {
 //
 // Sabotaje que la hace fallar: devolver un resultadoDeComando sin ComandoID en cualquiera de las
 // ramas de `ejecutar`.
+// arnes: archivo="cmd/musubi/shell_agente.go"
+// arnes: de="\tres := resultadoDeComando{ComandoID: comandoID}"
+// arnes: a="\tres := resultadoDeComando{ComandoID: comandoID[:0]}"
 func TestTodoResultadoLlevaElIdDelComandoPorCualquierCamino(t *testing.T) {
 	// Una shell que termina sola al instante: no queremos un proceso interactivo en una prueba.
 	t.Setenv("SHELL", "/bin/true")
@@ -97,6 +103,9 @@ func TestTodoResultadoLlevaElIdDelComandoPorCualquierCamino(t *testing.T) {
 // parecía un pty que no había muerto.
 //
 // Sabotaje que la hace fallar: quitar el p.cmd.Wait() de ptyLocal.cerrar.
+// arnes: archivo="cmd/musubi/shell_agente.go"
+// arnes: de="\t_ = p.cmd.Wait()\n}"
+// arnes: a="}"
 func TestCerrarElPtyNoDejaUnZombie(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("el pty local sólo existe en unix")

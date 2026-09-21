@@ -620,7 +620,43 @@ import (
 // una asegura que ese job EXISTA, la otra que todo job declarado esté VIGILADO. Son dos guardas
 // distintas, no una contada dos veces, pero en vez de declarar la colisión se movió el ancla a otro
 // job: una colisión declarada hay que mantenerla verdadera para siempre, y no haberla es más barato.
-const anclasEnProsaAlDia = 184
+// Y DE 184 A 171 EL 2026-09-21: las trece de LA SHELL REMOTA Y SU CONSENTIMIENTO —el buffer
+// interactivo (`internal/fleet/shell_buffer_test.go`), la CLI que abre la terminal
+// (`cmd/musubi/shell_test.go`), el eje de consentimiento sobre exec y shell y la serie de alcance—.
+// 13 de 13 en rojo, pero recién en la segunda vuelta, y lo que pasó en la primera es el hallazgo.
+//
+// UNA VOLVIÓ EN VERDE Y LA CULPA ERA MÍA, NO DE LA GUARDA. `TestUnaMaquinaQueNoSabeAvisarNoRecibe
+// UnAvisoQueNadieVaAMostrar` la mecanicé contra `methods_exec.go` y la prueba abre con
+// `toolFleetShell`: el sabotaje no tocaba el camino que ella mide. Lo que lo hace fácil de repetir
+// es que el `case consent.AvisaAlUsuario() && !d.PuedePreguntar:` es IDÉNTICO en los tres archivos
+// —pantalla, exec y shell— y el archivo de pruebas se llama `consentimiento_exec_shell_test.go`,
+// o sea que nombra los dos caminos. Elegir el archivo por el nombre del test acierta el texto y
+// yerra el camino. Se elige por la llamada que la prueba HACE, no por cómo se llama el archivo.
+//
+// Y AL BUSCAR A LAS HERMANAS APARECIÓ QUE EXEC NO TIENE. Pantalla la tiene en `aviso_test.go`,
+// shell la tiene en la que se acaba de mecanizar, y exec no tiene ninguna que diga «no se le encola
+// un aviso a una máquina que no sabe mostrarlo» — la que recorre los tres caminos prueba la
+// dirección contraria. Medido poniéndole `&& false` a ese `case` y corriendo el paquete entero: la
+// suite se pone roja, sí, pero en tres pruebas que no hablan de esto y por CONTAR comandos («se
+// entregaron 6 comandos distintos, esperaba 5»). El aviso de más les corre un conteo. Eso alcanza
+// hoy y se evapora el día que cualquiera de las tres cambie su fixture, sin que nada lo diga: un
+// invariante detectado de rebote no está guardado. Queda escrito en el bloque de esa prueba, con
+// la medición, en vez de arreglado acá — escribir la hermana que falta es otra clase de trabajo
+// que el de mecanizar lo que el árbol ya promete.
+//
+// DOS SABOTAJES COMPARTEN LÍNEA Y EL INSTRUMENTO PROBÓ QUE SON DOS. Los del buffer: uno lo vuelve
+// un ring que descarta, el otro le saca la contrapresión entera, y los dos tocan el mismo `for`.
+// Se declaró `colision_ok` cruzado, y los motivos que devolvió el arnés lo confirman sin que haya
+// que creerle a nadie — «se perdieron 786 432 bytes en el camino» contra «el escritor NO se frenó
+// con el buffer lleno». Dos fallas distintas con el mismo arreglo NO son una guarda contada dos
+// veces; dos fallas distintas con motivos distintos, tampoco.
+//
+// Y UNA SE MECANIZÓ AGREGANDO UN MÉTODO, no sustituyendo una línea: `Alcance` obligatorio en el
+// JSON no se puede pedir con una etiqueta de campo, así que el sabotaje INSERTA un `UnmarshalJSON`
+// sobre `Muestra` que falla si el campo no está. Vale anotarlo porque abre una forma que estaba
+// sin usar: cuando el defecto no existe como línea, el arnés igual lo puede fabricar como bloque,
+// y eso es preferible a declarar `no_mecanizable`, que baja el número igual y es mucho más barato.
+const anclasEnProsaAlDia = 171
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
