@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"context"
+	"errors"
 	"fmt"
 
 	"musubi/internal/config"
@@ -231,6 +233,11 @@ func (e *DbEngine) listarParaEmbeber(consulta string, args ...any) ([]obsPendien
 // aborta antes de aparear vectores con observaciones equivocadas.
 func (e *DbEngine) embeberYGuardar(embed func([]string) ([][]float32, error), todo []obsPendiente, res *EmbedBackfillResult, alGuardar func(id string, vec []float32)) error {
 	for inicio := 0; inicio < len(todo); inicio += embedBatchSize {
+		// Entre lotes se mira el cierre: Close espera a esta goroutine (bgWG), y una base entera
+		// pendiente son cientos de lotes. Lo ya persistido queda; el resto sigue pendiente.
+		if e.cerrando() {
+			return errRellenoCortadoPorCierre
+		}
 		fin := min(inicio+embedBatchSize, len(todo))
 		lote := todo[inicio:fin]
 
@@ -241,6 +248,11 @@ func (e *DbEngine) embeberYGuardar(embed func([]string) ([][]float32, error), to
 
 		var fallos []error
 		vecs, err := embed(textos)
+		if err != nil && e.cerrando() {
+			// El lote falló porque el cierre le canceló el ctx al embebedor, no por sus textos:
+			// reintentarlo de a uno serían 16 pedidos más contra un ctx ya cancelado.
+			return errRellenoCortadoPorCierre
+		}
 		if err != nil {
 			// UNA observación imposible NO puede seguir bloqueando a las otras 15. Se reintenta
 			// texto por texto para que el costo del rechazo sea su propio lugar y nada más.
@@ -289,11 +301,23 @@ func (e *DbEngine) embeberYGuardar(embed func([]string) ([][]float32, error), to
 			if err != nil {
 				return fmt.Errorf("error al serializar el vector de %s: %w", p.id, err)
 			}
-			if _, err := e.db.Exec(
-				`INSERT OR REPLACE INTO embeddings (observation_id, vector, model_id) VALUES (?, ?, ?)`,
-				p.id, vectorBytes, e.vectorModelID,
-			); err != nil {
+			// SÓLO SI EL CONTENIDO SIGUE SIENDO EL QUE SE EMBEBIÓ. Entre el SELECT de pendientes y
+			// este INSERT pasan segundos (el embebedor), y en ese rato un pull puede bajar una edición
+			// de la fila: IngestShared le pisa el contenido y le borra el vector. Un INSERT a secas
+			// le volvía a poner el vector del texto VIEJO con el model_id actual —fuera de
+			// stalePredicate, así que nadie lo corregía—. Con la condición, la fila editada queda
+			// pendiente y la re-embebe la vuelta que ese mismo pull pidió.
+			r, err := e.db.Exec(
+				`INSERT OR REPLACE INTO embeddings (observation_id, vector, model_id)
+				 SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM observations WHERE id = ? AND content = ?)`,
+				p.id, vectorBytes, e.vectorModelID, p.id, p.content,
+			)
+			if err != nil {
 				return fmt.Errorf("error al guardar el embedding de %s: %w", p.id, err)
+			}
+			if n, err := r.RowsAffected(); err == nil && n == 0 {
+				logx.Info("la observación cambió mientras se embebía; queda pendiente con su contenido nuevo", "id", p.id)
+				continue
 			}
 			res.Embedded++
 			if alGuardar != nil {
@@ -362,6 +386,10 @@ func (e *DbEngine) dominantEmbeddingModel() (modelID string, total int, err erro
 // re-embeber una base grande tardaría minutos y haría FALLAR el arranque de la unit. spawnBackground
 // ya resuelve el cierre limpio (no lanza si el engine está cerrado; Close espera a que termine).
 //
+// Pasa por la MISMA puerta que IncrementalEmbedBackfill (pedirRelleno). Antes no: el primer pull
+// con filas que llegaba mientras el arranque embebía lanzaba una segunda corrida que listaba el
+// mismo conjunto pendiente, y las dos embebían todo DOS veces (medido por el revisor).
+//
 // El engine sigue siendo model-free: recibe el callback de vectorización del caller, no embebe.
 func (e *DbEngine) AutoEmbedBackfill(embed func([]string) ([][]float32, error)) {
 	if e.vectorModelID == "" || embed == nil {
@@ -380,24 +408,7 @@ func (e *DbEngine) AutoEmbedBackfill(embed func([]string) ([][]float32, error)) 
 	logx.Info("re-embebiendo memoria histórica en background",
 		"pendientes", n, "modelo", e.vectorModelID,
 		"nota", "hasta que termine, esas observaciones no aparecen en la búsqueda semántica")
-	e.spawnBackground(func() {
-		res, err := e.EmbedBackfill(embed)
-		if err != nil {
-			logx.Warn("el re-embedding automático falló; corré `musubi embed backfill` a mano",
-				"error", err, "embebidas", res.Embedded)
-			return
-		}
-		if res.Failed > 0 {
-			// Que no se lea como un verde limpio: quedaron observaciones fuera del recall semántico
-			// y el próximo arranque las va a volver a intentar. El id de cada una ya se logueó.
-			logx.Warn("re-embedding automático completo, pero el embebedor rechazó algunas observaciones",
-				"embebidas", res.Embedded, "fallidas", res.Failed, "omitidas", res.Skipped, "modelo", res.ModelID,
-				"nota", "las fallidas siguen pendientes y fuera de la búsqueda semántica")
-			return
-		}
-		logx.Info("re-embedding automático completo",
-			"embebidas", res.Embedded, "omitidas", res.Skipped, "modelo", res.ModelID)
-	})
+	e.pedirRelleno(embed, true)
 }
 
 // IncrementalEmbedBackfill vectoriza en BACKGROUND lo que quedó pendiente (stalePredicate) sin
@@ -410,72 +421,129 @@ func (e *DbEngine) AutoEmbedBackfill(embed func([]string) ([][]float32, error)) 
 // llevaba a 0.
 //
 // Por qué TODAS las pendientes y no sólo las filas recién bajadas: si el embebedor falla en un
-// pull, esas filas tienen que reintentarse en el próximo, no esperar al reinicio — que es el hueco
-// que esto viene a cerrar. Una observación imposible no frena a las demás (embeberYGuardar la
-// aísla con embedUnoAUno), así que retomar la cola entera no puede atascarse detrás de ella.
+// pull, esas filas no pueden quedar esperando al reinicio — que es el hueco que esto viene a
+// cerrar. Ojo con lo que eso promete y lo que no: el disparo lo hace un pull que ingirió AL MENOS
+// UNA fila, así que lo que falló se reintenta en el próximo pull que baje algo (o en el próximo
+// arranque, por AutoEmbedBackfill), NO en el próximo tick a secas. Una observación imposible no
+// frena a las demás (embeberYGuardar la aísla con embedUnoAUno), así que retomar la cola entera no
+// puede atascarse detrás de ella.
+//
+// embed recibe un ctx que se cancela en Close (contextoDeCierre): un apagado corta el pedido en
+// vuelo al embebedor en vez de esperarlo, y embeberYGuardar deja de tomar lotes nuevos.
 //
 // Tres diferencias con AutoEmbedBackfill, las tres porque esto corre MUCHAS veces y no una:
 //   - Mantiene el índice IVF con Add por vector + el rebuild ESPACIADO (maybeRebuildVectorIndexWith),
 //     igual que un save normal, en vez de reconstruirlo entero en cada pull.
 //   - No toca MetaEmbedModel: esa marca dice «la base entera migró a este modelo», y la declaran
 //     el backfill completo y el manual, no una pasada disparada por un pull.
-//   - COALESCE: si ya hay una corrida en vuelo, no lanza otra — le pide UNA vuelta más al terminar,
-//     porque las filas que bajaron después de su SELECT no las vio. Nunca hay dos a la vez por esta
-//     puerta, y ningún pedido se pierde.
+//   - Si hay una corrida en vuelo —de esta puerta O del arranque— no lanza otra: le pide UNA vuelta
+//     más al terminar, porque las filas que bajaron después de su SELECT no las vio (pedirRelleno).
 //
-// Degrada, no tumba: un error del embebedor se loguea y la cola queda para el próximo disparo; un
-// panic del callback se recupera (una goroutine de fondo que entra en pánico mata el PROCESO).
+// Degrada, no tumba: un error del embebedor se loguea y la cola queda para el próximo disparo (el
+// próximo pull que ingiera filas, o el próximo arranque); un panic del callback se recupera (una goroutine de fondo que entra en pánico mata el PROCESO).
 // Sin embebedor nombrado (Noop/none ⇒ vectorModelID vacío) es un no-op que no lanza nada.
-func (e *DbEngine) IncrementalEmbedBackfill(embed func([]string) ([][]float32, error)) {
+func (e *DbEngine) IncrementalEmbedBackfill(embed func(ctx context.Context, textos []string) ([][]float32, error)) {
 	if e.vectorModelID == "" || embed == nil {
 		return
 	}
-	e.incrMu.Lock()
-	if e.incrCorriendo {
-		e.incrOtraVuelta = true
-		e.incrMu.Unlock()
+	ctx := e.contextoDeCierre()
+	e.pedirRelleno(func(textos []string) ([][]float32, error) { return embed(ctx, textos) }, false)
+}
+
+// pedirRelleno es la ÚNICA puerta al relleno de vectores de fondo: la usan el arranque (completa)
+// y cada pull (incremental). A lo sumo una corrida en vuelo; el pedido que llega mientras corre se
+// anota y se cobra como UNA vuelta más al terminar (con el embed del último pedido, y completa si
+// alguno de los anotados lo era). Así ningún pedido se pierde y ninguna fila se embebe dos veces
+// por dos corridas que listaron el mismo conjunto.
+func (e *DbEngine) pedirRelleno(embed func([]string) ([][]float32, error), completa bool) {
+	e.rellenoMu.Lock()
+	if e.rellenoCorriendo {
+		e.rellenoOtraVuelta = true
+		e.rellenoOtraCompleta = e.rellenoOtraCompleta || completa
+		e.rellenoEmbed = embed
+		e.rellenoMu.Unlock()
 		return
 	}
-	e.incrCorriendo = true
-	e.incrMu.Unlock()
+	e.rellenoCorriendo = true
+	e.rellenoFin = make(chan struct{})
+	e.rellenoMu.Unlock()
 
 	// La config del índice se copia ACÁ, en la goroutine del caller: las de fondo no leen
 	// e.vindexCfg (ver el comentario del campo).
 	cfg := e.vindexCfg
 	lanzada := e.spawnBackground(func() {
 		for {
-			e.pasadaIncremental(embed, cfg)
-			e.incrMu.Lock()
-			if !e.incrOtraVuelta {
-				e.incrCorriendo = false
-				e.incrMu.Unlock()
+			e.pasadaDeRelleno(embed, completa, cfg)
+			// El cierre gana a la vuelta anotada: lo pendiente lo retoma el próximo arranque.
+			cerrando := e.cerrando()
+			e.rellenoMu.Lock()
+			if !e.rellenoOtraVuelta || cerrando {
+				e.soltarRellenoLocked()
+				e.rellenoMu.Unlock()
 				return
 			}
-			e.incrOtraVuelta = false
-			e.incrMu.Unlock()
+			embed, completa = e.rellenoEmbed, e.rellenoOtraCompleta
+			e.rellenoOtraVuelta, e.rellenoOtraCompleta, e.rellenoEmbed = false, false, nil
+			e.rellenoMu.Unlock()
 		}
 	})
 	if !lanzada {
 		// El engine se está cerrando: liberar el guard para no dejarlo tomado.
-		e.incrMu.Lock()
-		e.incrCorriendo = false
-		e.incrMu.Unlock()
+		e.rellenoMu.Lock()
+		e.soltarRellenoLocked()
+		e.rellenoMu.Unlock()
 	}
 }
 
-// pasadaIncremental es UNA vuelta de IncrementalEmbedBackfill. Va en su propia función para que el
-// recover cubra exactamente una pasada y el bucle de afuera siga pudiendo soltar el guard.
-func (e *DbEngine) pasadaIncremental(embed func([]string) ([][]float32, error), cfg config.VectorIndexConfig) {
+// soltarRellenoLocked libera la puerta del relleno y descarta lo anotado. Requiere rellenoMu.
+func (e *DbEngine) soltarRellenoLocked() {
+	e.rellenoCorriendo = false
+	e.rellenoOtraVuelta, e.rellenoOtraCompleta, e.rellenoEmbed = false, false, nil
+	if e.rellenoFin != nil {
+		close(e.rellenoFin)
+		e.rellenoFin = nil
+	}
+}
+
+// EsperarRelleno bloquea hasta que termine la corrida de relleno de vectores en vuelo, con las
+// vueltas que tenga anotadas. Sin corrida en vuelo vuelve enseguida.
+//
+// Existe porque Close ya NO sirve para esperar al relleno: Close lo CORTA (es un apagado, y lo que
+// falta queda para el próximo arranque). Quien necesita saber que lo pendiente ya tiene vector —las
+// pruebas del sync entrante, que viven en otro paquete— espera acá y recién después cierra.
+func (e *DbEngine) EsperarRelleno() {
+	e.rellenoMu.Lock()
+	fin := e.rellenoFin
+	e.rellenoMu.Unlock()
+	if fin != nil {
+		<-fin
+	}
+}
+
+// errRellenoCortadoPorCierre es cómo termina una pasada que el cierre del engine interrumpió. No es
+// una falla del embebedor: lo que no se llegó a embeber sigue pendiente para el próximo arranque.
+var errRellenoCortadoPorCierre = errors.New("relleno de vectores cortado por el cierre del engine; lo que falta sigue pendiente")
+
+// pasadaDeRelleno es UNA vuelta de pedirRelleno. Va en su propia función para que el recover cubra
+// exactamente una pasada y el bucle de afuera siga pudiendo soltar el guard.
+func (e *DbEngine) pasadaDeRelleno(embed func([]string) ([][]float32, error), completa bool, cfg config.VectorIndexConfig) {
 	defer func() {
 		if r := recover(); r != nil {
-			logx.Error("el embebedor entró en pánico durante el backfill incremental; la memoria queda pendiente para el próximo disparo",
-				"panic", r)
+			logx.Error("el embebedor entró en pánico durante el relleno de vectores; la memoria queda pendiente hasta el próximo pull que baje filas o el próximo arranque",
+				"panic", r, "completo", completa)
 		}
 	}()
+	if completa {
+		e.pasadaCompleta(embed)
+		return
+	}
 	res, err := e.embedBackfillIncremental(embed, cfg)
 	switch {
+	case errors.Is(err, errRellenoCortadoPorCierre):
+		logx.Info("vectorización tras el pull cortada por el cierre; lo pendiente se retoma al arrancar",
+			"embebidas", res.Embedded, "modelo", res.ModelID)
 	case err != nil:
-		logx.Warn("no se pudo vectorizar la memoria pendiente; queda para el próximo pull",
+		logx.Warn("no se pudo vectorizar la memoria pendiente; queda para el próximo pull que baje filas (o el próximo arranque)",
 			"error", err, "embebidas", res.Embedded, "modelo", res.ModelID)
 	case res.Failed > 0:
 		logx.Warn("memoria pendiente vectorizada, pero el embebedor rechazó algunas observaciones",
@@ -484,6 +552,32 @@ func (e *DbEngine) pasadaIncremental(embed func([]string) ([][]float32, error), 
 		logx.Info("memoria pendiente vectorizada tras el pull",
 			"embebidas", res.Embedded, "omitidas", res.Skipped, "modelo", res.ModelID)
 	}
+}
+
+// pasadaCompleta es la corrida del arranque (AutoEmbedBackfill): EmbedBackfill entero, que
+// reconstruye el índice una vez y declara MetaEmbedModel.
+func (e *DbEngine) pasadaCompleta(embed func([]string) ([][]float32, error)) {
+	res, err := e.EmbedBackfill(embed)
+	if errors.Is(err, errRellenoCortadoPorCierre) {
+		logx.Info("re-embedding automático cortado por el cierre; lo pendiente se retoma al arrancar",
+			"embebidas", res.Embedded, "modelo", res.ModelID)
+		return
+	}
+	if err != nil {
+		logx.Warn("el re-embedding automático falló; corré `musubi embed backfill` a mano",
+			"error", err, "embebidas", res.Embedded)
+		return
+	}
+	if res.Failed > 0 {
+		// Que no se lea como un verde limpio: quedaron observaciones fuera del recall semántico
+		// y el próximo arranque las va a volver a intentar. El id de cada una ya se logueó.
+		logx.Warn("re-embedding automático completo, pero el embebedor rechazó algunas observaciones",
+			"embebidas", res.Embedded, "fallidas", res.Failed, "omitidas", res.Skipped, "modelo", res.ModelID,
+			"nota", "las fallidas siguen pendientes y fuera de la búsqueda semántica")
+		return
+	}
+	logx.Info("re-embedding automático completo",
+		"embebidas", res.Embedded, "omitidas", res.Skipped, "modelo", res.ModelID)
 }
 
 // embedBackfillIncremental es el cuerpo síncrono de una pasada: la MISMA selección que EmbedBackfill
@@ -498,6 +592,9 @@ func (e *DbEngine) embedBackfillIncremental(embed func([]string) ([][]float32, e
 	if len(todo) == 0 {
 		return res, nil
 	}
+	// Con el índice IVF ENTRENADO, SearchObservations rankea sólo lo que el índice devuelve: un
+	// vector persistido pero no agregado no aparece hasta el próximo rebuild, que puede tardar
+	// horas (RebuildEvery + RebuildMinHours). Por eso cada vector nuevo entra al índice acá.
 	var alGuardar func(string, []float32)
 	if e.index != nil && cfg.Enabled {
 		alGuardar = e.index.Add

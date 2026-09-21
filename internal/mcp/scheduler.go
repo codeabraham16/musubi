@@ -292,8 +292,10 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 // observaciones visibles sin vector tras un reinicio, 4 un rato después, 21 al día siguiente.
 //
 // No bloquea el scheduler: el engine lo corre en su goroutine de fondo (rastreada por Close) y
-// coalesce los pedidos que llegan mientras trabaja. Un embebedor caído degrada —queda pendiente
-// para el próximo pull— y nunca tumba el drain. Con Noop/none no hay semántica: no hace nada.
+// coalesce los pedidos que llegan mientras trabaja —también contra el relleno del arranque—. Un
+// embebedor caído degrada y nunca tumba el drain: lo que no se vectorizó queda pendiente hasta el
+// próximo pull QUE INGIERA AL MENOS UNA FILA (un tick que no baja nada no dispara esto) o hasta el
+// próximo arranque. Con Noop/none no hay semántica: no hace nada.
 //
 // El engine se pide por aserción de interfaz y no por StorageBackend, por la misma razón que
 // estamparProcedenciaDelVector: subir el método a la interfaz obligaría a implementarlo a todos
@@ -303,16 +305,16 @@ func (s *McpServer) vectorizarLoBajado() {
 		return
 	}
 	eng, ok := s.engine.(interface {
-		IncrementalEmbedBackfill(func([]string) ([][]float32, error))
+		IncrementalEmbedBackfill(func(context.Context, []string) ([][]float32, error))
 	})
 	if !ok {
 		return
 	}
 	emb := s.embedder
-	// Background y no el ctx del scheduler: la corrida vive en el engine, cuyo Close la espera; el
-	// techo por pedido lo pone el cliente HTTP de cada proveedor.
-	eng.IncrementalEmbedBackfill(func(textos []string) ([][]float32, error) {
-		return embedding.EmbedBatch(context.Background(), emb, textos)
+	// El ctx lo pone el ENGINE y no el scheduler: la corrida vive en el engine, sobrevive al tick
+	// que la pidió, y ese ctx se cancela en engine.Close, que es lo que un apagado tiene que cortar.
+	eng.IncrementalEmbedBackfill(func(ctx context.Context, textos []string) ([][]float32, error) {
+		return embedding.EmbedBatch(ctx, emb, textos)
 	})
 }
 

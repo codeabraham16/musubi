@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -47,8 +48,9 @@ func centralConDosFilas(t *testing.T) *httptest.Server {
 }
 
 // conVectorTrasElDrain corre UN drain entrante con el embebedor dado y devuelve qué ids quedaron
-// con vector de SU procedencia. La sincronización con la goroutine de fondo es engine.Close(), que
-// espera a todo lo que el engine lanzó: nada de sondear con sleeps. Después se reabre la base y se
+// con vector de SU procedencia. La sincronización con la goroutine de fondo es
+// engine.EsperarRelleno(), y recién después Close: Close CORTA el relleno (es un apagado), así que
+// cerrar sin esperar mediría el corte y no la vectorización. Nada de sondear con sleeps. Después se reabre la base y se
 // pregunta como lo haría el recall semántico (misma procedencia, regla de homogeneidad).
 func conVectorTrasElDrain(t *testing.T, emb embedding.Provider, consulta []float32) map[string]bool {
 	t.Helper()
@@ -67,6 +69,7 @@ func conVectorTrasElDrain(t *testing.T, emb embedding.Provider, consulta []float
 	if raw, ok, _ := engine.GetMeta("sync:inbound_cursor"); !ok || raw != "5" {
 		t.Errorf("cursor entrante = %q (ok=%v), esperaba \"5\": el drain no ingirió", raw, ok)
 	}
+	engine.EsperarRelleno()
 	if err := engine.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -124,8 +127,8 @@ func (c embebedorContado) Embed(ctx context.Context, s string) ([]float32, error
 }
 
 // Un embebedor caído DEGRADA: el drain ingiere y avanza el cursor igual (lo asierta
-// conVectorTrasElDrain), el proceso no se cae, y las filas quedan sin vector — pendientes para el
-// próximo pull, no perdidas.
+// conVectorTrasElDrain), el proceso no se cae, y las filas quedan sin vector — pendientes, no
+// perdidas: las retoma el próximo pull que ingiera al menos una fila, o el próximo arranque.
 func TestDrainInboundConEmbebedorCaidoIngiereIgual(t *testing.T) {
 	var n atomic.Int32
 	got := conVectorTrasElDrain(t, embebedorContado{failingEmbedder{}, &n}, make([]float32, 8))
@@ -149,11 +152,11 @@ func (panicEmbedder) Name() string    { return "panic-test" }
 // Un panic del embebedor en la goroutine de fondo mataría el PROCESO entero, no sólo el drain. Si
 // esta prueba termina, el panic se contuvo; el contador descarta que termine porque nadie embebió.
 //
-// Sabotaje que la hace fallar: sacar el recover de la pasada incremental → el panic escapa de la
-// goroutine de fondo y tumba el binario de prueba entero.
-// arnes: archivo="internal/memory/embed_backfill.go"
-// arnes: de="if r := recover(); r != nil {"
-// arnes: a="if r := any(nil); r != nil {"
+// Es la prueba de punta a punta y no lleva directiva a propósito: sin el recover, el panic tumba
+// el binario de prueba entero, no queda un solo `--- FAIL` que leer y el juez de sabotajes lo
+// cuenta como «no se midió nada». El recover se mide en
+// memory.TestLaPasadaDeRellenoContieneElPanicoDelEmbebedor, que corre la pasada en la goroutine de
+// la prueba y ataja el panic con nombre.
 func TestDrainInboundConEmbebedorEnPanicoNoTumbaNada(t *testing.T) {
 	var n atomic.Int32
 	got := conVectorTrasElDrain(t, embebedorContado{panicEmbedder{}, &n}, []float32{1, 0, 0})
@@ -163,4 +166,69 @@ func TestDrainInboundConEmbebedorEnPanicoNoTumbaNada(t *testing.T) {
 	if len(got) != 0 {
 		t.Errorf("con el embebedor en pánico no debería haber vectores, hay %v", got)
 	}
+}
+
+// engineQueFallaEn es un engine real al que IngestShared le falla para UNA id: el fallo de ingest a
+// mitad de lote (un SQLITE_BUSY, una fila veneno) sin tener que provocarlo en SQLite.
+type engineQueFallaEn struct {
+	*memory.DbEngine
+	id string
+}
+
+func (e engineQueFallaEn) IngestShared(o memory.SharedObs) (bool, error) {
+	if o.ID == e.id {
+		return false, errors.New("ingest roto a propósito (test)")
+	}
+	return e.DbEngine.IngestShared(o)
+}
+
+// Si el lote falla A MITAD, lo que sí se ingirió antes del fallo se vectoriza igual: el disparo va
+// en un defer y cuenta las filas ingeridas, no los lotes completos.
+//
+// c1 entra, c2 falla: el cursor queda en c1 (el ingest no avanza más allá de lo contiguo) y c1
+// tiene que salir del drain con vector, no esperar al próximo pull que baje algo.
+//
+// Sabotaje que la hace fallar: olvidar lo ingerido cuando el lote falla → el defer ve cero filas,
+// no dispara la vectorización y c1 queda sin vector.
+// arnes: archivo="internal/mcp/scheduler.go"
+// arnes: de="\t\t\t\tfailed = true\n\t\t\t\tbreak\n"
+// arnes: a="\t\t\t\tfailed = true\n\t\t\t\tingeridas = 0\n\t\t\t\tbreak\n"
+func TestDrainInboundVectorizaLoIngeridoAunqueElLoteFalleAMitad(t *testing.T) {
+	stub := centralConDosFilas(t)
+	dir := memtest.DirSembrado(t)
+	engine, err := memory.NewDbEngine(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vec := []float32{0.1, 0.2, 0.3}
+	emb := fakeEmbedder{vec: vec}
+	s := NewMcpServer(engineQueFallaEn{engine, "c2"}, t.TempDir(), emb, WithMemory(config.MemoryConfig{TeamMode: true}))
+	s.SetSyncClient(newTestSyncClient(t, stub.URL), config.SyncConfig{BatchSize: 200})
+
+	s.drainInboundOnce(context.Background())
+
+	if raw, ok, _ := engine.GetMeta("sync:inbound_cursor"); !ok || raw != "3" {
+		t.Fatalf("cursor entrante = %q (ok=%v), esperaba \"3\": el lote no falló a mitad como la prueba necesita", raw, ok)
+	}
+	engine.EsperarRelleno()
+	if err := engine.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	e2, err := memory.NewDbEngine(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e2.Close()
+	e2.SetVectorModelID(emb.Name())
+	res, err := e2.SearchObservations(context.Background(), vec, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range res {
+		if r.ID == "c1" {
+			return
+		}
+	}
+	t.Errorf("c1 se ingirió antes del fallo de c2 pero quedó sin vector: el lote que falla a mitad no disparó la vectorización (resultados: %d)", len(res))
 }

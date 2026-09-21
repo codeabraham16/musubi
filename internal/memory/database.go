@@ -5,6 +5,7 @@
 package memory
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"musubi/internal/config"
@@ -36,12 +37,22 @@ type DbEngine struct {
 	lifecycleMu sync.Mutex
 	closed      bool
 	bgWG        sync.WaitGroup
-	// incrMu + incrCorriendo + incrOtraVuelta coalescen IncrementalEmbedBackfill: a lo sumo UNA
-	// corrida en vuelo, y un pedido que llega mientras corre se cobra como UNA vuelta más al
-	// terminar (ver embed_backfill.go).
-	incrMu         sync.Mutex
-	incrCorriendo  bool
-	incrOtraVuelta bool
+	// ctxCierre se cancela en Close (ver contextoDeCierre): es el ctx con el que el relleno de
+	// vectores de fondo llama al embebedor, para que un apagado corte el pedido en vuelo en vez de
+	// esperarlo. Se crea perezoso bajo lifecycleMu: un DbEngine armado a mano (tests) no lo tiene.
+	ctxCierre      context.Context
+	cancelarCierre context.CancelFunc
+	// rellenoMu y lo que protege coalescen el RELLENO DE VECTORES de fondo: el del arranque
+	// (AutoEmbedBackfill) y el que dispara cada pull (IncrementalEmbedBackfill) pasan por la MISMA
+	// puerta (pedirRelleno), así que nunca hay dos corridas a la vez embebiendo el mismo conjunto.
+	// Un pedido que llega mientras una corre se cobra como UNA vuelta más al terminar; si alguno de
+	// los pedidos anotados era el completo, la vuelta es completa (ver embed_backfill.go).
+	rellenoMu           sync.Mutex
+	rellenoCorriendo    bool
+	rellenoOtraVuelta   bool
+	rellenoOtraCompleta bool
+	rellenoEmbed        func([]string) ([][]float32, error)
+	rellenoFin          chan struct{} // se cierra cuando la corrida en vuelo suelta la puerta (EsperarRelleno)
 	// projectID es el proyecto de origen que se estampa en cada observación guardada
 	// (columna project_id) para la memoria híbrida local+central. Lo inyecta el
 	// entrypoint tras cargar la config (ver SetProjectID). "" = sin atribución (NULL-like).
@@ -102,6 +113,29 @@ func (e *DbEngine) SetLedgerPrefixes(p []string) { e.ledgerPrefixes = p }
 // "" ⇒ procedencia desconocida (sin embedder nombrado); no cambia el comportamiento
 // histórico porque un engine con "" sólo compara contra vectores con model_id "".
 func (e *DbEngine) SetVectorModelID(modelID string) { e.vectorModelID = modelID }
+
+// contextoDeCierre devuelve un ctx que se cancela cuando el engine se cierra (Close). Si el engine
+// ya está cerrado, lo devuelve cancelado. Lo usan las corridas de fondo que llaman a algo lento
+// (el embebedor) para no retener el apagado mientras terminan un pedido que ya nadie va a usar.
+func (e *DbEngine) contextoDeCierre() context.Context {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	if e.ctxCierre == nil {
+		e.ctxCierre, e.cancelarCierre = context.WithCancel(context.Background())
+		if e.closed {
+			e.cancelarCierre()
+		}
+	}
+	return e.ctxCierre
+}
+
+// cerrando dice si Close ya empezó. Las corridas de fondo largas lo miran entre lotes: Close las
+// espera (bgWG), así que una que no mira sigue embebiendo la base entera con el daemon apagándose.
+func (e *DbEngine) cerrando() bool {
+	e.lifecycleMu.Lock()
+	defer e.lifecycleMu.Unlock()
+	return e.closed
+}
 
 // spawnBackground lanza f como goroutine RASTREADA por bgWG, salvo que el engine ya
 // esté cerrado. Devuelve true si la lanzó. El registro en bgWG ocurre bajo
@@ -448,6 +482,11 @@ func (e *DbEngine) backfillDigests() error {
 func (e *DbEngine) Close() error {
 	e.lifecycleMu.Lock()
 	e.closed = true
+	if e.cancelarCierre != nil {
+		// Antes de esperar: el relleno de vectores en vuelo corta su pedido al embebedor acá, y
+		// no después de que termine un lote que puede tardar segundos (proveedor por HTTP).
+		e.cancelarCierre()
+	}
 	e.lifecycleMu.Unlock()
 	e.bgWG.Wait()
 	return e.db.Close()
