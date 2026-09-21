@@ -133,7 +133,12 @@ func TestFlotaSinCredencialNoEntra(t *testing.T) {
 }
 
 // I3 — EL RECEPTOR ACOTA. Un batch más grande que el tope rebota entero con 400 y no publica
-// nada. Sabotaje visto rojo: quitar el chequeo de flotaBatchTope.
+// nada.
+//
+// Sabotaje que la hace fallar: quitar el chequeo de flotaBatchTope del receptor.
+// arnes: archivo="internal/mcp/flota.go"
+// arnes: de="\t\tif len(entrantes) > flotaBatchTope {"
+// arnes: a="\t\tif len(entrantes) > flotaBatchTope && false {"
 func TestFlotaElReceptorAcota(t *testing.T) {
 	s, ts := servidorFlota(t)
 	id, ch, _ := s.live.subscribe("", false)
@@ -156,7 +161,12 @@ func TestFlotaElReceptorAcota(t *testing.T) {
 
 // I4 — SIN CONTENIDO, POR CONSTRUCCIÓN. El decode es estricto: un campo extra (content, args,
 // principal — lo que sea) rechaza el batch entero. Es la mitad receptora del invariante L1 del
-// feed. Sabotaje visto rojo: quitar DisallowUnknownFields.
+// feed.
+//
+// Sabotaje que la hace fallar: quitar DisallowUnknownFields del decoder.
+// arnes: archivo="internal/mcp/flota.go"
+// arnes: de="\t\tdec.DisallowUnknownFields()\n"
+// arnes: a=""
 func TestFlotaSinContenidoPorConstruccion(t *testing.T) {
 	_, ts := servidorFlota(t)
 	body := []byte(`[{"tool":"musubi_recall","outcome":"ok","ms":3,"content":"el secreto que no debe viajar"}]`)
