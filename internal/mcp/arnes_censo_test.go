@@ -495,7 +495,31 @@ import (
 // lee. Quitarlo no es una sustitución sino una refactorización, y no hay otro corte que la ponga en
 // rojo porque el valor se fija en el literal del test. Lo que custodia es la FORMA del tipo, y esa
 // clase de invariante la sostiene el compilador.
-const anclasEnProsaAlDia = 249
+//
+// Y DE 249 A 235 EL 2026-09-21: las catorce anclas de la SEGURIDAD DEL BINARIO Y DEL CANAL —el
+// blindaje de la unidad de systemd (`cmd/musubi/blindaje_test.go`), la firma de las actualizaciones
+// (`internal/selfupdate/firma_test.go`) y la rotación de credenciales (`internal/mcp/rotacion_test.go`)—.
+// Doce con directiva, DOS exentas, 18 de 18 en rojo al cierre.
+//
+// UNA GUARDA QUE MIRA LA SUPERFICIE DE LECTURA Y NO LA BASE. `TestElTokenDeLaRotacionNoQuedaEnClaroEnLaBase`
+// promete que en reposo hay hashes y no credenciales. Se guardó el token EN CLARO en la columna y la
+// prueba quedó VERDE: lo único que inspecciona es el JSON de `ListarDevices`, y `fleet.Device` no
+// tiene ningún campo que lleve ese token. Lo que custodia de verdad es que la REPRESENTACIÓN no lo
+// exponga —cierto y valioso— y no el invariante que su nombre anuncia. Cubrirlo exigiría leer la
+// columna directamente, y este paquete no tiene por dónde. Queda dicho en vez de fingido.
+//
+// UNA EXENCIÓN QUE SU PROPIA PROSA YA ANUNCIABA. El ancla de la re-serialización del manifiesto dice
+// con todas las letras «TestUnManifiestoConFirmaAjenaNoVerifica no lo caza»; se mecanizó igual para
+// comprobarlo y el barrido devolvió VERDE, como estaba escrito. Los fixtures firman y verifican el
+// MISMO arreglo de bytes, así que reordenar claves no les cambia nada; lo que rompe es un release
+// REAL. La red contra eso es el aviso en el doc de VerificarFirma, no una guarda.
+//
+// Y UN SABOTAJE QUE PANIQUEABA EN VEZ DE FALLAR. Neutralizar la guarda de largo de clave dejaba que
+// `ed25519.Verify` entrara con una clave corta y PANIQUEARA; el arnés lo marcó «rojo sospechoso»
+// porque no podía aislar un motivo propio. El corte correcto es el que la prosa pedía literalmente
+// —devolver nil— y da un rojo limpio. Un pánico no es una guarda contestando: es el proceso
+// muriéndose antes de que la guarda hable.
+const anclasEnProsaAlDia = 235
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //

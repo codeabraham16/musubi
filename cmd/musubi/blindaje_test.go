@@ -22,6 +22,9 @@ func conPodman(c string) bool { return c == "podman" }
 // su blindaje importa.
 //
 // Sabotaje que la hace fallar: declarar las rutas de contenedores sin consultar hayCLI.
+// arnes: archivo="cmd/musubi/blindaje.go"
+// arnes: de="\tif hayCLI(\"podman\") {"
+// arnes: a="\tif true {"
 func TestSinPodmanNiDockerElAgenteNoPideRutasDeContenedores(t *testing.T) {
 	ns := necesidadesDelAgente("/home/musubi", "/run/user/1000", sinCLI)
 	for _, n := range ns {
@@ -66,6 +69,9 @@ func TestSinPodmanNiDockerElAgenteNoPideRutasDeContenedores(t *testing.T) {
 // arnes: de="Ruta: path.Join(runtimeDir, sub), Opcional: true,"
 // arnes: a="Ruta: path.Join(runtimeDir, sub),"
 // Sabotaje que la hace fallar: emitir la directiva sin el `-`.
+// arnes: archivo="cmd/musubi/blindaje.go"
+// arnes: de="\"ReadWritePaths=-\" + path.Join(runtimeDir, sub),"
+// arnes: a="\"ReadWritePaths=\" + path.Join(runtimeDir, sub),"
 func TestLasRutasDeRuntimeSonOpcionalesYSuDirectivaLlevaGuion(t *testing.T) {
 	for _, n := range necesidadesDelAgente("/home/musubi", "/run/user/1000", conPodman) {
 		enRuntime := strings.HasPrefix(n.Ruta, "/run/")
@@ -92,6 +98,9 @@ func TestLasRutasDeRuntimeSonOpcionalesYSuDirectivaLlevaGuion(t *testing.T) {
 // delante DOS DÍAS ANTES de pensar en correr un strace.
 //
 // Sabotaje que la hace fallar: dejar `Sintoma` vacío en cualquier necesidad.
+// arnes: archivo="cmd/musubi/blindaje.go"
+// arnes: de="\t\t\tSintoma:   \"el agente arranca y sale en el acto diciendo que falta la credencial\","
+// arnes: a="\t\t\tSintoma:   \"\","
 func TestCadaNecesidadDiceComoSeVeSuFalloYComoSeArregla(t *testing.T) {
 	ns := necesidadesDelAgente("/home/musubi", "/run/user/1000", conPodman)
 	if len(ns) < 4 {
@@ -276,7 +285,13 @@ func unidadYDropIns(t *testing.T) string {
 // esto lo dice.
 //
 // Sabotaje que la hace fallar: borrar una línea ReadWritePaths del drop-in de contenedores.
+// arnes: archivo="deploy/systemd/musubi-agente-contenedores.conf"
+// arnes: de="ReadWritePaths=/home/musubi/.local/share/containers\n"
+// arnes: a=""
 // Sabotaje que la hace fallar: agregarle al agente una necesidad nueva sin tocar deploy/systemd/.
+// arnes: archivo="cmd/musubi/blindaje.go"
+// arnes: de="\tvar ns []necesidad"
+// arnes: a="\tvar ns []necesidad\n\tns = append(ns, necesidad{Trabajo: \"inventado\", Acceso: accesoEscritura, Ruta: \"/tmp/inventado\", Sintoma: \"nada\", Directiva: \"ReadWritePaths=/tmp/inventado\"})"
 func TestElBlindajeDeLaUnidadConcedeLoQueElAgenteDECLARA(t *testing.T) {
 	// Los valores de la máquina de producción, que son los que los archivos tienen escritos.
 	const homeProd, runtimeProd = "/home/musubi", "/run/user/1000"
@@ -308,6 +323,9 @@ func TestElBlindajeDeLaUnidadConcedeLoQueElAgenteDECLARA(t *testing.T) {
 // ignorarla. Pero queda escrito en la salida del test.
 //
 // Sabotaje que la hace fallar: agregar un ReadWritePaths inventado al drop-in.
+// arnes: archivo="deploy/systemd/musubi-agente-contenedores.conf"
+// arnes: de="ReadWritePaths=-/run/user/1000/libpod"
+// arnes: a="ReadWritePaths=-/run/user/1000/libpod\nReadWritePaths=/tmp/inventado"
 func TestLaUnidadNoConcedeRutasQueElAgenteNoPide(t *testing.T) {
 	const homeProd, runtimeProd = "/home/musubi", "/run/user/1000"
 	declaradas := map[string]bool{}
