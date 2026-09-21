@@ -31,6 +31,9 @@ func leerScrapeDeAltura(t *testing.T) string {
 // prometheus.yml, el `.ejemplo` no sirve para nada.
 //
 // Sabotaje que la hace fallar: sacar el bloque `scrape_config_files` de prometheus.yml.
+// arnes: archivo="deploy/prometheus/prometheus.yml"
+// arnes: de="scrape_config_files:"
+// arnes: a="scrape_config_files_apagado:"
 func TestElScrapeDeSitioLoCargaPrometheusDeVerdad(t *testing.T) {
 	b, err := leerArchivoDeDespliegue("../../deploy/prometheus/prometheus.yml")
 	if err != nil {
@@ -58,6 +61,9 @@ func TestElScrapeDeSitioLoCargaPrometheusDeVerdad(t *testing.T) {
 // máquina, distinguidas nada más que por `job` — y cada regla de flota matchearía las dos.
 //
 // Sabotaje que la hace fallar: agregar `node_.*` al regex del `keep`.
+// arnes: archivo="deploy/prometheus/scrapes/altura-db.yml.ejemplo"
+// arnes: de="regex: \"up|pg_.*|pgbouncer_.*\""
+// arnes: a="regex: \"up|node_.*|pg_.*|pgbouncer_.*\""
 func TestElScrapeDeAlturaNoTraeLosVitalesQueProduceMusubi(t *testing.T) {
 	conf := leerScrapeDeAltura(t)
 
@@ -107,6 +113,9 @@ func TestElScrapeDeAlturaNoTraeLosVitalesQueProduceMusubi(t *testing.T) {
 // en un chat.
 //
 // Sabotaje que la hace fallar: cambiar `credentials_file:` por `credentials:`.
+// arnes: archivo="deploy/prometheus/scrapes/altura-db.yml.ejemplo"
+// arnes: de="credentials_file: /etc/prometheus/altura-db.token"
+// arnes: a="credentials: /etc/prometheus/altura-db.token"
 func TestLaCredencialDelScrapeVaPorReferencia(t *testing.T) {
 	conf := leerScrapeDeAltura(t)
 	if !strings.Contains(conf, "credentials_file:") {
@@ -134,6 +143,9 @@ func TestLaCredencialDelScrapeVaPorReferencia(t *testing.T) {
 // umbral — nunca sonó, y «nunca sonó» se lee igual que «todo bien».
 //
 // Sabotaje que la hace fallar: reemplazar la métrica del denominador por un 400 literal.
+// arnes: archivo="deploy/musubi-alerts-altura.yml"
+// arnes: de="/ pgbouncer_config_max_client_connections{job=\"altura-db\"} > 0.85"
+// arnes: a="/ 400 > 0.85"
 func TestElUmbralDelPoolerNoTieneElTechoTipeado(t *testing.T) {
 	b, err := leerArchivoDeDespliegue("../../deploy/musubi-alerts-altura.yml")
 	if err != nil {

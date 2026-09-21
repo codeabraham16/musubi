@@ -590,7 +590,37 @@ import (
 // se confunda con un archivo ausente, que una configuración rota no tumbe a las máquinas que no
 // están en ella, y —del otro lado— que el redespliegue no vuelva a comparar el esquema contra un
 // número tipeado a mano, que es el cabo A111 letra por letra.
-const anclasEnProsaAlDia = 192
+// Y DE 192 A 184 EL 2026-09-21: las ocho que el lote anterior dejó anotadas a propósito —ALERTAS DE
+// ALTURA (`despliegue_altura_test.go`) y CUSTODIA DE REGLAS (`despliegue_custodia_test.go`)—. 8 de 8
+// en rojo, y cada rojo nombrando el invariante suyo y no el de un vecino.
+//
+// UNA DE LAS OCHO PROMETÍA DOS CORTES Y NINGUNO CORTA. Decía «sacarle el `\\.` o el `;` a cualquiera
+// de las dos regex» de la custodia cruzada, y las dos lecturas quedan en VERDE, medido contra las
+// seis etiquetas que la propia prueba lleva: desescapar el punto deja el mismo conjunto
+// seleccionado, porque el comodín igual necesita `yml;` inmediatamente después y en la otra ruta lo
+// que sigue a `musubi-alerts` es `-flota.yml;`; y sacarle el `;` tampoco suma un grupo ajeno, por la
+// razón que el encabezado de esa misma prueba ya dice bien — `musubi-alerts.yml` no es prefijo de
+// `musubi-alerts-flota.yml`. O sea que el encabezado tenía razón Y la línea de sabotaje no, en el
+// mismo bloque de comentario. El corte que sí la ejercita estaba escrito dos párrafos más arriba:
+// ENSANCHAR el matcher a `.*musubi-alerts.*`, que agarra los cinco grupos de los dos archivos. Se
+// mecanizó ése y se dejó la medición escrita, porque una promesa que no corta enseña a confiar en
+// una red que no está.
+//
+// Y UNA SEGUNDA MECANIZA LA OTRA DIRECCIÓN, que hasta hoy era una afirmación en prosa. El bloque de
+// `TestLosJobsVigiladosSonLosQueElRepoDeclara` cuenta que la primera versión de esa guarda no veía
+// `- job_name: 'altura-db'` —comillas simples, YAML válido, el estilo de media documentación de
+// Prometheus— y que se midió en las dos direcciones el 2026-09-05. Ahora eso se corre: el sabotaje
+// agrega un job que la alerta no vigila y la pone ROJA, y el `arreglo_` requota un job existente y
+// tiene que dejarla VERDE. Una guarda invertida contesta bien al sabotaje y manda a sacar la línea
+// correcta; con las dos direcciones atadas, eso ya no puede pasar sin que el arnés lo diga.
+//
+// EL CORTE DE ESTE LOTE NO ES POR CANTIDAD SINO POR ARCHIVO: se eligió el par que sabotea YAML de
+// despliegue porque comparten superficie, y uno de los ocho tuvo que reanclarse. Su `de` natural
+// —`  - job_name: alertmanager`— ya era el de otra guarda, en otro archivo, sobre la misma línea:
+// una asegura que ese job EXISTA, la otra que todo job declarado esté VIGILADO. Son dos guardas
+// distintas, no una contada dos veces, pero en vez de declarar la colisión se movió el ancla a otro
+// job: una colisión declarada hay que mantenerla verdadera para siempre, y no haberla es más barato.
+const anclasEnProsaAlDia = 184
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //

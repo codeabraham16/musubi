@@ -95,6 +95,9 @@ func exprDeAlerta(a archivoDeReglas, alerta string) (string, bool) {
 // arreglando algo— o, peor, alguien la "arregla" bajando el número y la custodia deja de custodiar.
 //
 // Sabotaje: agregar una alerta a cualquiera de los dos archivos sin tocar el número del otro.
+// arnes: archivo="deploy/musubi-alerts-flota.yml"
+// arnes: de="      - alert: ReglasDelCerebroSinDesplegar"
+// arnes: a="      - alert: ReglasFantasma\n        expr: vector(0) > 1\n        labels: { severity: warning }\n      - alert: ReglasDelCerebroSinDesplegar"
 func TestCadaArchivoDeReglasCustodiaElConteoDelOtro(t *testing.T) {
 	base, _ := cargarReglas(t, "musubi-alerts.yml")
 	flota, _ := cargarReglas(t, "musubi-alerts-flota.yml")
@@ -146,7 +149,25 @@ func TestCadaArchivoDeReglasCustodiaElConteoDelOtro(t *testing.T) {
 // dos. Si la de un archivo matchea también al otro, los conteos se suman y la custodia compara
 // contra un total que no es el de nadie: pasa a estar rota en verde.
 //
-// Sabotaje: sacarle el `\\.` o el `;` a cualquiera de las dos regex → falla acá.
+// LOS DOS CORTES QUE ESTE COMENTARIO PROMETÍA NO CORTAN NADA, medido el 2026-09-21 contra las seis
+// etiquetas de abajo. Decía «sacarle el `\\.` o el `;` a cualquiera de las dos regex → falla acá», y
+// las dos lecturas quedan en VERDE en las tres alertas.
+//
+// Desescapar el punto (`.*musubi-alerts\\.yml;.*` → `.*musubi-alerts.yml;.*`) selecciona las mismas
+// dos etiquetas y ninguna ajena: el `.` comodín igual necesita `yml;` justo después, y en la otra
+// ruta lo que sigue a `musubi-alerts` es `-flota.yml;`. Sacarle el `;` tampoco cambia nada, y por
+// la razón que el párrafo de arriba ya dice bien — `musubi-alerts.yml` no es prefijo de
+// `musubi-alerts-flota.yml`, así que acá el separador no desambigua y quitarlo no suma un grupo ajeno.
+//
+// El corte que sí ejercita esta guarda es el de ese párrafo: ENSANCHAR el matcher a
+// `.*musubi-alerts.*`, que agarra los cinco grupos de los dos archivos. Ése es el que se mecaniza.
+// (Borrar el `\\.` entero —`musubi-alertsyml`— también da rojo, pero por la OTRA rama: selecciona
+// cero grupos y la denuncia pasa a ser «la custodia queda muda», no «los conteos se suman».)
+//
+// Sabotaje: ensanchar una de las dos regex a `.*musubi-alerts.*`, que agarra los dos archivos.
+// arnes: archivo="deploy/musubi-alerts-flota.yml"
+// arnes: de="absent(sum(prometheus_rule_group_rules{rule_group=~\".*musubi-alerts\\\\.yml;.*\"}))"
+// arnes: a="absent(sum(prometheus_rule_group_rules{rule_group=~\".*musubi-alerts.*\"}))"
 func TestLaCustodiaNoConfundeUnArchivoDeReglasConElOtro(t *testing.T) {
 	base, _ := cargarReglas(t, "musubi-alerts.yml")
 	flota, _ := cargarReglas(t, "musubi-alerts-flota.yml")
@@ -228,6 +249,9 @@ func TestLaCustodiaNoConfundeUnArchivoDeReglasConElOtro(t *testing.T) {
 // `deploy/verificar-despliegue.sh`.
 //
 // Sabotaje: borrar la línea `# despliegue:` de cualquiera de los cuatro archivos.
+// arnes: archivo="deploy/musubi-alerts-backup-offhost.yml"
+// arnes: de="# despliegue: condicional"
+// arnes: a="# sin marca de despliegue:"
 func TestCadaArchivoDeReglasDeclaraCuandoSeDespliega(t *testing.T) {
 	rutas, err := filepath.Glob(filepath.Join("..", "..", "deploy", "musubi-alerts*.yml"))
 	if err != nil || len(rutas) < 4 {
@@ -261,6 +285,11 @@ func TestCadaArchivoDeReglasDeclaraCuandoSeDespliega(t *testing.T) {
 // falta una métrica suya.
 //
 // Sabotaje: agregar un `job_name:` a prometheus.yml sin sumarlo a la alerta → falla acá.
+// arnes: archivo="deploy/prometheus/prometheus.yml"
+// arnes: de="  - job_name: prometheus"
+// arnes: a="  - job_name: prometheus\n  - job_name: job-fantasma\n    static_configs:\n      - targets: [\"127.0.0.1:9999\"]"
+// arnes: arreglo_de="  - job_name: prometheus"
+// arnes: arreglo_a="  - job_name: 'prometheus'"
 func TestLosJobsVigiladosSonLosQueElRepoDeclara(t *testing.T) {
 	cfg := leerDeploy(t, "prometheus", "prometheus.yml")
 
