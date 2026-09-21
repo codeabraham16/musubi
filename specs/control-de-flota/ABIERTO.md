@@ -4062,7 +4062,7 @@ cuatro eran pruebas que pasaban por el motivo equivocado, y sólo el sabotaje lo
    (A21 «habría que tocar el bundle», A13 «verificar contra el relay», A28 «no se puede sin
    instalar un servidor»). Antes de dar por bueno un «no se hizo porque X», verificá X.
 6. **El número es la identidad: uno solo por cosa, y para siempre.** Un número nuevo va por encima
-   del máximo en uso (hoy **A129** y **B21**) y NO se recicla uno libre: `A6`-`A9`, `A15` y `A16`
+   del máximo en uso (hoy **A130** y **B21**) y NO se recicla uno libre: `A6`-`A9`, `A15` y `A16`
    nunca se usaron, y estrenarlos ahora haría que un lector con el archivo viejo en la cabeza lea
    otra cosa. Si un cabo se convierte en otro —de la tabla 1 a la 2, o al revés— la fila nueva dice
    **«(era A33)»** y la vieja se borra: sin esa marca, cada cita del número anterior apunta a la
