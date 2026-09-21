@@ -18,6 +18,9 @@ import (
 // anclada a 2027 empieza a fallar sola ese año y se borra en vez de arreglarse.
 //
 // Sabotaje que la hace fallar: sacar el `if match.Vencida(...)` de resolve.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="\t\tif match.Vencida(ahoraParaVencimiento()) {\n\t\t\treturn nil, false\n\t\t}\n"
+// arnes: a=""
 func TestUnPrincipalVencidoNoAutentica(t *testing.T) {
 	const tok = "token-que-vence"
 	reg := registroConExpires(t, `principals:
@@ -54,6 +57,9 @@ func TestUnPrincipalVencidoNoAutentica(t *testing.T) {
 // a nadie: todo principals.yaml que ya existe sigue significando exactamente lo mismo.
 //
 // Sabotaje: que parsearVencimiento devuelva time.Now() ante un valor vacío.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="\tif valor == \"\" {\n\t\treturn time.Time{}, nil\n\t}"
+// arnes: a="\tif valor == \"\" {\n\t\treturn time.Now(), nil\n\t}"
 func TestSinExpiresLaCredencialNoVence(t *testing.T) {
 	const tok = "token-eterno"
 	reg := registroConExpires(t, `principals:
@@ -79,6 +85,9 @@ func TestSinExpiresLaCredencialNoVence(t *testing.T) {
 // de un typo tiene que ser que el cerebro no arranque.
 //
 // Sabotaje: que parsearVencimiento devuelva (time.Time{}, nil) cuando time.Parse falla.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="\tt, err := time.Parse(time.RFC3339, valor)\n\tif err != nil {"
+// arnes: a="\tt, err := time.Parse(time.RFC3339, valor)\n\tif err != nil && false {"
 func TestUnExpiresIlegibleImpideArrancar(t *testing.T) {
 	dir := t.TempDir()
 	ruta := filepath.Join(dir, "principals.yaml")
