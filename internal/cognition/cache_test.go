@@ -18,9 +18,9 @@ import (
 // espia cuenta llamadas y devuelve una respuesta derivada del prompt, para poder distinguir
 // "vino del motor" de "vino del caché" y detectar una respuesta CRUZADA (K0).
 type espia struct {
-	mu      sync.Mutex
+	mu       sync.Mutex
 	llamadas int
-	err     error
+	err      error
 }
 
 func (e *espia) Name() string { return "espia" }

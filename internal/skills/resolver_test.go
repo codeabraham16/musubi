@@ -54,7 +54,7 @@ func TestLoadSkillsMissingDirReturnsEmptyNotNil(t *testing.T) {
 
 func TestLoadSkillsParsesValidAndSkipsInvalid(t *testing.T) {
 	root := setupSkillsDir(t, map[string]string{
-		"go.yaml": "name: go-rules\ndescription: reglas go\ntriggers:\n  - \"*.go\"\ncapabilities:\n  - go\nrules: |\n  - usar SOLID\n",
+		"go.yaml":     "name: go-rules\ndescription: reglas go\ntriggers:\n  - \"*.go\"\ncapabilities:\n  - go\nrules: |\n  - usar SOLID\n",
 		"broken.yaml": "name: [esto no es: yaml válido\n  - roto",
 		"notes.txt":   "esto no es un skill",
 	})

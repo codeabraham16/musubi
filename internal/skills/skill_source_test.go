@@ -94,10 +94,10 @@ func TestSkillSourceOmitemptyNoAparececEnYAMLVacio(t *testing.T) {
 func TestResolverIgnoraSource(t *testing.T) {
 	// El resolver solo mira Triggers y Capabilities: Source/SourceURL son ignorados.
 	skill := Skill{
-		Triggers:    []string{"*.go"},
+		Triggers:     []string{"*.go"},
 		Capabilities: []string{},
-		Source:      "musubi-catalog-v1",
-		SourceURL:   "https://example.com/rules.md",
+		Source:       "musubi-catalog-v1",
+		SourceURL:    "https://example.com/rules.md",
 	}
 
 	r := NewResolver(t.TempDir())

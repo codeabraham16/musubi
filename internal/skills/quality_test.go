@@ -111,9 +111,9 @@ func TestSourceTrustTier(t *testing.T) {
 		"https://github.com/anthropics/skills/blob/main/x/SKILL.md": "official",
 		"https://docs.claude.com/skills":                            "official",
 		"https://github.com/PatrickJS/awesome-cursorrules":          "curated",
-		"https://github.com/Gentleman-Programming/Gentleman-Skills":  "curated",
+		"https://github.com/Gentleman-Programming/Gentleman-Skills": "curated",
 		"https://github.com/random/repo":                            "community",
-		"": "unknown",
+		"":                                                          "unknown",
 	}
 	for url, want := range cases {
 		if got := SourceTrustTier(url); got != want {
