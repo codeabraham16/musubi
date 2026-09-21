@@ -163,7 +163,7 @@ func TestMetricsCountsToolCalls(t *testing.T) {
 
 func TestMetricsRequiresAuthWhenTokenSet(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
-	ts := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second, token: "tok", loopbackOnly: true}))
+	ts := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second, token: "tok"}))
 	t.Cleanup(ts.Close)
 
 	resp, err := http.Get(ts.URL + "/metrics") // sin bearer

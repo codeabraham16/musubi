@@ -110,7 +110,7 @@ func TestA8ElCensoPorHTTPRespetaLaTenancy(t *testing.T) {
 // el mismo evento — sin que nada falle, que es la peor forma de estar mal.
 func TestA9LaTaxonomiaDeSondeoViajaConElCenso(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
-	ts := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second, loopbackOnly: true}))
+	ts := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second}))
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/actores")

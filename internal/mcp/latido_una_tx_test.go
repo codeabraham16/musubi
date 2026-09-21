@@ -161,7 +161,7 @@ func servidorConEspiaDeEscrituras(t *testing.T) (*McpServer, *httptest.Server, s
 	s := NewMcpServer(espia, t.TempDir(), embedding.NoopProvider{})
 	tokenDevice := enrolarDePrueba(t, s, "casa", "pc-gio")
 	ts := httptest.NewServer(s.HTTPHandler(httpOptions{
-		reqTimeout: 10 * time.Second, token: "token-de-una-persona", loopbackOnly: true,
+		reqTimeout: 10 * time.Second, token: "token-de-una-persona",
 	}))
 	t.Cleanup(ts.Close)
 	return s, ts, tokenDevice, espia

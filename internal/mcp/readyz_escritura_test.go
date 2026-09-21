@@ -186,7 +186,7 @@ func TestS6ReadyzEscribeDeVerdad(t *testing.T) {
 	// verificación es por EFECTO sobre la base, no por el código de estado — que es precisamente
 	// lo que mentía.
 	s := newTestServer(t, embedding.NoopProvider{})
-	ts := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second, loopbackOnly: true}))
+	ts := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second}))
 	defer ts.Close()
 
 	sondear := func() {

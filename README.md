@@ -661,7 +661,8 @@ Otros bloques disponibles (con defaults): `maintenance` (consolidación + olvido
 `sync` (cerebro central) y `service` (transporte HTTP opt-in).
 
 `service` tiene seguridad por capas y conviene no resumirla como «solo loopback»: con un bind
-loopback (el default) no exige auth y se defiende del DNS-rebinding validando Host y Origin; con un
+loopback (el default) no exige auth y se defiende del DNS-rebinding validando Host y Origin en TODAS
+las puertas de persona — esa defensa cuelga de que no haya credencial, no del bind; con un
 bind **no-loopback** exige un bearer token (`service.auth_token_env`) y **se niega a arrancar sin
 él**. Es el camino por el que corre un cerebro central, y ahí el servidor además fuerza la redacción
 del lado del servidor.
