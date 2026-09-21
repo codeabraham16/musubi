@@ -9,6 +9,9 @@ import "testing"
 // Distinguirlos después, mirando una serie en 0, es imposible.
 //
 // Sabotaje: que DestinoDeAlcanceValido devuelva true a secas → falla acá.
+// arnes: archivo="internal/fleet/alcance.go"
+// arnes: de="func DestinoDeAlcanceValido(d string) bool {\n\td = strings.TrimSpace(d)\n\tif d == \"\" || strings.ContainsAny(d, \" \\t\\r\\n\") {\n\t\treturn false\n\t}\n\ti := strings.LastIndex(d, \":\")\n\tif i <= 0 || i == len(d)-1 {\n\t\treturn false\n\t}\n\thost := d[:i]\n\tif host == \"\" || strings.Contains(host, \",\") {\n\t\treturn false\n\t}\n\tp, err := strconv.Atoi(d[i+1:])\n\treturn err == nil && p >= 1 && p <= 65535\n}\n"
+// arnes: a="func DestinoDeAlcanceValido(d string) bool {\n\td = strings.TrimSpace(d)\n\t_, _ = strconv.Atoi(d)\n\treturn true\n}\n"
 func TestUnDestinoMalEscritoNoLlegaASondearse(t *testing.T) {
 	malos := []string{"", "  ", "sinpuerto", "host:", ":21116", "host:0", "host:65536",
 		"host:abc", "host con espacio:21116", "a,b:21116"}
@@ -31,6 +34,9 @@ func TestUnDestinoMalEscritoNoLlegaASondearse(t *testing.T) {
 // configuró lo descubre media hora después preguntándose por qué «la serie no aparece».
 //
 // Sabotaje: devolver siempre 0 en `descartados` → falla la segunda mitad.
+// arnes: archivo="internal/fleet/alcance.go"
+// arnes: de="\treturn destinos, descartados\n"
+// arnes: a="\treturn destinos, 0\n"
 func TestLosDestinosSeLimpianYLoQueQuedaAfueraSeCuenta(t *testing.T) {
 	in := []string{
 		"a:1", "a:1", // repetido

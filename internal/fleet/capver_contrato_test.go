@@ -211,6 +211,9 @@ func TestElCapverSubeCuandoSeMueveElContratoDelLatido(t *testing.T) {
 // LA VUELTA DEL CABLE TAMBIÉN SE FIJA.
 //
 // Sabotaje que la hace fallar: agregarle un campo a `fleet.RespuestaLatido` sin subir Capver.
+// arnes: archivo="internal/fleet/protocolo.go"
+// arnes: de="type RespuestaLatido struct {\n\tOK      bool   `json:\"ok\"`\n"
+// arnes: a="type RespuestaLatido struct {\n\tOK      bool   `json:\"ok\"`\n\tSaboteoCapverRespuesta string `json:\"saboteo_capver_respuesta,omitempty\"`\n"
 func TestElCapverSubeCuandoSeMueveLaRespuestaDelCerebro(t *testing.T) {
 	huella, campos := huellaDeLaRespuesta()
 

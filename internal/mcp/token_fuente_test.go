@@ -115,6 +115,9 @@ func TestElCerebroGuardaYExponeDeDondeSalioElTokenDelAgente(t *testing.T) {
 //
 // Sabotaje verificado que la pone en rojo: devolver `(0, true)` en vez de `(0, false)` cuando
 // `CredencialRotable` dice que no se sabe.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\t\t\t\tif !seSabe {\n\t\t\t\t\treturn 0, false\n\t\t\t\t}"
+// arnes: a="\t\t\t\tif !seSabe {\n\t\t\t\t\treturn 0, true\n\t\t\t\t}"
 func TestLaSerieDeRotabilidadNoExisteSiElAgenteNoLoDijo(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	tok := enrolarConExec(t, s, "casa", "pc-gio")

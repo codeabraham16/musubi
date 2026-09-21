@@ -33,6 +33,9 @@ import (
 //
 // Sabotaje: sacar el reparto de `pide` de toolFleetShell (vuelve el defecto original), o hacer
 // que `Bloquea()` deje de cubrir `prohibido` en cualquiera de los tres.
+// arnes: archivo="internal/mcp/methods_shell.go"
+// arnes: de="\tif consent := d.ConsentimientoEfectivo(); consent == fleet.ConsentimientoPide {\n\t\treturn s.pedirPermisoParaShell(d, p, proyecto, ahora)\n\t}\n"
+// arnes: a=""
 func TestElEjeDeConsentimientoEsUnaMatrizDeCaminosPorGrados(t *testing.T) {
 	// Qué se espera en cada celda. `abre` es si el acceso procede; `pregunta` es si se le encoló
 	// a la máquina un `musubi:preguntar` —no un aviso—, que es lo único que cumple `pide`.
@@ -257,6 +260,9 @@ func TestLaPreguntaDiceQueSeEstaPidiendo(t *testing.T) {
 //
 // Sabotaje: que un «negada» deje la sesión en `abriendo`; o que ResponderConsentimientoDeShell no
 // se llame nunca desde registrarRespuestaDePermiso.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\tif err != nil {\n\t\tif e2 := s.engine.ResponderConsentimientoDeShell(deviceID, cmd.Argv[1], r, time.Now()); e2 == nil {\n\t\t\treturn\n\t\t}\n\t}\n"
+// arnes: a=""
 func TestElCircuitoCompletoDeUnPideEnLaShell(t *testing.T) {
 	for _, c := range []struct {
 		nombre    string

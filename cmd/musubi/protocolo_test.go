@@ -89,6 +89,9 @@ func TestNingunCampoDeLaRespuestaDelLatidoSePierdeEnSilencio(t *testing.T) {
 // exactamente el atajo que convierte una guarda en decoración.
 //
 // Sabotaje que la hace fallar: quitar cualquiera de los cinco del decode de latir().
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="\t\t\tif r.Protocolo != \"\" {"
+// arnes: a="\t\t\tif r.Protocolo != \"\" && false {"
 func TestLosCincoCamposQueElAgenteConsumeLleganDeVerdad(t *testing.T) {
 	cuerpo, err := json.Marshal(fleet.RespuestaLatido{
 		OK: true, Device: "pc-gio", Project: "casa",

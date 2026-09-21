@@ -28,6 +28,9 @@ import (
 //
 // Sabotaje que la hace fallar: sacar un grammar_subset de cualquiera de los dos; agregar una
 // gramática nueva a uno y olvidarse del otro; sacar el `-tags` de construir.sh.
+// arnes: archivo="deploy/construir.sh"
+// arnes: de="TAGS='treesitter grammar_subset grammar_subset_typescript grammar_subset_tsx grammar_subset_javascript grammar_subset_python'"
+// arnes: a="TAGS='treesitter grammar_subset grammar_subset_typescript grammar_subset_tsx grammar_subset_javascript'"
 func TestLosTagsDeConstruirIgualanAlosDelRelease(t *testing.T) {
 	construir := leerParaTags(t, "../../deploy/construir.sh")
 	release := leerParaTags(t, "../../.github/workflows/release.yml")

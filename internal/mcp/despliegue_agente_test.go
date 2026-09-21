@@ -40,6 +40,10 @@ var reRutaEscribible = regexp.MustCompile(`(?m)^ReadWritePaths=(-?)(\S+)`)
 //
 // Sabotaje que la hace fallar: sacarle el `-` a `-/run/user/1000/libpod`, o ponérselo a la ruta
 // del home.
+// arnes: colision_ok="TestLaUnidadNoConcedeRutasQueElAgenteNoPide"
+// arnes: archivo="deploy/systemd/musubi-agente-contenedores.conf"
+// arnes: de="ReadWritePaths=-/run/user/1000/libpod"
+// arnes: a="ReadWritePaths=/run/user/1000/libpod"
 func TestElDropInDelAgenteNoPuedeImpedirQueElAgenteArranque(t *testing.T) {
 	conf := leerDropInDelAgente(t)
 	rutas := reRutaEscribible.FindAllStringSubmatch(conf, -1)

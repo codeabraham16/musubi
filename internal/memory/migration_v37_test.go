@@ -27,6 +27,9 @@ import (
 // (la fila reportada queda protegida y la poda deja de podar), o borrarlo (la fila declarada queda
 // desprotegida y el primer latido se la lleva).
 // ────────────────────────────────────────────────────────────────────────────────────────────
+// arnes: archivo="internal/memory/migrations.go"
+// arnes: de="\t\t\t\t_, err := x.Exec(`UPDATE services SET declared = 1 WHERE last_report IS NULL`)\n"
+// arnes: a="\t\t\t\t_, err := x.Exec(`UPDATE services SET declared = 1`)\n"
 func TestMigracionV37MarcaDeclaradoLoQueNuncaReporto(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, config.DirName, config.DBFile)

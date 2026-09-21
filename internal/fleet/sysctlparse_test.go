@@ -11,6 +11,9 @@ import (
 // cubre su parte difícil.
 //
 // Sabotaje que la hace fallar: devolver los uint32 sin dividir por fscale.
+// arnes: archivo="internal/fleet/sysctlparse.go"
+// arnes: de="\tconv := func(off int) float64 {\n\t\treturn float64(binary.LittleEndian.Uint32(b[off:off+4])) / float64(escala)\n\t}"
+// arnes: a="\tconv := func(off int) float64 {\n\t\treturn float64(binary.LittleEndian.Uint32(b[off:off+4]))\n\t}"
 func TestParseLoadavgDivideElPuntoFijo(t *testing.T) {
 	// Un loadavg real de macOS: fscale = 2048, y cargas de 1.50 / 2.25 / 0.75.
 	const escala = 2048

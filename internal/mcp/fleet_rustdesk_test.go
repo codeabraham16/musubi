@@ -54,6 +54,9 @@ func enrolarConPantallaViva(t *testing.T, s *McpServer, proyecto, nombre, rid st
 // pantalla que puede no ser la que cree, que es justo el daño a evitar.
 //
 // Sabotaje que la hace fallar: quitar la consulta de colisión de toolFleetScreen.
+// arnes: archivo="internal/mcp/methods_pantalla.go"
+// arnes: de="\tif len(otras) > 0 || fuera > 0 {\n\t\treturn nil, rpcErrorf(codeInvalidParams, \"%s\", explicarColision(d, otras, fuera))\n\t}\n"
+// arnes: a="\tif (len(otras) > 0 || fuera > 0) && false {\n\t\treturn nil, rpcErrorf(codeInvalidParams, \"%s\", explicarColision(d, otras, fuera))\n\t}\n"
 func TestNoSeAbreLaPantallaDeUnIdQueReclamanDos(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConPantallaViva(t, s, "casa", "pc-buena", "123456789")
@@ -89,6 +92,9 @@ func TestNoSeAbreLaPantallaDeUnIdQueReclamanDos(t *testing.T) {
 //
 // Sabotaje que la hace fallar: acotar QuienMasDiceSer al projectID, o devolver los nombres de
 // otros proyectos.
+// arnes: archivo="internal/memory/sesiones.go"
+// arnes: de="\t\t`SELECT name, project_id FROM devices\n\t\t  WHERE rustdesk_id = ? AND id <> ? AND revoked = 0`,\n\t\trid, strings.TrimSpace(deviceID))\n"
+// arnes: a="\t\t`SELECT name, project_id FROM devices\n\t\t  WHERE rustdesk_id = ? AND id <> ? AND revoked = 0 AND project_id = ?`,\n\t\trid, strings.TrimSpace(deviceID), strings.TrimSpace(projectID))\n"
 func TestUnaColisionEntreTenantsSeDetectaSinNombrarLaMaquinaAjena(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConPantallaViva(t, s, "casa", "pc-gio", "999888777")
@@ -110,6 +116,9 @@ func TestUnaColisionEntreTenantsSeDetectaSinNombrarLaMaquinaAjena(t *testing.T) 
 // es normal— pero la otra explicación posible es que alguien esté mintiendo.
 //
 // Sabotaje que la hace fallar: hacer que GuardarRustdeskID sólo escriba el valor nuevo.
+// arnes: archivo="internal/memory/sesiones.go"
+// arnes: de="\t\t\t\tELSE rustdesk_id_previo END,"
+// arnes: a="\t\t\t\tELSE rustdesk_id END,"
 func TestUnIdDePantallaQueCambiaQuedaEscrito(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := enrolarConPantallaViva(t, s, "casa", "pc-gio", "111111111")

@@ -1101,6 +1101,7 @@ func TestConLaMaquinaEnLibreLosCuatroOjosSiPidenAprobacion(t *testing.T) {
 // miraba no coincidían»— sólo que un eje más allá.
 //
 // Sabotaje verificado: mover `puertaDeCuatroOjos` DEBAJO de la rama de `pide`.
+// arnes: colision_ok="TestElEjeDeConsentimientoEsUnaMatrizDeCaminosPorGrados"
 // arnes: archivo="internal/mcp/methods_shell.go"
 // arnes: de="\tif resp, rpcErr := s.puertaDeCuatroOjos(d, p, proyecto, fleet.CapShell, args.Motivo, ahora); rpcErr != nil || resp != nil {\n"
 // arnes: a="\tif consent := d.ConsentimientoEfectivo(); consent == fleet.ConsentimientoPide {\n\t\treturn s.pedirPermisoParaShell(d, p, proyecto, ahora)\n\t}\n\tif resp, rpcErr := s.puertaDeCuatroOjos(d, p, proyecto, fleet.CapShell, args.Motivo, ahora); rpcErr != nil || resp != nil {\n"

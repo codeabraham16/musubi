@@ -24,6 +24,10 @@ import (
 //
 // Sabotaje que la pone roja: volver a poner `[[ -d "$REPO/.git" ]]` en cualquier guion de deploy/.
 // ════════════════════════════════════════════════════════════════════════════════════════════
+// arnes: prueba="TestNingunGuionPreguntaSiElRepoEsUnDirectorioGit"
+// arnes: archivo="deploy/actualizar-agente-windows.sh"
+// arnes: de="git -C \"$REPO\" rev-parse --git-dir >/dev/null 2>&1 || {"
+// arnes: a="[[ -d \"$REPO/.git\" ]] || {"
 
 // gitComoDirectorio caza la pregunta rota: un test de EXISTENCIA DE DIRECTORIO sobre `.git`.
 //

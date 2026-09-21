@@ -110,6 +110,9 @@ func TestParseSymbolLineSobreGistsReales(t *testing.T) {
 // distingue de una nota que sigue valiendo).
 //
 // Sabotaje: cambiar el separador de FormatSymbols, o el prefijo `L`.
+// arnes: archivo="internal/codeintel/symbols.go"
+// arnes: de="parts = append(parts, fmt.Sprintf(\"%s L%d\", s.Ref(), s.StartLine))"
+// arnes: a="parts = append(parts, fmt.Sprintf(\"%s N%d\", s.Ref(), s.StartLine))"
 func TestFormatSymbolsYParseSymbolLineCierranElIdaYVuelta(t *testing.T) {
 	origen := []Symbol{
 		{Name: "Alpha", Kind: KindFunc, StartLine: 10, EndLine: 20},
