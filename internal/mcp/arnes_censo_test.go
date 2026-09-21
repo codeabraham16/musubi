@@ -782,6 +782,20 @@ import (
 // LAS DOS direcciones, que es lo normal cuando cada `a` destruye el `de` del otro; cuando denuncia
 // una sola, declarar la otra es afirmar que alguien miró algo que nadie miró. Se cuentan las
 // direcciones que el aviso imprime y se declaran exactamente ésas.
+//
+// Y EL CORPUS CAMBIÓ SIN QUE EL NÚMERO SE MOVIERA, el mismo 2026-09-21. Hasta ese día el censo
+// enumeraba `*_test.go` y nada más, así que este techo y la «cobertura ejecutable» eran propiedades
+// de los `_test.go` y se leían como propiedades del ÁRBOL. No lo eran: `cmd/musubi/precheck.go`
+// llevaba dos anclas que el instrumento no contaba ni podía contar, y una de ellas —«mover la
+// apertura antes de leerEventoPrecheck»— era la ÚNICA promesa de
+// `TestPrecheckNoAbreLaBaseSiNoLeToca`, que no tiene ancla propia. Es la misma forma que las dos
+// entradas de más arriba sobre los filtros por REDACCIÓN, salvo que acá el filtro era por
+// UBICACIÓN, que sale más barato de creer porque nadie lo escribe en el número.
+//
+// Con el enumerador abierto a todos los `.go` trackeados: +2 anclas de producción, −1 (la de
+// `avisoSinGrafo` era una promesa YA CUMPLIDA del lado de la prueba y se reescribió como
+// referencia; dejarla puesta contaba dos veces la misma guarda) y −1 (la de `precheckHook` se
+// mecanizó). El mismo número por cuatro movimientos y no por quietud.
 const anclasEnProsaAlDia = 2
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.

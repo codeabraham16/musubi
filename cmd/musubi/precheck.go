@@ -376,8 +376,11 @@ func esEdicion(tool string) bool {
 // —igual vas a leer el archivo, y el gist y la telemetría hablan por su cuenta—; acá el silencio
 // ocupa el lugar de «fijate quién depende de esto antes de tocarlo».
 //
-// Sabotaje: hacer que devuelva "" siempre → vuelve el mudo. Sacarle la guarda del ledger → el
-// aviso se repite en cada edición.
+// SUS DOS SABOTAJES YA ESTÁN MECANIZADOS, y del lado de la prueba: `precheck_singrafo_test.go`
+// declara «devolver "" siempre» (vuelve el mudo) y «sacarle la guarda del ledger» (el aviso se
+// repite en cada edición). Acá queda la referencia y no la promesa: escrita como promesa, el
+// censo la contaba una segunda vez y dos directivas idénticas sobre esta misma función fallan
+// igual —que es como una guarda se cuenta dos veces—.
 func avisoSinGrafo(store codeStore, key, sessionID string) string {
 	const superficie = "precheck_sin_grafo"
 	if l, err := store.LedgerAdd(sessionID, superficie, 0); err == nil {
@@ -750,6 +753,10 @@ func abrirMemoriaDelHook(root string) (storeDelHook, error) {
 // evento que no le tocaba —un Bash, un Grep, cualquier tool sin file_path— pagaba la apertura
 // completa (y, con un matcher más ancho, la pagaría en cada tool de la sesión) para devolver "".
 // Sabotaje: mover la apertura antes de leerEventoPrecheck → TestPrecheckNoAbreLaBaseSiNoLeToca.
+// arnes: prueba="TestPrecheckNoAbreLaBaseSiNoLeToca"
+// arnes: archivo="cmd/musubi/precheck.go"
+// arnes: de="\tin, aplica := leerEventoPrecheck(stdin)\n\tif !aplica {\n\t\treturn \"\"\n\t}\n\tstore, err := abrir(root)\n"
+// arnes: a="\tstore, err := abrir(root)\n\tin, aplica := leerEventoPrecheck(stdin)\n\tif !aplica {\n\t\treturn \"\"\n\t}\n"
 func precheckHook(root string, stdin io.Reader, abrir abridorDelHook, stderr io.Writer) string {
 	in, aplica := leerEventoPrecheck(stdin)
 	if !aplica {

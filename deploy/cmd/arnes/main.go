@@ -461,7 +461,7 @@ func imprimirCenso(c arnes.Censo, detalle bool) {
 	}
 
 	fmt.Printf("CENSO DE SABOTAJES DECLARADOS\n")
-	fmt.Printf("  archivos de prueba mirados : %d\n", c.Archivos)
+	fmt.Printf("  archivos `.go` mirados     : %d  (pruebas Y producción)\n", c.Archivos)
 	fmt.Printf("  anclas encontradas         : %d  (en %d archivos)\n", len(c.Anclas), len(porArchivo))
 	fmt.Printf("  ├─ mecanizadas (`arnes:`)  : %d\n", len(mec))
 	fmt.Printf("  ├─ ROTAS (directiva ilegible): %d\n", len(rot))
@@ -478,7 +478,7 @@ func imprimirCenso(c arnes.Censo, detalle bool) {
 		// VA ANTES QUE CUALQUIER OTRO NÚMERO: si estás escribiendo pruebas nuevas, el censo NO las
 		// ve, y su «0 mecanizadas» significa «todavía no las agregaste», no «no hay ninguna». Me
 		// pasó escribiendo esto.
-		fmt.Printf("\n! %d `_test.go` SIN TRACKEAR: este censo deriva de `git ls-files`, así que NO los mira.\n", len(c.SinTrackear))
+		fmt.Printf("\n! %d `.go` SIN TRACKEAR: este censo deriva de `git ls-files`, así que NO los mira.\n", len(c.SinTrackear))
 		for _, s := range c.SinTrackear {
 			fmt.Println("   ", s)
 		}
@@ -866,7 +866,13 @@ func revisarElRojo(salida, archivoAncla, pruebaDeclarada, raiz, paquete string) 
 	if !ok {
 		return "", quejaMotivoIlegible, "el motivo no nombra un `_test.go:línea`: " + primerasRunas(primera, 80)
 	}
-	if base := archivoAncla[strings.LastIndex(archivoAncla, "/")+1:]; arch != base {
+	// LA COMPROBACIÓN NO SE LE HACE A UN ANCLA DE PRODUCCIÓN, porque ahí es imposible que dé otra
+	// cosa: la aserción vive en un `_test.go` y el ancla, por definición, no. Desde que el censo
+	// mira también el código de producción, dejarla puesta imprimía una queja segura en cada una de
+	// esas anclas — y una advertencia que aparece siempre se deja de leer, que es exactamente cómo
+	// se pierde la que sí importa.
+	base := archivoAncla[strings.LastIndex(archivoAncla, "/")+1:]
+	if strings.HasSuffix(base, "_test.go") && arch != base {
 		clase = quejaOtroArchivo
 		queja = "la aserción que cayó vive en " + arch + " y el ancla está en " + base
 		return primera, clase, queja
