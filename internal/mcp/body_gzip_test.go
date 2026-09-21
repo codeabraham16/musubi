@@ -285,7 +285,7 @@ func TestPushDelPorteDeProduccionCruzaEntero(t *testing.T) {
 	}
 	s := newTestServer(t, embedding.NoopProvider{})
 	ts := httptest.NewServer(s.HTTPHandler(httpOptions{
-		reqTimeout: time.Duration(plazo) * time.Second, loopbackOnly: true}))
+		reqTimeout: time.Duration(plazo) * time.Second}))
 	t.Cleanup(ts.Close)
 
 	c, err := NewSyncClient(config.SyncConfig{CentralURL: ts.URL, AllowInsecureToken: true, RequestTimeoutSeconds: plazo})

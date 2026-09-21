@@ -3,10 +3,14 @@ package mcp
 // Transporte HTTP del servidor MCP (Track 4): expone el mismo dispatch que el stdio
 // sobre un endpoint HTTP, para usar Musubi como servicio. Es OPT-IN
 // (config.Service.Enabled). Seguridad por capas:
-//   - Bind loopback (default): sin auth obligatoria; defensa anti DNS-rebinding por
-//     validación de Host loopback + Origin local.
+//   - Sin credencial (confianza local): las puertas de PERSONA exigen Host loopback +
+//     Origin local — la defensa anti DNS-rebinding. Cuelga de que NO haya credencial, no
+//     del bind: ver `confianzaLocal` y `puertaDePersona`.
+//   - Con bearer o registro de principals: el token es el gate, y la defensa de Host no
+//     corre — el navegador de la víctima no puede fabricar un bearer, y así un proxy TLS
+//     propio (que preserva el Host del tailnet) puede pasar.
 //   - Bind no-loopback (remoto): EXIGE un bearer token (service.auth_token_env); sin él
-//     `serve` se niega a arrancar. El token es el gate de autenticación.
+//     `serve` se niega a arrancar, así que «sin credencial» implica bind loopback.
 //   - TLS opcional (service.tls_cert_file + tls_key_file).
 //
 // Modelo de concurrencia: las peticiones se SERIALIZAN sobre un mutex (línea base
@@ -108,10 +112,6 @@ type httpOptions struct {
 	reqTimeout time.Duration
 	// token, si no es vacío, exige Authorization: Bearer <token> en cada request.
 	token string
-	// loopbackOnly activa la defensa anti DNS-rebinding (Host loopback + Origin local).
-	// Se usa en modo loopback; en modo remoto el bearer token es el gate y estos checks
-	// romperían a clientes legítimos (que usan un Host no-loopback).
-	loopbackOnly bool
 	// registry, si no es nil, activa la IDENTIDAD por-principal (16.1c): cada request se
 	// autentica contra el snapshot VIGENTE del registro (o el token legacy) y el principal
 	// resuelto viaja en el ctx para la autorización por rol. Nil ⇒ modo legacy (el único
@@ -135,6 +135,57 @@ type httpOptions struct {
 	// `/mcp`: las otras siete puertas rechazaban credenciales sin dejar rastro en ningún lado.
 	metricas  *serverMetrics
 	auditoria *registroDeAuth
+}
+
+// confianzaLocal dice si esta configuración sirve las puertas de PERSONA SIN pedir credencial.
+//
+// ANTES ESTO SE DEDUCÍA DEL BIND (`loopbackOnly`, que salía de `isLoopbackHost(cfg.Addr)`), y esa
+// era la pregunta equivocada. Medido el 2026-09-20 en producción: atar el cerebro a `127.0.0.1`
+// para cerrar el puerto en claro ENCENDÍA la defensa, y el proxy TLS propio —que preserva el
+// `Host` del tailnet— empezó a cobrar 403 en `/mcp`. La misma decisión que cierra una puerta
+// prendía una guarda que deja afuera al único camino que queda.
+//
+// LA PREGUNTA QUE SÍ DECIDE ES SI HAY CREDENCIAL. El DNS-rebinding explota AUTORIDAD AMBIENTE: el
+// navegador de la víctima no puede mentir el `Host`, pero tampoco puede fabricar un bearer, y acá
+// la credencial no viaja sola (no hay cookie, ni sesión, ni identidad por IP). Donde hay registro
+// o token, la página rebindeada cobra 401 y no lee una sola respuesta. Donde NO lo hay, la
+// compuerta corre igual que siempre — y `resolveServiceAuth` es fail-closed, así que un bind que
+// sale de la máquina SIN token se niega a arrancar: "sin credencial" implica bind loopback, que es
+// exactamente el escenario que la guía de MCP cubre con Host + Origin.
+//
+// SI ALGÚN DÍA UNA PUERTA DE PERSONA ACEPTA UNA CREDENCIAL AMBIENTE —una cookie, una identidad
+// derivada de `X-Forwarded-For`, mTLS por IP— este razonamiento se cae y hay que volver a mirarlo.
+func (o httpOptions) confianzaLocal() bool { return o.registry == nil && o.token == "" }
+
+// puertaDePersona envuelve una puerta que autentica a una PERSONA con la defensa anti
+// DNS-rebinding (Host loopback + Origin local) cuando la configuración es de confianza local.
+//
+// POR QUÉ UN ENVOLTORIO Y NO UN `if` ADENTRO DE CADA HANDLER. El 2026-09-20 se midió que la
+// compuerta vivía en UNA de seis puertas de persona: con `Host: evil.example.com` y sin
+// credencial, `/mcp` daba 403 pero `/metrics`, `/api/actores` y `/api/stream` contestaban 200 —el
+// último con el feed EN VIVO— y `/api/flota` aceptaba una escritura con 202. Es el defecto
+// dominante de este repo: la guarda en N−1 de N caminos. Con el envoltorio, una puerta nueva NACE
+// con la compuerta puesta; el camino malo deja de ser algo que alguien tiene que acordarse de
+// escribir.
+//
+// LAS PUERTAS DE DISPOSITIVO NO PASAN POR ACÁ, y no es un olvido: `/fleet/*` y `/body/` las usan
+// los agentes, que llegan por el proxy con el `Host` del tailnet y autentican con su propio token
+// de dispositivo. Gatearlas dejaría a la flota incomunicada. Cada una lo declara al lado con el
+// comentario que exige `TestNingunaPuertaNaceSinDecirDeQuienEs`.
+func puertaDePersona(opt httpOptions, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if opt.confianzaLocal() {
+			if !isLoopbackHost(r.Host) {
+				http.Error(w, "forbidden: non-loopback host", http.StatusForbidden)
+				return
+			}
+			if o := r.Header.Get("Origin"); o != "" && !isLocalOrigin(o) {
+				http.Error(w, "forbidden: cross-origin", http.StatusForbidden)
+				return
+			}
+		}
+		h.ServeHTTP(w, r)
+	})
 }
 
 // autenticarPersona resuelve el principal del request y aplica el candado EN EL ORDEN CORRECTO.
@@ -232,19 +283,7 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 	mux := http.NewServeMux()
 
 	// Endpoint MCP, envuelto en observabilidad (correlation ID + métricas por resultado).
-	mux.Handle(mcpHTTPPath, withObservability(metrics, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Defensa anti DNS-rebinding SOLO en modo loopback (guía de seguridad del
-		// transporte HTTP de MCP). En remoto, el bearer token es el gate.
-		if opt.loopbackOnly {
-			if !isLoopbackHost(r.Host) {
-				http.Error(w, "forbidden: non-loopback host", http.StatusForbidden)
-				return
-			}
-			if o := r.Header.Get("Origin"); o != "" && !isLocalOrigin(o) {
-				http.Error(w, "forbidden: cross-origin", http.StatusForbidden)
-				return
-			}
-		}
+	mux.Handle(mcpHTTPPath, puertaDePersona(opt, withObservability(metrics, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Autenticación. Con registro de principals (16.1c): el bearer debe resolver a un
 		// principal (o al token legacy) — si no, 401. Sin registro (modo legacy): un único
 		// token, comparado en tiempo constante. El principal resuelto viaja en el ctx.
@@ -303,10 +342,12 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 			return
 		}
 		writeHTTPJSON(w, resp)
-	})))
+	}))))
 
 	// Liveness y readiness: sin auth (los sondea un orquestador/proxy; no exponen secretos).
+	// no es de persona: liveness sin auth ni estado, no dice nada de nadie.
 	mux.HandleFunc("/healthz", healthzHandler)
+	// no es de persona: readiness sin auth, la frontera es el tailnet.
 	mux.HandleFunc("/readyz", s.readyzHandler)
 
 	// LA PUERTA DEL DISPOSITIVO (track «Control de flota»). Autentica contra la tabla `devices`,
@@ -314,29 +355,35 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 	// persona no abre esto. La separación y su porqué están en fleet_http.go — en dos líneas:
 	// un agente corre en la superficie más expuesta de la flota, y su credencial no puede ser
 	// la llave de la memoria de la empresa. Comparte el `limiter` con /mcp a propósito.
+	// no es de persona: la usan los AGENTES con su token de dispositivo, y llegan por el proxy con el Host del tailnet.
 	mux.HandleFunc(fleetHeartbeatPath, s.handlerLatido(limiter))
 	// Y la contraparte: por acá el agente reporta cómo salió un comando (S5). Mismo almacén de
 	// credenciales, mismo limiter.
+	// no es de persona: el agente ENTREGA el resultado de un comando, con su token de dispositivo.
 	mux.HandleFunc(fleetResultPath, s.handlerResultado(limiter))
 	// La puerta del RENDIMIENTO (fase 4): salud para servicios DECLARADOS que ninguna máquina
 	// enumera —un bot, un puente—. Mismo token que el latido; ni poda ni estampa señal de vida.
+	// no es de persona: el agente reporta la salud de sus servicios, con su token de dispositivo.
 	mux.HandleFunc(fleetSaludPath, s.handlerSaludDeServicios(limiter))
 
 	// EL RELAY DE SHELL INTERACTIVA (S5b). OJO: estas tres rutas autentican PERSONAS (registro de
 	// principals), al revés que las dos de arriba, que autentican DISPOSITIVOS (tabla `devices`).
 	// Están pegadas en el mux y son puertas distintas; el detalle, en shell_relay.go.
-	mux.HandleFunc(shellOutPath, s.handlerShellOut(opt))
-	mux.HandleFunc(shellInPath, s.handlerShellIn(opt))
-	mux.HandleFunc(shellClosePath, s.handlerShellClose(opt))
+	mux.Handle(shellOutPath, puertaDePersona(opt, s.handlerShellOut(opt)))
+	mux.Handle(shellInPath, puertaDePersona(opt, s.handlerShellIn(opt)))
+	mux.Handle(shellClosePath, puertaDePersona(opt, s.handlerShellClose(opt)))
 	// Y las dos del AGENTE (S5c), que vuelven a autenticar DISPOSITIVOS. Por ellas viaja todo lo
 	// que la persona teclea, así que su guarda central no es «¿el token vale?» sino «¿esta sesión
 	// es de ESTA máquina?». Ver shell_agente_http.go.
+	// no es de persona: el AGENTE recoge lo que se tecleo, con su token de dispositivo.
 	mux.HandleFunc(shellAgenteEntradaPath, s.handlerShellAgenteEntrada(limiter, auditoriaAuth))
+	// no es de persona: el AGENTE entrega lo que imprimio el pty, con su token de dispositivo.
 	mux.HandleFunc(shellAgenteSalidaPath, s.handlerShellAgenteSalida(limiter, auditoriaAuth))
 
 	// Auto-update del cuerpo por la malla: sirve manifest + binarios desde bodyDir, sin
 	// auth (la frontera es el tailnet, como /readyz). Solo si está configurado.
 	if opt.bodyDir != "" {
+		// no es de persona: canal de auto-update del cuerpo, lo consume musubi fetch desde la malla.
 		mux.HandleFunc("/body/", bodyUpdateHandler(opt.bodyDir))
 	}
 
@@ -345,7 +392,7 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 	// opt.token, así que en el setup multi-tenant recomendado (principals.yaml, sin token legacy) el
 	// token quedaba "" y /metrics caía ABIERTO en el bind del tailnet. Ahora usa la MISMA regla que /mcp:
 	// con registry, exige un principal válido; con token legacy, exige el bearer.
-	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/metrics", puertaDePersona(opt, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		deny := func() {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -389,19 +436,19 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 		// cerebro no sirve TLS.
 		s.renderCertificadoTLS(&b, ahora)
 		_, _ = w.Write([]byte(b.String()))
-	})
+	})))
 
 	// /api/actores — el CENSO: quién llama al cerebro, del ledger histórico. Es la contraparte
 	// de /api/stream: el riel es el PRESENTE (quién está llamando ahora) y esto es la HISTORIA
 	// (cuánto llamó cada uno). El panel necesita las dos: sin la historia, un actor que trabajó
 	// todo el día y se calló hace un minuto no existe. Ver actores.go.
-	mux.HandleFunc("/api/actores", s.handlerActores(opt))
+	mux.Handle("/api/actores", puertaDePersona(opt, s.handlerActores(opt)))
 
 	// /api/flota — la telemetría de las máquinas de la flota (flota.go): cada daemon local con
 	// sync empuja acá su trabajo (nunca su sondeo, nunca contenido) y el central lo publica en su
 	// propio feed con origen "flota". Así el panel del central muestra a las terminales
 	// trabajando EN VIVO, no sólo lo que le llega por sync.
-	mux.HandleFunc("/api/flota", s.handlerFlota(opt))
+	mux.Handle("/api/flota", puertaDePersona(opt, s.handlerFlota(opt)))
 
 	// /api/stream — el FEED EN VIVO por SSE (livefeed.go). Cada invocación de tool sale acá en el
 	// instante en que termina: qué tool, cómo salió, cuánto tardó y de quién fue.
@@ -417,7 +464,7 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 	// header Authorization, y la alternativa —el token en la query string— lo deja escrito en los
 	// logs de acceso y en el historial del navegador. Con fetch + ReadableStream el bearer viaja
 	// donde tiene que viajar.
-	mux.HandleFunc("/api/stream", func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/api/stream", puertaDePersona(opt, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", "GET")
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -520,7 +567,7 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 				}
 			}
 		}
-	})
+	})))
 
 	return mux
 }
@@ -826,7 +873,7 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 	}
 	srv := &http.Server{
 		Addr:    cfg.Addr,
-		Handler: s.HTTPHandler(httpOptions{reqTimeout: timeout, token: token, loopbackOnly: loopback, registry: resolver, bodyDir: bodyDir}),
+		Handler: s.HTTPHandler(httpOptions{reqTimeout: timeout, token: token, registry: resolver, bodyDir: bodyDir}),
 		// Timeouts contra slow-loris y conexiones colgadas. WriteTimeout deja margen
 		// sobre el budget por request para no cortar una respuesta legítima a mitad.
 		ReadHeaderTimeout: 10 * time.Second,

@@ -17,7 +17,7 @@ import (
 
 func TestHTTPBearerAuth(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
-	ts := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second, token: "s3cr3t", loopbackOnly: true}))
+	ts := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second, token: "s3cr3t"}))
 	t.Cleanup(ts.Close)
 
 	body := `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`

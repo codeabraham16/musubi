@@ -229,7 +229,7 @@ func TestStreamExigeCredencial(t *testing.T) {
 // L-VIVO-9 · el camino completo por HTTP: backlog primero, después los eventos en vivo.
 func TestStreamEmiteBacklogYLuegoEnVivo(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
-	ts := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second, loopbackOnly: true}))
+	ts := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second}))
 	defer ts.Close()
 
 	// Un evento ANTES de conectarse: tiene que venir en el backlog.
@@ -299,7 +299,7 @@ func TestStreamEmiteBacklogYLuegoEnVivo(t *testing.T) {
 // mandar todo eso por el tailnet para tirarlo al llegar.
 func TestStreamPuedeDejarFueraElSondeo(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
-	ts := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second, loopbackOnly: true}))
+	ts := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second}))
 	defer ts.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

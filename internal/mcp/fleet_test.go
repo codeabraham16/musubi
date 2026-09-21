@@ -40,7 +40,7 @@ func servidorConFlota(t *testing.T) (*McpServer, *httptest.Server, string, strin
 
 	const tokenPersona = "token-de-una-persona"
 	ts := httptest.NewServer(s.HTTPHandler(httpOptions{
-		reqTimeout: 10 * time.Second, token: tokenPersona, loopbackOnly: true,
+		reqTimeout: 10 * time.Second, token: tokenPersona,
 	}))
 	t.Cleanup(ts.Close)
 	return s, ts, tokenDevice, tokenPersona
@@ -423,7 +423,7 @@ func listarFlota(t *testing.T, s *McpServer, proyecto string) []map[string]any {
 func servidorHTTP(t *testing.T, s *McpServer) *httptest.Server {
 	t.Helper()
 	ts := httptest.NewServer(s.HTTPHandler(httpOptions{
-		reqTimeout: 10 * time.Second, token: "token-de-una-persona", loopbackOnly: true,
+		reqTimeout: 10 * time.Second, token: "token-de-una-persona",
 	}))
 	t.Cleanup(ts.Close)
 	return ts

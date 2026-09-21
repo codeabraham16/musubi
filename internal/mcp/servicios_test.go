@@ -776,7 +776,7 @@ func TestElAgenteSeEnteraDeQuePasoConSuInventario(t *testing.T) {
 func servidorHTTPDeFlota(t *testing.T, s *McpServer) *httptest.Server {
 	t.Helper()
 	ts := httptest.NewServer(s.HTTPHandler(httpOptions{
-		reqTimeout: 10 * time.Second, token: "token-de-una-persona", loopbackOnly: true,
+		reqTimeout: 10 * time.Second, token: "token-de-una-persona",
 	}))
 	t.Cleanup(ts.Close)
 	return ts

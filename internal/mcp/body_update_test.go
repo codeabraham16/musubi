@@ -18,7 +18,7 @@ import (
 func newBodyHTTPServer(t *testing.T, bodyDir string) *httptest.Server {
 	t.Helper()
 	s := newTestServer(t, embedding.NoopProvider{})
-	ts := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second, loopbackOnly: true, bodyDir: bodyDir}))
+	ts := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second, bodyDir: bodyDir}))
 	t.Cleanup(ts.Close)
 	return ts
 }

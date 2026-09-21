@@ -20,7 +20,7 @@ import (
 func newHTTPTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	s := newTestServer(t, embedding.NoopProvider{})
-	ts := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second, loopbackOnly: true}))
+	ts := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second}))
 	t.Cleanup(ts.Close)
 	return ts
 }
