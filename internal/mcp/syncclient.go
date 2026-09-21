@@ -82,6 +82,10 @@ func NewSyncClient(cfg config.SyncConfig) (*SyncClient, error) {
 		}
 		token = v
 	}
+	nombre, err := nombreTLSDelSync(cfg)
+	if err != nil {
+		return nil, err
+	}
 	timeout := cfg.RequestTimeoutSeconds
 	if timeout <= 0 {
 		timeout = 30
@@ -94,8 +98,38 @@ func NewSyncClient(cfg config.SyncConfig) (*SyncClient, error) {
 		// 2026-09-20 se arreglaron los seis de cmd/musubi. Sin ServerName, el día que
 		// central_url pase a https contra una IP el sync muere con un error de certificado
 		// que no nombra la causa — y el outbox deja de drenar en silencio.
-		http: cerebro.Cliente(cerebro.NombreTLS(), time.Duration(timeout)*time.Second, nil),
+		//
+		// Push, PushGraph, Pull, PushFlota y callCentral —por donde pasa todo el arsenal— salen
+		// por este mismo c.http: son los cinco `c.http.Do` del paquete, y no hay otro constructor.
+		http: cerebro.Cliente(nombre, time.Duration(timeout)*time.Second, nil),
 	}, nil
+}
+
+// nombreTLSDelSync decide contra qué nombre se verifica el certificado del central.
+//
+// LA CLAVE DEL CONFIG GANA, y es la que existe para esto. El sync saca su URL SÓLO de
+// `sync.central_url`, así que el nombre tiene que poder vivir al lado: quien escribe la IP del
+// tailnet en el config escribe el nombre en la línea de abajo, y el daemon lo lee sin depender de
+// qué variables heredó el proceso que lo lanzó. Antes de esta clave la única vía era
+// MUSUBI_BRAIN_TLS_NAME, y un daemon que no la heredara discaba la IP sin SNI (Go no lo manda
+// para una IP): medido contra el cerebro en :10000, `tailscale serve` corta con «tls: internal
+// error», el fallo se clasifica transitorio y las filas 'shared' quedan pending para siempre.
+//
+// Sin la clave se cae a `cerebro.NombreTLS()` —el ÚNICO lector de la variable; acá no se lee
+// otra vez— para no romper a quien ya la exporta. Y sin ninguna de las dos, "" ⇒ el host de la URL.
+//
+// Un valor con esquema, puerto o barra se RECHAZA como permanente, y no por prolijidad: un
+// `tls_server_name: https://nodo…` llegaría al handshake como nombre imposible, fallaría como error
+// de red y se reintentaría para siempre. Rechazado acá, el arranque del daemon lo grita una vez.
+func nombreTLSDelSync(cfg config.SyncConfig) (string, error) {
+	n := strings.TrimSpace(cfg.TLSServerName)
+	if n == "" {
+		return cerebro.NombreTLS(), nil
+	}
+	if strings.ContainsAny(n, ":/ \t") {
+		return "", fmt.Errorf("%w: sync.tls_server_name tiene que ser un nombre de host pelado, sin esquema ni puerto (ej. musubi-server.tail89e295.ts.net): %q", errPermanent, cfg.TLSServerName)
+	}
+	return n, nil
 }
 
 // syncRPCRequest es el sobre JSON-RPC 2.0 que se emite por fila. id = obs_id (no notificación:

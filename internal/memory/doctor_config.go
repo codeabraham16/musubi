@@ -90,6 +90,11 @@ func diferenciasDeSync(dirGobierna, dirSombra string) []string {
 	if a.Sync.CentralURL != b.Sync.CentralURL {
 		dif = append(dif, fmt.Sprintf("sync.central_url: %q acá vs %q allá", a.Sync.CentralURL, b.Sync.CentralURL))
 	}
+	// El nombre TLS cambia el comportamiento tanto como la URL: con central_url por IP, decide si el
+	// handshake pasa o si el outbox se queda en pending para siempre.
+	if a.Sync.TLSServerName != b.Sync.TLSServerName {
+		dif = append(dif, fmt.Sprintf("sync.tls_server_name: %q acá vs %q allá", a.Sync.TLSServerName, b.Sync.TLSServerName))
+	}
 	if a.Sync.AuthTokenEnv != b.Sync.AuthTokenEnv {
 		dif = append(dif, fmt.Sprintf("sync.auth_token_env: %q acá vs %q allá", a.Sync.AuthTokenEnv, b.Sync.AuthTokenEnv))
 	}

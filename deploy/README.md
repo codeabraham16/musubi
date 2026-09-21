@@ -135,6 +135,12 @@ curl -sS https://<nodo>.tail<xxxx>.ts.net:7717/readyz
 MUSUBI_BRAIN_URL=https://100.x.y.z:7717
 MUSUBI_BRAIN_TLS_NAME=<nodo>.tail<xxxx>.ts.net
 
+# 4b. En cada proyecto con sync saliente: el sync lee su URL SÓLO de .musubi/config.yaml, así
+#     que el nombre va ahí, en la línea de abajo (la variable del paso 4 es sólo el respaldo)
+sync:
+  central_url: https://100.x.y.z:<puerto>
+  tls_server_name: <nodo>.tail<xxxx>.ts.net
+
 # 5. Prometheus: scheme https en el job `musubi`
 # 6. Cerrar la migración exigiéndola, o vuelve a aflojarse sola
 MUSUBI_SSH=<host> MUSUBI_EXIGIR_TLS=1 ./deploy/verificar-despliegue.sh

@@ -103,3 +103,27 @@ func TestElDoctorDiceCuandoSeCorreConDefaults(t *testing.T) {
 		t.Fatalf("tiene que explicar que corre con defaults: %q / %s", c.Status, c.Message)
 	}
 }
+
+// EL NOMBRE TLS TAMBIÉN DECIDE, y el doctor lo tiene que ver. Con `central_url` por IP, que el
+// config de la sombra diga otro `tls_server_name` —o ninguno— es la diferencia entre un outbox que
+// drena y uno pending para siempre. Si la comparación lo ignora, quien diagnostique abriendo el
+// otro archivo lee la misma URL y concluye que el sync está bien configurado.
+//
+// Sabotaje que la hace fallar: que la comparación de la sombra no mire el nombre.
+// arnes: archivo="internal/memory/doctor_config.go"
+// arnes: de="\tif a.Sync.TLSServerName != b.Sync.TLSServerName {"
+// arnes: a="\tif false && a.Sync.TLSServerName != b.Sync.TLSServerName {"
+func TestElDoctorVeUnNombreTLSDistintoEnLaSombra(t *testing.T) {
+	home := t.TempDir()
+	fijarHome(t, home)
+	const base = "sync:\n  enabled: true\n  central_url: https://100.79.126.62:10000\n  auth_token_env: MUSUBI_TOKEN\n"
+	escribirConfig(t, home, base)
+
+	proyecto := t.TempDir()
+	escribirConfig(t, proyecto, base+"  tls_server_name: musubi-server.tail89e295.ts.net\n")
+
+	c := memory.CheckConfigQueGobierna(proyecto)
+	if c.Status != "warning" || !strings.Contains(c.Message, "sync.tls_server_name") {
+		t.Fatalf("los dos configs difieren SÓLO en el nombre TLS y el doctor no lo dijo; dio %q: %s", c.Status, c.Message)
+	}
+}

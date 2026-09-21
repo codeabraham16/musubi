@@ -8,6 +8,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
+  de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
+  sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,
+  así que `sync.central_url` se escribe con la IP. Discando una IP, Go no manda SNI y `tailscale
+  serve` corta el handshake con `remote error: tls: internal error`; el fallo se clasifica
+  transitorio y las filas `shared` quedan `pending` para siempre, sin pasar nunca a dead. El sync
+  saca su URL **sólo** de `.musubi/config.yaml`, y el nombre sólo podía venir de
+  `MUSUBI_BRAIN_TLS_NAME`, una variable que el daemon hereda o no según quién lo lanzó. Ahora:
+
+  ```yaml
+  sync:
+    central_url: https://100.79.126.62:10000
+    tls_server_name: musubi-server.tail89e295.ts.net
+  ```
+
+  La clave gana; sin ella sigue valiendo `MUSUBI_BRAIN_TLS_NAME` (leída por su único lector,
+  `cerebro.NombreTLS`), y sin ninguna de las dos el nombre sale del host de la URL, como siempre.
+  Sólo se toca `ServerName`: la verificación sigue entera. Un valor con esquema, puerto o barra
+  (`https://nodo…`, `nodo…:10000`) se rechaza al construir el cliente como error **permanente**, en
+  vez de fallar en cada handshake como error de red. El `doctor` compara también esta clave entre
+  el config que gobierna y su sombra. *Medido con un doble que se porta como `tailscale serve`
+  —certificado sólo para el nombre, handshake cortado sin SNI— discando `127.0.0.1`: sin la clave la
+  entrega cae transitoria con el mismo `tls: internal error` y el servidor ve un ClientHello sin SNI;
+  con la clave pasa y ve el nombre.*
 - **La compuerta de guiones ahora CONSTRUYE el comando, y con eso la guarda de alcance pasó de
   preguntar N cosas a preguntar una** (A127, cerrado). Las dos mitades de la equivalencia —quien
   ejecuta una shell pasa por la compuerta, y quien pasa por la compuerta ejecuta una shell— se
