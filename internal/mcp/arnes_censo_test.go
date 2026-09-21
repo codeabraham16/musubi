@@ -552,7 +552,29 @@ import (
 // la otra renombraba el job a `alertmanager-apagado`, que SIGUE CONTENIENDO «alertmanager» — y la
 // prueba busca por subcadena. Un renombre no es un borrado si el nombre viejo sobrevive adentro del
 // nuevo.
-const anclasEnProsaAlDia = 218
+//
+// Y DE 218 A 200 EL 2026-09-21: las dieciocho anclas del LATIDO Y EL INVENTARIO DE LA FLOTA
+// —`latido_una_tx_test.go`, `flota_test.go`, `fleet_vidared_test.go` y `fleet_renombrar_test.go`—.
+// 18 de 18 en rojo, y el lote entró SIN una sola hueca: es el primero en el que el diseño acertó de
+// entrada, y no por suerte.
+//
+// LO QUE CAMBIÓ ES EL MÉTODO: VERIFICAR LOS LITERALES ANTES DE APLICAR NADA. El guion de aplicación
+// ahora desescapa cada `de` —DOS veces, una por su propia fuente y otra por el formato de la
+// directiva— y cuenta sus apariciones en el archivo destino; si alguno no es único, aborta sin
+// tocar el árbol. Los lotes anteriores gastaban tres o cuatro vueltas de aplicar → validar →
+// corregir en unicidad; éste, ninguna.
+//
+// TRES PAREJAS DE `colision_ok` EN UN SOLO LOTE, y las tres son la misma forma: una LÍNEA que dos
+// pruebas miran desde ángulos opuestos. El autorreporte del latido lo cortan el techo de
+// transacciones y el inventario; `proyectosParaLeer` lo cortan «no pude leer la lista» y «la lista
+// vino truncada»; y el autorreporte además choca con la guarda de que sólo toca la fila del token.
+// Cuando una línea concentra varios invariantes, las colisiones no son un problema del arnés: son
+// el mapa de cuántas cosas dependen de esa línea.
+//
+// Y UN SABOTAJE QUE NO COMPILÓ, quinta cara: `if false {` sobre una condición deja SIN USAR las
+// variables que la condición leía. El corte que compila las conserva —`if !hay && v == X && false`—
+// y dice lo mismo.
+const anclasEnProsaAlDia = 200
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
