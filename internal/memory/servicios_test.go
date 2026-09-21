@@ -92,7 +92,7 @@ func TestElAltaSobreUnaMaquinaRevocadaNoRevelaQueExistio(t *testing.T) {
 //
 // Sabotaje: sacar el `AND device_id = ?` del UPDATE de ReportarServicios → el reporte de A pisa
 // la salud del servicio de B.
-// arnes: colision_ok="TestElServicioDeclaradoAManoNoResucitaPorqueLaMaquinaLoSigaViendo"
+// arnes: colision_ok="TestElServicioDeclaradoAManoNoResucitaPorqueLaMaquinaLoSigaViendo TestUnServicioDeclaradoQueLaMaquinaReportaSigueSiendoDeclarado"
 // arnes: archivo="internal/memory/servicios.go"
 // arnes: de="\t\t\t  WHERE name = ? AND device_id = ? AND (revoked = 0 OR declared = 0)`,\n\t\t\tahora.UTC().Format(time.RFC3339), salud, salud, r.Clase, r.Clase, r.Nombre, deviceID)\n"
 // arnes: a="\t\t\t  WHERE name = ? AND (revoked = 0 OR declared = 0)`,\n\t\t\tahora.UTC().Format(time.RFC3339), salud, salud, r.Clase, r.Clase, r.Nombre)\n"
@@ -639,7 +639,7 @@ func TestLoQuePodoLaAusenciaVuelveConLaPresencia(t *testing.T) {
 //
 // Sabotaje que la hace fallar: cambiar el WHERE del UPDATE por `AND (revoked = 0 OR 1 = 1)`, o
 // sea sacarle el `declared = 0` a la condición de resurrección.
-// arnes: colision_ok="TestUnaMaquinaNoPuedeReportarLosServiciosDeOtra"
+// arnes: colision_ok="TestUnaMaquinaNoPuedeReportarLosServiciosDeOtra TestUnServicioDeclaradoQueLaMaquinaReportaSigueSiendoDeclarado"
 // arnes: archivo="internal/memory/servicios.go"
 // arnes: de="\t\t\t  WHERE name = ? AND device_id = ? AND (revoked = 0 OR declared = 0)`,\n"
 // arnes: a="\t\t\t  WHERE name = ? AND device_id = ? AND (revoked = 0 OR 1 = 1)`,\n"

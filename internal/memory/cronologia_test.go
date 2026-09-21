@@ -67,7 +67,7 @@ func TestLaCronologiaIncluyeLoQueAcabaDePasar(t *testing.T) {
 //
 // Sabotaje: quitar `AND creado >= ? AND creado < ?` de hechosDeComandos y filtrar en Go → esta
 // prueba falla con `limite: 2` y tres hechos nuevos encima del viejo.
-// arnes: colision_ok="TestLaVentanaSeAplicaEnLaConsultaYNoDespues"
+// arnes: colision_ok="TestLaVentanaSeAplicaEnLaConsultaYNoDespues TestLaCronologiaNoCruzaTenants"
 // arnes: archivo="internal/memory/cronologia.go"
 // arnes: de="\trows, err := e.db.Query(\n\t\t`SELECT `+columnasComando+` FROM device_commands\n\t\t  WHERE project_id = ? AND device_id = ? AND creado >= ? AND creado < ?\n"
 // arnes: a="\trows, err := e.db.Query(\n\t\t`SELECT `+columnasComando+` FROM device_commands\n\t\t  WHERE project_id = ? AND device_id = ? AND (creado >= ? OR 1=1) AND (creado < ? OR 1=1)\n"
@@ -108,7 +108,7 @@ func TestLaVentanaViajaEnLaConsultaYNoEnGo(t *testing.T) {
 // Sabotaje: sacar `project_id = ?` del WHERE → pedir la cronología con el id de una máquina de
 // otro tenant la devuelve entera. El id de un device es un uuid, pero un uuid filtrado en una
 // bitácora anterior no puede convertirse en la llave de otro tenant.
-// arnes: colision_ok="TestLaVentanaSeAplicaEnLaConsultaYNoDespues"
+// arnes: colision_ok="TestLaVentanaSeAplicaEnLaConsultaYNoDespues TestLaVentanaViajaEnLaConsultaYNoEnGo"
 // arnes: archivo="internal/memory/cronologia.go"
 // arnes: de="\t\t  WHERE project_id = ? AND device_id = ? AND creado >= ? AND creado < ?\n\t\t  ORDER BY creado DESC LIMIT ?`,\n\t\tprojectID, deviceID, desde, hasta, tope)\n"
 // arnes: a="\t\t  WHERE device_id = ? AND creado >= ? AND creado < ?\n\t\t  ORDER BY creado DESC LIMIT ?`,\n\t\tdeviceID, desde, hasta, tope)\n"

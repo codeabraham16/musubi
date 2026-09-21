@@ -221,7 +221,47 @@ type Directiva struct {
 	// cosmética: se midió que un `:línea` se pudre solo. La respuesta en prosa que #494 dejó
 	// escrita nombraba `colector_test.go:152`, y al aterrizar ese mismo PR corrió el ancla a la
 	// 166. Un nombre de prueba no se mueve cuando alguien agrega un comentario arriba.
+	//
+	// LLEVA VARIOS NOMBRES, SEPARADOS POR ESPACIOS, y eso NO es comodidad: un ancla se puede pisar
+	// con más de una, y con un solo nombre la respuesta era estructuralmente imposible de dar. Se
+	// midió el 2026-09-21 mecanizando setenta y ocho anclas de una vez: el `WHERE` de la cronología
+	// lo cubren TRES guardas —la ventana del dominio, la ventana del envoltorio y el tenant— y el
+	// UPDATE de `servicios.go`, CUATRO. Contestarle a una dejaba las otras dos gritando para
+	// siempre, que es exactamente el «aviso verdadero que nadie puede contestar» que este campo
+	// vino a evitar. Quedaron cinco pares sin respuesta por el techo de la clave, no por descuido.
+	//
+	// Se separan por espacios como `env`, y cada nombre se valida por separado: uno que no se pise
+	// con nadie se denuncia como rancio aunque sus hermanos sí contesten. Declarar de más es la
+	// misma falla que declarar de menos — un «ya lo miré» sobre algo que nadie miró.
 	ColisionOk string
+}
+
+// ColisionesOk devuelve los nombres declarados en `colision_ok`, ya separados.
+//
+// Vive acá y no en cada llamador para que la forma de separarlos sea UNA: un `Fields` escrito dos
+// veces es un derivado a mano, y el día que uno acepte comas y el otro no, la guarda y su censo
+// dejan de hablar del mismo conjunto sin que nada se ponga rojo.
+func (d Directiva) ColisionesOk() []string { return strings.Fields(d.ColisionOk) }
+
+// ContestaA dice si esta declaración le responde a `prueba`.
+//
+// Es una función y no un `slices.Contains` en el llamador por una razón medida: el sabotaje que
+// custodia esa línea la reemplaza por una que no mira los nombres, y con `slices` usado ahí y en
+// ningún otro lado el sabotaje dejaba el import colgado y NO COMPILABA — un rojo de compilación no
+// prueba nada sobre la guarda. Con la pregunta adentro de un método, el sabotaje es una
+// sustitución limpia y su rojo significa lo que tiene que significar.
+//
+// El nombre vacío nunca contesta: una directiva sin `prueba` no es a quien se le puede responder.
+func (d Directiva) ContestaA(prueba string) bool {
+	if prueba == "" {
+		return false
+	}
+	for _, n := range d.ColisionesOk() {
+		if n == prueba {
+			return true
+		}
+	}
+	return false
 }
 
 // Censo es lo que el árbol declara, contado.
@@ -816,11 +856,13 @@ func directivaDe(lineas []lineaCom, rel, pruebaDerivada string) (*Directiva, str
 	// número y la respuesta pasa a apuntar a otro lado, sin que nada se ponga rojo. Se midió
 	// pasando: la respuesta en prosa de #494 nombraba `colector_test.go:152` y el propio PR que la
 	// escribió movió esa ancla a la 166.
-	if d.ColisionOk != "" && !esNombreDePrueba(d.ColisionOk) {
-		quejas = append(quejas, fmt.Sprintf("`colision_ok` trae %q, y tiene que ser el NOMBRE de la "+
-			"otra prueba (`TestLoQueSea`), no un `archivo:línea`: un número de línea se corre solo "+
-			"en cuanto alguien agrega una línea arriba, y la respuesta quedaría apuntando a otro lado",
-			d.ColisionOk))
+	for _, nombre := range d.ColisionesOk() {
+		if !esNombreDePrueba(nombre) {
+			quejas = append(quejas, fmt.Sprintf("`colision_ok` trae %q, y tiene que ser el NOMBRE de la "+
+				"otra prueba (`TestLoQueSea`), no un `archivo:línea`: un número de línea se corre solo "+
+				"en cuanto alguien agrega una línea arriba, y la respuesta quedaría apuntando a otro lado. "+
+				"Si contestás a varias, van separadas por ESPACIOS", nombre))
+		}
 	}
 	if len(quejas) > 0 {
 		return d, "", quejas
@@ -992,8 +1034,12 @@ func Colisiones(c Censo) []string {
 	// Las respuestas que de verdad taparon una colisión. Lo que quede declarado y NO esté acá es una
 	// respuesta a algo que ya no pasa: se denuncia, porque una respuesta rancia es peor que ninguna
 	// —dice «esto ya se miró» sobre algo que nadie miró—.
+	// SE RASTREA NOMBRE POR NOMBRE Y NO SITIO POR SITIO. Un ancla puede contestarle a varias, y si
+	// se marcara «usada» la declaración entera, un nombre rancio quedaría tapado por sus hermanos:
+	// bastaría que UNO de los tres se pise de verdad para que los otros dos pasen sin que nadie los
+	// relea. La clave es `sitio\x00nombre`, que es el par que de verdad contesta o no contesta.
 	usadas := map[string]bool{}
-	declaradas := map[string]string{} // sitio → a qué prueba dice contestarle
+	declaradas := map[string]string{} // sitio\x00nombre → sitio (para poder nombrarlo al quejarse)
 	for archivo, anclas := range porArchivo {
 		if len(anclas) < 2 {
 			continue
@@ -1007,8 +1053,8 @@ func Colisiones(c Censo) []string {
 				continue // idem: eso es de `Validar`
 			}
 			sitio := fmt.Sprintf("%s:%d", x.Archivo, x.Linea)
-			if x.Directiva.ColisionOk != "" {
-				declaradas[sitio] = x.Directiva.ColisionOk
+			for _, nombre := range x.Directiva.ColisionesOk() {
+				declaradas[sitio+"\x00"+nombre] = sitio
 			}
 			despues := strings.Replace(string(b), x.Directiva.De, x.Directiva.A, 1)
 			for _, y := range anclas {
@@ -1021,8 +1067,8 @@ func Colisiones(c Censo) []string {
 				// LA RESPUESTA, SI ESTÁ Y ES PARA ESTA COLISIÓN. Tiene que nombrar a la prueba que
 				// se pisa con ésta y no a cualquier otra: contestar «ya lo miré» señalando a un
 				// tercero sería apagar el aviso sin haberlo mirado.
-				if x.Directiva.ColisionOk != "" && x.Directiva.ColisionOk == y.Directiva.Prueba {
-					usadas[sitio] = true
+				if x.Directiva.ContestaA(y.Directiva.Prueba) {
+					usadas[sitio+"\x00"+y.Directiva.Prueba] = true
 					continue
 				}
 				males = append(males, fmt.Sprintf(
@@ -1040,8 +1086,9 @@ func Colisiones(c Censo) []string {
 	// `colision_ok` queda, nadie lo relee, y lo que era una medición se vuelve una afirmación
 	// heredada. Es la forma de siempre —lo que se midió una vez se cita para siempre— y sale barato
 	// denunciarla acá, que es donde alguien está mirando las colisiones.
-	for sitio, aQuien := range declaradas {
-		if !usadas[sitio] {
+	for clave, sitio := range declaradas {
+		if !usadas[clave] {
+			aQuien := clave[strings.IndexByte(clave, 0)+1:]
 			males = append(males, fmt.Sprintf(
 				"%s declara `colision_ok=%q` y NO se pisa con esa prueba — la respuesta quedó rancia. "+
 					"O la otra guarda cambió y hay que releer las dos, o la colisión ya no existe y la "+
