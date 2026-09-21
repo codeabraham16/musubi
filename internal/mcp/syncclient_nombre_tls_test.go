@@ -302,6 +302,32 @@ func TestElSyncRechazaUnNombreTLSConEsquemaOPuerto(t *testing.T) {
 	}
 }
 
+// TestElSyncRechazaUnaIPComoNombreTLS — una IP en tls_server_name es el error más probable.
+//
+// Quien lee «el sync va por IP» tiende a poner la IP también en el nombre. Go no manda SNI para
+// una IP (hostnameInSNI devuelve ""), así que tailscale serve cortaría con «tls: internal error»:
+// el mismo fallo transitorio, para siempre, que esta clave vino a cerrar. La validación de esquema
+// y puerto no la veía, porque una IPv4 no tiene «:» ni «/». La encontró el re-revisor.
+//
+// Sabotaje que la hace fallar: sacar el chequeo de IP.
+// arnes: archivo="internal/mcp/syncclient.go"
+// arnes: de="\tif net.ParseIP(n) != nil {"
+// arnes: a="\tif false && net.ParseIP(n) != nil {"
+func TestElSyncRechazaUnaIPComoNombreTLS(t *testing.T) {
+	t.Setenv(cerebro.EnvNombreTLS, "")
+	for _, ip := range []string{"100.79.126.62", "127.0.0.1"} {
+		_, err := NewSyncClient(cfgSyncPorIP("https://100.79.126.62:10000", ip))
+		if err == nil {
+			t.Errorf("tls_server_name %q se aceptó: Go no manda SNI para una IP y el sync quedaría "+
+				"pendiente para siempre", ip)
+			continue
+		}
+		if !errors.Is(err, errPermanent) || !strings.Contains(err.Error(), "tls_server_name") {
+			t.Errorf("tls_server_name %q: el error tiene que ser permanente y nombrar la clave, dijo: %v", ip, err)
+		}
+	}
+}
+
 // TestElSyncRechazaUnNombreTLSMalEscritoEnLaVariable — el respaldo pasa por la misma aduana.
 //
 // Sin la clave del config, el nombre sale de MUSUBI_BRAIN_TLS_NAME. La primera versión validaba

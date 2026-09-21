@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -135,6 +136,12 @@ func nombreTLSDelSync(cfg config.SyncConfig) (string, error) {
 	}
 	if strings.ContainsAny(n, ":/ \t") {
 		return "", fmt.Errorf("%w: %s tiene que ser un nombre de host pelado, sin esquema ni puerto (ej. musubi-server.tail89e295.ts.net): %q", errPermanent, origen, n)
+	}
+	// Una IPv4 no tiene «:» ni «/», así que la línea de arriba no la ve. Y es el error más
+	// probable: quien lee «el sync va por IP» pone la IP también acá. Go no manda SNI para una IP
+	// (hostnameInSNI devuelve ""), así que el handshake cortaría como si no hubiera clave.
+	if net.ParseIP(n) != nil {
+		return "", fmt.Errorf("%w: %s tiene que ser el NOMBRE del certificado, no una IP (la IP va en central_url): %q", errPermanent, origen, n)
 	}
 	return n, nil
 }
