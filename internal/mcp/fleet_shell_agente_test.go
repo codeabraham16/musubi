@@ -39,6 +39,10 @@ func enrolarTierAConShell(t *testing.T, s *McpServer, proyecto, nombre string) (
 // escribe ahí. Es la peor fuga posible de este track, porque lo que se lee son contraseñas.
 //
 // Sabotaje que la hace fallar: quitar el `ses.DeviceID != d.ID` de canalDelAgente.
+// arnes: archivo="internal/mcp/shell_agente_http.go"
+// arnes: de="\tif ses.DeviceID != d.ID {"
+// arnes: a="\tif false {"
+// arnes: colision_ok="TestLaMaquinaDuenaSiRecogeSusTeclas"
 func TestUnaMaquinaNoPuedeEngancharseALaSesionDeOtra(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	victima, _ := enrolarTierAConShell(t, s, "casa", "pc-gio")
@@ -87,6 +91,7 @@ func TestUnaMaquinaNoPuedeEngancharseALaSesionDeOtra(t *testing.T) {
 // arnes: archivo="internal/mcp/shell_agente_http.go"
 // arnes: de="\tif ses.DeviceID != d.ID {"
 // arnes: a="\tif true {"
+// arnes: colision_ok="TestUnaMaquinaNoPuedeEngancharseALaSesionDeOtra"
 func TestLaMaquinaDuenaSiRecogeSusTeclas(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d, token := enrolarTierAConShell(t, s, "casa", "pc-gio")
@@ -123,6 +128,9 @@ func TestLaMaquinaDuenaSiRecogeSusTeclas(t *testing.T) {
 // engancha nada, ni aunque el cerebro le haya ofrecido la sesión por error.
 //
 // Sabotaje que la hace fallar: quitar el chequeo de Permite(CapShell) de deviceDeRequest.
+// arnes: archivo="internal/mcp/shell_agente_http.go"
+// arnes: de="\tif !d.Permite(fleet.CapShell) {"
+// arnes: a="\tif false {"
 func TestUnaMaquinaSinShellConcedidaNoEnganchaNada(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	res, e := call(t, s, "musubi_fleet_enroll", map[string]any{
@@ -167,6 +175,9 @@ func TestUnaMaquinaSinShellConcedidaNoEnganchaNada(t *testing.T) {
 // ────────────────────────────────────────────────────────────────────────────────────────────
 //
 // Sabotaje que la hace fallar: quitar la aserción de tipo de canalDelAgente.
+// arnes: archivo="internal/mcp/shell_agente_http.go"
+// arnes: de="\tagente, ok := canal.(*fleet.CanalAgente)\n\tif !ok {"
+// arnes: a="\tagente, ok := canal.(*fleet.CanalAgente)\n\tif !ok && agente == nil && false {"
 func TestUnCanalQueNoEsDeAgenteNoSeEngancha(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d, _ := enrolarTierAConShell(t, s, "casa", "pc-gio")
@@ -202,6 +213,9 @@ func TestUnCanalQueNoEsDeAgenteNoSeEngancha(t *testing.T) {
 // una sesión donde `tail -f` escupe líneas está viva aunque nadie teclee.
 //
 // Sabotaje que la hace fallar: no llamar a TocarSesionShell en handlerShellAgenteSalida.
+// arnes: archivo="internal/mcp/shell_agente_http.go"
+// arnes: de="\t\t\tif err := s.engine.TocarSesionShell(id, time.Now()); err != nil {"
+// arnes: a="\t\t\tif err := error(nil); err != nil {"
 func TestLaSalidaQueSubeElAgenteLlegaYMantieneVivaLaSesion(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d, token := enrolarTierAConShell(t, s, "casa", "pc-gio")
@@ -261,6 +275,9 @@ func TestLaSalidaQueSubeElAgenteLlegaYMantieneVivaLaSesion(t *testing.T) {
 // cuida estas dos cabeceras es esto.
 //
 // Sabotaje que la hace fallar: borrar el Set de nosniff en shell_agente_http.go o en shell_relay.go.
+// arnes: archivo="internal/mcp/shell_agente_http.go"
+// arnes: de="\t\tw.Header().Set(\"X-Content-Type-Options\", \"nosniff\")"
+// arnes: a="\t\t_ = w"
 func TestLosCuerposDePtyProhibenElOlfateoDeTipo(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d, tokenAgente := enrolarTierAConShell(t, s, "casa", "pc-gio")
@@ -333,6 +350,9 @@ func revisarCabecerasDePty(t *testing.T, quien string, h http.Header) {
 //
 // Sabotaje que la hace fallar: borrar el bloque `if agente, esDeAgente := canal.(*fleet.CanalAgente)`
 // de handlerShellOut — vuelve el 200 vacío sin cabecera, indistinguible de una terminal quieta.
+// arnes: archivo="internal/mcp/shell_relay.go"
+// arnes: de="\t\tif agente, esDeAgente := canal.(*fleet.CanalAgente); esDeAgente && !agente.Enganchado() {"
+// arnes: a="\t\tif agente, esDeAgente := canal.(*fleet.CanalAgente); false && esDeAgente && !agente.Enganchado() {"
 func TestUnaShellDeTierASinAgenteSeDistingueDeUnaTerminalQuieta(t *testing.T) {
 	// La espera real son 25 s y acá no se puede pagar eso: se achica para esta prueba y se
 	// restaura al salir. Es la única razón por la que `esperaSalidaShell` es var y no const.
