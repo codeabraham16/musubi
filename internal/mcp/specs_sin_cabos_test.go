@@ -596,6 +596,10 @@ func TestNingunCaboDeFlotaSeQuedaSinRegistro(t *testing.T) {
 // Sabotaje que la hace fallar: borrar las filas de cualquiera de las dos tablas, o dejar vacía la
 // celda de estado de una fila.
 // ════════════════════════════════════════════════════════════════════════════════════════════
+// arnes: prueba="TestElRegistroDeAbiertosSigueEnPie"
+// arnes: archivo="specs/control-de-flota/ABIERTO.md"
+// arnes: de="Hoy macOS mide disco, carga, uptime y CPUs. | **S4c** |"
+// arnes: a="Hoy macOS mide disco, carga, uptime y CPUs. |  |"
 
 func TestElRegistroDeAbiertosSigueEnPie(t *testing.T) {
 	texto := registroDeAbiertos(t)
@@ -702,6 +706,10 @@ func TestElRegistroDeAbiertosSigueEnPie(t *testing.T) {
 // Sabotaje que la hace fallar: ponerle `| — (cerrado) |`, `| hecho |` o
 // `| **gio** — falta el redespliegue. Por lo demás quedó cerrado. |` a cualquier fila de la tabla 1.
 // ════════════════════════════════════════════════════════════════════════════════════════════
+// arnes: prueba="TestNingunaFilaDeLaTabla1SeDeclaraCerrada"
+// arnes: archivo="specs/control-de-flota/ABIERTO.md"
+// arnes: de="**macOS sigue bloqueado**: gio no tiene Mac por ahora. | **S4c** |"
+// arnes: a="**macOS sigue bloqueado**: gio no tiene Mac por ahora. | hecho |"
 
 var (
 	// LAS CUATRO FORMAS DE ASIGNAR UN CABO VIVO. Son las que el archivo usa; agregar una quinta es
@@ -1451,6 +1459,10 @@ func filasVivas(t *testing.T, texto string) (map[string]int, []string) {
 //
 // Sabotaje que la hace fallar: duplicar cualquier fila de la tabla 2 con el número de otra.
 // NINGÚN NÚMERO DEL RANGO EN USO PUEDE DESAPARECER.
+// arnes: prueba="TestNingunNumeroDeRegistroSeUsaDosVeces"
+// arnes: archivo="specs/control-de-flota/ABIERTO.md"
+// arnes: de="| B1 | **`gopsutil`** |"
+// arnes: a="| B2 | fila duplicada a proposito para el arnes | no es un cabo real | — |\n| B1 | **`gopsutil`** |"
 //
 // ────────────────────────────────────────────────────────────────────────────────────────────
 // EL PISO TIPEADO NO CUBRÍA LO QUE DECÍA CUBRIR. Cada tabla tenía un piso de filas escrito a
@@ -1676,6 +1688,9 @@ func TestNingunNumeroDeRegistroSeUsaDosVeces(t *testing.T) {
 // registro prometía tenerlo.
 //
 // Sabotaje que la hace fallar: citar **A999** en cualquier fila de las tablas.
+// arnes: archivo="specs/control-de-flota/ABIERTO.md"
+// arnes: de="| B3 | **Tools para administrar los grants por red** |"
+// arnes: a="| B3 | **Tools para administrar los grants por red** (lo decide **A999**) |"
 func TestUnCaboVivoNoApuntaAUnNumeroQueElRegistroNoDefine(t *testing.T) {
 	texto := registroDeAbiertos(t)
 	conFila, vivo := filasVivas(t, texto)
@@ -1740,6 +1755,10 @@ func estaDefinido(texto, num string) bool {
 // cualquier fila, quitarle la barra de cierre a una fila que no sea la última de su tabla, o meter
 // una línea en blanco entre dos filas.
 // ════════════════════════════════════════════════════════════════════════════════════════════
+// arnes: prueba="TestTodaFilaDeAbiertoTieneLasCeldasDeSuEncabezado"
+// arnes: archivo="specs/control-de-flota/ABIERTO.md"
+// arnes: de="o si gio cambia el autoritativo.** |"
+// arnes: a="o si gio cambia el autoritativo.** | **decidido** |"
 
 func TestTodaFilaDeAbiertoTieneLasCeldasDeSuEncabezado(t *testing.T) {
 	crudo := registroDeAbiertos(t)

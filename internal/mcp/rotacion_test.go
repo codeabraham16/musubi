@@ -23,6 +23,9 @@ import (
 // Sabotaje que la hace fallar: completar la rotación dentro de AbrirRotacion (el viejo muere
 // antes de que el agente sepa nada), o no llamar a CompletarRotacion en el latido (el viejo no
 // muere nunca y rotar no rota).
+// arnes: archivo="internal/memory/rotacion.go"
+// arnes: de="\t\treturn \"\", fmt.Errorf(\"error al abrir la rotación de %q: %w\", deviceID, err)\n\t}"
+// arnes: a="\t\treturn \"\", fmt.Errorf(\"error al abrir la rotación de %q: %w\", deviceID, err)\n\t}\n\tif err := e.CompletarRotacion(deviceID); err != nil {\n\t\treturn \"\", err\n\t}"
 func TestLosDosTokensValenHastaQueElAgenteUsaElNuevo(t *testing.T) {
 	s, ts, tokenViejo, _ := servidorConFlota(t)
 
@@ -85,6 +88,9 @@ func TestLosDosTokensValenHastaQueElAgenteUsaElNuevo(t *testing.T) {
 //
 // Sabotaje que la hace fallar: que AbandonarRotacionesVencidas complete la rotación en vez de
 // descartarla.
+// arnes: archivo="internal/memory/rotacion.go"
+// arnes: de="func (e *DbEngine) AbandonarRotacionesVencidas(ahora time.Time) (int64, error) {"
+// arnes: a="func (e *DbEngine) AbandonarRotacionesVencidas(ahora time.Time) (int64, error) {\n\tif ahora.Year() > 0 {\n\t\treturn 0, nil\n\t}"
 func TestUnaRotacionVencidaSeAbandonaYElTokenViejoSigueValiendo(t *testing.T) {
 	s, ts, tokenViejo, _ := servidorConFlota(t)
 	d, _, _ := s.engine.DevicePorNombre("casa", "pc-gio")
@@ -111,8 +117,19 @@ func TestUnaRotacionVencidaSeAbandonaYElTokenViejoSigueValiendo(t *testing.T) {
 // ser un llavero — es exactamente lo que costó A74 con la contraseña de pantalla, y la salida es
 // la misma: el secreto vive en memoria del cerebro.
 //
-// Sabotaje que la hace fallar: guardar el token en claro en `token_sha256_nuevo` para poder
-// repetirlo sin el mapa en memoria.
+// ESTA GUARDA MIRA LA SUPERFICIE DE LECTURA DEL DOMINIO, NO LA BASE — medido el 2026-09-21.
+// Se mecanizó el sabotaje que declara —guardar `nuevo` en claro en vez de `fleet.HashToken(nuevo)`
+// dentro de AbrirRotacion— y el barrido devolvió VERDE. El motivo es concreto: lo único que esta
+// prueba inspecciona es el JSON de `ListarDevices`, y `fleet.Device` NO TIENE ningún campo que
+// lleve el token de la rotación, así que la columna puede contener la credencial en claro sin que
+// nada de lo que se serializa cambie.
+//
+// O sea: lo que la prueba custodia de verdad es que la REPRESENTACIÓN del device no exponga el
+// token —que es cierto y vale—, y NO que en reposo haya hashes. Para cubrir eso haría falta leer
+// la columna `token_sha256_nuevo` directamente, y este paquete no tiene por dónde: el motor no
+// expone la consulta cruda. Queda dicho en vez de fingido.
+// Sabotaje que la hace fallar: guardar el token en claro en `token_sha256_nuevo`.
+// arnes: no_mecanizable="el sabotaje declarado —token en claro en token_sha256_nuevo— deja esta prueba en VERDE porque sólo inspecciona el JSON de ListarDevices, y fleet.Device no tiene campo para ese token. Cubrir el invariante de verdad exige leer la columna directamente, y el motor no expone una consulta cruda a este paquete. Medido con el arnés el 2026-09-21."
 func TestElTokenDeLaRotacionNoQuedaEnClaroEnLaBase(t *testing.T) {
 	s, _, _, _ := servidorConFlota(t)
 	d, _, _ := s.engine.DevicePorNombre("casa", "pc-gio")
@@ -138,6 +155,9 @@ func TestElTokenDeLaRotacionNoQuedaEnClaroEnLaBase(t *testing.T) {
 // afuera al agente. Es la misma clase de acto que enrolar o revocar.
 //
 // Sabotaje: sacar el `if !p.isAdmin()` de toolFleetRotate.
+// arnes: archivo="internal/mcp/methods_rotacion.go"
+// arnes: de="\tif !p.isAdmin() {"
+// arnes: a="\tif false {"
 func TestRotarExigeAdmin(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
