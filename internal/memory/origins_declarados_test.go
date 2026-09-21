@@ -50,6 +50,9 @@ func declararGist(t *testing.T, e *DbEngine, path, symbols string) {
 // símbolo top-level llamado X» para todo lo que no fuera Go. La memoria no se vencía nunca ahí.
 //
 // Sabotaje: sacar el fallback a declarados de symbolFingerprintCon → vuelve el error.
+// arnes: archivo="internal/memory/origins.go"
+// arnes: de="\tif fuente != fuenteDerivada && !hayMatch(syms, symbol) && declaradosDe != nil {\n"
+// arnes: a="\tif fuente != fuenteDerivada && !hayMatch(syms, symbol) && declaradosDe != nil && false {\n"
 func TestSePuedeAnclarAUnSimboloDeclaradoEnUnArchivoSinExtractor(t *testing.T) {
 	engine, _ := engineConArchivos(t, map[string]string{"supabase/migrations/alertas.sql": contenidoSQL})
 	declararGist(t, engine, "supabase/migrations/alertas.sql", "create table alertas L2; evaluar_alertas L6-11; limpiar_alertas L13-18")
@@ -141,6 +144,9 @@ func TestEnGoElExtractorLeGanaALoDeclarado(t *testing.T) {
 //
 // Sabotaje: hacer que originFingerprint ignore el prefijo del fingerprint guardado y use siempre
 // fuenteAuto → esta prueba se pone roja.
+// arnes: archivo="internal/memory/origins.go"
+// arnes: de="\tfuente := fuenteAuto\n\tswitch {\n\tcase guardado == \"\":\n\t\t// Captura: se elige la mejor fuente disponible y el prefijo queda escrito.\n\tcase strings.HasPrefix(guardado, prefijoDeclarado):\n\t\tfuente = fuenteDeclarada\n\tdefault:\n\t\tfuente = fuenteDerivada\n\t}\n"
+// arnes: a="\tfuente := fuenteAuto\n\tif guardado != \"\" {\n\t\tfuente = fuenteDerivada\n\t}\n"
 func TestElAnclaDeclaradaNoSeVuelveRanciaCuandoElExtractorEmpiezaAEntender(t *testing.T) {
 	engine, root := engineConArchivos(t, map[string]string{"supabase/migrations/alertas.sql": contenidoSQL})
 	declararGist(t, engine, "supabase/migrations/alertas.sql", "evaluar_alertas L6-11; limpiar_alertas L13-18")

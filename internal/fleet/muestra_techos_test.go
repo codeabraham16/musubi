@@ -23,6 +23,9 @@ import (
 // de la que sobre.
 //
 // Sabotaje que la hace fallar: devolver `m.MemTotal > 0 &&` a la condición.
+// arnes: archivo="internal/fleet/muestra.go"
+// arnes: de="\tif m.MemLibre != nil && *m.MemLibre > m.MemTotal {"
+// arnes: a="\tif m.MemLibre != nil && m.MemTotal > 0 && *m.MemLibre > m.MemTotal {"
 func TestLaRamLibreTieneTechoAunqueElTotalLlegueEnCero(t *testing.T) {
 	casos := []struct {
 		nombre string
@@ -95,6 +98,9 @@ func muestraMinimaValida() Muestra {
 // (D7) mientras el latido sigue valiendo: estar viva y saber medirse son cosas distintas.
 //
 // Sabotaje que la hace fallar: sacar el `if m.Tomada.IsZero()` de Valida.
+// arnes: archivo="internal/fleet/muestra.go"
+// arnes: de="\tif m.Tomada.IsZero() {"
+// arnes: a="\tif m.Tomada.IsZero() && false {"
 func TestUnaMuestraSinHoraNoSeGuarda(t *testing.T) {
 	sinHora := muestraMinimaValida()
 	sinHora.Tomada = time.Time{}
@@ -132,6 +138,9 @@ func TestUnaMuestraSinHoraNoSeGuarda(t *testing.T) {
 // eso ahora hay una.
 //
 // Sabotaje que la hace fallar: cambiar el número esperado por la resta cruda (63882345600).
+// arnes: archivo="internal/fleet/muestra_techos_test.go"
+// arnes: de="\tconst saturado = 9223372036 // maxInt64 nanosegundos, en segundos"
+// arnes: a="\tconst saturado = 63882345600 // la resta cruda contra el año 1"
 func TestLaAntiguedadDeUnaMuestraSinHoraSatura(t *testing.T) {
 	// La MISMA cuenta que hace musubi_fleet_metrics: ahora.Sub(m.Tomada).Seconds().
 	var sinHora Muestra

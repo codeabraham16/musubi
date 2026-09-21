@@ -208,6 +208,7 @@ func TestUnaOperacionDePantallaNoSeLeMuestraAQuienSoloPuedeEjecutar(t *testing.T
 //
 // Sabotaje: traer las últimas N filas y filtrar por fecha en Go → con `limite: 3` y cinco hechos
 // nuevos encima, el hecho viejo NUNCA aparece.
+// arnes: colision_ok="TestLaCronologiaNoCruzaTenants"
 // arnes: archivo="internal/memory/cronologia.go"
 // arnes: de="\t\t`SELECT `+columnasComando+` FROM device_commands\n\t\t  WHERE project_id = ? AND device_id = ? AND creado >= ? AND creado < ?\n\t\t  ORDER BY creado DESC LIMIT ?`,\n\t\tprojectID, deviceID, desde, hasta, tope)"
 // arnes: a="\t\t`SELECT * FROM (SELECT `+columnasComando+` FROM device_commands\n\t\t  WHERE project_id = ? AND device_id = ?\n\t\t  ORDER BY creado DESC LIMIT ?) WHERE creado >= ? AND creado < ?`,\n\t\tprojectID, deviceID, tope, desde, hasta)"

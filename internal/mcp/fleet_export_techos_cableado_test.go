@@ -99,6 +99,10 @@ func flotaDesdeYAML(t *testing.T, texto string) config.FleetConfig {
 //
 // Sabotaje que la pone roja: en http.go, cambiar `s.techoServiciosPorProyecto` por
 // `serviciosPorProyectoDefault` (o por cualquier otra cosa que no sea el campo).
+// arnes: colision_ok="TestElTechoDeAprobacionesQueCortaEsElDeLaPerillaYNoLaConstante"
+// arnes: archivo="internal/mcp/http.go"
+// arnes: de="\t\trenderFlota(&b, s.engine, quien, ahora, s.sondaIntervalo, s.version, s.vidaDeRedDe, s.techoServiciosPorProyecto, s.techoAprobacionesPorProyecto)"
+// arnes: a="\t\trenderFlota(&b, s.engine, quien, ahora, s.sondaIntervalo, s.version, s.vidaDeRedDe, serviciosPorProyectoDefault, s.techoAprobacionesPorProyecto)"
 func TestLaPerillaGobiernaElMetricsDeVerdadYNoSoloAlRenderFlota(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()
@@ -169,6 +173,9 @@ func bloqueDeTruncado(salida string) string {
 // que sea un techo». Subir el default por config.go no la rompe; apagarlo sí.
 //
 // Sabotaje que la pone roja: `techoServiciosPorProyecto: 0` en el constructor.
+// arnes: archivo="internal/mcp/server.go"
+// arnes: de="\t\ttechoServiciosPorProyecto:    config.Default().Fleet.EffectiveServicesPerProjectExport(),"
+// arnes: a="\t\ttechoServiciosPorProyecto:    0,"
 func TestElServidorNaceConTechoYNoSinTecho(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	esperado := config.Default().Fleet.EffectiveServicesPerProjectExport()
@@ -202,6 +209,9 @@ func TestElServidorNaceConTechoYNoSinTecho(t *testing.T) {
 //
 // Sabotaje que la pone roja: en fleet_otlp.go, cambiar `s.techoServiciosPorProyecto` por
 // `serviciosPorProyectoDefault` en el argumento de `techo_servicios_por_proyecto`.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="\t\t\t\"techo_servicios_por_proyecto\", s.techoServiciosPorProyecto,"
+// arnes: a="\t\t\t\"techo_servicios_por_proyecto\", serviciosPorProyectoDefault,"
 func TestElAvisoDelEmpujeImprimeElNumeroDelTechoQueCorto(t *testing.T) {
 	destino := nuevoReceptor(t, http.StatusOK)
 	s := prepararEmpuje(t, destino.URL, registroDePrueba(principalDePrometheus()), nil)
@@ -691,6 +701,13 @@ func literalIzquierdo(e ast.Expr) (string, bool) {
 // El sabotaje de arriba cae en (2): un exportador con el techo apagado no corta en ningún
 // número, así que 64 —que es el techo de PROYECTOS y está en la línea con todo derecho— no
 // puede ser el techo de servicios de nadie.
+// Sabotaje que la pone roja: hacer que la rama `techoServicios <= 0` de
+// `describirTechoDeServicios` devuelva «de 64 servicios (techo …, DESACTIVADO)» — el MISMO que
+// la versión anterior de esta guarda dejaba pasar en verde, y que con la comparación por
+// diferencia ya no entra.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\tif techoServicios <= 0 {\n\t\treturn \"el techo de servicios, que está DESACTIVADO (`fleet.services_per_project_export` negativo), así que este punto no puede encenderse\"\n\t}"
+// arnes: a="\tif techoServicios <= 0 {\n\t\treturn fmt.Sprintf(\"de %d servicios (techo `fleet.services_per_project_export`, DESACTIVADO)\", proyectosParaExportar)\n\t}"
 func TestElHelpYElComentarioImprimenElTechoVigenteYNoLaConstante(t *testing.T) {
 	// DOS techos vigentes distintos entre sí y distintos de las constantes del exportador. Que
 	// sean chicos es a propósito: el techo se mide CORRIENDO el recorte, y para eso hay que dar

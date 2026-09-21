@@ -142,6 +142,10 @@ func nombraLaSerie(expr, serie string) bool {
 // deploy/musubi-alerts-flota.yml. También falla si alguien la deja nombrando la serie sólo en la
 // `nota:` —las anotaciones no entran acá— o si le cambia la expresión por una que mire el NIVEL
 // en vez de la CAÍDA.
+// arnes: colision_ok="TestElUmbralDeCadaAlertaSobreUnaSerieGrabadaEsAlcanzable"
+// arnes: archivo="deploy/musubi-alerts-flota.yml"
+// arnes: de="      - alert: CoberturaDelSlaDeServiciosSeCayo\n        expr: delta(musubi:service_up:cobertura30d[6h]) < -0.05\n"
+// arnes: a="      - alert: CoberturaDelSlaDeServiciosSeCayo\n        expr: delta(musubi:project_service_up:cobertura30d[6h]) < -0.05\n"
 func TestCadaCoberturaDeSlaPorProyectoTieneUnaAlertaQueLaLee(t *testing.T) {
 	grabadas := grabacionesDelSla(t)
 	alertas := alertasDeTodosLosArchivos(t)
@@ -276,6 +280,9 @@ func verificarFormaDeLaAlertaDeCobertura(t *testing.T, alerta, expr, serie strin
 //
 // Sabotaje que la hace fallar: renombrar `musubi:project_service_up:cobertura30d` en
 // musubi-recording.yml y no tocar la alerta.
+// arnes: archivo="deploy/musubi-recording.yml"
+// arnes: de="      - record: musubi:service_up:cobertura30d\n        expr: count_over_time(musubi:service_up:norm[30d]) / 8640\n"
+// arnes: a="      - record: musubi:service_up:cobertura_mensual\n        expr: count_over_time(musubi:service_up:norm[30d]) / 8640\n"
 func TestNingunaAlertaLeeUnaSerieDeSlaQueNadieGraba(t *testing.T) {
 	grabadas := grabacionesDelSla(t)
 	alertas := alertasDeTodosLosArchivos(t)

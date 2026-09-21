@@ -106,6 +106,9 @@ func (a almacenQueNoSeDejaLeer) RotacionesAbiertas() ([]memory.RotacionAbierta, 
 // truncado y lo ilegible de `proyectosVisibles`, y `renderRotacionesAbiertas` LOGUEABA el nombre
 // de la serie `kind="unreadable"` y después hacía `return` sin encenderla. Una guarda que cubre
 // 4 de 6 barridos es la forma que este repo persigue con nombre propio.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\t\t\t\"error\", err, \"serie\", nombreExportTruncado+`{kind=\"unreadable\"}`)\n\t\treturn true"
+// arnes: a="\t\t\t\"error\", err, \"serie\", nombreExportTruncado+`{kind=\"unreadable\"}`)\n\t\treturn false"
 func TestUnPedazoDeLaFlotaQueNoSePudoLeerNoSeInformaComoSinRecorte(t *testing.T) {
 	for _, rompe := range []string{"proyectos", "devices", "servicios", "aprobaciones", "bajas", "rotaciones"} {
 		t.Run(rompe, func(t *testing.T) {
@@ -179,6 +182,9 @@ func TestUnPedazoDeLaFlotaQueNoSePudoLeerNoSeInformaComoSinRecorte(t *testing.T)
 // Sabotaje que la pone roja (verificado): en `renderBajasRecientes`, volver el `ilegible = true`
 // de la rama de error de `ListarDevices` al `continue // lo ilegible ya lo cuenta el barrido
 // principal` que había — el comentario que era falso justo para estos proyectos.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\t\t\tilegible = true\n\t\t\tlogx.Error(\"export de flota: no se pudieron listar las máquinas de un proyecto al buscar bajas recientes; sus bajas NO se anuncian\",\n\t\t\t\t\"project\", proy, \"error\", err, \"serie\", nombreExportTruncado+`{kind=\"unreadable\"}`)\n\t\t\tcontinue"
+// arnes: a="\t\t\tlogx.Error(\"export de flota: no se pudieron listar las máquinas de un proyecto al buscar bajas recientes; sus bajas NO se anuncian\",\n\t\t\t\t\"project\", proy, \"error\", err, \"serie\", nombreExportTruncado+`{kind=\"unreadable\"}`)\n\t\t\tcontinue"
 func TestElProyectoQueSeApagoEnteroYNoSeDejaLeerLoDeclara(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	montaje := time.Now()
@@ -312,6 +318,9 @@ func TestConTodoLegibleElExportDeclaraQueNoHuboNadaIlegible(t *testing.T) {
 // busca como texto: se parsean los selectores de la expresión y se mira si ALGUNO acota `kind`,
 // venga como `=`, `!=`, `=~` o `!~`, con espacios o sin ellos, en el selector de la métrica o en
 // otro. Lo que no se puede parsear es rojo con su motivo, no verde.
+// arnes: archivo="deploy/musubi-alerts.yml"
+// arnes: de="        expr: musubi_fleet_export_truncated == 1"
+// arnes: a="        expr: musubi_fleet_export_truncated{kind=~\"projects|services\"} == 1"
 func TestLaAlertaDeTruncadoNoFiltraPorKindYPorEsoCubreAlIlegible(t *testing.T) {
 	reglas, _ := cargarReglas(t, "musubi-alerts.yml")
 	expr := exprDeLaUnicaAlerta(t, reglas, "ExportacionTruncada")
