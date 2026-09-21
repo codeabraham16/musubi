@@ -106,6 +106,9 @@ func TestSecretoDeEnvElArchivoLeGanaALaVariable(t *testing.T) {
 // Es el hermano de `cmd/musubi/agent_token_fuente_test.go`, que ya fija esto del lado del agente.
 //
 // Sabotaje que la hace fallar: que el error del archivo caiga a la variable en vez de propagarse.
+// arnes: archivo="internal/config/secreto_env.go"
+// arnes: de="\t\treturn \"\", fmt.Errorf(\"%s%s apunta a %q y no se pudo leer: %w\", nombre, SufijoArchivoDeSecreto, ruta, err)"
+// arnes: a="\t\treturn strings.TrimSpace(os.Getenv(nombre)), nil"
 func TestSecretoDeEnvConArchivoRotoNoCaeALaVariable(t *testing.T) {
 	t.Setenv("PRUEBA_TOKEN", "de-la-variable")
 	t.Setenv("PRUEBA_TOKEN_FILE", filepath.Join(t.TempDir(), "no-existe"))
@@ -231,6 +234,9 @@ func TestConfigSombraNoSeDelataASiMismo(t *testing.T) {
 // sin credencial y sin aviso.
 //
 // Sabotaje que la hace fallar: volver a poner `os.Getenv(cfg.AuthTokenEnv)` en cualquier lado.
+// arnes: archivo="internal/mcp/http.go"
+// arnes: de="\t\ttoken, err = config.SecretoDeEnv(cfg.AuthTokenEnv)"
+// arnes: a="\t\ttoken, err = os.Getenv(cfg.AuthTokenEnv), error(nil)"
 func TestNadieLeeUnTokenNombradoSinElRespaldoDelArchivo(t *testing.T) {
 	var revisados int
 	var culpables []string
@@ -301,6 +307,9 @@ func TestNadieLeeUnTokenNombradoSinElRespaldoDelArchivo(t *testing.T) {
 // credenciales cuando lo honesto es decir que no se sabe cuál se quiso poner.
 //
 // Sabotaje verificado: quitar la guarda → el caso de dos líneas devuelve el valor con `\n` adentro.
+// arnes: archivo="internal/config/secreto_env.go"
+// arnes: de="\tif strings.ContainsAny(secreto, \"\\n\\r\") {"
+// arnes: a="\tif false && strings.ContainsAny(secreto, \"\\n\\r\") {"
 func TestUnArchivoDeSecretoConVariasLineasSeRechazaConSuMotivo(t *testing.T) {
 	dir := t.TempDir()
 	escribir := func(nombre, contenido string) string {
@@ -402,6 +411,20 @@ func TestUnArchivoDeSecretoConVariasLineasSeRechazaConSuMotivo(t *testing.T) {
 // Encontrado el 2026-09-05 auditando A101.
 //
 // Sabotaje que la hace fallar: volver a escribir esa frase en cualquiera de ellos.
+//
+// NO SE PUEDE MECANIZAR, Y EL MOTIVO ES LA TRAMPA QUE ESTA MISMA PRUEBA YA DOCUMENTA. El arnés
+// sabotea por SUSTITUCIÓN DE TEXTO LITERAL, así que la directiva tiene que llevar la frase escrita
+// entera — y las directivas viven en un comentario de este archivo, que es un `.go` trackeado y por
+// lo tanto uno de los que esta guarda barre. Medido el 2026-09-21: al escribir la directiva, el
+// único culpable del árbol pasó a ser este archivo, y el arnés se abstuvo con «CONTROL EN ROJO: la
+// prueba ya falla SIN el sabotaje, así que su rojo no prueba nada». Es la misma razón por la que
+// `frase` se arma por partes veinte líneas más abajo, un nivel más arriba: allá el peligro era el
+// comentario, acá es el corpus del arnés.
+//
+// No hay dónde esconder la directiva: la guarda mira `.go`, `.md`, `.sh`, `.yml`, `.ps1` y `.cmd`,
+// y una directiva sólo puede vivir en un comentario de un `_test.go`. Una guarda que busca un
+// literal en el repo entero no puede tener su sabotaje escrito en el repo.
+// arnes: no_mecanizable="el sabotaje ES la frase que la guarda busca, y la directiva que la lleve queda dentro del árbol que barre: el control se pone rojo antes de aplicar nada (medido 2026-09-21)"
 func TestNadieDiceQueElArchivoDeTokensTraeElMasNuevoPrimero(t *testing.T) {
 	raiz := filepath.Join("..", "..")
 	// LA FRASE SE ARMA POR PARTES A PROPÓSITO. Escrita entera acá, este archivo sería su

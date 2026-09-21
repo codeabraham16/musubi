@@ -683,7 +683,33 @@ import (
 // EL LOTE SE CORTÓ EN OCHO dejando afuera `internal/config/secreto_env_test.go`, que tiene cuatro:
 // dos de las suyas BARREN EL REPO buscando una frase en vez de sabotear una línea de código, y eso
 // pide leerlas con calma en vez de apurarlas al final de un lote.
-const anclasEnProsaAlDia = 163
+// Y DE 163 A 159 EL 2026-09-21: las cuatro de EL SECRETO QUE SALE DEL ENTORNO
+// —`internal/config/secreto_env_test.go`—, o sea de dónde sale una credencial y qué pasa cuando el
+// archivo que la tiene está roto. Tres en rojo y UNA que NO SE PUEDE MECANIZAR, con un motivo que
+// vale más que el ancla.
+//
+// EL SABOTAJE ES LA FRASE QUE LA GUARDA BUSCA, Y LA DIRECTIVA QUE LA LLEVE CAE ADENTRO DEL ÁRBOL
+// QUE BARRE. `TestNadieDiceQueElArchivoDeTokensTraeElMasNuevoPrimero` recorre todos los `.go`,
+// `.md`, `.sh`, `.yml`, `.ps1` y `.cmd` que git lista y denuncia al que afirme «el más nuevo
+// primero» del archivo de tokens. El arnés sabotea por sustitución de TEXTO LITERAL, así que la
+// directiva tiene que llevar la frase escrita entera — y las directivas viven en un comentario de
+// un `_test.go`, que es exactamente uno de los archivos que la guarda mira. Al escribirla, el único
+// culpable del árbol pasó a ser el archivo de la directiva, y el arnés se abstuvo con «CONTROL EN
+// ROJO: la prueba ya falla SIN el sabotaje, así que su rojo no prueba nada».
+//
+// Abstenerse fue lo correcto y el diagnóstico salió de ahí: un `grep` de la frase sobre el repo
+// devolvió UN solo archivo, el de la directiva. O sea que el instrumento no falló — detectó que el
+// corpus estaba contaminado por su propia declaración, que es el modo de falla que más cuesta ver.
+//
+// Y ES LA MISMA TRAMPA QUE ESA PRUEBA YA DOCUMENTA, UN NIVEL MÁS ARRIBA: veinte líneas más abajo
+// arma la frase por partes (`"el más " + "nuevo primero"`) porque «escrita entera acá, este archivo
+// sería su propio culpable: la guarda se disparó con su propia documentación en la primera
+// corrida». Allá el peligro era el comentario de la prueba; acá es el corpus del arnés. No hay
+// dónde esconder la directiva, porque una guarda que busca un literal en el repo entero no puede
+// tener su sabotaje escrito en el repo. Queda `no_mecanizable` con eso como motivo — no por
+// comodidad, que es el riesgo que esta constante ya se anotó más arriba, sino porque el camino malo
+// es irrepresentable.
+const anclasEnProsaAlDia = 159
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
