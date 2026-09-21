@@ -1174,6 +1174,58 @@ if [ -n "$PUERTO_CEREBRO" ]; then
     | tr -d ' ' | grep -o "\"Proxy\":\"http://127\.0\.0\.1:$PUERTO_CEREBRO\"" | head -1)"
 fi
 
+# ── LA SONDA QUE FALTABA: ESTE INFORME NUNCA TOCÓ EL PROXY ──────────────────────────────────
+#
+# Hasta el 2026-09-21 la postura de TLS se decidía leyendo el CONFIG y nada más. El 2026-09-20 se
+# ató el cerebro a loopback en producción y `/mcp` POR EL PROXY empezó a contestar 403: atar el
+# bind ENCIENDE la defensa anti DNS-rebinding, que exige un `Host` loopback, y `tailscale serve`
+# preserva el `Host` del tailnet. La flota siguió viva —el latido no pasa por /mcp— pero el sync de
+# memoria de todos los clientes MCP se cortó.
+#
+# Y ESTE INFORME LO HABRÍA CANTADO VERDE, porque el config decía exactamente lo que él quería ver:
+# `addr` loopback + un handler de `tailscale serve`. La postura era correcta sobre el papel y el
+# camino real estaba roto. Leer configuración no es medir alcance.
+#
+# SE SONDEA SIN CREDENCIAL A PROPÓSITO: así la sonda corre donde este guion ya corre, sin token.
+#   401 → la puerta VIVE y la custodia el bearer. Es la respuesta BUENA.
+#   429 → lo mismo, con el candado por IP activo por fallos previos; no es un fallo de esta sonda.
+#   403 → la compuerta se está comiendo al proxy. Es el fallo exacto del 2026-09-20.
+#   000 → no se llegó: el proxy no contesta, o no hay nadie detrás.
+#
+# UN 401 DE ACÁ NO PUEDE BLOQUEAR A NADIE, y se comprobó antes de escribir esto: el candado de auth
+# se consulta SÓLO dentro del camino de fallo (`candado.fail` + `candado.locked` en
+# internal/mcp/http.go), así que un cliente con credencial válida nunca lo toca.
+#
+# EL FRENTE SE DERIVA del mismo JSON del que salió `PROXY_TLS`. Clavar el nombre del tailnet acá
+# sería una copia que envejece sola el día que el nodo cambie de nombre.
+SONDA_MCP=""
+FRENTE_TLS=""
+if [ -n "$PROXY_TLS" ] && [ -n "$PUERTO_CEREBRO" ]; then
+  FRENTE_TLS="$(corre_alla 'tailscale serve status --json 2>/dev/null' | tr -d ' \n' \
+    | grep -o "\"[^\"]*\":{\"Handlers\":{\"/\":{\"Proxy\":\"http://127\.0\.0\.1:$PUERTO_CEREBRO\"}}}" \
+    | sed 's/":{.*//;s/^"//' | head -1)"
+  if [ -n "$FRENTE_TLS" ]; then
+    SONDA_MCP="$(corre_alla "curl -s -o /dev/null -w '%{http_code}' --max-time 8 -X POST 'https://$FRENTE_TLS/mcp' -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}' 2>/dev/null")"
+  fi
+fi
+
+# EL VEREDICTO SE DA APARTE de la postura del config, y a propósito: son dos preguntas distintas
+# —«¿está bien configurado?» y «¿se llega?»— y juntarlas es exactamente cómo una tapó a la otra.
+#
+# ES UNA FUNCIÓN Y NO UN `case` SUELTO para que `deploy/pruebas/sonda-por-el-proxy.sh` pueda
+# EXTRAERLA de este archivo y ejercitar los cinco caminos sin red y sin servidor. Un `case` adentro
+# del cuerpo del guion sólo se puede probar replicándolo, y una réplica no prueba el original.
+veredicto_sonda_mcp() {  # $1 = código HTTP (vacío = no se pudo sondear)  $2 = frente  $3 = hay proxy
+  case "$1" in
+    "")      [ -n "$3" ] && dudoso "hay un proxy TLS por delante pero no pude sondear /mcp a través de él: no sé si el camino que usan los clientes funciona" ;;
+    401|429) verde "el /mcp del cerebro responde POR EL PROXY y lo custodia el bearer (HTTP $1 sin credencial): el camino que usan los clientes está vivo" ;;
+    403)     rojo "el /mcp del cerebro contesta 403 POR EL PROXY: la defensa anti DNS-rebinding está rechazando al proxy por su Host. Es el fallo medido el 2026-09-20 — el config se ve perfecto y el camino real está cortado. Hace falta el binario en el que la compuerta cuelga de la CREDENCIAL y no del bind (la funcion puertaDePersona)" ;;
+    000)     rojo "no se llegó al /mcp del cerebro por el proxy ($2): el camino que usan los clientes no responde" ;;
+    *)       rojo "el /mcp del cerebro contestó HTTP $1 por el proxy, y sin credencial sólo un 401 (o un 429) significa que la puerta vive y está custodiada" ;;
+  esac
+}
+veredicto_sonda_mcp "$SONDA_MCP" "$FRENTE_TLS" "$PROXY_TLS"
+
 if [ -z "$POSTURA_TLS" ]; then
   dudoso "no se pudo leer $CFG_REMOTO: no sé si el cerebro sirve TLS (probá MUSUBI_CFG=<ruta>)"
 elif printf '%s' "$POSTURA_TLS" | grep -q '^tls_cert_file:.\+'; then
