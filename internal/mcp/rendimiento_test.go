@@ -42,7 +42,13 @@ func rendimientoDelBot() *fleet.Rendimiento {
 // bot que vive en una base gestionada en la nube no lo reporta ninguna máquina.
 //
 // Sabotaje que la hace fallar: no registrar fleetSaludPath en el mux.
+// arnes: archivo="internal/mcp/http.go"
+// arnes: de="\tmux.HandleFunc(fleetSaludPath, s.handlerSaludDeServicios(limiter))"
+// arnes: a="\t_ = s.handlerSaludDeServicios(limiter)"
 // Sabotaje que la hace fallar: no llamar a ReportarSaludDeServicios desde el handler.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\t\tactualizados, desconocidos, err := s.engine.ReportarSaludDeServicios(d.ID, time.Now(), cuerpo.Servicios)"
+// arnes: a="\t\tactualizados, desconocidos, err := 0, []string(nil), error(nil)"
 func TestUnBotDeclaradoAlFinPuedeRecibirSalud(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 	declararBot(t, s, "pc-gio", "alturito20")
@@ -100,8 +106,17 @@ func TestUnBotDeclaradoAlFinPuedeRecibirSalud(t *testing.T) {
 // poda por ausencia es correcta para un INVENTARIO —«esto es todo lo que corre acá»— y es una
 // afirmación que el colector de un bot no está en condiciones de hacer.
 //
-// Sabotaje que la hace fallar: llamar a ReportarServicios (el del latido) desde el handler.
+// LA PRIMERA MITAD DE ESTA PROMESA ERA FALSA, Y SE MIDIÓ. Decía «llamar a ReportarServicios (el
+// del latido) desde el handler», y ese sabotaje deja la prueba en VERDE: ReportarServicios NO
+// poda. La poda es OTRA llamada —PodarServiciosAusentes— que el handler del latido hace aparte,
+// después. «Usar el camino del latido» son dos operaciones y sólo la segunda borra; la primera
+// se limita a reportar. Anotarlo importa más que borrarlo: un doc que nombra un sabotaje inerte
+// enseña a confiar en una red que no está ahí.
+//
 // Sabotaje que la hace fallar: podar por ausencia en ReportarSaludDeServicios.
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\tif err := tx.Commit(); err != nil {\n\t\treturn 0, nil, fmt.Errorf(\"error al confirmar el reporte de salud: %w\", err)\n\t}"
+// arnes: a="\tfor _, r := range reportes {\n\t\t_, _ = tx.Exec(`UPDATE services SET revoked = 1 WHERE device_id = ? AND name != ?`, deviceID, r.Nombre)\n\t}\n\tif err := tx.Commit(); err != nil {\n\t\treturn 0, nil, fmt.Errorf(\"error al confirmar el reporte de salud: %w\", err)\n\t}"
 func TestReportarLaSaludDeUnBotNoBorraLosOtrosServiciosDeLaMaquina(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 
@@ -148,6 +163,9 @@ func TestReportarLaSaludDeUnBotNoBorraLosOtrosServiciosDeLaMaquina(t *testing.T)
 // cron de un minuto. La vida de la máquina la afirma quien la mide.
 //
 // Sabotaje que la hace fallar: llamar a LatirDevice desde ReportarSaludDeServicios o del handler.
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\tif !existe || d.Revoked {\n\t\treturn 0, nil, nil\n\t}\n\n\ttx, err := e.db.Begin()"
+// arnes: a="\tif !existe || d.Revoked {\n\t\treturn 0, nil, nil\n\t}\n\t_, _ = e.LatirDevice(deviceID, ahora, \"\")\n\n\ttx, err := e.db.Begin()"
 func TestReportarSaludNoResucitaAUnaMaquinaCaida(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 	declararBot(t, s, "pc-gio", "alturito20")
@@ -182,6 +200,9 @@ func TestReportarSaludNoResucitaAUnaMaquinaCaida(t *testing.T) {
 // después, el agente lo podaría de nuevo, y el servicio parpadearía en el panel para siempre.
 //
 // Sabotaje que la hace fallar: agregarle el INSERT a ReportarSaludDeServicios.
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\t\tif n == 0 {\n\t\t\t// SE DICE CUÁL, y no se traga en silencio."
+// arnes: a="\t\tif n == 0 {\n\t\t\t_, _ = tx.Exec(`INSERT INTO services (id, name, project_id, device_id, kind, registered_at, last_report, last_health, revoked, declared) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`, uuid.NewString(), r.Nombre, d.ProjectID, deviceID, \"\", ahora.UTC().Format(time.RFC3339), ahora.UTC().Format(time.RFC3339), salud)\n\t\t\tactualizados++\n\t\t\tcontinue\n\t\t}\n\t\tif n == 0 {\n\t\t\t// SE DICE CUÁL, y no se traga en silencio."
 func TestReportarLaSaludDeUnServicioQueNadieDeclaroNoLoCrea(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 
@@ -221,7 +242,15 @@ func TestReportarLaSaludDeUnServicioQueNadieDeclaroNoLoCrea(t *testing.T) {
 // EL TOKEN DECIDE LA MÁQUINA, Y EL CUERPO NO TIENE POR DÓNDE DECIRLO. Es la misma garantía del
 // latido y del resultado: no es disciplina, es que el tipo no tiene el campo.
 //
-// Sabotaje que la hace fallar: agregarle un campo `device` a cuerpoSalud y hacerle caso.
+// El sabotaje que prometía la prosa —«agregarle un campo `device` a cuerpoSalud y hacerle caso»—
+// son DOS sitios que no se tocan (el tipo y el handler), y un corte vive en uno solo. Se mecaniza
+// la SEGUNDA compuerta, que es la que decide de verdad qué fila se escribe: sin ella, el nombre
+// del servicio —que sí viene en el cuerpo— alcanza para escribirle a la máquina de otro.
+//
+// Sabotaje que la hace fallar: sacarle el `AND device_id = ?` al UPDATE de la salud.
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\t\t\t  WHERE name = ? AND device_id = ? AND revoked = 0`,\n\t\t\tahora.UTC().Format(time.RFC3339), salud, r.Nombre, deviceID)"
+// arnes: a="\t\t\t  WHERE name = ? AND revoked = 0`,\n\t\t\tahora.UTC().Format(time.RFC3339), salud, r.Nombre)"
 func TestLaPuertaDeSaludNoDejaReportarSobreLaMaquinaDeOtro(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 	// Una segunda máquina, con un servicio propio.
@@ -263,6 +292,9 @@ func TestLaPuertaDeSaludNoDejaReportarSobreLaMaquinaDeOtro(t *testing.T) {
 // dato bueno por culpa de un reporte roto.
 //
 // Sabotaje que la hace fallar: guardar la salud sin validarla en ReportarSaludDeServicios.
+// arnes: archivo="internal/memory/servicios.go"
+// arnes: de="\t\tif err := r.Salud.Valida(); err != nil {"
+// arnes: a="\t\tif err := r.Salud.Valida(); err != nil && false {"
 func TestUnReporteImposibleNoPisaLaUltimaSaludBuena(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 	declararBot(t, s, "pc-gio", "alturito20")
@@ -325,6 +357,9 @@ func idDeDevice(t *testing.T, s *McpServer, nombre string) string {
 // muestra un hueco y la tabla un número, y no hay forma de saber cuál miente.
 //
 // Sabotaje que la hace fallar: sacar una de las series de rendimiento de seriesDeServicio.
+// arnes: archivo="internal/mcp/fleet_prometheus_servicios.go"
+// arnes: de="\t\t{\"musubi_fleet_service_failed\",\n\t\t\t\"De las atendidas, cuántas salieron mal. Es un SUBCONJUNTO de musubi_fleet_service_handled, nunca un total aparte. AUSENTE con el mismo criterio que aquélla.\",\n\t\t\t\"\",\n\t\t\tfunc(sv fleet.Servicio, ahora time.Time) (float64, bool) {\n\t\t\t\tif r := rendimientoDe(sv); r != nil {\n\t\t\t\t\treturn float64(r.Fallidas), true\n\t\t\t\t}\n\t\t\t\treturn 0, false\n\t\t\t}},\n"
+// arnes: a=""
 // Sabotaje que la hace fallar: sacar `fila["rendimiento"]` de filaDeServicio.
 // arnes: archivo="internal/mcp/methods_servicios.go"
 // arnes: de="\t\t\tfila[\"rendimiento\"] = rend\n"
@@ -401,6 +436,9 @@ func TestLaToolYElExportadorCoincidenSobreElRendimiento(t *testing.T) {
 // columna y no una serie por máquina.
 //
 // Sabotaje que la hace fallar: agregar una serie por clave del desglose.
+// arnes: archivo="internal/mcp/fleet_prometheus_servicios.go"
+// arnes: de="\treturn []serieDeServicio{"
+// arnes: a="\treturn []serieDeServicio{\n\t\t{\"musubi_fleet_service_breakdown_ok\", \"una serie por cada clave del desglose\", \"\", func(sv fleet.Servicio, ahora time.Time) (float64, bool) { return 0, false }},"
 func TestElDesgloseNoViajaAPrometheusPorCardinalidad(t *testing.T) {
 	for _, s := range seriesDeServicio() {
 		for _, clave := range []string{"ok", "no_puedo", "vacio", "desglose"} {

@@ -208,6 +208,9 @@ func TestUnaOperacionDePantallaNoSeLeMuestraAQuienSoloPuedeEjecutar(t *testing.T
 //
 // Sabotaje: traer las últimas N filas y filtrar por fecha en Go → con `limite: 3` y cinco hechos
 // nuevos encima, el hecho viejo NUNCA aparece.
+// arnes: archivo="internal/memory/cronologia.go"
+// arnes: de="\t\t`SELECT `+columnasComando+` FROM device_commands\n\t\t  WHERE project_id = ? AND device_id = ? AND creado >= ? AND creado < ?\n\t\t  ORDER BY creado DESC LIMIT ?`,\n\t\tprojectID, deviceID, desde, hasta, tope)"
+// arnes: a="\t\t`SELECT * FROM (SELECT `+columnasComando+` FROM device_commands\n\t\t  WHERE project_id = ? AND device_id = ?\n\t\t  ORDER BY creado DESC LIMIT ?) WHERE creado >= ? AND creado < ?`,\n\t\tprojectID, deviceID, tope, desde, hasta)"
 func TestLaVentanaSeAplicaEnLaConsultaYNoDespues(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")
@@ -260,6 +263,9 @@ func TestLaVentanaSeAplicaEnLaConsultaYNoDespues(t *testing.T) {
 // todo lo que pasó».
 //
 // Sabotaje: devolver `truncado: false` siempre → falla acá.
+// arnes: archivo="internal/mcp/methods_cronologia.go"
+// arnes: de="\t\t\"truncado\":            truncado,"
+// arnes: a="\t\t\"truncado\":            truncado && false,"
 func TestElTopeQueCortaSeDeclara(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")
@@ -363,6 +369,9 @@ func TestLaCronologiaNoEsUnOraculoDeMaquinasAjenas(t *testing.T) {
 //
 // Sabotaje: que `horas` gane en silencio → quien mandó las dos cosas recibe una ventana que no
 // pidió y la respuesta se ve correcta.
+// arnes: archivo="internal/mcp/methods_cronologia.go"
+// arnes: de="\tif horas > 0 && (desdeTxt != \"\" || hastaTxt != \"\") {"
+// arnes: a="\tif false && horas > 0 && (desdeTxt != \"\" || hastaTxt != \"\") {"
 func TestHorasConDesdeOHastaEsUnError(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	sembrarLosTresPlanos(t, s, "infra", "pc-gio")
@@ -426,8 +435,17 @@ func TestLaVentanaQueVuelveEsLaQueSeAplico(t *testing.T) {
 // aislamiento: con las fechas guardadas al segundo y el borde superior abierto, un comando
 // encolado en este mismo segundo quedaba afuera.
 //
-// Sabotaje: sacar Ventana.Normalizada del camino → esta prueba falla, y con ella la experiencia
-// más común de todas: reiniciar algo y entrar a mirar qué pasó.
+// SE MIDIÓ, Y EL CAMINO TIENE DOS COMPUERTAS. La ventana se normaliza DOS veces —una en
+// methods_cronologia.go antes de llamar al motor, otra en memory/cronologia.go adentro— y sacar
+// cualquiera de las dos sola deja esta prueba en VERDE: la que queda vuelve a redondear. No es
+// redundancia inútil —la de arriba existe porque esa ventana también se DEVUELVE—, pero sí
+// quiere decir que ningún llamador es el corte. El que decide es el redondeo mismo.
+//
+// Sabotaje: que Normalizada deje de redondear `hasta` al segundo siguiente → esta prueba falla,
+// y con ella la experiencia más común de todas: reiniciar algo y entrar a mirar qué pasó.
+// arnes: archivo="internal/fleet/cronologia.go"
+// arnes: de="\tif hasta.Before(v.Hasta) {\n\t\thasta = hasta.Add(time.Second)\n\t}"
+// arnes: a="\tif false && hasta.Before(v.Hasta) {\n\t\thasta = hasta.Add(time.Second)\n\t}"
 func TestLoQueAcabaDePasarEntraEnLaVentana(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")
@@ -452,6 +470,9 @@ func TestLoQueAcabaDePasarEntraEnLaVentana(t *testing.T) {
 //
 // Sabotaje: sumarla a `ocultos_por_permiso` → el mensaje sería «pedile permiso a alguien» sobre
 // algo que ningún permiso destraba.
+// arnes: archivo="internal/mcp/methods_cronologia.go"
+// arnes: de="\t\t\tsinClasificar++\n\t\t\tcontinue"
+// arnes: a="\t\t\tocultos++\n\t\t\tcontinue"
 func TestUnaOperacionInternaNuevaNoSeMuestraYSeCuentaAparte(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")
@@ -596,6 +617,9 @@ func TestNoSePuedeEncolarUnAvisoSinDeclararSuPlano(t *testing.T) {
 // mintiendo, y la que miente es siempre la que menos se mira.
 //
 // Sabotaje: devolver `string(c.Estado)` en cualquiera de las dos → falla acá, en esa mitad.
+// arnes: archivo="internal/memory/cronologia.go"
+// arnes: de="\t\tc.Estado = c.EstadoActual(ahora)\n\t\tout = append(out, fleet.HechoDeComando(c, nombre))"
+// arnes: a="\t\tout = append(out, fleet.HechoDeComando(c, nombre))"
 func TestLasDosSuperficiesMuestranVencidoUnComandoQueNadieLevanto(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")
@@ -666,7 +690,17 @@ func TestLasDosSuperficiesMuestranVencidoUnComandoQueNadieLevanto(t *testing.T) 
 // atribuiría a una persona cada disparo automático viejo.
 //
 // Sabotaje: emitir `"persona"` cuando el origen está vacío → falla acá, en la mitad del control.
-// Sabotaje: no escribir el origen en politicas.go → falla la primera aserción.
+// arnes: archivo="internal/mcp/methods_cronologia.go"
+// arnes: de="\t\tfila[\"origen\"] = nil\n\t\tfila[\"automatico\"] = nil"
+// arnes: a="\t\tfila[\"origen\"] = string(fleet.OrigenPersona)\n\t\tfila[\"automatico\"] = false"
+//
+// LA OTRA MITAD NO SE CUSTODIA ACÁ, Y DECIRLO IMPORTA. La prosa prometía que sacarle el origen
+// a politicas.go hacía fallar la primera aserción: se midió y queda VERDE. Esta prueba siembra
+// MARCAAUTO A MANO con `Origen: OrigenPolitica`, así que prueba que el campo VIAJA, no que
+// alguien lo setea. El único lugar donde ese cableado se verifica es
+// TestLaAccionDeUnaPoliticaQuedaEnLaMismaBitacoraQueLasPersonas, que dispara la política de
+// verdad — y ahí sí está mecanizado. La disciplina que este bloque aplica al caso MANUAL
+// —pasar por la tool y no por el motor— le falta al caso AUTOMÁTICO.
 func TestElOrigenAutomaticoSeDistingueYLoDesconocidoNoSeInventa(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")
@@ -761,6 +795,9 @@ func TestElOrigenAutomaticoSeDistingueYLoDesconocidoNoSeInventa(t *testing.T) {
 //
 // Sabotaje que lo hace fallar: ponerle `fleet.HechoCanalPantalla` a avisoExec o a avisoShell, o
 // hacer que encolarAvisoDeAcceso ignore `a.clase`.
+// arnes: archivo="internal/mcp/methods_pantalla.go"
+// arnes: de="\tavisoExec     = avisoDeAcceso{\"está ejecutando comandos en esta máquina.\", fleet.HechoCanalExec}"
+// arnes: a="\tavisoExec     = avisoDeAcceso{\"está ejecutando comandos en esta máquina.\", fleet.HechoCanalPantalla}"
 func TestElAvisoDeUnExecNoLoVeQuienSoloMiraLaPantalla(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")
