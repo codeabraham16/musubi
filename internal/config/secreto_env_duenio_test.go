@@ -37,6 +37,10 @@ import (
 //   - volver `methods.go` (marketplace) o `catalog.go` a `os.Getenv(apiKeyEnv)`;
 //   - volver `calibrate.go` a `os.Getenv("ANTHROPIC_API_KEY")`;
 //   - agregar un `os.Getenv("LO_QUE_SEA_API_KEY")` nuevo en cualquier parte de internal/ o cmd/.
+//
+// arnes: archivo="internal/mcp/methods.go"
+// arnes: de="\t\tk, err := config.SecretoDeEnv(s.sourcing.MarketplaceAPIKeyEnv)\n\t\tif err != nil {\n\t\t\tlogx.Warn(\"marketplace_api_key_env nombra un archivo que no se pudo leer; sigo con el tier anónimo\", \"error\", err)\n\t\t}\n\t\tapiKey = k\n"
+// arnes: a="\t\tapiKey = os.Getenv(s.sourcing.MarketplaceAPIKeyEnv)\n"
 func TestNadieLeeUnaCredencialConGetenvPelado(t *testing.T) {
 	// EXCEPCIONES, UNA POR UNA, CON SU RAZÓN MEDIDA.
 	exentos := map[string]string{

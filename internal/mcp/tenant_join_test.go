@@ -24,6 +24,9 @@ import (
 //
 // Sabotaje que la hace fallar: volver cualquier `on(project, device)` a `on(device)` en
 // deploy/musubi-alerts-flota.yml.
+// arnes: archivo="deploy/musubi-alerts-flota.yml"
+// arnes: de="        expr: (musubi_fleet_device_sample_age_seconds > 600) unless on(project, device) (musubi_fleet_device_up == 0)\n"
+// arnes: a="        expr: (musubi_fleet_device_sample_age_seconds > 600) unless on(device) (musubi_fleet_device_up == 0)\n"
 func TestNingunJoinDeFlotaEmparejaSoloPorDevice(t *testing.T) {
 	ruta := filepath.Join("..", "..", "deploy", "musubi-alerts-flota.yml")
 	b, err := os.ReadFile(ruta)
@@ -56,6 +59,9 @@ func TestNingunJoinDeFlotaEmparejaSoloPorDevice(t *testing.T) {
 // del `srv-01` de un cliente callara los avisos del `srv-01` de otro.
 //
 // Sabotaje: sacarle `project` al `group_by`, o a cualquier `equal` que nombre `device`.
+// arnes: archivo="deploy/prometheus/alertmanager.yml"
+// arnes: de="  group_by: ['alertname', 'project', 'device']\n"
+// arnes: a="  group_by: ['alertname', 'device']\n"
 func TestElAgrupadoYLasInhibicionesLlevanProject(t *testing.T) {
 	ruta := filepath.Join("..", "..", "deploy", "prometheus", "alertmanager.yml")
 	b, err := os.ReadFile(ruta)

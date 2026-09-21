@@ -39,6 +39,9 @@ func TestElNucleoSaleDeLasDosFamiliasDeVersionQueExisten(t *testing.T) {
 //
 // Sabotaje: comparar las cadenas completas en vez del núcleo → la primera fila (mismo release,
 // commits distintos) pasa a difiere=true, y con ella toda la flota en cada redespliegue.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="\tnucleoAgente, ok := NucleoDeVersion(agente)\n\tif !ok {\n\t\treturn true, true\n\t}\n\treturn nucleoAgente != nucleoCerebro, true"
+// arnes: a="\tnucleoAgente, ok := NucleoDeVersion(agente)\n\tif !ok {\n\t\treturn true, true\n\t}\n\tnucleoAgente = strings.TrimSpace(agente)\n\tnucleoCerebro = strings.TrimSpace(cerebro)\n\treturn nucleoAgente != nucleoCerebro, true"
 func TestDosCommitsDelMismoReleaseNoSonUnAgenteAtrasado(t *testing.T) {
 	const cerebro = "0.130.0-flota.38a0a9f"
 
@@ -72,6 +75,9 @@ func TestDosCommitsDelMismoReleaseNoSonUnAgenteAtrasado(t *testing.T) {
 // —`musubi version` lo dice— en vez de por una alarma que acusa a las máquinas equivocadas.
 //
 // Sabotaje: devolver (true, true) cuando el núcleo del cerebro no parsea → falla acá.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="func VersionDelAgenteDifiere(agente, cerebro string) (difiere bool, comparable bool) {\n\tif strings.TrimSpace(agente) == \"\" {\n\t\treturn false, false\n\t}\n"
+// arnes: a="func VersionDelAgenteDifiere(agente, cerebro string) (difiere bool, comparable bool) {\n\tif strings.TrimSpace(agente) == \"\" {\n\t\treturn false, false\n\t}\n\tif _, ok := NucleoDeVersion(cerebro); !ok {\n\t\treturn true, true\n\t}\n"
 func TestUnCerebroSinVersionNoMarcaAtrasadaALaFlotaEntera(t *testing.T) {
 	for _, cerebro := range []string{"dev", "", "no-es-una-version"} {
 		difiere, comparable := VersionDelAgenteDifiere("0.130.0-flota.e140e0c", cerebro)

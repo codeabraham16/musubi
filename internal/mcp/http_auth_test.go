@@ -144,6 +144,9 @@ func TestValidBearer(t *testing.T) {
 // degrada en silencio a UN SOLO bearer admin-federado que ve todos los proyectos.
 //
 // Sabotaje que la hace fallar: devolver cfg.PrincipalsFile tal cual (como era antes).
+// arnes: archivo="internal/mcp/http.go"
+// arnes: de="\treturn filepath.Join(s.projectPath, p)\n}\n"
+// arnes: a="\treturn p\n}\n"
 func TestUnPrincipalsFileRelativoCuelgaDelWorkspaceYNoDelDirectorioDeTrabajo(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 

@@ -33,6 +33,16 @@ func leerRedespliegue(t *testing.T) string {
 // hecho hasta que el servicio no levanta.
 //
 // Sabotaje que la hace fallar: sacar la línea que copia el respaldo sobre la base en volver_atras.
+//
+// EL `de` LLEVA LA LÍNEA DE ARRIBA COMO CONTEXTO, Y NO ES DECORACIÓN. `cp -a "$RESPALDO" "$BASE"`
+// aparece DOS veces en el guion: la sentencia real (línea 114) y una cita adentro de un comentario
+// (línea 178, «…hace `cp -a "$RESPALDO" "$BASE"` y borra el WAL…»). La PRUEBA no ve la segunda
+// —`leerRedespliegue` pasa por el filtro que blanquea las líneas que empiezan con `#`— pero EL
+// ARNÉS SABOTEA EL ARCHIVO CRUDO, así que para él el literal es ambiguo y se niega a aplicarlo.
+// Único en el código no es único en el disco: el `de` se ancla contra lo que ve el arnés.
+// arnes: archivo="deploy/redesplegar-cerebro.sh"
+// arnes: de="  cp -a \"$BIN_VIEJO\" \"$DESTINO\"\n  cp -a \"$RESPALDO\" \"$BASE\"\n"
+// arnes: a="  cp -a \"$BIN_VIEJO\" \"$DESTINO\"\n"
 func TestLaVueltaAtrasRestauraLaBaseYNoSoloElBinario(t *testing.T) {
 	texto := leerRedespliegue(t)
 	i := strings.Index(texto, "volver_atras(){")

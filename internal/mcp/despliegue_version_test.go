@@ -88,6 +88,9 @@ import (
 // núcleo vacío, que es justo el caso que falla, los campos se corrían y el lector terminaba
 // mirando `ok` en la variable del núcleo: el sabotaje salía rojo POR CASUALIDAD y el mensaje
 // informaba un campo que no era. Se cambió el separador a `|`, que no colapsa.
+// arnes: archivo="deploy/construir.sh"
+// arnes: de="fi\nVERSION=\"${BASE}${ETIQUETA:+-$ETIQUETA}.${COMMIT}${SUCIO}\""
+// arnes: a="fi\nVERSION=\"${BASE}${ETIQUETA:+.$ETIQUETA}.${COMMIT}${SUCIO}\""
 func TestLaVersionQueEmiteConstruirEsSiempreParseable(t *testing.T) {
 	// El salteo de fuera de linux vive en UN solo lugar (internal/guiones) y en linux no puede
 	// activarse. Acá había tres `t.Skipf` propios, y los dos de `exec.LookPath` salteaban TAMBIÉN

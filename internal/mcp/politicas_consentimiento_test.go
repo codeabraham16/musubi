@@ -148,6 +148,9 @@ func TestSinGradoDeclaradoElAutoHealSigueActuando(t *testing.T) {
 //
 // Sabotaje verificado que la pone en rojo: sacar el switch de `ConsentimientoEfectivo` de
 // `actuarSiCorresponde` dejando sus comentarios intactos.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="\tswitch consent := d.ConsentimientoEfectivo(); {\n"
+// arnes: a="\tswitch consent := d.Consentimiento; {\n"
 func TestTodoArchivoQueLeHaceHacerAlgoAUnaMaquinaConoceElEjeDeConsentimiento(t *testing.T) {
 	// Las excepciones se enumeran CON SU MOTIVO. Un allowlist sin razones se llena solo.
 	exentos := map[string]string{}

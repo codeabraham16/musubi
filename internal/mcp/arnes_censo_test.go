@@ -745,7 +745,44 @@ import (
 // `colision_ok` de los dos lados donde se pudo y quedaron 5 pares sin contestar, porque
 // `ColisionOk` es UN string: un ancla que se pisa con tres sólo puede nombrar a una. No es
 // negligencia — es el techo de la clave, y el resto queda como el aviso que esta guarda quiere.
-const anclasEnProsaAlDia = 83
+// Y DE 83 A 3 EL 2026-09-21, QUE ES EL FONDO DE ESTA CUENTA: las ochenta y una anclas de la COLA
+// LARGA —lo que quedaba después de los lotes grandes, repartido en 62 archivos con una a cuatro
+// anclas cada uno—. 74 sabotajes corridos con la herramienta real: 74 en ROJO, 0 verdes, 0 sin
+// veredicto, 0 motivos repetidos. El corpus queda en 98,3 % ejecutable.
+//
+// LAS DOS QUE QUEDAN NO SON OLVIDO: cayeron fuera del reparto por superficies. La tercera se
+// cobró acá mismo, y enseña algo del instrumento: su `de` —«cp -a "$RESPALDO" "$BASE"»— aparece DOS
+// veces en `redesplegar-cerebro.sh`, la sentencia real y una cita adentro de un comentario. La
+// PRUEBA no ve la segunda, porque lee por el filtro que blanquea las líneas que empiezan con `#`;
+// EL ARNÉS SÍ, porque sabotea el archivo CRUDO. Único en el código no es único en el disco, y el
+// `de` se ancla contra lo que ve el arnés: se le sumó la línea de arriba como contexto y quedó en
+// ROJO con el motivo suyo («la vuelta atrás no restaura la BASE»).
+//
+// EL BARRIDO MIDIÓ EL CORPUS EQUIVOCADO LA PRIMERA VEZ, Y DIO PERFECTO. Los cuatro worktrees de
+// barrido se crearon desde la RAMA con las directivas todavía SIN COMMITEAR, así que salieron sin
+// una sola: los 27 rojos que devolvió eran de anclas preexistentes que caían en los mismos rangos
+// de índice. No lo dijo ningún error — lo dijeron dos detalles que no cerraban: un «rojo
+// sospechoso» cuyo `archivo=` no era ninguno de los objetivos, y números de línea que no coincidían
+// con el listado propio, siendo la diferencia justamente las líneas que las directivas insertan.
+// Antes de barrer en un worktree recién creado, `grep -c` de un texto de tu directiva tiene que dar
+// 1. Commitear primero; el commit es lo único que viaja.
+//
+// Y GOFMT VOLVIÓ A CORROMPER DOS DIRECTIVAS, convirtiendo un par de comillas simples en una comilla
+// tipográfica de cierre, dentro del comentario. (No se escriben acá los caracteres porque gofmt
+// haría con este párrafo exactamente lo que el párrafo denuncia: se comprobó, quiso reescribirlo.)
+// Las dos
+// saboteaban SQL con una cadena vacía. `-validar` las denunció («el `de` … YA NO ESTÁ»), y el
+// arreglo fue elegir otro punto de corte SIN comillas simples — que de paso resolvió once
+// colisiones, porque el `de` viejo era tan grueso que lo pisaba todo lo que tocara `migrations.go`.
+// Regla: ninguna comilla simple en un `de` ni en un `a`, y `-validar` después de cada `gofmt -w`.
+//
+// SOBRE LA DIRECCIÓN DE `colision_ok`, que es una precisión al párrafo de más arriba: la respuesta
+// va en el AGRESOR. El aviso lo dice —«X pisa a Y» significa que el `a` de X rompe el `de` de Y— y
+// ponerla en Y produce una RANCIA. Lo de «declarar de los dos lados» vale cuando el censo denuncia
+// LAS DOS direcciones, que es lo normal cuando cada `a` destruye el `de` del otro; cuando denuncia
+// una sola, declarar la otra es afirmar que alguien miró algo que nadie miró. Se cuentan las
+// direcciones que el aviso imprime y se declaran exactamente ésas.
+const anclasEnProsaAlDia = 2
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //

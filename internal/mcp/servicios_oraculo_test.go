@@ -20,6 +20,9 @@ import (
 //
 // Sabotaje que la hace fallar: devolver `res["sin_permiso"] = sinPermiso` también cuando hay
 // filtro (o sea, borrar el `if conFiltro { return res }` de respuestaDeServicios).
+// arnes: archivo="internal/mcp/methods_servicios.go"
+// arnes: de="\tif conFiltro {\n\t\treturn res\n\t}\n"
+// arnes: a="\tif conFiltro && false {\n\t\treturn res\n\t}\n"
 func TestElFiltroPorMaquinaNoDelataSiLaMaquinaExiste(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 
@@ -46,6 +49,9 @@ func TestElFiltroPorMaquinaNoDelataSiLaMaquinaExiste(t *testing.T) {
 // no se convierta en «nunca se avisa nada».
 //
 // Sabotaje que la hace fallar: devolver siempre `res` sin los contadores en respuestaDeServicios.
+// arnes: archivo="internal/mcp/methods_servicios.go"
+// arnes: de="\tif sinPermiso > 0 {\n\t\tres[\"sin_permiso\"] = sinPermiso\n\t}\n\tif huerfanos > 0 {\n\t\tres[\"sin_maquina\"] = huerfanos\n\t}\n\treturn res\n"
+// arnes: a="\tif sinPermiso > 0 && false {\n\t\tres[\"sin_permiso\"] = sinPermiso\n\t}\n\tif huerfanos > 0 && false {\n\t\tres[\"sin_maquina\"] = huerfanos\n\t}\n\treturn res\n"
 func TestElContadorSigueSaliendoCuandoNadieFiltro(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	bob := principalDeFlota("bob", "casa", map[fleet.Cap][]string{fleet.CapMetrics: {"nas"}})
@@ -65,6 +71,9 @@ func TestElContadorSigueSaliendoCuandoNadieFiltro(t *testing.T) {
 // del journal del cerebro.
 //
 // Sabotaje que la hace fallar: devolver `crudo` tal cual en urlSinSecretos.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="\tu.User = nil\n\tif u.RawQuery != \"\" {\n\t\tu.RawQuery = \"[oculto]\"\n\t}\n\treturn u.String()\n"
+// arnes: a="\tu.User = nil\n\tif u.RawQuery != \"\" {\n\t\tu.RawQuery = \"[oculto]\"\n\t}\n\treturn crudo\n"
 func TestElQueryStringDelDestinoNoLlegaAlLog(t *testing.T) {
 	casos := []struct {
 		crudo   string

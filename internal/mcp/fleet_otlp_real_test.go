@@ -109,6 +109,9 @@ func TestContraUnPrometheusDeVerdadAceptaElSobreYQuedaConsultable(t *testing.T) 
 // Sabotaje que la hace fallar: poner `Unit: "By"` en vez de `serie.Unidad` en armarPayloadOTLP —el
 // mismo que hasta ahora sólo cazaba un Prometheus encendido—, o sacarle el `Content-Type` a
 // `enviar`, o cambiarle el path al endpoint.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="\t\tif len(datos) == 0 {\n\t\t\t// Una métrica sin ningún punto no se emite, igual que /metrics no emite HELP/TYPE sin\n\t\t\t// cuerpo: un nombre de serie sin datos es ruido que el receptor igual indexa.\n\t\t\tcontinue\n\t\t}\n\t\tpuntos += len(datos)\n\t\tmetricas = append(metricas, otlpMetric{\n\t\t\tName: serie.Nombre, Description: serie.Ayuda, Unit: serie.Unidad,\n"
+// arnes: a="\t\tif len(datos) == 0 {\n\t\t\t// Una métrica sin ningún punto no se emite, igual que /metrics no emite HELP/TYPE sin\n\t\t\t// cuerpo: un nombre de serie sin datos es ruido que el receptor igual indexa.\n\t\t\tcontinue\n\t\t}\n\t\tpuntos += len(datos)\n\t\tmetricas = append(metricas, otlpMetric{\n\t\t\tName: serie.Nombre, Description: serie.Ayuda, Unit: \"By\",\n"
 func TestElCaminoOTLPDePuntaAPuntaContraUnReceptorQueGuardaYContesta(t *testing.T) {
 	prom := nuevoPrometheusDeMentira(t)
 	// Un solo intento a propósito: el doble guarda en el mismo request. Si hiciera falta esperar,

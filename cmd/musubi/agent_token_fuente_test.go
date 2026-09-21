@@ -102,6 +102,9 @@ func TestElAgenteDiceDeDondeSalioSuToken(t *testing.T) {
 //
 // Sabotaje: sacar el `if fuenteDelToken != ""` y mandarlo siempre → el subtest del vacío se pone rojo
 // porque el campo aparece.
+// arnes: archivo="internal/fleet/protocolo.go"
+// arnes: de="\tTokenFuente string `json:\"token_fuente,omitempty\"`"
+// arnes: a="\tTokenFuente string `json:\"token_fuente\"`"
 func TestElLatidoLlevaLaFuenteDelToken(t *testing.T) {
 	for _, c := range []struct {
 		nombre string

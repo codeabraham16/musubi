@@ -302,6 +302,9 @@ func TestUnAdminSinGrantsEnrolaPeroNoConcede(t *testing.T) {
 
 // C8 — el inventario dice qué puede ejercer QUIEN MIRA, no sólo qué admite la máquina.
 // Sabotaje: devolver `caps` también en `puedo`.
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="\t\t\t\t\"puedo\":       capsComoLista(capsQuePuede(p, d)),\n"
+// arnes: a="\t\t\t\t\"puedo\":       capsComoLista(d.Caps),\n"
 func TestElInventarioDiceQuePuedeQuienMira(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	// Alta como stdio local (confianza local): la máquina queda con las tres capacidades.

@@ -195,6 +195,10 @@ func TestDesignElTopKNoColapsaEnLoMismo(t *testing.T) {
 	// SABOTAJE: con la diversidad apagada (λ=0) los clones ganan por similitud pura y el distinto
 	// queda afuera. Se comprueba sobre la función directamente para que el invariante no dependa de
 	// que alguien recuerde tocar la constante.
+	// arnes: prueba="TestDesignLosArticulosCompletosTienenLugar"
+	// arnes: archivo="internal/mcp/methods_design.go"
+	// arnes: de="const designLambdaMMR = 0.45"
+	// arnes: a="const designLambdaMMR = 0.0"
 	fuentes := make([]searchSource, 0, len(entradas))
 	for i, e := range entradas {
 		fuentes = append(fuentes, searchSource{

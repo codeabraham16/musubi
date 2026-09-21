@@ -19,6 +19,9 @@ import (
 // fila mal formada, y darla por abierta la dejaría en el panel para siempre.
 //
 // Sabotaje que la hace fallar: devolver `s.Cerrada.IsZero()` a secas.
+// arnes: archivo="internal/fleet/sesion_viva.go"
+// arnes: de="\treturn s.Cerrada.IsZero() && !s.Vence.IsZero() && ahora.Before(s.Vence)\n"
+// arnes: a="\treturn s.Cerrada.IsZero()\n"
 func TestAbiertaSeDerivaYNoSeGuarda(t *testing.T) {
 	ahora := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	casos := []struct {
@@ -50,6 +53,9 @@ func TestAbiertaSeDerivaYNoSeGuarda(t *testing.T) {
 // nombre de la máquina viaja resuelto porque una lista de ids opacos no la lee nadie.
 //
 // Sabotaje que la hace fallar: devolver la misma Modalidad en las dos puertas.
+// arnes: archivo="internal/fleet/sesion_viva.go"
+// arnes: de="\t\tID: s.ID, Modalidad: ModalidadShell, DeviceID: s.DeviceID, Device: device,\n"
+// arnes: a="\t\tID: s.ID, Modalidad: ModalidadPantalla, DeviceID: s.DeviceID, Device: device,\n"
 func TestLaModalidadYElNombreDeLaMaquinaViajanEnLaVista(t *testing.T) {
 	creada := time.Now().UTC()
 	p := DesdeSesionPantalla(SesionPantalla{

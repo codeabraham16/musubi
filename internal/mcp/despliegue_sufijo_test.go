@@ -49,6 +49,9 @@ import (
 // «UN BINARIO QUE SE LLEVA CÓDIGO SIN COMMITEAR NO SALIÓ MARCADO». Y uno que NO lo pone en rojo, a
 // propósito: marcar SIEMPRE queda curado por el relink, porque el sufijo es una lectura del sello y
 // no una afirmación — dos capas, y el arnés lo deja escrito para que ese verde no se lea como hueco.
+// arnes: archivo="deploy/construir.sh"
+// arnes: de="compilar() {\n  local ld=\"-X main.version=$1\""
+// arnes: a="compilar() {\n  local ld=\"-X main.version=${1%-sucio}\""
 func TestUnBinarioConCodigoSinCommitearLoDiceEnSuVersion(t *testing.T) {
 	// Los dos `t.Skipf` de `exec.LookPath` que había acá salteaban TAMBIÉN EN LINUX: sin bash o sin
 	// go esta guarda no existía y `go test` contestaba `ok`. La compuerta los convierte en un fallo.

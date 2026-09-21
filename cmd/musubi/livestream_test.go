@@ -264,6 +264,9 @@ func TestMotivoSinRelayNombraLoQueFalta(t *testing.T) {
 //
 // Sabotaje que la hace fallar: que `motivoSinRelay` ignore el error y siga mirando sólo si el token
 // está vacío.
+// arnes: archivo="cmd/musubi/dashboard.go"
+// arnes: de="\tif errToken != nil {\n\t\treturn \"la credencial está MAL configurada, no ausente: \" + errToken.Error()\n\t}"
+// arnes: a="\tif errToken != nil && false {\n\t\treturn \"la credencial está MAL configurada, no ausente: \" + errToken.Error()\n\t}"
 func TestMotivoSinRelayDistingueRotaDeAusente(t *testing.T) {
 	t.Setenv("MUSUBI_TEST_TOKEN_RIEL", "hay-token-en-la-variable")
 	roto := fmt.Errorf("MUSUBI_TEST_TOKEN_RIEL_FILE apunta a %q y no se pudo leer", "/no/existe")

@@ -66,6 +66,10 @@ var seccionesDelGuion = []struct {
 // —por ejemplo a segunda— en vez de dejarla apendeada al final. La prueba se pone roja diciendo
 // qué sección esperaba en esa posición y qué encontró. También la ponen roja: intercambiar dos
 // secciones cualesquiera, borrar una, o apendear una novena sin darle su índice en el parser.
+// arnes: colision_ok="TestElGuionRealCorridoContraEsteLinuxNoCruzaLasSecciones"
+// arnes: archivo="internal/fleet/remoto.go"
+// arnes: de="\t`cat /proc/meminfo 2>/dev/null; echo '` + separadorProc + `'; ` +\n\t`cat /proc/loadavg 2>/dev/null; echo '` + separadorProc + `'; ` +\n"
+// arnes: a="\t`cat /proc/loadavg 2>/dev/null; echo '` + separadorProc + `'; ` +\n\t`cat /proc/meminfo 2>/dev/null; echo '` + separadorProc + `'; ` +\n"
 func TestElOrdenDelGuionEsElOrdenDeLosIndicesDelParser(t *testing.T) {
 	// El guion es `cmd0; echo 'SEP'; cmd1; echo 'SEP'; ...; cmdN`. Partirlo por la marca deja
 	// exactamente una pieza por sección, en orden: la pieza i lleva el comando de la sección i.
@@ -107,6 +111,9 @@ func TestElOrdenDelGuionEsElOrdenDeLosIndicesDelParser(t *testing.T) {
 // Sabotaje que la hace fallar (VERIFICADO): insertar `ls -1 /proc` como SEGUNDA sección del guion
 // sin tocar el parser. NumCPU pasa a valer la temperatura en miligrados (27800 en esta máquina),
 // MemTotal queda en 0 y Load1 en nil — que es exactamente la muestra basura que se guardaba.
+// arnes: archivo="internal/fleet/remoto.go"
+// arnes: de="const guionLecturaProc = `cat /proc/stat 2>/dev/null; echo '` + separadorProc + `'; ` +\n\t`cat /proc/meminfo 2>/dev/null; echo '` + separadorProc + `'; ` +\n"
+// arnes: a="const guionLecturaProc = `cat /proc/stat 2>/dev/null; echo '` + separadorProc + `'; ` +\n\t`ls -1 /proc 2>/dev/null; echo '` + separadorProc + `'; ` +\n\t`cat /proc/meminfo 2>/dev/null; echo '` + separadorProc + `'; ` +\n"
 func TestElGuionRealCorridoContraEsteLinuxNoCruzaLasSecciones(t *testing.T) {
 	// La compuerta única de las pruebas que ejecutan una shell. Reemplaza a dos `t.Skip` que
 	// salteaban TAMBIÉN EN LINUX —sin `sh`, o con `/proc` ilegible, `go test` contestaba `ok` y esta
