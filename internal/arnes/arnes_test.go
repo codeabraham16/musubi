@@ -759,7 +759,7 @@ func TestTagsYEnvSeLeenYUnErrorDeEscrituraNoSeVuelveSilencio(t *testing.T) {
 // Sabotaje que la hace fallar: en `Colisiones`, que alcance con tener la clave puesta sin exigir
 // que nombre a la prueba que se pisa → cualquier respuesta tapa cualquier colisión.
 // arnes: archivo="internal/arnes/arnes.go"
-// arnes: de="\t\t\t\tif x.Directiva.ColisionOk != \"\" && x.Directiva.ColisionOk == y.Directiva.Prueba {"
+// arnes: de="\t\t\t\tif x.Directiva.ContestaA(y.Directiva.Prueba) {"
 // arnes: a="\t\t\t\tif x.Directiva.ColisionOk != \"\" {"
 // arnes: prueba="TestUnaColisionContestadaSeCallaYUnaRespuestaRanciaSeDenuncia"
 func TestUnaColisionContestadaSeCallaYUnaRespuestaRanciaSeDenuncia(t *testing.T) {
@@ -830,6 +830,28 @@ func TestUnaColisionContestadaSeCallaYUnaRespuestaRanciaSeDenuncia(t *testing.T)
 		if !strings.Contains(junto, "TestUnTercero") {
 			t.Errorf("no se dice a quién decía contestarle, así que no se puede corregir:\n%s", junto)
 		}
+		// TIENEN QUE SALIR LAS DOS QUEJAS, Y NO ALCANZA CON CONTAR. Acá había una guarda hueca, y
+		// se destapó al cambiar el rastreo de `usadas` de por-sitio a por-nombre (2026-09-21): con
+		// el sabotaje puesto —«alcanza con tener la clave para tapar cualquier colisión»— la
+		// colisión se callaba Y la respuesta pasaba a ser rancia, o sea UNA queja en vez de UNA
+		// queja, del mismo tamaño y nombrando los mismos textos. Las tres aserciones de arriba
+		// seguían verdes porque la queja RANCIA también nombra `uno_test.go:10` y `TestUnTercero`.
+		// Es la forma de siempre: preguntar por un texto que está, sin preguntar QUIÉN lo puso.
+		//
+		// Lo que decide es que la COLISIÓN siga denunciada además de la respuesta rancia.
+		var colision, rancia int
+		for _, q := range m {
+			if strings.Contains(q, "pisa a") {
+				colision++
+			}
+			if strings.Contains(q, "rancia") {
+				rancia++
+			}
+		}
+		if colision != 1 || rancia != 1 {
+			t.Errorf("esperaba UNA denuncia de colisión (la que la clave no contestó) y UNA de "+
+				"respuesta rancia; vinieron %d y %d:\n%s", colision, rancia, junto)
+		}
 	})
 
 	t.Run("una respuesta a una colisión que ya no existe se denuncia como rancia", func(t *testing.T) {
@@ -865,8 +887,8 @@ func TestUnaColisionContestadaSeCallaYUnaRespuestaRanciaSeDenuncia(t *testing.T)
 // Sabotaje que la hace fallar: en `directivaDe`, sacar la exigencia de que `colision_ok` sea un
 // nombre de prueba → un `archivo:línea` pasa y vuelve a pudrirse solo.
 // arnes: archivo="internal/arnes/arnes.go"
-// arnes: de="\tif d.ColisionOk != \"\" && !esNombreDePrueba(d.ColisionOk) {"
-// arnes: a="\tif false {"
+// arnes: de="\t\tif !esNombreDePrueba(nombre) {"
+// arnes: a="\t\tif false {"
 // arnes: prueba="TestUnColisionOkConNumeroDeLineaSeRechaza"
 func TestUnColisionOkConNumeroDeLineaSeRechaza(t *testing.T) {
 	leer := func(extra string) []string {
@@ -899,6 +921,99 @@ func TestUnColisionOkConNumeroDeLineaSeRechaza(t *testing.T) {
 		// Las 88 directivas que no tienen colisión no tienen que escribir nada.
 		if q := leer(""); len(q) != 0 {
 			t.Errorf("una directiva sin `colision_ok` se quejó: %v", q)
+		}
+	})
+}
+
+// UN ANCLA SE PISA CON VARIAS, Y CON UN SOLO NOMBRE LA RESPUESTA ERA IMPOSIBLE DE DAR.
+//
+// `colision_ok` nació llevando UN nombre, y mientras las colisiones venían de a pares alcanzaba.
+// Medido el 2026-09-21 mecanizando setenta y ocho anclas de una vez, deja de alcanzar: el `WHERE`
+// de la cronología lo cubren TRES guardas —la ventana del dominio, la ventana del envoltorio y el
+// tenant— y el UPDATE de `servicios.go`, CUATRO. Contestarle a una dejaba a las otras gritando
+// para siempre, que es justo el «aviso verdadero que nadie puede contestar» que la clave vino a
+// evitar: cinco pares quedaron sin respuesta por el techo de la clave y no por descuido.
+//
+// LO QUE ESTA PRUEBA CUIDA NO ES QUE ACEPTE VARIOS SINO QUE LOS CUENTE POR SEPARADO. El riesgo del
+// arreglo cómodo es marcar «usada» la declaración entera en cuanto UNO de los nombres se pisa de
+// verdad: ahí un nombre rancio viaja escondido detrás de sus hermanos y nadie lo relee nunca, que
+// es peor que el aviso original — un «esto ya se miró» sobre algo que nadie miró.
+//
+// Sabotaje que la hace fallar: marcar `usadas[sitio]` en vez de `usadas[sitio+"\x00"+nombre]`.
+// arnes: archivo="internal/arnes/arnes.go"
+// arnes: de="\t\t\t\t\tusadas[sitio+\"\\x00\"+y.Directiva.Prueba] = true"
+// arnes: a="\t\t\t\t\tusadas[sitio] = true"
+func TestUnColisionOkContestaAVariasYCadaNombreSeCuentaSolo(t *testing.T) {
+	raiz := t.TempDir()
+	ruta := filepath.Join(raiz, "prod.go")
+	if err := os.WriteFile(ruta, []byte("package p\n\nfunc f() {\n\tif n != 1 {\n\t\treturn\n\t}\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Las TRES se pisan entre sí: cada `a` destruye el `de` de las otras dos.
+	const literal = "\tif n != 1 {"
+	ancla := func(archivo, prueba, a, colisionOk string) Ancla {
+		return Ancla{Archivo: archivo, Linea: 10, Directiva: &Directiva{
+			Archivo: "prod.go", De: literal, A: a, Prueba: prueba, ColisionOk: colisionOk,
+		}}
+	}
+	males := func(anclas ...Ancla) []string {
+		return Colisiones(Censo{Raiz: raiz, Anclas: anclas})
+	}
+
+	// CONTROL DE «EL DETECTOR ESTÁ VIVO». Sin esto, un cero más abajo no distingue «contestada» de
+	// «no se miró nada»: tres anclas que se pisan de a pares dan seis denuncias, dos por par.
+	t.Run("CONTROL: sin ninguna clave, las tres se denuncian en las dos direcciones", func(t *testing.T) {
+		m := males(
+			ancla("a_test.go", "TestA", "\tif n != 2 {", ""),
+			ancla("b_test.go", "TestB", "\tif false {", ""),
+			ancla("c_test.go", "TestC", "\tif n > 9 {", ""),
+		)
+		if len(m) != 6 {
+			t.Fatalf("esperaba 6 denuncias, vinieron %d:\n  %s", len(m), strings.Join(m, "\n  "))
+		}
+	})
+
+	t.Run("un solo nombre NO alcanza cuando se pisa con dos", func(t *testing.T) {
+		// A contesta sólo a B: la dirección A→C queda viva, que es correcto y es el techo viejo.
+		m := males(
+			ancla("a_test.go", "TestA", "\tif n != 2 {", "TestB"),
+			ancla("b_test.go", "TestB", "\tif false {", "TestA TestC"),
+			ancla("c_test.go", "TestC", "\tif n > 9 {", "TestA TestB"),
+		)
+		if len(m) != 1 {
+			t.Fatalf("esperaba 1 denuncia (la dirección A→C, sin contestar), vinieron %d:\n  %s",
+				len(m), strings.Join(m, "\n  "))
+		}
+		if !strings.Contains(m[0], "a_test.go") || !strings.Contains(m[0], "TestC") {
+			t.Errorf("la denuncia que queda tiene que ser A→C y dice: %s", m[0])
+		}
+	})
+
+	t.Run("con los tres nombres puestos, el aviso se calla entero", func(t *testing.T) {
+		m := males(
+			ancla("a_test.go", "TestA", "\tif n != 2 {", "TestB TestC"),
+			ancla("b_test.go", "TestB", "\tif false {", "TestA TestC"),
+			ancla("c_test.go", "TestC", "\tif n > 9 {", "TestA TestB"),
+		)
+		if len(m) != 0 {
+			t.Fatalf("con las tres respuestas puestas no tendría que quedar nada, vinieron %d:\n  %s",
+				len(m), strings.Join(m, "\n  "))
+		}
+	})
+
+	t.Run("UN NOMBRE RANCIO NO SE ESCONDE DETRÁS DE SUS HERMANOS", func(t *testing.T) {
+		// Ésta es la que decide. `TestA` contesta a `TestB` —que se pisa de verdad— y de paso
+		// nombra a `TestFantasma`, que no existe. Si la declaración se marcara «usada» entera, el
+		// fantasma pasaría sin que nadie lo relea.
+		m := males(
+			ancla("a_test.go", "TestA", "\tif n != 2 {", "TestB TestFantasma"),
+			ancla("b_test.go", "TestB", "\tif false {", "TestA"),
+		)
+		if len(m) != 1 {
+			t.Fatalf("esperaba 1 denuncia (la rancia), vinieron %d:\n  %s", len(m), strings.Join(m, "\n  "))
+		}
+		if !strings.Contains(m[0], "rancia") || !strings.Contains(m[0], "TestFantasma") {
+			t.Errorf("la denuncia tiene que nombrar al fantasma rancio y dice: %s", m[0])
 		}
 	})
 }
