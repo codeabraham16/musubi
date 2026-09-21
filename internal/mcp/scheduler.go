@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"musubi/internal/cognition"
+	"musubi/internal/embedding"
 	"musubi/internal/logx"
 	"musubi/internal/memory"
 )
@@ -213,7 +214,16 @@ func (s *McpServer) RunInboundScheduler(ctx context.Context, interval time.Durat
 // localmente (IngestShared, anti-loop: NO re-encola en el outbox). Avanza el cursor con el mayor
 // rowid del lote. Best-effort: un fallo de red reintenta en el próximo tick; un fallo de ingest de
 // una fila se logea y no aborta el batch. Tope de páginas por tick para no monopolizar.
+//
+// Si ingirió al menos una fila, al salir —por cualquiera de sus returns— pide vectorizar lo
+// pendiente (vectorizarLoBajado). Un tick que no bajó nada no cuesta ni una consulta más.
 func (s *McpServer) drainInboundOnce(ctx context.Context) {
+	ingeridas := 0
+	defer func() {
+		if ingeridas > 0 {
+			s.vectorizarLoBajado()
+		}
+	}()
 	var cur int64
 	if raw, ok, _ := s.engine.GetMeta(metaInboundCursor); ok {
 		cur, _ = strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
@@ -249,6 +259,7 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 				failed = true
 				break
 			}
+			ingeridas++
 			if o.RowID > lastOK {
 				lastOK = o.RowID
 			}
@@ -270,6 +281,41 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// vectorizarLoBajado pide al engine que vectorice, en background, la memoria pendiente de vector
+// después de un pull que ingirió filas.
+//
+// ⚠️ SIN ESTO LO BAJADO ERA INVISIBLE PARA LA BÚSQUEDA SEMÁNTICA HASTA EL PRÓXIMO ARRANQUE.
+// IngestShared guarda sin vector (es léxico a propósito) y el único relleno automático
+// —autoBackfill en cmd/musubi— corre una vez, al levantar el daemon. Medido en davantis-1: 0
+// observaciones visibles sin vector tras un reinicio, 4 un rato después, 21 al día siguiente.
+//
+// No bloquea el scheduler: el engine lo corre en su goroutine de fondo (rastreada por Close) y
+// coalesce los pedidos que llegan mientras trabaja —también contra el relleno del arranque—. Un
+// embebedor caído degrada y nunca tumba el drain: lo que no se vectorizó queda pendiente hasta el
+// próximo pull QUE INGIERA AL MENOS UNA FILA (un tick que no baja nada no dispara esto) o hasta el
+// próximo arranque. Con Noop/none no hay semántica: no hace nada.
+//
+// El engine se pide por aserción de interfaz y no por StorageBackend, por la misma razón que
+// estamparProcedenciaDelVector: subir el método a la interfaz obligaría a implementarlo a todos
+// los dobles de prueba, y quien no lo tenga no tiene vectores que rellenar.
+func (s *McpServer) vectorizarLoBajado() {
+	if !embedding.Enabled(s.embedder) {
+		return
+	}
+	eng, ok := s.engine.(interface {
+		IncrementalEmbedBackfill(func(context.Context, []string) ([][]float32, error))
+	})
+	if !ok {
+		return
+	}
+	emb := s.embedder
+	// El ctx lo pone el ENGINE y no el scheduler: la corrida vive en el engine, sobrevive al tick
+	// que la pidió, y ese ctx se cancela en engine.Close, que es lo que un apagado tiene que cortar.
+	eng.IncrementalEmbedBackfill(func(ctx context.Context, textos []string) ([][]float32, error) {
+		return embedding.EmbedBatch(ctx, emb, textos)
+	})
 }
 
 // drainOutboxOnce reclama un batch del outbox y empuja cada fila al central, aplicando el

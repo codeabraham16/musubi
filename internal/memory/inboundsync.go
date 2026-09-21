@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"musubi/internal/redact"
@@ -97,8 +99,23 @@ func (e *DbEngine) IngestShared(o SharedObs) (inserted bool, err error) {
 	tokens := EstimateTokens(clean)
 	memType := normalizeMemType(o.MemType)
 
-	var before int
-	_ = e.db.QueryRow(`SELECT COUNT(*) FROM observations WHERE id = ?`, o.ID).Scan(&before)
+	// Una sola transacción para leer el contenido previo, pisarlo e invalidar el vector: el DSN
+	// lleva _txlock=immediate, así que el lock de escritura se toma al nacer y nadie puede editar la
+	// fila entre la lectura y el UPSERT.
+	tx, err := e.db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("error al abrir la transacción de ingest shared: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var previo string
+	existia := true
+	switch err := tx.QueryRow(`SELECT content FROM observations WHERE id = ?`, o.ID).Scan(&previo); {
+	case errors.Is(err, sql.ErrNoRows):
+		existia = false
+	case err != nil:
+		return false, fmt.Errorf("error al leer el contenido previo de %s: %w", o.ID, err)
+	}
 
 	// UPSERT espejo del de saveObservation, PERO sin enqueueOutboxTx (anti-loop) y forzando
 	// scope='shared' (viene del pozo compartido). project_id/author se estampan del ORIGEN y no se
@@ -122,7 +139,7 @@ func (e *DbEngine) IngestShared(o SharedObs) (inserted bool, err error) {
 	// día se quiere limpiar el pasado, el lugar es una reparación explícita sobre las filas
 	// existentes —que además tiene que devolverle a cada una la importance que declaró— y no un
 	// rechazo en el camino de relay.
-	_, err = e.db.Exec(`INSERT INTO observations
+	_, err = tx.Exec(`INSERT INTO observations
 		(id, topic_key, content, gist, content_hash, tokens, importance, mem_type, scope, project_id, author, sync_seq)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'shared', ?, ?, (SELECT IFNULL(MAX(sync_seq),0)+1 FROM observations))
 		ON CONFLICT(id) DO UPDATE SET
@@ -138,5 +155,32 @@ func (e *DbEngine) IngestShared(o SharedObs) (inserted bool, err error) {
 	if err != nil {
 		return false, fmt.Errorf("error al ingerir observación shared: %w", err)
 	}
-	return before == 0, nil
+
+	// ⚠️ UNA EDICIÓN QUE BAJA DEL CENTRAL DEJABA EL VECTOR DEL CONTENIDO VIEJO. El central sube el
+	// sync_seq en cada update, así que una fila editada vuelve a bajar y este UPSERT le pisa content
+	// y content_hash; pero la fila de embeddings seguía con el vector del texto anterior y el
+	// model_id ACTUAL, que no entra en stalePredicate: ni el incremental ni el backfill la volvían a
+	// ver, y la búsqueda semántica la rankeaba por lo que ya no dice. Si el contenido cambió, el
+	// vector se borra en la MISMA transacción y la fila queda pendiente: el relleno que dispara el
+	// pull la re-embebe con el texto nuevo. Si no cambió (re-entrega, o sólo cambió la importancia),
+	// el vector sigue valiendo y no se toca: re-embeber de más cuesta un pedido por fila y deja la
+	// fila fuera del recall semántico hasta que vuelva.
+	//
+	// Se compara el contenido y no content_hash porque el vector se calcula del contenido: es la
+	// entrada exacta, sin depender de que el hash previo de la fila esté cargado.
+	cambio := existia && previo != clean
+	if cambio {
+		if _, err := tx.Exec(`DELETE FROM embeddings WHERE observation_id = ?`, o.ID); err != nil {
+			return false, fmt.Errorf("error al invalidar el vector viejo de %s: %w", o.ID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("error al commitear el ingest shared de %s: %w", o.ID, err)
+	}
+	if cambio && e.index != nil {
+		// Post-commit, como en saveObservation: el IVF no guarda un candidato muerto. La
+		// correctitud ya la da el JOIN contra embeddings; esto es precisión del recall.
+		e.index.Remove(o.ID)
+	}
+	return !existia, nil
 }

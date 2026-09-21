@@ -635,10 +635,15 @@ func (e *DbEngine) autoBuildVectorIndex(cfg config.VectorIndexConfig) {
 // o porque acumuló suficientes cambios (dirty) y pasó el piso temporal. Corre en
 // segundo plano con guard atómico para no demorar el path de escritura.
 func (e *DbEngine) maybeRebuildVectorIndex() {
-	if e.index == nil || !e.vindexCfg.Enabled {
+	e.maybeRebuildVectorIndexWith(e.vindexCfg) // snapshot en la goroutine del caller, para pasar a la de fondo
+}
+
+// maybeRebuildVectorIndexWith es maybeRebuildVectorIndex con la config por COPIA, para los caminos
+// que ya corren en una goroutine de fondo (el backfill incremental) y no deben leer e.vindexCfg.
+func (e *DbEngine) maybeRebuildVectorIndexWith(cfg config.VectorIndexConfig) {
+	if e.index == nil || !cfg.Enabled {
 		return
 	}
-	cfg := e.vindexCfg // snapshot en la goroutine del caller, para pasar a la de fondo
 	trained := e.index.Trained()
 	dirty := e.index.Dirty()
 	needTrain := !trained && dirty >= cfg.ExactThreshold
