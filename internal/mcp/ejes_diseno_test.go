@@ -25,6 +25,9 @@ import (
 //
 // SABOTAJE: etiquetar buscando el nombre del eje en vez de su vocabulario ⇒ una tarjeta que habla
 // de accesibilidad sin nombrarla queda sin eje y este test se pone rojo.
+// arnes: archivo="internal/mcp/ejes_diseno.go"
+// arnes: de="\t\tfor w := range vocab {\n\t\t\tif bolsa[w] {"
+// arnes: a="\t\tfor w := range vocab {\n\t\t\tif bolsa[nombre] && w != \"\" {"
 func TestEjesEtiquetanPorVocabularioNoPorNombre(t *testing.T) {
 	casos := []struct {
 		topic, texto, espera string
@@ -52,6 +55,9 @@ func TestEjesEtiquetanPorVocabularioNoPorNombre(t *testing.T) {
 // se pierde justo las tarjetas escritas con más cuidado.
 //
 // SABOTAJE: sacar sinAcento de palabrasNormalizadas ⇒ la versión acentuada deja de etiquetar.
+// arnes: archivo="internal/mcp/ejes_diseno.go"
+// arnes: de="\t\tb.WriteRune(sinAcento(r))"
+// arnes: a="\t\tb.WriteRune(r)"
 func TestEjesElAcentoNoRompeLaEtiqueta(t *testing.T) {
 	// TODAS las palabras que etiquetan llevan acento, y eso es el punto. La primera versión usaba
 	// «la validación del campo del formulario»: sin normalizar, «campo» y «formulario» alcanzaban
@@ -79,6 +85,9 @@ func TestEjesElAcentoNoRompeLaEtiqueta(t *testing.T) {
 // a11y, y la etiqueta deja de significar algo.
 //
 // SABOTAJE: bajar designEjeMinHits a 1 ⇒ la tarjeta de una sola mención se lleva varios ejes.
+// arnes: archivo="internal/mcp/ejes_diseno.go"
+// arnes: de="const designEjeMinHits = 2"
+// arnes: a="const designEjeMinHits = 1"
 func TestEjesUnaMencionSueltaNoEtiqueta(t *testing.T) {
 	if designEjeMinHits < 2 {
 		t.Fatalf("designEjeMinHits=%d: con 1, una mención suelta etiqueta y el eje no significa nada", designEjeMinHits)
@@ -122,6 +131,9 @@ func TestEjesSinTablaCompletaNoSeRutea(t *testing.T) {
 // del azar del ranking. `retrieval` y `axis` lo cuentan.
 //
 // SABOTAJE: no poblar Axis ⇒ el brief rutea pero no lo declara y este test se pone rojo.
+// arnes: archivo="internal/mcp/methods_design.go"
+// arnes: de="\t\tAxis:            rec.Eje,"
+// arnes: a="\t\tAxis:            \"\","
 func TestEjesElRuteoSeDeclaraEnElBrief(t *testing.T) {
 	engine, err := memory.NewDbEngine(t.TempDir())
 	if err != nil {
@@ -227,6 +239,9 @@ func (e *embebedorDeEje) EmbedBatch(ctx context.Context, txts []string) ([][]flo
 //
 // SABOTAJE: sacar el camino del slug ⇒ una tarjeta que nombra su eje en el topic y no repite su
 // vocabulario en el cuerpo queda sin etiquetar, o sea inalcanzable por ruteo.
+// arnes: archivo="internal/mcp/ejes_diseno.go"
+// arnes: de="\tif slug := strings.TrimPrefix(topic, designCorpusPrefix); slug != topic {\n\t\tfor nombre := range vocabDeEje {\n\t\t\tif strings.HasPrefix(slug, nombre+\"-\") {\n\t\t\t\tout[nombre] = true\n\t\t\t}\n\t\t}\n\t}\n"
+// arnes: a=""
 func TestEjesElSlugDeclaraElEje(t *testing.T) {
 	// EL FIXTURE NO PUEDE ETIQUETARSE POR VOCABULARIO, o el test pasa por el otro camino y no prueba
 	// nada. La primera versión usaba el topic real `presencia-un-solo-protagonista`, que trae DOS

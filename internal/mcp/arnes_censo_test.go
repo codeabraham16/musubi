@@ -451,7 +451,27 @@ import (
 // Y OTRO SABOTAJE QUE NO COMPILA, con una cara nueva: no por tipos, sino por CÓDIGO INALCANZABLE.
 // Anteponer un `return` al cuerpo de un `case` deja muerto lo que sigue y `go vet` lo rechaza, así
 // que el corte tiene que REEMPLAZAR el `return` final del caso en vez de adelantarse a él.
-const anclasEnProsaAlDia = 277
+//
+// Y DE 277 A 264 EL 2026-09-21: las trece anclas del MOTOR DE DISEÑO —`ejes_diseno_test.go` y
+// `formas_diseno_test.go`—: cómo se etiqueta una tarjeta por su VOCABULARIO y no por su nombre, y
+// cómo el motor ACOTA las formas plausibles sin elegir por vos. 15 de 15 en rojo (las trece más dos
+// de control). Dos intentos míos fallaron antes, y los dos enseñan algo.
+//
+// EL EJE QUE LA PRUEBA MIRA NO ES EL QUE UNO SUPONE. `TestFormasUnaPropiedadNoTieneForma` recorre
+// una lista tipeada —color, a11y, tipografia, terminacion, estado-vacio— y el primer corte le dio
+// candidatas a «paleta», que no está en esa lista: VERDE. Cuando el sabotaje es AGREGAR algo a una
+// tabla, hay que agregarlo exactamente donde la prueba va a mirar, y eso se lee de la prueba, no
+// del dominio.
+//
+// Y LA TERCERA CARA DE «EL SABOTAJE NO COMPILA»: vaciar un campo de un struct puede dejar SIN USAR
+// la variable que lo llenaba. `Shape: forma` → `Shape: ""` deja a `forma` declarada y no usada, y
+// Go no compila. `Shape: forma[:0]` da lo mismo —cadena vacía— y conserva el uso.
+//
+// LAS CINCO ANCLAS DE `specs_sin_cabos_test.go` QUEDAN PARA UN LOTE PROPIO: sabotean TABLAS DE
+// MARKDOWN del registro de cabos, con filas de miles de caracteres y `|`, `**` y backticks adentro.
+// Es un objetivo nuevo para el arnés y merece su propio cuidado con los escapes, no el final de una
+// tanda larga.
+const anclasEnProsaAlDia = 264
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //

@@ -15,6 +15,9 @@ import (
 // del proyecto. Servir UNA forma sería el motor decidiendo; servir las doce sería no acotar nada.
 //
 // SABOTAJE: devolver una sola candidata ⇒ el motor pasó a elegir y este test se pone rojo.
+// arnes: archivo="internal/mcp/formas_diseno.go"
+// arnes: de="\treturn elegirPorContraste(disponibles, origen, rs, hayDireccion(rs), designFormasPropuestas)"
+// arnes: a="\treturn elegirPorContraste(disponibles, origen, rs, hayDireccion(rs), 1)"
 func TestFormasElMotorAcotaNoElige(t *testing.T) {
 	for eje := range formasPorEje {
 		b := formasPara(eje, nil, intencionDeDiseno{})
@@ -39,6 +42,9 @@ func TestFormasElMotorAcotaNoElige(t *testing.T) {
 // respuesta — el mismo criterio que ya usa la abstención cuando no hay material.
 //
 // SABOTAJE: darle candidatas a esos ejes ⇒ el motor propone esqueleto donde no hay pantalla.
+// arnes: archivo="internal/mcp/formas_diseno.go"
+// arnes: de="var formasPorEje = map[string][]string{"
+// arnes: a="var formasPorEje = map[string][]string{\n\t\"color\": {\"tabla-densa\"},"
 func TestFormasUnaPropiedadNoTieneForma(t *testing.T) {
 	for _, eje := range []string{"color", "a11y", "tipografia", "terminacion", "estado-vacio"} {
 		if b := formasPara(eje, nil, intencionDeDiseno{}); b != "" {
@@ -98,6 +104,9 @@ func TestFormasLaRotacionNoDejaSinForma(t *testing.T) {
 //
 // SABOTAJE: nombrar una forma inexistente en formasPorEje ⇒ el brief propondría una línea con el
 // nombre vacío y su descripción vacía, y este test la agarra.
+// arnes: archivo="internal/mcp/formas_diseno.go"
+// arnes: de="\t\"tabla\":      {\"tabla-densa\","
+// arnes: a="\t\"tabla\":      {\"forma-que-no-existe\", \"tabla-densa\","
 func TestFormasTodaReferenciaExiste(t *testing.T) {
 	for eje, cands := range formasPorEje {
 		for _, c := range cands {
@@ -128,6 +137,9 @@ func TestFormasTodaReferenciaExiste(t *testing.T) {
 // I-FRM5 · LA FORMA LLEGA AL BRIEF CUANDO SE RUTEÓ.
 //
 // SABOTAJE: no poblar Shape ⇒ el catálogo existe y nunca sale.
+// arnes: archivo="internal/mcp/methods_design.go"
+// arnes: de="\t\tShape:           forma,"
+// arnes: a="\t\tShape:           forma[:0],"
 func TestFormasLaFormaLlegaAlBrief(t *testing.T) {
 	engine, err := memory.NewDbEngine(t.TempDir())
 	if err != nil {
@@ -184,6 +196,10 @@ func servidorConFormas(t *testing.T) (*McpServer, *memory.DbEngine) {
 // del artefacto, porque no tienen estado. Nosotros lo leemos de la memoria del proyecto.
 //
 // SABOTAJE: ignorar la historia y pasar siempre nil ⇒ la forma anterior vuelve a proponerse.
+// arnes: archivo="internal/mcp/methods_design.go"
+// arnes: de="\t\t\tusadas, huboRotacion = s.formasUsadasPor(proyectoDelPrincipal(principalFrom(ctx)))"
+// arnes: a="\t\t\tusadas, huboRotacion = nil, false"
+// arnes: colision_ok="TestRotacionSeLlaveaPorElPrincipalNoPorLaMarca"
 func TestRotacionExcluyeLaFormaAnterior(t *testing.T) {
 	s, engine := servidorConFormas(t)
 	admin := &Principal{Name: "sala", ProjectID: "proy-a", Read: "all", Write: "all"}
@@ -217,6 +233,10 @@ func TestRotacionExcluyeLaFormaAnterior(t *testing.T) {
 // por marca, la sala de mando le escribiría la rotación a Altura cada vez que diseña para ellos.
 //
 // SABOTAJE: llavear por brandScope ⇒ la historia de un proyecto contamina la del otro.
+// arnes: archivo="internal/mcp/methods_design.go"
+// arnes: de="\t\t\tusadas, huboRotacion = s.formasUsadasPor(proyectoDelPrincipal(principalFrom(ctx)))"
+// arnes: a="\t\t\tusadas, huboRotacion = s.formasUsadasPor(brandScopeFor(principalFrom(ctx), args.Brand))"
+// arnes: colision_ok="TestRotacionExcluyeLaFormaAnterior"
 func TestRotacionSeLlaveaPorElPrincipalNoPorLaMarca(t *testing.T) {
 	s, engine := servidorConFormas(t)
 	// La historia vive en el proyecto de la SALA.
@@ -242,6 +262,9 @@ func TestRotacionSeLlaveaPorElPrincipalNoPorLaMarca(t *testing.T) {
 // nota va SIEMPRE, porque si sólo apareciera con historia no existiría nunca la primera anotación.
 //
 // SABOTAJE: emitir la nota sólo cuando hay historia ⇒ la rotación no arranca jamás.
+// arnes: archivo="internal/mcp/formas_diseno.go"
+// arnes: de="func notaDeRotacion(hubo bool) string {"
+// arnes: a="func notaDeRotacion(hubo bool) string {\n\tif !hubo {\n\t\treturn \"\"\n\t}"
 func TestRotacionSinHistoriaSeDeclaraYSePide(t *testing.T) {
 	s, _ := servidorConFormas(t)
 	admin := &Principal{Name: "sala", ProjectID: "proy-nuevo", Read: "all", Write: "all"}
@@ -264,6 +287,9 @@ func TestRotacionSinHistoriaSeDeclaraYSePide(t *testing.T) {
 // rotación se apague ante la primera nota redactada distinto — y se apagaría en silencio.
 //
 // SABOTAJE: exigir un formato exacto (JSON, o el nombre solo) ⇒ una nota en prosa deja de contar.
+// arnes: archivo="internal/mcp/formas_diseno.go"
+// arnes: de="\t\tif strings.Contains(bajo, clave) || strings.Contains(bajo, strings.ToLower(f.Nombre)) {"
+// arnes: a="\t\tif bajo == clave && f.Nombre != \"\" {"
 func TestRotacionToleraLaNotaEnProsa(t *testing.T) {
 	for _, nota := range []string{
 		"tabla-densa",
