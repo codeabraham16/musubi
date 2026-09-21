@@ -306,7 +306,7 @@ type Censo struct {
 	// decirlo, no restarlo del total en silencio.
 	SinUbicar []string
 
-	// SinTrackear son `_test.go` que existen en el árbol y NO están en el índice de git.
+	// SinTrackear son `.go` que existen en el árbol y NO están en el índice de git.
 	//
 	// ESTO ME PASÓ ESCRIBIENDO ESTE PAQUETE Y POR ESO ESTÁ ACÁ. El censo deriva de `git ls-files`
 	// —que es lo correcto: barrer el disco mete adentro `.claude/` con sus ~64k `.go` ajenos— pero
@@ -372,14 +372,26 @@ func (c Censo) filtrar(ok func(Ancla) bool) []Ancla {
 	return out
 }
 
-// ArchivosDePrueba pregunta a git qué `_test.go` trackea el repo.
+// ArchivosDelCorpus pregunta a git qué `.go` trackea el repo: LOS DE PRUEBA Y LOS DE PRODUCCIÓN.
 //
 // `git ls-files` Y NO UN BARRIDO DEL DISCO, y no es una preferencia de estilo: `.claude/` tiene
 // ~64.149 `.go` de otros proyectos y un respaldo sin trackear en `.musubi/` ya hizo que una guarda
 // acusara a tres lectores que no existían. Un barrido falla SÓLO EN LOCAL y pasa SIEMPRE en CI,
 // que es el peor de los dos mundos.
-func ArchivosDePrueba(raiz string) ([]string, error) {
-	salida, err := exec.Command("git", "-C", raiz, "ls-files", "-z", "*_test.go").Output()
+//
+// MIRA TAMBIÉN EL CÓDIGO DE PRODUCCIÓN, y eso es un arreglo, no una comodidad. Mientras este
+// enumerador pedía `*_test.go` y nada más, «cobertura ejecutable 98,5 %» NO era una propiedad del
+// árbol: era una propiedad de los `_test.go`. `cmd/musubi/precheck.go` llevaba dos anclas y el
+// censo no las contaba ni podía contarlas, y una de ellas —«mover la apertura antes de
+// leerEventoPrecheck»— era la ÚNICA promesa de `TestPrecheckNoAbreLaBaseSiNoLeToca`, que no tiene
+// ancla propia. Un filtro por UBICACIÓN se lee como una propiedad del árbol exactamente igual que
+// uno por redacción, y sale más barato de creer porque nadie lo escribe en el número.
+//
+// Lo que entra por acá NO se mecaniza solo: un ancla en código de producción no está pegada a un
+// `func Test…`, así que tiene que declarar su `prueba="…"` a mano o el censo la denuncia. Ver
+// `censarArchivo`, donde el mapa de pruebas sólo acepta funciones que son pruebas de verdad.
+func ArchivosDelCorpus(raiz string) ([]string, error) {
+	salida, err := exec.Command("git", "-C", raiz, "ls-files", "-z", "*.go").Output()
 	if err != nil {
 		return nil, fmt.Errorf("no pude preguntarle a git qué trackea desde %s: %w — no medí nada", raiz, err)
 	}
@@ -396,21 +408,21 @@ func ArchivosDePrueba(raiz string) ([]string, error) {
 		out = append(out, rel)
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("git no listó NI UN `_test.go` trackeado desde %s: eso no es «no hay pruebas», "+
+		return nil, fmt.Errorf("git no listó NI UN `.go` trackeado desde %s: eso no es «no hay código», "+
 			"es que este enumerador no miró nada", raiz)
 	}
 	sort.Strings(out)
 	return out, nil
 }
 
-// pruebasSinTrackear pregunta por los `_test.go` que están en el árbol y no en el índice.
+// goSinTrackear pregunta por los `.go` que están en el árbol y no en el índice.
 //
 // `--exclude-standard` respeta `.gitignore`, así que lo ignorado a propósito no aparece. Un fallo
 // de git acá no es fatal —esto es un aviso, no una medición— pero tampoco se inventa un vacío:
 // devolver nil cuando no se pudo preguntar es lo correcto sólo porque el llamador ya no depende de
 // esto para decidir nada.
-func pruebasSinTrackear(raiz string) []string {
-	salida, err := exec.Command("git", "-C", raiz, "ls-files", "-z", "-o", "--exclude-standard", "*_test.go").Output()
+func goSinTrackear(raiz string) []string {
+	salida, err := exec.Command("git", "-C", raiz, "ls-files", "-z", "-o", "--exclude-standard", "*.go").Output()
 	if err != nil {
 		return nil
 	}
@@ -426,11 +438,11 @@ func pruebasSinTrackear(raiz string) []string {
 
 // Censar lee todo el árbol y devuelve lo que declara.
 func Censar(raiz string) (Censo, error) {
-	archivos, err := ArchivosDePrueba(raiz)
+	archivos, err := ArchivosDelCorpus(raiz)
 	if err != nil {
 		return Censo{}, err
 	}
-	c := Censo{Raiz: raiz, Archivos: len(archivos), SinTrackear: pruebasSinTrackear(raiz)}
+	c := Censo{Raiz: raiz, Archivos: len(archivos), SinTrackear: goSinTrackear(raiz)}
 	for _, rel := range archivos {
 		r, err := censarArchivo(raiz, rel)
 		if err != nil {
@@ -498,8 +510,19 @@ func censarArchivo(raiz, rel string) (loDeUnArchivo, error) {
 		if fn.Doc == nil {
 			continue
 		}
+		// SÓLO LAS PRUEBAS ENTRAN AL MAPA, y el `esPrueba` de acá no es una repetición del de
+		// arriba: sin él, un ancla pegada al doc de un HELPER heredaba el nombre del helper como
+		// si fuera su prueba. La queja que existe para ese caso dice «el ancla no está pegada a un
+		// `func Test…`» y nunca se disparaba: no faltaba el nombre, venía uno EQUIVOCADO, y un
+		// `-run ^clavesPermitidasDelLatido$` no matchea nada. El árbol tiene dos anclas en esa
+		// posición exacta —`cmd/musubi/agent_test.go:488` e
+		// `internal/mcp/despliegue_alertas_test.go:459`— y las salva un `prueba="…"` explícito, o
+		// sea la casualidad de que quien las escribió no se apoyó en la derivación.
+		if !esPrueba {
+			continue
+		}
 		dePrueba[fn.Doc] = fn.Name.Name
-		if esPrueba && grupoTieneAncla(fset, fn.Doc) {
+		if grupoTieneAncla(fset, fn.Doc) {
 			conAncla++
 		}
 	}

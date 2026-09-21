@@ -458,19 +458,20 @@ func TestUnaExencionSinMotivoNoVale(t *testing.T) {
 // Un cero acá no es «el árbol no promete sabotajes»: es «este lector no miró nada», y son cosas
 // opuestas que salen por la misma puerta. Todo lo que cuelgue del censo daría verde.
 //
-// Sabotaje que la hace fallar: hacer que ArchivosDePrueba filtre por un patrón que no matchea
+// Sabotaje que la hace fallar: hacer que ArchivosDelCorpus filtre por un patrón que no matchea
 // nada, p. ej. `*_prueba.go`.
 // arnes: archivo="internal/arnes/arnes.go"
-// arnes: de="\"ls-files\", \"-z\", \"*_test.go\""
+// arnes: de="\"ls-files\", \"-z\", \"*.go\""
 // arnes: a="\"ls-files\", \"-z\", \"*_prueba.go\""
+// arnes: colision_ok="TestElCorpusIncluyeElCodigoDeProduccion"
 func TestElLectorNoPuedeDevolverCeroSobreElArbolDeVerdad(t *testing.T) {
 	raiz := filepath.Join("..", "..")
-	archivos, err := ArchivosDePrueba(raiz)
+	archivos, err := ArchivosDelCorpus(raiz)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(archivos) < 400 {
-		t.Fatalf("git listó %d `_test.go` y el árbol tiene más de 600: este enumerador está mirando "+
+		t.Fatalf("git listó %d `.go` y el árbol tiene más de mil: este enumerador está mirando "+
 			"otra cosa, y un censo chico se lee igual que una deuda chica", len(archivos))
 	}
 	c, err := Censar(raiz)
@@ -485,6 +486,128 @@ func TestElLectorNoPuedeDevolverCeroSobreElArbolDeVerdad(t *testing.T) {
 	if len(c.SinUbicar) > 0 {
 		t.Errorf("el lector vio %d ancla/s en el texto crudo y no pudo colocarlas en el AST: %v",
 			len(c.SinUbicar), c.SinUbicar)
+	}
+}
+
+// ── 8b · EL CORPUS NO ES «LOS `_test.go`»: TAMBIÉN ES EL CÓDIGO DE PRODUCCIÓN ──────────────────
+//
+// SU HERMANA DE ARRIBA PREGUNTA «¿MEDÍ ALGO?» Y ÉSTA PREGUNTA «¿MEDÍ TODO?», que no es lo mismo y
+// por eso son dos. Con el enumerador acotado a `*_test.go` la de arriba seguía verde —675 archivos
+// son muchos más que 400— mientras el número que el censo publica dejaba de ser una propiedad del
+// árbol para ser una de los `_test.go`. Medido: `cmd/musubi/precheck.go` llevaba dos anclas
+// invisibles, y una de ellas era la única promesa de `TestPrecheckNoAbreLaBaseSiNoLeToca`.
+//
+// LA COMPROBACIÓN NO NOMBRA UN ARCHIVO. Pedir «que aparezca precheck.go» ataría esta guarda a que
+// ese archivo conserve su ancla: el día que alguien la mueva, la guarda se pondría roja por una
+// mudanza y no por un agujero. Pregunta por la FORMA —que el censo haya colocado al menos un ancla
+// fuera de un `_test.go`— que es lo que el enumerador decide.
+//
+// Sabotaje que la hace fallar: volver a acotar el enumerador a `*_test.go`.
+// arnes: archivo="internal/arnes/arnes.go"
+// arnes: de="\"ls-files\", \"-z\", \"*.go\""
+// arnes: a="\"ls-files\", \"-z\", \"*_test.go\""
+// arnes: colision_ok="TestElLectorNoPuedeDevolverCeroSobreElArbolDeVerdad"
+func TestElCorpusIncluyeElCodigoDeProduccion(t *testing.T) {
+	raiz := filepath.Join("..", "..")
+	archivos, err := ArchivosDelCorpus(raiz)
+	if err != nil {
+		t.Fatal(err)
+	}
+	produccion := 0
+	for _, rel := range archivos {
+		if !strings.HasSuffix(rel, "_test.go") {
+			produccion++
+		}
+	}
+	if produccion == 0 {
+		t.Fatalf("de %d archivos enumerados, CERO son de producción: el censo estaría midiendo los "+
+			"`_test.go` y publicando el número como si fuera del árbol", len(archivos))
+	}
+
+	c, err := Censar(raiz)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fuera := 0
+	for _, a := range c.Anclas {
+		if !strings.HasSuffix(a.Archivo, "_test.go") {
+			fuera++
+		}
+	}
+	if fuera == 0 {
+		t.Errorf("el censo enumeró %d archivos de producción y no colocó NI UN ancla en ellos. O el "+
+			"árbol dejó de prometer sabotajes fuera de las pruebas —y entonces esta guarda sobra y "+
+			"se saca a mano— o el lector los está mirando sin leerlos, que se ve igual.", produccion)
+	}
+}
+
+// ── 8c · UN ANCLA PEGADA A UN HELPER NO HEREDA EL NOMBRE DEL HELPER ────────────────────────────
+//
+// La queja que cubre este caso dice «el ancla no está pegada a un `func Test…`», y durante toda su
+// vida fue mentira: el mapa de pruebas aceptaba CUALQUIER función con doc, así que un ancla sobre
+// un helper no se quedaba sin nombre —se quedaba con el nombre EQUIVOCADO—, y la queja no se
+// disparaba nunca. Un `-run ^nombreDelHelper$` no matchea ninguna prueba: el sabotaje sale «sin
+// veredicto», que es el desenlace que este arnés existe para sacar.
+//
+// El árbol tiene dos anclas exactamente ahí —`cmd/musubi/agent_test.go:488` y
+// `internal/mcp/despliegue_alertas_test.go:459`— y las dos se salvan porque declaran su
+// `prueba="…"` a mano. O sea que hoy no hay daño, y lo único que sostenía eso era la costumbre de
+// quien las escribió.
+//
+// Sabotaje que la hace fallar: sacar el `if !esPrueba { continue }` de `censarArchivo` → el helper
+// vuelve a prestarle su nombre al ancla.
+// arnes: archivo="internal/arnes/arnes.go"
+// arnes: de="\t\tif !esPrueba {\n\t\t\tcontinue\n\t\t}\n"
+// arnes: a=""
+func TestUnAnclaPegadaAUnHelperNoHeredaSuNombre(t *testing.T) {
+	raiz := t.TempDir()
+	rel := "x_test.go"
+	// EL FIXTURE SE ARMA CONCATENANDO Y NO CON UN LITERAL CRUDO. Con backticks, las líneas
+	// `// Sabotaje…` quedan FÍSICAS en este archivo: el control de `SinUbicar` las lee del texto
+	// crudo, no las encuentra en el AST —viven adentro de un string— y denuncia un agujero del
+	// lector que no existe. Ya pasó al escribir esta guarda.
+	cuerpo := "package p\n\n" +
+		"// ayudante arma el fixture.\n" +
+		"//\n" +
+		"// Sabotaje que la hace fallar: romper el fixture.\n" +
+		"func ayudante() int { return 1 }\n\n" +
+		"// TestDeVerdad mide algo.\n" +
+		"//\n" +
+		"// Sabotaje que la hace fallar: sacar la comprobación.\n" +
+		"func TestDeVerdad() {}\n"
+	if err := os.WriteFile(filepath.Join(raiz, rel), []byte(cuerpo), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := censarArchivo(raiz, rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.anclas) != 2 {
+		t.Fatalf("esperaba las 2 anclas del fixture, vinieron %d: sin las dos no se puede comparar "+
+			"el caso malo contra su control", len(r.anclas))
+	}
+	// EL CONTROL VA JUNTO AL CASO: si la derivación dejara de funcionar del TODO, el caso malo
+	// daría verde por la razón equivocada y esta guarda no lo notaría.
+	//
+	// Las dos anclas se distinguen por su PROSA y no por su número de línea: agregar un renglón al
+	// fixture correría los números y esta guarda pasaría a mirar el ancla que no es.
+	var deHelper, deTest string
+	for _, a := range r.anclas {
+		switch {
+		case strings.Contains(a.Prosa, "romper el fixture"):
+			deHelper = a.Prueba
+		case strings.Contains(a.Prosa, "sacar la comprobación"):
+			deTest = a.Prueba
+		}
+	}
+	if deTest != "TestDeVerdad" {
+		t.Errorf("el ancla pegada a `func TestDeVerdad` derivó %q: la derivación que SÍ tiene que "+
+			"andar dejó de andar, y sin ella el caso de abajo daría verde sin medir nada", deTest)
+	}
+	if deHelper != "" {
+		t.Errorf("el ancla pegada a `func ayudante` derivó la prueba %q. No es un nombre que falte: "+
+			"es uno equivocado, y `-run ^%s$` no matchea nada — el sabotaje saldría «sin veredicto» "+
+			"en vez de denunciar que falta `prueba=\"…\"`", deHelper, deHelper)
 	}
 }
 
