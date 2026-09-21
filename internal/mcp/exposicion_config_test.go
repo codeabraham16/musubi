@@ -24,6 +24,9 @@ import (
 // archivo versionado no se puede des-filtrar.
 //
 // Sabotaje que la hace fallar: sacar la guarda de `u.User`.
+// arnes: archivo="internal/mcp/exposicion_config.go"
+// arnes: de="\tif u.User != nil {"
+// arnes: a="\tif false && u.User != nil {"
 func TestLaCredencialNoPuedeEntrarPorLaURL(t *testing.T) {
 	_, err := resolverExposicion("base", entradaExposicion{
 		URL: "https://alguien:la-clave@metrics.example.com/m",
@@ -60,6 +63,9 @@ func TestLaCredencialNoPuedeEntrarPorLaURL(t *testing.T) {
 // falló»: dos causas distintas no pueden tener el mismo síntoma.
 //
 // Sabotaje que la hace fallar: seguir con Autorizacion vacía cuando la variable no está.
+// arnes: archivo="internal/mcp/exposicion_config.go"
+// arnes: de="\t\tif secreto == \"\" {"
+// arnes: a="\t\tif false && secreto == \"\" {"
 func TestUnaVariableDeclaradaYAusenteNoEsUnEndpointSinCredencial(t *testing.T) {
 	_, err := resolverExposicion("base", entradaExposicion{
 		URL: "https://metrics.example.com/m", AuthEnv: "NO_EXISTE_EN_NINGUN_LADO",
@@ -91,6 +97,9 @@ func TestUnaVariableDeclaradaYAusenteNoEsUnEndpointSinCredencial(t *testing.T) {
 // «esta máquina dejó de medirse» con el archivo a la vista, correcto salvo por una línea.
 //
 // Sabotaje que la hace fallar: devolver (vacío, false, nil) también cuando el YAML no parsea.
+// arnes: archivo="internal/mcp/exposicion_config.go"
+// arnes: de="\t\treturn fleet.DestinoExposicion{}, false, fmt.Errorf(\"%s no es YAML válido: %w\", s.rutaExposicion(), err)"
+// arnes: a="\t\treturn fleet.DestinoExposicion{}, false, nil"
 func TestUnYamlRotoNoSeConfundeConUnArchivoAusente(t *testing.T) {
 	s := &McpServer{projectPath: t.TempDir()}
 	if err := os.MkdirAll(filepath.Join(s.projectPath, ".musubi"), 0o755); err != nil {
@@ -140,6 +149,9 @@ func TestUnYamlRotoNoSeConfundeConUnArchivoAusente(t *testing.T) {
 // lado, no en un log.
 //
 // Sabotaje que la hace fallar: volver a `fila["error"] = errCfg.Error(); return fila`.
+// arnes: archivo="internal/mcp/methods_sonda.go"
+// arnes: de="\tif errCfg != nil {\n\t\tfila[\"aviso_configuracion\"] = errCfg.Error()\n\t}"
+// arnes: a="\tif errCfg != nil {\n\t\tfila[\"aviso_configuracion\"] = errCfg.Error()\n\t\treturn fila\n\t}"
 func TestUnaConfiguracionRotaNoTumbaALasMaquinasQueNoEstanEnElla(t *testing.T) {
 	s := &McpServer{projectPath: t.TempDir()}
 	if err := os.MkdirAll(filepath.Join(s.projectPath, ".musubi"), 0o755); err != nil {

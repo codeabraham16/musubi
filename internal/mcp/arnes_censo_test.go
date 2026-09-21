@@ -574,7 +574,23 @@ import (
 // Y UN SABOTAJE QUE NO COMPILÓ, quinta cara: `if false {` sobre una condición deja SIN USAR las
 // variables que la condición leía. El corte que compila las conserva —`if !hay && v == X && false`—
 // y dice lo mismo.
-const anclasEnProsaAlDia = 200
+//
+// Y DE 200 A 192 EL 2026-09-21: las ocho anclas de LO QUE EL DESPLIEGUE DA POR SENTADO —la
+// configuración que el cerebro lee del disco (`exposicion_config_test.go`) y el esquema que el
+// redespliegue verifica contra el binario (`despliegue_esquema_test.go`)—. 8 de 8 en rojo, segundo
+// lote consecutivo sin una sola corrección: la verificación previa de literales ya es rutina.
+//
+// EL LOTE SE CORTÓ EN OCHO A PROPÓSITO, y vale decir por qué. El grupo natural eran dieciséis —con
+// las alertas de Altura y la custodia de reglas— pero esas sabotean YAML de alertas y globs de
+// Prometheus, donde cada corte pide leer con cuidado QUÉ REGEX mira la prueba. Entregar ocho bien
+// atadas es mejor que dieciséis a medias, y las otras ocho quedan anotadas para un lote propio.
+//
+// LO QUE ESTAS OCHO CUSTODIAN, dicho corto: que una credencial no pueda entrar por la URL, que una
+// variable declarada y ausente sea un ERROR y no «un endpoint sin credencial», que un YAML roto no
+// se confunda con un archivo ausente, que una configuración rota no tumbe a las máquinas que no
+// están en ella, y —del otro lado— que el redespliegue no vuelva a comparar el esquema contra un
+// número tipeado a mano, que es el cabo A111 letra por letra.
+const anclasEnProsaAlDia = 192
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
