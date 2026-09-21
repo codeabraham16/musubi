@@ -39,6 +39,9 @@ func fixtureExposicion(t *testing.T) string {
 // alerta que no salta nunca: el disco de la base llegaría al 100 % con la raíz mostrando 12 %.
 //
 // Sabotaje que la hace fallar: ignorar `montaje` y quedarse con la primera fila de cada familia.
+// arnes: archivo="internal/fleet/exposicion.go"
+// arnes: de="\t\t\tif valorDeEtiqueta(etiquetas, \"mountpoint\") != montaje {\n\t\t\t\tcontinue\n\t\t\t}\n"
+// arnes: a=""
 func TestElMontajePedidoEsElQueSeMide(t *testing.T) {
 	texto := fixtureExposicion(t)
 
@@ -122,6 +125,9 @@ func TestLaMemoriaDelEndpointSaleDeAvailableYNoDeFree(t *testing.T) {
 // es la única forma en que el atajo produce un número, y ahí se ve que produce uno absurdo.
 //
 // Sabotaje que la hace fallar: escribir un valor por defecto cuando la familia no vino.
+// arnes: archivo="internal/fleet/exposicion.go"
+// arnes: de="\tif cpu != nil {\n\t\tidle, hayI := l.Num(ExpCPUIdle)"
+// arnes: a="\tm.NumProcesos = 120\n\tif cpu != nil {\n\t\tidle, hayI := l.Num(ExpCPUIdle)"
 func TestLoQueElEndpointNoPublicaNoSeInventa(t *testing.T) {
 	texto := fixtureExposicion(t)
 	if strings.Contains(texto, "node_boot_time_seconds") {
@@ -159,6 +165,9 @@ func TestLoQueElEndpointNoPublicaNoSeInventa(t *testing.T) {
 // negativo y, en un uint64, gigantesco.
 //
 // Sabotaje que la hace fallar: cambiar la guarda por `if hayA` y restar contra ahora.Unix().
+// arnes: archivo="internal/fleet/exposicion.go"
+// arnes: de="\tif hayA && hayB && ahoraRemoto > arranque {\n\t\tm.UptimeSeg = uint64(ahoraRemoto - arranque)\n\t}"
+// arnes: a="\t_ = hayB\n\t_ = ahoraRemoto\n\tif hayA {\n\t\tm.UptimeSeg = uint64(ahora.Unix() - int64(arranque))\n\t}"
 func TestConLaMitadDelParDelUptimeNoSeUsaElRelojDeAca(t *testing.T) {
 	mitad := cuerpoMinimo + "node_boot_time_seconds 1.7e+09\n"
 	l, ok := ParsearExposicion(mitad, "/")
@@ -185,6 +194,9 @@ func TestConLaMitadDelParDelUptimeNoSeUsaElRelojDeAca(t *testing.T) {
 // host». Es el mismo rechazo que hace la lectura por SSH cuando del otro lado no hay /proc.
 //
 // Sabotaje que la hace fallar: devolver ok=true siempre.
+// arnes: archivo="internal/fleet/exposicion.go"
+// arnes: de="\t\treturn LecturaExposicion{}, false\n\t}\n\treturn l, true"
+// arnes: a="\t\treturn l, true\n\t}\n\treturn l, true"
 func TestUnEndpointDeAplicacionNoPasaPorUnHost(t *testing.T) {
 	soloApp := `# HELP http_requests_total Cuántas
 # TYPE http_requests_total counter
@@ -215,6 +227,9 @@ pg_database_size_bytes{datname="postgres"} 8.3e+06
 //
 // Sabotaje que la hace fallar: tomar el último campo como valor; cortar en el primer `}`; comparar
 // la etiqueta con strings.HasPrefix.
+// arnes: archivo="internal/fleet/exposicion.go"
+// arnes: de="\t\tif nombre == clave {"
+// arnes: a="\t\tif strings.HasPrefix(nombre, clave) {"
 func TestLasTresTrampasDeUnaLineaDeExposicion(t *testing.T) {
 	casos := []struct {
 		nombre string
@@ -273,6 +288,9 @@ func TestLasTresTrampasDeUnaLineaDeExposicion(t *testing.T) {
 //
 // Sabotaje que la hace fallar: devolver 0 en la primera lectura en vez de nil; o sumar los
 // contadores de idle adentro del total dos veces.
+// arnes: archivo="internal/fleet/exposicion.go"
+// arnes: de="\t\t\tm.CPUPct = cpu.Delta(uint64((total-idle)*100), uint64(total*100))"
+// arnes: a="\t\t\tm.CPUPct = cpu.Delta(uint64((total-idle)*100), uint64(total*100))\n\t\t\tif m.CPUPct == nil {\n\t\t\t\tz := 0.0\n\t\t\t\tm.CPUPct = &z\n\t\t\t}"
 func TestElPorcentajeDeCPUNecesitaDosLecturas(t *testing.T) {
 	texto := fixtureExposicion(t)
 	l, _ := ParsearExposicion(texto, "/data")
@@ -444,6 +462,9 @@ func TestUn401MandaAMirarLaCredencialYNoLaRed(t *testing.T) {
 // pasa es que ese endpoint no alcanza para medir un host.
 //
 // Sabotaje que la hace fallar: pedir sólo ExpMemTotal en la compuerta.
+// arnes: archivo="internal/fleet/exposicion.go"
+// arnes: de="\t_, hayDispo := l.Num(ExpMemDisponible)\n\tif !hayTotal || !hayDispo {"
+// arnes: a="\t_, hayDispo := l.Num(ExpMemDisponible)\n\t_ = hayDispo\n\tif !hayTotal {"
 func TestLaCompuertaYLaReglaDeLosParesNoSeContradicen(t *testing.T) {
 	casos := []struct {
 		nombre string
@@ -505,6 +526,9 @@ func TestLaCompuertaYLaReglaDeLosParesNoSeContradicen(t *testing.T) {
 //
 // Sabotaje que la hace fallar: sacar la asignación del total de adentro del `if` del libre, en
 // cualquiera de los tres pares.
+// arnes: archivo="internal/fleet/exposicion.go"
+// arnes: de="\tif total, hay := l.Num(ExpSwapTotal); hay {\n\t\tif libre, hayL := l.Num(ExpSwapLibre); hayL && libre <= total {\n\t\t\tm.SwapTotal = uint64(total)"
+// arnes: a="\tif total, hay := l.Num(ExpSwapTotal); hay {\n\t\tm.SwapTotal = uint64(total)\n\t\tif libre, hayL := l.Num(ExpSwapLibre); hayL && libre <= total {"
 func TestUnTotalSinSuLibreNoSeMide(t *testing.T) {
 	for _, c := range []struct {
 		par       string
