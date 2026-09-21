@@ -52,6 +52,10 @@ func serieDe(salida, metrica, device string) (string, bool) {
 // redespliega varias veces por día— y marcarlos atrasados dejaría la alarma encendida siempre.
 //
 // Sabotaje: comparar `d.AgentVer != versionCerebro` en vez del núcleo → la máquina al día pasa a 1.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\t\t\t\tdifiere, comparable := fleet.VersionDelAgenteDifiere(d.AgentVer, versionCerebro)"
+// arnes: a="\t\t\t\tdifiere, comparable := d.AgentVer != versionCerebro, d.AgentVer != \"\""
+// arnes: colision_ok="TestUnaMaquinaSinAgenteNoDiceQueEstaAlDia"
 func TestElAgenteAtrasadoSeDistingueDelQueSoloCambioDeCommit(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ts := servidorHTTP(t, s)
@@ -80,6 +84,9 @@ func TestElAgenteAtrasadoSeDistingueDelQueSoloCambioDeCommit(t *testing.T) {
 // afirmación que nadie midió — la misma regla que gobierna el exportador entero desde S4.
 //
 // Sabotaje: devolver (0, true) cuando AgentVer está vacío → la línea aparece y falla acá.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\t\t\t\tdifiere, comparable := fleet.VersionDelAgenteDifiere(d.AgentVer, versionCerebro)\n\t\t\t\tif !comparable {\n\t\t\t\t\treturn 0, false\n\t\t\t\t}"
+// arnes: a="\t\t\t\tdifiere, comparable := fleet.VersionDelAgenteDifiere(d.AgentVer, versionCerebro)\n\t\t\t\tif !comparable {\n\t\t\t\t\treturn 0, true\n\t\t\t\t}"
 func TestUnaMaquinaSinAgenteNoDiceQueEstaAlDia(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ts := servidorHTTP(t, s)
@@ -106,6 +113,9 @@ func TestUnaMaquinaSinAgenteNoDiceQueEstaAlDia(t *testing.T) {
 // equivocadas manda a alguien a revisar diez agentes sanos.
 //
 // Sabotaje: emitir 1 cuando el núcleo del cerebro no parsea → la línea aparece y falla acá.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="\tnucleoCerebro, ok := NucleoDeVersion(cerebro)\n\tif !ok {\n\t\treturn false, false\n\t}"
+// arnes: a="\tnucleoCerebro, ok := NucleoDeVersion(cerebro)\n\tif !ok {\n\t\treturn true, true\n\t}"
 func TestConElCerebroSinVersionNoSeMarcaAtrasadaANadie(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ts := servidorHTTP(t, s)
@@ -141,6 +151,9 @@ func TestConElCerebroSinVersionNoSeMarcaAtrasadaANadie(t *testing.T) {
 // `musubi_fleet_list`.
 //
 // Sabotaje: agregar {"agent_version", d.AgentVer} a labelsDeFlota → falla acá.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\t\t{\"os\", d.OS},"
+// arnes: a="\t\t{\"agent_version\", d.AgentVer},"
 func TestLaVersionDelAgenteNoEntraComoEtiqueta(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ts := servidorHTTP(t, s)
@@ -168,6 +181,9 @@ func TestLaVersionDelAgenteNoEntraComoEtiqueta(t *testing.T) {
 // Sabotaje: sacar `mcp.WithVersion(version)` de cualquiera de las TRES construcciones de
 // `cmd/musubi/main.go` (daemon, serve, sólo lectura) → falla acá. Verificado en las tres el
 // 2026-09-07, después de pasar la guarda de leer un renglón a leer la llamada entera.
+// arnes: archivo="cmd/musubi/main.go"
+// arnes: de="mcp.WithUsageLedger(engine, cfg.UsageLedger), mcp.WithVersion(version))"
+// arnes: a="mcp.WithUsageLedger(engine, cfg.UsageLedger))"
 func TestTodoServidorQueSeSirveDeclaraSuVersion(t *testing.T) {
 	crudo, err := os.ReadFile("../../cmd/musubi/main.go")
 	if err != nil {

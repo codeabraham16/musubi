@@ -48,6 +48,9 @@ func latirConInventario(t *testing.T, ts, token string, capver int, motivo strin
 // que enseñárselo a cada regla y la que se olvide lo lee como un número.
 //
 // SABOTAJES CORRIDOS:
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\t\t\t\tif d.Capver < buildid.CapverConInventarioExplicado {\n\t\t\t\t\treturn 0, false\n\t\t\t\t}\n\t\t\t\tif d.ServiciosError != \"\" {"
+// arnes: a="\t\t\t\tif false && d.Capver < buildid.CapverConInventarioExplicado {\n\t\t\t\t\treturn 0, false\n\t\t\t\t}\n\t\t\t\tif d.ServiciosError != \"\" {"
 //   - ROJO: sacar la compuerta de capver de `services_unknown` → la máquina vieja vuelve a
 //     publicar un 0 y esta prueba lo caza.
 //   - ROJO: gatear con `>` en vez de `>=` → la máquina que SÍ sabe contestar (capver == 2) pierde

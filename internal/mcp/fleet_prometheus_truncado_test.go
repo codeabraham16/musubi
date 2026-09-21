@@ -23,6 +23,9 @@ import (
 // Sabotaje que la hace fallar: sacar el `renderTruncado` de renderFlota; o emitir la serie sólo
 // cuando vale 1 (una serie que sólo existe cuando hay problema no se distingue de «el exportador
 // no corrió»).
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\trenderTruncado(b, recorte, techoServicios, techoAprobaciones)\n\t// EL MARGEN, ANTES DEL CORTE."
+// arnes: a="\t// EL MARGEN, ANTES DEL CORTE."
 func TestElTruncadoDelExportadorSaleComoSerieYNoComoComentario(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()

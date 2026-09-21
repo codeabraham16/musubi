@@ -431,7 +431,27 @@ import (
 // texto, y lo mismo pasa con «guardar la respuesta en la columna equivocada» y «devolver el mismo
 // mensaje para los tres». En los dos casos queda mecanizado el corte más estructural y ESCRITA la
 // medición que dice por qué el otro no agrega red.
-const anclasEnProsaAlDia = 294
+//
+// Y DE 294 A 277 EL 2026-09-21: las diecisiete anclas del EXPORTADOR DE PROMETHEUS, repartidas en
+// cinco archivos —el scrape, los servicios, la versión del agente, el inventario y el truncado—.
+// Es lo que leen el panel y TODAS las alertas, así que una guarda hueca acá no se ve: se ve como
+// una alerta que nunca dispara. 18 de 18 en rojo al cierre.
+//
+// SEIS COLISIONES EN UN SOLO LOTE, Y ESO ES UNA PROPIEDAD DEL SITIO. El scrape y el empuje OTLP son
+// DOS superficies sobre UNA tabla de series, así que sus guardas se pisan por construcción: es la
+// lección A39 del propio repo, vista desde el arnés. Cinco eran parejas legítimas y se declararon;
+// una era mía, por un `de` ambiguo, y se arregló alargando el literal. El detalle que vale: cuando
+// el censo dice «el `de` aparece 2 veces», la ambigüedad también CONFUNDE al detector de
+// colisiones, que denuncia pares que no existen. Se arregla la unicidad primero y después se mira
+// qué colisiones quedan de verdad.
+//
+// LA COLISIÓN ES DIRECCIONAL — cuarta vez, y ya no hace falta volver a medirlo: un `a` que CONSERVA
+// su `de` no pisa a nadie. En este lote dos declaraciones volvieron por rancias justo por eso.
+//
+// Y OTRO SABOTAJE QUE NO COMPILA, con una cara nueva: no por tipos, sino por CÓDIGO INALCANZABLE.
+// Anteponer un `return` al cuerpo de un `case` deja muerto lo que sigue y `go vet` lo rechaza, así
+// que el corte tiene que REEMPLAZAR el `return` final del caso en vez de adelantarse a él.
+const anclasEnProsaAlDia = 277
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
