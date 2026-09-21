@@ -1,8 +1,10 @@
 package arnes
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -608,6 +610,134 @@ func TestUnAnclaPegadaAUnHelperNoHeredaSuNombre(t *testing.T) {
 		t.Errorf("el ancla pegada a `func ayudante` derivó la prueba %q. No es un nombre que falte: "+
 			"es uno equivocado, y `-run ^%s$` no matchea nada — el sabotaje saldría «sin veredicto» "+
 			"en vez de denunciar que falta `prueba=\"…\"`", deHelper, deHelper)
+	}
+}
+
+// ── 8d · UNA EXENCIÓN CON UN SABOTAJE AL LADO SE DENUNCIA ──────────────────────────────────────
+//
+// `no_mecanizable` devuelve temprano y se lleva puesto todo lo demás. Mientras eso fue silencioso,
+// cuatro directivas escritas para OTRA ancla podían caer acá y evaporarse sin que nada lo dijera.
+//
+// NO ES UN CASO INVENTADO: es lo que pasaba en `internal/mcp/aviso_test.go`. Dos anclas en el mismo
+// bloque de comentario, las directivas de la PRIMERA escritas un renglón por DEBAJO de la segunda,
+// y la segunda con exención. El alcance de un ancla termina donde empieza la siguiente, así que se
+// las quedó la exenta. Resultado: la primera figuraba «EN PROSA Y NADA MÁS» con su sabotaje escrito
+// tres renglones más abajo, y el censo no decía nada. El autor incluso había dejado anotado que
+// «tenían que ir ACÁ y no después» — la nota estaba, la denuncia no.
+//
+// SE DENUNCIA Y NO SE ELIGE UNA DE LAS DOS. Adivinar cuál quiso el autor —quedarse con el sabotaje
+// e ignorar la exención, o al revés— es exactamente cómo una directiva muerta pasa por viva.
+//
+// Sabotaje que la hace fallar: en `directivaDe`, apagar la comprobación de las claves que sobran.
+// arnes: archivo="internal/arnes/arnes.go"
+// arnes: de="\t\tif len(sobran) > 0 {"
+// arnes: a="\t\tif false {"
+func TestUnaExencionConSabotajeAlLadoSeDenuncia(t *testing.T) {
+	linea := func(n int, texto string) lineaCom {
+		return lineaCom{linea: n, texto: texto, cruda: " " + texto}
+	}
+	const motivo = `no_mecanizable="el sabotaje que describe deja la prueba en verde y ponerla roja pide una aserción de orden que hoy no existe"`
+
+	t.Run("sola, la exención pasa sin queja", func(t *testing.T) {
+		_, m, quejas := directivaDe([]lineaCom{
+			linea(1, "Sabotaje: X"),
+			linea(2, "arnes: "+motivo),
+		}, "x_test.go", "TestX")
+		if m == "" {
+			t.Fatal("no leyó la exención: sin este control, el caso de abajo daría rojo por cualquier motivo")
+		}
+		if len(quejas) != 0 {
+			t.Errorf("una exención sola trajo %d queja(s) y no tenía que traer ninguna: %v", len(quejas), quejas)
+		}
+	})
+
+	t.Run("con un sabotaje al lado, se denuncia y se NOMBRAN las claves muertas", func(t *testing.T) {
+		_, m, quejas := directivaDe([]lineaCom{
+			linea(1, "Sabotaje: X"),
+			linea(2, `arnes: archivo="p.go"`),
+			linea(3, `arnes: de="uno"`),
+			linea(4, `arnes: a="dos"`),
+			linea(5, "arnes: "+motivo),
+		}, "x_test.go", "TestX")
+		if m == "" {
+			t.Fatal("dejó de leer la exención")
+		}
+		if len(quejas) == 0 {
+			t.Fatal("la exención se comió `archivo`, `de` y `a` EN SILENCIO. Es el defecto medido en " +
+				"aviso_test.go: un sabotaje escrito, muerto, y contado como ancla en prosa")
+		}
+		junto := strings.Join(quejas, "\n")
+		// LOS NOMBRES SON DATOS, NO PROSA: sin ellos la denuncia no dice qué mover.
+		for _, quiero := range []string{"archivo", "de", "a"} {
+			if !strings.Contains(junto, quiero) {
+				t.Errorf("la denuncia no nombra la clave muerta %q, así que no se puede ir a mirar:\n%s", quiero, junto)
+			}
+		}
+	})
+}
+
+// ── 8e · LAS CUATRO CATEGORÍAS PARTEN EL CENSO, Y NO DEJAN UNA QUINTA ──────────────────────────
+//
+// `Mecanizadas`, `Rotas`, `Exentas` y `Pendientes` se presentan como las cuatro en que se parte el
+// censo, y durante toda su vida NO partían: un ancla con queja y sin directiva —una exención que
+// además trae un sabotaje muerto— no entraba en ninguna de las cuatro. Quedaba en `anclas
+// encontradas` y en ninguna fila de abajo, que es una quinta categoría que nadie nombra y que se ve
+// exactamente igual que un árbol sano.
+//
+// LA SUMA ES LA GUARDA, Y NO LA LISTA DE CASOS. Enumerar las combinaciones de `Directiva`,
+// `NoMecanizable` y `Quejas` es la forma que no converge: son ocho hoy y nueve el día que se agregue
+// un campo. Preguntar «¿las cuatro suman el total?» es exacto por construcción y no se queda corto.
+//
+// Sabotaje que la hace fallar: devolverle a `Rotas` la condición vieja, que además exigía directiva.
+// arnes: archivo="internal/arnes/arnes.go"
+// arnes: de="\treturn c.filtrar(func(a Ancla) bool { return len(a.Quejas) > 0 })"
+// arnes: a="\treturn c.filtrar(func(a Ancla) bool { return a.Directiva != nil && len(a.Quejas) > 0 })"
+func TestLasCuatroCategoriasPartenElCensoYNoDejanUnaQuinta(t *testing.T) {
+	// Las cinco formas que un ancla puede tener hoy, incluida la que no entraba en ninguna fila.
+	c := Censo{Anclas: []Ancla{
+		{Archivo: "a_test.go", Linea: 1, Directiva: &Directiva{}},
+		{Archivo: "b_test.go", Linea: 2, Directiva: &Directiva{}, Quejas: []string{"ilegible"}},
+		{Archivo: "c_test.go", Linea: 3, NoMecanizable: "un motivo largo y de verdad"},
+		{Archivo: "d_test.go", Linea: 4},
+		{Archivo: "e_test.go", Linea: 5, NoMecanizable: "un motivo largo y de verdad", Quejas: []string{"y encima un sabotaje muerto"}},
+	}}
+
+	cajas := map[string][]Ancla{
+		"mecanizadas": c.Mecanizadas(),
+		"rotas":       c.Rotas(),
+		"exentas":     c.Exentas(),
+		"pendientes":  c.Pendientes(),
+	}
+
+	suma := 0
+	for _, v := range cajas {
+		suma += len(v)
+	}
+	if suma != len(c.Anclas) {
+		var detalle []string
+		for k, v := range cajas {
+			detalle = append(detalle, fmt.Sprintf("%s=%d", k, len(v)))
+		}
+		sort.Strings(detalle)
+		t.Fatalf("las cuatro categorías suman %d y el censo tiene %d anclas (%s).\n"+
+			"  Lo que falta NO se reporta en ninguna fila: queda en «anclas encontradas» y en ninguna\n"+
+			"  otra, que es una quinta categoría sin nombre. Un árbol con anclas ahí adentro se ve\n"+
+			"  idéntico a uno sano.", suma, len(c.Anclas), strings.Join(detalle, " "))
+	}
+
+	// Y NINGUNA EN DOS CAJAS: sumar bien también se consigue contando una dos veces y perdiendo otra.
+	donde := map[string][]string{}
+	for caja, v := range cajas {
+		for _, a := range v {
+			donde[a.Archivo] = append(donde[a.Archivo], caja)
+		}
+	}
+	for arch, cajas := range donde {
+		if len(cajas) > 1 {
+			sort.Strings(cajas)
+			t.Errorf("%s cae en %v a la vez: las categorías se solapan y el total cierra por casualidad",
+				arch, cajas)
+		}
 	}
 }
 
