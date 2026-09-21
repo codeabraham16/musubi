@@ -196,6 +196,13 @@ func TestNormalizarCapsDeduplicaYOrdenaPorPoder(t *testing.T) {
 // arnes: archivo="internal/fleet/device.go"
 // arnes: de="\t\t\tset[c] = true\n\t\t}\n"
 // arnes: a="\t\t\tset[c] = true\n\t\tdefault:\n\t\t\tset[c] = true\n\t\t}\n"
+// LA COLISIÓN ESTÁ CONTESTADA PORQUE LOS DOS MOTIVOS SE LEYERON, y son distintos: ésta pregunta
+// qué pasa con una cap DESCONOCIDA («esperaba [metrics screen] descartando `root`, obtuve
+// [root metrics screen]») y la otra qué pasa con una CONOCIDA que se lee como otra («la columna
+// "screen:view" se leyó como [screen]»). Dos guardas cubriendo el mismo `switch` desde ángulos
+// que no se tapan — y el aviso va acá, en el agresor, porque es el `a` de ESTA directiva el que
+// le rompe el ancla a la otra.
+// arnes: colision_ok="TestCadaCapacidadVaYVuelveSiendoEllaMisma"
 func TestCapsIdaYVueltaYBasuraSeDescarta(t *testing.T) {
 	cs := []Cap{CapMetrics, CapExec}
 	if got := CapsDesdeTexto(CapsComoTexto(cs)); len(got) != 2 || got[0] != CapMetrics || got[1] != CapExec {
