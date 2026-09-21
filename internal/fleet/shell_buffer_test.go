@@ -27,6 +27,10 @@ import (
 // ────────────────────────────────────────────────────────────────────────────────────────────
 //
 // Sabotaje que la hace fallar: descartar lo viejo al llenarse en vez de bloquear.
+// arnes: archivo="internal/fleet/shell_buffer.go"
+// arnes: de="\tfor len(b.datos) >= bufferMaxBytes && !b.cerrado {\n\t\tb.lugar.Wait()\n\t}"
+// arnes: a="\tif len(b.datos) >= bufferMaxBytes {\n\t\tb.datos = nil\n\t}"
+// arnes: colision_ok="TestElEscritorSeFrenaConElBufferLlenoYSiguePorSiSoloAlDrenarse"
 func TestElBufferNoPierdeNiUnByteAunqueElEscritorCorraMasRapido(t *testing.T) {
 	b := nuevoBufferInteractivo()
 	patron := []byte("0123456789abcdef")
@@ -80,6 +84,10 @@ func TestElBufferNoPierdeNiUnByteAunqueElEscritorCorraMasRapido(t *testing.T) {
 // bytes, y se come un `cat /dev/urandom` en la RAM del cerebro hasta tumbarlo.
 //
 // Sabotaje que la hace fallar: quitar el `for len(b.datos) >= bufferMaxBytes` de escribir.
+// arnes: archivo="internal/fleet/shell_buffer.go"
+// arnes: de="\tfor len(b.datos) >= bufferMaxBytes && !b.cerrado {\n\t\tb.lugar.Wait()\n\t}\n"
+// arnes: a=""
+// arnes: colision_ok="TestElBufferNoPierdeNiUnByteAunqueElEscritorCorraMasRapido"
 func TestElEscritorSeFrenaConElBufferLlenoYSiguePorSiSoloAlDrenarse(t *testing.T) {
 	b := nuevoBufferInteractivo()
 	bloque := make([]byte, bufferMaxBytes)
@@ -117,6 +125,9 @@ func TestElEscritorSeFrenaConElBufferLlenoYSiguePorSiSoloAlDrenarse(t *testing.T
 // lleno deja un goroutine esperando para siempre — una fuga por cada sesión que muera así.
 //
 // Sabotaje que la hace fallar: quitar el `lugar.Broadcast()` de cerrar.
+// arnes: archivo="internal/fleet/shell_buffer.go"
+// arnes: de="\tb.hay.Broadcast()\n\tb.lugar.Broadcast()\n}"
+// arnes: a="\tb.hay.Broadcast()\n}"
 func TestCerrarDespiertaAlEscritorFrenadoYNoDejaFugas(t *testing.T) {
 	b := nuevoBufferInteractivo()
 	if !b.escribir(make([]byte, bufferMaxBytes)) {
@@ -141,6 +152,9 @@ func TestCerrarDespiertaAlEscritorFrenadoYNoDejaFugas(t *testing.T) {
 // Confundirlo con un fallo haría que el cliente cerrara la sesión cada vez que nadie teclea.
 //
 // Sabotaje que la hace fallar: devolver un error al vencer la espera.
+// arnes: archivo="internal/fleet/shell_buffer.go"
+// arnes: de="\t\treturn nil, nil\n\t}\n\tout := b.datos"
+// arnes: a="\t\treturn nil, ErrCanalCerrado\n\t}\n\tout := b.datos"
 func TestUnaTerminalQuietaNoEsUnError(t *testing.T) {
 	b := nuevoBufferInteractivo()
 	inicio := time.Now()
