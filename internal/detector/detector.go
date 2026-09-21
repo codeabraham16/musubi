@@ -329,11 +329,11 @@ func extraerEtiquetaXML(contenido, etiqueta string) string {
 func parsearGoMod(data []byte) (frameworks []string, moduleName string) {
 	// Mapeo de dependencias a nombres de framework.
 	frameworkMap := map[string]string{
-		"gin-gonic/gin":   "gin",
-		"labstack/echo":   "echo",
-		"gofiber/fiber":   "fiber",
-		"gorilla/mux":     "mux",
-		"go-chi/chi":      "chi",
+		"gin-gonic/gin": "gin",
+		"labstack/echo": "echo",
+		"gofiber/fiber": "fiber",
+		"gorilla/mux":   "mux",
+		"go-chi/chi":    "chi",
 	}
 
 	scanner := bufio.NewScanner(bytes.NewReader(data))
@@ -358,14 +358,14 @@ func parsearGoMod(data []byte) (frameworks []string, moduleName string) {
 func parsearPackageJSON(data []byte) (frameworks []string, moduleName string) {
 	// Mapeo de paquetes a nombres de framework.
 	frameworkMap := map[string]string{
-		"react":          "react",
-		"next":           "Next.js",
-		"vue":            "vue",
-		"@angular/core":  "angular",
-		"express":        "express",
-		"@nestjs/core":   "nest",
-		"svelte":         "svelte",
-		"vite":           "vite",
+		"react":         "react",
+		"next":          "Next.js",
+		"vue":           "vue",
+		"@angular/core": "angular",
+		"express":       "express",
+		"@nestjs/core":  "nest",
+		"svelte":        "svelte",
+		"vite":          "vite",
 	}
 
 	var pkg packageJSON

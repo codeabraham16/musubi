@@ -13,13 +13,13 @@ import (
 // serialicen y deserialicen correctamente via yaml.Marshal / yaml.Unmarshal.
 func TestSkillProvenanciaRoundTrip(t *testing.T) {
 	original := Skill{
-		Name:        "mi-skill",
-		Description: "skill de prueba",
-		Triggers:    []string{"*.go"},
+		Name:         "mi-skill",
+		Description:  "skill de prueba",
+		Triggers:     []string{"*.go"},
 		Capabilities: []string{},
-		Rules:       "usar SOLID",
-		GeneratedBy: "auto-discovery",
-		GeneratedAt: "2026-01-01T00:00:00Z",
+		Rules:        "usar SOLID",
+		GeneratedBy:  "auto-discovery",
+		GeneratedAt:  "2026-01-01T00:00:00Z",
 	}
 
 	data, err := yaml.Marshal(original)
@@ -44,9 +44,9 @@ func TestSkillProvenanciaRoundTrip(t *testing.T) {
 // incluyan los campos generated_by/generated_at en el YAML serializado.
 func TestSkillSinProvenanciaOmitempty(t *testing.T) {
 	s := Skill{
-		Name:    "sin-procedencia",
+		Name:     "sin-procedencia",
 		Triggers: []string{"*.py"},
-		Rules:   "reglas python",
+		Rules:    "reglas python",
 	}
 
 	data, err := yaml.Marshal(s)
