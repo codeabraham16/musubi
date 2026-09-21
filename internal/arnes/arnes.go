@@ -341,24 +341,38 @@ type Censo struct {
 //
 // La cuarta —Rotas— existe porque la primera versión no la tenía y contaba como mecanizada una
 // directiva ilegible: la cobertura subía con sabotajes que nadie podía correr.
+// LAS CUATRO PARTEN EL CENSO DE VERDAD, Y NO LO HACÍAN. La queja se pregunta PRIMERO y en las
+// cuatro, así que ninguna ancla puede quedar afuera de las cuatro ni entrar en dos.
+//
+// Antes, `Rotas` pedía `Directiva != nil`, así que un ancla con queja y SIN directiva —el caso de
+// una exención que además trae un sabotaje muerto— caía en `Exentas`, con la queja adentro y sin
+// que nada la mirara: la única guarda que corre en CI pregunta por `Rotas()`, y el aviso salía
+// sólo por el CLI. Medido el 2026-09-21: el censo denunciaba `internal/mcp/aviso_test.go:94` y
+// `TestLaDeudaDeSabotajesNoCreceYElCorpusNoSePodre` pasaba en verde.
+//
+// Una categoría de más que nadie nombra se ve exactamente igual que un árbol sano. Por eso hay una
+// guarda que suma las cuatro y exige que dé el total: la quinta deja de poder existir.
 func (c Censo) Mecanizadas() []Ancla {
-	return c.filtrar(func(a Ancla) bool { return a.Directiva != nil && len(a.Quejas) == 0 })
+	return c.filtrar(func(a Ancla) bool { return len(a.Quejas) == 0 && a.Directiva != nil })
 }
 
-// Rotas son las anclas que declararon una directiva y la directiva no se pudo leer.
+// Rotas son las anclas que declararon algo y ese algo no se pudo leer. La queja manda: una
+// exención con queja es una declaración rota, no una exención.
 func (c Censo) Rotas() []Ancla {
-	return c.filtrar(func(a Ancla) bool { return a.Directiva != nil && len(a.Quejas) > 0 })
+	return c.filtrar(func(a Ancla) bool { return len(a.Quejas) > 0 })
 }
 
 // Exentas son las anclas que declararon POR QUÉ su sabotaje no se puede mecanizar.
 func (c Censo) Exentas() []Ancla {
-	return c.filtrar(func(a Ancla) bool { return a.Directiva == nil && a.NoMecanizable != "" })
+	return c.filtrar(func(a Ancla) bool {
+		return len(a.Quejas) == 0 && a.Directiva == nil && a.NoMecanizable != ""
+	})
 }
 
 // Pendientes son las anclas que siguen sólo en prosa: la deuda que este arnés mide.
 func (c Censo) Pendientes() []Ancla {
 	return c.filtrar(func(a Ancla) bool {
-		return a.Directiva == nil && a.NoMecanizable == "" && len(a.Quejas) == 0
+		return len(a.Quejas) == 0 && a.Directiva == nil && a.NoMecanizable == ""
 	})
 }
 
@@ -810,6 +824,30 @@ func directivaDe(lineas []lineaCom, rel, pruebaDerivada string) (*Directiva, str
 			quejas = append(quejas, "`no_mecanizable` necesita un motivo de verdad (≥20 caracteres): "+
 				"la clase estructural medida es «borrar la guarda deja el import huérfano y no compila», "+
 				"y sin el motivo escrito esta salida se vuelve un `skip`")
+		}
+		// Y UNA EXENCIÓN NO PUEDE CONVIVIR CON UN SABOTAJE: el `return` de abajo se lleva puesto
+		// todo lo demás, en silencio. Esto NO es una precaución teórica — es el defecto que se
+		// midió en `internal/mcp/aviso_test.go`, donde cuatro líneas escritas para el ancla de
+		// ARRIBA quedaron una línea por debajo de la de abajo, que sí lleva exención. El alcance
+		// de un ancla termina donde empieza la siguiente, así que se las quedó la exenta y acá se
+		// evaporaron: el ancla de arriba figuraba «EN PROSA Y NADA MÁS» con su sabotaje escrito
+		// tres renglones más abajo, y nada lo decía. El autor hasta dejó anotado que «tenían que
+		// ir ACÁ y no después» y aun así el censo se quedó callado.
+		//
+		// Se DENUNCIA y no se elige una de las dos: adivinar cuál quiso el autor es exactamente
+		// cómo una directiva muerta pasa por viva.
+		var sobran []string
+		for _, k := range []string{"archivo", "de", "a", "arreglo_de", "arreglo_a", "colision_ok", "paquete", "tags", "env"} {
+			if _, hay := campos[k]; hay {
+				sobran = append(sobran, k)
+			}
+		}
+		if len(sobran) > 0 {
+			quejas = append(quejas, "esta directiva declara `no_mecanizable` Y "+strings.Join(sobran, ", ")+
+				": la exención se lleva puesto todo lo demás y esas claves NO HACEN NADA. "+
+				"Si el sabotaje es de OTRA ancla, movelo ARRIBA de la línea «Sabotaje» que le "+
+				"corresponde — el alcance de un ancla termina donde empieza la siguiente. Si es de "+
+				"ésta, sacá el `no_mecanizable`.")
 		}
 		return nil, motivo, quejas
 	}

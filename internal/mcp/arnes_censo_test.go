@@ -111,6 +111,26 @@ import (
 // arnes: archivo="internal/mcp/sonda_permiso_test.go"
 // arnes: de="package mcp"
 // arnes: a="package mcp\n\n// Sabotaje: un ancla nueva SIN su directiva, puesta a propósito para que suba la deuda."
+//
+// LOS OTROS DOS CANALES, Y POR QUÉ SÓLO UNO SE PUEDE SABOTEAR. Esta guarda es la única del árbol
+// que corre el censo en CI, y hasta el 2026-09-21 miraba dos de sus cuatro avisos: `SinUbicar` y
+// `Rotas`. `Huerfanas` y `Quejas` salían sólo por el CLI, o sea que un aviso real podía imprimirse
+// en la terminal de quien lo corriera a mano y el CI seguía verde. Se midió: el censo denunciaba
+// una directiva muerta en `aviso_test.go:94` y esta prueba pasaba.
+//
+// El ancla de abajo ejercita el canal de las HUÉRFANAS, agregándole al corpus una línea `arnes:`
+// que no cuelga de ningún ancla. La otra mitad de `Quejas` —un archivo que el lector no puede
+// PARSEAR— no se puede sabotear: cualquier mutación que rompa el parser de Go rompe también el
+// build, y el rojo sería del compilador. Queda escrito en vez de dejarlo como un hueco mudo.
+//
+// Sabotaje que la hace fallar: meterle al corpus una línea `// arnes:` que no cuelgue de ningún
+// ancla. El sabotaje es un COMENTARIO, así que compila igual y el rojo es el del canal, no el del
+// build. Se elige `package main` de la CLI del arnés —no un `_test.go` ajeno— y el `a` contiene al
+// `de` entero, así que no le rompe el ancla a nadie.
+// arnes: prueba="TestLaDeudaDeSabotajesNoCreceYElCorpusNoSePodre"
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="package main"
+// arnes: a="package main\n\n// arnes: de=\"una directiva hu\u00e9rfana: no cuelga de ning\u00fan ancla\""
 
 // anclasEnProsaAlDia es LA DEUDA MEDIDA, con su fecha. Es un hecho del mundo —cuántas promesas sin
 // ejecutar tenía el árbol ese día— así que va clavado: derivarlo del árbol dejaría a esta guarda
@@ -796,7 +816,21 @@ import (
 // `avisoSinGrafo` era una promesa YA CUMPLIDA del lado de la prueba y se reescribió como
 // referencia; dejarla puesta contaba dos veces la misma guarda) y −1 (la de `precheckHook` se
 // mecanizó). El mismo número por cuatro movimientos y no por quietud.
-const anclasEnProsaAlDia = 2
+//
+// Y DE 2 A 1 EL MISMO DÍA, QUE ES LA ÚLTIMA QUE SE PODÍA BAJAR SIN UN PROMETHEUS DE VERDAD. La que
+// bajó no era un ancla sin escribir: su sabotaje estaba escrito TRES RENGLONES MÁS ABAJO y muerto.
+// `internal/mcp/aviso_test.go` tiene dos anclas en un mismo bloque de comentario, y las cuatro
+// directivas de la PRIMERA quedaron un renglón por DEBAJO de la segunda, que lleva `no_mecanizable`.
+// El alcance de un ancla termina donde empieza la siguiente, así que se las quedó la exenta, y la
+// exención devuelve temprano y se lleva puesto todo lo demás: el ancla de arriba figuraba «EN PROSA
+// Y NADA MÁS» con su directiva completa a la vista. Movidas de lado, el sabotaje da ROJO con motivo
+// propio («no se encoló ningún aviso … `avisa` sigue prometiendo una notificación que no viaja»).
+//
+// LA QUE QUEDA NO ES OLVIDO: `TestContraUnPrometheusDeVerdadAceptaElSobreYQuedaConsultable` se
+// saltea sin `MUSUBI_OTLP_REAL`, así que su directiva se podría escribir con `env=` pero NADIE la
+// habría visto en rojo. Una directiva sin verificar es la clase de cobertura que este arnés existe
+// para no contar.
+const anclasEnProsaAlDia = 1
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
@@ -844,6 +878,30 @@ func TestLaDeudaDeSabotajesNoCreceYElCorpusNoSePodre(t *testing.T) {
 		t.Errorf("%d directiva/s `arnes:` no se pueden leer. NO cuentan como mecanizadas a propósito: "+
 			"una directiva ilegible que se cuenta como cubierta hace subir la cobertura con sabotajes "+
 			"que nadie puede correr.\n  %s", len(rotas), strings.Join(lineas, "\n  "))
+	}
+
+	// LOS OTROS DOS CANALES DE ALARMA, QUE HASTA HOY SÓLO SALÍAN POR EL CLI.
+	//
+	// El censo tiene CUATRO formas de decir «acá hay un agujero» —`SinUbicar`, `Rotas`, `Huerfanas`
+	// y `Quejas`— y esta guarda, que es la única que corre en CI, miraba dos. Medido el 2026-09-21:
+	// el CLI denunciaba una directiva muerta en `internal/mcp/aviso_test.go:94` y esta prueba pasaba
+	// en VERDE. Un aviso que sólo existe cuando alguien corre la herramienta a mano no es una guarda:
+	// es documentación con suerte.
+	//
+	// `Huerfanas` son líneas `// arnes:` que no cuelgan de ningún ancla — escritas, con el trabajo
+	// hecho, y sin correr nunca. `Quejas` junta eso con los archivos que el lector NO PUDO PARSEAR,
+	// que es el caso peor: un archivo invisible para el censo no baja la cobertura, la desaparece.
+	if len(c.Huerfanas) > 0 {
+		t.Errorf("%d línea/s `// arnes:` NO cuelgan de ningún ancla, así que NO EXISTEN para esta "+
+			"herramienta: el sabotaje está escrito y no se corre, y la cobertura sube igual. Dales "+
+			"una línea propia que empiece con «Sabotaje» arriba de ellas.\n  %s",
+			len(c.Huerfanas), strings.Join(c.Huerfanas, "\n  "))
+	}
+
+	if len(c.Quejas) > 0 {
+		t.Errorf("el censo juntó %d queja/s. Cada una es un archivo que no pudo leer o una directiva "+
+			"que no pudo interpretar, y las dos se ven desde afuera como «este archivo no promete "+
+			"nada»:\n  %s", len(c.Quejas), strings.Join(c.Quejas, "\n  "))
 	}
 
 	// LOS SABOTAJES QUE SE PISAN SE INFORMAN Y NO FALLAN, y la distinción la enseñó la medición.
