@@ -21,10 +21,12 @@ import (
 // medias (el cerebro en TLS, un agente todavía en claro) se ve exactamente igual que una
 // completa.
 //
-// ARRANCA EN 0 A PROPÓSITO. Hoy el cerebro sirve HTTP en claro —lo cifra el tailnet, no el
-// transporte— y ponerla en 1 dejaría la unidad en rojo todos los días por una postura que está
-// DECIDIDA. Lo que se arregla acá no es la postura: es que la perilla tenga UN SOLO lugar donde
-// vive, para que cambiarla sea una línea y no acordarse de un comando.
+// ARRANCÓ EN 0 A PROPÓSITO Y ESTÁ EN 1 DESDE EL 2026-09-21. Mientras el cerebro sirvió HTTP en
+// claro, ponerla en 1 habría dejado la unidad en rojo todos los días por una postura decidida.
+// Ese día el cerebro pasó a escuchar SÓLO en `127.0.0.1:7717` con `tailscale serve` terminando el
+// TLS por delante, y se midió lo único que autoriza a prenderla: el verificador corrido contra
+// producción con la perilla en 0 y en 1 dio DOS SALIDAS IDÉNTICAS (75 líneas, EXIT=0). Prenderla
+// no acusa a nadie hoy; lo que compra es el día que alguien REVIERTA.
 // ────────────────────────────────────────────────────────────────────────────────────────────
 func TestLaPerillaDelTLSViveEnLaUnidadYViajaEnElLatido(t *testing.T) {
 	unidad := leerDeploy(t, "systemd", "musubi-comparar.service")
@@ -40,6 +42,28 @@ func TestLaPerillaDelTLSViveEnLaUnidadYViajaEnElLatido(t *testing.T) {
 			"a mano: la exigencia no corre sola nunca.\n" +
 			"  El día que alguien migre el transporte, nada va a comprobar que la migración quedó " +
 			"completa.")
+	}
+
+	// Y EL VALOR ESTÁ CLAVADO EN 1, QUE ES LO QUE HACE DE ESTO UN TRINQUETE Y NO UNA PREFERENCIA.
+	//
+	// En producción la vuelta atrás la caza `ExigenciaDeTLSApagada`, pero recién UNA HORA después
+	// de que el latido la reporte, y sólo si el latido sigue llegando. Acá se caza en el PR, que es
+	// donde la vuelta atrás se escribe. La diferencia importa porque bajarla a 0 no rompe nada
+	// visible: el verificador simplemente deja de mirar el transporte y sale verde igual — «no lo
+	// miré» y «lo miré y está bien» son el mismo resultado, que es el defecto que este track
+	// persigue aplicado a su propia perilla.
+	//
+	// SI LA MIGRACIÓN SE REVIRTIÓ DE VERDAD, esta guarda se cambia a mano y en el mismo commit se
+	// dice por qué en specs/control-de-flota/ABIERTO.md. Eso es a propósito: un trinquete que se
+	// afloja sin dejar rastro no es un trinquete.
+	if !strings.Contains(unidad, "Environment=MUSUBI_EXIGIR_TLS=1") {
+		t.Error("`MUSUBI_EXIGIR_TLS` dejó de valer 1 en la unidad.\n" +
+			"  Está en 1 desde el 2026-09-21, cuando el cerebro pasó a escuchar sólo en 127.0.0.1:7717 " +
+			"con el TLS terminado por `tailscale serve` por delante. En 0, el verificador reporta un " +
+			"cerebro que volvió a HTTP en claro como una salvedad de postura en vez de una divergencia: " +
+			"o sea que sale VERDE.\n" +
+			"  Si la migración se revirtió de verdad, cambiá esta guarda a mano y decí por qué en " +
+			"specs/control-de-flota/ABIERTO.md. Si no, volvé a poner 1.")
 	}
 
 	// Y EL VALOR VIAJA EN EL LATIDO. Sin eso, «esta corrida exigió TLS» y «esta corrida lo aceptó

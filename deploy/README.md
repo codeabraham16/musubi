@@ -99,11 +99,35 @@ SSH si la querés remota).
 
 ### Pasar el cerebro a HTTPS: el certificado dice un nombre y el agente disca una IP
 
-Hoy el cerebro sirve HTTP en claro (`allow_insecure_token: true`). Lo cifra WireGuard —el tramo
-va por el tailnet— y eso alcanza para operar; **no** alcanza para una auditoría, porque no hay
-cifrado de extremo a extremo y cualquier proceso del propio servidor que le hable al loopback ve
-el bearer. `deploy/verificar-despliegue.sh` lo dice en la sección «postura de transporte» con un
-`~`, sin ponerse rojo: no divergió nada del repo, es la configuración elegida.
+> ✅ **HECHO EL 2026-09-21, Y POR UN CAMINO DISTINTO AL QUE ESTA SECCIÓN DESCRIBÍA.** El TLS NO se
+> terminó adentro del cerebro: lo termina **`tailscale serve`** por delante, en el `10000`, con un
+> certificado del tailnet que se renueva solo, y reenvía a `http://127.0.0.1:7717`. El cerebro
+> escucha **sólo en loopback** y `MUSUBI_EXIGIR_TLS` está en **1**.
+>
+> ⚠️ **LA RECETA DE ABAJO, SEGUIDA HOY, ROMPE EL CEREBRO.** Su paso 2 manda sacar
+> `allow_insecure_token`, y con el TLS terminado por delante el cerebro recibe HTTP en claro por
+> loopback: sacarlo lo deja rechazando a su propio proxy. Se conserva como la receta del **otro**
+> camino —el certificado adentro del cerebro— por si algún día se toma, y porque explica el nudo
+> del `ServerName`, que sí sigue vigente y es lo que hace funcionar al camino real.
+>
+> **Por qué nadie vio que ya estaba puesto**: el verificador, que es el instrumento que MIDE la
+> postura, también RECOMENDABA esta salida — y su recomendación heredaba su punto ciego, porque lo
+> único que leía era el config del cerebro, donde un TLS de adelante no se ve. Hoy el bloque
+> recolecta además `tailscale serve status --json` y la dirección de escucha.
+>
+> **El camino que corre hoy, en orden:** (1) `tailscale serve` termina HTTPS por delante; (2)
+> el nombre TLS + la URL https en cada cliente del cerebro — que **no son sólo los agentes**:
+> también el `sync` del `.musubi/config.yaml` (`central_url` + `tls_server_name`, #597),
+> `MUSUBI_CENTRAL_URL` y el `.mcp.json` que lee el editor;
+> (3) el cerebro atado a `127.0.0.1`, para que usar el proxy deje de ser optativo; (4)
+> `MUSUBI_EXIGIR_TLS=1` en `deploy/systemd/musubi-comparar.service`.
+
+Antes de eso el cerebro servía HTTP en claro (`allow_insecure_token: true`). Lo cifraba WireGuard
+—el tramo va por el tailnet— y eso alcanzaba para operar; **no** alcanzaba para una auditoría,
+porque no había cifrado de extremo a extremo y cualquier proceso del propio servidor que le
+hablara al loopback veía el bearer. `deploy/verificar-despliegue.sh` lo decía en la sección
+«postura de transporte» con un `~`, sin ponerse rojo: no divergía nada del repo, era la
+configuración elegida.
 
 **El nudo que hacía imposible la migración**, y por qué no es obvio: `tailscale cert` emite un
 certificado de Let's Encrypt válido para el **nombre** del nodo (`<nodo>.tail<xxxx>.ts.net`) y
@@ -142,7 +166,10 @@ sync:
   tls_server_name: <nodo>.tail<xxxx>.ts.net
 
 # 5. Prometheus: scheme https en el job `musubi`
-# 6. Cerrar la migración exigiéndola, o vuelve a aflojarse sola
+# 6. Cerrar la migración exigiéndola, o vuelve a aflojarse sola. La perilla YA NO se pasa a mano:
+#    vive en `Environment=MUSUBI_EXIGIR_TLS=` de deploy/systemd/musubi-comparar.service, que es lo
+#    que hace que la exigencia corra sola cuatro veces por día. La invocación de abajo sirve para
+#    PROBAR el efecto antes de cambiar la unidad — correrla con 0 y con 1 y comparar las salidas.
 MUSUBI_SSH=<host> MUSUBI_EXIGIR_TLS=1 ./deploy/verificar-despliegue.sh
 ```
 

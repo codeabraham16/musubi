@@ -531,12 +531,23 @@ groups:
       # --- LA EXIGENCIA DE TLS NO SE APAGA DESPUÉS DE PRENDIDA ---
       #
       # `MUSUBI_EXIGIR_TLS=1` es el paso que CIERRA la migración a TLS: convierte «el bearer viaja
-      # en texto plano» de una salvedad de postura en una divergencia. Hoy vale 0, y eso está
-      # DECIDIDO — el cerebro sirve HTTP en claro y lo cifra el tailnet.
+      # en texto plano» de una salvedad de postura en una divergencia.
+      #
+      # 🔔 ESTA ALERTA SE ARMÓ EL 2026-09-21, Y HASTA ESE DÍA NO PODÍA SONAR. Mientras la perilla
+      # valió 0 —toda su vida— el segundo término de la `expr` era falso y la alerta estaba muda a
+      # propósito. Ese día la perilla pasó a 1 en `deploy/systemd/musubi-comparar.service`, porque
+      # el cerebro dejó de escuchar en claro: hoy escucha SÓLO en `127.0.0.1:7717` y el TLS lo
+      # termina `tailscale serve` por delante. O sea que a partir de acá esta alerta SÍ puede
+      # disparar, y lo que vigila ya no es hipotético.
       #
       # ESTA ALERTA ES UN TRINQUETE Y NO UN JUICIO SOBRE LA POSTURA. No puede disparar mientras la
       # perilla nunca haya estado en 1: sólo suena si alguien la APAGA después de haberla prendido
       # — o sea, si se migró a TLS y después se dejó de comprobar que la migración sigue completa.
+      #
+      # PRENDERLA NO CAMBIÓ NI UNA LÍNEA DEL VEREDICTO, y ése es el motivo por el que se pudo
+      # prender: se corrió el verificador contra producción con la perilla en 0 y en 1, y las dos
+      # corridas salieron idénticas (75 líneas, EXIT=0). Un trinquete se prende el día que no
+      # cuesta nada, que es el único día en que se puede prender.
       #
       # Sin ella, esa vuelta atrás es invisible: el verificador deja de mirar el transporte y sale
       # verde igual, porque «no lo miré» y «lo miré y está bien» son el mismo 0 en el resultado.
