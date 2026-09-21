@@ -446,6 +446,7 @@ func TestLaVentanaQueVuelveEsLaQueSeAplico(t *testing.T) {
 // arnes: archivo="internal/fleet/cronologia.go"
 // arnes: de="\tif hasta.Before(v.Hasta) {\n\t\thasta = hasta.Add(time.Second)\n\t}"
 // arnes: a="\tif false && hasta.Before(v.Hasta) {\n\t\thasta = hasta.Add(time.Second)\n\t}"
+// arnes: colision_ok="TestLaVentanaSeNormalizaHaciaAfuera"
 func TestLoQueAcabaDePasarEntraEnLaVentana(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")

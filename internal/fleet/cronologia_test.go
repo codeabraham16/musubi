@@ -16,7 +16,13 @@ import (
 // no público, y esta prueba obliga a que esa decisión sea explícita.
 //
 // Sabotaje: agregarle un `case` a CapDeHecho para HechoSinClasificar → falla acá.
+// arnes: archivo="internal/fleet/cronologia.go"
+// arnes: de="\tcase HechoCanalExec:\n\t\treturn CapExec, true\n\t}"
+// arnes: a="\tcase HechoCanalExec:\n\t\treturn CapExec, true\n\tcase HechoSinClasificar:\n\t\treturn CapExec, true\n\t}"
 // Sabotaje: agregar un tipo a TiposDeHecho sin su case → falla acá.
+// arnes: archivo="internal/fleet/cronologia.go"
+// arnes: de="\tHechoCanalPantalla, HechoCanalShell, HechoCanalExec, HechoSinClasificar,"
+// arnes: a="\tHechoCanalPantalla, HechoCanalShell, HechoCanalExec, HechoSinClasificar, TipoDeHecho(\"nuevo_sin_case\"),"
 func TestCadaTipoDeHechoMostrableTieneCapacidadYPlano(t *testing.T) {
 	for _, tipo := range TiposDeHecho {
 		capacidad, tieneCap := CapDeHecho(tipo)
@@ -106,6 +112,9 @@ func TestLasOperacionesInternasDeHoyEstanClasificadas(t *testing.T) {
 //
 // Sabotaje que lo hace fallar: devolver HechoCanalPantalla para OpAvisar en TipoDeArgv, o hacer
 // que TipoDeComando ignore c.Clasificacion.
+// arnes: archivo="internal/fleet/cronologia.go"
+// arnes: de="\tcase OpShell:\n\t\treturn HechoCanalShell\n\t}"
+// arnes: a="\tcase OpShell:\n\t\treturn HechoCanalShell\n\tcase OpAvisar:\n\t\treturn HechoCanalPantalla\n\t}"
 func TestElPlanoDeUnAvisoLoDecideQuienLoEncolo(t *testing.T) {
 	casos := []struct {
 		clase TipoDeHecho
@@ -154,11 +163,11 @@ func TestElPlanoDeUnAvisoLoDecideQuienLoEncolo(t *testing.T) {
 //
 // Sabotaje: que ArgvDeBitacora devuelva `argv` tal cual → falla acá, y la cronología entregaría
 // contraseñas de sesión a quien pueda leerla.
-// arnes: archivo="internal/fleet/cronologia.go"
 // EL CORTE SE LLEVA LA DECLARACIÓN DE `id`, y no sólo el return: cortando sólo el return,
 // `id` queda declarada y sin usar, el paquete NO COMPILA y el sabotaje no prueba nada — un
 // rojo por build roto se lee igual que uno por guarda que funciona. Medido: el arnés lo marcó
 // «sin veredicto», que es lo correcto.
+// arnes: archivo="internal/fleet/cronologia.go"
 // arnes: de="\tid := \"\"\n\tif len(argv) > 1 {\n\t\tid = argv[1]\n\t}\n\treturn []string{OpPantalla, id, \"[oculto]\"}"
 // arnes: a="\treturn argv"
 func TestElArgvDeBitacoraNuncaLlevaLaContrasena(t *testing.T) {
@@ -213,6 +222,10 @@ func TestLaVentanaEsSemiabierta(t *testing.T) {
 // Sabotaje: truncar las dos puntas hacia abajo → una ventana que termina «ahora» excluye lo que
 // acaba de pasar, y quien reinicia un servicio y entra a mirar ve la cronología vacía. Fue un bug
 // real de esta misma tanda, encontrado por el control POSITIVO del barrido de aislamiento.
+// arnes: archivo="internal/fleet/cronologia.go"
+// arnes: de="\tif hasta.Before(v.Hasta) {\n\t\thasta = hasta.Add(time.Second)\n\t}"
+// arnes: a="\tif false && hasta.Before(v.Hasta) {\n\t\thasta = hasta.Add(time.Second)\n\t}"
+// arnes: colision_ok="TestLoQueAcabaDePasarEntraEnLaVentana"
 func TestLaVentanaSeNormalizaHaciaAfuera(t *testing.T) {
 	// Punta de arriba con fracción: se redondea hacia ARRIBA, así entra el hecho de ese segundo.
 	ahora := time.Date(2026, 8, 29, 22, 29, 58, 700_000_000, time.UTC)
@@ -242,6 +255,9 @@ func TestLaVentanaSeNormalizaHaciaAfuera(t *testing.T) {
 // Una ventana mal armada NO se convierte en «traeme todo». Fail-closed.
 //
 // Sabotaje: que Valida devuelva nil siempre → un `desde` vacío consultaría desde el año cero.
+// arnes: archivo="internal/fleet/cronologia.go"
+// arnes: de="func (v Ventana) Valida() error {\n\tif v.Desde.IsZero() || v.Hasta.IsZero() {"
+// arnes: a="func (v Ventana) Valida() error {\n\tif true {\n\t\treturn nil\n\t}\n\tif v.Desde.IsZero() || v.Hasta.IsZero() {"
 func TestUnaVentanaInvalidaNoSeConvierteEnTraemeTodo(t *testing.T) {
 	ahora := time.Now().UTC()
 	casos := map[string]Ventana{
@@ -515,6 +531,9 @@ func TestUnEntregadoQueNuncaReportaSeMuestraPerdido(t *testing.T) {
 // tarde.
 //
 // Sabotaje: cambiar EsperaMaxDeEntregado por `c.Timeout + MargenDeReporte` → falla acá.
+// arnes: archivo="internal/fleet/comando.go"
+// arnes: de="\treturn ahora.Sub(c.Entregado) > EsperaMaxDeEntregado"
+// arnes: a="\treturn ahora.Sub(c.Entregado) > c.Timeout+MargenDeReporte"
 func TestElUltimoDeUnaTandaLargaNoSeMarcaPerdidoMientrasEspera(t *testing.T) {
 	ahora := time.Date(2026, 8, 31, 5, 0, 0, 0, time.UTC)
 
@@ -537,6 +556,9 @@ func TestElUltimoDeUnaTandaLargaNoSeMarcaPerdidoMientrasEspera(t *testing.T) {
 // misma regla que gobierna todo el track — un dato ausente no es un cero.
 //
 // Sabotaje: sacar la guarda de `Entregado.IsZero()` en Perdido → falla acá.
+// arnes: archivo="internal/fleet/comando.go"
+// arnes: de="\tif c.Estado != EstadoEntregado || c.Entregado.IsZero() {"
+// arnes: a="\tif c.Estado != EstadoEntregado {"
 func TestUnEntregadoSinFechaDeEntregaNoEsPerdido(t *testing.T) {
 	ahora := time.Date(2026, 8, 31, 5, 0, 0, 0, time.UTC)
 

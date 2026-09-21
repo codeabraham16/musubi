@@ -304,7 +304,29 @@ import (
 // respuesta NO fue declarar `colision_ok` sino elegir el corte que esta prueba y sólo ésta mira:
 // el jitter en un caso, el punto del sello en el otro. `colision_ok` es para cuando las dos
 // guardas cubren la línea de verdad; acá una de las dos estaba prometiendo el trabajo de la otra.
-const anclasEnProsaAlDia = 379
+//
+// Y DE 379 A 364 EL 2026-09-21: las quince anclas del DOMINIO de la cronología y de la EXPOSICIÓN
+// —`internal/fleet/cronologia_test.go` y `exposicion_test.go`—: qué se puede ver de la línea de
+// tiempo y qué se puede creer de un endpoint `/metrics` ajeno. Ninguna resultó hueca, y el barrido
+// se corrió sobre el PAQUETE ENTERO: 83 de 83 en rojo.
+//
+// LO QUE DEJÓ ESTE LOTE NO ES UN HUECO SINO UNA REGLA SOBRE `colision_ok`. El censo denunció tres
+// colisiones y sólo UNA merecía respuesta:
+//
+// SÍ: el redondeo de `Ventana.Normalizada` lo custodian DOS pruebas de verdad, una por paquete
+// —`TestLaVentanaSeNormalizaHaciaAfuera` mira la aritmética y `TestLoQueAcabaDePasarEntraEnLaVentana`
+// mira la consulta contra la base—. Las dos cubren la línea y sus motivos son distintos, así que
+// se declaró `colision_ok` de los DOS lados: la respuesta de una sola deja la otra sin contestar.
+//
+// NO, LAS OTRAS DOS: el default de `TipoDeArgv` y la compuerta del parser ya tenían su guarda, y
+// lo que estaba por poner era el mismo corte dos veces. Ahí la respuesta no es declarar la
+// colisión sino MOVER EL CORTE al punto que esta prueba —y sólo ésta— mira: un `case` explícito en
+// vez del default, y el `return` final en vez de la condición de la compuerta.
+//
+// El criterio, que vale para todo lo que viene: `colision_ok` se declara cuando las dos guardas
+// cubren la línea de verdad. Si una de las dos está prometiendo el trabajo de la otra, declararla
+// sería apagar el aviso en vez de contestarlo.
+const anclasEnProsaAlDia = 364
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
