@@ -348,8 +348,33 @@ func TestUnBrainConEsquemaLlegaIgualALosDosArtefactos(t *testing.T) {
 	if !strings.Contains(string(cfg), "central_url: "+destino) {
 		t.Fatalf("el config.yaml no lleva la dirección tal como se pidió (%s):\n%s", destino, cfg)
 	}
-	if !strings.Contains(string(mcp), destino+"/mcp") {
+	// LA DIRECCIÓN VA SIN EL SUFIJO `/mcp`, y eso NO es un descuido: la entrada del cerebro se
+	// cablea por STDIO (`musubi cerebro --url <base>`) y es ese comando quien arma el endpoint
+	// (`base + "/mcp"`). Pedirle el sufijo al archivo ataría esta prueba a la forma remota.
+	if !strings.Contains(string(mcp), destino) {
 		t.Fatalf("el .mcp.json no lleva la dirección tal como se pidió (%s):\n%s", destino, mcp)
+	}
+
+	// Y LA GUARDA QUE HABRÍA CAZADO EL DEFECTO DEL 2026-09-21, que es de lo que se trata todo esto.
+	//
+	// El cerebro se cableaba como `{"type":"http","url":…,"headers":{"Authorization":"Bearer
+	// ${VAR}"}}`, apoyado en que el cliente MCP expandiera la variable y MANDARA el header. El
+	// cliente de Claude Code NO manda los `headers` del .mcp.json (bug anthropics/claude-code
+	// #48514), así que la credencial nunca llegaba: el servidor quedaba en «Failed» con un error
+	// que no nombra la causa, y NADA en el árbol lo decía — `musubi cerebro` existía justamente
+	// para eso y este sitio seguía generando la forma que ese comando vino a reemplazar.
+	//
+	// Se mira la FORMA y no el texto del header: pedir que no aparezca «Authorization» dejaría
+	// pasar un `type: "http"` sin credencial, que falla igual y por lo mismo.
+	if strings.Contains(string(mcp), `"type": "http"`) || strings.Contains(string(mcp), `"type":"http"`) {
+		t.Errorf("el .mcp.json volvió a cablear el cerebro como servidor remoto `type: http`.\n"+
+			"  El cliente MCP de Claude Code no manda los `headers` que declara el archivo, así que "+
+			"el bearer nunca llega y la entrada queda en «Failed».\n"+
+			"  Va por stdio: `musubi cerebro --url <base> --token-env <VAR>`, que además resuelve la "+
+			"credencial con `config.SecretoDeEnv` y por lo tanto honra `<VAR>_FILE`.\n%s", mcp)
+	}
+	if !strings.Contains(string(mcp), `"cerebro"`) || !strings.Contains(string(mcp), `"--token-env"`) {
+		t.Errorf("el .mcp.json no cablea el cerebro por stdio con `musubi cerebro --token-env`:\n%s", mcp)
 	}
 
 	// Con una base https, el opt-in a texto plano NO se escribe: dejarlo puesto es autorizar de

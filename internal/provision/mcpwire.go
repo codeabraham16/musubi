@@ -18,7 +18,8 @@ type wireResult struct {
 
 // wireMCPJSON cablea (idempotente) el .mcp.json de projectDir con DOS entradas: la LOCAL
 // ("musubi", stdio al binario, forma portable ${MUSUBI_BIN}) y la del CEREBRO
-// ("musubi-cerebro", http al brain, con el bearer por referencia a tokenEnv). Preserva
+// ("musubi-cerebro", stdio a `musubi cerebro`, que reenvía al brain y resuelve el bearer con
+// `config.SecretoDeEnv(tokenEnv)` — o sea que honra `<VAR>_FILE`). Preserva
 // cualquier otra entrada/clave existente. El secreto NUNCA toca el archivo (va por ${VAR}).
 // Con dryRun no escribe: solo calcula si cambiaría.
 func wireMCPJSON(projectDir, brain, tokenEnv, exePath string, dryRun bool) (wireResult, error) {
@@ -55,8 +56,34 @@ func wireMCPJSON(projectDir, brain, tokenEnv, exePath string, dryRun bool) (wire
 	if elCertificadoNoVaAServirParaUnaIP(baseDelCerebro) {
 		res.aviso = "ojo: " + baseDelCerebro + " es https contra una IP pelada, y el certificado del tailnet lleva sólo el NOMBRE como SAN. El host MCP que lee este archivo no declara ServerName, así que no va a poder validarlo: usá el nombre del tailnet en vez de la IP"
 	}
-	remote := bootstrap.RemoteEntry(baseDelCerebro+"/mcp", tokenEnv)
-	merged, err = bootstrap.MergeRemoteMCPServer(merged, "musubi-cerebro", remote)
+	// SE CABLEA POR STDIO Y NO CON `type: "http"`, Y NO ES UNA PREFERENCIA DE ESTILO.
+	//
+	// La forma remota escribía `{"type":"http","url":...,"headers":{"Authorization":"Bearer
+	// ${VAR}"}}` y apoyaba en que el cliente MCP expandiera la variable y MANDARA el header. El
+	// cliente de Claude Code NO manda los `headers` del .mcp.json (bug anthropics/claude-code
+	// #48514) y encima intenta OAuth por descubrimiento en vez de por un 401 (#46879), así que la
+	// credencial nunca llegaba y el servidor quedaba en «Failed» con un error que no nombra la
+	// causa. Medido el 2026-09-21 sobre un `.mcp.json` aprovisionado por acá: `musubi-cerebro`
+	// figuraba Failed, y el mismo cerebro con la misma credencial por STDIO contestó el
+	// `initialize` y 75 tools.
+	//
+	// `musubi cerebro` existe exactamente para esto —su comentario de cabecera lo dice desde que
+	// se escribió— y este sitio seguía generando la forma que ese comando vino a reemplazar.
+	//
+	// Y HAY UN SEGUNDO MOTIVO, que es el que lo vuelve obligatorio: por stdio la credencial la
+	// resuelve `config.SecretoDeEnv`, que lee `<VAR>_FILE` ANTES que `<VAR>`. O sea que un secreto
+	// guardado en un archivo 0600 —en vez de exportado al entorno, que es como seis credenciales
+	// terminaron en los transcriptos— sigue funcionando. Con `${VAR}` eso era imposible: el editor
+	// sólo sabe expandir variables, así que el archivo obligaba a tener el secreto en el entorno.
+	//
+	// La URL va explícita y no por `$MUSUBI_CENTRAL_URL`: lo que se escribe acá es lo que esa
+	// máquina va a usar, y depender de una variable de entorno para el DESTINO reintroduce por la
+	// otra puerta el mismo «funciona según quién lanzó el editor».
+	cerebro := bootstrap.MCPServerEntry{
+		Command: "${MUSUBI_BIN:-" + exePath + "}",
+		Args:    []string{"cerebro", "--url", baseDelCerebro, "--token-env", tokenEnv},
+	}
+	merged, err = bootstrap.MergeMCPServer(merged, "musubi-cerebro", cerebro)
 	if err != nil {
 		return res, err
 	}
