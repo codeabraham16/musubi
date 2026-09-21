@@ -37,6 +37,9 @@ func deviceCaido(t *testing.T, s *McpServer, nombre string) fleet.Device {
 // mandaba a revisar el hardware de una máquina encendida.
 //
 // Sabotaje: que medirVidaDeRed guarde VidaAusente cuando el par está EnLinea.
+// arnes: archivo="internal/mcp/vidared.go"
+// arnes: de="\t\tv := fleet.VidaDeRedDe(d.Name, pares)"
+// arnes: a="\t\tv := fleet.VidaAusente\n\t\t_ = pares"
 func TestSiElTailnetVeLaMaquinaLoCaidoEsElAgente(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := deviceCaido(t, s, "davantis-1")
@@ -79,6 +82,9 @@ func TestSiElTailnetNoLaVeLaSerieDiceCero(t *testing.T) {
 //
 // Sabotaje: emitir 0 cuando fleet.VidaNoMedida, o dejar que medirVidaDeRed guarde algo cuando
 // la consulta al tailnet falla.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\t\tif !hay || v == fleet.VidaNoMedida {"
+// arnes: a="\t\tif !hay && v == fleet.VidaNoMedida && false {"
 func TestLoQueNoSePudoMedirNoEmiteSerie(t *testing.T) {
 	casos := []struct {
 		nombre string
@@ -116,6 +122,9 @@ func TestLoQueNoSePudoMedirNoEmiteSerie(t *testing.T) {
 // por nosotros.
 //
 // Sabotaje: sacar la comparación contra vidaRedVigencia.
+// arnes: archivo="internal/mcp/vidared.go"
+// arnes: de="\tif !ok || ahora.Sub(m.cuando) > vidaRedVigencia {"
+// arnes: a="\tif !ok {"
 func TestUnaMedicionViejaNoSeEmite(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := deviceCaido(t, s, "davantis-1")
@@ -135,6 +144,9 @@ func TestUnaMedicionViejaNoSeEmite(t *testing.T) {
 // convivirían para siempre y la alerta que los cruza tendría un dato que ya no se refresca.
 //
 // Sabotaje: sacar el olvidarVidaDeRed de medirVidaDeRedDeLosCaidos.
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\t\t\t\ts.olvidarVidaDeRed(d.ID)"
+// arnes: a="\t\t\t\t_ = d"
 func TestCuandoVuelveALatirLaSerieDesaparece(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := deviceCaido(t, s, "gio")

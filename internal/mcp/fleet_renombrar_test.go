@@ -32,6 +32,9 @@ func regConNombres(concede, allow string) *PrincipalRegistry {
 // nada — la misma forma que tiene todo lo caro de este track.
 //
 // Sabotaje: renombrar igual sin confirmar → falla acá.
+// arnes: archivo="internal/mcp/methods_renombrar.go"
+// arnes: de="\tif !args.Confirmar {"
+// arnes: a="\tif false {"
 func TestRenombrarNoHaceNadaSinConfirmar(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	sembrarLosTresPlanos(t, s, "infra", "pc-gio")
@@ -63,6 +66,9 @@ func TestRenombrarNoHaceNadaSinConfirmar(t *testing.T) {
 // autorización sin que nadie se la haya dado. Es el que a nadie se le ocurre mirar.
 //
 // Sabotaje: informar sólo el impacto del nombre viejo → falla acá.
+// arnes: archivo="internal/mcp/methods_renombrar.go"
+// arnes: de="\tif len(hereda.Concesiones) > 0 || len(hereda.Allowlists) > 0 || len(polNuevo) > 0 {"
+// arnes: a="\tif false && len(hereda.Concesiones) > 0 || len(hereda.Allowlists) > 0 && false || len(polNuevo) > 0 && false {"
 func TestRenombrarAvisaLoQueLaMaquinaVaAHEREDAR(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	sembrarLosTresPlanos(t, s, "infra", "pc-gio")
@@ -87,6 +93,9 @@ func TestRenombrarAvisaLoQueLaMaquinaVaAHEREDAR(t *testing.T) {
 //
 // Sabotaje: implementar el rename como baja+alta → falla acá, porque el id cambia y los comandos
 // dejan de encontrarse.
+// arnes: archivo="internal/memory/devices.go"
+// arnes: de="\tres, err := e.db.Exec(`UPDATE devices SET name = ? WHERE project_id = ? AND name = ?`,"
+// arnes: a="\t_, _ = e.db.Exec(`UPDATE devices SET id = lower(hex(randomblob(16))) WHERE project_id = ? AND name = ?`, projectID, viejo)\n\tres, err := e.db.Exec(`UPDATE devices SET name = ? WHERE project_id = ? AND name = ?`,"
 func TestRenombrarConservaElIdYConElLaBitacora(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")
@@ -190,6 +199,9 @@ func renombrarOk(t *testing.T, s *McpServer, p *Principal, args map[string]any) 
 // consulta. Inventarle una comprobación que no puede hacer sería peor que decir la verdad.
 //
 // Sabotaje: sacar el campo `no_puedo_ver` del informe.
+// arnes: archivo="internal/mcp/methods_renombrar.go"
+// arnes: de="\t\t\"no_puedo_ver\": []string{"
+// arnes: a="\t\t\"lo_que_no_veo\": []string{"
 func TestElInformeDeclaraLoQueNoPuedeVer(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	sembrarLosTresPlanos(t, s, "infra", "pc-gio")
