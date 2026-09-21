@@ -213,6 +213,33 @@ service:
     auth_token_env: "MUSUBI_TOKEN"
     allow_insecure_token: true
     request_timeout_seconds: 60
+    # DE DONDE SALE LA IP QUE SE AUDITA, Y POR QUE NO ES OBVIO (2026-09-21).
+    #
+    # OJO AL EDITAR: este heredoc es <<EOF SIN comillas, porque tiene que expandir BRAIN_ADDR.
+    # Eso significa que un backtick ACA SE EJECUTA. Medido al escribir este bloque: poner
+    # tailscale serve entre backticks corrio el comando de verdad y volco su texto de ayuda
+    # ADENTRO del config generado. Nada de backticks, nada de $ que no quieras expandir.
+    #
+    # Cuando el cerebro escucha SOLO en loopback y el TLS lo termina un proxy por delante
+    # (tailscale serve), TODA peticion le llega desde 127.0.0.1. Sin esta linea el cerebro no
+    # mira X-Forwarded-For --el default, y el unico seguro sin configurar-- asi que la
+    # auditoria de auth registra ip=127.0.0.1 PARA TODO EL MUNDO: un "credencial rechazada"
+    # deja de decir QUE MAQUINA fallo, que es lo unico para lo que sirve esa linea.
+    #
+    # NO ES UN RIESGO DE DISPONIBILIDAD, y conviene decirlo porque parece que si: el candado
+    # anti fuerza-bruta se consulta SOLO dentro del camino de fallo (ver autenticarPersona en
+    # internal/mcp/http.go, que retorna en el "if ok" antes de cualquier locked()), asi que
+    # una credencial VALIDA nunca lo toca y nadie queda bloqueado por la IP compartida.
+    #
+    # ES SEGURO PORQUE EL PROXY REEMPLAZA EL HEADER, y eso se midio, no se supuso: se mando
+    # X-Forwarded-For: 203.0.113.66 a traves del proxy y al backend llego SOLO el
+    # 100.79.126.62 real. El cliente no puede elegir su propia IP. Y si algun dia el proxy
+    # pasara a APENDEAR en vez de reemplazar, clientIP recorre de derecha a izquierda
+    # salteando proxies confiables, que es la lectura que resiste un header falsificado.
+    #
+    # Con un addr NO loopback y sin proxy no cambia nada: las peticiones llegan con la IP real
+    # del cliente, que no esta en 127.0.0.1/32, y el header no se lee.
+    trusted_proxies: ["127.0.0.1/32"]
 EOF
 chown "$BRAIN_USER:$BRAIN_USER" "$CFG"
 ok "Bloque service configurado"
