@@ -42,6 +42,9 @@ func leerDespliegueRelay(t *testing.T, archivo string) string {
 // explícita, no ser lo que pasa si no decís nada.
 //
 // Sabotaje que la hace fallar: cambiar el fallback de `preparar.sh` a BIND="0.0.0.0".
+// arnes: archivo="deploy/rustdesk/preparar.sh"
+// arnes: de="BIND=\"\""
+// arnes: a="BIND=\"0.0.0.0\""
 func TestNingunCaminoDelRelaySeAtaAlMundoPorDefecto(t *testing.T) {
 	for _, archivo := range []string{"install-rustdesk-relay.sh", "preparar.sh"} {
 		texto := leerDespliegueRelay(t, archivo)
@@ -69,6 +72,9 @@ func TestNingunCaminoDelRelaySeAtaAlMundoPorDefecto(t *testing.T) {
 // ser tan abierto como el público — con la diferencia de que uno cree que no lo es.
 //
 // Sabotaje que la hace fallar: quitar `-k _` del compose o del instalador.
+// arnes: archivo="deploy/rustdesk/compose.yml"
+// arnes: de="    command: hbbr -k _"
+// arnes: a="    command: hbbr"
 func TestLosDosCaminosDelRelayExigenLaClave(t *testing.T) {
 	// CADA SERVICIO por su nombre, no «el archivo menciona -k _». La primera versión buscaba la
 	// cadena en el archivo entero y pasaba en verde con hbbr desarmado: hbbs la tenía y tapaba el
@@ -92,6 +98,9 @@ func TestLosDosCaminosDelRelayExigenLaClave(t *testing.T) {
 // conecta y se corta al segundo — sin un error que apunte a la causa.
 //
 // Sabotaje que la hace fallar: darle a hbbr su propio `${MUSUBI_RUSTDESK_DIR}/hbbr:/root`.
+// arnes: archivo="deploy/rustdesk/compose.yml"
+// arnes: de="      # conexión que se establece y se cae al segundo — sin un error que lo explique.\n      - ${MUSUBI_RUSTDESK_DIR}/data:/root:z"
+// arnes: a="      # conexión que se establece y se cae al segundo — sin un error que lo explique.\n      - ${MUSUBI_RUSTDESK_DIR}/hbbr:/root:z"
 func TestHbbsYHbbrCompartenElDirectorioDeDatos(t *testing.T) {
 	texto := leerDespliegueRelay(t, "compose.yml")
 	re := regexp.MustCompile(`(?m)^\s*-\s*(\S+):/root(:\w+)?\s*$`)
@@ -117,6 +126,9 @@ func TestHbbsYHbbrCompartenElDirectorioDeDatos(t *testing.T) {
 // TCP del mismo número sí contesta, cualquier verificación superficial dice que todo anda.
 //
 // Sabotaje que la hace fallar: borrar la línea del `/udp` del compose.
+// arnes: archivo="deploy/rustdesk/compose.yml"
+// arnes: de="      - \"${MUSUBI_RUSTDESK_BIND}:21116:21116/udp\"\n"
+// arnes: a=""
 func TestElRelayPublicaElUDPDel21116(t *testing.T) {
 	texto := leerDespliegueRelay(t, "compose.yml")
 	if !strings.Contains(texto, "21116:21116/udp") {
@@ -180,6 +192,9 @@ func TestElComposeDelRelayNoUsaLaRedDelHost(t *testing.T) {
 //
 // Sabotajes que la hacen fallar: sacar la copia de `preparar.sh`, o borrar la salvedad de que no
 // protege contra perder el disco.
+// arnes: archivo="deploy/rustdesk/preparar.sh"
+// arnes: de="  install -m 0600 \"$DIR/data/id_ed25519\" \"$BACKUP/rustdesk-relay/id_ed25519\"\n"
+// arnes: a=""
 func TestPrepararGuardaLaIdentidadDelRelayYNoMienteSobreLoQueProtege(t *testing.T) {
 	texto := leerDespliegueRelay(t, "preparar.sh")
 
@@ -235,6 +250,9 @@ func TestPrepararGuardaLaIdentidadDelRelayYNoMienteSobreLoQueProtege(t *testing.
 // amarre pobre y es el que hay; por eso además se ejercita el contrato de verdad abajo.
 //
 // Sabotaje que la hace fallar: volver a contar `atendidas` sólo sobre los puertos que contestaron.
+// arnes: archivo="deploy/colectores/reportar-relay.py"
+// arnes: de="        \"atendidas\": len(PUERTOS),"
+// arnes: a="        \"atendidas\": len(PUERTOS) - len(caidos),"
 func TestElColectorDelRelayCuentaLasSondasIntentadasYNoLasQueContestaron(t *testing.T) {
 	b, err := leerArchivoDeDespliegue("../../deploy/colectores/reportar-relay.py")
 	if err != nil {
@@ -272,6 +290,10 @@ func TestElColectorDelRelayCuentaLasSondasIntentadasYNoLasQueContestaron(t *test
 // Sabotaje que la hace fallar: hacer que TasaDeError devuelva ok=false con atendidas>0, o apretar
 // la regla del desglose a `total >= Atendidas` (con los tres puertos caídos el desglose IGUALA a
 // las sondas, así que ahí un `>=` rechazaría el reporte legítimo).
+// arnes: archivo="internal/fleet/rendimiento.go"
+// arnes: de="\tif total > r.Atendidas {"
+// arnes: a="\tif total >= r.Atendidas {"
+// arnes: colision_ok="TestElDesgloseSumaMenosOIgualPeroNuncaMas"
 //
 // Y uno que NO la hace fallar, anotado porque lo probé y me equivoqué: QUITAR el chequeo de
 // subconjunto de Valida la deja en verde, y hace bien — esta prueba afirma que el reporte se

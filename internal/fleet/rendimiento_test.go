@@ -196,6 +196,7 @@ func TestUnConteoSinVentanaSeRechaza(t *testing.T) {
 // arnes: archivo="internal/fleet/rendimiento.go"
 // arnes: de="\tif total > r.Atendidas {"
 // arnes: a="\tif false && total > r.Atendidas {"
+// arnes: colision_ok="TestElReporteDelRelayConLosTresPuertosCaidosLoAceptaElCerebro"
 func TestElDesgloseSumaMenosOIgualPeroNuncaMas(t *testing.T) {
 	menos := &Rendimiento{VentanaSeg: 60, Atendidas: 47, Desglose: map[string]int{"ok": 40}}
 	if err := menos.Valida(); err != nil {
