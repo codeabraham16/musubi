@@ -257,7 +257,29 @@ import (
 // que el cerebro le cuenta a quien pregunta por una—. Cuatro de las veinticinco tenían la prosa mal,
 // y una de ellas de una forma nueva: DOS anclas del mismo bloque declaraban el MISMO corte, y sólo
 // enciende en una de las dos, porque el fixture de la otra mide un valor que la guarda deja pasar.
-const anclasEnProsaAlDia = 423
+//
+// Y DE 423 A 395 EL 2026-09-20: las veintiocho anclas de RENDIMIENTO y CRONOLOGÍA —qué HIZO un
+// servicio (no en qué estado está) y el relato de qué pasó en una máquina y cuándo—. Tres de las
+// veintiocho tenían la prosa mal, y las tres por la misma causa de fondo: nombraban un corte que
+// NO es el que decide.
+//
+// UNA: «llamar a ReportarServicios (el del latido) desde el handler» no borra nada. La poda es
+// OTRA llamada, PodarServiciosAusentes, que el handler del latido hace aparte y después. «Usar el
+// camino del latido» son dos operaciones y sólo la segunda es la que hace daño.
+//
+// DOS: «sacar Ventana.Normalizada del camino» es un no-op. Hay DOS normalizaciones en el camino y
+// la que queda vuelve a redondear; el corte que decide está adentro de la función, no en ninguno
+// de sus llamadores.
+//
+// TRES: «no escribir el origen en politicas.go» deja la prueba VERDE, porque siembra el comando A
+// MANO con el origen ya puesto: prueba que el campo viaja, no que alguien lo setea. Ese cableado
+// lo custodia un hermano, en fleet_politicas_test.go, y allá sí está mecanizado.
+//
+// La familia es una sola y vale escribirla: CONTÁ LAS COMPUERTAS ANTES DE NOMBRAR EL CORTE. Un
+// camino con dos guardas en serie, o con la escritura y la lectura separadas, no se corta por
+// cualquiera de sus mitades — y la prosa, que se escribe mirando el código una vez, elige casi
+// siempre la mitad que se ve primero.
+const anclasEnProsaAlDia = 395
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //

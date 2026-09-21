@@ -28,6 +28,9 @@ func rendimientoSano() *Rendimiento {
 // desaparecería y las dos situaciones se verían idénticas: sin datos.
 //
 // Sabotaje que la hace fallar: rechazar Atendidas == 0 en Valida.
+// arnes: archivo="internal/fleet/rendimiento.go"
+// arnes: de="\tif r.Atendidas < 0 {"
+// arnes: a="\tif r.Atendidas <= 0 {"
 func TestUnRendimientoEnCeroEsUnaMedicionYNoUnaAusencia(t *testing.T) {
 	vacio := &Rendimiento{VentanaSeg: 60, Atendidas: 0, Fallidas: 0}
 	if err := vacio.Valida(); err != nil {
@@ -121,6 +124,9 @@ func TestNoHayTasaDeErrorSinNadaQueMedir(t *testing.T) {
 // gráfico queda diciendo que el sistema anduvo rapidísimo cuando en realidad no anduvo.
 //
 // Sabotaje que la hace fallar: quitar la guarda de Atendidas == 0 con latencia.
+// arnes: archivo="internal/fleet/rendimiento.go"
+// arnes: de="\tif r.Atendidas == 0 && (r.LatenciaP95Ms != nil || r.LatenciaMaxMs != nil) {"
+// arnes: a="\tif false && r.Atendidas == 0 && (r.LatenciaP95Ms != nil || r.LatenciaMaxMs != nil) {"
 func TestUnaLatenciaSobreCeroUnidadesSeRechaza(t *testing.T) {
 	r := &Rendimiento{VentanaSeg: 60, Atendidas: 0, LatenciaP95Ms: ptr(0)}
 	err := r.Valida()
@@ -140,6 +146,9 @@ func TestUnaLatenciaSobreCeroUnidadesSeRechaza(t *testing.T) {
 // dos campos, y cruzarlos es fácil: los dos son enteros de milisegundos.
 //
 // Sabotaje que la hace fallar: quitar la comparación entre p95 y máximo.
+// arnes: archivo="internal/fleet/rendimiento.go"
+// arnes: de="\tif r.LatenciaP95Ms != nil && r.LatenciaMaxMs != nil && *r.LatenciaP95Ms > *r.LatenciaMaxMs {"
+// arnes: a="\tif false && r.LatenciaP95Ms != nil && r.LatenciaMaxMs != nil && *r.LatenciaP95Ms > *r.LatenciaMaxMs {"
 func TestElP95NoPuedeSuperarAlMaximo(t *testing.T) {
 	r := &Rendimiento{VentanaSeg: 60, Atendidas: 10, LatenciaP95Ms: ptr(900), LatenciaMaxMs: ptr(400)}
 	if err := r.Valida(); err == nil {
@@ -157,6 +166,9 @@ func TestElP95NoPuedeSuperarAlMaximo(t *testing.T) {
 // distintos y que alguien cambia por otra razón.
 //
 // Sabotaje que la hace fallar: aceptar VentanaSeg == 0.
+// arnes: archivo="internal/fleet/rendimiento.go"
+// arnes: de="\tif r.VentanaSeg <= 0 {"
+// arnes: a="\tif r.VentanaSeg < 0 {"
 func TestUnConteoSinVentanaSeRechaza(t *testing.T) {
 	r := &Rendimiento{Atendidas: 47}
 	err := r.Valida()
@@ -181,6 +193,9 @@ func TestUnConteoSinVentanaSeRechaza(t *testing.T) {
 // desglose y el total cuentan cosas distintas, y entonces NINGUNO de los dos se puede usar.
 //
 // Sabotaje que la hace fallar: quitar la comparación total > Atendidas.
+// arnes: archivo="internal/fleet/rendimiento.go"
+// arnes: de="\tif total > r.Atendidas {"
+// arnes: a="\tif false && total > r.Atendidas {"
 func TestElDesgloseSumaMenosOIgualPeroNuncaMas(t *testing.T) {
 	menos := &Rendimiento{VentanaSeg: 60, Atendidas: 47, Desglose: map[string]int{"ok": 40}}
 	if err := menos.Valida(); err != nil {
@@ -198,6 +213,9 @@ func TestElDesgloseSumaMenosOIgualPeroNuncaMas(t *testing.T) {
 // ilimitada en Prometheus y una tabla ilegible en la pantalla.
 //
 // Sabotaje que la hace fallar: quitar el tope DesgloseMax (o el de largo de clave).
+// arnes: archivo="internal/fleet/rendimiento.go"
+// arnes: de="\tif n := len(r.Desglose); n > DesgloseMax {"
+// arnes: a="\tif n := len(r.Desglose); n > DesgloseMax && false {"
 func TestElDesgloseTieneTopeDeClavesYDeLargo(t *testing.T) {
 	muchas := &Rendimiento{VentanaSeg: 60, Atendidas: 0, Desglose: map[string]int{}}
 	for i := 0; i < DesgloseMax+1; i++ {
@@ -223,6 +241,9 @@ func TestElDesgloseTieneTopeDeClavesYDeLargo(t *testing.T) {
 // con un número imposible, y nadie sabe cuál de los dos mirar.
 //
 // Sabotaje que la hace fallar: no llamar a Rendimiento.Valida desde SaludServicio.Valida.
+// arnes: archivo="internal/fleet/servicio.go"
+// arnes: de="\tif err := s.Rendimiento.Valida(); err != nil {"
+// arnes: a="\tif err := s.Rendimiento.Valida(); err != nil && false {"
 func TestUnaSaludConRendimientoImposibleSeRechazaEntera(t *testing.T) {
 	s := SaludServicio{
 		Tomada: time.Now(), Estado: EstadoCorriendo,
@@ -247,6 +268,9 @@ func TestUnaSaludConRendimientoImposibleSeRechazaEntera(t *testing.T) {
 // dejaría de cuadrar con el total sin que nada lo dijera.
 //
 // Sabotaje que la hace fallar: usar `limpio[k] = v` en vez de `limpio[k] += v`.
+// arnes: archivo="internal/fleet/servicio.go"
+// arnes: de="\t\t\t\tlimpio[k] += v"
+// arnes: a="\t\t\t\tlimpio[k] = v"
 func TestRecortarNormalizaLasClavesSumandoYNoPisando(t *testing.T) {
 	r := RecortarReporte(ReporteServicio{
 		Nombre: "alturito", Salud: SaludServicio{Tomada: time.Now(), Estado: EstadoCorriendo,
@@ -269,6 +293,9 @@ func TestRecortarNormalizaLasClavesSumandoYNoPisando(t *testing.T) {
 // reordena sus columnas en cada refresco es ilegible.
 //
 // Sabotaje que la hace fallar: devolver las claves sin ordenar.
+// arnes: archivo="internal/fleet/rendimiento.go"
+// arnes: de="\tsort.Strings(out)"
+// arnes: a="\tif false {\n\t\tsort.Strings(out)\n\t}"
 func TestLasClavesDelDesgloseSalenOrdenadas(t *testing.T) {
 	r := rendimientoSano()
 	// Se repite: con una sola corrida un map de tres claves puede salir ordenado de casualidad.
