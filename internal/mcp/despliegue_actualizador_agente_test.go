@@ -63,7 +63,23 @@ func guionesDeWindows(t *testing.T) string {
 	return leerDeploy(t, "actualizar-agente-windows.sh") + "\n" + leerDeploy(t, "lib-agente-windows.sh")
 }
 
-// Sabotaje que la hace fallar: volver a poner `Select-Object -First 1` para elegir la instalación.
+// LO QUE ESTA GUARDA CUBRE ES UNA FORMA, NO EL DEFECTO — medido al mecanizarla. El primer corte
+// que se probó fue `$conToken = @($cands | Select-Object -First 1)`: elige la instalación por el
+// primer proceso que aparezca, que es EXACTAMENTE el defecto del cabo A98, y esta prueba quedó
+// VERDE. El motivo está tres líneas más abajo: la condición exige las DOS cadenas en la MISMA
+// línea, así que el mismo defecto escrito con otra grafía pasa limpio.
+//
+// No se ensancha la condición a propósito: `Select-Object -First 1` a secas es legítimo en
+// cualquier otra tubería del guion, y una guarda que lo prohíba entero se vuelve un estorbo que
+// alguien termina apagando. Lo que corresponde es saber qué custodia: la tubería histórica, no
+// la idea. El discriminante de verdad —que se elija por `device.token`— lo custodia la aserción
+// de abajo, y la mitad «ante la duda, parar» la custodia la prueba siguiente.
+//
+// Sabotaje que la hace fallar: volver a poner `Get-Process musubi | Select-Object -First 1` para
+// elegir la instalación.
+// arnes: archivo="deploy/lib-agente-windows.sh"
+// arnes: de="$conToken = @($cands | Where-Object { Test-Path (Join-Path $_ \"device.token\") })"
+// arnes: a="$conToken = @(Get-Process musubi | Select-Object -First 1 | ForEach-Object { Split-Path $_.Path })"
 func TestElActualizadorNoEligeLaInstalacionPorElPrimerProcesoQueAparezca(t *testing.T) {
 	g := guionesDeWindows(t)
 
@@ -93,6 +109,9 @@ func TestElActualizadorNoEligeLaInstalacionPorElPrimerProcesoQueAparezca(t *test
 // La otra mitad de A98: elegir bien no alcanza si ante la duda se elige igual.
 //
 // Sabotaje que la hace fallar: sacar cualquiera de los dos `exit 1` del resolver.
+// arnes: archivo="deploy/lib-agente-windows.sh"
+// arnes: de="if ($conToken.Count -gt 1) { \"hay \" + $conToken.Count + \" instalaciones con device.token y no se cual es el agente: \" + ($conToken -join \", \") + \". No elijo a ciegas\"; exit 1 }"
+// arnes: a="if ($false) { \"no elijo a ciegas\"; exit 1 }"
 func TestElActualizadorSeParaSiNoPuedeDecidirCualEsElAgente(t *testing.T) {
 	g := guionesDeWindows(t)
 	for _, frase := range []string{
@@ -114,6 +133,9 @@ func TestElActualizadorSeParaSiNoPuedeDecidirCualEsElAgente(t *testing.T) {
 //
 // Sabotaje que la hace fallar: mover el `if not exist "%DIR%\device.token"` debajo del `schtasks
 // /end`, o sacarlo.
+// arnes: archivo="deploy/cambiar-agente.cmd"
+// arnes: de="REM device.token es el discriminante porque es la credencial del dispositivo, el mismo archivo que"
+// arnes: a="schtasks /end /tn \"%TAREA%\" >> \"%LOG%\" 2>&1\nREM device.token es el discriminante porque es la credencial del dispositivo, el mismo archivo que"
 func TestElCambiadorNoTocaLaTareaAntesDeConfirmarQueEsLaCarpetaDelAgente(t *testing.T) {
 	c := leerDeploy(t, "cambiar-agente.cmd")
 
@@ -177,6 +199,9 @@ func TestElCambiadorSigueSiendoAsciiPuro(t *testing.T) {
 //
 // Sabotaje que la hace fallar: volver a poner `[[ "$V" == "$VERSION" ]] && { ok ...; exit 0; }`
 // sin la confirmación en la máquina.
+// arnes: archivo="deploy/actualizar-agente-windows.sh"
+// arnes: de="confirmando EN LA MÁQUINA"
+// arnes: a="confirmando"
 func TestElActualizadorNoCantaVictoriaSoloPorLaVersionReportada(t *testing.T) {
 	g := leerDeploy(t, "actualizar-agente-windows.sh")
 
@@ -276,6 +301,9 @@ func TestElActualizadorTambienRefrescaElLanzador(t *testing.T) {
 // sincronizados: el proceso tiene que haber arrancado DESPUÉS de que el archivo se escribiera.
 //
 // Sabotaje que la hace fallar: sacar la comparación de StartTime contra LastWriteTime.
+// arnes: archivo="deploy/lib-agente-windows.sh"
+// arnes: de="$nuevos = @($todos | Where-Object { $_.StartTime -gt $escrito })"
+// arnes: a="$nuevos = @($todos)"
 func TestLaConfirmacionExigeUnProcesoMasNuevoQueElBinario(t *testing.T) {
 	// SE MIRAN SÓLO LAS LÍNEAS DE CÓDIGO. La primera versión buscaba las frases en TODO el
 	// archivo y `LastWriteTime` aparecía en el comentario que explica qué hace `$escrito`: el
@@ -305,6 +333,9 @@ func TestLaConfirmacionExigeUnProcesoMasNuevoQueElBinario(t *testing.T) {
 //
 // Sabotaje que la hace fallar: pegarle a `matar-zombis-agente.sh` su propia copia del `RESOLVER=`
 // en vez de cargar el lib.
+// arnes: archivo="deploy/matar-zombis-agente.sh"
+// arnes: de="# shellcheck source=deploy/lib-agente-windows.sh\nsource \"$(dirname \"${BASH_SOURCE[0]}\")/lib-agente-windows.sh\""
+// arnes: a="RESOLVER=\"copia propia a mano, sin el lib\""
 func TestLosDosGuionesDeWindowsCarganElMismoLibYNoUnaCopia(t *testing.T) {
 	for _, nombre := range []string{"actualizar-agente-windows.sh", "matar-zombis-agente.sh"} {
 		g := leerDeploy(t, nombre)
@@ -333,6 +364,9 @@ func TestLosDosGuionesDeWindowsCarganElMismoLibYNoUnaCopia(t *testing.T) {
 //
 // Sabotaje que la hace fallar: volver a filtrar con `Get-Process musubi`, o sacar `$viejo` de la
 // condición de `$todos`.
+// arnes: archivo="deploy/lib-agente-windows.sh"
+// arnes: de="$todos  = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe -or $_.Path -eq $viejo })"
+// arnes: a="$todos  = @(Get-Process musubi -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe })"
 func TestLaClasificacionVeTambienAlZombiDelBinarioRenombrado(t *testing.T) {
 	lib := leerDeploy(t, "lib-agente-windows.sh")
 

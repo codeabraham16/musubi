@@ -353,7 +353,31 @@ import (
 // pisan, porque el `a` de los dos CONSERVA su propio `de` (insertan un return y renombran la
 // función vieja). Un `a` que preserva el `de` no rompe a nadie. La herramienta caza la respuesta
 // rancia igual que caza la promesa rancia.
-const anclasEnProsaAlDia = 340
+//
+// Y DE 340 A 326 EL 2026-09-21: las catorce anclas del DESPLIEGUE —el relay de pantalla
+// (`despliegue_relay_test.go`) y el actualizador del agente de Windows
+// (`despliegue_actualizador_agente_test.go`)—. Es el primer lote donde casi nada de lo saboteado es
+// Go: se cortan `compose.yml`, `preparar.sh`, `lib-agente-windows.sh`, `cambiar-agente.cmd`,
+// `matar-zombis-agente.sh` y un colector en Python. Una resultó hueca.
+//
+// LA HUECA ES DE UNA FAMILIA QUE YA ESTÁ ESCRITA Y VOLVIÓ CON OTRA CARA: una guarda de TEXTO cubre
+// una FORMA, no el defecto. `TestElActualizadorNoEligeLaInstalacionPorElPrimerProcesoQueAparezca`
+// exige las DOS cadenas —`Get-Process musubi` y `Select-Object -First 1`— en la MISMA línea. El
+// primer corte que se probó fue `$conToken = @($cands | Select-Object -First 1)`: elige la
+// instalación por el primer proceso que aparezca, que es EXACTAMENTE el cabo A98, y la prueba quedó
+// VERDE porque la grafía no coincide.
+//
+// NO SE ENSANCHÓ LA CONDICIÓN, Y ESO TAMBIÉN ES LA LECCIÓN. `Select-Object -First 1` a secas es
+// legítimo en cualquier otra tubería del guion, y una guarda que lo prohíba entero se vuelve un
+// estorbo que alguien termina apagando. Lo que corresponde es que quede ESCRITO qué custodia: la
+// tubería histórica, no la idea. El discriminante de verdad —elegir por `device.token`— lo custodia
+// la aserción de al lado, y la mitad «ante la duda, parar» la custodia la prueba siguiente.
+//
+// Y UNA COLISIÓN LEGÍTIMA MÁS, la tercera de la campaña: la regla del desglose
+// (`total > Atendidas` en rendimiento.go) la custodian el DOMINIO —TestElDesgloseSumaMenosOIgualPeroNuncaMas—
+// y el CONTRATO DEL RELAY, que manda un reporte donde el desglose IGUALA a las sondas. Las dos
+// cubren la línea de verdad y sus motivos difieren, así que `colision_ok` de los dos lados.
+const anclasEnProsaAlDia = 326
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
