@@ -174,6 +174,37 @@ func TestNingunCandadoDelDespachoCruzaUnaLlamadaDeRed(t *testing.T) {
 		a.primitivasVistas, strings.Join(a.salidasFleet, ", "))
 }
 
+// HASTA DÓNDE LLEGA ESTE ANÁLISIS, MEDIDO — porque su verde no distingue «ninguna tool cruza» de
+// «no miré por ahí».
+//
+// El grafo cubre `internal/mcp` y cruza a UN solo paquete vecino: `internal/fleet`. Los otros doce
+// paquetes internos que hacen I/O de red o de proceso —arbol, arnes, cerebro, codeintel, cognition,
+// embedding, guiones, ingest, provision, selfupdate, skills, skillsource— no se recorren. Un handler
+// que llegara a la red SÓLO a través de uno de ellos sería invisible acá.
+//
+// SE MIDIÓ EL 2026-09-22 Y LA EXPOSICIÓN ES CERO. Corriendo el mismo análisis con el borde extendido
+// a los trece paquetes, los nombres exportados que lo alcanzan pasan de **3 a 23** —`Extract` y
+// `Transcribe` de ingest, `Download` y `LatestVersion` de selfupdate, las tres de skillsource, `Ask`
+// y `Rerank` de cognición, `Diff` de codeintel, las cuatro de provision— y **CERO tools sin
+// `lockSelf` se encienden**: todas las que podrían llegar ya lo declaran.
+//
+// Y EXTENDERLO A CIEGAS INVERTIRÍA LA GUARDA, que es por qué el borde sigue chico. El
+// emparejamiento es POR NOMBRE SIMPLE —así se reconocen los métodos de interfaz, cuya
+// implementación no se conoce al compilar— y `provision.Run` choca con un `Run` que este mismo
+// paquete define. Un borde extendido marcaría ESE `Run` como salida y le exigiría `lockSelf` a una
+// tool que no lo necesita: la falla 7, castigar el estado correcto. Hacerlo bien pide emparejar por
+// nombre CALIFICADO para las funciones de paquete y dejar el nombre simple sólo para los métodos de
+// interfaz — otro trabajo, con cero beneficio mientras la exposición siga en cero.
+//
+// SE INTENTÓ ESCRIBIR LA GUARDA QUE VIGILA ESE CERO, Y NO SE DEJÓ. Su aserción principal —«ninguna
+// tool se enciende con el borde extendido»— no la puede poner roja nada en el árbol de hoy: se
+// probó quitándole el `lockSelf` a `musubi_ingest_url`, suponiendo que su único camino al borde
+// pasaba por `internal/ingest`, y la que se puso roja fue ESTA guarda, no aquélla — el handler llega
+// al borde acá adentro, porque persistir la observación la embebe y `Embed` sí es borde. Una guarda
+// verde en las dos direcciones al lado de una hermana que sí caza el caso es peor que la medición
+// escrita: se lee como cobertura. La medición queda acá; el día que alguien la vea distinta de cero,
+// el trabajo del nombre calificado se justifica solo.
+//
 // toolsQueTodaviaCruzanLaRed es el TRINQUETE: las tools que, medido el 2026-09-13, sostienen el
 // candado del despacho mientras esperan una salida de red o de proceso.
 //
