@@ -37,6 +37,16 @@
 #     sudo -u mon bash deploy/cerrar-metrics-del-funnel.sh
 # ────────────────────────────────────────────────────────────────────────────────────────────
 set -u
+# EL BUS DE `systemctl --user`, Y SIN ESTO EL GUION EDITA Y NO RECARGA.
+#
+# Esto se corre con `sudo -u mon`, y sudo tiene `env_reset`: NO le pasa el entorno del que
+# invoca, ni le arma uno al usuario destino. Sin `XDG_RUNTIME_DIR`, `systemctl --user` falla con
+# «Failed to connect to user scope bus» — y el fallo llega DESPUES de haber editado el Caddyfile,
+# o sea en el peor momento posible. Está escrito en el CLAUDE.md del repo desde el 2026-09-19 y
+# aun asi se escapo la primera vez: la regla vive en la documentacion y el guion no la heredaba.
+#
+# `id -u` corre YA como el usuario destino, asi que da el uid correcto sin clavarlo acá.
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 CF=${CADDYFILE:-/home/mon/caddy-rum/Caddyfile}
 BK=$CF.antes-de-cerrar-metrics-$(date +%Y%m%d)
 BASE=${BASE_OPENOBSERVE:-http://127.0.0.1:5081}
@@ -83,7 +93,13 @@ else
 fi
 
 paso "5 · recargar"
-systemctl --user restart caddy-rum.service || mal "no pude reiniciar caddy-rum.service"
+if ! systemctl --user restart caddy-rum.service; then
+  # SE REVIERTE, y no es paranoia: dejar el archivo editado con Caddy corriendo la config VIEJA
+  # significa que el proximo reinicio —de cualquiera, por cualquier motivo— aplica un cambio que
+  # NADIE verifico. El estado a medias es peor que el estado anterior.
+  cp -a "$BK" "$CF"
+  mal "no pude reiniciar caddy-rum.service (¿falta XDG_RUNTIME_DIR, o no sos mon?) — revertido, nada quedó aplicado"
+fi
 sleep 3
 
 paso "6 · verificar LAS DOS MITADES — una sola miente"
