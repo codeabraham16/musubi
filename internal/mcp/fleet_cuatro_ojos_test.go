@@ -299,6 +299,10 @@ func TestSinLaMismaCapacidadNoSePuedeAprobar(t *testing.T) {
 // abra una shell — si no, el permiso más barato de conseguir habilitaría el más caro.
 //
 // Sabotaje: sacar `AND capacidad = ?` de AprobacionVigenteDe.
+// Su `a` le rompe el ancla a la guarda del MOTOR, que cubre las TRES dimensiones de esa misma
+// consulta. Los dos motivos se leyeron y son distintos: éste cae en «una aprobación de `screen`
+// abrió una SHELL» y aquél en «SE ENCONTRÓ consultando (maquina-B, …)».
+// arnes: colision_ok="TestUnaAprobacionVigenteAcotaPorLasTresDimensiones"
 //
 // arnes: archivo="internal/memory/aprobaciones.go"
 // EL CORTE ES FINO Y NO EL `WHERE` ENTERO, y la razón no es estética. Un `de` que abarca toda la
@@ -369,6 +373,12 @@ func TestLaAprobacionDePantallaNoAbreUnaShell(t *testing.T) {
 // ENCENDER O APAGAR EL CONTROL ES DE ADMIN. Si quien entra pudiera apagarlo, no habría control.
 //
 // Sabotaje: sacar el `if !p.isAdmin()` de toolFleetRequireApproval.
+// La colisión es con `TestSoloUnAdminApagaLosCuatroOjos`, que aflojará la MISMA compuerta de otra
+// forma —a «admin o write=any»— y por eso el censo la denuncia en las DOS direcciones. Los dos
+// motivos se leyeron: éste cae en «alguien con `screen` apagó el control» y aquél en «un principal
+// writer/any APAGÓ los cuatro ojos sin ser admin». Son dos formas de principal, no una contada dos
+// veces.
+// arnes: colision_ok="TestSoloUnAdminApagaLosCuatroOjos"
 //
 // `&& false` EN VEZ DE `if false`: así la llamada a `p.isAdmin()` sigue escrita y `p` conserva una
 // referencia viva. Un corte que deja un símbolo huérfano no compila, y el arnés contesta «sin
@@ -679,6 +689,9 @@ func devicePorNombreEnPrueba(t *testing.T, s *McpServer, proyecto, nombre string
 // AprobacionVigenteDe defiende con más párrafos, y no tenía ninguna prueba que se pusiera roja.
 //
 // Sabotaje: sacar `AND solicitante = ?` de AprobacionVigenteDe.
+// Misma línea que la guarda del MOTOR y motivos distintos, leídos los dos: éste cae en «un tercero
+// usó la aprobación que le dieron a otro» y aquél en la dimensión de la MÁQUINA.
+// arnes: colision_ok="TestUnaAprobacionVigenteAcotaPorLasTresDimensiones"
 //
 // CUATRO SABOTAJES CAEN SOBRE ESTA CONSULTA Y NINGUNO SE PISA CON OTRO, porque cada uno corta
 // SÓLO la cláusula que su prueba mide: el filtro por capacidad (una aprobación de pantalla
