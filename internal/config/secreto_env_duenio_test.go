@@ -36,11 +36,17 @@ import (
 //   - volver `embedding/factory.go` a `os.Getenv(envName)`;
 //   - volver `methods.go` (marketplace) o `catalog.go` a `os.Getenv(apiKeyEnv)`;
 //   - volver `calibrate.go` a `os.Getenv("ANTHROPIC_API_KEY")`;
-//   - agregar un `os.Getenv("LO_QUE_SEA_API_KEY")` nuevo en cualquier parte de internal/ o cmd/.
+//   - agregar un `os.Getenv("LO_QUE_SEA_API_KEY")` nuevo en cualquier parte de internal/ o cmd/;
+//   - o leer cualquiera de esas credenciales con `os.LookupEnv`, que es el otro accesor del
+//     entorno y tampoco honra `<VAR>_FILE`.
 //
 // arnes: archivo="internal/mcp/methods.go"
 // arnes: de="\t\tk, err := config.SecretoDeEnv(s.sourcing.MarketplaceAPIKeyEnv)\n\t\tif err != nil {\n\t\t\tlogx.Warn(\"marketplace_api_key_env nombra un archivo que no se pudo leer; sigo con el tier anónimo\", \"error\", err)\n\t\t}\n\t\tapiKey = k\n"
-// arnes: a="\t\tapiKey = os.Getenv(s.sourcing.MarketplaceAPIKeyEnv)\n"
+// EL SABOTAJE USA `os.LookupEnv` Y NO `os.Getenv`, A PROPÓSITO: con `Getenv` lo cazaba ya la
+// versión ANTERIOR de estos patrones, así que su rojo no diría nada sobre el alcance que se
+// agregó. Con `LookupEnv`, si alguien vuelve a acotar los patrones a un solo accesor este
+// sabotaje se pone VERDE y la guarda queda denunciada.
+// arnes: a="\t\tapiKey, _ = os.LookupEnv(s.sourcing.MarketplaceAPIKeyEnv)\n"
 func TestNadieLeeUnaCredencialConGetenvPelado(t *testing.T) {
 	// EXCEPCIONES, UNA POR UNA, CON SU RAZÓN MEDIDA.
 	exentos := map[string]string{
@@ -73,8 +79,28 @@ func TestNadieLeeUnaCredencialConGetenvPelado(t *testing.T) {
 	// Por eso se mira también A QUIÉN SE LE ASIGNA: si el resultado de un `os.Getenv` termina en
 	// algo que se llama `apiKey`, `token` o `secret`, es una credencial, se llame como se llame la
 	// variable de entorno.
-	porElNombreDeLaVariableDeEntorno := regexp.MustCompile(`(?i)os\.Getenv\(\s*"?[a-z0-9_."]*(key|token|secret|password|passwd|credential)`)
-	porElDestinoDeLaAsignacion := regexp.MustCompile(`(?i)\b[a-z0-9_]*(apikey|api_key|token|secret|password|passwd|credential|clave)[a-z0-9_]*\s*:?=[^=]*os\.Getenv\(`)
+	// LOS DOS ACCESORES, Y EL SEGUNDO ES OTRO N−1 DE LA MISMA FAMILIA. La primera versión de estos
+	// dos patrones preguntaba sólo por `os.Getenv`, y la regla que custodia no es sobre esa función:
+	// es «toda credencial pasa por SecretoDeEnv». `os.LookupEnv` lee el mismo entorno, NO honra
+	// `<VAR>_FILE` y dejaba la guarda en VERDE — medido el 2026-09-22 reemplazando la llamada del
+	// marketplace por `apiKey, _ = os.LookupEnv(...)`: compila, saltea la regla entera y esta guarda
+	// no lo veía. El nombre de la guarda decía «os.Getenv pelado» y la regla dice otra cosa.
+	//
+	// ENTRAN LOS CUATRO LECTORES DEL API, Y ESO ES CERRAR LA CLASE Y NO EL SITIO. Agregar un accesor
+	// suelto sería tapar el caso que apareció; lo que vale es que el API de entorno de `os` es un
+	// conjunto CERRADO —`Getenv`, `LookupEnv`, `Environ`, `ExpandEnv` leen; `Setenv`, `Unsetenv` y
+	// `Clearenv` escriben— así que enumerarlo entero converge, a diferencia de enumerar «formas de
+	// escribir» algo abierto, que este repo ya midió que no converge.
+	//
+	// LOS DOS QUE HOY NO TIENEN USO NO SON RUIDO: `os.ExpandEnv("$API_KEY")` lee el entorno igual y
+	// no honra `<VAR>_FILE`; lo caza el patrón del DESTINO —el del nombre no, porque el `$` corta su
+	// clase de caracteres, y se dice acá para que nadie lo descubra creyendo que está cubierto—.
+	// `os.Environ()` tiene UN uso medido, `cmd/musubi/shell_agente.go` armando el entorno de un
+	// HIJO, y no lo acusa ninguno de los dos patrones: no hay nombre de credencial después del
+	// paréntesis ni destino que se llame como una.
+	const accesores = `os\.(Getenv|LookupEnv|Environ|ExpandEnv)\(`
+	porElNombreDeLaVariableDeEntorno := regexp.MustCompile(`(?i)` + accesores + `\s*"?[a-z0-9_."]*(key|token|secret|password|passwd|credential)`)
+	porElDestinoDeLaAsignacion := regexp.MustCompile(`(?i)\b[a-z0-9_]*(apikey|api_key|token|secret|password|passwd|credential|clave)[a-z0-9_]*\s*:?=[^=]*` + accesores)
 
 	// SE BARREN LAS RAICES DE CODIGO Y NO EL REPO ENTERO. Barrer desde la raiz levantaba .go de
 	// `.musubi/backups/` —copias de rescate de worktrees, que no son codigo de esta rama— y de
@@ -135,7 +161,7 @@ func TestNadieLeeUnaCredencialConGetenvPelado(t *testing.T) {
 	}
 
 	if len(ofensores) > 0 {
-		t.Errorf("hay %d lectura(s) de credencial con `os.Getenv` pelado, sin pasar por "+
+		t.Errorf("hay %d lectura(s) de credencial que leen el entorno a mano, sin pasar por "+
 			"`config.SecretoDeEnv` y sin declararse en `exentos`:\n  %s\n\n"+
 			"`SecretoDeEnv` honra `<VAR>_FILE`, que `deploy/musubi-tool.sh:21` recomienda como "+
 			"LO RECOMENDADO. Un camino que no lo lee deja sin credencial a quien siga el consejo "+
