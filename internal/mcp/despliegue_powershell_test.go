@@ -312,6 +312,7 @@ var inventarioPowerShell = []struct {
 	{"deploy/confiar-editor-windows.ps1", 30, "hoy tiene 66 cadenas dobles"},
 	{"deploy/connect-brain-windows.ps1", 25, "hoy tiene 54 cadenas dobles"},
 	{"deploy/diagnostico-cortes-windows.ps1", 40, "hoy tiene 81 cadenas dobles"},
+	{"deploy/diagnostico-disco-windows.ps1", 43, "el hermano que mide el disco; hoy tiene 87 cadenas dobles"},
 	{"deploy/cambiar-agente.cmd", 1,
 		"el `powershell -NoProfile -Command` que mata los procesos por RUTA exacta (:69)"},
 	// EL HERMANO QUE NO VIVE EN `deploy/`. Lo encontró el control al revés de acá abajo, no yo:
