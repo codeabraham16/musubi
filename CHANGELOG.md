@@ -8,6 +8,35 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
+  El ledger era UNA casilla de `meta` que guardaba UNA sesión, y `LedgerAdd` la reiniciaba entera
+  con `if sessionID != l.SessionID`. Con varias terminales sobre el mismo cuaderno —10 procesos
+  `musubi` en davantis-1, más los sub-agentes, que traen su propio id— cada sesión que escribía
+  borraba la de todas. Medido el 2026-09-23: `musubi_tokens` decía **262 tokens de una sola
+  superficie** para una sesión que llevaba el día entero inyectando contexto de arranque, de turno
+  y de PreToolUse. El número no era «lo que gastó esta sesión» sino «lo que sobrevivió desde el
+  último cambio de sesión».
+
+  Ahora el mismo valor de `meta` guarda una entrada **por sesión**, con tope de 16 y desalojo de la
+  menos recientemente escrita (por número de escritura, no por reloj: determinista y sin depender
+  de que dos máquinas tengan la hora igual). `LedgerStatus` devuelve la sesión escrita más
+  recientemente —con una sola terminal, exactamente lo de antes— y `LedgerStatusDe(id)` una
+  concreta. El caller **sin** id (el camino MCP, que no ve el id del hook) sigue acumulando en la
+  última que escribió, que es el contrato de siempre: lo cazó `TestLedgerEmptySessionKeepsCurrent`
+  cuando la primera versión lo mandaba a una cuenta aparte.
+
+  **La suma corre dentro de una transacción** (el DSN ya lleva `_txlock=immediate`). Con la casilla
+  única la carrera costaba un incremento; ahora el valor lleva a todas las sesiones, así que una
+  escritura pisada costaría la cuenta entera de otra terminal. Y el **formato viejo se migra** en
+  vez de descartarse, o instalar este binario pondría en cero la sesión en curso sin decir nada.
+
+  *Cuatro invariantes, cada uno con su sabotaje corrido: volver a borrar al cambiar de sesión deja a
+  la sesión anterior en `Total:0`; quitar la migración lee el formato viejo como vacío; quitar el
+  tope deja 20 sesiones de 16; y leer y escribir SIN transacción hace que cuatro goroutines
+  concurrentes se coman sumas — **8 de 8 corridas rojas sin la transacción, 5 de 5 verdes con
+  ella**, así que la prueba de concurrencia no pasa por suerte. `TestLedgerResetsOnNewSession` se
+  renombró a `TestLedgerSesionNuevaArrancaDeCero`: su nombre describía el defecto como contrato, y
+  como sólo miraba el valor de la sesión nueva, pasaba igual con el arreglo y sin él.*
 - **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
   de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
   sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,
