@@ -487,36 +487,11 @@ func TestLaPaginaDeFlotaNoDibujaUnServicioDesconocidoComoDetenido(t *testing.T) 
 	if n := strings.Count(p, "function servicios("); n != 1 {
 		t.Errorf("hay %d definiciones de servicios(): tiene que haber exactamente una", n)
 	}
-	// LAS CUATRO MARCAS SON DISTINTAS ENTRE SÍ. Es lo que impide que `desconocido` se dibuje como
-	// `detenido`: si dos estados compartieran glifo, la columna mentiría en silencio.
-	i := strings.Index(p, "const marca = {")
-	if i < 0 {
-		t.Fatal("flota.html no declara la tabla de marcas por estado")
-	}
-	tabla := p[i : strings.Index(p[i:], "}")+i]
-	for _, estado := range []string{"corriendo", "detenido", "fallado", "desconocido"} {
-		if !strings.Contains(tabla, estado+":") {
-			t.Errorf("el estado %q no tiene marca propia: %s", estado, tabla)
-		}
-	}
-	glifos := map[string]bool{}
-	for _, campo := range strings.Split(tabla[strings.Index(tabla, "{")+1:], ",") {
-		partes := strings.SplitN(campo, ":", 2)
-		if len(partes) != 2 {
-			continue
-		}
-		g := strings.Trim(strings.TrimSpace(partes[1]), "'\"")
-		if g == "" {
-			continue
-		}
-		if glifos[g] {
-			t.Errorf("dos estados comparten la marca %q: un `desconocido` se dibujaría como otra cosa\n%s", g, tabla)
-		}
-		glifos[g] = true
-	}
-	if len(glifos) != 4 {
-		t.Errorf("se declararon %d marcas distintas, esperaba 4: %s", len(glifos), tabla)
-	}
+	// LAS MARCAS POR ESTADO SE VERIFICAN EN `TestCadaEstadoDeServicioTieneSuMarcaEnElPanel`
+	// (flota_marcas_test.go), derivadas de la fuente del enum. Acá había una lista de CUATRO
+	// escrita a mano y un `len(glifos) != 4`: cuando nació `ocioso` esta guarda no se enteró, el
+	// panel lo dibujó como `?` durante semanas, y al arreglarlo ESTA guarda se puso roja — o sea
+	// que defendía el número viejo, no el invariante.
 	// Y NINGÚN BOTÓN: el invariante I4 del panel sigue en pie en un slice de visualización.
 	if strings.Contains(p, "<button") || strings.Contains(p, "onclick") {
 		t.Error("la página de flota ganó un botón: reiniciar un servicio se hace con musubi_fleet_exec, que deja su línea en la bitácora")
