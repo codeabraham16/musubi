@@ -8,6 +8,32 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **`musubi provision` ya deja el sync en los DOS sentidos: una máquina nueva dejaba de subir y no
+  bajar.** `ensureSyncConfig` escribía sólo el bloque `sync:`, y `RunInboundScheduler` se apaga solo
+  sin `memory.team_mode` (`internal/mcp/scheduler.go`), así que la máquina recién dada de alta
+  arrancaba el drain del outbox y **no hacía un solo pull**: cuaderno vacío que además empieza a
+  mandar. No faltaba una función —el pull inicial baja el histórico completo en unos 4 ticks, lo
+  demuestra esta PC, que espejó el central entero— faltaba una clave que el único camino automático
+  de alta jamás escribía. Es el motivo medido por el que «un empleado nuevo hereda el cerebro» no
+  funcionaba.
+
+  La clave se FUERZA a `true`, igual que el bloque `sync:` pisa el `enabled: false` del default: ese
+  false lo escribe el default sin que nadie lo haya elegido, y `provision` ES el acto explícito de
+  sumar la máquina a un cerebro compartido. Y la salida temprana de «ya configurado» ahora mira la
+  bajada: una máquina que ya tenía sync saliente se quedaba en «subo y no bajo» para siempre.
+
+  El bloque `memory:` **no** se reemplaza entero como el de `sync:` —ahí viven otras claves del
+  proyecto y pisarlas sería borrar configuración que nadie pidió tocar—: se cambia UNA línea.
+  *Y la sangría se deduce del bloque en vez de fijarse, porque `config.Default().Marshal()` sale de
+  `yaml.Marshal`, que indenta con CUATRO espacios mientras un config escrito a mano usa dos.
+  Insertar `  team_mode: true` fijo dejaba el config sin parsear —para el parser es un dedent a mitad
+  del mapa— o sea que el paso reportaba ✓ y rompía la configuración entera; lo cazó una prueba que ya
+  existía (`TestSyncConfigEnablesWhenPresentButDisabled`). Cuatro invariantes con su sabotaje corrido:
+  no llamar al helper deja `team_mode` en false; reemplazar el bloque entero pierde las claves
+  hermanas y el comentario del usuario; la salida temprana sin mirar la bajada devuelve OK sobre un
+  «subo y no bajo»; y la sangría fija rompe el caso de cuatro espacios. Sin caso de tabulador a
+  propósito: YAML lo prohíbe en la sangría, así que ese config no parsea antes de que provision lo
+  toque.*
 - **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
   de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
   sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,
