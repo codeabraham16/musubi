@@ -8,6 +8,33 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **La captura de commits vuelve a avanzar: el cursor guarda el progreso por commit, no al final
+  del lote.** El hook `Stop` tiene 10 s (`.claude/settings.json`) y `captureCommitsKeyed` avanzaba
+  `capture:last_commit` **una sola vez, después del bucle**. Con un rango largo —546 commits en este
+  repo, porque el cursor había quedado en `e928e67`, un commit que existe pero ya no es ancestro de
+  `HEAD`— cada corrida moría a mitad, el cursor no se movía, y la siguiente arrancaba por el mismo
+  commit para morir en el mismo lugar: **20 días con progreso cero y 10 s de peaje en cada turno**,
+  y ni un solo commit de septiembre anotado en ninguna de las dos bases. Ahora el cursor avanza al
+  SHA de cada commit ya procesado, así que lo que una corrida alcanzó a hacer queda hecho.
+
+  Va con un tope por corrida, `maxCommitsPorCorrida = 25`, **sólo en modo hook**: el modo
+  origin-side corre en un timer y no tiene ese presupuesto encima. El tope trae las dos guardas que
+  son el invariante de verdad: cortar por tope **no** salta el cursor al `HEAD` —eso se tragaría en
+  silencio lo que quedó sin mirar—, y el tope **no se aplica si el cursor no pudo avanzar** (commits
+  sin SHA), porque cortar sin guardar progreso cambiaría una captura trabada por otra.
+
+  Lo que **no** se hizo, y conviene que quede escrito porque parecía el arreglo obvio: detectar el
+  cursor huérfano con `git merge-base --is-ancestor` y caer a capturar sólo el `HEAD`. El síntoma lo
+  invita —`git log huerfano..HEAD` no falla, así que el fallback por error de `CommitsSince` nunca se
+  entera— pero **tira los 546 commits de historia real**. No hace falta: todos los commits de ese
+  rango sí son ancestros de `HEAD`, así que el cursor durable los consume por tandas y el rango se
+  achica solo hasta vaciarse. Lo que estaba roto no era el rango: era que el progreso no se guardaba.
+  *Los tres invariantes van con su sabotaje verificado: quitar el avance por commit deja el cursor en
+  `""`; saltar al `HEAD` tras cortar pierde el commit que quedaba; aplicar el tope sin progreso
+  captura 1 de 3 para siempre. Los dos últimos sabotajes, escritos como borrado, no compilaban
+  —`declared and not used`— y la prueba se ponía roja por el build y no por el invariante; se
+  reescribieron como `if true || completo` y `(avanzo || true)` para que el rojo signifique lo que
+  dice.*
 - **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
   de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
   sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,

@@ -49,6 +49,9 @@ type recordingStore struct {
 	byID map[string]string
 	// scopeByID: con qué scope se guardó cada commit (C5.2: 'shared' en team mode).
 	scopeByID map[string]string
+	// fallaTrasNGuardados corta la corrida al guardado N+1, que es lo más cerca que se puede
+	// simular de que el hook Stop se quede sin sus 10 s a mitad del lote.
+	fallaTrasNGuardados int
 }
 
 func (r *recordingStore) GetMeta(k string) (string, bool, error) {
@@ -65,6 +68,9 @@ func (r *recordingStore) SetMeta(k, v string) error {
 
 // byID simula la tabla: id → contenido. Es lo que permite testear el UPSERT del gemelo del squash.
 func (r *recordingStore) SaveObservationTyped(id, _, content string, _ float64, _, scope string, emb []float32) error {
+	if r.fallaTrasNGuardados > 0 && r.saved >= r.fallaTrasNGuardados {
+		return errors.New("se acabó el presupuesto del hook")
+	}
 	if r.byID == nil {
 		r.byID = map[string]string{}
 		r.scopeByID = map[string]string{}
@@ -130,11 +136,11 @@ func TestCaptureCommitsKeyedCursorPorRepo(t *testing.T) {
 		t.Fatal("dos repos distintos deben tener claves de cursor distintas")
 	}
 
-	if n, err := captureCommitsKeyed(store, repoA, nil, nil, memory.ScopeShared, keyA); err != nil || n != 1 {
+	if n, err := captureCommitsKeyed(store, repoA, nil, nil, memory.ScopeShared, keyA, 0); err != nil || n != 1 {
 		t.Fatalf("repo A: (%d, %v), esperaba 1", n, err)
 	}
 	// Repo B con SU propio cursor captura, sin que el HEAD de A lo bloquee.
-	if n, err := captureCommitsKeyed(store, repoB, nil, nil, memory.ScopeShared, keyB); err != nil || n != 1 {
+	if n, err := captureCommitsKeyed(store, repoB, nil, nil, memory.ScopeShared, keyB, 0); err != nil || n != 1 {
 		t.Fatalf("repo B: (%d, %v), esperaba 1 (el cursor de A no debe interferir)", n, err)
 	}
 	// Cada cursor apunta al HEAD de SU repo.
@@ -142,7 +148,7 @@ func TestCaptureCommitsKeyedCursorPorRepo(t *testing.T) {
 		t.Errorf("cursores cruzados: keyA=%q (quería a1), keyB=%q (quería b1)", store.meta[keyA], store.meta[keyB])
 	}
 	// Re-capturar A con su cursor: ya está al día ⇒ 0 nuevos.
-	if n, _ := captureCommitsKeyed(store, repoA, nil, nil, memory.ScopeShared, keyA); n != 0 {
+	if n, _ := captureCommitsKeyed(store, repoA, nil, nil, memory.ScopeShared, keyA, 0); n != 0 {
 		t.Errorf("re-captura de A: esperaba 0 (al día), obtuve %d", n)
 	}
 	// repoCursorKey es determinista y namespaced bajo la clave global.
@@ -407,5 +413,79 @@ func TestCaptureNotAGitRepo(t *testing.T) {
 	}
 	if v, _, _ := e.GetMeta(metaCaptureLastCommit); v != "" {
 		t.Fatalf("sin repo no debe setear meta: %q", v)
+	}
+}
+
+// TestCaptureCursorDurableSobreviveAlCorte custodia el invariante que destraba la captura: lo que
+// una corrida ya procesó queda en el cursor aunque la corrida muera a mitad del lote.
+//
+// EL DEFECTO QUE ESTO ARREGLA, medido el 2026-09-23 en el repo real: el cursor avanzaba UNA sola
+// vez, después del bucle. El hook Stop tiene 10 s; el rango pendiente eran 546 commits y cada uno
+// paga embedding más detección de duplicados. La corrida moría siempre a mitad, el cursor no se
+// movía nunca, y la corrida siguiente arrancaba por el mismo commit para morir en el mismo lugar:
+// 20 días con progreso exactamente cero y 10 s de peaje en cada turno.
+func TestCaptureCursorDurableSobreviveAlCorte(t *testing.T) {
+	store := &recordingStore{fallaTrasNGuardados: 2}
+	g := &fakeGit{head: "h5", commits: []commit{
+		{SHA: "c1", Subject: "feat: el primero de la tanda"},
+		{SHA: "c2", Subject: "fix: el segundo de la tanda"},
+		{SHA: "c3", Subject: "feat: el tercero, que ya no entra"},
+	}}
+	if _, err := captureCommits(store, g, nil, nil, memory.ScopeLocal); err == nil {
+		t.Fatal("la corrida tenía que cortarse: el store falla al tercer guardado")
+	}
+	if got := store.meta[metaCaptureLastCommit]; got != "c2" {
+		t.Fatalf("el cursor tiene que conservar lo ya procesado: quería %q, obtuve %q", "c2", got)
+	}
+}
+
+// TestCaptureTopePorCorridaNoSaltaAlHead custodia la otra mitad: si la corrida corta por el tope,
+// el cursor NO puede saltar al HEAD, porque eso se tragaría en silencio lo que quedó sin mirar —
+// justo la pérdida de historia que este arreglo viene a evitar.
+func TestCaptureTopePorCorridaNoSaltaAlHead(t *testing.T) {
+	store := &recordingStore{}
+	commits := []commit{
+		{SHA: "c1", Subject: "feat: uno de la tanda larga"},
+		{SHA: "c2", Subject: "feat: dos de la tanda larga"},
+		{SHA: "c3", Subject: "feat: tres de la tanda larga"},
+	}
+	g := &fakeGit{head: "c3", commits: commits}
+	n, err := captureCommitsKeyed(store, g, nil, nil, memory.ScopeLocal, metaCaptureLastCommit, 2)
+	if err != nil || n != 2 {
+		t.Fatalf("con tope 2 esperaba 2 guardados; n=%d err=%v", n, err)
+	}
+	if got := store.meta[metaCaptureLastCommit]; got != "c2" {
+		t.Fatalf("cortar por tope NO puede saltar al HEAD: quería %q, obtuve %q", "c2", got)
+	}
+	// Y la corrida siguiente tiene que levantar el que quedó, no perderlo.
+	g2 := &fakeGit{head: "c3", commits: commits[2:]}
+	n2, err := captureCommitsKeyed(store, g2, nil, nil, memory.ScopeLocal, metaCaptureLastCommit, 2)
+	if err != nil || n2 != 1 {
+		t.Fatalf("la corrida siguiente tenía que capturar el commit que quedó; n=%d err=%v", n2, err)
+	}
+	if got := store.meta[metaCaptureLastCommit]; got != "c3" {
+		t.Fatalf("consumido el rango entero, el cursor sí salta al HEAD: %q", got)
+	}
+}
+
+// TestCaptureTopeNoSeAplicaSinProgreso: el tope corta sólo si el cursor pudo avanzar. Con commits
+// sin SHA no hay dónde guardar el progreso, así que cortar dejaría a la corrida siguiente repitiendo
+// el mismo lote para siempre — cambiar una captura trabada por otra.
+func TestCaptureTopeNoSeAplicaSinProgreso(t *testing.T) {
+	store := &recordingStore{}
+	g := &fakeGit{head: "hx", commits: []commit{
+		{Subject: "feat: uno sin sha en el registro"},
+		{Subject: "feat: dos sin sha en el registro"},
+		{Subject: "feat: tres sin sha en el registro"},
+	}}
+	n, err := captureCommitsKeyed(store, g, nil, nil, memory.ScopeLocal, metaCaptureLastCommit, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("sin SHA el tope no puede cortar: esperaba los 3, obtuve %d", n)
+	}
+	if got := store.meta[metaCaptureLastCommit]; got != "hx" {
+		t.Fatalf("consumido el rango entero, el cursor salta al HEAD: %q", got)
 	}
 }

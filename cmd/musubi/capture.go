@@ -110,19 +110,28 @@ func (g realGit) Head() (string, error) {
 }
 
 func (g realGit) CommitsSince(last string) ([]commit, error) {
+	last = strings.TrimSpace(last)
+	// CURSOR HUÉRFANO, y por qué acá NO se lo descarta. Tras un rebase o un squash-merge el commit
+	// del cursor puede seguir EXISTIENDO como objeto suelto sin ser ancestro de HEAD. En ese caso
+	// `git log last..HEAD` no falla —así que el fallback de abajo nunca se entera— y devuelve todo
+	// lo alcanzable desde HEAD: en este repo, 546 commits. La tentación es detectarlo con
+	// `merge-base --is-ancestor` y caer a capturar sólo el HEAD, pero eso TIRA esos 546 commits de
+	// historia real. No hace falta: todos los commits de ese rango SÍ son ancestros de HEAD, así que
+	// el cursor durable de captureCommitsKeyed los va consumiendo por tandas y el rango se achica
+	// solo hasta vaciarse. Lo que estaba roto no era el rango: era que el progreso no se guardaba.
 	// Separadores de control para un parseo robusto: %x1e entre commits, %x1f entre campos.
 	args := []string{"log", "--no-color", "--no-merges", "--reverse", "--name-only",
 		"--format=%x1e%H%x1f%s%x1f%b%x1f"}
-	if strings.TrimSpace(last) != "" {
+	if last != "" {
 		args = append(args, last+"..HEAD")
 	} else {
 		args = append(args, "-1", "HEAD")
 	}
 	out, err := g.run(args...)
 	if err != nil {
-		// El rango last..HEAD puede fallar si `last` ya no existe (rebase/force-push): caer a
-		// capturar sólo el HEAD actual en vez de romper.
-		if strings.TrimSpace(last) != "" {
+		// El rango todavía puede fallar por otros motivos (ref ilegible, repo a medio escribir):
+		// caer a capturar sólo el HEAD actual en vez de romper.
+		if last != "" {
 			return g.CommitsSince("")
 		}
 		return nil, err
@@ -208,15 +217,23 @@ func hasWord(s string, words ...string) bool {
 type detectFunc func(obsID string)
 
 func captureCommits(store captureStore, git gitLog, embed embedFunc, detect detectFunc, scope string) (int, error) {
-	return captureCommitsKeyed(store, git, embed, detect, scope, metaCaptureLastCommit)
+	return captureCommitsKeyed(store, git, embed, detect, scope, metaCaptureLastCommit, 0)
 }
+
+// maxCommitsPorCorrida acota cuántos commits mira UNA corrida del hook Stop. El hook tiene un
+// presupuesto de 10 s y cada commit paga embedding más detección de duplicados contra toda la
+// memoria, así que un rango largo no entra nunca. Con el cursor durable un tope no pierde nada: la
+// corrida siguiente arranca donde quedó ésta. 0 = sin tope, que es lo que usa el modo origin-side
+// del cerebro central, porque corre en un timer y no tiene ese presupuesto encima.
+const maxCommitsPorCorrida = 25
 
 // captureCommitsKeyed es captureCommits con la CLAVE DEL CURSOR explícita. Capturar varios repos en
 // la MISMA memoria (el cerebro central, origin-side) exige que cada repo lleve su propio cursor
 // `capture:last_commit:<repo>`: con la clave global compartida, capturar el repo B pisaría el HEAD
 // del repo A y ninguno avanzaría bien. captureCommits usa la clave global histórica (un repo por
 // workspace, el caso del hook en la máquina de dev).
-func captureCommitsKeyed(store captureStore, git gitLog, embed embedFunc, detect detectFunc, scope, cursorKey string) (int, error) {
+// limite acota cuántos commits procesa esta corrida (0 = todos); ver maxCommitsPorCorrida.
+func captureCommitsKeyed(store captureStore, git gitLog, embed embedFunc, detect detectFunc, scope, cursorKey string, limite int) (int, error) {
 	head, err := git.Head()
 	if err != nil || head == "" {
 		return 0, nil
@@ -229,48 +246,79 @@ func captureCommitsKeyed(store captureStore, git gitLog, embed embedFunc, detect
 	if err != nil {
 		return 0, err
 	}
-	saved := 0
-	for _, c := range commits {
-		memType, importance, skip := classifyCommit(c.Subject)
-		if skip {
-			continue
+	saved, completo, avanzo := 0, true, false
+	for i, c := range commits {
+		// El tope sólo se aplica si el cursor YA pudo avanzar. Cortar sin haber guardado progreso
+		// dejaría a la corrida siguiente repitiendo exactamente el mismo lote, para siempre: sería
+		// cambiar una captura trabada por otra.
+		if limite > 0 && i >= limite && avanzo {
+			completo = false
+			break
 		}
-		content := c.Subject
-		if c.Body != "" {
-			content += "\n\n" + c.Body
-		}
-		if len(c.Files) > 0 {
-			content += "\n\nArchivos: " + strings.Join(c.Files, ", ")
-		}
-		var vec []float32
-		if embed != nil {
-			vec = embed(content)
-		}
-		// Id DETERMINÍSTICO desde la clave normalizada (ver commitObsID): si ya existe, este "commit
-		// nuevo" es el mismo commit reformulado por el squash-merge ⇒ el guardado lo UPSERTEA con el
-		// contenido canónico en vez de crear un gemelo. No se oculta ni se descarta nada: se
-		// ACTUALIZA. SaveObservationTyped preserva created_at y las stats de acceso en el update.
-		id := commitObsID(content)
-		existed, err := store.ObservationExists(id)
+		nuevo, err := capturarUnCommit(store, c, embed, detect, scope)
 		if err != nil {
 			return saved, err
 		}
-		if err := store.SaveObservationTyped(id, memory.CommitTopicKey, content, importance, memType, scope, vec); err != nil {
-			return saved, err
+		saved += nuevo
+		// CURSOR DURABLE. Con el avance sólo al final del bucle, que el hook se quede sin sus 10 s a
+		// mitad del lote dejaba progreso CERO: la corrida siguiente volvía a empezar por el mismo
+		// commit y a morir en el mismo lugar. Así se congeló la captura de este repo durante veinte
+		// días. Acá se guarda lo que ya se procesó: los commits vienen en --reverse (del más viejo
+		// al más nuevo), así que el cursor sólo puede avanzar hacia adelante.
+		if c.SHA != "" {
+			_ = store.SetMeta(cursorKey, c.SHA)
+			avanzo = true
 		}
-		if existed {
-			continue // gemelo del squash: se actualizó lo existente, no hay memoria nueva
-		}
-		// Gate de novedad (M4): marcar el commit que duplica algo ya guardado. Sólo sobre memoria
-		// REALMENTE nueva: un UPSERT no crea observación que relacionar. El detect corre en modo
-		// DetectOnly ⇒ jamás auto-oculta un commit anterior.
-		if detect != nil {
-			detect(id)
-		}
-		saved++
 	}
-	_ = store.SetMeta(cursorKey, head)
+	// Saltar al HEAD sólo si se consumió el rango ENTERO. Hacerlo después de cortar por el tope se
+	// tragaría en silencio los commits que quedaron sin mirar, que es justo lo que este arreglo
+	// viene a evitar.
+	if completo {
+		_ = store.SetMeta(cursorKey, head)
+	}
 	return saved, nil
+}
+
+// capturarUnCommit guarda un commit. Devuelve 1 si nació memoria nueva y 0 si no hubo nada que
+// guardar: el commit era trivial, o el UPSERT actualizó el gemelo que ya existía.
+func capturarUnCommit(store captureStore, c commit, embed embedFunc, detect detectFunc, scope string) (int, error) {
+	memType, importance, skip := classifyCommit(c.Subject)
+	if skip {
+		return 0, nil
+	}
+	content := c.Subject
+	if c.Body != "" {
+		content += "\n\n" + c.Body
+	}
+	if len(c.Files) > 0 {
+		content += "\n\nArchivos: " + strings.Join(c.Files, ", ")
+	}
+	var vec []float32
+	if embed != nil {
+		vec = embed(content)
+	}
+	// Id DETERMINÍSTICO desde la clave normalizada (ver commitObsID): si ya existe, este "commit
+	// nuevo" es el mismo commit reformulado por el squash-merge ⇒ el guardado lo UPSERTEA con el
+	// contenido canónico en vez de crear un gemelo. No se oculta ni se descarta nada: se
+	// ACTUALIZA. SaveObservationTyped preserva created_at y las stats de acceso en el update.
+	id := commitObsID(content)
+	existed, err := store.ObservationExists(id)
+	if err != nil {
+		return 0, err
+	}
+	if err := store.SaveObservationTyped(id, memory.CommitTopicKey, content, importance, memType, scope, vec); err != nil {
+		return 0, err
+	}
+	if existed {
+		return 0, nil // gemelo del squash: se actualizó lo existente, no hay memoria nueva
+	}
+	// Gate de novedad (M4): marcar el commit que duplica algo ya guardado. Sólo sobre memoria
+	// REALMENTE nueva: un UPSERT no crea observación que relacionar. El detect corre en modo
+	// DetectOnly ⇒ jamás auto-oculta un commit anterior.
+	if detect != nil {
+		detect(id)
+	}
+	return 1, nil
 }
 
 // repoCursorKey deriva una clave de cursor estable y única por repo desde su ruta absoluta, para que
@@ -411,7 +459,14 @@ func runCapture(args []string) {
 		}
 	}
 
-	n, err := captureCommitsKeyed(engine, realGit{dir: gitDir}, embed, detect, scope, cursorKey)
+	// El tope por corrida es SÓLO del hook: el modo origin-side corre en un timer, sin el
+	// presupuesto de 10 s encima, y ahí cortar un lote largo sólo lo haría tardar más días.
+	limite := 0
+	if hookMode {
+		limite = maxCommitsPorCorrida
+	}
+
+	n, err := captureCommitsKeyed(engine, realGit{dir: gitDir}, embed, detect, scope, cursorKey, limite)
 	if err != nil {
 		if !hookMode {
 			fmt.Fprintf(os.Stderr, "capture: %v\n", err)
