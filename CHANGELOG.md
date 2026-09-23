@@ -8,6 +8,32 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **La bajada del central ya tiene candado: dos terminales en el mismo proyecto dejan de bajar lo
+  mismo.** La subida estaba protegida desde siempre —`ClaimOutboxBatch` toma un lease de 60 s— pero
+  la bajada no tenía nada: `drainInboundOnce` leía el cursor con `GetMeta`, lo escribía con
+  `SetMeta` y no reclamaba nada. Con dos terminales abiertas sobre la misma base, las dos bajaban
+  las mismas páginas en cada tick. Medido en el central el 2026-09-23, en 24 h y contra las 2.880
+  consultas que haría UN proceso cada 30 s: **la laptop tiró 4.997 (1,7 procesos) y Altura 4.374
+  (1,5)**.
+
+  Ahora `ReclamarBajada` deja bajar a un solo proceso por base: una sentencia atómica sobre una
+  fila de `meta` (`dueño|vence`) con el vencimiento del reloj de SQLite, igual que el lease del
+  outbox, así que todos los procesos que comparten la base comparten también el reloj. El dueño
+  **renueva** en cada tick en vez de soltar —soltar dejaría que el otro bajara en su tick siguiente
+  y los dos volverían a alternarse—, y si muere, el candado vence solo. El lease dura cuatro ticks
+  con piso de dos minutos: tiene que ganarle al intervalo, o vencería entre ticks y el defecto
+  volvería disfrazado de arreglo. Y `AvanzarCursorBajada` escribe el cursor **monótono en la misma
+  sentencia**: un tick más lento que el lease podía escribir después de que otro tomara el candado,
+  y con `SetMeta` a secas el cursor retrocedía y se re-bajaba lo ya bajado.
+
+  *Nueve invariantes con su sabotaje, los nueve rojos. La prueba de integración cuenta los pedidos
+  que LLEGAN al central —el costo real— y no una variable interna. Dos cosas que la verificación
+  cazó: `AvanzarCursorBajada` tenía prueba unitaria pero **nada comprobaba que el scheduler la
+  llamara** —volver a `SetMeta` no rompía ninguna prueba—, así que se sumó una donde el central falso
+  adelanta el cursor a mitad del tick, simulando a la otra terminal. Y la prueba de dueños con
+  prefijo común **siguió verde con el candado comparando por prefijo**: estaba armada al revés. El
+  agujero real es guardado el largo (`proc-a-otro`) y reclamando el corto, donde
+  `'proc-a-otro|…' LIKE 'proc-a%'` regala el candado ajeno; ahora cubre las dos direcciones.*
 - **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
   de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
   sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,

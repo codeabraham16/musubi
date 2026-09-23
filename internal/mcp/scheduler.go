@@ -190,6 +190,22 @@ func (s *McpServer) RunOutboxScheduler(ctx context.Context, interval time.Durati
 // metaInboundCursor guarda el rowid del central hasta el que ya bajamos memoria shared (C5.3b).
 const metaInboundCursor = "sync:inbound_cursor"
 
+// leaseBajadaSegundos es cuánto dura el candado de la bajada: cuatro ticks, con piso de dos minutos.
+//
+// Tiene que durar MÁS que el intervalo, porque el dueño lo renueva en cada tick en vez de soltarlo.
+// Con un lease más corto que el tick vencería entre dos ticks, el otro proceso lo tomaría, y los dos
+// volverían a alternarse bajando lo mismo: el defecto que el candado viene a sacar, disfrazado de
+// arreglo. Cuatro y no dos para que un tick lento —hasta veinte páginas sobre una red mala— no lo
+// deje vencer a mitad. El costo de pasarse es acotado: si el dueño muere, otro toma la bajada a los
+// pocos minutos, y mientras tanto no se pierde nada, sólo se atrasa.
+func (s *McpServer) leaseBajadaSegundos() int {
+	seg := 4 * s.syncCfg.DrainIntervalSeconds
+	if seg < 120 {
+		seg = 120
+	}
+	return seg
+}
+
 // RunInboundScheduler baja periódicamente la memoria 'shared' del proyecto DESDE el central (sync
 // ENTRANTE, C5.3b): el espejo de RunOutboxScheduler en sentido de bajada. Solo corre si hay sync
 // configurado (syncClient) Y el proyecto está en team mode (memory.team_mode) — un proyecto local no
@@ -224,6 +240,17 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 			s.vectorizarLoBajado()
 		}
 	}()
+	// UN SOLO PROCESO POR BASE BAJA POR VEZ (ver memory.ReclamarBajada). La subida tenía su lease
+	// desde siempre; la bajada no, y con dos terminales abiertas en el mismo proyecto las dos bajaban
+	// las mismas páginas en cada tick — medido, 1,7 veces el tráfico de un proceso en la laptop.
+	ok, err := s.engine.ReclamarBajada(s.duenoBajada, s.leaseBajadaSegundos())
+	if err != nil {
+		logx.Error("inbound: no se pudo reclamar la bajada (reintenta en el próximo tick)", "error", err)
+		return
+	}
+	if !ok {
+		return // otro proceso de esta máquina ya está bajando para esta base
+	}
 	var cur int64
 	if raw, ok, _ := s.engine.GetMeta(metaInboundCursor); ok {
 		cur, _ = strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
@@ -270,7 +297,10 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 		}
 		if advanceTo > cur {
 			cur = advanceTo
-			if merr := s.engine.SetMeta(metaInboundCursor, strconv.FormatInt(cur, 10)); merr != nil {
+			// Monótono en la base, no sólo en memoria: un tick más lento que el lease puede seguir
+			// escribiendo después de que otro proceso tomó el candado vencido, y con SetMeta a secas
+			// el lento pisaba al rápido y el cursor retrocedía (ver memory.AvanzarCursorBajada).
+			if merr := s.engine.AvanzarCursorBajada(metaInboundCursor, cur); merr != nil {
 				logx.Error("inbound: no se pudo guardar el cursor entrante", "error", merr)
 			}
 		}
