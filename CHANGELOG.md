@@ -35,6 +35,26 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   —`declared and not used`— y la prueba se ponía roja por el build y no por el invariante; se
   reescribieron como `if true || completo` y `(avanzo || true)` para que el rojo signifique lo que
   dice.*
+
+  **Y lo que encontró una revisión adversarial antes del merge: la premisa de arriba era FALSA.**
+  «Todos los commits de ese rango son ancestros de `HEAD`, así que el rango se achica solo» no vale
+  en un historial con merges —éste tiene más de cien—: `cursor..HEAD` excluye sólo los ancestros del
+  cursor, y si el último procesado queda en una rama, lo ya procesado de la rama paralela vuelve a
+  entrar al rango. Tres revisores lo simularon por separado sobre la historia real, desde el cursor
+  huérfano `e928e67`: **a la corrida 15 caía en un ciclo de tres cursores y no llegaba nunca al
+  `HEAD`**, gastando 25 commits por turno. Agregar `--topo-order` no alcanzaba: ciclaba con período
+  dos. Ahora el avance es una **tanda congelada**: al empezar se fija su objetivo —el `HEAD` de ese
+  momento— en `<cursor>:objetivo`, se recorre la lista determinística `base..objetivo` guardando el
+  último commit hecho en `<cursor>:hecho`, la corrida siguiente recalcula la MISMA lista y sigue desde
+  ahí, y recién al terminarla la base salta al objetivo. El avance es una posición en una lista fija,
+  no un commit suelto en un grafo que no es una línea; lo que llega mientras tanto va a la tanda
+  siguiente. Si el objetivo desaparece (rebase + gc), la tanda se abandona y la siguiente arranca de
+  nuevo. **Contra la historia real, desde `e928e67`: converge en 22 corridas y captura 392 commits.**
+  *Ocho invariantes con su sabotaje, incluida la vuelta al diseño de la primera ronda, que las dos
+  pruebas con repos git reales de los revisores ponen en rojo (ramas intercaladas y orden no
+  topológico). `--topo-order` queda, pero NO se custodia como invariante, a propósito: con la tanda
+  congelada el orden no puede perder commits —se recorre la lista entera—, así que es orden causal de
+  la memoria, no corrección; su sabotaje sigue verde y está documentado así.*
 - **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
   de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
   sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,

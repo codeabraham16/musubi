@@ -39,7 +39,9 @@ type commit struct {
 // gitLog abstrae la lectura del historial, para testear el core con un git falso.
 type gitLog interface {
 	Head() (string, error) // SHA del HEAD; error si no es un repo git
-	CommitsSince(last string) ([]commit, error)
+	// CommitsEntre devuelve los commits de desde..hasta, del más viejo al más nuevo, en orden
+	// topológico. Con desde vacío, sólo hasta.
+	CommitsEntre(desde, hasta string) ([]commit, error)
 }
 
 // captureStore es lo mínimo que el core necesita del motor. *memory.DbEngine lo satisface.
@@ -109,30 +111,27 @@ func (g realGit) Head() (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-func (g realGit) CommitsSince(last string) ([]commit, error) {
-	last = strings.TrimSpace(last)
-	// CURSOR HUÉRFANO, y por qué acá NO se lo descarta. Tras un rebase o un squash-merge el commit
-	// del cursor puede seguir EXISTIENDO como objeto suelto sin ser ancestro de HEAD. En ese caso
-	// `git log last..HEAD` no falla —así que el fallback de abajo nunca se entera— y devuelve todo
-	// lo alcanzable desde HEAD: en este repo, 546 commits. La tentación es detectarlo con
-	// `merge-base --is-ancestor` y caer a capturar sólo el HEAD, pero eso TIRA esos 546 commits de
-	// historia real. No hace falta: todos los commits de ese rango SÍ son ancestros de HEAD, así que
-	// el cursor durable de captureCommitsKeyed los va consumiendo por tandas y el rango se achica
-	// solo hasta vaciarse. Lo que estaba roto no era el rango: era que el progreso no se guardaba.
+func (g realGit) CommitsEntre(desde, hasta string) ([]commit, error) {
+	desde, hasta = strings.TrimSpace(desde), strings.TrimSpace(hasta)
+	// --topo-order con --reverse: un padre sale SIEMPRE antes que sus hijos. El orden por defecto es
+	// por fecha, y con commits del mismo segundo (un rebase en lote) o relojes corridos entre
+	// máquinas, un hijo podía salir antes que su padre. Con la tanda congelada no se pierde nada
+	// igual —se recorre la lista entera—, pero la memoria de un commit no debería nacer antes que
+	// la del cambio del que depende.
 	// Separadores de control para un parseo robusto: %x1e entre commits, %x1f entre campos.
-	args := []string{"log", "--no-color", "--no-merges", "--reverse", "--name-only",
+	args := []string{"log", "--no-color", "--no-merges", "--reverse", "--topo-order", "--name-only",
 		"--format=%x1e%H%x1f%s%x1f%b%x1f"}
-	if last != "" {
-		args = append(args, last+"..HEAD")
+	if desde != "" {
+		args = append(args, desde+".."+hasta)
 	} else {
-		args = append(args, "-1", "HEAD")
+		args = append(args, "-1", hasta)
 	}
 	out, err := g.run(args...)
 	if err != nil {
-		// El rango todavía puede fallar por otros motivos (ref ilegible, repo a medio escribir):
-		// caer a capturar sólo el HEAD actual en vez de romper.
-		if last != "" {
-			return g.CommitsSince("")
+		// El rango puede fallar si `desde` ya no existe como objeto (un rebase seguido de gc): caer a
+		// capturar sólo `hasta` en vez de romper. Si falla `hasta`, no hay de dónde caer.
+		if desde != "" {
+			return g.CommitsEntre("", hasta)
 		}
 		return nil, err
 	}
@@ -222,61 +221,113 @@ func captureCommits(store captureStore, git gitLog, embed embedFunc, detect dete
 
 // maxCommitsPorCorrida acota cuántos commits mira UNA corrida del hook Stop. El hook tiene un
 // presupuesto de 10 s y cada commit paga embedding más detección de duplicados contra toda la
-// memoria, así que un rango largo no entra nunca. Con el cursor durable un tope no pierde nada: la
-// corrida siguiente arranca donde quedó ésta. 0 = sin tope, que es lo que usa el modo origin-side
-// del cerebro central, porque corre en un timer y no tiene ese presupuesto encima.
+// memoria, así que un rango largo no entra nunca. Con la tanda congelada un tope no pierde nada: la
+// corrida siguiente sigue desde el último commit hecho. 0 = sin tope, que es lo que usa el modo
+// origin-side del cerebro central, porque corre en un timer y no tiene ese presupuesto encima.
 const maxCommitsPorCorrida = 25
+
+// Claves de la TANDA en curso, colgadas de la clave del cursor (así cada repo lleva la suya).
+const (
+	sufijoTandaObjetivo = ":objetivo" // el HEAD que se fijó al empezar la tanda
+	sufijoTandaHecho    = ":hecho"    // el último commit ya procesado de esa tanda
+)
 
 // captureCommitsKeyed es captureCommits con la CLAVE DEL CURSOR explícita. Capturar varios repos en
 // la MISMA memoria (el cerebro central, origin-side) exige que cada repo lleve su propio cursor
 // `capture:last_commit:<repo>`: con la clave global compartida, capturar el repo B pisaría el HEAD
 // del repo A y ninguno avanzaría bien. captureCommits usa la clave global histórica (un repo por
-// workspace, el caso del hook en la máquina de dev).
-// limite acota cuántos commits procesa esta corrida (0 = todos); ver maxCommitsPorCorrida.
+// workspace, el caso del hook en la máquina de dev). limite acota cuántos commits procesa esta
+// corrida (0 = todos); ver maxCommitsPorCorrida.
+//
+// EL AVANCE ES UNA TANDA CONGELADA, NO UN COMMIT SUELTO, y la diferencia es todo el arreglo.
+//
+// El defecto original: el cursor se guardaba UNA vez, al final del bucle. El hook tiene 10 s; con
+// 546 commits pendientes cada corrida moría a mitad y la siguiente arrancaba por el mismo commit.
+// Veinte días con progreso cero.
+//
+// La primera versión de este arreglo guardaba el cursor en el SHA de cada commit procesado, y una
+// revisión adversarial lo refutó antes del merge, con tres simulaciones independientes: la historia
+// de este repo tiene más de cien merges, y `cursor..HEAD` excluye sólo los ANCESTROS del cursor. Si
+// el último procesado queda en una rama, los commits ya procesados de la rama paralela vuelven a
+// entrar al rango; el rango no se achica de forma monótona y, sobre la historia real desde el cursor
+// huérfano e928e67, a la corrida 15 caía en un ciclo de tres cursores y no llegaba nunca al HEAD.
+// Agregar --topo-order no alcanzaba: ciclaba con período dos.
+//
+// Ahora: al empezar una tanda se FIJA su objetivo —el HEAD de ese momento— y se recorre la lista
+// determinística base..objetivo, guardando el último commit hecho. La corrida siguiente recalcula la
+// MISMA lista (mismos extremos, mismo orden), saltea hasta el último hecho y sigue. Recién cuando la
+// lista se termina, la base salta al objetivo. El avance es una posición en una lista fija, no un
+// commit suelto en un grafo que no es una línea. Los commits que lleguen mientras tanto entran en la
+// tanda siguiente, objetivo..HEAD.
 func captureCommitsKeyed(store captureStore, git gitLog, embed embedFunc, detect detectFunc, scope, cursorKey string, limite int) (int, error) {
 	head, err := git.Head()
 	if err != nil || head == "" {
 		return 0, nil
 	}
-	last, _, _ := store.GetMeta(cursorKey)
-	if strings.TrimSpace(last) == head {
-		return 0, nil
+	objKey, hechoKey := cursorKey+sufijoTandaObjetivo, cursorKey+sufijoTandaHecho
+	base := metaLimpia(store, cursorKey)
+	objetivo := metaLimpia(store, objKey)
+	if objetivo == "" {
+		if base == head {
+			return 0, nil // al día
+		}
+		objetivo = head
+		_ = store.SetMeta(objKey, objetivo)
+		_ = store.SetMeta(hechoKey, "")
 	}
-	commits, err := git.CommitsSince(last)
+	commits, err := git.CommitsEntre(base, objetivo)
 	if err != nil {
+		// El objetivo ya no existe (un rebase seguido de gc): se abandona la tanda y la corrida
+		// siguiente arranca una nueva hacia el HEAD de ese momento. Lo ya capturado queda: los ids
+		// son determinísticos, así que repasar un commit lo actualiza en vez de duplicarlo.
+		_ = store.SetMeta(objKey, "")
+		_ = store.SetMeta(hechoKey, "")
 		return 0, err
 	}
-	saved, completo, avanzo := 0, true, false
-	for i, c := range commits {
-		// El tope sólo se aplica si el cursor YA pudo avanzar. Cortar sin haber guardado progreso
-		// dejaría a la corrida siguiente repitiendo exactamente el mismo lote, para siempre: sería
-		// cambiar una captura trabada por otra.
-		if limite > 0 && i >= limite && avanzo {
-			completo = false
-			break
+	desde := 0
+	if hecho := metaLimpia(store, hechoKey); hecho != "" {
+		for i, c := range commits {
+			if c.SHA == hecho {
+				desde = i + 1
+				break
+			}
+		}
+		// Si el último hecho no aparece, la lista cambió: se recorre entera. El id determinístico
+		// hace que repasar lo ya guardado lo actualice, no lo duplique.
+	}
+	saved, procesados, avanzo := 0, 0, false
+	for _, c := range commits[desde:] {
+		// El tope sólo se aplica si esta corrida YA pudo guardar su progreso (un commit con SHA).
+		// Cortar sin haberlo guardado dejaría a la corrida siguiente repitiendo el mismo tramo para
+		// siempre: sería cambiar una captura trabada por otra.
+		if limite > 0 && procesados >= limite && avanzo {
+			return saved, nil // tanda a medias: la próxima corrida sigue desde el último hecho
 		}
 		nuevo, err := capturarUnCommit(store, c, embed, detect, scope)
 		if err != nil {
 			return saved, err
 		}
 		saved += nuevo
-		// CURSOR DURABLE. Con el avance sólo al final del bucle, que el hook se quede sin sus 10 s a
-		// mitad del lote dejaba progreso CERO: la corrida siguiente volvía a empezar por el mismo
-		// commit y a morir en el mismo lugar. Así se congeló la captura de este repo durante veinte
-		// días. Acá se guarda lo que ya se procesó: los commits vienen en --reverse (del más viejo
-		// al más nuevo), así que el cursor sólo puede avanzar hacia adelante.
+		procesados++
+		// Progreso DURABLE, commit por commit: si el hook se queda sin sus 10 s a mitad, lo hecho
+		// queda hecho y la corrida siguiente no lo repite.
 		if c.SHA != "" {
-			_ = store.SetMeta(cursorKey, c.SHA)
+			_ = store.SetMeta(hechoKey, c.SHA)
 			avanzo = true
 		}
 	}
-	// Saltar al HEAD sólo si se consumió el rango ENTERO. Hacerlo después de cortar por el tope se
-	// tragaría en silencio los commits que quedaron sin mirar, que es justo lo que este arreglo
-	// viene a evitar.
-	if completo {
-		_ = store.SetMeta(cursorKey, head)
-	}
+	// Tanda completa: recién ahora la base salta al objetivo. Hacerlo antes —al cortar por el tope—
+	// se tragaría en silencio lo que quedó sin mirar.
+	_ = store.SetMeta(cursorKey, objetivo)
+	_ = store.SetMeta(objKey, "")
+	_ = store.SetMeta(hechoKey, "")
 	return saved, nil
+}
+
+// metaLimpia lee una clave de meta sin espacios alrededor ("" si no está).
+func metaLimpia(store captureStore, key string) string {
+	v, _, _ := store.GetMeta(key)
+	return strings.TrimSpace(v)
 }
 
 // capturarUnCommit guarda un commit. Devuelve 1 si nació memoria nueva y 0 si no hubo nada que
