@@ -873,11 +873,12 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_tokens",
-				Description: "Ledger de tokens (model-free): cuántos tokens inyectó Musubi en el contexto, por superficie (arranque, por turno, PreToolUse, hidratación). Devuelve total, desglose ordenado por gasto, y —si hay presupuesto— restante, % usado y estado (ok | watch | over). action ∈ {status, reset}. ⚠️ MIRÁ `session_id` ANTES DE INTERPRETAR EL TOTAL: quien marca el corte de sesión son los hooks, y el camino MCP llama con session_id VACÍO. Con `session_id` vacío el total es un ACUMULADO DE POR VIDA del proceso —en un servidor always-on como el cerebro central el ledger no rota nunca— y NO se compara contra el techo: ahí un `pct_used` de miles por ciento y un `status: over` permanente son lo esperado, no una alarma. El techo además es BLANDO: no recorta nada, así que `over` NUNCA es una orden de achicar el contexto.",
+				Description: "Ledger de tokens (model-free): cuántos tokens inyectó Musubi en el contexto, por superficie (arranque, por turno, PreToolUse, hidratación). Devuelve total, desglose ordenado por gasto, y —si hay presupuesto— restante, % usado y estado (ok | watch | over). action ∈ {status, reset}. ⚠️ MIRÁ `session_id` ANTES DE INTERPRETAR EL TOTAL: quien marca el corte de sesión son los hooks, y el camino MCP llama con session_id VACÍO. Con `session_id` vacío el total es un ACUMULADO DE POR VIDA del proceso —en un servidor always-on como el cerebro central el ledger no rota nunca— y NO se compara contra el techo: ahí un `pct_used` de miles por ciento y un `status: over` permanente son lo esperado, no una alarma. El techo además es BLANDO: no recorta nada, así que `over` NUNCA es una orden de achicar el contexto. El ledger lleva UNA CUENTA POR SESIÓN: el reporte es de la sesión escrita más recientemente, que con varias terminales abiertas puede no ser la tuya — `sesiones` lista todas con su `session_id`, su total y su orden de escritura. `reset` pone en cero SÓLO esa sesión, no las demás; con `session_id` se elige cuál.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"action": {Type: "string", Description: "status | reset (default status)"},
+						"action":     {Type: "string", Description: "status | reset (default status)"},
+						"session_id": {Type: "string", Description: "Sesión a reportar o a poner en cero (opcional). Sin ella, la escrita más recientemente, que con varias terminales puede no ser la tuya: los ids están en `sesiones`."},
 					},
 				},
 			},

@@ -33,12 +33,24 @@ import (
 // lo único que fallaba era lo que se decía. Por eso quien consume el ledger tiene que
 // mirar SessionID: vacío ⇒ es un acumulado, no una sesión, y no se compara contra el techo.
 
+// metaTokenLedger es la casilla del formato VIEJO (una sola sesión). Sólo se LEE, para migrar.
 const metaTokenLedger = "token_ledger"
 
-// maxSesionesEnLedger acota cuántas sesiones se guardan. El ledger es telemetría, no un registro
-// contable: pasado ese número se desaloja la MENOS recientemente escrita. Sin tope, una máquina que
-// abre y cierra terminales todo el día haría crecer un único valor de `meta` sin freno.
-const maxSesionesEnLedger = 16
+// metaTokenLedgerV2 es donde vive el formato por sesión. Es una clave NUEVA a propósito.
+//
+// Una revisión adversarial lo encontró antes del merge: los servidores MCP son procesos largos que
+// siguen corriendo el binario VIEJO después de instalar el nuevo, hasta que se reinicia cada sesión,
+// mientras los hooks ya corren el nuevo. Con las dos versiones escribiendo la MISMA clave, el viejo
+// leía el formato nuevo como un TokenLedger vacío (json.Unmarshal no falla, ignora lo que no conoce),
+// le sumaba lo suyo y guardaba su casilla encima: todas las sesiones en cero, en cada hidratación.
+// Con claves separadas, el binario viejo sólo pisa su propia casilla, que el nuevo ya no escribe.
+const metaTokenLedgerV2 = "token_ledger_v2"
+
+// maxSesionesEnLedger acota cuántas sesiones se guardan: el ledger es telemetría, no un registro
+// contable, y sin tope un solo valor de `meta` crecería sin freno. Es 64 y no 16 porque en este repo
+// corren workflows de 40 y 72 sub-agentes con id propio: con 16, la terminal principal que los lanzó
+// quedaba desalojada mientras esperaba. Cada sesión pesa unos cientos de bytes; 64 son decenas de KB.
+const maxSesionesEnLedger = 64
 
 // ledgerStore es lo que se persiste: un ledger POR SESIÓN, no uno solo.
 //
@@ -154,9 +166,61 @@ func (e *DbEngine) LedgerStatusDe(sessionID string) (TokenLedger, error) {
 	return st.de(sessionID), nil
 }
 
-// LedgerReset borra el ledger de TODAS las sesiones.
-func (e *DbEngine) LedgerReset() error {
-	return e.SetMeta(metaTokenLedger, "")
+// LedgerReset pone en cero la cuenta de UNA sesión: la indicada por sessionID, o —si viene vacío— la
+// escrita más recientemente, que es la misma a la que LedgerAdd le imputa un llamado sin id. Quien lo
+// pide es musubi_tokens, que corre por MCP y no conoce su propio id: por eso puede recibirlo, y la
+// lista de sesiones del reporte es de donde el agente lo saca.
+//
+// No borra TODAS, y lo encontró la revisión adversarial: el reset desde una terminal vaciaba el valor
+// entero, o sea que reintroducía por otra puerta exactamente el defecto que este formato viene a
+// cerrar —una sesión borrando la cuenta de las demás—.
+func (e *DbEngine) LedgerReset(sessionID string) error {
+	tx, err := e.db.Begin()
+	if err != nil {
+		return fmt.Errorf("error al abrir la transacción del ledger: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	st, err := leerLedgerStoreTx(tx)
+	if err != nil {
+		return err
+	}
+	id := st.destinoDe(sessionID)
+	if _, hay := st.Sesiones[id]; !hay {
+		return nil // nada que poner en cero: no se crea una sesión para vaciarla
+	}
+	st.Sesiones[id] = TokenLedger{SessionID: id, Surfaces: map[string]int{}}
+	if err := guardarLedgerStoreTx(tx, st); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SesionLedger es el resumen de una sesión para listar todas: quién, cuánto, y en qué orden escribió.
+type SesionLedger struct {
+	SessionID string `json:"session_id"`
+	Total     int    `json:"total"`
+	Orden     int    `json:"orden"`
+}
+
+// LedgerSesiones lista todas las sesiones guardadas, de la escrita más recientemente a la más vieja.
+// Existe para que musubi_tokens no muestre un número suelto sin decir de quién es: corre por MCP, no
+// sabe cuál es su propia sesión, y con varias terminales «la última que escribió» puede ser otra.
+func (e *DbEngine) LedgerSesiones() ([]SesionLedger, error) {
+	st, err := e.loadLedgerStore()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SesionLedger, 0, len(st.Sesiones))
+	for id, l := range st.Sesiones {
+		out = append(out, SesionLedger{SessionID: id, Total: l.Total, Orden: st.Orden[id]})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Orden != out[j].Orden {
+			return out[i].Orden > out[j].Orden
+		}
+		return out[i].SessionID < out[j].SessionID
+	})
+	return out, nil
 }
 
 // de devuelve el ledger de una sesión, siempre con Surfaces no nil.
@@ -194,14 +258,25 @@ func (s ledgerStore) ultimaID() (string, bool) {
 	return mejorID, hay
 }
 
-// podar desaloja las sesiones más viejas cuando se pasa del tope.
-func (s *ledgerStore) podar() {
+// podar desaloja sesiones cuando se pasa del tope: la de MENOR total primero, y nunca la que se
+// acaba de escribir.
+//
+// La primera versión desalojaba la menos recientemente escrita, y una revisión adversarial mostró el
+// costo: la terminal principal que lanza un workflow de sub-agentes queda quieta mientras ellos
+// escriben con sus propios ids, así que era la más vieja justo cuando más había gastado, y volvía de
+// la espera con la cuenta en cero. Las sesiones de sub-agentes son chicas y cortas; la de quien
+// trabaja acumula. Desalojar por total protege la cuenta que importa. La recién escrita se excluye
+// porque una sesión que acaba de nacer tiene total chico, y sin la excepción la desalojaría la misma
+// escritura que la creó.
+func (s *ledgerStore) podar(protegida string) {
 	for len(s.Sesiones) > maxSesionesEnLedger {
-		peorID, peorSeq, hay := "", 0, false
-		for id := range s.Sesiones {
-			seq := s.Orden[id]
-			if !hay || seq < peorSeq || (seq == peorSeq && id < peorID) {
-				peorID, peorSeq, hay = id, seq, true
+		peorID, hay := "", false
+		for id, l := range s.Sesiones {
+			if id == protegida {
+				continue
+			}
+			if !hay || desalojarAntes(l.Total, s.Orden[id], id, s.Sesiones[peorID].Total, s.Orden[peorID], peorID) {
+				peorID, hay = id, true
 			}
 		}
 		if !hay {
@@ -212,18 +287,40 @@ func (s *ledgerStore) podar() {
 	}
 }
 
-// LedgerAdd suma tokens a una superficie de la sesión sessionID y devuelve el
-// ledger actualizado. Si sessionID identifica una sesión distinta de la activa,
-// reinicia el ledger antes de sumar. Si sessionID es vacío, acumula en la sesión
-// activa sin reiniciar (caller sin id de hook) y el SessionID queda vacío, que es
-// la señal de "esto es un acumulado, no una sesión" — ver el encabezado del archivo.
+// desalojarAntes ordena candidatas a desalojo: menor total primero; a igual total, la menos
+// recientemente escrita; a igual orden, por id, para que la salida sea determinista (el recorrido de
+// un map en Go es aleatorio a propósito).
+func desalojarAntes(total, orden int, id string, totalB, ordenB int, idB string) bool {
+	if total != totalB {
+		return total < totalB
+	}
+	if orden != ordenB {
+		return orden < ordenB
+	}
+	return id < idB
+}
+
+// LedgerAdd suma tokens a una superficie de la sesión sessionID y devuelve su ledger. Cada sesión
+// tiene su propia cuenta: sumar en una no toca a las demás. Un sessionID vacío se imputa a la sesión
+// escrita más recientemente (ver destinoDe).
+//
+// Con tokens <= 0 es una LECTURA PURA: no abre transacción, no crea la sesión y no la sube en el
+// orden. Hay llamadores que la usan para preguntar —el aviso una-vez-por-sesión de precheck lee su
+// marca con 0 tokens—, y en la primera versión esa pregunta escribía: una sesión que sólo leía ocupaba
+// un lugar y empujaba a otras al desalojo.
 func (e *DbEngine) LedgerAdd(sessionID, surface string, tokens int) (TokenLedger, error) {
 	// En sólo lectura el ledger no se toca: es telemetría del ahorro, no parte de ninguna
 	// respuesta. Se devuelve lo que hay hoy —una lectura— para que el caller no tenga que
 	// distinguir el modo. Sin esta guarda, `musubi_recall_code` intentaría escribir y `query_only`
-	// lo rechazaría, dejando fuera de servicio a otra tool que es puramente de lectura.
-	if e.soloLectura {
-		return e.LedgerStatusDe(sessionID)
+	// lo rechazaría, dejando fuera de servicio a otra tool que es puramente de lectura. Y el destino
+	// se resuelve IGUAL que en el camino escribible: en la primera versión, un llamado sin id
+	// devolvía acá la clave literal "" (ceros) y allá la última sesión.
+	if e.soloLectura || tokens <= 0 {
+		st, err := e.loadLedgerStore()
+		if err != nil {
+			return TokenLedger{Surfaces: map[string]int{}}, err
+		}
+		return st.de(st.destinoDe(sessionID)), nil
 	}
 	// LEER-MODIFICAR-ESCRIBIR DENTRO DE UNA TRANSACCIÓN. Con la casilla única esto ya era una
 	// carrera, sólo que barata: dos procesos concurrentes perdían un incremento. Ahora el valor
@@ -236,41 +333,23 @@ func (e *DbEngine) LedgerAdd(sessionID, surface string, tokens int) (TokenLedger
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	st, err := leerLedgerStore(tx.QueryRow(`SELECT value FROM meta WHERE key = ?`, metaTokenLedger))
+	st, err := leerLedgerStoreDe(tx)
 	if err != nil {
 		return TokenLedger{}, err
 	}
-	// Un caller SIN id —el camino MCP, que no ve el id del hook— no puede decir a qué sesión
-	// pertenece, así que sigue acumulando en la última que escribió: es el contrato de siempre, y el
-	// único con sentido cuando hay una sola terminal. Con varias es una atribución imperfecta, y no
-	// se puede hacer mejor sin un id; pero ya no BORRA a nadie, que era el defecto. Si todavía no hay
-	// ninguna sesión, cae en la clave vacía: el acumulado del servidor always-on (ver encabezado).
-	destino := sessionID
-	if destino == "" {
-		destino, _ = st.ultimaID()
-	}
+	destino := st.destinoDe(sessionID)
 	l := st.de(destino)
-	if tokens > 0 {
-		l.Total += tokens
-		if surface != "" {
-			l.Surfaces[surface] += tokens
-		}
+	l.Total += tokens
+	if surface != "" {
+		l.Surfaces[surface] += tokens
 	}
 	st.Seq++
 	st.Sesiones[destino] = l
 	st.Orden[destino] = st.Seq
-	st.podar()
+	st.podar(destino)
 
-	data, err := json.Marshal(st)
-	if err != nil {
-		return TokenLedger{}, fmt.Errorf("error al serializar ledger: %w", err)
-	}
-	if _, err := tx.Exec(
-		`INSERT INTO meta (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-		 ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP`,
-		metaTokenLedger, string(data),
-	); err != nil {
-		return TokenLedger{}, fmt.Errorf("error al guardar el ledger: %w", err)
+	if err := guardarLedgerStoreTx(tx, st); err != nil {
+		return TokenLedger{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return TokenLedger{}, fmt.Errorf("error al confirmar el ledger: %w", err)
@@ -278,40 +357,66 @@ func (e *DbEngine) LedgerAdd(sessionID, surface string, tokens int) (TokenLedger
 	return l, nil
 }
 
-func (e *DbEngine) loadLedgerStore() (ledgerStore, error) {
-	return leerLedgerStore(e.db.QueryRow(`SELECT value FROM meta WHERE key = ?`, metaTokenLedger))
+// destinoDe resuelve a qué sesión se imputa un llamado. Un caller SIN id —el camino MCP, que no ve el
+// id del hook— no puede decir a qué sesión pertenece, así que se imputa a la última que escribió: es
+// el contrato de siempre, y el único con sentido cuando hay una sola terminal. Con varias es una
+// atribución imperfecta, y no se puede hacer mejor sin un id; pero ya no BORRA a nadie, que era el
+// defecto. Si todavía no hay ninguna sesión, cae en la clave vacía: el acumulado del servidor
+// always-on (ver el encabezado del archivo).
+func (s ledgerStore) destinoDe(sessionID string) string {
+	if sessionID != "" {
+		return sessionID
+	}
+	id, _ := s.ultimaID()
+	return id
 }
 
-// leerLedgerStore decodifica el valor guardado, venga de la conexión o de una transacción.
+func (e *DbEngine) loadLedgerStore() (ledgerStore, error) {
+	return leerLedgerStoreDe(e.db)
+}
+
+// leerLedgerStoreTx lee el ledger dentro de una transacción ya abierta.
+func leerLedgerStoreTx(tx *sql.Tx) (ledgerStore, error) {
+	return leerLedgerStoreDe(tx)
+}
+
+// lectorLedger es lo que *sql.DB y *sql.Tx tienen en común para leer.
+type lectorLedger interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+// leerLedgerStoreDe lee el formato por sesión de SU clave (metaTokenLedgerV2) y, si todavía no existe,
+// MIGRA la casilla vieja en vez de tirarla: sin esto, instalar el binario nuevo pondría en cero el
+// contador de la sesión en curso sin decir nada — la misma pérdida silenciosa que este formato viene
+// a eliminar. La migración sólo LEE la clave vieja; nunca la escribe, para que un binario viejo que
+// siga corriendo pise únicamente su propia casilla (ver metaTokenLedgerV2).
 //
-// MIGRA EL FORMATO VIEJO en vez de tirarlo: el valor de una sola casilla
-// (`{"session_id":…,"total":…}`) se lee como una sesión más. Sin esto, instalar el binario nuevo
-// pondría en cero el contador de la sesión en curso sin decir nada — la misma clase de pérdida
-// silenciosa que este arreglo viene a eliminar. Un `json.Unmarshal` del formato viejo sobre
-// ledgerStore NO falla (ignora los campos que no conoce) y deja `Sesiones` en nil: eso es lo que
-// distingue un formato del otro, no una versión escrita a mano que habría que acordarse de subir.
-func leerLedgerStore(fila interface{ Scan(...any) error }) (ledgerStore, error) {
+// Un `json.Unmarshal` del formato viejo sobre ledgerStore NO falla —ignora los campos que no conoce—
+// y deja `Sesiones` en nil: eso es lo que distingue un formato del otro.
+func leerLedgerStoreDe(c lectorLedger) (ledgerStore, error) {
 	vacio := ledgerStore{Sesiones: map[string]TokenLedger{}, Orden: map[string]int{}}
-	var v string
-	switch err := fila.Scan(&v); {
-	case err == sql.ErrNoRows:
-		return vacio, nil
-	case err != nil:
-		return vacio, fmt.Errorf("error al leer el ledger: %w", err)
-	}
-	if v == "" {
-		return vacio, nil
-	}
-	var st ledgerStore
-	if err := json.Unmarshal([]byte(v), &st); err == nil && st.Sesiones != nil {
+	if v, ok, err := leerValorMeta(c, metaTokenLedgerV2); err != nil {
+		return vacio, err
+	} else if ok && v != "" {
+		var st ledgerStore
+		if err := json.Unmarshal([]byte(v), &st); err != nil || st.Sesiones == nil {
+			return vacio, nil // valor corrupto: arrancar de cero en vez de fallar
+		}
 		if st.Orden == nil {
 			st.Orden = map[string]int{}
 		}
 		return st, nil
 	}
+	v, ok, err := leerValorMeta(c, metaTokenLedger)
+	if err != nil {
+		return vacio, err
+	}
+	if !ok || v == "" {
+		return vacio, nil
+	}
 	var viejo TokenLedger
 	if err := json.Unmarshal([]byte(v), &viejo); err != nil {
-		return vacio, nil // valor corrupto: arrancar de cero en vez de fallar
+		return vacio, nil
 	}
 	if viejo.Surfaces == nil {
 		viejo.Surfaces = map[string]int{}
@@ -321,4 +426,31 @@ func leerLedgerStore(fila interface{ Scan(...any) error }) (ledgerStore, error) 
 		Orden:    map[string]int{viejo.SessionID: 1},
 		Seq:      1,
 	}, nil
+}
+
+func leerValorMeta(c lectorLedger, key string) (string, bool, error) {
+	var v string
+	switch err := c.QueryRow(`SELECT value FROM meta WHERE key = ?`, key).Scan(&v); {
+	case err == sql.ErrNoRows:
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("error al leer el ledger: %w", err)
+	}
+	return v, true, nil
+}
+
+// guardarLedgerStoreTx escribe el formato por sesión en SU clave, nunca en la del formato viejo.
+func guardarLedgerStoreTx(tx *sql.Tx, st ledgerStore) error {
+	data, err := json.Marshal(st)
+	if err != nil {
+		return fmt.Errorf("error al serializar ledger: %w", err)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO meta (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP`,
+		metaTokenLedgerV2, string(data),
+	); err != nil {
+		return fmt.Errorf("error al guardar el ledger: %w", err)
+	}
+	return nil
 }

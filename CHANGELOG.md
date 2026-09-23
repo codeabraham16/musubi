@@ -37,6 +37,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   ella**, así que la prueba de concurrencia no pasa por suerte. `TestLedgerResetsOnNewSession` se
   renombró a `TestLedgerSesionNuevaArrancaDeCero`: su nombre describía el defecto como contrato, y
   como sólo miraba el valor de la sesión nueva, pasaba igual con el arreglo y sin él.*
+
+  **Y lo que encontró una revisión adversarial antes del merge**, cinco cosas, dos de ellas peores
+  que el defecto original. (1) La alerta de presupuesto y la brevedad automática de una terminal
+  leían «la última sesión que escribió», así que la terminal A recibía «esta sesión (9000 tokens)
+  superó el presupuesto» habiendo gastado 100: ahora el hook lee **su propia** cuenta
+  (`LedgerStatusDe`), que es la que conoce. (2) Un servidor MCP con el binario **viejo** —son procesos
+  largos que siguen vivos después de instalar— leía el formato nuevo como un ledger vacío y lo pisaba:
+  todas las sesiones en cero, en cada hidratación. El formato nuevo vive ahora en **otra clave**
+  (`token_ledger_v2`); la vieja sólo se lee, para migrar, y el binario viejo pisa únicamente su
+  casilla. (3) El `reset` de `musubi_tokens` vaciaba el valor entero —una terminal borrando la cuenta
+  de todas, el mismo defecto por otra puerta—: ahora pone en cero **una**. (4) El desalojo por
+  antigüedad sacaba a la terminal principal mientras esperaba a sus sub-agentes: ahora el tope es 64 y
+  se desaloja por **menor total**, nunca la recién escrita. (5) Leer con 0 tokens —así pregunta
+  precheck por su marca— escribía y ocupaba un lugar: ahora es una lectura pura. `musubi_tokens`
+  suma la lista de `sesiones` y un `session_id` opcional para reportar o resetear una en concreto,
+  porque corre por MCP y no sabe cuál es la suya. *Doce invariantes con su sabotaje, los doce rojos,
+  incluidos los de la primera ronda repetidos sobre el código nuevo; las pruebas del revisor quedaron
+  como regresión (`ledger_revision_test.go`).*
 - **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
   de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
   sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,

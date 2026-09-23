@@ -124,7 +124,7 @@ func TestBudgetExponeSessionIDVacioParaDistinguirAcumulado(t *testing.T) {
 func TestLedgerReset(t *testing.T) {
 	e := newTestEngine(t)
 	e.LedgerAdd("s1", "turn_recall", 10)
-	if err := e.LedgerReset(); err != nil {
+	if err := e.LedgerReset(""); err != nil {
 		t.Fatalf("LedgerReset error: %v", err)
 	}
 	l, _ := e.LedgerStatus()
@@ -177,7 +177,8 @@ func TestLedgerMigraElFormatoViejo(t *testing.T) {
 }
 
 // El valor vive en una sola fila de `meta`: sin tope, una máquina que abre terminales todo el día lo
-// haría crecer sin freno. Se desaloja la MENOS recientemente escrita, no una cualquiera.
+// haría crecer sin freno. A IGUAL total se desaloja la menos recientemente escrita, no una cualquiera
+// (la política completa —menor total primero— la custodia TestLedgerDesalojoProtegeLaSesionGrande).
 func TestLedgerDesalojaLaSesionMasVieja(t *testing.T) {
 	e := newTestEngine(t)
 	for i := 0; i < maxSesionesEnLedger+4; i++ {

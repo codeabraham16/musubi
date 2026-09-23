@@ -37,6 +37,7 @@ type turnStore interface {
 	SetMeta(key, value string) error
 	LedgerAdd(sessionID, surface string, tokens int) (memory.TokenLedger, error)
 	LedgerStatus() (memory.TokenLedger, error)
+	LedgerStatusDe(sessionID string) (memory.TokenLedger, error)
 }
 
 // Claves de meta del loop dirigido para el recordatorio de captura.
@@ -150,7 +151,7 @@ func buildBudgetAlert(store turnStore, sessionID string, budget int) string {
 	if budget <= 0 {
 		return ""
 	}
-	l, err := store.LedgerStatus()
+	l, err := ledgerDeLaSesion(store, sessionID)
 	if err != nil || l.Total < budget {
 		return ""
 	}
@@ -175,7 +176,7 @@ func buildBrevityNudge(store turnStore, sessionID, mode string, budget int) stri
 		if budget <= 0 {
 			return ""
 		}
-		l, err := store.LedgerStatus()
+		l, err := ledgerDeLaSesion(store, sessionID)
 		if err != nil || l.Total < budget {
 			return "" // todavía bajo presupuesto: no inyectar (costo cero)
 		}
@@ -189,6 +190,18 @@ func buildBrevityNudge(store turnStore, sessionID, mode string, budget int) stri
 	}
 	_ = store.SetMeta(metaBrevityInjected, want)
 	return brevityDirective(mode)
+}
+
+// ledgerDeLaSesion lee la cuenta de ESTA sesión. El hook sí conoce su id, así que no tiene por qué
+// adivinar: con LedgerStatus() a secas —«la última que escribió»— la alerta de presupuesto y la
+// brevedad automática de la terminal A se disparaban con el total de la terminal B. Una revisión
+// adversarial lo reprodujo antes del merge: A gastó 20 tokens y recibió «esta sesión (9000 tokens)
+// superó el presupuesto». Sin id (una llamada que no viene de un hook), se cae a la última.
+func ledgerDeLaSesion(store turnStore, sessionID string) (memory.TokenLedger, error) {
+	if sessionID == "" {
+		return store.LedgerStatus()
+	}
+	return store.LedgerStatusDe(sessionID)
 }
 
 // brevityDirective devuelve el texto de la directiva por modo. Mantiene exacto lo que no
