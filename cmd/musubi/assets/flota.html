@@ -395,7 +395,12 @@ function servicios(e) {
   const svs = Array.isArray(e.servicios) ? e.servicios : [];
   if (!svs.length) return '<span class="nd">0</span>';
 
-  const marca = { corriendo: '▶', detenido: '■', fallado: '✕', desconocido: '?' };
+  // `ocioso` TIENE MARCA PROPIA y no es un olvido cosmético. Sin ella caía en el `: 'desconocido'`
+  // de abajo y se dibujaba con `?` —el tooltip decía textualmente «desconocido»— sobre un estado
+  // que se SABE: apagado porque nadie lo pidió (A70). Medido el 2026-09-23: eran 17 servicios.
+  // Su clase queda `sano` por construcción: `mal` es una lista de FALLAS (fallado, detenido), así
+  // que un estado que no es falla no la necesita — igual que `politica.go`.
+  const marca = { corriendo: '▶', detenido: '■', fallado: '✕', desconocido: '?', ocioso: '○' };
   const corriendo = svs.filter(s => s.estado === 'corriendo' && s.fresco).length;
   const fichas = svs.filter(s => !s.fresco || s.estado !== 'corriendo').map(s => {
     const est = marca[s.estado] ? s.estado : 'desconocido';
