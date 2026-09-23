@@ -20,7 +20,7 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   La clave se FUERZA a `true`, igual que el bloque `sync:` pisa el `enabled: false` del default: ese
   false lo escribe el default sin que nadie lo haya elegido, y `provision` ES el acto explícito de
   sumar la máquina a un cerebro compartido. Y la salida temprana de «ya configurado» ahora mira la
-  bajada: una máquina que ya tenía sync saliente se quedaba en «subo y no bajo» para siempre.
+  bajada — y la INFORMA sin tocar el archivo, ver la segunda ronda más abajo.
 
   El bloque `memory:` **no** se reemplaza entero como el de `sync:` —ahí viven otras claves del
   proyecto y pisarlas sería borrar configuración que nadie pidió tocar—: se cambia UNA línea.
