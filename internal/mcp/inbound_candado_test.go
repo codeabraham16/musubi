@@ -119,3 +119,48 @@ func TestDrainInboundNoRetrocedeElCursor(t *testing.T) {
 		t.Fatalf("el cursor RETROCEDIÓ a %q: la escritura del scheduler no es monótona", got)
 	}
 }
+
+// LO QUE ENCONTRÓ LA REVISIÓN ADVERSARIAL (y su prueba, adaptada): una terminal que falla SIEMPRE
+// —token vencido de una que arrancó antes de rotarlo, un central_url viejo— renovaba el candado en
+// cada tick antes de ir a la red, y la terminal sana no bajaba nunca más. Reproducido antes del
+// arreglo: cinco ticks cada una, la sana hizo CERO pedidos. Sin candado la sana bajaba sola; el
+// candado no puede dejarla peor.
+func TestDrainInboundUnDuenoQueFallaNoDejaSinBajadaALosDemas(t *testing.T) {
+	roto := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer roto.Close()
+	var pedidosSano atomic.Int64
+	sano := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		pedidosSano.Add(1)
+		payload := `{"items":[{"rowid":3,"id":"c1","topic_key":"t/a","content":"alpha del central","importance":1,"mem_type":"semantic","author":"ana","project_id":"acme"}],"next_cursor":3}`
+		resp := `{"jsonrpc":"2.0","id":"pull","result":{"content":[{"type":"text","text":` + strconv.Quote(payload) + `}]}}`
+		_, _ = w.Write([]byte(resp))
+	}))
+	defer sano.Close()
+
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	nuevo := func(url string) *McpServer {
+		s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{}, WithMemory(config.MemoryConfig{TeamMode: true}))
+		s.SetSyncClient(newTestSyncClient(t, url), config.SyncConfig{BatchSize: 50, DrainIntervalSeconds: 30})
+		return s
+	}
+	rota, sana := nuevo(roto.URL), nuevo(sano.URL)
+	// La rota arranca primero y toma el candado: es el peor orden.
+	for tick := 0; tick < 3; tick++ {
+		rota.drainInboundOnce(context.Background())
+		sana.drainInboundOnce(context.Background())
+	}
+	if pedidosSano.Load() == 0 {
+		t.Fatal("la terminal sana NUNCA bajó: el dueño que falla se quedó con el candado")
+	}
+	if cur, _, _ := engine.GetMeta(metaInboundCursor); cur != "3" {
+		t.Fatalf("la bajada de la sana tenía que llegar a la base: cursor=%q", cur)
+	}
+}

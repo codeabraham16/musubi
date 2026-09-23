@@ -268,6 +268,12 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 		items, next, err := s.syncClient.Pull(cur, limit)
 		if err != nil {
 			logx.Error("inbound: no se pudo bajar del central (reintenta en el próximo tick)", "error", err)
+			// El candado se SUELTA: un dueño que falla siempre —un token vencido, un central_url viejo—
+			// lo renovaría en cada tick y dejaría a la base sin bajada aunque otra terminal esté sana
+			// (ver memory.SoltarBajada).
+			if serr := s.engine.SoltarBajada(s.duenoBajada); serr != nil {
+				logx.Error("inbound: no se pudo soltar el candado de la bajada", "error", serr)
+			}
 			return
 		}
 		if len(items) == 0 {

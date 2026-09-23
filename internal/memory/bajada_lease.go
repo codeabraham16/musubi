@@ -10,7 +10,8 @@ const metaBajadaLease = "sync:inbound_lease"
 
 // ReclamarBajada intenta quedarse con la bajada de esta base durante leaseSeconds. Devuelve true si
 // el candado es de quien llama —estaba libre, vencido, o ya era suyo— y false si lo tiene otro
-// proceso vivo.
+// proceso vivo. Un valor que no tiene la forma dueño|vence cuenta como libre: una escritura cortada
+// (un apagón deja archivos en ceros en esta PC) no puede trabar la bajada para siempre.
 //
 // EL DEFECTO QUE ESTO ARREGLA (medido 2026-09-23). La SUBIDA ya estaba protegida contra varios
 // daemons sobre la misma base —ClaimOutboxBatch toma un lease de 60 s— pero la BAJADA no tenía
@@ -40,6 +41,7 @@ func (e *DbEngine) ReclamarBajada(dueno string, leaseSeconds int) (bool, error) 
 		ON CONFLICT(key) DO UPDATE
 		SET value = excluded.value, updated_at = excluded.updated_at
 		WHERE meta.value = ''
+		   OR instr(meta.value, '|') = 0
 		   OR substr(meta.value, 1, instr(meta.value, '|') - 1) = ?
 		   OR substr(meta.value, instr(meta.value, '|') + 1) <= datetime('now')`,
 		metaBajadaLease, dueno, strconv.Itoa(leaseSeconds), dueno)
@@ -51,6 +53,28 @@ func (e *DbEngine) ReclamarBajada(dueno string, leaseSeconds int) (bool, error) 
 		return false, fmt.Errorf("error al leer el resultado del reclamo de la bajada: %w", err)
 	}
 	return n == 1, nil
+}
+
+// SoltarBajada libera el candado, sólo si es de quien llama.
+//
+// EL DEFECTO QUE ESTO CIERRA, y que encontró una revisión adversarial antes del merge: el dueño
+// renovaba el candado al EMPEZAR cada tick, antes de ir a la red. Si su bajada fallaba siempre
+// —el token vencido de una terminal que arrancó antes de rotarlo, un central_url viejo—, igual lo
+// renovaba, y la terminal sana no bajaba NUNCA MÁS. Sin candado, la sana bajaba sola; con el
+// candado, una sola terminal rota dejaba a toda la base sin bajada. Reproducido: con un dueño que
+// recibe 401 y otra terminal sana, cinco ticks cada una, la sana hizo cero pedidos.
+//
+// Soltar en vez de dejar vencer: vencer tarda el lease entero (cuatro ticks), y en ese rato nadie
+// baja. Soltado, la terminal sana lo toma en su tick siguiente.
+func (e *DbEngine) SoltarBajada(dueno string) error {
+	_, err := e.db.Exec(`
+		UPDATE meta SET value = '', updated_at = datetime('now')
+		WHERE key = ? AND substr(value, 1, instr(value, '|') - 1) = ?`,
+		metaBajadaLease, dueno)
+	if err != nil {
+		return fmt.Errorf("error al soltar la bajada: %w", err)
+	}
+	return nil
 }
 
 // AvanzarCursorBajada guarda el cursor de la bajada SÓLO si es mayor que el guardado.

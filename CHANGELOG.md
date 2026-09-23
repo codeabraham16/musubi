@@ -34,6 +34,19 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   prefijo común **siguió verde con el candado comparando por prefijo**: estaba armada al revés. El
   agujero real es guardado el largo (`proc-a-otro`) y reclamando el corto, donde
   `'proc-a-otro|…' LIKE 'proc-a%'` regala el candado ajeno; ahora cubre las dos direcciones.*
+
+  **Y lo que encontró una revisión adversarial antes del merge**, que era grave: el dueño renovaba
+  el candado al EMPEZAR cada tick, antes de ir a la red. Una terminal que falla siempre —el token
+  vencido de una que arrancó antes de rotarlo (`NewSyncClient` lee el token una sola vez), un
+  `central_url` viejo— lo renovaba igual, y **la terminal sana no bajaba nunca más**: reproducido,
+  cinco ticks cada una y la sana hizo cero pedidos. Sin candado la sana bajaba sola, así que el
+  arreglo dejaba las cosas peor que antes. Ahora, si el `Pull` falla, el dueño **suelta** el candado
+  (`SoltarBajada`, sólo si es suyo) y la sana lo toma en su tick siguiente. Y un valor que no tiene la
+  forma `dueño|vence` cuenta como libre: una escritura cortada —un apagón deja archivos en ceros en
+  esta PC— ya no puede trabar la bajada para siempre. *Tres invariantes nuevos con su sabotaje, más
+  los cuatro del reclamo repetidos por el cambio en el `WHERE`: siete de siete rojos. Uno de los
+  repetidos salió VERDE la primera vez, y no por el código: el ancla del sabotaje (`if !ok {`)
+  aparecía tres veces en el archivo y el reemplazo cayó en otra función. Con un ancla única, rojo.*
 - **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
   de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
   sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,

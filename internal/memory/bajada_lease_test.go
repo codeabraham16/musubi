@@ -87,3 +87,39 @@ func TestAvanzarCursorBajadaNoRetrocede(t *testing.T) {
 		}
 	}
 }
+
+// Soltar es SÓLO del dueño: si cualquiera pudiera soltar, una terminal rota que falla podría
+// liberarle el candado a la sana en cada tick y volverían a bajar las dos.
+func TestSoltarBajadaSoloLaSueltaElDueno(t *testing.T) {
+	e := newTestEngine(t)
+	if ok, _ := e.ReclamarBajada("proc-a", 120); !ok {
+		t.Fatal("setup")
+	}
+	if err := e.SoltarBajada("proc-b"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := e.ReclamarBajada("proc-b", 120); ok {
+		t.Fatal("proc-b soltó un candado que no era suyo")
+	}
+	if err := e.SoltarBajada("proc-a"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := e.ReclamarBajada("proc-b", 120); !ok {
+		t.Fatal("soltado por su dueño, el candado tenía que quedar libre para proc-b")
+	}
+}
+
+// Un valor que no tiene la forma dueño|vence cuenta como libre. Sin esto, una escritura cortada
+// —un apagón deja archivos en ceros en esta PC— trabaría la bajada para siempre: `'basura' <=
+// datetime('now')` es falso como texto y nadie podría volver a tomarlo.
+func TestReclamarBajadaValorCorruptoSeTomaIgual(t *testing.T) {
+	for _, corrupto := range []string{"basura-sin-separador", "\x00\x00\x00\x00"} {
+		e := newTestEngine(t)
+		if err := e.SetMeta(metaBajadaLease, corrupto); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := e.ReclamarBajada("proc-a", 120); err != nil || !ok {
+			t.Errorf("valor %q: un candado corrupto tiene que poder tomarse; ok=%v err=%v", corrupto, ok, err)
+		}
+	}
+}

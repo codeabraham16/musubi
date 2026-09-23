@@ -362,6 +362,7 @@ type OutboxStore interface {
 	// ReclamarBajada y AvanzarCursorBajada son el lease y el cursor monótono de la BAJADA: el mismo
 	// resguardo que ClaimOutboxBatch le da a la subida, que la bajada no tenía (ver bajada_lease.go).
 	ReclamarBajada(dueno string, leaseSeconds int) (bool, error)
+	SoltarBajada(dueno string) error
 	AvanzarCursorBajada(key string, v int64) error
 	// ListSharedForPull sirve el sync ENTRANTE (C5.3): lista la memoria 'shared' del proyecto del
 	// ctx (aislamiento T17-19) con rowid > afterRowID, paginada. La corre el central en un pull.
