@@ -78,6 +78,7 @@ func runCerebro(args []string) {
 	tokenEnv := fs.String("token-env", "MANDO_MUSUBI_TOKEN", "variable de entorno con el token")
 	timeout := fs.Int("timeout", 60, "timeout por request, en segundos")
 	dialTimeout := fs.Int("dial-timeout", defaultDialTimeoutSeg, "timeout para ESTABLECER la conexión, en segundos")
+	alcance := fs.Bool("alcance", false, "sondea /readyz y sale: no abre el canal MCP ni necesita token")
 	_ = fs.Parse(args)
 
 	base := strings.TrimSpace(*url)
@@ -88,6 +89,14 @@ func runCerebro(args []string) {
 		fmt.Fprintln(os.Stderr, "musubi cerebro: falta la URL del cerebro (--url o $MUSUBI_CENTRAL_URL)")
 		os.Exit(1)
 	}
+	// `--alcance` SALE ANTES DEL TOKEN, y no es un atajo: `/readyz` no pide credencial, así que
+	// exigirla acá convertiría «no llego al cerebro» en «te falta una variable de entorno» — que es
+	// justo la confusión que este comando existe para deshacer. Se puede correr desde una máquina
+	// recién enrolada, antes de tener token.
+	if *alcance {
+		os.Exit(informarAlcance(os.Stdout, base, nombreTLSDelCerebro(), esperaDelSondeo))
+	}
+
 	token, terr := config.SecretoDeEnv(*tokenEnv)
 	if terr != nil {
 		fmt.Fprintf(os.Stderr, "musubi cerebro: %v\n", terr)

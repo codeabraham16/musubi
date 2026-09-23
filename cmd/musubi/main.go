@@ -172,7 +172,7 @@ func printUsage() {
 
 	section("Servidor MCP")
 	cmd("daemon", "Arranca el servidor MCP sobre stdin/stdout")
-	cmd("cerebro", "Canal MCP (stdio) al cerebro CENTRAL: consulta en vivo, no replica")
+	cmd("cerebro [--alcance]", "Canal MCP (stdio) al cerebro CENTRAL; --alcance sondea /readyz y sale")
 	cmd("serve [--addr host:port]", "Servidor MCP sobre HTTP (modo servicio, opt-in; solo loopback)")
 
 	section("Flota")

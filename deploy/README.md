@@ -97,6 +97,34 @@ SSH si la querés remota).
 - Usar SIEMPRE la **IP del tailnet** (no nombres MagicDNS): con NordVPN activo el DNS no
   resuelve los nombres de la malla.
 
+### ¿Llego al cerebro desde acá?
+
+```bash
+musubi cerebro --alcance                 # usa $MUSUBI_CENTRAL_URL
+musubi cerebro --alcance --url https://100.x.y.z:10000
+```
+
+Sondea `/readyz` y sale con 0 sólo si contestó 200, así que entra en un `&&`. No pide token —
+`/readyz` no lleva credencial— y por eso se puede correr desde una máquina recién enrolada.
+
+**Esto reemplaza a un `curl` escrito a mano, y el motivo es una medición.** El 2026-09-22 el
+comando que el manual de operación tenía anotado devolvía `000` contra un cerebro **sano**: seguía
+nombrando el `7717`, que desde #601 es loopback y en claro. Un literal envejece callado, y `000` se
+lee como «el cerebro está caído» en vez de «me quedé con la dirección de antes». Las dos mitades
+que el sondeo agrega y el `curl` no tenía:
+
+- **`000` no es un diagnóstico.** Aplasta en un número tres mundos distintos —no resuelve, no
+  escucha, el handshake se cortó—. El sondeo imprime el error del stack, que ya los distingue, y
+  **la demora**, que separa un corte inmediato de una espera agotada.
+- **Nombra la única causa que se puede decidir.** Una base `https` contra una **IP pelada** sin
+  `MUSUBI_BRAIN_TLS_NAME` no puede validar nunca, porque el certificado del tailnet lleva el
+  nombre del nodo como único SAN. El resto de los fallos vuelven con su error crudo y **sin**
+  causa inventada.
+
+Y deshace una contradicción que parecía obligar a elegir: la regla de acá arriba dice usar la IP,
+y el certificado dice un nombre. No hay que elegir — se disca la IP y se verifica contra el
+nombre, que es para lo que existe `ServerName` (la sección que sigue cuenta ese nudo entero).
+
 ### Pasar el cerebro a HTTPS: el certificado dice un nombre y el agente disca una IP
 
 > ✅ **HECHO EL 2026-09-21, Y POR UN CAMINO DISTINTO AL QUE ESTA SECCIÓN DESCRIBÍA.** El TLS NO se
