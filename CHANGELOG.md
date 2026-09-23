@@ -8,6 +8,32 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **Los manuales del agente se ponen al día solos al arrancar cada sesión.** Los de `.musubi/skills/`
+  y su copia en `.claude/skills/` los escribía **sólo** `musubi setup`: medido el 2026-09-23, once de
+  los doce de este repo tenían fecha del 2026-08-10, 44 días atrás, y nada los refrescaba. Un binario
+  nuevo con manuales corregidos dejaba los viejos en disco, y como `.claude/` está en el `.gitignore`
+  tampoco llegaban por un pull. La lógica para refrescar sin pisar lo editado a mano ya existía
+  (`writeCognitiveSkills` con `ManagedChecksum`, `exportarSkillsAlAgente` que preserva los SKILL.md
+  tocados); faltaba el disparador, y ahora lo es el hook `SessionStart`.
+
+  Corre en cada arranque, así que va detrás de una **huella barata**: identidad del binario más el
+  listado de `.musubi/skills/`. Lo caro —detectar el stack para saber qué manuales escribir— cuesta
+  ~95 ms medido en este repo, y sólo se paga cuando la huella cambia. La identidad del binario es
+  versión **más commit y árbol sucio** (`vcs.revision`, `vcs.modified`): en un build local `version`
+  vale `"dev"` siempre, y una huella hecha sólo con ella no cambiaría nunca en la máquina donde más
+  se compila. El listado entra para que también se exporte lo que baja del arsenal del central. Sólo
+  actúa en proyectos que ya tienen `.musubi/skills/` —el hook corre en cualquier repo y crearlos
+  sería imponerlos—, y guarda la huella **después** de escribir y **sólo** si todo salió bien: antes,
+  las fechas que acaba de cambiar harían que el arranque siguiente reescribiera todo; con un fallo,
+  la sesión siguiente tiene que reintentar.
+
+  Con varias terminales arrancando a la vez dos refrescos pueden escribir el mismo manual, así que
+  las escrituras pasan a ser **atómicas** (temporal en el mismo directorio + rename):
+  `escribirArchivoAtomico`, extraída de `writeJSONAtomic` del catálogo, que ahora la usa. *Ocho
+  invariantes con su sabotaje, los ocho rojos por su motivo. Dos agujeros en las pruebas se cerraron
+  antes de sabotear: nada probaba el commit del build —justo la razón de no usar la versión sola—,
+  porque una prueba no puede cambiarlo, así que `identidadDelBuild` quedó inyectable; y la escritura
+  atómica sólo se probaba en el caso feliz, cuando lo que importa es que limpie el temporal si falla.*
 - **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
   de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
   sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,

@@ -218,11 +218,26 @@ func splitSeeds(s string) []string {
 	return out
 }
 
-// writeJSONAtomic serializa v como JSON indentado y lo escribe atómicamente en path
-// (temp en el mismo dir + rename, evita fallos cross-device en Windows; limpia si falla).
+// writeJSONAtomic serializa v como JSON indentado y lo escribe atómicamente en path.
 func writeJSONAtomic(path string, v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Errorf("serializar JSON: %w", err)
+	}
+	return escribirArchivoAtomico(path, data, 0o644)
+}
+
+// escribirArchivoAtomico escribe data en path sin que nadie pueda leer el archivo a medio escribir:
+// temporal en el MISMO directorio + rename (en otro directorio el rename puede cruzar de volumen y
+// fallar en Windows), y limpieza del temporal si algo falla. El temporal empieza con punto y termina
+// en .tmp: ningún lector de skills (que sólo abre .yaml/.yml y SKILL.md) lo toma por un archivo real.
+//
+// Existe como pieza aparte desde que los manuales se refrescan solos al arrancar cada sesión: con
+// varias terminales abriéndose a la vez, dos refrescos pueden escribir el mismo manual al mismo
+// tiempo, y con os.WriteFile una sesión que lo leyera en ese instante podía cargar la mitad.
+func escribirArchivoAtomico(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "*.tmp")
+	tmp, err := os.CreateTemp(dir, ".musubi-*.tmp")
 	if err != nil {
 		return fmt.Errorf("crear archivo temporal en %s: %w", dir, err)
 	}
@@ -233,17 +248,16 @@ func writeJSONAtomic(path string, v any) error {
 			os.Remove(tmpName)
 		}
 	}()
-
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return fmt.Errorf("serializar JSON: %w", err)
-	}
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return fmt.Errorf("escribir datos en temporal: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("cerrar archivo temporal: %w", err)
+	}
+	// CreateTemp crea con 0600; sin esto el archivo final perdería los permisos que tenía.
+	if err := os.Chmod(tmpName, perm); err != nil {
+		return fmt.Errorf("permisos del temporal: %w", err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("renombrar %s → %s: %w", tmpName, path, err)

@@ -463,6 +463,15 @@ func runDetect() {
 	sessionID := ""
 	if hookMode {
 		sessionID = readSessionID(os.Stdin)
+		// Los manuales se ponen al día SOLOS al arrancar cada sesión, en vez de sólo con `musubi
+		// setup` (ver skills_frescas.go). Va ANTES del arranque para que esta misma sesión ya los
+		// encuentre frescos. Best-effort como todo el hook: un fallo se avisa por stderr y la sesión
+		// arranca igual — un manual viejo es mucho menos grave que una sesión que no arranca. Y en
+		// silencio si sale bien: stdout es contexto del agente, y «refresqué tres archivos» no le
+		// sirve para trabajar.
+		if _, rerr := refrescarSkillsSiHaceFalta(root); rerr != nil {
+			fmt.Fprintf(os.Stderr, "musubi detect: no se pudieron refrescar los manuales (la sesión sigue): %v\n", rerr)
+		}
 	}
 
 	out, err := detectOutput(root, hookMode, sessionID)

@@ -275,14 +275,14 @@ func writeCognitiveSkills(root string) ([]string, error) {
 			if !managedSkillAction(existing, canonicalSum) {
 				continue
 			}
-			if err := os.WriteFile(path, newData, 0644); err != nil {
+			if err := escribirArchivoAtomico(path, newData, 0o644); err != nil {
 				return refreshed, err
 			}
 			refreshed = append(refreshed, sk.Name)
 			continue
 		}
 		// No existía: escritura nueva (no se reporta como refrescada).
-		if err := os.WriteFile(path, newData, 0644); err != nil {
+		if err := escribirArchivoAtomico(path, newData, 0o644); err != nil {
 			return refreshed, err
 		}
 	}

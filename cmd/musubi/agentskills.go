@@ -106,7 +106,7 @@ func escribirSkillMD(destino string, sk skills.Skill) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(ruta, []byte(contenido), 0o644); err != nil {
+	if err := escribirArchivoAtomico(ruta, []byte(contenido), 0o644); err != nil {
 		return "", err
 	}
 	return "escrita", nil
