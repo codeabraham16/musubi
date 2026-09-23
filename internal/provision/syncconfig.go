@@ -5,81 +5,173 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
+	"reflect"
 	"strings"
 
 	"musubi/internal/config"
 )
 
-// syncBlockRe captura el bloque `sync:` de nivel superior COMPLETO (la línea `sync:` más sus líneas
-// indentadas) para poder REEMPLAZARLO en su lugar. No basta con detectar `^sync:` y anexar: el config
-// que deja `ensureWorkspace` (config.Default().Marshal()) YA trae un bloque `sync:` con enabled:false,
-// y anexar otro crearía una clave YAML duplicada (parseo fallido). Ver auditoría 2026-07-26 #2.
-var syncBlockRe = regexp.MustCompile(`(?m)^sync:.*(?:\n[ \t]+.*)*\n?`)
-
-// memoryBlockRe captura el bloque `memory:` de nivel superior COMPLETO, y teamModeRe la línea
-// `team_mode:` de adentro. Son dos regex y no una porque el bloque `memory:` NO se puede reemplazar
-// entero como el de `sync:`: ahí viven otras claves del proyecto (presupuestos de recall, modo de
-// brevedad) y pisarlas sería borrar configuración que nadie pidió tocar. Acá se cambia UNA línea.
+// bloqueDeNivelSuperior ubica el bloque `clave:` de nivel superior del YAML: ini es el comienzo de la
+// línea de cabecera, finCabecera el comienzo de la línea siguiente y fin el final del bloque (justo
+// después de su último hijo). ok=false si no hay tal bloque.
 //
-// Los dos capturan la SANGRÍA en un grupo, y eso no es cosmético: `config.Default().Marshal()` sale
-// de `yaml.Marshal`, que indenta con CUATRO espacios, mientras que un config escrito a mano usa dos.
-// Insertar la clave con una sangría fija produce un YAML que no parsea —para el parser es un dedent
-// a mitad del mapa— y el config del proyecto queda ilegible. La sangría se deduce del bloque.
-var (
-	memoryBlockRe   = regexp.MustCompile(`(?m)^memory:.*(?:\n[ \t]+.*)*\n?`)
-	teamModeRe      = regexp.MustCompile(`(?m)^([ \t]+)team_mode:.*$`)
-	primerHijoRe    = regexp.MustCompile(`(?m)^memory:[^\n]*\n([ \t]+)\S`)
-	sangriaPorMedio = []byte("  ")
-)
+// POR QUÉ UN RECORRIDO DE LÍNEAS Y NO UNA REGEX, que es como estaba. La regex terminaba el bloque en
+// la primera línea que no arrancara con sangría, así que una LÍNEA EN BLANCO o un comentario en
+// columna 0 entre dos claves del bloque lo cortaban. Una revisión adversarial lo reprodujo antes del
+// merge: con `memory:\n  recall_token_budget: 400\n\n  team_mode: false`, el editor no veía el
+// team_mode de abajo, insertaba otro arriba, y el config quedaba con la clave DUPLICADA —yaml.v3 lo
+// rechaza— mientras el paso reportaba «hecho». Ahora las vacías y los comentarios que quedan ENTRE
+// dos hijos son del bloque, y los del FINAL no: suelen ser la cabecera de la sección siguiente, y
+// reemplazar el bloque `sync:` se los llevaría puestos.
+func bloqueDeNivelSuperior(content []byte, clave string) (ini, finCabecera, fin int, ok bool) {
+	cab := []byte(clave + ":")
+	for off := 0; off < len(content); off += largoDeLinea(content[off:]) {
+		linea := content[off : off+largoDeLinea(content[off:])]
+		if !bytes.HasPrefix(linea, cab) {
+			continue
+		}
+		// La clave tiene que terminar en los dos puntos: `sync:` no es `sync_extra:`.
+		if resto := linea[len(cab):]; len(resto) > 0 && !bytes.ContainsAny(resto[:1], " \t\r\n#") {
+			continue
+		}
+		ini, finCabecera = off, off+len(linea)
+		fin = finCabecera
+		for p := finCabecera; p < len(content); p += largoDeLinea(content[p:]) {
+			l := content[p : p+largoDeLinea(content[p:])]
+			t := bytes.TrimSpace(l)
+			switch {
+			case len(t) == 0 || t[0] == '#':
+				// Vacía o comentario: es del bloque sólo si después aparece otro hijo.
+			case l[0] == ' ' || l[0] == '\t':
+				fin = p + len(l)
+			default:
+				return ini, finCabecera, fin, true
+			}
+		}
+		return ini, finCabecera, fin, true
+	}
+	return 0, 0, 0, false
+}
+
+// largoDeLinea devuelve el largo de la primera línea de b, incluido su salto de línea.
+func largoDeLinea(b []byte) int {
+	if i := bytes.IndexByte(b, '\n'); i >= 0 {
+		return i + 1
+	}
+	return len(b)
+}
+
+// finDeLinea devuelve el salto de línea con que termina la línea ("\r\n", "\n" o "" si es la última
+// y no tiene): lo que se inserta respeta el estilo del archivo.
+func finDeLinea(linea []byte) string {
+	switch {
+	case bytes.HasSuffix(linea, []byte("\r\n")):
+		return "\r\n"
+	case bytes.HasSuffix(linea, []byte("\n")):
+		return "\n"
+	}
+	return ""
+}
 
 // asegurarTeamMode deja `memory.team_mode: true` en el config, que es la llave de la BAJADA.
 //
-// POR QUÉ ESTO VA EN EL ALTA. `provision` habilita el sync saliente y nada más, así que una máquina
-// recién dada de alta SUBE Y NO BAJA: RunInboundScheduler se apaga solo sin team_mode, y el pull
-// nunca arranca. La máquina queda con un cuaderno vacío que además empieza a mandar. Medido el
-// 2026-09-23: es el motivo por el que «un empleado nuevo hereda el cerebro» no funcionaba, y no era
-// una función faltante sino una clave que el único camino automático de alta jamás escribía.
+// POR QUÉ ESTO VA EN EL ALTA. `provision` habilitaba el sync saliente y nada más, así que una
+// máquina recién dada de alta SUBÍA Y NO BAJABA: RunInboundScheduler se apaga solo sin team_mode, y
+// el pull nunca arrancaba. Medido el 2026-09-23: es el motivo por el que «un empleado nuevo hereda el
+// cerebro» no funcionaba, y no era una función faltante sino una clave que el alta jamás escribía.
 //
-// Se FUERZA a true en vez de respetar un false previo, por la misma razón por la que el bloque
-// `sync:` pisa el `enabled: false` del default: el default escribe false sin que nadie lo haya
-// elegido, y `provision` ES el acto explícito de sumar esta máquina a un cerebro compartido. Dejar
-// el false del default ganaría sobre la intención de quien corre el comando.
-func asegurarTeamMode(content []byte) []byte {
-	bloque := memoryBlockRe.Find(content)
-	if bloque == nil {
-		// Sin bloque `memory:`: se agrega uno. Anexar es seguro justamente porque no hay ninguno —
-		// es el caso que el comentario de syncBlockRe advierte que NO hay que asumir a ciegas.
-		if len(bytes.TrimSpace(content)) > 0 && !bytes.HasSuffix(content, []byte("\n")) {
-			content = append(content, '\n')
+// El bloque `memory:` NO se reemplaza entero como el de `sync:`: ahí viven otras claves del proyecto
+// y pisarlas sería borrar configuración que nadie pidió tocar. Se cambia UNA línea, con la sangría de
+// sus hermanos —yaml.Marshal indenta con cuatro espacios y un config a mano con dos, y una sangría fija
+// dejaba el YAML sin parsear—, salteando los comentarios al elegir el molde: un comentario con otra
+// sangría como primera línea hacía que la clave quedara más honda que sus hermanas.
+//
+// Si `memory:` trae su valor en la misma línea (`memory: {}`, `memory: null`) no se edita a ciegas:
+// se devuelve error y el que llama no escribe nada.
+func asegurarTeamMode(content []byte) ([]byte, error) {
+	ini, finCab, fin, ok := bloqueDeNivelSuperior(content, "memory")
+	if !ok {
+		out := append([]byte{}, content...)
+		if len(bytes.TrimSpace(out)) > 0 && !bytes.HasSuffix(out, []byte("\n")) {
+			out = append(out, '\n')
 		}
-		return append(content, []byte("\n# Bajada del cerebro híbrido: lo compartido del central desciende a esta máquina.\nmemory:\n"+
-			string(sangriaPorMedio)+"team_mode: true\n")...)
+		return append(out, []byte("\n# Bajada del cerebro híbrido: lo compartido del central desciende a esta máquina.\nmemory:\n  team_mode: true\n")...), nil
 	}
-	// La clave ya está: se reescribe su valor CONSERVANDO su propia sangría.
-	if teamModeRe.Match(bloque) {
-		nuevo := teamModeRe.ReplaceAll(bloque, []byte("${1}team_mode: true"))
-		return bytes.Replace(content, bloque, nuevo, 1)
+	cabecera := content[ini:finCab]
+	valor := strings.TrimSpace(strings.TrimPrefix(string(bytes.TrimSpace(cabecera)), "memory:"))
+	if i := strings.Index(valor, "#"); i >= 0 {
+		valor = strings.TrimSpace(valor[:i])
 	}
-	// El bloque existe pero sin la clave: se INSERTA como primer hijo, con la sangría que ya usan
-	// sus hermanos, sin tocar el resto del bloque.
-	sangria := sangriaPorMedio
-	if m := primerHijoRe.FindSubmatch(bloque); m != nil {
-		sangria = m[1]
+	if valor != "" {
+		return nil, fmt.Errorf("el bloque memory: trae su valor en la misma línea (%q), y eso no se edita a ciegas", valor)
 	}
-	corte := bytes.IndexByte(bloque, '\n') + 1 // fin de la línea `memory:`
-	nuevo := make([]byte, 0, len(bloque)+len(sangria)+16)
-	nuevo = append(nuevo, bloque[:corte]...)
-	nuevo = append(nuevo, sangria...)
-	nuevo = append(nuevo, []byte("team_mode: true\n")...)
-	nuevo = append(nuevo, bloque[corte:]...)
-	return bytes.Replace(content, bloque, nuevo, 1)
+
+	// El molde de sangría es el del primer hijo REAL (no un comentario ni una vacía).
+	var sangria []byte
+	for p := finCab; p < fin; p += largoDeLinea(content[p:]) {
+		l := content[p : p+largoDeLinea(content[p:])]
+		t := bytes.TrimSpace(l)
+		if len(t) == 0 || t[0] == '#' {
+			continue
+		}
+		ind := l[:len(l)-len(bytes.TrimLeft(l, " \t"))]
+		if sangria == nil {
+			sangria = ind
+		}
+		// La clave ya está entre los hijos directos: se reescribe su valor, con su sangría y su fin de línea.
+		if bytes.Equal(ind, sangria) && bytes.HasPrefix(t, []byte("team_mode:")) {
+			nueva := string(ind) + "team_mode: true" + finDeLinea(l)
+			return append(append(append([]byte{}, content[:p]...), nueva...), content[p+len(l):]...), nil
+		}
+	}
+	if sangria == nil {
+		sangria = []byte("  ")
+	}
+	eol := finDeLinea(cabecera)
+	out := append([]byte{}, content[:finCab]...)
+	if eol == "" { // `memory:` era la última línea y sin salto: primero el salto, después la clave
+		out = append(out, '\n')
+		eol = "\n"
+	}
+	out = append(out, sangria...)
+	out = append(out, "team_mode: true"+eol...)
+	return append(out, content[finCab:]...), nil
 }
 
-// ensureSyncConfig deja el bloque `sync:` en el .musubi/config.yaml del proyecto para que el
-// daemon LOCAL suba solo la memoria `shared` al cerebro central (outbox de F2). Sin esto, el
-// `.mcp.json` conecta pero el auto-sync local→central queda apagado (era el hueco que hacía
-// falta un paso manual). Idempotente: si el bloque ya está, no lo pisa. Incluye
+// validarEdicion comprueba el config editado con el MISMO parser que lo va a leer (config.Parse)
+// antes de escribirlo: tiene que parsear, quedar con el sync hacia centralURL y con team_mode en
+// true, y todo lo demás tiene que quedar IGUAL que antes. Un editor de texto puede equivocarse con
+// un YAML que no previó; lo que no puede es escribir un config ilegible y reportar «hecho», que es
+// lo que hacía antes (ver bloqueDeNivelSuperior).
+//
+// Un original que no parsea no se toca: no hay contra qué comparar, y pisarlo borraría la pista de
+// qué estaba mal.
+func validarEdicion(original, editado []byte, centralURL string) error {
+	antes, err := config.Parse(original)
+	if err != nil {
+		return fmt.Errorf("el config actual no parsea y no lo toco: %w", err)
+	}
+	despues, err := config.Parse(editado)
+	if err != nil {
+		return fmt.Errorf("la edición dejaba el config sin parsear: %w", err)
+	}
+	if !despues.Sync.Enabled || despues.Sync.CentralURL != centralURL {
+		return fmt.Errorf("la edición no dejaba el sync habilitado hacia %s", centralURL)
+	}
+	if !despues.Memory.TeamMode {
+		return fmt.Errorf("la edición no dejaba memory.team_mode en true")
+	}
+	antes.Sync = despues.Sync
+	antes.Memory.TeamMode = despues.Memory.TeamMode
+	if !reflect.DeepEqual(antes, despues) {
+		return fmt.Errorf("la edición cambiaba algo más que el sync y memory.team_mode")
+	}
+	return nil
+}
+
+// ensureSyncConfig deja el sync del .musubi/config.yaml del proyecto en los DOS sentidos: el bloque
+// `sync:` para que el daemon LOCAL suba la memoria `shared` al cerebro central (outbox de F2), y
+// `memory.team_mode` para que baje lo del central (ver asegurarTeamMode). Idempotente. Incluye
 // `allow_insecure_token` SÓLO cuando la base quedó en http:// —el central sobre el tailnet, donde
 // WireGuard ya cifra el transporte y el cliente de sync es fail-closed sin ese opt-in—. Con una
 // base https no hace falta, y escribirlo igual dejaría puesto un permiso para volver a texto
@@ -102,24 +194,22 @@ func ensureSyncConfig(projectDir, brain, tokenEnv string, dryRun bool) StepResul
 	}
 
 	// "Ya configurado" NO es "existe un bloque sync:": el default trae uno con enabled:false. Se
-	// consulta el estado REAL (parseado, con defaults aplicados): sólo si el sync ya está habilitado y
-	// con central_url no vacío se lo deja en paz. Así provision funciona sobre un proyecto ya inicializado.
+	// consulta el estado REAL (parseado, con defaults aplicados): si el sync ya está habilitado y con
+	// central_url, el archivo NO SE TOCA.
+	//
+	// Y si sube pero no baja, SE DICE en vez de repararlo. La primera versión lo reparaba solo, y la
+	// revisión adversarial mostró dos costos: en máquinas que ya existían, este camino —que antes jamás
+	// escribía el archivo— pasaba a reescribirlo; y un `team_mode: false` en una máquina con el sync ya
+	// armado puede ser una DECISIÓN —una consola de alcance acotado, como la de otra persona, que sube
+	// sólo lo que promueve a mano—, y darlo vuelta cambia el scope por defecto de todo lo que se guarde
+	// a `shared`, o sea al central, sin que nadie lo haya pedido.
 	if cfg, lerr := config.Load(projectDir); lerr == nil && cfg.Sync.Enabled && cfg.Sync.CentralURL != "" {
-		// El sync SALIENTE ya está, pero la bajada puede seguir apagada: ése es el estado «subo y no
-		// bajo», y salir acá sin mirarlo lo dejaba puesto para siempre en toda máquina que ya tuviera
-		// sync. Se repara la mitad que falta y nada más.
 		if cfg.Memory.TeamMode {
-			return StepResult{Name: "sync-config", Status: StatusOK, Detail: "sync ya habilitado hacia " + cfg.Sync.CentralURL}
+			return StepResult{Name: "sync-config", Status: StatusOK, Detail: "sync ya habilitado en los dos sentidos hacia " + cfg.Sync.CentralURL}
 		}
-		if dryRun {
-			return StepResult{Name: "sync-config", Status: StatusTodo,
-				Detail: "el sync sube pero NO baja: encendería memory.team_mode en " + cfgPath}
-		}
-		if err := os.WriteFile(cfgPath, asegurarTeamMode(existing), 0o644); err != nil {
-			return StepResult{Name: "sync-config", Status: StatusError, Detail: "no se pudo escribir " + cfgPath + ": " + err.Error()}
-		}
-		return StepResult{Name: "sync-config", Status: StatusDone,
-			Detail: "el sync ya subía; se encendió la BAJADA (memory.team_mode) en " + cfgPath}
+		return StepResult{Name: "sync-config", Status: StatusTodo,
+			Detail: "el sync sube hacia " + cfg.Sync.CentralURL + " pero NO BAJA: memory.team_mode está en false en " + cfgPath +
+				". Si esta máquina tiene que heredar el cerebro, ponelo en true y reabrí las sesiones abiertas. Ojo: eso también hace que lo que se guarde sin scope nazca 'shared' y suba al central. No lo cambio solo porque en una máquina ya configurada puede ser una decisión."}
 	}
 
 	base, _, ok := direccionDelCerebro(brain)
@@ -151,9 +241,9 @@ func ensureSyncConfig(projectDir, brain, tokenEnv string, dryRun bool) StepResul
 
 	// Si ya hay un bloque `sync:` (el deshabilitado del default), se REEMPLAZA en su lugar para no
 	// duplicar la clave. Si no hay ninguno, se anexa al final.
-	content := existing
-	if syncBlockRe.Match(content) {
-		content = syncBlockRe.ReplaceAll(content, []byte(block))
+	content := append([]byte{}, existing...)
+	if ini, _, fin, ok := bloqueDeNivelSuperior(content, "sync"); ok {
+		content = append(append(append([]byte{}, content[:ini]...), block...), content[fin:]...)
 	} else {
 		if len(bytes.TrimSpace(content)) == 0 {
 			content = []byte("# Configuración de Musubi (bootstrap por `musubi provision`).\n")
@@ -163,11 +253,19 @@ func ensureSyncConfig(projectDir, brain, tokenEnv string, dryRun bool) StepResul
 		content = append(content, '\n')
 		content = append(content, []byte(block)...)
 	}
-	// La otra mitad del enlace: sin esto la máquina sube y no baja.
-	content = asegurarTeamMode(content)
+	manual := " No se escribió nada. Para hacerlo a mano en " + cfgPath + ": en `sync:` poné `enabled: true` y `central_url: " + base +
+		"`, y en `memory:` poné `team_mode: true`."
+	content, err = asegurarTeamMode(content)
+	if err != nil {
+		return StepResult{Name: "sync-config", Status: StatusError, Detail: err.Error() + "." + manual}
+	}
+	if err := validarEdicion(existing, content, base); err != nil {
+		return StepResult{Name: "sync-config", Status: StatusError, Detail: err.Error() + "." + manual}
+	}
 	if err := os.WriteFile(cfgPath, content, 0o644); err != nil {
 		return StepResult{Name: "sync-config", Status: StatusError, Detail: "no se pudo escribir " + cfgPath + ": " + err.Error()}
 	}
 	return StepResult{Name: "sync-config", Status: StatusDone,
-		Detail: "sync habilitado en los DOS sentidos (sube 'shared' y baja lo del central) en " + cfgPath}
+		Detail: "sync habilitado en los DOS sentidos (sube 'shared' y baja lo del central) en " + cfgPath +
+			". Desde ahora lo que se guarde sin scope nace 'shared' y sube al central. Si hay sesiones abiertas, reabrilas para que la bajada arranque."}
 }

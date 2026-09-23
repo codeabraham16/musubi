@@ -34,6 +34,32 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   «subo y no bajo»; y la sangría fija rompe el caso de cuatro espacios. Sin caso de tabulador a
   propósito: YAML lo prohíbe en la sangría, así que ese config no parsea antes de que provision lo
   toque.*
+
+  **Y lo que encontró una revisión adversarial antes del merge**, que era grave: el editor por
+  expresiones regulares terminaba el bloque en la primera línea que no arrancara con sangría, así que
+  una **línea en blanco** o un comentario en columna 0 entre dos claves de `memory:` lo cortaban. El
+  editor no veía el `team_mode` de abajo, insertaba otro, y el config quedaba con la clave
+  **duplicada** —yaml.v3 lo rechaza, y el daemon no arranca— mientras el paso reportaba «hecho». Lo
+  mismo con un comentario como primer hijo (tomaba su sangría de molde), con `memory: {}` o
+  `memory: null`, y con `memory:` como última línea sin salto. Y la trampa de la línea en blanco
+  estaba en el bloque `sync:` desde antes de este cambio. Ahora: el bloque se ubica **recorriendo
+  líneas** —las vacías y los comentarios ENTRE dos hijos son del bloque, los del final no, porque
+  suelen ser de la sección siguiente—; un `memory:` con valor en la misma línea no se edita a ciegas;
+  y todo el resultado se **valida antes de escribir** con `config.Parse` —el mismo parser que después
+  lo lee, extraído de `config.Load` para esto—: tiene que parsear, dejar el sync y `team_mode`, y
+  **no cambiar nada más**. Si no pasa, no se escribe nada y el error dice cómo hacerlo a mano.
+
+  Y una decisión revertida: en una máquina que **ya** tenía el sync armado, la primera versión daba
+  vuelta `team_mode: false` sola. Ese camino antes jamás escribía el archivo, y un `false` ahí puede
+  ser una decisión —una consola de alcance acotado que sube sólo lo que promueve—: `team_mode` no es
+  sólo la llave de la bajada, también hace que todo lo que se guarde sin scope nazca `shared` y suba
+  al central. Ahora ese caso se **informa** (`StatusTodo`, con lo que cuesta encenderlo) y no se toca;
+  el alta de una máquina nueva sí lo enciende, y el mensaje dice las dos consecuencias y que hay que
+  reabrir las sesiones. *Once invariantes con su sabotaje, los once rojos. Uno salió verde la primera
+  vez por un agujero en la prueba: usaba un config sin `sync:`, el alta le agrega ese bloque al final,
+  y `memory:` dejaba de ser la última línea — la rama custodiada no se ejecutaba nunca. Y cada guarda
+  tiene su prueba sola, porque la validación final tapa a las de adelante: sabotear una seguía en
+  verde porque la validación rechazaba igual el resultado.*
 - **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
   de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
   sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,

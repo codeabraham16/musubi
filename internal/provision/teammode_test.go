@@ -83,23 +83,30 @@ memory:
 	}
 }
 
-// Una máquina que YA tenía sync saliente se quedaba en «subo y no bajo» para siempre: la salida
-// temprana de «ya configurado» ni miraba la bajada.
-func TestProvisionReparaElSuboYNoBajo(t *testing.T) {
-	dir := escribirCfg(t, `version: "1.0"
+// Una máquina que YA tenía sync saliente y la bajada apagada: se INFORMA, no se toca. La primera
+// versión lo reparaba sola, y la revisión adversarial mostró dos costos: este camino —que antes jamás
+// escribía el archivo— pasaba a reescribirlo (y con el editor por regex, a romperlo), y un
+// team_mode: false en una máquina ya configurada puede ser una decisión —una consola de alcance
+// acotado— que darlo vuelta convierte en «todo lo que se guarde sube al central».
+func TestProvisionInformaElSuboYNoBajoSinTocarElArchivo(t *testing.T) {
+	cfg := `version: "1.0"
 sync:
   enabled: true
   central_url: https://cerebro:10000
   auth_token_env: MUSUBI_TOKEN
 memory:
   team_mode: false
-`)
+`
+	dir := escribirCfg(t, cfg)
 	r := ensureSyncConfig(dir, "https://cerebro:10000", "MUSUBI_TOKEN", false)
-	if r.Status != StatusDone {
-		t.Fatalf("tenía que reparar la bajada; estado %q: %s", r.Status, r.Detail)
+	if r.Status != StatusTodo {
+		t.Fatalf("tenía que informarlo como pendiente; estado %q: %s", r.Status, r.Detail)
 	}
-	if cfg := cargar(t, dir); !cfg.Memory.TeamMode {
-		t.Error("con el sync ya encendido y la bajada apagada, provision tiene que encender la bajada")
+	if !strings.Contains(r.Detail, "NO BAJA") || !strings.Contains(r.Detail, "suba al central") {
+		t.Errorf("el aviso tiene que decir que no baja Y lo que cuesta encenderlo: %s", r.Detail)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, ".musubi", "config.yaml")); string(got) != cfg {
+		t.Fatalf("en una máquina ya configurada el archivo NO se toca:\n%s", got)
 	}
 }
 
