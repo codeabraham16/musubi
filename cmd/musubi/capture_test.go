@@ -49,6 +49,9 @@ type recordingStore struct {
 	byID map[string]string
 	// scopeByID: con qué scope se guardó cada commit (C5.2: 'shared' en team mode).
 	scopeByID map[string]string
+	// fallaTrasNGuardados corta la corrida al guardado N+1, que es lo más cerca que se puede
+	// simular de que el hook Stop se quede sin sus 10 s a mitad del lote.
+	fallaTrasNGuardados int
 }
 
 func (r *recordingStore) GetMeta(k string) (string, bool, error) {
@@ -65,6 +68,9 @@ func (r *recordingStore) SetMeta(k, v string) error {
 
 // byID simula la tabla: id → contenido. Es lo que permite testear el UPSERT del gemelo del squash.
 func (r *recordingStore) SaveObservationTyped(id, _, content string, _ float64, _, scope string, emb []float32) error {
+	if r.fallaTrasNGuardados > 0 && r.saved >= r.fallaTrasNGuardados {
+		return errors.New("se acabó el presupuesto del hook")
+	}
 	if r.byID == nil {
 		r.byID = map[string]string{}
 		r.scopeByID = map[string]string{}
@@ -130,11 +136,11 @@ func TestCaptureCommitsKeyedCursorPorRepo(t *testing.T) {
 		t.Fatal("dos repos distintos deben tener claves de cursor distintas")
 	}
 
-	if n, err := captureCommitsKeyed(store, repoA, nil, nil, memory.ScopeShared, keyA); err != nil || n != 1 {
+	if n, err := captureCommitsKeyed(store, repoA, nil, nil, memory.ScopeShared, keyA, 0); err != nil || n != 1 {
 		t.Fatalf("repo A: (%d, %v), esperaba 1", n, err)
 	}
 	// Repo B con SU propio cursor captura, sin que el HEAD de A lo bloquee.
-	if n, err := captureCommitsKeyed(store, repoB, nil, nil, memory.ScopeShared, keyB); err != nil || n != 1 {
+	if n, err := captureCommitsKeyed(store, repoB, nil, nil, memory.ScopeShared, keyB, 0); err != nil || n != 1 {
 		t.Fatalf("repo B: (%d, %v), esperaba 1 (el cursor de A no debe interferir)", n, err)
 	}
 	// Cada cursor apunta al HEAD de SU repo.
@@ -142,7 +148,7 @@ func TestCaptureCommitsKeyedCursorPorRepo(t *testing.T) {
 		t.Errorf("cursores cruzados: keyA=%q (quería a1), keyB=%q (quería b1)", store.meta[keyA], store.meta[keyB])
 	}
 	// Re-capturar A con su cursor: ya está al día ⇒ 0 nuevos.
-	if n, _ := captureCommitsKeyed(store, repoA, nil, nil, memory.ScopeShared, keyA); n != 0 {
+	if n, _ := captureCommitsKeyed(store, repoA, nil, nil, memory.ScopeShared, keyA, 0); n != 0 {
 		t.Errorf("re-captura de A: esperaba 0 (al día), obtuve %d", n)
 	}
 	// repoCursorKey es determinista y namespaced bajo la clave global.
@@ -311,12 +317,13 @@ type fakeGit struct {
 	head      string
 	headErr   error
 	commits   []commit
-	sinceWith string
+	sinceWith string // el `desde` que recibió CommitsEntre
+	hastaWith string // el `hasta` que recibió CommitsEntre
 }
 
 func (f *fakeGit) Head() (string, error) { return f.head, f.headErr }
-func (f *fakeGit) CommitsSince(last string) ([]commit, error) {
-	f.sinceWith = last
+func (f *fakeGit) CommitsEntre(desde, hasta string) ([]commit, error) {
+	f.sinceWith, f.hastaWith = desde, hasta
 	return f.commits, nil
 }
 
@@ -341,7 +348,7 @@ func TestCaptureFirstRunSavesHead(t *testing.T) {
 		t.Fatalf("esperaba 1 guardado, obtuve %d", n)
 	}
 	if g.sinceWith != "" {
-		t.Fatalf("primera corrida sin last: CommitsSince recibió %q", g.sinceWith)
+		t.Fatalf("primera corrida sin base: CommitsEntre recibió desde=%q", g.sinceWith)
 	}
 	if v, _, _ := e.GetMeta(metaCaptureLastCommit); v != "abc123" {
 		t.Fatalf("meta no avanzó: %q", v)
