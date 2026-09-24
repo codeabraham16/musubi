@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"time"
 )
 
 // ledger.go lleva un LEDGER de tokens por sesión: cuántos tokens inyectó Musubi
@@ -62,13 +63,28 @@ const maxSesionesEnLedger = 64
 // cambio de sesión»: medido en vivo, 262 tokens de una sola superficie para una sesión que llevaba
 // el día entero inyectando contexto de arranque, de turno y de PreToolUse.
 //
-// `Orden` es un número de escritura, no un reloj: desalojar por secuencia es determinista y no
-// depende de que dos máquinas tengan la hora igual.
+// `Orden` es un número de escritura: dice quién escribió después de quién sin depender del reloj.
+// `Ultima` es la hora (unix) de la última escritura de cada sesión, y sirve para una sola cosa:
+// saber cuáles llevan HORAS sin escribir (ver podar). La base es de una sola máquina, así que no hay
+// dos relojes que comparar.
 type ledgerStore struct {
 	Sesiones map[string]TokenLedger `json:"sesiones"`
 	Orden    map[string]int         `json:"orden"`
+	Ultima   map[string]int64       `json:"ultima,omitempty"`
 	Seq      int                    `json:"seq"`
 }
+
+// relojLedger es la hora que se estampa en cada escritura. Variable para que las pruebas puedan
+// armar sesiones «de ayer» sin esperar un día.
+var relojLedger = time.Now
+
+// sesionesRecientesProtegidas es cuántas de las últimas sesiones que escribieron no se desalojan
+// nunca, además de la recién escrita. inactivaTras es cuánto tiempo sin escribir hace que una sesión
+// se considere cerrada. Ver podar.
+const (
+	sesionesRecientesProtegidas = 8
+	inactivaTras                = 2 * time.Hour
+)
 
 // TokenLedger es el acumulado de tokens inyectados en la sesión activa.
 type TokenLedger struct {
@@ -200,6 +216,9 @@ type SesionLedger struct {
 	SessionID string `json:"session_id"`
 	Total     int    `json:"total"`
 	Orden     int    `json:"orden"`
+	// UltimaEscritura es la hora de su última escritura (RFC3339), vacía si no se sabe. Es lo que
+	// deja a un agente reconocer su propia sesión en la lista: la que escribió recién es la suya.
+	UltimaEscritura string `json:"ultima_escritura,omitempty"`
 }
 
 // LedgerSesiones lista todas las sesiones guardadas, de la escrita más recientemente a la más vieja.
@@ -212,7 +231,11 @@ func (e *DbEngine) LedgerSesiones() ([]SesionLedger, error) {
 	}
 	out := make([]SesionLedger, 0, len(st.Sesiones))
 	for id, l := range st.Sesiones {
-		out = append(out, SesionLedger{SessionID: id, Total: l.Total, Orden: st.Orden[id]})
+		sl := SesionLedger{SessionID: id, Total: l.Total, Orden: st.Orden[id]}
+		if u := st.Ultima[id]; u > 0 {
+			sl.UltimaEscritura = time.Unix(u, 0).UTC().Format(time.RFC3339)
+		}
+		out = append(out, sl)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Orden != out[j].Orden {
@@ -258,33 +281,91 @@ func (s ledgerStore) ultimaID() (string, bool) {
 	return mejorID, hay
 }
 
-// podar desaloja sesiones cuando se pasa del tope: la de MENOR total primero, y nunca la que se
-// acaba de escribir.
+// podar desaloja sesiones cuando se pasa del tope. Nunca la recién escrita ni las
+// sesionesRecientesProtegidas que escribieron último; entre las demás, primero las INACTIVAS (sin
+// escribir hace más de inactivaTras, la más vieja antes) y, si no hay, la de MENOR total.
 //
-// La primera versión desalojaba la menos recientemente escrita, y una revisión adversarial mostró el
-// costo: la terminal principal que lanza un workflow de sub-agentes queda quieta mientras ellos
-// escriben con sus propios ids, así que era la más vieja justo cuando más había gastado, y volvía de
-// la espera con la cuenta en cero. Las sesiones de sub-agentes son chicas y cortas; la de quien
-// trabaja acumula. Desalojar por total protege la cuenta que importa. La recién escrita se excluye
-// porque una sesión que acaba de nacer tiene total chico, y sin la excepción la desalojaría la misma
-// escritura que la creó.
+// Dos revisiones adversariales, dos formas de equivocarse, y cada criterio tapa una:
+//
+//   - La primera versión desalojaba la menos recientemente escrita: la terminal principal que lanza
+//     un workflow de sub-agentes queda quieta mientras ellos escriben con sus ids, así que era la más
+//     vieja justo cuando más había gastado. Por eso, entre las activas, se desaloja por total: las
+//     sesiones de sub-agentes son chicas y la de quien trabaja acumula.
+//   - Pero SÓLO por total, las sesiones más gordas de toda la historia —terminales de días
+//     anteriores, ya cerradas— se volvían inmortales, y toda sesión viva que todavía no las
+//     alcanzaba era la candidata apenas escribía cualquier otra: dos terminales abiertas se
+//     borraban la cuenta mutuamente en cada escritura (medido en la segunda ronda: A y B gastaron
+//     2.500 cada una y el ledger decía 0 y 500). Por eso las inactivas salen primero, y las últimas
+//     que escribieron no son candidatas: dos terminales que se alternan están siempre ahí.
+//
+// La recién escrita se excluye porque una sesión que acaba de nacer tiene total chico, y sin la
+// excepción la desalojaría la misma escritura que la creó.
 func (s *ledgerStore) podar(protegida string) {
 	for len(s.Sesiones) > maxSesionesEnLedger {
-		peorID, hay := "", false
+		protegidas := s.recientes(sesionesRecientesProtegidas)
+		protegidas[protegida] = true
+		limite := relojLedger().Add(-inactivaTras).Unix()
+		peorID, peorInactiva, hay := "", false, false
 		for id, l := range s.Sesiones {
-			if id == protegida {
+			if protegidas[id] {
 				continue
 			}
-			if !hay || desalojarAntes(l.Total, s.Orden[id], id, s.Sesiones[peorID].Total, s.Orden[peorID], peorID) {
-				peorID, hay = id, true
+			inactiva := s.Ultima[id] <= limite
+			switch {
+			case !hay:
+			case inactiva != peorInactiva:
+				if !inactiva {
+					continue // una inactiva ya ganó el lugar: una activa no le pasa adelante
+				}
+			case inactiva:
+				if !masViejaAntes(s.Ultima[id], s.Orden[id], id, s.Ultima[peorID], s.Orden[peorID], peorID) {
+					continue
+				}
+			default:
+				if !desalojarAntes(l.Total, s.Orden[id], id, s.Sesiones[peorID].Total, s.Orden[peorID], peorID) {
+					continue
+				}
 			}
+			peorID, peorInactiva, hay = id, inactiva, true
 		}
 		if !hay {
 			return
 		}
 		delete(s.Sesiones, peorID)
 		delete(s.Orden, peorID)
+		delete(s.Ultima, peorID)
 	}
+}
+
+// recientes devuelve las n sesiones con el número de escritura más alto.
+func (s ledgerStore) recientes(n int) map[string]bool {
+	ids := make([]string, 0, len(s.Sesiones))
+	for id := range s.Sesiones {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		if s.Orden[ids[i]] != s.Orden[ids[j]] {
+			return s.Orden[ids[i]] > s.Orden[ids[j]]
+		}
+		return ids[i] > ids[j]
+	})
+	out := make(map[string]bool, n+1)
+	for i := 0; i < n && i < len(ids); i++ {
+		out[ids[i]] = true
+	}
+	return out
+}
+
+// masViejaAntes ordena inactivas: la que escribió hace más tiempo primero; a igual hora, la de menor
+// orden; a igual orden, por id (salida determinista).
+func masViejaAntes(ultima int64, orden int, id string, ultimaB int64, ordenB int, idB string) bool {
+	if ultima != ultimaB {
+		return ultima < ultimaB
+	}
+	if orden != ordenB {
+		return orden < ordenB
+	}
+	return id < idB
 }
 
 // desalojarAntes ordena candidatas a desalojo: menor total primero; a igual total, la menos
@@ -346,6 +427,7 @@ func (e *DbEngine) LedgerAdd(sessionID, surface string, tokens int) (TokenLedger
 	st.Seq++
 	st.Sesiones[destino] = l
 	st.Orden[destino] = st.Seq
+	st.Ultima[destino] = relojLedger().Unix()
 	st.podar(destino)
 
 	if err := guardarLedgerStoreTx(tx, st); err != nil {
@@ -394,7 +476,7 @@ type lectorLedger interface {
 // Un `json.Unmarshal` del formato viejo sobre ledgerStore NO falla —ignora los campos que no conoce—
 // y deja `Sesiones` en nil: eso es lo que distingue un formato del otro.
 func leerLedgerStoreDe(c lectorLedger) (ledgerStore, error) {
-	vacio := ledgerStore{Sesiones: map[string]TokenLedger{}, Orden: map[string]int{}}
+	vacio := ledgerStore{Sesiones: map[string]TokenLedger{}, Orden: map[string]int{}, Ultima: map[string]int64{}}
 	if v, ok, err := leerValorMeta(c, metaTokenLedgerV2); err != nil {
 		return vacio, err
 	} else if ok && v != "" {
@@ -404,6 +486,9 @@ func leerLedgerStoreDe(c lectorLedger) (ledgerStore, error) {
 		}
 		if st.Orden == nil {
 			st.Orden = map[string]int{}
+		}
+		if st.Ultima == nil {
+			st.Ultima = map[string]int64{}
 		}
 		return st, nil
 	}
@@ -424,6 +509,7 @@ func leerLedgerStoreDe(c lectorLedger) (ledgerStore, error) {
 	return ledgerStore{
 		Sesiones: map[string]TokenLedger{viejo.SessionID: viejo},
 		Orden:    map[string]int{viejo.SessionID: 1},
+		Ultima:   map[string]int64{viejo.SessionID: relojLedger().Unix()},
 		Seq:      1,
 	}, nil
 }

@@ -55,6 +55,23 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   porque corre por MCP y no sabe cuál es la suya. *Doce invariantes con su sabotaje, los doce rojos,
   incluidos los de la primera ronda repetidos sobre el código nuevo; las pruebas del revisor quedaron
   como regresión (`ledger_revision_test.go`).*
+
+  **Una segunda ronda encontró tres más, uno de ellos el mismo defecto de fondo por otra puerta.**
+  (1) Desalojar SÓLO por menor total volvía inmortales a las sesiones más gordas de la historia
+  —terminales de días anteriores, ya cerradas— y toda sesión viva que todavía no las alcanzaba era la
+  candidata apenas escribía otra: con el ledger lleno, dos terminales abiertas se borraban la cuenta
+  en cada escritura (A y B gastaron 2.500 cada una y el ledger decía 0 y 500), y la principal volvía
+  a quedar en cero con la primera escritura de un sub-agente. Llenarlo no es raro: 32 sesiones en
+  menos de dos días en este repo. Ahora cada escritura estampa su hora, las **8 últimas** que
+  escribieron nunca se desalojan, y entre las demás salen **primero las inactivas** (más de 2 h sin
+  escribir, la más vieja antes) y recién después la de menor total. (2) La marca de «ya avisado» de
+  la alerta de presupuesto y de la brevedad seguía siendo UNA casilla con UN id: con la cuenta por
+  sesión el total ya no baja, así que dos terminales pasadas del techo se re-avisaban en cada
+  alternancia —una alerta en 20 turnos alternados en main, veinte con la rama—. La marca es ahora
+  por sesión, acotada a 64. (3) El `reset` sin `session_id` ponía en cero «la última que escribió»,
+  que suele ser OTRA terminal: ahora, con más de una sesión, se niega y lista las sesiones con la
+  hora de su última escritura, que es de donde el agente reconoce la suya. *Ocho invariantes nuevos
+  con su sabotaje, los ocho rojos, incluida la vuelta a la marca de casilla única.*
 - **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
   de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
   sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,

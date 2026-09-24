@@ -1838,7 +1838,28 @@ func (s *McpServer) toolTokens(raw json.RawMessage) (interface{}, *RpcError) {
 	sid := strings.TrimSpace(args.SessionID)
 	switch strings.TrimSpace(args.Action) {
 	case "reset":
-		// Pone en cero UNA sesión (la última que escribió), no todas: ver memory.LedgerReset.
+		// Pone en cero UNA sesión, no todas: ver memory.LedgerReset. Sin session_id y con más de una
+		// sesión en el ledger, SE NIEGA en vez de adivinar: esta tool corre por MCP y no conoce su
+		// propia sesión, y «la última que escribió» es a menudo OTRA terminal —su precheck cobra en
+		// cada edición—. La segunda revisión lo midió: el reset pedido desde A puso en cero la cuenta
+		// de B. La lista que acompaña la negativa trae la última escritura de cada una, que es de
+		// donde el agente reconoce la suya.
+		if sid == "" {
+			sesiones, err := s.engine.LedgerSesiones()
+			if err != nil {
+				return nil, rpcErrorf(codeInternalError, "error al leer las sesiones del ledger: %v", err)
+			}
+			if len(sesiones) > 1 {
+				var b strings.Builder
+				for i, se := range sesiones {
+					if i > 0 {
+						b.WriteString(", ")
+					}
+					fmt.Fprintf(&b, "%s (%d tokens, última escritura %s)", se.SessionID, se.Total, se.UltimaEscritura)
+				}
+				return nil, rpcErrorf(codeInvalidParams, "hay %d sesiones en el ledger y esta tool no sabe cuál es la tuya: pasá session_id. Sesiones, de la más reciente a la más vieja: %s", len(sesiones), b.String())
+			}
+		}
 		if err := s.engine.LedgerReset(sid); err != nil {
 			return nil, rpcErrorf(codeInternalError, "error al reiniciar el ledger: %v", err)
 		}
