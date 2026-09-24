@@ -138,13 +138,36 @@ func TestCaptureObjetivoPerdidoAbandonaLaTanda(t *testing.T) {
 type gitQueFallaCon struct {
 	fakeGit
 	hastaQueFalla string
+	falla         error // si no es nil, todo rango falla con esto (un error que NO es «objetivo perdido»)
 }
 
 func (g *gitQueFallaCon) CommitsEntre(desde, hasta string) ([]commit, error) {
 	if hasta == g.hastaQueFalla {
-		return nil, fmt.Errorf("fatal: bad revision '%s'", hasta)
+		return nil, fmt.Errorf("%w: fatal: bad revision '%s'", errObjetivoPerdido, hasta)
+	}
+	if g.falla != nil {
+		return nil, g.falla
 	}
 	return g.fakeGit.CommitsEntre(desde, hasta)
+}
+
+// Un error del rango que NO es «el objetivo ya no existe» —un timeout de git, un lock— conserva la
+// tanda con su progreso: tirarla obligaba a repasarla desde el principio, y la primera versión caía
+// además a capturar sólo el HEAD, dando por capturado todo lo del medio.
+//
+// Sabotaje que la pone roja: abandonar la tanda ante cualquier error.
+// arnes: archivo="cmd/musubi/capture.go"
+// arnes: de="\t\tif errors.Is(err, errObjetivoPerdido) {\n\t\t\t_ = store.SetMeta(objKey, \"\")"
+// arnes: a="\t\tif errors.Is(err, errObjetivoPerdido) || true {\n\t\t\t_ = store.SetMeta(objKey, \"\")"
+func TestCaptureUnErrorTransitorioConservaLaTanda(t *testing.T) {
+	store := &recordingStore{meta: map[string]string{claveObjetivo: "h9", claveHecho: "c3"}}
+	g := &gitQueFallaCon{fakeGit: fakeGit{head: "h9"}, falla: fmt.Errorf("git log: signal: killed (timeout)")}
+	if _, err := captureCommitsKeyed(store, g, nil, nil, memory.ScopeLocal, metaCaptureLastCommit, 25); err == nil {
+		t.Fatal("el error del rango tenía que avisarse")
+	}
+	if store.meta[claveObjetivo] != "h9" || store.meta[claveHecho] != "c3" {
+		t.Fatalf("un error transitorio tiró la tanda y su progreso: %v", store.meta)
+	}
 }
 
 // ─── Con repos git de verdad ────────────────────────────────────────────────────────────────────

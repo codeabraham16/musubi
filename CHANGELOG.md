@@ -55,6 +55,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   topológico). `--topo-order` queda, pero NO se custodia como invariante, a propósito: con la tanda
   congelada el orden no puede perder commits —se recorre la lista entera—, así que es orden causal de
   la memoria, no corrección; su sabotaje sigue verde y está documentado así.*
+
+  **Una segunda revisión encontró que la tanda también se podía trabar, y dos bordes más.** (1) Un
+  commit que falla SIEMPRE —un cuerpo que termina en `</content>`, que la guarda del sobre rechaza
+  mirándolo, o dos repos con el mismo primer commit que chocan de tenant en el central— congelaba la
+  tanda para siempre: la base no se movía y nada posterior entraba nunca, y en la primera corrida era
+  regresión contra `main`. Ahora esos errores (`ErrPayloadInvalido`, `ErrCrossTenant`) son
+  incapturables por construcción: el commit se avisa y se saltea, y sólo un error transitorio corta
+  la corrida. (2) Ante CUALQUIER error del rango, `CommitsEntre` caía a capturar sólo el HEAD y la
+  tanda se cerraba dando por capturado todo lo del medio sin mirarlo: base borrada por un gc y cuatro
+  commits nuevos, se capturaba uno. Ahora pregunta qué falló: si la base ya no existe toma una
+  VENTANA de 200 hacia atrás (repasar es UPSERT); si el objetivo ya no existe abandona la tanda; y
+  cualquier otro error —un timeout, un lock— la conserva con su progreso. (3) Un mensaje con los
+  separadores del parseo adentro fabricaba un registro con un SHA real repetido, y si el progreso
+  caía en esa segunda aparición el tramo se repetía para siempre: los repetidos se descartan. Contra
+  la historia real desde `e928e67` sigue convergiendo: 24 corridas, 412 commits. *Siete invariantes
+  nuevos con su sabotaje, los siete rojos; los de la primera ronda repetidos, rojos también. Uno
+  documentado como no custodiado: que el fallback pregunte si la base existe, porque git real no deja
+  hacer fallar el rango con la base viva sin simularlo.*
 - **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
   de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
   sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,

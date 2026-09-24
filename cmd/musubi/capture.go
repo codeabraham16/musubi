@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -112,6 +114,12 @@ func (g realGit) Head() (string, error) {
 }
 
 func (g realGit) CommitsEntre(desde, hasta string) ([]commit, error) {
+	return g.commitsEntre(desde, hasta, 1)
+}
+
+// commitsEntre es CommitsEntre con el tope de commits para el caso sin base: 1 en el camino normal
+// (la primera corrida sobre un repo), ventanaBasePerdida cuando la base de la tanda ya no existe.
+func (g realGit) commitsEntre(desde, hasta string, ventana int) ([]commit, error) {
 	desde, hasta = strings.TrimSpace(desde), strings.TrimSpace(hasta)
 	// --topo-order con --reverse: un padre sale SIEMPRE antes que sus hijos. El orden por defecto es
 	// por fecha, y con commits del mismo segundo (un rebase en lote) o relojes corridos entre
@@ -124,18 +132,67 @@ func (g realGit) CommitsEntre(desde, hasta string) ([]commit, error) {
 	if desde != "" {
 		args = append(args, desde+".."+hasta)
 	} else {
-		args = append(args, "-1", hasta)
+		if ventana < 1 {
+			ventana = 1
+		}
+		args = append(args, "-n", strconv.Itoa(ventana), hasta)
 	}
 	out, err := g.run(args...)
 	if err != nil {
-		// El rango puede fallar si `desde` ya no existe como objeto (un rebase seguido de gc): caer a
-		// capturar sólo `hasta` en vez de romper. Si falla `hasta`, no hay de dónde caer.
-		if desde != "" {
-			return g.CommitsEntre("", hasta)
+		// QUÉ FALLÓ decide qué se hace, y la primera versión no lo preguntaba: ante CUALQUIER error del
+		// rango caía a capturar sólo `hasta`, y la tanda se cerraba dando por capturado todo lo del
+		// medio sin mirarlo. La segunda revisión lo reprodujo: base borrada por un gc, cuatro commits
+		// nuevos, se capturó uno. Y un timeout de git con la base viva perdía igual.
+		if desde != "" && !g.existe(desde) {
+			// La base ya no existe (un rebase seguido de gc): no hay rango que pedir. Se toma una
+			// VENTANA hacia atrás desde `hasta` en vez de un solo commit. Repasar lo ya capturado no
+			// cuesta memoria: los ids son determinísticos por contenido y repasar es UPSERT.
+			return g.commitsEntre("", hasta, ventanaBasePerdida)
 		}
-		return nil, err
+		if !g.existe(hasta) {
+			return nil, fmt.Errorf("%w (%s): %v", errObjetivoPerdido, hasta, err)
+		}
+		return nil, err // la base y el objetivo existen: falló otra cosa, y la tanda se conserva
 	}
 	return parseCommits(out), nil
+}
+
+// ventanaBasePerdida es cuántos commits hacia atrás se toman cuando la base de la tanda ya no existe.
+const ventanaBasePerdida = 200
+
+// errObjetivoPerdido: el commit objetivo de la tanda ya no existe. Es el ÚNICO error del rango que
+// abandona la tanda; cualquier otro la conserva con su progreso.
+var errObjetivoPerdido = errors.New("el objetivo de la tanda ya no existe")
+
+// existe dice si un commit existe en el repo.
+func (g realGit) existe(sha string) bool {
+	_, err := g.run("cat-file", "-e", sha+"^{commit}")
+	return err == nil
+}
+
+// incapturable dice si un error de capturarUnCommit es del COMMIT y no del momento: un payload que
+// una guarda rechaza mirándolo (ErrPayloadInvalido; p. ej. un cuerpo que termina en `</content>`) o
+// un id que ya es de otro proyecto en el central (ErrCrossTenant; dos repos con el mismo primer
+// commit). Reintentarlos da lo mismo siempre.
+func incapturable(err error) bool {
+	return errors.Is(err, memory.ErrPayloadInvalido) || errors.Is(err, memory.ErrCrossTenant)
+}
+
+// sinSHARepetidos saca de la lista los registros con un SHA que ya apareció. En la salida de git un
+// commit sale una vez; un repetido sólo lo fabrica un mensaje que trae los separadores del parseo
+// adentro. Si el progreso (`:hecho`) caía en esa segunda aparición, la corrida siguiente lo
+// encontraba en la PRIMERA y rehacía el mismo tramo para siempre.
+func sinSHARepetidos(commits []commit) []commit {
+	vistos := make(map[string]bool, len(commits))
+	out := commits[:0:0]
+	for _, c := range commits {
+		if c.SHA != "" && vistos[c.SHA] {
+			continue
+		}
+		vistos[c.SHA] = true
+		out = append(out, c)
+	}
+	return out
 }
 
 // parseCommits parsea la salida de `git log` con separadores %x1e/%x1f + --name-only.
@@ -277,13 +334,16 @@ func captureCommitsKeyed(store captureStore, git gitLog, embed embedFunc, detect
 	}
 	commits, err := git.CommitsEntre(base, objetivo)
 	if err != nil {
-		// El objetivo ya no existe (un rebase seguido de gc): se abandona la tanda y la corrida
-		// siguiente arranca una nueva hacia el HEAD de ese momento. Lo ya capturado queda: los ids
-		// son determinísticos, así que repasar un commit lo actualiza en vez de duplicarlo.
-		_ = store.SetMeta(objKey, "")
-		_ = store.SetMeta(hechoKey, "")
+		// Sólo si el OBJETIVO ya no existe (un rebase seguido de gc) se abandona la tanda, y la corrida
+		// siguiente arranca una nueva hacia el HEAD de ese momento. Cualquier otro error —un timeout de
+		// git, un lock— la CONSERVA con su progreso: tirarla obligaba a repasarla desde el principio.
+		if errors.Is(err, errObjetivoPerdido) {
+			_ = store.SetMeta(objKey, "")
+			_ = store.SetMeta(hechoKey, "")
+		}
 		return 0, err
 	}
+	commits = sinSHARepetidos(commits)
 	desde := 0
 	if hecho := metaLimpia(store, hechoKey); hecho != "" {
 		for i, c := range commits {
@@ -305,7 +365,14 @@ func captureCommitsKeyed(store captureStore, git gitLog, embed embedFunc, detect
 		}
 		nuevo, err := capturarUnCommit(store, c, embed, detect, scope)
 		if err != nil {
-			return saved, err
+			if !incapturable(err) {
+				return saved, err // transitorio (BUSY, E/S): se reintenta desde acá en la corrida siguiente
+			}
+			// INCAPTURABLE POR CONSTRUCCIÓN: fallaría igual en cada corrida, y antes eso congelaba la
+			// tanda para siempre —la base no se movía y nada posterior entraba nunca—. Se avisa y se
+			// saltea, y el progreso avanza como con cualquier otro commit.
+			fmt.Fprintf(os.Stderr, "musubi capture: el commit %.7s no se puede guardar como memoria y se saltea: %v\n", c.SHA, err)
+			nuevo = 0
 		}
 		saved += nuevo
 		procesados++
