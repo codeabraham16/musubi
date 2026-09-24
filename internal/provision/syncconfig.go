@@ -25,7 +25,14 @@ import (
 // reemplazar el bloque `sync:` se los llevaría puestos.
 func bloqueDeNivelSuperior(content []byte, clave string) (ini, finCabecera, fin int, ok bool) {
 	cab := []byte(clave + ":")
-	for off := 0; off < len(content); off += largoDeLinea(content[off:]) {
+	// Un BOM UTF-8 al principio —PowerShell 5.1 lo escribe con -Encoding utf8, y yaml.v3 lo acepta—
+	// escondía la cabecera de la PRIMERA línea: el editor no veía ese bloque, agregaba otro al final y
+	// la clave quedaba duplicada. El recorrido arranca después del BOM, así que un reemplazo lo conserva.
+	inicio := 0
+	if bytes.HasPrefix(content, []byte("\xEF\xBB\xBF")) {
+		inicio = 3
+	}
+	for off := inicio; off < len(content); off += largoDeLinea(content[off:]) {
 		linea := content[off : off+largoDeLinea(content[off:])]
 		if !bytes.HasPrefix(linea, cab) {
 			continue
@@ -161,12 +168,77 @@ func validarEdicion(original, editado []byte, centralURL string) error {
 	if !despues.Memory.TeamMode {
 		return fmt.Errorf("la edición no dejaba memory.team_mode en true")
 	}
-	antes.Sync = despues.Sync
+	// Se eximen SÓLO los campos que el alta escribe, no el bloque entero. La primera versión copiaba
+	// todo Sync y por eso no veía el borrado de lo que el usuario había puesto ahí: la segunda revisión
+	// lo reprodujo con un `sync:` deshabilitado que traía `tls_server_name` (sin él, con la IP en la
+	// URL, el handshake falla y la subida queda pending para siempre) y `flota_vivo: false` (sin él,
+	// la telemetría se ENCIENDE contra un opt-out explícito), y el paso reportaba «hecho».
+	antes.Sync.Enabled = despues.Sync.Enabled
+	antes.Sync.CentralURL = despues.Sync.CentralURL
+	antes.Sync.AuthTokenEnv = despues.Sync.AuthTokenEnv
+	antes.Sync.DrainIntervalSeconds = despues.Sync.DrainIntervalSeconds
+	antes.Sync.AllowInsecureToken = despues.Sync.AllowInsecureToken
 	antes.Memory.TeamMode = despues.Memory.TeamMode
 	if !reflect.DeepEqual(antes, despues) {
-		return fmt.Errorf("la edición cambiaba algo más que el sync y memory.team_mode")
+		return fmt.Errorf("la edición cambiaba algo más que lo que el alta escribe (enabled, central_url, auth_token_env, drain_interval_seconds, allow_insecure_token y memory.team_mode)")
 	}
 	return nil
+}
+
+// clavesQueEscribeElAlta son los hijos de `sync:` que el alta pone; los demás son del usuario.
+var clavesQueEscribeElAlta = []string{"enabled", "central_url", "auth_token_env", "drain_interval_seconds", "allow_insecure_token"}
+
+// bloqueSyncConservando arma el bloque `sync:` nuevo a partir del existente: las líneas que el alta
+// escribe, más TODOS los hijos del bloque viejo que no son esas claves —`tls_server_name`,
+// `flota_vivo`, `batch_size`, comentarios—, con la sangría y el fin de línea del archivo.
+//
+// POR QUÉ NO SE REEMPLAZA ENTERO. Un `sync:` deshabilitado no es siempre el default del init: puede
+// traer ajustes del usuario, y reemplazarlo los borraba. `tls_server_name` es el que deja discar la
+// IP del tailnet —sin él el handshake falla y la subida queda pending para siempre—, y
+// `flota_vivo: false` es un opt-out de telemetría que el reemplazo daba vuelta en silencio.
+func bloqueSyncConservando(cabecera, hijos []byte, lineas []string) []byte {
+	eol := finDeLinea(cabecera)
+	if eol == "" {
+		eol = "\n"
+	}
+	var sangria []byte
+	for p := 0; p < len(hijos); p += largoDeLinea(hijos[p:]) {
+		l := hijos[p : p+largoDeLinea(hijos[p:])]
+		if t := bytes.TrimSpace(l); len(t) > 0 && t[0] != '#' {
+			sangria = l[:len(l)-len(bytes.TrimLeft(l, " \t"))]
+			break
+		}
+	}
+	if sangria == nil {
+		sangria = []byte("  ")
+	}
+	out := []byte("# Sync saliente del cerebro híbrido: sube solo la memoria 'shared' al cerebro central." + eol + "sync:" + eol)
+	for _, l := range lineas {
+		out = append(append(append(out, sangria...), l...), eol...)
+	}
+	for p := 0; p < len(hijos); p += largoDeLinea(hijos[p:]) {
+		l := hijos[p : p+largoDeLinea(hijos[p:])]
+		ind := l[:len(l)-len(bytes.TrimLeft(l, " \t"))]
+		t := bytes.TrimSpace(l)
+		if bytes.Equal(ind, sangria) && esClaveDelAlta(t) {
+			continue
+		}
+		if !bytes.HasSuffix(l, []byte("\n")) {
+			l = append(append([]byte{}, l...), eol...)
+		}
+		out = append(out, l...)
+	}
+	return out
+}
+
+// esClaveDelAlta dice si una línea (sin sangría) es uno de los hijos que el alta escribe.
+func esClaveDelAlta(t []byte) bool {
+	for _, c := range clavesQueEscribeElAlta {
+		if bytes.HasPrefix(t, []byte(c+":")) {
+			return true
+		}
+	}
+	return false
 }
 
 // ensureSyncConfig deja el sync del .musubi/config.yaml del proyecto en los DOS sentidos: el bloque
@@ -217,33 +289,22 @@ func ensureSyncConfig(projectDir, brain, tokenEnv string, dryRun bool) StepResul
 		return StepResult{Name: "sync-config", Status: StatusError,
 			Detail: "la dirección del cerebro no es usable y no se escribe nada: " + brain + " (se espera host:port, http://host:port o https://host:port)"}
 	}
-	lineaInsegura := ""
+	lineas := []string{"enabled: true", "central_url: " + base, "auth_token_env: " + tokenEnv, "drain_interval_seconds: 30"}
 	if strings.HasPrefix(base, "http://") {
-		lineaInsegura = "  allow_insecure_token: true  # http sobre el tailnet (WireGuard ya cifra el transporte)\n"
+		lineas = append(lineas, "allow_insecure_token: true  # http sobre el tailnet (WireGuard ya cifra el transporte)")
 	}
-	block := fmt.Sprintf("# Sync saliente del cerebro híbrido: sube solo la memoria 'shared' al cerebro central.\n"+
-		"sync:\n"+
-		"  enabled: true\n"+
-		"  central_url: %s\n"+
-		"  auth_token_env: %s\n"+
-		"  drain_interval_seconds: 30\n"+
-		"%s",
-		base, tokenEnv, lineaInsegura)
-
-	if dryRun {
-		return StepResult{Name: "sync-config", Status: StatusTodo,
-			Detail: "habilitaría el sync en los DOS sentidos (sube 'shared' al cerebro y baja lo del central) en " + cfgPath}
-	}
-
-	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
-		return StepResult{Name: "sync-config", Status: StatusError, Detail: "no se pudo crear .musubi/: " + err.Error()}
+	block := "# Sync saliente del cerebro híbrido: sube solo la memoria 'shared' al cerebro central.\nsync:\n"
+	for _, l := range lineas {
+		block += "  " + l + "\n"
 	}
 
 	// Si ya hay un bloque `sync:` (el deshabilitado del default), se REEMPLAZA en su lugar para no
-	// duplicar la clave. Si no hay ninguno, se anexa al final.
+	// duplicar la clave, CONSERVANDO los hijos que el alta no escribe (ver bloqueSyncConservando). Si
+	// no hay ninguno, se anexa al final.
 	content := append([]byte{}, existing...)
-	if ini, _, fin, ok := bloqueDeNivelSuperior(content, "sync"); ok {
-		content = append(append(append([]byte{}, content[:ini]...), block...), content[fin:]...)
+	if ini, finCab, fin, ok := bloqueDeNivelSuperior(content, "sync"); ok {
+		nuevo := bloqueSyncConservando(content[ini:finCab], content[finCab:fin], lineas)
+		content = append(append(append([]byte{}, content[:ini]...), nuevo...), content[fin:]...)
 	} else {
 		if len(bytes.TrimSpace(content)) == 0 {
 			content = []byte("# Configuración de Musubi (bootstrap por `musubi provision`).\n")
@@ -261,6 +322,16 @@ func ensureSyncConfig(projectDir, brain, tokenEnv string, dryRun bool) StepResul
 	}
 	if err := validarEdicion(existing, content, base); err != nil {
 		return StepResult{Name: "sync-config", Status: StatusError, Detail: err.Error() + "." + manual}
+	}
+
+	// El dry-run va DESPUÉS de armar y validar la edición, que es todo en memoria: antes prometía
+	// «habilitaría el sync» para configs que la corrida real rechazaba (lo encontró la revisión).
+	if dryRun {
+		return StepResult{Name: "sync-config", Status: StatusTodo,
+			Detail: "habilitaría el sync en los DOS sentidos (sube 'shared' al cerebro y baja lo del central) en " + cfgPath}
+	}
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		return StepResult{Name: "sync-config", Status: StatusError, Detail: "no se pudo crear .musubi/: " + err.Error()}
 	}
 	if err := os.WriteFile(cfgPath, content, 0o644); err != nil {
 		return StepResult{Name: "sync-config", Status: StatusError, Detail: "no se pudo escribir " + cfgPath + ": " + err.Error()}

@@ -60,6 +60,20 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   y `memory:` dejaba de ser la última línea — la rama custodiada no se ejecutaba nunca. Y cada guarda
   tiene su prueba sola, porque la validación final tapa a las de adelante: sabotear una seguía en
   verde porque la validación rechazaba igual el resultado.*
+
+  **Una segunda revisión encontró que la red de seguridad tenía un punto ciego.** La validación
+  eximía el bloque `sync:` ENTERO, así que no veía lo que el reemplazo borraba de un `sync:`
+  deshabilitado que traía ajustes del usuario: `tls_server_name` —sin él, con la IP en la URL, el
+  handshake falla y la subida queda `pending` para siempre— y `flota_vivo: false` —un opt-out de
+  telemetría que quedaba ENCENDIDO—, con el paso en «hecho». Ahora el bloque se reemplaza
+  **conservando** todos los hijos que el alta no escribe (con la sangría y el fin de línea del
+  archivo), y la validación exime sólo los cinco campos que el alta pone. Además el dry-run arma y
+  valida la edición —todo en memoria— antes de prometer nada: decía «habilitaría el sync» para
+  configs que la corrida real rechazaba. Y un BOM UTF-8 al principio (PowerShell 5.1) ya no esconde
+  la cabecera de la primera línea. *Cinco invariantes nuevos con su sabotaje, los cinco rojos,
+  incluida la vuelta a la validación de la primera ronda. De los once de la primera, uno quedó
+  equivalente y se documenta como no custodiado: que los comentarios del final cuenten o no como
+  del bloque ya no cambia el resultado, porque el bloque se conserva y se re-emiten en el mismo orden.*
 - **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
   de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
   sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,
