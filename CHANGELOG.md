@@ -47,6 +47,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   los cuatro del reclamo repetidos por el cambio en el `WHERE`: siete de siete rojos. Uno de los
   repetidos salió VERDE la primera vez, y no por el código: el ancla del sabotaje (`if !ok {`)
   aparecía tres veces en el archivo y el reemplazo cayó en otra función. Con un ancla única, rojo.*
+
+  **Una segunda revisión encontró que soltar no alcanzaba, y cuatro cosas más.** (1) Soltar sólo
+  cubría las fallas RÁPIDAS: si el `Pull` del dueño muere por *timeout* —30 s, igual que el tick por
+  defecto—, al soltar el tick siguiente ya está encolado en el `Ticker` y lo retoma en microsegundos,
+  y la terminal sana, que tickea en otra fase, lo encontraba tomado siempre: cero pedidos en seis
+  ticks, y en `main` la misma prueba bajaba. Ahora quien falla además **cede dos ticks enteros** sin
+  reclamar. (2) La vectorización de lo bajado dependía del embebedor del dueño: si arrancó léxico,
+  lo bajado quedaba sin vector aunque otra terminal semántica estuviera viva. Ahora quien no es dueño
+  mira el cursor —una lectura local por tick— y si avanzó, vectoriza él. (3) Un cierre ordenado no
+  soltaba el candado, y la terminal que seguía abierta pasaba hasta dos minutos y medio sin bajar: el
+  scheduler lo suelta al salir, y `runDaemon` lo suelta además de forma sincrónica antes de cerrar la
+  base. (4) El dueño renueva **antes de cada página** y corta si otro lo tomó: veinte páginas con su
+  timeout duran más que el lease. (5) Un dueño con `|` trababa el candado para siempre: se rechaza, y
+  el valor se lee desde la derecha —el vencimiento tiene ancho fijo—, así que ni uno viejo traba.
+  *Siete invariantes nuevos con su sabotaje, los siete rojos; las cuatro pruebas de los revisores
+  quedaron como regresión. Uno documentado como no custodiado a propósito: leer el dueño por el
+  primer `|` o desde la derecha es equivalente para dueños válidos. El `SoltarBajada` sincrónico de
+  `runDaemon` no tiene prueba propia: es el cinturón del que suelta el scheduler, que sí la tiene.*
 - **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
   de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
   sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,

@@ -3,6 +3,7 @@ package memory
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // metaBajadaLease es la fila de `meta` que dice qué proceso está bajando memoria del central.
@@ -28,9 +29,13 @@ const metaBajadaLease = "sync:inbound_lease"
 // Quien lo tiene lo RENUEVA en cada tick en vez de soltarlo: soltarlo al terminar dejaría que el
 // otro proceso bajara en SU tick siguiente, y los dos volverían a alternarse bajando lo mismo. Si el
 // dueño muere, el candado vence solo y otro lo toma.
+//
+// El valor se lee DESDE LA DERECHA: el vencimiento es un datetime de ancho fijo (19 caracteres) y el
+// dueño es todo lo anterior al último '|'. Partir por el PRIMER '|' —la primera versión— confundía
+// dueño y vencimiento en cuanto el dueño traía un '|', y el candado quedaba trabado para siempre.
 func (e *DbEngine) ReclamarBajada(dueno string, leaseSeconds int) (bool, error) {
-	if dueno == "" {
-		return false, fmt.Errorf("ReclamarBajada: dueño vacío")
+	if err := validarDuenoBajada(dueno); err != nil {
+		return false, err
 	}
 	if leaseSeconds <= 0 {
 		leaseSeconds = 120
@@ -42,8 +47,9 @@ func (e *DbEngine) ReclamarBajada(dueno string, leaseSeconds int) (bool, error) 
 		SET value = excluded.value, updated_at = excluded.updated_at
 		WHERE meta.value = ''
 		   OR instr(meta.value, '|') = 0
-		   OR substr(meta.value, 1, instr(meta.value, '|') - 1) = ?
-		   OR substr(meta.value, instr(meta.value, '|') + 1) <= datetime('now')`,
+		   OR length(meta.value) < 21
+		   OR substr(meta.value, 1, length(meta.value) - 20) = ?
+		   OR substr(meta.value, -19) <= datetime('now')`,
 		metaBajadaLease, dueno, strconv.Itoa(leaseSeconds), dueno)
 	if err != nil {
 		return false, fmt.Errorf("error al reclamar la bajada: %w", err)
@@ -67,9 +73,12 @@ func (e *DbEngine) ReclamarBajada(dueno string, leaseSeconds int) (bool, error) 
 // Soltar en vez de dejar vencer: vencer tarda el lease entero (cuatro ticks), y en ese rato nadie
 // baja. Soltado, la terminal sana lo toma en su tick siguiente.
 func (e *DbEngine) SoltarBajada(dueno string) error {
+	if err := validarDuenoBajada(dueno); err != nil {
+		return err
+	}
 	_, err := e.db.Exec(`
 		UPDATE meta SET value = '', updated_at = datetime('now')
-		WHERE key = ? AND substr(value, 1, instr(value, '|') - 1) = ?`,
+		WHERE key = ? AND length(value) >= 21 AND substr(value, 1, length(value) - 20) = ?`,
 		metaBajadaLease, dueno)
 	if err != nil {
 		return fmt.Errorf("error al soltar la bajada: %w", err)
@@ -93,6 +102,21 @@ func (e *DbEngine) AvanzarCursorBajada(key string, v int64) error {
 		key, strconv.FormatInt(v, 10))
 	if err != nil {
 		return fmt.Errorf("error al avanzar el cursor de la bajada: %w", err)
+	}
+	return nil
+}
+
+// validarDuenoBajada rechaza el dueño vacío y el que contiene '|'. El valor guardado es
+// «dueño|vence» y se parte por el PRIMER '|': con un dueño «a|b» se leería el dueño «a» —que no puede
+// renovar ni soltar— y el vencimiento «b|…», que como texto nunca queda atrás de una fecha. El
+// candado quedaba trabado para todos, para siempre. Hoy el dueño es un uuid y no llega a pasar, pero
+// la función es exportada.
+func validarDuenoBajada(dueno string) error {
+	if dueno == "" {
+		return fmt.Errorf("candado de la bajada: dueño vacío")
+	}
+	if strings.ContainsRune(dueno, '|') {
+		return fmt.Errorf("candado de la bajada: el dueño %q contiene '|', el separador del valor guardado", dueno)
 	}
 	return nil
 }

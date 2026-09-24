@@ -574,6 +574,14 @@ func runDaemon() {
 		server.Start()
 	}()
 
+	// Al salir, antes de los defers que cierran la base: parar los ciclos y soltar el candado de la
+	// bajada, así la terminal que sigue abierta no espera un lease entero para bajar. El scheduler
+	// también lo suelta al salir, pero desde su goroutine, y puede llegar con la base ya cerrada.
+	defer func() {
+		stopMaint()
+		server.SoltarBajada()
+	}()
+
 	select {
 	case sig := <-sigs:
 		fmt.Fprintf(os.Stderr, "musubi: señal %v recibida, cerrando\n", sig)
