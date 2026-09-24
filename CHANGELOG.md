@@ -260,6 +260,48 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   incluida la vuelta a la validación de la primera ronda. De los once de la primera, uno quedó
   equivalente y se documenta como no custodiado: que los comentarios del final cuenten o no como
   del bloque ya no cambia el resultado, porque el bloque se conserva y se re-emiten en el mismo orden.*
+- **Los manuales del agente se ponen al día solos al arrancar cada sesión.** Los de `.musubi/skills/`
+  y su copia en `.claude/skills/` los escribía **sólo** `musubi setup`: medido el 2026-09-23, once de
+  los doce de este repo tenían fecha del 2026-08-10, 44 días atrás, y nada los refrescaba. Un binario
+  nuevo con manuales corregidos dejaba los viejos en disco, y como `.claude/` está en el `.gitignore`
+  tampoco llegaban por un pull. La lógica para refrescar sin pisar lo editado a mano ya existía
+  (`writeCognitiveSkills` con `ManagedChecksum`, `exportarSkillsAlAgente` que preserva los SKILL.md
+  tocados); faltaba el disparador, y ahora lo es el hook `SessionStart`.
+
+  Corre en cada arranque, así que va detrás de una **huella** guardada en la meta de la base: si no
+  cambió, no se toca nada. La huella mide **qué** se escribiría —el checksum de cada manual cognitivo
+  con el stack de hoy, la plantilla del `SKILL.md` y el listado de `.musubi/skills/`—, no **quién**:
+  así otro build con los mismos manuales no reescribe nada, uno con otro texto sí aunque comparta
+  versión y commit, y un cambio de stack (un repo que suma JS) también refresca. El stack se detecta
+  una sola vez por arranque, compartido con el resto del hook. Sólo actúa en proyectos que ya tienen
+  `.musubi/skills/` —el hook corre en cualquier repo y crearlos sería imponerlos—, y la huella se
+  guarda sólo si todo salió bien, así una falla a mitad se reintenta en la sesión siguiente.
+
+  **Lo que una revisión adversarial le corrigió antes de publicarlo**, con las tres lentes. (1) La
+  primera versión guardaba la huella en `.musubi/skills-huella`, que git no ignoraba: **cada build
+  del repo salía `-sucio`**. Ahora vive en la base. (2) Medía la identidad del binario, y dos builds
+  sucios del mismo commit —o cualquiera desde un worktree anidado, que estampa el commit del repo
+  padre— daban la misma huella con otro texto de manual: el síntoma original, en la máquina donde
+  más se compila. (3) Un `name: ../../..` en un yaml de `.musubi/skills/` —que en otros repos viaja
+  por git— hacía que el arranque escribiera un `SKILL.md` **fuera del proyecto**, y en Windows
+  alcanzaba para instalar una skill global del usuario: ahora un nombre que no es slug no se exporta
+  y el reporte lo dice. (4) Un manual borrado a mano resucitaba en el arranque siguiente: el
+  refresco automático recuerda qué manuales escribió alguna vez y no recrea uno que falta, aunque
+  sí crea uno que el binario trae por primera vez (`musubi setup` sigue creándolos todos). (5) Un
+  binario más viejo reescribía lo que había dejado uno más nuevo, y con dos versiones conviviendo se
+  pisaban en cada arranque: ahora no toca lo de un release posterior (`dev` no se compara). (6) La
+  huella se tomaba después del export, y una skill que llegaba en esa ventana quedaba marcada como
+  procesada sin exportarse. (7) La escritura atómica fallaba en Windows donde `os.WriteFile` andaba
+  —renombrar sobre un archivo que otro proceso tiene abierto—: reintenta y, si sigue bloqueado,
+  escribe en el lugar como antes; y respeta un manual que es symlink en vez de reemplazarlo.
+
+  Con varias terminales arrancando a la vez dos refrescos pueden escribir el mismo manual, así que
+  las escrituras son **atómicas** (temporal en el mismo directorio + rename): `escribirArchivoAtomico`,
+  extraída de `writeJSONAtomic` del catálogo, que ahora la usa. *Catorce invariantes con su sabotaje,
+  los catorce rojos, incluido el del disparador: que el hook de arranque de verdad llame al refresco,
+  que era lo que faltaba al principio y ninguna prueba del refresco en sí podía ver. Pendiente, sin
+  reproducir: el hook está registrado sólo para `startup`, así que `claude --resume` después de
+  instalar un binario arranca con los manuales viejos hasta la sesión siguiente.*
 - **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
   de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
   sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,
