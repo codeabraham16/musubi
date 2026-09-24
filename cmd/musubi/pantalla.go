@@ -294,19 +294,21 @@ func idRustdeskLocal() string {
 	return id
 }
 
+var avisosDados sync.Map
+
 // avisarUnaVez imprime un aviso a stderr la PRIMERA vez que se ve cada motivo.
 //
 // El agente late cada pocos segundos; un aviso por latido llena el journal y deja de leerse, que
 // es exactamente el mismo resultado que no avisar. Una vez por motivo y por vida del proceso: si
 // el problema se arregla y vuelve, el reinicio del agente lo vuelve a decir.
-var avisosDados sync.Map
-
 func avisarUnaVez(motivo, formato string, args ...any) {
 	if _, ya := avisosDados.LoadOrStore(motivo, true); ya {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "%s %s\n", cYellow("!"), fmt.Sprintf(formato, args...))
 }
+
+var avisosConReloj sync.Map
 
 // avisarCada es avisarUnaVez para los problemas que DURAN.
 //
@@ -319,8 +321,6 @@ func avisarUnaVez(motivo, formato string, args ...any) {
 // Se separó de avisarUnaVez en vez de agregarle un parámetro porque son dos decisiones distintas
 // y conviene que se lean distinto en el punto de uso: una dice «esto es así», la otra «esto sigue
 // roto».
-var avisosConReloj sync.Map
-
 func avisarCada(motivo string, cada time.Duration, formato string, args ...any) {
 	ahora := time.Now()
 	if previo, hab := avisosConReloj.Load(motivo); hab {

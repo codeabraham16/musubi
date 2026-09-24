@@ -14,9 +14,6 @@ import (
 	"time"
 )
 
-// cerebroFalso levanta un /api/stream de mentira que emite lo que se le pase y registra cómo lo
-// llamaron. Devuelve la URL base y un puntero a lo que vio del pedido.
-//
 // El handler corre en la goroutine del servidor y el test lee desde la suya, así que lo que vio
 // va bajo mutex y sólo se lee por esperar(), que primero bloquea hasta que el pedido llegó de
 // verdad. Sin las dos cosas el test es una carrera: ver el defecto que esto arregla en R1.
@@ -44,6 +41,8 @@ func (p *pedidoVisto) esperar(t *testing.T, plazo time.Duration) pedidoVisto {
 	return pedidoVisto{auth: p.auth, query: p.query, ruta: p.ruta}
 }
 
+// cerebroFalso levanta un /api/stream de mentira que emite lo que se le pase y registra cómo lo
+// llamaron. Devuelve la URL base y un puntero a lo que vio del pedido.
 func cerebroFalso(t *testing.T, emitir func(w http.ResponseWriter, rc *http.ResponseController)) (string, *pedidoVisto) {
 	t.Helper()
 	visto := &pedidoVisto{llego: make(chan struct{})}
