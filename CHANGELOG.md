@@ -8,6 +8,70 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
+  El ledger era UNA casilla de `meta` que guardaba UNA sesión, y `LedgerAdd` la reiniciaba entera
+  con `if sessionID != l.SessionID`. Con varias terminales sobre el mismo cuaderno —10 procesos
+  `musubi` en davantis-1, más los sub-agentes, que traen su propio id— cada sesión que escribía
+  borraba la de todas. Medido el 2026-09-23: `musubi_tokens` decía **262 tokens de una sola
+  superficie** para una sesión que llevaba el día entero inyectando contexto de arranque, de turno
+  y de PreToolUse. El número no era «lo que gastó esta sesión» sino «lo que sobrevivió desde el
+  último cambio de sesión».
+
+  Ahora el mismo valor de `meta` guarda una entrada **por sesión**, con tope de 16 y desalojo de la
+  menos recientemente escrita (por número de escritura, no por reloj: determinista y sin depender
+  de que dos máquinas tengan la hora igual). `LedgerStatus` devuelve la sesión escrita más
+  recientemente —con una sola terminal, exactamente lo de antes— y `LedgerStatusDe(id)` una
+  concreta. El caller **sin** id (el camino MCP, que no ve el id del hook) sigue acumulando en la
+  última que escribió, que es el contrato de siempre: lo cazó `TestLedgerEmptySessionKeepsCurrent`
+  cuando la primera versión lo mandaba a una cuenta aparte.
+
+  **La suma corre dentro de una transacción** (el DSN ya lleva `_txlock=immediate`). Con la casilla
+  única la carrera costaba un incremento; ahora el valor lleva a todas las sesiones, así que una
+  escritura pisada costaría la cuenta entera de otra terminal. Y el **formato viejo se migra** en
+  vez de descartarse, o instalar este binario pondría en cero la sesión en curso sin decir nada.
+
+  *Cuatro invariantes, cada uno con su sabotaje corrido: volver a borrar al cambiar de sesión deja a
+  la sesión anterior en `Total:0`; quitar la migración lee el formato viejo como vacío; quitar el
+  tope deja 20 sesiones de 16; y leer y escribir SIN transacción hace que cuatro goroutines
+  concurrentes se coman sumas — **8 de 8 corridas rojas sin la transacción, 5 de 5 verdes con
+  ella**, así que la prueba de concurrencia no pasa por suerte. `TestLedgerResetsOnNewSession` se
+  renombró a `TestLedgerSesionNuevaArrancaDeCero`: su nombre describía el defecto como contrato, y
+  como sólo miraba el valor de la sesión nueva, pasaba igual con el arreglo y sin él.*
+
+  **Y lo que encontró una revisión adversarial antes del merge**, cinco cosas, dos de ellas peores
+  que el defecto original. (1) La alerta de presupuesto y la brevedad automática de una terminal
+  leían «la última sesión que escribió», así que la terminal A recibía «esta sesión (9000 tokens)
+  superó el presupuesto» habiendo gastado 100: ahora el hook lee **su propia** cuenta
+  (`LedgerStatusDe`), que es la que conoce. (2) Un servidor MCP con el binario **viejo** —son procesos
+  largos que siguen vivos después de instalar— leía el formato nuevo como un ledger vacío y lo pisaba:
+  todas las sesiones en cero, en cada hidratación. El formato nuevo vive ahora en **otra clave**
+  (`token_ledger_v2`); la vieja sólo se lee, para migrar, y el binario viejo pisa únicamente su
+  casilla. (3) El `reset` de `musubi_tokens` vaciaba el valor entero —una terminal borrando la cuenta
+  de todas, el mismo defecto por otra puerta—: ahora pone en cero **una**. (4) El desalojo por
+  antigüedad sacaba a la terminal principal mientras esperaba a sus sub-agentes: ahora el tope es 64 y
+  se desaloja por **menor total**, nunca la recién escrita. (5) Leer con 0 tokens —así pregunta
+  precheck por su marca— escribía y ocupaba un lugar: ahora es una lectura pura. `musubi_tokens`
+  suma la lista de `sesiones` y un `session_id` opcional para reportar o resetear una en concreto,
+  porque corre por MCP y no sabe cuál es la suya. *Doce invariantes con su sabotaje, los doce rojos,
+  incluidos los de la primera ronda repetidos sobre el código nuevo; las pruebas del revisor quedaron
+  como regresión (`ledger_revision_test.go`).*
+
+  **Una segunda ronda encontró tres más, uno de ellos el mismo defecto de fondo por otra puerta.**
+  (1) Desalojar SÓLO por menor total volvía inmortales a las sesiones más gordas de la historia
+  —terminales de días anteriores, ya cerradas— y toda sesión viva que todavía no las alcanzaba era la
+  candidata apenas escribía otra: con el ledger lleno, dos terminales abiertas se borraban la cuenta
+  en cada escritura (A y B gastaron 2.500 cada una y el ledger decía 0 y 500), y la principal volvía
+  a quedar en cero con la primera escritura de un sub-agente. Llenarlo no es raro: 32 sesiones en
+  menos de dos días en este repo. Ahora cada escritura estampa su hora, las **8 últimas** que
+  escribieron nunca se desalojan, y entre las demás salen **primero las inactivas** (más de 2 h sin
+  escribir, la más vieja antes) y recién después la de menor total. (2) La marca de «ya avisado» de
+  la alerta de presupuesto y de la brevedad seguía siendo UNA casilla con UN id: con la cuenta por
+  sesión el total ya no baja, así que dos terminales pasadas del techo se re-avisaban en cada
+  alternancia —una alerta en 20 turnos alternados en main, veinte con la rama—. La marca es ahora
+  por sesión, acotada a 64. (3) El `reset` sin `session_id` ponía en cero «la última que escribió»,
+  que suele ser OTRA terminal: ahora, con más de una sesión, se niega y lista las sesiones con la
+  hora de su última escritura, que es de donde el agente reconoce la suya. *Ocho invariantes nuevos
+  con su sabotaje, los ocho rojos, incluida la vuelta a la marca de casilla única.*
 - **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
   de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
   sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,

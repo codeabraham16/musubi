@@ -892,13 +892,17 @@
     },
     {
       "name": "musubi_tokens",
-      "description": "Ledger de tokens (model-free): cuántos tokens inyectó Musubi en el contexto, por superficie (arranque, por turno, PreToolUse, hidratación). Devuelve total, desglose ordenado por gasto, y —si hay presupuesto— restante, % usado y estado (ok | watch | over). action ∈ {status, reset}. ⚠️ MIRÁ `session_id` ANTES DE INTERPRETAR EL TOTAL: quien marca el corte de sesión son los hooks, y el camino MCP llama con session_id VACÍO. Con `session_id` vacío el total es un ACUMULADO DE POR VIDA del proceso —en un servidor always-on como el cerebro central el ledger no rota nunca— y NO se compara contra el techo: ahí un `pct_used` de miles por ciento y un `status: over` permanente son lo esperado, no una alarma. El techo además es BLANDO: no recorta nada, así que `over` NUNCA es una orden de achicar el contexto.",
+      "description": "Ledger de tokens (model-free): cuántos tokens inyectó Musubi en el contexto, por superficie (arranque, por turno, PreToolUse, hidratación). Devuelve total, desglose ordenado por gasto, y —si hay presupuesto— restante, % usado y estado (ok | watch | over). action ∈ {status, reset}. ⚠️ MIRÁ `session_id` ANTES DE INTERPRETAR EL TOTAL: quien marca el corte de sesión son los hooks, y el camino MCP llama con session_id VACÍO. Con `session_id` vacío el total es un ACUMULADO DE POR VIDA del proceso —en un servidor always-on como el cerebro central el ledger no rota nunca— y NO se compara contra el techo: ahí un `pct_used` de miles por ciento y un `status: over` permanente son lo esperado, no una alarma. El techo además es BLANDO: no recorta nada, así que `over` NUNCA es una orden de achicar el contexto. El ledger lleva UNA CUENTA POR SESIÓN: el reporte es de la sesión escrita más recientemente, que con varias terminales abiertas puede no ser la tuya — `sesiones` lista todas con su `session_id`, su total, su orden y la hora de su última escritura (la que escribió recién es la tuya). `reset` pone en cero UNA sola sesión: la de `session_id`; sin él, sólo si hay una única sesión — con más de una SE NIEGA y lista las sesiones, porque «la última que escribió» suele ser otra terminal.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "action": {
             "type": "string",
             "description": "status | reset (default status)"
+          },
+          "session_id": {
+            "type": "string",
+            "description": "Sesión a reportar o a poner en cero. Opcional para status (sin ella, la escrita más recientemente); obligatoria para reset cuando hay más de una sesión. Los ids están en `sesiones`."
           }
         }
       }

@@ -308,7 +308,12 @@ type WorkflowStore interface {
 type LedgerStore interface {
 	LedgerStatus() (TokenLedger, error)
 	LedgerAdd(sessionID, surface string, tokens int) (TokenLedger, error)
-	LedgerReset() error
+	LedgerStatusDe(sessionID string) (TokenLedger, error)
+	// LedgerReset pone en cero UNA sesión: la indicada, o la última que escribió si sessionID es vacío.
+	LedgerReset(sessionID string) error
+	// LedgerSesiones lista todas las sesiones con su total: musubi_tokens corre por MCP, no sabe cuál
+	// es la suya, y sin la lista mostraba el número de otra terminal sin decir de quién era.
+	LedgerSesiones() ([]SesionLedger, error)
 }
 
 // PhaseStore — pipeline por fases del loop dirigido (explore→plan→code→verify).
