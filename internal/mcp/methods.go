@@ -1009,9 +1009,6 @@ func (s *McpServer) toolDebate(raw json.RawMessage) (interface{}, *RpcError) {
 	}
 }
 
-// toolWorkflow es la interfaz MCP del motor de orquestación DAG (model-free).
-// Musubi NO ejecuta los steps: define el grafo, persiste el estado y devuelve los
-// steps listos; el agente ejecuta y reporta con 'complete'. El estado es resumible.
 // workflowRunLean es la vista del run para las acciones INCREMENTALES: espeja
 // memory.WorkflowRun pero OMITE la definición (Def), que es inmutable tras start y el
 // caller ya recibió. En un run de varios pasos, el DAG completo (títulos + directivas
@@ -1040,6 +1037,9 @@ func leanRun(r memory.WorkflowRun) workflowRunLean {
 	}
 }
 
+// toolWorkflow es la interfaz MCP del motor de orquestación DAG (model-free).
+// Musubi NO ejecuta los steps: define el grafo, persiste el estado y devuelve los
+// steps listos; el agente ejecuta y reporta con 'complete'. El estado es resumible.
 func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Action         string `json:"action"`

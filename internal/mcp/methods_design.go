@@ -866,9 +866,6 @@ type resultadoRecall struct {
 	Motivo   string // sinMaterial | bajoUmbral | sinRecuperador | sinCausaConcreta
 }
 
-// recallDesignCorpus trae los patrones más relevantes del acervo para el pedido. Prioriza la búsqueda
-// semántica (embedder) y cae a la léxica (FTS) si no hay embedder o si la semántica no devolvió nada.
-// Cualquier error es best-effort: devuelve lo que tenga (o vacío) y lo DECLARA, nunca falla la tool.
 // preparacionDeRecall es lo que se calcula ANTES de tomar el candado: las DOS llamadas de red del
 // camino de diseño. Existe porque las dos vivían adentro de `recallDesignCorpus`, que corría bajo
 // el candado exclusivo del despacho.
@@ -902,6 +899,9 @@ func (s *McpServer) prepararRecallDeDiseno(ctx context.Context, query string) pr
 	return preparacionDeRecall{Vec: vec, Ruta: r, HayRuta: ok}
 }
 
+// recallDesignCorpus trae los patrones más relevantes del acervo para el pedido. Prioriza la búsqueda
+// semántica (embedder) y cae a la léxica (FTS) si no hay embedder o si la semántica no devolvió nada.
+// Cualquier error es best-effort: devuelve lo que tenga (o vacío) y lo DECLARA, nunca falla la tool.
 func (s *McpServer) recallDesignCorpus(corpusCtx context.Context, query string, prep preparacionDeRecall, limit int) resultadoRecall {
 	// Traemos un POOL más grande que `limit` para poder re-rankear: las TARJETAS destiladas (cortas) pierden
 	// en similitud cruda contra los ARTÍCULOS crudos (blobs de miles de tokens), así que primero juntamos

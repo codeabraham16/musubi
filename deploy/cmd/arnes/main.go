@@ -570,31 +570,6 @@ func elOverlayPuedeTocar(archivo string) bool {
 	return base == "go.mod" || base == "go.sum"
 }
 
-// contraOverlay corre cada sabotaje SIN TOCAR EL DISCO y compara contra el veredicto de disco.
-//
-// LA IDEA NO ES MÍA Y SALE DE UN ACCIDENTE. Un refutador ajeno midió VERDE una directiva que este
-// arnés medía en ROJO, y las dos mediciones eran correctas: él aplicaba con `go test -overlay`, que
-// le cambia el archivo AL COMPILADOR, y la guarda en cuestión lee ese archivo DEL DISCO en tiempo de
-// ejecución con `os.ReadFile`. Bajo overlay el disco está sano, así que el daño colateral que
-// producía su rojo no ocurría. Ese rojo era falso: la prueba caía por el daño al corpus y no por el
-// defecto declarado.
-//
-// De ahí sale el detector, que es exacto para la clase:
-//
-//	ROJO al disco  ∧  VERDE bajo overlay  ⇒  el rojo depende de un efecto en el DISCO,
-//	                                          no del cambio de comportamiento
-//
-// El conjunto que sobrevive es chico y se separa a ojo: o es daño colateral —un rojo falso— o es un
-// defecto real que sólo se ve leyendo el disco, que en este árbol son contados.
-//
-// ES MÁS COMPLETO QUE `arnes.Colisiones` Y NO LO REEMPLAZA. `Colisiones` caza el daño al CORPUS DE
-// DIRECTIVAS —el `de` de uno es el ancla de otro— y dice POR QUÉ. Esto caza cualquier efecto que
-// dependa del archivo en disco, incluyendo los que no tienen ninguna directiva adentro, y dice
-// CUÁLES. Si esto marca uno que `Colisiones` no explica, ahí hay una tercera causa que ninguno de
-// los dos previó, y ése es el caso que más vale mirar.
-//
-// NO REIMPLEMENTA NINGUNA DE LAS OCHO COMPROBACIONES DE `sabotaje.sh`: no es un veredicto, es un
-// bit por directiva para cruzar contra el veredicto que ya dio el guion.
 // tramoACorrer dice QUÉ PEDAZO de la lista ya filtrada por paquete hay que correr.
 //
 // POR QUÉ EXISTE `-desde` Y NO ALCANZABA CON `-limite`: un barrido de `./internal/mcp` son ~165
@@ -622,6 +597,31 @@ func tramoACorrer(total, desde, limite int) (inicio, fin int) {
 	return inicio, fin
 }
 
+// contraOverlay corre cada sabotaje SIN TOCAR EL DISCO y compara contra el veredicto de disco.
+//
+// LA IDEA NO ES MÍA Y SALE DE UN ACCIDENTE. Un refutador ajeno midió VERDE una directiva que este
+// arnés medía en ROJO, y las dos mediciones eran correctas: él aplicaba con `go test -overlay`, que
+// le cambia el archivo AL COMPILADOR, y la guarda en cuestión lee ese archivo DEL DISCO en tiempo de
+// ejecución con `os.ReadFile`. Bajo overlay el disco está sano, así que el daño colateral que
+// producía su rojo no ocurría. Ese rojo era falso: la prueba caía por el daño al corpus y no por el
+// defecto declarado.
+//
+// De ahí sale el detector, que es exacto para la clase:
+//
+//	ROJO al disco  ∧  VERDE bajo overlay  ⇒  el rojo depende de un efecto en el DISCO,
+//	                                          no del cambio de comportamiento
+//
+// El conjunto que sobrevive es chico y se separa a ojo: o es daño colateral —un rojo falso— o es un
+// defecto real que sólo se ve leyendo el disco, que en este árbol son contados.
+//
+// ES MÁS COMPLETO QUE `arnes.Colisiones` Y NO LO REEMPLAZA. `Colisiones` caza el daño al CORPUS DE
+// DIRECTIVAS —el `de` de uno es el ancla de otro— y dice POR QUÉ. Esto caza cualquier efecto que
+// dependa del archivo en disco, incluyendo los que no tienen ninguna directiva adentro, y dice
+// CUÁLES. Si esto marca uno que `Colisiones` no explica, ahí hay una tercera causa que ninguno de
+// los dos previó, y ése es el caso que más vale mirar.
+//
+// NO REIMPLEMENTA NINGUNA DE LAS OCHO COMPROBACIONES DE `sabotaje.sh`: no es un veredicto, es un
+// bit por directiva para cruzar contra el veredicto que ya dio el guion.
 func contraOverlay(raiz string, c arnes.Censo, soloPaquete string, desde, limite int) int {
 	tmp, err := os.MkdirTemp("", "arnes-overlay-")
 	if err != nil {

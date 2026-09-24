@@ -196,12 +196,6 @@ func (c *SyncClient) FetchSkill(name string) (skills.Skill, error) {
 // para poder re-traerla cuando cambie en el central.
 const arsenalSource = "arsenal-central"
 
-// toolPromoteSkill sube una skill LOCAL al arsenal del central.
-//
-// Es EXPLÍCITA a propósito: nada sube solo. Medido sobre las 11 skills de este repo, 7 tienen
-// trigger "*" —disparan en cualquier archivo—, y algunas son locales por naturaleza
-// (project-profile describe ESTE proyecto). Subirlas todas ensuciaría el arsenal de todos. La
-// curaduría es del dueño; la herramienta sólo la hace fácil.
 // gateDePromocion es lo que se le cobra a una skill por entrar al arsenal COMPARTIDO.
 //
 // Hasta el spec «trigger-honesto» la promoción era la ÚNICA puerta sin gate: save_skill,
@@ -227,6 +221,12 @@ func gateDePromocion(sk skills.Skill) *RpcError {
 	return nil
 }
 
+// toolPromoteSkill sube una skill LOCAL al arsenal del central.
+//
+// Es EXPLÍCITA a propósito: nada sube solo. Medido sobre las 11 skills de este repo, 7 tienen
+// trigger "*" —disparan en cualquier archivo—, y algunas son locales por naturaleza
+// (project-profile describe ESTE proyecto). Subirlas todas ensuciaría el arsenal de todos. La
+// curaduría es del dueño; la herramienta sólo la hace fácil.
 func (s *McpServer) toolPromoteSkill(raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Name      string `json:"name"`

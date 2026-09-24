@@ -51,6 +51,10 @@ import (
 // scrape, y si alguna vez se alcanza, la salida lo dice (nunca se trunca en silencio).
 const proyectosParaExportar = 64
 
+// vidaDeRedLookup responde si el cerebro alcanza una máquina por fuera de su agente. Un `nil`
+// significa «nadie midió», que es distinto de «no está»: con nil no se emite ninguna serie.
+type vidaDeRedLookup func(deviceID string, ahora time.Time) (fleet.VidaDeRed, bool)
+
 // renderFlota agrega al exposition format las métricas de las máquinas que `p` puede ver.
 //
 // Recibe el principal ya resuelto por el handler: la autorización NO se decide acá, se APLICA.
@@ -64,10 +68,6 @@ const proyectosParaExportar = 64
 // viven en funciones compartidas y no adentro de este `for` — dos copias discrepan el día que
 // alguien agrega un campo, y la discrepancia se descubre semanas después, cuando dos dashboards
 // muestran cosas distintas.
-// vidaDeRedLookup responde si el cerebro alcanza una máquina por fuera de su agente. Un `nil`
-// significa «nadie midió», que es distinto de «no está»: con nil no se emite ninguna serie.
-type vidaDeRedLookup func(deviceID string, ahora time.Time) (fleet.VidaDeRed, bool)
-
 func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time,
 	intervaloSonda time.Duration, versionCerebro string, vidaDe vidaDeRedLookup, techoServicios, techoAprobaciones int) {
 	vistos, truncadoProyectos, ilegible := devicesVisiblesParaMetricas(engine, p)

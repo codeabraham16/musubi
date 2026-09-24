@@ -1454,40 +1454,6 @@ func filasVivas(t *testing.T, texto string) (map[string]int, []string) {
 	return ids, strings.Split(vivo, "\n")
 }
 
-// TestNingunNumeroDeRegistroSeUsaDosVeces: un número repetido es peor que uno faltante, porque no
-// se nota. Nadie lee las dos tablas de corrido buscando choques.
-//
-// Sabotaje que la hace fallar: duplicar cualquier fila de la tabla 2 con el número de otra.
-// NINGÚN NÚMERO DEL RANGO EN USO PUEDE DESAPARECER.
-// arnes: prueba="TestNingunNumeroDeRegistroSeUsaDosVeces"
-// arnes: archivo="specs/control-de-flota/ABIERTO.md"
-// arnes: de="| B1 | **`gopsutil`** |"
-// arnes: a="| B2 | fila duplicada a proposito para el arnes | no es un cabo real | — |\n| B1 | **`gopsutil`** |"
-//
-// ────────────────────────────────────────────────────────────────────────────────────────────
-// EL PISO TIPEADO NO CUBRÍA LO QUE DECÍA CUBRIR. Cada tabla tenía un piso de filas escrito a
-// mano —20 y 15— contra 29 y 21 reales, y su argumento era «un registro con la tabla vaciada se
-// lee igual que uno donde no queda nada abierto». Cierto, y por eso mismo insuficiente: con ese
-// margen se podían borrar NUEVE filas de la tabla 1 y el piso seguía pasando. Medio archivo
-// borrado produce exactamente la misma lectura falsa que el archivo entero.
-//
-// Y el piso es, además, un número derivado escrito a mano: envejece con cada cierre legítimo, así
-// que o se actualiza (trabajo que alguien se olvida) o se queda tan flojo que deja de decir nada.
-//
-// LA PROPIEDAD QUE SÍ ES DERIVABLE Y NO ENVEJECE sale de la regla 6 del propio registro: «el
-// número es la identidad: uno solo por cosa, y para siempre». Si es para siempre, entonces cada
-// número del rango en uso tiene que estar en UNO de tres lugares:
-//
-//	· vivo en una de las dos tablas,
-//	· nombrado en la sección 3, que es donde se escribe el cierre,
-//	· o declarado nunca-usado (la regla 6 los nombra: A6-A9, A15 y A16).
-//
-// Un número que no está en ninguno se EVAPORÓ: salió de la tabla y nadie escribió su cierre. Y
-// eso no es cosmético — la regla 6 existe justamente para poder «seguir la pista desde un
-// comentario del código», y un número evaporado deja esa pista apuntando a la nada.
-//
-// ASÍ SE ENCONTRARON A74 Y A84, los dos citados desde el código y ausentes del registro entero.
-// ────────────────────────────────────────────────────────────────────────────────────────────
 // LAS FILAS VIVAS CITAN SÍMBOLOS, NO NÚMEROS DE LÍNEA.
 //
 // ────────────────────────────────────────────────────────────────────────────────────────────
@@ -1665,6 +1631,40 @@ func TestLaReglaDeLosNumerosNombraElMaximoQueDeVerasEstaEnUso(t *testing.T) {
 	}
 }
 
+// TestNingunNumeroDeRegistroSeUsaDosVeces: un número repetido es peor que uno faltante, porque no
+// se nota. Nadie lee las dos tablas de corrido buscando choques.
+//
+// Sabotaje que la hace fallar: duplicar cualquier fila de la tabla 2 con el número de otra.
+// NINGÚN NÚMERO DEL RANGO EN USO PUEDE DESAPARECER.
+// arnes: prueba="TestNingunNumeroDeRegistroSeUsaDosVeces"
+// arnes: archivo="specs/control-de-flota/ABIERTO.md"
+// arnes: de="| B1 | **`gopsutil`** |"
+// arnes: a="| B2 | fila duplicada a proposito para el arnes | no es un cabo real | — |\n| B1 | **`gopsutil`** |"
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// EL PISO TIPEADO NO CUBRÍA LO QUE DECÍA CUBRIR. Cada tabla tenía un piso de filas escrito a
+// mano —20 y 15— contra 29 y 21 reales, y su argumento era «un registro con la tabla vaciada se
+// lee igual que uno donde no queda nada abierto». Cierto, y por eso mismo insuficiente: con ese
+// margen se podían borrar NUEVE filas de la tabla 1 y el piso seguía pasando. Medio archivo
+// borrado produce exactamente la misma lectura falsa que el archivo entero.
+//
+// Y el piso es, además, un número derivado escrito a mano: envejece con cada cierre legítimo, así
+// que o se actualiza (trabajo que alguien se olvida) o se queda tan flojo que deja de decir nada.
+//
+// LA PROPIEDAD QUE SÍ ES DERIVABLE Y NO ENVEJECE sale de la regla 6 del propio registro: «el
+// número es la identidad: uno solo por cosa, y para siempre». Si es para siempre, entonces cada
+// número del rango en uso tiene que estar en UNO de tres lugares:
+//
+//	· vivo en una de las dos tablas,
+//	· nombrado en la sección 3, que es donde se escribe el cierre,
+//	· o declarado nunca-usado (la regla 6 los nombra: A6-A9, A15 y A16).
+//
+// Un número que no está en ninguno se EVAPORÓ: salió de la tabla y nadie escribió su cierre. Y
+// eso no es cosmético — la regla 6 existe justamente para poder «seguir la pista desde un
+// comentario del código», y un número evaporado deja esa pista apuntando a la nada.
+//
+// ASÍ SE ENCONTRARON A74 Y A84, los dos citados desde el código y ausentes del registro entero.
+// ────────────────────────────────────────────────────────────────────────────────────────────
 func TestNingunNumeroDeRegistroSeUsaDosVeces(t *testing.T) {
 	ids, _ := filasVivas(t, registroDeAbiertos(t))
 	if len(ids) < 20 {

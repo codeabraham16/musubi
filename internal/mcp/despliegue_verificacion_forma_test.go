@@ -346,7 +346,7 @@ func nombreDelMarcoDeFuncion(id string) (string, bool) {
 	return "", false
 }
 
-// marco es un bloque abierto. `apertura` guarda con qué palabra se abrió, para que un `}` no
+// marcoBash es un bloque abierto. `apertura` guarda con qué palabra se abrió, para que un `}` no
 // cierre un `if` ni un `fi` cierre un `case`.
 type marcoBash struct {
 	apertura string

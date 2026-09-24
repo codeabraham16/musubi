@@ -331,16 +331,6 @@ func distanciaEn(a, b string, dims []int) int {
 	return total
 }
 
-// elegirPorContraste saca del pozo las `n` formas que más se separan del origen y entre sí, sobre las
-// dimensiones pedidas. Greedy max-min: la primera es la más lejana del origen; cada siguiente es la
-// que maximiza su distancia MÍNIMA a las ya elegidas.
-//
-// El max-min importa y no es un detalle: con «suma de distancias» las tres podían terminar apiladas
-// en el mismo extremo —las tres muy lejos del origen y pegadas entre sí— y eso vuelve a ser una sola
-// propuesta con tres nombres, que es el defecto original.
-//
-// Desempate por posición en el pozo, que ya viene ordenado por plausibilidad para el eje. Sin
-// desempate estable el brief dejaría de ser una función de sus entradas.
 // Las dos mitades del puntaje se pesan IGUAL y a propósito: mérito y contraste llegan los dos a la
 // escala 0–18 (mérito se normaliza por cuántas dimensiones se pidieron; el contraste es Manhattan
 // sobre las siete). Sólo mérito daría tres formas que ganan en lo mismo —una propuesta con tres
@@ -388,6 +378,17 @@ func hayDireccion(rs []reclamo) bool {
 	return false
 }
 
+// elegirPorContraste saca del pozo las `n` formas que más se separan del origen y entre sí, sobre las
+// dimensiones pedidas. Greedy max-min: la primera es la más lejana del origen; cada siguiente es la
+// que maximiza su distancia MÍNIMA a las ya elegidas.
+//
+// El max-min importa y no es un detalle: con «suma de distancias» las tres podían terminar apiladas
+// en el mismo extremo —las tres muy lejos del origen y pegadas entre sí— y eso vuelve a ser una sola
+// propuesta con tres nombres, que es el defecto original.
+//
+// Desempate por posición en el pozo, que ya viene ordenado por plausibilidad para el eje. Sin
+// desempate estable el brief dejaría de ser una función de sus entradas.
+//
 // `conMerito` es false cuando el pedido NO nombró ninguna dimensión, y entonces el mérito NO PESA.
 //
 // Lo destapó un test que ya existía: al eje `tabla` dejó de proponerle «tabla densa». Con el pedido
