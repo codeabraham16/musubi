@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"musubi/internal/guiones"
 	"musubi/internal/memory"
 )
 
@@ -182,7 +183,7 @@ func repoDePrueba(t *testing.T) (dir string, git func(fecha string, args ...stri
 	base := append(os.Environ(), "GIT_CONFIG_GLOBAL="+filepath.Join(dir, "sin-config"), "GIT_CONFIG_NOSYSTEM=1")
 	git = func(fecha string, args ...string) string {
 		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.email=a@b", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)...)
+		cmd := guiones.Herramienta(t, "git", append([]string{"-C", dir, "-c", "user.email=a@b", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)...)
 		cmd.Env = append(base, "GIT_COMMITTER_DATE="+fecha, "GIT_AUTHOR_DATE="+fecha)
 		out, err := cmd.CombinedOutput()
 		if err != nil {

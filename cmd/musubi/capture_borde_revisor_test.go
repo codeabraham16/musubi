@@ -4,11 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"musubi/internal/guiones"
 	"musubi/internal/memory"
 )
 
@@ -104,7 +104,7 @@ func TestCaptureBaseBorradaPorGCSaltaLoIntermedio(t *testing.T) {
 	}
 	git(fechaFija, "reflog", "expire", "--expire=now", "--all")
 	git(fechaFija, "gc", "-q", "--prune=now")
-	if err := exec.Command("git", "-C", dir, "cat-file", "-e", c1+"^{commit}").Run(); err == nil {
+	if err := guiones.Herramienta(t, "git", "-C", dir, "cat-file", "-e", c1+"^{commit}").Run(); err == nil {
 		t.Skip("el gc no borró la base; el escenario no se armó")
 	}
 	store := &recordingStore{meta: map[string]string{metaCaptureLastCommit: c1}}
