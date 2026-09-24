@@ -55,6 +55,11 @@ const (
 	// Separado de codeDegraded porque describe un servidor que SÍ sirve —las tools de lectura
 	// funcionan— y quien lo recibe puede seguir trabajando en vez de darse por muerto.
 	codeReadOnly = -32005
+	// codeGrafoViejo (rango server-error) = el central rechazó un push del grafo de código porque
+	// describe un árbol más viejo que el publicado (o no dice de cuál es y el publicado sí). Código
+	// propio porque quien lo recibe NO debe reintentar el mismo grafo —es viejo y va a seguir
+	// siéndolo—, pero tampoco es un pedido mal formado: el remedio es indexar un árbol al día.
+	codeGrafoViejo = -32006
 )
 
 type JsonRpcRequest struct {
@@ -374,6 +379,10 @@ type McpServer struct {
 	// memory/codegraph_generacion.go), porque una marca en memoria no la ve el otro daemon que
 	// comparte la base ni sobrevive a la sesión que muere entre el índice y el push.
 	pushMu sync.Mutex
+	// motivoDelPush dice por qué el último push del grafo NO salió o no se aceptó («el árbol no está
+	// en origin/main», «el central tiene uno más nuevo»). Vive bajo pushMu. Existe para que la tool
+	// no conteste un `federated:false` mudo: sin motivo, «no se publicó» se lee como «se cayó la red».
+	motivoDelPush string
 	// syncClient empuja las filas del outbox al cerebro central (F2); nil ⇒ sync desactivado
 	// (el drain no arranca). syncCfg trae los parámetros del drain (batch/lease/backoff/tope).
 	// Ambos los fija el entrypoint (SetSyncClient) cuando sync.enabled && central_url != "".

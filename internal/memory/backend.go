@@ -201,6 +201,11 @@ type CodeGraphStore interface {
 	// ReplaceProjectGraphFrom reemplaza el grafo COMPLETO de un proyecto (recepción de la
 	// federación push-on-index, F6): borra todo lo del origin_project_id y reinserta el set empujado.
 	ReplaceProjectGraphFrom(originProjectID string, nodes []GraphNode, edges []GraphEdge) error
+	// ReplaceProjectGraphPublicado es el reemplazo del receptor con la guarda de antigüedad: no
+	// deja que un grafo de un árbol más viejo pise el publicado (error que envuelve ErrGrafoMasViejo).
+	ReplaceProjectGraphPublicado(originProjectID string, pub PublicacionDelGrafo, nodes []GraphNode, edges []GraphEdge) error
+	// PublicacionDelGrafoDe dice de qué commit es el grafo publicado de un proyecto (vacía si nada).
+	PublicacionDelGrafoDe(projectID string) (PublicacionDelGrafo, error)
 	// AllGraphNodesCtx / AllGraphEdgesCtx vuelcan el grafo completo del proyecto (scopeado por la
 	// credencial) para serializarlo en el push-on-index de la federación (F6).
 	AllGraphNodesCtx(ctx context.Context) ([]GraphNode, error)

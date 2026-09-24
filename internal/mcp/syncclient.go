@@ -37,6 +37,9 @@ const umbralCompresionPush = 1 << 20 // 1 MiB
 var (
 	errTransient = errors.New("fallo transitorio de sync")
 	errPermanent = errors.New("fallo permanente de sync")
+	// errGrafoViejo: el central rechazó el push del grafo porque tiene publicado uno de un árbol más
+	// nuevo (codeGrafoViejo). Viaja JUNTO con errPermanent: reintentar el mismo grafo no lo arregla.
+	errGrafoViejo = errors.New("el central tiene publicado un grafo de un árbol más nuevo")
 )
 
 // SyncClient empuja filas del outbox al cerebro central. Se construye una vez desde SyncConfig
@@ -246,6 +249,14 @@ func (c *SyncClient) Push(item memory.OutboxItem) error {
 // devolver. El campo va SIEMPRE, aunque esté vacío — es lo que le dice al receptor "reemplazá los
 // míos"; un central viejo ignora la clave desconocida y se comporta como antes.
 func (c *SyncClient) PushGraph(nodes []memory.GraphNode, edges []memory.GraphEdge, gists []memory.CodeMemory) error {
+	return c.PushGraphDe(memory.PublicacionDelGrafo{}, nodes, edges, gists)
+}
+
+// PushGraphDe es PushGraph diciendo DE QUÉ ÁRBOL es el grafo: el commit indexado y su fecha de
+// commit, que el central usa para no dejar que un árbol viejo pise uno nuevo. Con la publicación
+// vacía los campos no viajan y el push es idéntico al de antes. Un central anterior a la guarda
+// ignora las dos claves.
+func (c *SyncClient) PushGraphDe(pub memory.PublicacionDelGrafo, nodes []memory.GraphNode, edges []memory.GraphEdge, gists []memory.CodeMemory) error {
 	if gists == nil {
 		gists = []memory.CodeMemory{}
 	}
@@ -256,9 +267,11 @@ func (c *SyncClient) PushGraph(nodes []memory.GraphNode, edges []memory.GraphEdg
 		Params  struct {
 			Name      string `json:"name"`
 			Arguments struct {
-				Nodes []memory.GraphNode  `json:"nodes"`
-				Edges []memory.GraphEdge  `json:"edges"`
-				Gists []memory.CodeMemory `json:"gists"`
+				Nodes  []memory.GraphNode  `json:"nodes"`
+				Edges  []memory.GraphEdge  `json:"edges"`
+				Gists  []memory.CodeMemory `json:"gists"`
+				Head   string              `json:"head,omitempty"`
+				HeadAt string              `json:"head_at,omitempty"`
 			} `json:"arguments"`
 		} `json:"params"`
 	}{JsonRpc: "2.0", ID: "codegraph-push", Method: "tools/call"}
@@ -266,6 +279,10 @@ func (c *SyncClient) PushGraph(nodes []memory.GraphNode, edges []memory.GraphEdg
 	reqBody.Params.Arguments.Nodes = nodes
 	reqBody.Params.Arguments.Edges = edges
 	reqBody.Params.Arguments.Gists = gists
+	if !pub.Vacia() {
+		reqBody.Params.Arguments.Head = pub.Head
+		reqBody.Params.Arguments.HeadAt = pub.En.UTC().Format(time.RFC3339)
+	}
 
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
@@ -456,6 +473,9 @@ func classifyResponse(resp *http.Response) error {
 			return fmt.Errorf("%w: respuesta 200 ilegible del central: %v", errTransient, err)
 		}
 		if body.Error != nil {
+			if body.Error.Code == codeGrafoViejo {
+				return fmt.Errorf("%w: %w: %s", errPermanent, errGrafoViejo, body.Error.Message)
+			}
 			if permanentRPCCodes[body.Error.Code] {
 				return fmt.Errorf("%w: el central RECHAZÓ la entrega (JSON-RPC %d): %s",
 					errPermanent, body.Error.Code, body.Error.Message)

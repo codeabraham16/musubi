@@ -73,8 +73,8 @@ func TestUnCambioQueIndexoOtroDaemonLlegaAlCentral(t *testing.T) {
 //
 // Sabotaje que la pone roja: marcar empujado ANTES de PushGraph, o sea aunque el push falle.
 // arnes: archivo="internal/mcp/methods_codegraph.go"
-// arnes: de="if err := s.syncClient.PushGraph(foto.Nodes"
-// arnes: a="_ = s.engine.MarcarGrafoEmpujado(foto.Generacion, time.Now())\n\tif err := s.syncClient.PushGraph(foto.Nodes"
+// arnes: de="if err := s.syncClient.PushGraphDe(pub, foto.Nodes"
+// arnes: a="_ = s.engine.MarcarGrafoEmpujado(foto.Generacion, time.Now())\n\tif err := s.syncClient.PushGraphDe(pub, foto.Nodes"
 // arnes: colision_ok="TestUnaFotoQueFallaNoMandaNadaAlCentral"
 func TestUnPushFallidoDeLaToolLoReintentaElScheduler(t *testing.T) {
 	central := nuevoCentralQueCuentaPushes(t)
@@ -274,8 +274,8 @@ func TestLosPushDeLaToolYDelSchedulerNoSeCruzan(t *testing.T) {
 //
 // Sabotaje que la pone roja: sacar el `return false` tras el error de FotoDelGrafoCtx (S1).
 // arnes: archivo="internal/mcp/methods_codegraph.go"
-// arnes: de="\t\treturn false\n\t}\n\tif err := s.syncClient.PushGraph("
-// arnes: a="\t}\n\tif err := s.syncClient.PushGraph("
+// arnes: de="\t\treturn false\n\t}\n\tif err := s.syncClient.PushGraphDe("
+// arnes: a="\t}\n\tif err := s.syncClient.PushGraphDe("
 func TestUnaFotoQueFallaNoMandaNadaAlCentral(t *testing.T) {
 	central := nuevoCentralQueCuentaPushes(t)
 	s := servidorFederado(t, proyectoGoSinIndexar(t), central)

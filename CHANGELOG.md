@@ -8,6 +8,35 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **El mapa de código del central ya no retrocede cuando otra máquina publica un árbol más viejo.**
+  El push del grafo es de REEMPLAZO y ganaba el último que llegaba, sin saber de qué commit era.
+  Medido el 2026-09-24: la laptop tenía checkouteada una rama del 12/09, 174 commits detrás de
+  `main`; su terminal la indexó y a las 17:02 la publicó encima del grafo de la PC de mando, que era
+  del día anterior. El central quedó describiendo el código de doce días atrás —997 archivos contra
+  1.071, sin `internal/arbol`, `internal/arnes` ni `ciclos_de_fondo.go`— y lo contestaba como el
+  mapa vigente. No era la primera vez: el registro de pushes muestra el grafo yendo y viniendo entre
+  las dos máquinas según cuál empujó última, y la higiene de 24 h lo re-empujaba aunque nada hubiera
+  cambiado. La guarda tiene dos mitades, porque cada una tapa un caso que la otra no ve:
+
+  - **El cliente publica sólo la rama principal.** Antes de empujar pregunta si el commit sellado
+    del índice es ancestro de `origin/<rama principal>` (`git merge-base --is-ancestor`). Si no lo
+    es —una rama de trabajo, commits sin empujar— no manda nada por la red, y
+    `musubi_codegraph_index` lo dice en `federated_motivo` en vez de un `federated:false` mudo. El
+    grafo LOCAL sigue indexando lo checkouteado: es lo que esa terminal necesita para su precheck.
+    Ante la duda (sin git, sin rama principal conocida) publica y decide el central.
+  - **El central no acepta un grafo más viejo que el publicado.** El push lleva ahora `head` y
+    `head_at` (el commit y su fecha de COMMIT, no la del push); el central guarda por proyecto qué
+    tiene publicado y, dentro de la misma transacción del reemplazo, rechaza con el error nuevo
+    `-32006` un commit más viejo, o un push sin commit si lo publicado lo tiene (un binario anterior
+    a esta guarda). El grafo rechazado no toca nada, y el cliente no lo reintenta en cada tick: la
+    foto es vieja y va a seguir siéndolo.
+
+  **Para que surta efecto hay que desplegar el central** (la mitad que rechaza) y actualizar los
+  clientes (la que manda el commit). Un central viejo ignora `head`/`head_at`; un cliente viejo
+  contra un central nuevo publica mientras nadie haya publicado con commit, y deja de poder pisar
+  en cuanto alguien lo hizo. *Catorce invariantes con su sabotaje, incluidas las dos guardas
+  existentes de la federación, que anclaban en la línea del push y se re-anclaron.*
+
 - **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
   de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
   sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,
