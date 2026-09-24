@@ -17,6 +17,7 @@ import (
 
 	"musubi/internal/config"
 	"musubi/internal/embedding"
+	"musubi/internal/guiones"
 	"musubi/internal/memory"
 	"musubi/internal/memory/memtest"
 )
@@ -39,7 +40,7 @@ func sinVariablesDeGit(t *testing.T) {
 // prueba no puede depender del reloj.
 func gitDePrueba(t *testing.T, dir, fecha string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd := guiones.Herramienta(t, "git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=prueba", "GIT_AUTHOR_EMAIL=p@x", "GIT_COMMITTER_NAME=prueba", "GIT_COMMITTER_EMAIL=p@x",
 		"GIT_AUTHOR_DATE="+fecha, "GIT_COMMITTER_DATE="+fecha)
