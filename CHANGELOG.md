@@ -18,24 +18,34 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   las dos máquinas según cuál empujó última, y la higiene de 24 h lo re-empujaba aunque nada hubiera
   cambiado. La guarda tiene dos mitades, porque cada una tapa un caso que la otra no ve:
 
-  - **El cliente publica sólo la rama principal.** Antes de empujar pregunta si el commit sellado
-    del índice es ancestro de `origin/<rama principal>` (`git merge-base --is-ancestor`). Si no lo
-    es —una rama de trabajo, commits sin empujar— no manda nada por la red, y
+  - **El cliente publica sólo la línea principal, y sólo si el grafo es de ese commit.** Antes de
+    empujar hace tres preguntas: que el commit sellado del índice sea el HEAD de ahora (con un
+    directorio fallido el índice no re-sella, y una rama salía con el sello de main); que esté en la
+    cadena de **primer padre** de `origin/<rama principal>` (ser ancestro no alcanza: con merge
+    commits, el de una rama ya mergeada es ancestro, puede ser más nuevo que el main publicado y no
+    tiene lo que main sumó en paralelo); y que no haya cambios sin commitear en archivos que el
+    grafo indexa (el índice lee el disco, no el commit). Si alguna falla no manda nada por la red, y
     `musubi_codegraph_index` lo dice en `federated_motivo` en vez de un `federated:false` mudo. El
     grafo LOCAL sigue indexando lo checkouteado: es lo que esa terminal necesita para su precheck.
     Ante la duda (sin git, sin rama principal conocida) publica y decide el central.
   - **El central no acepta un grafo más viejo que el publicado.** El push lleva ahora `head` y
     `head_at` (el commit y su fecha de COMMIT, no la del push); el central guarda por proyecto qué
     tiene publicado y, dentro de la misma transacción del reemplazo, rechaza con el error nuevo
-    `-32006` un commit más viejo, o un push sin commit si lo publicado lo tiene (un binario anterior
-    a esta guarda). El grafo rechazado no toca nada, y el cliente no lo reintenta en cada tick: la
-    foto es vieja y va a seguir siéndolo.
+    `-32006` un commit más viejo. Una fecha de commit adelantada más de una hora se topa en la hora
+    del central, para que un reloj mal puesto no bloquee a todos los commits reales posteriores.
+  - **A un binario anterior a la guarda se lo ignora, no se lo rechaza.** Su push no dice de qué
+    commit es; si lo publicado sí lo dice, el central no toca nada —ni el grafo ni los gists— y
+    contesta un **resultado** con `ignored: true` y el motivo. No un error: el binario viejo no
+    conoce `-32006`, lo tomaría como falla transitoria y re-empujaría el grafo entero en cada tick
+    logueando que el central falló. Con un resultado marca su generación y se calla. El cliente
+    nuevo lee ese `ignored` y tampoco reintenta, igual que ante un rechazo.
 
-  **Para que surta efecto hay que desplegar el central** (la mitad que rechaza) y actualizar los
-  clientes (la que manda el commit). Un central viejo ignora `head`/`head_at`; un cliente viejo
-  contra un central nuevo publica mientras nadie haya publicado con commit, y deja de poder pisar
-  en cuanto alguien lo hizo. *Catorce invariantes con su sabotaje, incluidas las dos guardas
-  existentes de la federación, que anclaban en la línea del push y se re-anclaron.*
+  **Para que surta efecto hay que desplegar el central** (la mitad que rechaza e ignora) y
+  actualizar los clientes (la que manda el commit y pregunta antes de publicar). Un central viejo
+  ignora `head`/`head_at` y se comporta como antes. *Veintidós invariantes con su sabotaje, los
+  veintidós rojos: las dos guardas existentes de la federación re-ancladas, y las tres pruebas con
+  las que una revisión adversarial reprodujo —contra un central real— el mismo defecto por tres
+  puertas nuevas (árbol sucio, sello rancio, rama ya mergeada) quedaron como regresión.*
 
 - **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
   de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva

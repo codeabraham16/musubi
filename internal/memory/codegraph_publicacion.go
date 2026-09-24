@@ -19,9 +19,22 @@ type PublicacionDelGrafo struct {
 func (p PublicacionDelGrafo) Vacia() bool { return strings.TrimSpace(p.Head) == "" }
 
 // ErrGrafoMasViejo lo devuelve ReplaceProjectGraphPublicado cuando el grafo que llega describe un
-// árbol MÁS VIEJO que el publicado, o no dice de cuál es y el publicado sí. El grafo del central
-// queda intacto.
+// árbol MÁS VIEJO que el publicado. El grafo del central queda intacto.
 var ErrGrafoMasViejo = fmt.Errorf("el grafo empujado es de un árbol más viejo que el publicado")
+
+// ErrGrafoIgnorado lo devuelve ReplaceProjectGraphPublicado cuando el grafo que llega no dice de qué
+// commit es y el publicado sí: un binario anterior a la guarda. Tampoco toca nada, pero es un error
+// DISTINTO porque la respuesta al emisor tiene que ser otra (ver toolCodegraphPush).
+var ErrGrafoIgnorado = fmt.Errorf("el grafo empujado no dice de qué commit es y el publicado sí")
+
+// decisionPublicacion es lo que la guarda hace con un push.
+type decisionPublicacion int
+
+const (
+	aceptarPublicacion decisionPublicacion = iota
+	rechazarPublicacion
+	ignorarPublicacion
+)
 
 // metaPublicacionDelGrafo es la clave de meta, POR PROYECTO, con la publicación vigente en el
 // central: "head|fecha RFC3339". Por proyecto porque la base del central guarda el grafo de todos.
@@ -43,26 +56,29 @@ func metaPublicacionDelGrafo(projectID string) string {
 //
 //   - Nada publicado con commit → se acepta: es el estado de antes de esta guarda, y rechazar
 //     dejaría al proyecto sin grafo.
-//   - Llega sin commit y lo publicado lo tiene → se rechaza. Es un binario viejo, y el caso medido
-//     fue exactamente ése; aceptarlo dejaría la guarda en manos de quien no la conoce.
+//   - Llega sin commit y lo publicado lo tiene → se IGNORA. Es un binario viejo, y el caso medido
+//     fue exactamente ése; aceptarlo dejaría la guarda en manos de quien no la conoce. Se ignora y no
+//     se rechaza porque un binario viejo no conoce el rechazo: lo tomaría como falla transitoria y
+//     re-empujaría el grafo entero en cada tick, logueando que el central falló (lo encontró la
+//     revisión antes del merge). Ignorado, lo toma como éxito, marca su generación y se calla.
 //   - Mismo commit → se acepta: es el re-empuje de higiene del mismo árbol.
-//   - Commit más viejo → se rechaza.
-func decidirPublicacion(vigente, nueva PublicacionDelGrafo) (bool, string) {
+//   - Commit más viejo → se rechaza. Esto sólo lo manda un cliente nuevo, que sí entiende el rechazo.
+func decidirPublicacion(vigente, nueva PublicacionDelGrafo) (decisionPublicacion, string) {
 	if vigente.Vacia() {
-		return true, ""
+		return aceptarPublicacion, ""
 	}
 	if nueva.Vacia() {
-		return false, fmt.Sprintf("el central tiene publicado el grafo de %s (%s) y este push no dice de qué commit es: "+
-			"lo mandó un binario anterior a esta guarda, que hay que actualizar", vigente.Head, vigente.En.UTC().Format(time.RFC3339))
+		return ignorarPublicacion, fmt.Sprintf("el central tiene publicado el grafo de %s (%s) y este push no dice de qué commit es: "+
+			"lo mandó un binario anterior a esta guarda, que hay que actualizar; no se tocó nada", vigente.Head, vigente.En.UTC().Format(time.RFC3339))
 	}
 	if nueva.Head == vigente.Head {
-		return true, ""
+		return aceptarPublicacion, ""
 	}
 	if nueva.En.Before(vigente.En) {
-		return false, fmt.Sprintf("el grafo empujado es de %s (%s) y el publicado es de %s (%s), más nuevo: "+
+		return rechazarPublicacion, fmt.Sprintf("el grafo empujado es de %s (%s) y el publicado es de %s (%s), más nuevo: "+
 			"se conserva el publicado", nueva.Head, nueva.En.UTC().Format(time.RFC3339), vigente.Head, vigente.En.UTC().Format(time.RFC3339))
 	}
-	return true, ""
+	return aceptarPublicacion, ""
 }
 
 // leerPublicacionDelGrafo lee la publicación vigente de un proyecto. Un valor ilegible cuenta como
@@ -100,7 +116,8 @@ func (e *DbEngine) PublicacionDelGrafoDe(projectID string) (PublicacionDelGrafo,
 
 // ReplaceProjectGraphPublicado es ReplaceProjectGraphFrom con la guarda de antigüedad: en UNA
 // transacción lee lo publicado, decide, y sólo si acepta reemplaza el grafo y registra la nueva
-// publicación. Si rechaza, devuelve un error que envuelve ErrGrafoMasViejo y no toca nada.
+// publicación. Si no acepta devuelve un error que envuelve ErrGrafoMasViejo o ErrGrafoIgnorado, y no
+// toca nada.
 //
 // La decisión va DENTRO de la transacción del reemplazo, no antes: dos pushes que llegan juntos no
 // pueden pasar los dos la pregunta con la misma publicación vieja y aterrizar en el orden malo.
@@ -119,8 +136,11 @@ func (e *DbEngine) ReplaceProjectGraphPublicado(originProjectID string, nueva Pu
 	if err != nil {
 		return err
 	}
-	if ok, motivo := decidirPublicacion(vigente, nueva); !ok {
+	switch decision, motivo := decidirPublicacion(vigente, nueva); decision {
+	case rechazarPublicacion:
 		return fmt.Errorf("%w: %s", ErrGrafoMasViejo, motivo)
+	case ignorarPublicacion:
+		return fmt.Errorf("%w: %s", ErrGrafoIgnorado, motivo)
 	}
 	if err := reemplazarGrafoTx(tx, projectID, nodes, edges); err != nil {
 		return err

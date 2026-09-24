@@ -25,30 +25,29 @@ func TestDecidirPublicacionDelGrafo(t *testing.T) {
 	casos := []struct {
 		nombre         string
 		vigente, llega PublicacionDelGrafo
-		acepta         bool
+		decision       decisionPublicacion
 	}{
-		{"nada publicado, llega con commit", PublicacionDelGrafo{}, nuevo, true},
-		{"nada publicado, llega sin commit (estado de antes de la guarda)", PublicacionDelGrafo{}, PublicacionDelGrafo{}, true},
-		{"llega MÁS VIEJO que lo publicado", nuevo, viejo, false},
-		{"llega sin commit y lo publicado lo tiene (binario viejo)", nuevo, PublicacionDelGrafo{}, false},
-		{"mismo commit (re-empuje de higiene)", nuevo, nuevo, true},
-		{"llega más nuevo", viejo, nuevo, true},
-		{"otro commit en el mismo segundo", nuevo, PublicacionDelGrafo{Head: "otro", En: nuevo.En}, true},
+		{"nada publicado, llega con commit", PublicacionDelGrafo{}, nuevo, aceptarPublicacion},
+		{"nada publicado, llega sin commit (estado de antes de la guarda)", PublicacionDelGrafo{}, PublicacionDelGrafo{}, aceptarPublicacion},
+		{"llega MÁS VIEJO que lo publicado", nuevo, viejo, rechazarPublicacion},
+		{"llega sin commit y lo publicado lo tiene (binario viejo)", nuevo, PublicacionDelGrafo{}, ignorarPublicacion},
+		{"mismo commit (re-empuje de higiene)", nuevo, nuevo, aceptarPublicacion},
+		{"llega más nuevo", viejo, nuevo, aceptarPublicacion},
+		{"otro commit en el mismo segundo", nuevo, PublicacionDelGrafo{Head: "otro", En: nuevo.En}, aceptarPublicacion},
 	}
 	for _, c := range casos {
-		ok, motivo := decidirPublicacion(c.vigente, c.llega)
-		if ok != c.acepta {
-			t.Errorf("%s: acepta=%v, esperaba %v (motivo %q)", c.nombre, ok, c.acepta, motivo)
+		decision, motivo := decidirPublicacion(c.vigente, c.llega)
+		if decision != c.decision {
+			t.Errorf("%s: decisión=%v, esperaba %v (motivo %q)", c.nombre, decision, c.decision, motivo)
 		}
-		if !ok && motivo == "" {
-			t.Errorf("%s: un rechazo sin motivo es un federated:false mudo", c.nombre)
+		if decision != aceptarPublicacion && motivo == "" {
+			t.Errorf("%s: un push no aplicado sin motivo es un federated:false mudo", c.nombre)
 		}
 	}
-	// El push sin commit lo rechazaría también la regla de la fecha (la fecha cero es anterior a
-	// todo), pero el remedio es otro y el mensaje tiene que decirlo: no es «indexá un árbol al día»
-	// sino «actualizá ese binario».
+	// El remedio del push sin commit es otro y el mensaje tiene que decirlo: no es «indexá un árbol
+	// al día» sino «actualizá ese binario».
 	if _, motivo := decidirPublicacion(nuevo, PublicacionDelGrafo{}); !strings.Contains(motivo, "binario") {
-		t.Errorf("el rechazo de un push sin commit tiene que decir que es un binario viejo, dijo %q", motivo)
+		t.Errorf("el push sin commit ignorado tiene que decir que es un binario viejo, dijo %q", motivo)
 	}
 }
 
@@ -84,9 +83,9 @@ func TestReplaceProjectGraphPublicadoNoDejaRetroceder(t *testing.T) {
 		t.Fatalf("el rechazo cambió la publicación vigente: %+v", pub)
 	}
 
-	// Un binario viejo (sin commit) tampoco lo pisa.
-	if err := e.ReplaceProjectGraphPublicado("musubi", PublicacionDelGrafo{}, rancio, nil); !errors.Is(err, ErrGrafoMasViejo) {
-		t.Fatalf("un push sin commit sobre uno publicado con commit tenía que rechazarse, dio %v", err)
+	// Un binario viejo (sin commit) tampoco lo pisa: se ignora.
+	if err := e.ReplaceProjectGraphPublicado("musubi", PublicacionDelGrafo{}, rancio, nil); !errors.Is(err, ErrGrafoIgnorado) {
+		t.Fatalf("un push sin commit sobre uno publicado con commit tenía que ignorarse, dio %v", err)
 	}
 	if n := nodosDe(t, e, "musubi"); len(n) != 1 || n[0].Name != "Nuevo" {
 		t.Fatalf("el push sin commit tocó el grafo publicado: %+v", n)

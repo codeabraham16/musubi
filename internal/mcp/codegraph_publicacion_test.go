@@ -87,10 +87,10 @@ func servidorSobreElArbol(t *testing.T, dir string) *McpServer {
 // LA MITAD DEL CLIENTE: un árbol que no está en la rama principal remota no se publica. Es el caso
 // medido: la laptop publicó una rama de trabajo del 12/09 encima del grafo al día.
 //
-// Sabotaje que la pone roja: tratar «no es ancestro» como publicable.
+// Sabotaje que la pone roja: no mirar si el commit está en la línea principal.
 // arnes: archivo="internal/mcp/methods_codegraph.go"
-// arnes: de="\tcase 1:\n\t\treturn pub, false,"
-// arnes: a="\tcase 1:\n\t\treturn pub, true,"
+// arnes: de="rc == 0 && !contieneLinea(cadena, completo) {"
+// arnes: a="rc == 0 && !contieneLinea(cadena, completo) && false {"
 func TestElGrafoDeUnaRamaDeTrabajoNoSePublica(t *testing.T) {
 	dir, enMain, enRama := repoConRamaDeTrabajo(t)
 	s := servidorSobreElArbol(t, dir)
@@ -106,7 +106,9 @@ func TestElGrafoDeUnaRamaDeTrabajoNoSePublica(t *testing.T) {
 		t.Errorf("el motivo tiene que decir contra qué se comparó, dijo %q", motivo)
 	}
 
-	// El mismo servidor, con el índice de main: se publica, con el commit COMPLETO y su fecha de commit.
+	// El mismo servidor, de vuelta en main con su índice: se publica, con el commit COMPLETO y su
+	// fecha de commit. El checkout va antes: un sello que no es el HEAD de ahora no se publica.
+	gitDePrueba(t, dir, "", "checkout", "-q", "main")
 	if err := s.engine.SetMeta(memory.MetaCodegraphHead, enMain[:7]); err != nil {
 		t.Fatal(err)
 	}
@@ -228,6 +230,122 @@ func TestElCentralNoAceptaUnGrafoMasViejo(t *testing.T) {
 	}
 	if e := empujar("X", "abc", "ayer"); e == nil || e.Code != codeInvalidParams {
 		t.Errorf("un head_at ilegible es un pedido mal formado, dio %+v", e)
+	}
+}
+
+// Un push SIN commit sobre uno publicado con commit —un binario anterior a la guarda— se IGNORA con un
+// resultado, no con un error: el binario viejo no conoce -32006, lo tomaría como falla transitoria y
+// re-empujaría el grafo entero en cada tick logueando que el central falló. Con un resultado marca su
+// generación y se calla. Y no toca nada: ni el grafo ni los gists.
+//
+// Sabotaje que la pone roja: contestarle al binario viejo con el error de rechazo.
+// arnes: archivo="internal/mcp/methods_codegraph.go"
+// arnes: de="\t\tif errors.Is(err, memory.ErrGrafoIgnorado) {"
+// arnes: a="\t\tif errors.Is(err, memory.ErrGrafoIgnorado) && false {"
+func TestUnBinarioViejoRecibeUnResultadoYNoUnError(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	p := &Principal{Name: "davantis-2", Role: RoleWriter, ProjectID: "musubi"}
+	ctx := withPrincipal(context.Background(), p)
+	empujar := func(args map[string]interface{}) (interface{}, *RpcError) {
+		raw, _ := json.Marshal(args)
+		params, _ := json.Marshal(CallToolRequest{Name: "musubi_codegraph_push", Arguments: raw})
+		return s.handleToolsCall(ctx, params)
+	}
+	nodo := func(n string) []memory.GraphNode {
+		return []memory.GraphNode{{Key: n + ".go#func:" + n, Kind: "func", Name: n, Path: n + ".go"}}
+	}
+	if _, e := empujar(map[string]interface{}{"nodes": nodo("AlDia"), "edges": []memory.GraphEdge{},
+		"gists": []memory.CodeMemory{{Path: "AlDia.go", Gist: "el gist al día"}},
+		"head":  "fc3c297aaaa", "head_at": "2026-09-23T17:00:00Z"}); e != nil {
+		t.Fatalf("publicar el grafo al día: %+v", e)
+	}
+	// Lo que manda un binario viejo: sin head y con sus gists.
+	res, e := empujar(map[string]interface{}{"nodes": nodo("Rancio"), "edges": []memory.GraphEdge{},
+		"gists": []memory.CodeMemory{{Path: "Rancio.go", Gist: "gist rancio"}}})
+	if e != nil {
+		t.Fatalf("al binario viejo se le contestó con un error (lo reintentaría cada tick): %+v", e)
+	}
+	if txt := textOf(t, res); !strings.Contains(txt, `"ignored":true`) || !strings.Contains(txt, "binario") {
+		t.Errorf("el resultado tiene que decir que se ignoró y por qué: %s", txt)
+	}
+	own := memory.WithProjectScope(context.Background(), memory.ProjectScope{ProjectID: "musubi"})
+	if n, _ := s.engine.AllGraphNodesCtx(own); len(n) != 1 || n[0].Name != "AlDia" {
+		t.Fatalf("el push ignorado tocó el grafo: %+v", n)
+	}
+	if g := gistsDe(t, s, "musubi"); len(g) != 1 || g[0].Path != "AlDia.go" {
+		t.Fatalf("el push ignorado tocó los gists: %+v", g)
+	}
+}
+
+// El cliente nuevo lee el `ignored` del resultado: no loguea «empujado» y no reintenta.
+//
+// Sabotaje que la pone roja: no leer el resultado.
+// arnes: archivo="internal/mcp/syncclient.go"
+// arnes: de="\tif motivo, ignorado := pushIgnorado(result); ignorado {"
+// arnes: a="\tif motivo, ignorado := pushIgnorado(result); ignorado && false {"
+func TestUnPushIgnoradoNoSeReintentaYDiceElMotivo(t *testing.T) {
+	var pushes atomic.Int64
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		pushes.Add(1)
+		texto := `{"nodes":0,"edges":0,"ignored":true,"motivo":"este push no dice de qué commit es"}`
+		cuerpo, _ := json.Marshal(map[string]interface{}{"jsonrpc": "2.0", "id": "codegraph-push",
+			"result": map[string]interface{}{"content": []map[string]string{{"type": "text", "text": texto}}}})
+		_, _ = w.Write(cuerpo)
+	}))
+	t.Cleanup(ts.Close)
+	s := servidorSobreElArbol(t, proyectoGoSinIndexar(t))
+	s.SetSyncClient(newTestSyncClient(t, ts.URL), config.SyncConfig{BatchSize: 200})
+	for i := 0; i < 3; i++ {
+		s.reindexCodeGraphOnce(context.Background())
+	}
+	if n := pushes.Load(); n != 1 {
+		t.Fatalf("el central ignoró el push y el cliente lo reintentó: %d pushes en 3 ticks (esperaba 1)", n)
+	}
+	if m := s.ultimoMotivoDelPush(); !strings.Contains(m, "commit") {
+		t.Errorf("el motivo del ignorado tiene que quedar a la vista, quedó %q", m)
+	}
+}
+
+// Una fecha de commit en el futuro se topa en la hora del central: sin el tope quedaría publicada y
+// bloquearía todo commit real posterior hasta que el reloj la alcanzara.
+//
+// Sabotaje que la pone roja: sacar el tope.
+// arnes: archivo="internal/mcp/methods_codegraph.go"
+// arnes: de="en.After(ahora.Add(topeFechaFutura)) {"
+// arnes: a="en.After(ahora.Add(topeFechaFutura)) && false {"
+func TestUnaFechaDeCommitEnElFuturoSeTopa(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	p := &Principal{Name: "davantis-1", Role: RoleWriter, ProjectID: "musubi"}
+	ctx := withPrincipal(context.Background(), p)
+	empujar := func(head string, en time.Time) *RpcError {
+		args, _ := json.Marshal(map[string]interface{}{"nodes": []memory.GraphNode{}, "edges": []memory.GraphEdge{},
+			"head": head, "head_at": en.UTC().Format(time.RFC3339)})
+		params, _ := json.Marshal(CallToolRequest{Name: "musubi_codegraph_push", Arguments: args})
+		_, e := s.handleToolsCall(ctx, params)
+		return e
+	}
+	if e := empujar("adelantado", time.Now().Add(30*24*time.Hour)); e != nil {
+		t.Fatalf("un commit con fecha adelantada se tenía que aceptar (topado): %+v", e)
+	}
+	if e := empujar("real", time.Now().Add(time.Minute)); e != nil {
+		t.Fatalf("un commit real posterior quedó bloqueado por la fecha adelantada: %+v", e)
+	}
+}
+
+// Lo que el grafo NO indexa no frena la publicación: un .md o un respaldo sin trackear no cambian el
+// grafo, y en la PC de mando siempre hay alguno.
+func TestUnArchivoNoIndexableSinCommitearNoFrenaLaPublicacion(t *testing.T) {
+	dir, enMain, _ := repoConRamaDeTrabajo(t)
+	gitDePrueba(t, dir, "", "checkout", "-q", "main")
+	writeFile(t, filepath.Join(dir, "docs", "notas.md"), "borrador\n")
+	writeFile(t, filepath.Join(dir, "config.yaml.antes"), "x: 1\n")
+	s := servidorSobreElArbol(t, dir)
+	if err := s.engine.SetMeta(memory.MetaCodegraphHead, enMain[:7]); err != nil {
+		t.Fatal(err)
+	}
+	if _, publicable, motivo := s.origenDelGrafo(); !publicable {
+		t.Fatalf("un .md y un .yaml sin commitear frenaron la publicación: %s", motivo)
 	}
 }
 
