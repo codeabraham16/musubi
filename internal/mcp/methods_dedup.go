@@ -25,7 +25,8 @@ import (
 //
 // Disciplina del pilar (igual que el destilador): OFFLINE (LLM, jamás en el camino caliente), OPT-IN
 // (sin motor, falla explícito), ADMIN (escribe en el acervo compartido) y CONSERVADOR — el juez fusiona
-// SÓLO si archivar una tarjeta no pierde conocimiento, ante la duda conserva, y toda fusión es un
+// SÓLO si archivar la B (la más débil, la que se archiva siempre, y él lo sabe) no pierde conocimiento,
+// ante la duda conserva, y toda fusión es un
 // soft-delete REVERSIBLE (ArchiveAsDuplicate calca a Consolidate). Un par que el juez decide conservar
 // (KEEP) se marca `not_duplicate` para no volver a gastarle una llamada al motor. Se corre de a tandas.
 
@@ -38,7 +39,7 @@ const (
 	// gemelas reales viven en 0.82-0.89 (los blobs distintos de verdad quedan debajo). El piso es un
 	// FILTRO GRUESO barato; la precisión la pone el juez LLM, así que conviene un piso algo bajo (más
 	// pares a juzgar) antes que perderse gemelas legítimas — SIEMPRE QUE EL JUEZ PONGA ESA PRECISIÓN.
-	// Hoy no la pone, y por eso vale 0.84 y no 0.82.
+	// El juez de antes no la ponía, y por eso vale 0.84 y no 0.82.
 	//
 	// LA FRANJA 0.82-0.84 TIENE GEMELAS: eso quedó medido el 2026-09-23 corriendo ESTA función
 	// (SemanticDuplicateCandidates) contra una copia del acervo del cerebro —1.523 tarjetas, vectores
@@ -65,6 +66,12 @@ const (
 	// PARA VOLVER A BAJARLO no alcanza con cambiar el prompt: hay que medir el juez nuevo contra las
 	// mismas etiquetas y ver que ya no fusiona con pérdida. La franja no se vuelve segura porque el
 	// juez cambie; se vuelve segura cuando se MIDE que el juez cambió.
+	//
+	// Y SE MIDIÓ, EL MISMO DÍA (el porqué del prompt está en sharpenSystemPrompt): con el juez que
+	// sabe cuál se archiva, la pérdida esperada en la franja baja de ~9,7 a ~0,7, y en los 36 pares
+	// de ≥0.84 a 0. La regla fijada de antemano dice que con eso 0.82 se puede volver a PROPONER. Sigue
+	// en 0.84 a propósito: bajarlo es decisión del dueño, y conviene ver primero al juez nuevo trabajar
+	// en el cerebro con el piso de siempre.
 	//
 	// OJO AL TOCARLO: no es sólo el default de la herramienta manual. `sharpenBatchOnce` lo usa en el
 	// afilado de fondo, que en el cerebro está PRENDIDO (`auto_sharpen_pairs: 2`) y fusiona solo. Subir
@@ -240,8 +247,9 @@ func (s *McpServer) runDedupBatch(ctx context.Context, floor float64, maxPairs i
 	return report, nil
 }
 
-// dedupJudge pregunta al motor si dos tarjetas gemelas son redundantes (MERGE) o facetas distintas
-// (KEEP). FAIL-SAFE: ante un fallo del motor devuelve KEEP —nunca se fusiona por un hipo del endpoint—.
+// dedupJudge pregunta al motor si archivar la B pierde algo que la A no diga (MERGE: no pierde; KEEP:
+// pierde, o dudó). La B va SEGUNDA y rotulada «TARJETA B»: el prompt promete que ésa es la que se
+// archiva. FAIL-SAFE: ante un fallo del motor devuelve KEEP —nunca se fusiona por un hipo del endpoint—.
 func (s *McpServer) dedupJudge(ctx context.Context, c memory.SemDupCandidate) string {
 	user := fmt.Sprintf("TARJETA A (tema %s):\n%s\n\nTARJETA B (tema %s):\n%s", c.TopicA, c.ContentA, c.TopicB, c.ContentB)
 	jctx, cancel := context.WithTimeout(ctx, askTimeout)
@@ -279,11 +287,36 @@ func parseDedupVerdict(answer string) string {
 	return dedupKeep
 }
 
-const sharpenSystemPrompt = `Sos el AFILADOR del acervo de diseño de Musubi (pilar 'Musubi Renaissance'). Recibís DOS tarjetas de conocimiento de diseño que un detector marcó como PARECIDAS por su vector. Tu único trabajo: decidir si son LA MISMA lección accionable —tan redundantes que archivar una NO pierde nada— o si cubren facetas DISTINTAS que conviene conservar por separado.
+// sharpenSystemPrompt LE DICE AL JUEZ CUÁL SE ARCHIVA, porque es la pregunta que decide la pérdida.
+//
+// El prompt anterior preguntaba «¿son la misma lección?», que es simétrica: si la A cabía entera en
+// la B, la respuesta honesta es sí, y runDedupBatch archivaba la B —la más completa— porque archiva
+// SIEMPRE la B. Medido el 2026-09-24 con un etiquetado a ciegas pre-registrado: de las 28 fusiones
+// que ese juez había hecho, 8 perdieron algo, y 7 de las 8 por esa dirección.
+//
+// Este texto se eligió entre tres candidatos con una regla fijada antes de correrlos, contra las
+// mismas etiquetas, con una réplica del juez corrida tres veces por par sobre 84 pares:
+//
+//	juez anterior                     ~15,7 archivos con pérdida esperados · 9,0 fusiones limpias
+//	éste: dice cuál se archiva         ~0,7                                 · 9,0
+//	el juez elige cuál sobra (A o B)   ~2,0                                 · 10,3
+//	el juez describe, decide el código ~5,0                                 · 15,7
+//
+// O sea: las mismas fusiones buenas y casi ninguna mala. Los otros dos fusionan más, pero pierden más.
+// Es concordancia con un panel de LLMs, no verdad humana, y la réplica no es el endpoint de producción
+// (coincidió 30 de 36 con él).
+//
+// QUE LA B SEA LA QUE SE ARCHIVA ES UNA PROMESA DE ESTE TEXTO SOBRE EL CÓDIGO. Si runDedupBatch un día
+// archivara la A, o dedupJudge presentara las tarjetas en otro orden, este prompt le mentiría al juez
+// y la pérdida volvería sin que nada falle. La guarda es
+// TestElJuezSabeCualSeArchivaYEsLaQueSeArchiva: mira las dos puntas a la vez.
+const sharpenSystemPrompt = `Sos el AFILADOR del acervo de diseño de Musubi (pilar 'Musubi Renaissance'). Recibís DOS tarjetas de conocimiento de diseño que un detector marcó como PARECIDAS por su vector. Si decidís MERGE, la TARJETA B se ARCHIVA y la TARJETA A queda como la única versión de esa lección. La A no se edita: lo que diga sólo la B se pierde. Tu único trabajo: decidir si archivar la B pierde algo.
 
 CRITERIO:
-- MERGE sólo si una es redundante con la otra: mismo principio, misma acción, sin matiz propio que se perdería al archivar una. Ejemplos claros de MERGE: la misma regla escrita en inglés y en castellano; dos redacciones de "contraste mínimo 4.5:1".
-- KEEP si aportan algo distinto: distinto disparador, distinto valor, distinta faceta, un ejemplo o una excepción que la otra no tiene. Ante CUALQUIER duda, KEEP — perder una fusión es reversible, perder conocimiento no.
+- MERGE sólo si TODO lo que dice la B ya está en la A, aunque sea con otras palabras, en otro idioma o en otro formato. Que la A diga más cosas que la B no impide el MERGE: lo que decide es qué se pierde al archivar la B.
+- KEEP si la B dice algo que la A no dice: un valor, una regla, un caso en que aplica, una excepción, un paso, un ejemplo o una razón. Aunque la A sea más completa en otras cosas, si la B tiene algo propio, KEEP.
+- KEEP si dan valores o reglas incompatibles para lo mismo: el afilador no decide cuál tiene razón.
+- Ante CUALQUIER duda, KEEP — perder una fusión es reversible, perder conocimiento no.
 
 SALIDA: SÓLO un objeto JSON, sin prosa antes ni después: {"verdict":"MERGE"} o {"verdict":"KEEP"}.`
 
