@@ -248,11 +248,19 @@ func managedSkillAction(existing []byte, canonicalSum string) bool {
 // los nombres de las skills que reescribió sobre un archivo YA EXISTENTE (refrescadas/adoptadas),
 // para que setup lo reporte; las escrituras nuevas no se listan.
 func writeCognitiveSkills(root string) ([]string, error) {
+	stack, _ := detector.DetectStack(root)
+	return escribirCognitivas(root, stack, func(string) bool { return true })
+}
+
+// escribirCognitivas es writeCognitiveSkills con el stack ya detectado y la decisión de qué manual
+// FALTANTE crear en manos de quien llama: `musubi setup` los crea todos; el refresco automático del
+// arranque sólo los que Musubi nunca escribió, para no resucitar uno que el usuario borró a propósito
+// (ver refrescarSkillsSiHaceFalta). Devuelve los que reescribió o creó.
+func escribirCognitivas(root string, stack []detector.StackResult, crear func(nombre string) bool) ([]string, error) {
 	skillsDir := filepath.Join(root, config.DirName, config.SkillsDir)
 	if err := os.MkdirAll(skillsDir, 0755); err != nil {
 		return nil, err
 	}
-	stack, _ := detector.DetectStack(root)
 	var refreshed []string
 	for _, sk := range cognitiveSkills(stack) {
 		path := filepath.Join(skillsDir, sk.Name+".yaml")
@@ -281,7 +289,10 @@ func writeCognitiveSkills(root string) ([]string, error) {
 			refreshed = append(refreshed, sk.Name)
 			continue
 		}
-		// No existía: escritura nueva (no se reporta como refrescada).
+		// No existía: escritura nueva, si quien llama la quiere (no se reporta como refrescada).
+		if !crear(sk.Name) {
+			continue
+		}
 		if err := escribirArchivoAtomico(path, newData, 0o644); err != nil {
 			return refreshed, err
 		}

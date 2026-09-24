@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"musubi/internal/config"
@@ -236,6 +239,14 @@ func writeJSONAtomic(path string, v any) error {
 // varias terminales abriéndose a la vez, dos refrescos pueden escribir el mismo manual al mismo
 // tiempo, y con os.WriteFile una sesión que lo leyera en ese instante podía cargar la mitad.
 func escribirArchivoAtomico(path string, data []byte, perm os.FileMode) error {
+	// Un symlink se respeta: se escribe junto a su OBJETIVO. Renombrar sobre el enlace lo reemplazaba
+	// por un archivo común —el objetivo quedaba viejo y el repo con una copia suelta—, cuando
+	// os.WriteFile, lo que había antes, escribía a través del enlace.
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		if objetivo, err := filepath.EvalSymlinks(path); err == nil {
+			path = objetivo
+		}
+	}
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".musubi-*.tmp")
 	if err != nil {
@@ -259,11 +270,44 @@ func escribirArchivoAtomico(path string, data []byte, perm os.FileMode) error {
 	if err := os.Chmod(tmpName, perm); err != nil {
 		return fmt.Errorf("permisos del temporal: %w", err)
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := renombrarConReintentos(tmpName, path); err != nil {
+		// En Windows, renombrar sobre un archivo que otro proceso tiene abierto sin FILE_SHARE_DELETE
+		// (os.Open de Go, otra terminal leyendo el manual) falla aunque se reintente, cosa que
+		// os.WriteFile —lo que había antes— no sufría. Último recurso: escribir en el lugar. Pierde la
+		// atomicidad sólo en ese caso, que es exactamente como se escribía antes.
+		if bloqueoDeWindows(err) {
+			if werr := os.WriteFile(path, data, perm); werr == nil {
+				return nil
+			}
+		}
 		return fmt.Errorf("renombrar %s → %s: %w", tmpName, path, err)
 	}
 	success = true
 	return nil
+}
+
+// renombrarConReintentos es os.Rename con unos pocos reintentos cortos ante un bloqueo de Windows
+// (un antivirus o un indexador que tiene el archivo un instante): es el patrón de robustio del
+// toolchain de Go. En los demás sistemas, o ante otro error, un solo intento.
+func renombrarConReintentos(desde, hacia string) error {
+	var err error
+	for intento := 0; intento < 5; intento++ {
+		if err = os.Rename(desde, hacia); err == nil || !bloqueoDeWindows(err) {
+			return err
+		}
+		time.Sleep(time.Duration(10<<intento) * time.Millisecond)
+	}
+	return err
+}
+
+// bloqueoDeWindows dice si un error es un «otro proceso tiene el archivo»: ERROR_ACCESS_DENIED (5) o
+// ERROR_SHARING_VIOLATION (32). Fuera de Windows es siempre false.
+func bloqueoDeWindows(err error) bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	var errno syscall.Errno
+	return errors.As(err, &errno) && (errno == 5 || errno == 32)
 }
 
 // runValidate implementa `musubi catalog validate [ruta]`: envoltorio fino sobre
