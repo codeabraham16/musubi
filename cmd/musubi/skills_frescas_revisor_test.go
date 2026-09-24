@@ -14,6 +14,7 @@ import (
 
 	"musubi/internal/config"
 	"musubi/internal/detector"
+	"musubi/internal/guiones"
 	"musubi/internal/skills"
 )
 
@@ -182,7 +183,7 @@ func TestSkillsFrescasNoEnsucianElArbolDelRepo(t *testing.T) {
 // pruebas los exporta, y git miraría el repo equivocado).
 func gitSinHook(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd := guiones.Herramienta(t, "git", append([]string{"-C", dir}, args...)...)
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "GIT_") {
 			cmd.Env = append(cmd.Env, kv)
