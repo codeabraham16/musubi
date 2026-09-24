@@ -355,6 +355,14 @@ func ElegirTemperatura(texto string) *float64 {
 	return mejor
 }
 
+// TempMinPlausibleC y TempMaxPlausibleC son la banda, y viven acá porque las usan LOS DOS
+// parsers —éste y ParsearTempDecikelvin de Windows—. Un segundo par de constantes con el mismo
+// número es el defecto de este repo sembrado a mano: N lugares que deberían decir lo mismo.
+const (
+	TempMinPlausibleC = 5
+	TempMaxPlausibleC = 150
+)
+
 // ParsearTempMiligrados convierte el contenido de una zona térmica. Devuelve nil si no hay sensor
 // o si el valor es implausible.
 //
@@ -369,14 +377,6 @@ func ElegirTemperatura(texto string) *float64 {
 // un valor plausible —27,85 °C es el caso real, ver A2 en las dos Windows— pasa por acá sin que
 // se lo pueda distinguir de una lectura buena. Eso NO se detecta con un sample; se detecta con
 // varianza a lo largo del tiempo, que es una pregunta para Prometheus y no para un parser.
-// TempMinPlausibleC y TempMaxPlausibleC son la banda, y viven acá porque las usan LOS DOS
-// parsers —éste y ParsearTempDecikelvin de Windows—. Un segundo par de constantes con el mismo
-// número es el defecto de este repo sembrado a mano: N lugares que deberían decir lo mismo.
-const (
-	TempMinPlausibleC = 5
-	TempMaxPlausibleC = 150
-)
-
 func ParsearTempMiligrados(texto string) *float64 {
 	mili, err := strconv.ParseFloat(strings.TrimSpace(texto), 64)
 	if err != nil {

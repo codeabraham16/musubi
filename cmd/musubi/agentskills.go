@@ -28,6 +28,7 @@ type ReporteExport struct {
 	Escritas    []string // nuevas o refrescadas
 	Preservadas []string // editadas a mano: Musubi no las toca
 	Retiradas   []string // ya no existen en el origen y estaban intactas
+	Omitidas    []string // su nombre no es un slug: exportarlas escribiría fuera de .claude/skills
 }
 
 // exportarSkillsAlAgente vuelca las skills de .musubi/skills/ a .claude/skills/<name>/SKILL.md.
@@ -49,6 +50,16 @@ func exportarSkillsAlAgente(root string) (ReporteExport, error) {
 
 	vivas := make(map[string]bool, len(arsenal))
 	for _, sk := range arsenal {
+		// Un nombre que no es slug no se exporta. El destino es Join(destino, sk.Name), y LoadSkills
+		// sólo exige que el nombre no esté vacío: un yaml con `name: ../../../fuera` —que puede llegar
+		// por un pull, porque .musubi/skills/ viaja por git en otros repos— escribía un SKILL.md fuera
+		// del proyecto, y en Windows alcanzaba para instalar una skill GLOBAL del usuario. Con el
+		// refresco del arranque eso pasaba solo, sin que nadie corriera nada. La regla de slug existía,
+		// pero sólo en la puerta MCP; lo que llega por git o a mano no pasaba por ahí.
+		if !skills.NombreSeguro(sk.Name) {
+			rep.Omitidas = append(rep.Omitidas, sk.Name)
+			continue
+		}
 		vivas[sk.Name] = true
 		accion, err := escribirSkillMD(destino, sk)
 		if err != nil {
@@ -71,6 +82,7 @@ func exportarSkillsAlAgente(root string) (ReporteExport, error) {
 	sort.Strings(rep.Escritas)
 	sort.Strings(rep.Preservadas)
 	sort.Strings(rep.Retiradas)
+	sort.Strings(rep.Omitidas)
 	return rep, nil
 }
 
@@ -106,7 +118,7 @@ func escribirSkillMD(destino string, sk skills.Skill) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(ruta, []byte(contenido), 0o644); err != nil {
+	if err := escribirArchivoAtomico(ruta, []byte(contenido), 0o644); err != nil {
 		return "", err
 	}
 	return "escrita", nil

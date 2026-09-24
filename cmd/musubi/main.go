@@ -213,8 +213,6 @@ func printUsage() {
 	cmd("precompact --hook-mode", "PreCompact: avisa de bajar lo durable ANTES de que se resuma")
 }
 
-// runMaintain corre el auto-mantenimiento de la memoria (consolidar + olvidar)
-// como proceso one-shot e imprime un resumen en stdout.
 // avisarQueConfigGobierna escribe en stderr, al arrancar, CUÁL config.yaml se cargó — y avisa si
 // hay otro en el home que no gobierna (cabo A96, salida b).
 //
@@ -245,6 +243,8 @@ func avisarQueConfigGobierna(root string) {
 	}
 }
 
+// runMaintain corre el auto-mantenimiento de la memoria (consolidar + olvidar)
+// como proceso one-shot e imprime un resumen en stdout.
 func runMaintain() {
 	root := workspaceDir()
 	if err := ensureWorkspace(root); err != nil {
@@ -574,6 +574,14 @@ func runDaemon() {
 		server.Start()
 	}()
 
+	// Al salir, antes de los defers que cierran la base: parar los ciclos y soltar el candado de la
+	// bajada, así la terminal que sigue abierta no espera un lease entero para bajar. El scheduler
+	// también lo suelta al salir, pero desde su goroutine, y puede llegar con la base ya cerrada.
+	defer func() {
+		stopMaint()
+		server.SoltarBajada()
+	}()
+
 	select {
 	case sig := <-sigs:
 		fmt.Fprintf(os.Stderr, "musubi: señal %v recibida, cerrando\n", sig)
@@ -581,7 +589,6 @@ func runDaemon() {
 	}
 }
 
-// startOutboxDrain arranca el drain del outbox (sync saliente del cerebro híbrido, F2) si está
 // autoBackfill (M3) le pasa al engine el callback de vectorización para que cierre en background el
 // hueco de procedencia (memoria sin vector del modelo actual). El engine se mantiene MODEL-FREE: no
 // embebe, recibe el embed del caller. Compartido por runServe y runDaemon. No bloquea el arranque
@@ -593,12 +600,6 @@ func autoBackfill(engine *memory.DbEngine, embedder embedding.Provider) {
 	})
 }
 
-// configurado: requiere sync.enabled, un central_url no vacío y un intervalo > 0. Construye el
-// SyncClient desde cfg.Sync (resuelve el token de la env var, valida https/allow_insecure), lo
-// inyecta en el server y lanza RunOutboxScheduler en su propia goroutine atada a ctx. Es
-// best-effort y compartido por runServe y runDaemon: un error de construcción del cliente NO
-// aborta el arranque (se avisa por stderr y el server sigue local-first). Con sync desactivado
-// es un no-op total (comportamiento idéntico al de antes de F2).
 // reconcileOutboxOnStartup concilia el outbox con la config de sync al arrancar, para que un stall
 // SILENCIOSO sea imposible. Con backlog pendiente hay dos caminos:
 //   - Nodo TERMINAL (sync off o sin central_url): esas filas no tienen destino — son huérfanas de
@@ -627,6 +628,13 @@ func reconcileOutboxOnStartup(engine *memory.DbEngine, sync config.SyncConfig) {
 	fmt.Fprintf(os.Stderr, "musubi: outbox — %d observación(es) 'shared' pendientes de enviar al central; el drain intentará vaciarlas\n", pending)
 }
 
+// startOutboxDrain arranca el drain del outbox (sync saliente del cerebro híbrido, F2) si está
+// configurado: requiere sync.enabled, un central_url no vacío y un intervalo > 0. Construye el
+// SyncClient desde cfg.Sync (resuelve el token de la env var, valida https/allow_insecure), lo
+// inyecta en el server y lanza RunOutboxScheduler en su propia goroutine atada a ctx. Es
+// best-effort y compartido por runServe y runDaemon: un error de construcción del cliente NO
+// aborta el arranque (se avisa por stderr y el server sigue local-first). Con sync desactivado
+// es un no-op total (comportamiento idéntico al de antes de F2).
 func startOutboxDrain(ctx context.Context, server *mcp.McpServer, cfg config.SyncConfig) {
 	if !cfg.Enabled {
 		return // sync saliente apagado a propósito (nodo local o terminal): no-op total.

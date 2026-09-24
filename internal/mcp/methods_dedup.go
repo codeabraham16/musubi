@@ -279,15 +279,15 @@ CRITERIO:
 
 SALIDA: SÓLO un objeto JSON, sin prosa antes ni después: {"verdict":"MERGE"} o {"verdict":"KEEP"}.`
 
-// sharpenToolEntry registra musubi_sharpen. Va en el central (donde vive el acervo `musubi-design` y hay
-// motor); en stdio local sin motor, falla explícito (opt-in). NO es readOnly: archiva tarjetas + escribe
-// marcadores. Es lockSelf porque hace I/O externa (juez LLM) por cada par — sostener el candado del
-// despacho durante minutos congelaría el servidor (igual que el destilador).
 // pisoPorDefaultEnTexto es el piso tal como lo lee quien consulta la herramienta. SALE DE LA CONSTANTE
 // y no se escribe a mano: la descripción decía «default 0.84» en dos lugares, y un número copiado en
 // prosa es justo lo que queda viejo el día que alguien cambia el de verdad sin buscar sus copias.
 var pisoPorDefaultEnTexto = strconv.FormatFloat(dedupDefaultFloor, 'f', -1, 64)
 
+// sharpenToolEntry registra musubi_sharpen. Va en el central (donde vive el acervo `musubi-design` y hay
+// motor); en stdio local sin motor, falla explícito (opt-in). NO es readOnly: archiva tarjetas + escribe
+// marcadores. Es lockSelf porque hace I/O externa (juez LLM) por cada par — sostener el candado del
+// despacho durante minutos congelaría el servidor (igual que el destilador).
 func (s *McpServer) sharpenToolEntry() toolEntry {
 	return toolEntry{
 		Tool: Tool{

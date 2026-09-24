@@ -515,39 +515,6 @@ func TestElPinDelGuionDeRedespliegueEsElVerdadero(t *testing.T) {
 	}
 }
 
-// TestCadaGuionQueSeInstalaEnElServidorSeCompara — que la tabla de guiones derivados no se quede
-// corta cuando alguien agregue el tercero (A111).
-//
-// EL CABO ES DE UN PISO MÁS ARRIBA QUE EL DE A111. Arreglar la deriva del redespliegue agregando
-// una fila a mano en `verificar-despliegue.sh` deja el mismo agujero para el PRÓXIMO guion: una
-// lista escrita a mano no tiene cómo enterarse de que apareció un archivo nuevo. Es el defecto de
-// A93 —`verificar-cobertura.sh` con su lista de archivos a mano y el argumento contra las listas a
-// mano escrito al lado— y no se cierra escribiendo mejor la lista, se cierra derivándola.
-//
-// LA FUENTE MECÁNICA ES EL INSTALADOR, Y LA LISTA DE INSTALADORES TAMBIÉN SE DERIVA. Todo lo que
-// llega al servidor con `install` está declarado en un guion, con su destino. La versión anterior
-// de esta prueba leía UN instalador —`install-musubi-brain.sh`, nombrado a mano— y ahí quedaba su
-// propio agujero: `redesplegar-cerebro.sh` TAMBIÉN tiene un `install -m` (línea 132), corre en el
-// servidor con `sudo`, y un segundo `install` ahí habría llegado sin que nada lo cruzara contra su
-// fuente, con esta guarda en verde. Es la lección de N-1 de N caminos, adentro de la guarda escrita
-// para cerrarla.
-//
-// EL CONJUNTO CORRECTO SE DERIVA DE LA TABLA. Los guiones que corren EN el servidor del cerebro son
-// exactamente los que `GUIONES_DERIVADOS` declara que se instalan allá. Así que los instaladores a
-// mirar son: el instalador raíz, más cada `.sh` del lado izquierdo de la tabla. Si mañana alguien
-// agrega un tercer guion a la tabla, entra a este barrido SOLO. No hay lista que actualizar.
-//
-// Los otros `install -m` del repo (`deploy/prometheus/install-musubi-prometheus.sh`,
-// `deploy/docker/preparar.sh`, `deploy/rustdesk/preparar.sh`) quedan afuera por una razón y no por
-// olvido: ninguno se instala en el servidor del cerebro —se corren a mano desde el repo, sobre otros
-// roles— y lo que SÍ depositan desde el repo son archivos de reglas, que `verificar-despliegue.sh`
-// compara por su propio camino (el barrido de `$DIR_REGLAS_ALLA`, no esta tabla).
-//
-// Y NO SE CUENTA LO QUE MATCHEÓ, SE EXIGE QUE NO QUEDE NINGUNO SIN PARSEAR. Una guarda que enumera
-// formas no converge: el día que un `install` se escriba distinto, un regex que sólo cuenta sus
-// aciertos mira hacia otro lado y se queda en verde. Acá cada línea de CÓDIGO que diga `install -m`
-// tiene que resolverse a un destino; una que no se pueda parsear es un ROJO que pide enseñarle la
-// forma nueva, no un silencio.
 // filaDerivada es una fila de GUIONES_DERIVADOS ya partida: el archivo del repo y su destino en el
 // servidor.
 type filaDerivada struct{ rel, destino string }
@@ -613,6 +580,40 @@ func rutasAsignadasEn(crudo []byte, soloLiterales bool) map[string]string {
 	return fuera
 }
 
+// TestCadaGuionQueSeInstalaEnElServidorSeCompara — que la tabla de guiones derivados no se quede
+// corta cuando alguien agregue el tercero (A111).
+//
+// EL CABO ES DE UN PISO MÁS ARRIBA QUE EL DE A111. Arreglar la deriva del redespliegue agregando
+// una fila a mano en `verificar-despliegue.sh` deja el mismo agujero para el PRÓXIMO guion: una
+// lista escrita a mano no tiene cómo enterarse de que apareció un archivo nuevo. Es el defecto de
+// A93 —`verificar-cobertura.sh` con su lista de archivos a mano y el argumento contra las listas a
+// mano escrito al lado— y no se cierra escribiendo mejor la lista, se cierra derivándola.
+//
+// LA FUENTE MECÁNICA ES EL INSTALADOR, Y LA LISTA DE INSTALADORES TAMBIÉN SE DERIVA. Todo lo que
+// llega al servidor con `install` está declarado en un guion, con su destino. La versión anterior
+// de esta prueba leía UN instalador —`install-musubi-brain.sh`, nombrado a mano— y ahí quedaba su
+// propio agujero: `redesplegar-cerebro.sh` TAMBIÉN tiene un `install -m` (línea 132), corre en el
+// servidor con `sudo`, y un segundo `install` ahí habría llegado sin que nada lo cruzara contra su
+// fuente, con esta guarda en verde. Es la lección de N-1 de N caminos, adentro de la guarda escrita
+// para cerrarla.
+//
+// EL CONJUNTO CORRECTO SE DERIVA DE LA TABLA. Los guiones que corren EN el servidor del cerebro son
+// exactamente los que `GUIONES_DERIVADOS` declara que se instalan allá. Así que los instaladores a
+// mirar son: el instalador raíz, más cada `.sh` del lado izquierdo de la tabla. Si mañana alguien
+// agrega un tercer guion a la tabla, entra a este barrido SOLO. No hay lista que actualizar.
+//
+// Los otros `install -m` del repo (`deploy/prometheus/install-musubi-prometheus.sh`,
+// `deploy/docker/preparar.sh`, `deploy/rustdesk/preparar.sh`) quedan afuera por una razón y no por
+// olvido: ninguno se instala en el servidor del cerebro —se corren a mano desde el repo, sobre otros
+// roles— y lo que SÍ depositan desde el repo son archivos de reglas, que `verificar-despliegue.sh`
+// compara por su propio camino (el barrido de `$DIR_REGLAS_ALLA`, no esta tabla).
+//
+// Y NO SE CUENTA LO QUE MATCHEÓ, SE EXIGE QUE NO QUEDE NINGUNO SIN PARSEAR. Una guarda que enumera
+// formas no converge: el día que un `install` se escriba distinto, un regex que sólo cuenta sus
+// aciertos mira hacia otro lado y se queda en verde. Acá cada línea de CÓDIGO que diga `install -m`
+// tiene que resolverse a un destino; una que no se pueda parsear es un ROJO que pide enseñarle la
+// forma nueva, no un silencio.
+//
 // MECANIZADA. El sabotaje es sacar una fila de GUIONES_DERIVADOS: un guion que el instalador
 // deposita en el servidor deja de compararse contra el repo, que es el defecto A111 original.
 // Medido: la prueba nombra al culpable con archivo y linea («install-musubi-brain.sh instala

@@ -190,6 +190,23 @@ func (s *McpServer) RunOutboxScheduler(ctx context.Context, interval time.Durati
 // metaInboundCursor guarda el rowid del central hasta el que ya bajamos memoria shared (C5.3b).
 const metaInboundCursor = "sync:inbound_cursor"
 
+// leaseBajadaSegundos es cuánto dura el candado de la bajada: cuatro ticks, con piso de dos minutos.
+//
+// Tiene que durar MÁS que el intervalo, porque el dueño lo renueva en cada tick en vez de soltarlo.
+// Con un lease más corto que el tick vencería entre dos ticks, el otro proceso lo tomaría, y los dos
+// volverían a alternarse bajando lo mismo: el defecto que el candado viene a sacar, disfrazado de
+// arreglo. Un tick largo —hasta veinte páginas, cada una con su timeout— NO lo cubre este margen:
+// para eso el dueño lo renueva antes de cada página (ver drainInboundOnce). El costo de pasarse es
+// acotado: si el dueño muere sin soltarlo, otro toma la bajada a los pocos minutos, y mientras tanto
+// no se pierde nada, sólo se atrasa.
+func (s *McpServer) leaseBajadaSegundos() int {
+	seg := 4 * s.syncCfg.DrainIntervalSeconds
+	if seg < 120 {
+		seg = 120
+	}
+	return seg
+}
+
 // RunInboundScheduler baja periódicamente la memoria 'shared' del proyecto DESDE el central (sync
 // ENTRANTE, C5.3b): el espejo de RunOutboxScheduler en sentido de bajada. Solo corre si hay sync
 // configurado (syncClient) Y el proyecto está en team mode (memory.team_mode) — un proyecto local no
@@ -198,16 +215,46 @@ func (s *McpServer) RunInboundScheduler(ctx context.Context, interval time.Durat
 	if interval <= 0 || s.syncClient == nil || !s.memory.TeamMode {
 		return
 	}
+	s.intervaloBajada.Store(int64(interval))
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			// Un cierre ordenado suelta el candado: sin esto la terminal que sigue abierta pasaba hasta
+			// un lease entero —dos minutos y medio con la config de este repo— sin bajar nada, y una
+			// terminal que reinicia su MCP quedaba frenada por el lease de su propio antecesor.
+			s.SoltarBajada()
 			return
 		case <-t.C:
 			s.drainInboundOnce(ctx)
 		}
 	}
+}
+
+// SoltarBajada suelta el candado de la bajada si este proceso lo tiene. Es para el apagado: el
+// scheduler lo llama al salir, y runDaemon lo llama además SINCRÓNICO antes de cerrar la base, porque
+// la goroutine del scheduler puede llegar tarde, con la base ya cerrada. Best-effort y no-op si este
+// proceso no baja.
+func (s *McpServer) SoltarBajada() {
+	if s.syncClient == nil || !s.memory.TeamMode {
+		return
+	}
+	if err := s.engine.SoltarBajada(s.duenoBajada); err != nil {
+		logx.Error("inbound: no se pudo soltar el candado de la bajada al cerrar", "error", err)
+	}
+}
+
+// cesionTrasFallo es cuánto deja de reclamar la bajada un proceso cuyo Pull falló: dos ticks.
+func (s *McpServer) cesionTrasFallo() time.Duration {
+	tick := time.Duration(s.intervaloBajada.Load())
+	if tick <= 0 {
+		tick = time.Duration(s.syncCfg.DrainIntervalSeconds) * time.Second
+	}
+	if tick <= 0 {
+		tick = 30 * time.Second
+	}
+	return 2 * tick
 }
 
 // drainInboundOnce baja páginas de memoria shared del central desde el cursor guardado y las ingiere
@@ -224,6 +271,31 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 			s.vectorizarLoBajado()
 		}
 	}()
+	// CEDER DESPUÉS DE FALLAR. Soltar el candado tras un Pull fallido no alcanzaba: si el Pull muere
+	// por TIMEOUT —30 s, igual que el tick por defecto—, al soltarlo el tick siguiente ya está encolado
+	// en el Ticker y lo retoma en microsegundos, y la terminal sana, que tickea en otra fase, lo
+	// encuentra tomado siempre. La segunda revisión lo reprodujo: la sana hizo 0 pedidos en 6 ticks
+	// (en main, sin candado, bajaba). Ahora quien falla deja de reclamar dos ticks enteros.
+	if hasta := s.bajadaCedidaHasta.Load(); hasta > 0 && time.Now().UnixNano() < hasta {
+		return
+	}
+	// UN SOLO PROCESO POR BASE BAJA POR VEZ (ver memory.ReclamarBajada). La subida tenía su lease
+	// desde siempre; la bajada no, y con dos terminales abiertas en el mismo proyecto las dos bajaban
+	// las mismas páginas en cada tick — medido, 1,7 veces el tráfico de un proceso en la laptop.
+	ok, err := s.engine.ReclamarBajada(s.duenoBajada, s.leaseBajadaSegundos())
+	if err != nil {
+		logx.Error("inbound: no se pudo reclamar la bajada (reintenta en el próximo tick)", "error", err)
+		return
+	}
+	if !ok {
+		// Otro proceso de esta máquina ya está bajando para esta base. Pero la VECTORIZACIÓN de lo
+		// bajado depende del embebedor de quien lo ingiere: si el dueño arrancó léxico (Noop, ante
+		// cualquier error del proveedor), lo bajado quedaba sin vector aunque ESTE proceso sea
+		// semántico. Si el cursor avanzó desde la última vez que lo miró, vectoriza él. Cuesta una
+		// lectura local por tick y cero tráfico al central.
+		s.vectorizarSiBajoOtro()
+		return
+	}
 	var cur int64
 	if raw, ok, _ := s.engine.GetMeta(metaInboundCursor); ok {
 		cur, _ = strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
@@ -238,9 +310,24 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 			return
 		default:
 		}
+		// Renovar ANTES de cada página, no sólo al empezar el tick: veinte páginas con su timeout
+		// pueden durar más que el lease, y vencido a mitad, otro proceso lo tomaba y los dos bajaban
+		// las mismas páginas. Si otro ya lo tiene, se corta acá.
+		if page > 0 {
+			if sigo, rerr := s.engine.ReclamarBajada(s.duenoBajada, s.leaseBajadaSegundos()); rerr != nil || !sigo {
+				return
+			}
+		}
 		items, next, err := s.syncClient.Pull(cur, limit)
 		if err != nil {
 			logx.Error("inbound: no se pudo bajar del central (reintenta en el próximo tick)", "error", err)
+			// El candado se SUELTA y este proceso CEDE: un dueño que falla siempre —un token vencido,
+			// un central_url viejo— lo renovaría en cada tick y dejaría a la base sin bajada aunque
+			// otra terminal esté sana (ver memory.SoltarBajada y el principio de esta función).
+			if serr := s.engine.SoltarBajada(s.duenoBajada); serr != nil {
+				logx.Error("inbound: no se pudo soltar el candado de la bajada", "error", serr)
+			}
+			s.bajadaCedidaHasta.Store(time.Now().Add(s.cesionTrasFallo()).UnixNano())
 			return
 		}
 		if len(items) == 0 {
@@ -270,9 +357,13 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 		}
 		if advanceTo > cur {
 			cur = advanceTo
-			if merr := s.engine.SetMeta(metaInboundCursor, strconv.FormatInt(cur, 10)); merr != nil {
+			// Monótono en la base, no sólo en memoria: un tick más lento que el lease puede seguir
+			// escribiendo después de que otro proceso tomó el candado vencido, y con SetMeta a secas
+			// el lento pisaba al rápido y el cursor retrocedía (ver memory.AvanzarCursorBajada).
+			if merr := s.engine.AvanzarCursorBajada(metaInboundCursor, cur); merr != nil {
 				logx.Error("inbound: no se pudo guardar el cursor entrante", "error", merr)
 			}
+			s.cursorBajadaVisto.Store(cur) // lo bajó y lo vectoriza este mismo proceso
 		}
 		if failed {
 			return // no seguir paginando tras un fallo: se retoma desde acá en el próximo tick
@@ -281,6 +372,24 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// vectorizarSiBajoOtro vectoriza lo pendiente si el cursor de bajada avanzó desde la última vez que
+// ESTE proceso lo miró, o sea si bajó otro. Sin embebedor semántico no hace nada: ni la lectura.
+func (s *McpServer) vectorizarSiBajoOtro() {
+	if !embedding.Enabled(s.embedder) {
+		return
+	}
+	raw, ok, _ := s.engine.GetMeta(metaInboundCursor)
+	if !ok {
+		return
+	}
+	cur, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || cur <= s.cursorBajadaVisto.Load() {
+		return
+	}
+	s.cursorBajadaVisto.Store(cur)
+	s.vectorizarLoBajado()
 }
 
 // vectorizarLoBajado pide al engine que vectorice, en background, la memoria pendiente de vector

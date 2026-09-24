@@ -475,13 +475,6 @@ func Censar(raiz string) (Censo, error) {
 	return c, nil
 }
 
-// censarArchivo parsea UN archivo de prueba.
-//
-// `parser.ParseComments` Y NO EL MODO 0, y acá eso es todo el punto: con el modo 0 el parser
-// DESCARTA los comentarios, así que este lector encontraría cero anclas y diría que el árbol no
-// promete nada. Es la trampa simétrica de la que ya pagamos en la guarda del candado, donde el
-// modo 0 hacía que ningún comentario pudiera satisfacer la guarda: ahí el bug era ver comentarios,
-// acá es no verlos.
 // loDeUnArchivo es lo que sale de censarArchivo. Es un struct y no seis valores de retorno
 // porque seis valores posicionales es cómo se termina pasando `quejas` donde iba `sinUbicar`.
 type loDeUnArchivo struct {
@@ -493,6 +486,13 @@ type loDeUnArchivo struct {
 	pruebasConAncla int
 }
 
+// censarArchivo parsea UN archivo de prueba.
+//
+// `parser.ParseComments` Y NO EL MODO 0, y acá eso es todo el punto: con el modo 0 el parser
+// DESCARTA los comentarios, así que este lector encontraría cero anclas y diría que el árbol no
+// promete nada. Es la trampa simétrica de la que ya pagamos en la guarda del candado, donde el
+// modo 0 hacía que ningún comentario pudiera satisfacer la guarda: ahí el bug era ver comentarios,
+// acá es no verlos.
 func censarArchivo(raiz, rel string) (loDeUnArchivo, error) {
 	ruta := filepath.Join(raiz, filepath.FromSlash(rel))
 	src, err := os.ReadFile(ruta)

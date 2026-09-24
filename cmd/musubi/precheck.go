@@ -340,14 +340,6 @@ func esEdicion(tool string) bool {
 	return false
 }
 
-// impactMessage arma el RADIO DE IMPACTO de un archivo que se va a editar: qué símbolos suyos
-// tienen quien los llame, cuántos son de forma directa y cuántos arrastrando el cierre transitivo.
-// "" si el archivo no está en el grafo — inerte hasta que se indexe, igual que codeGraphMessage.
-//
-// El caso "ningún símbolo tiene llamadas DIRECTAS en el grafo" NO devuelve vacío: cuesta una línea
-// decirlo, y callar ahí sería confundir "no hay riesgo" con "no sé". Pero tampoco afirma que el
-// archivo esté aislado: el grafo no ve llamadas por interfaz ni métodos pasados como valor (ver
-// ceroLlamadasDirectas), así que lo que dice es lo que vio, no lo que no existe.
 // avisoSinGrafo dice, ANTES DE EDITAR, que el radio de impacto no se pudo mirar.
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════
@@ -368,9 +360,11 @@ func esEdicion(tool string) bool {
 // CADA edición: un aviso por archivo convertiría un proyecto de React o de SQL en una pared de
 // texto repetido, y una advertencia que aparece siempre se deja de leer —que es exactamente cómo
 // se pierde una advertencia que sí importa—. El dato no es del archivo, es del binario y del
-// proyecto, así que decirlo una vez alcanza. El ledger ya lleva la cuenta por sesión y se
-// reinicia solo al cambiar de sesión: `LedgerAdd` con 0 tokens LEE sin sumar (ver ledger.go, el
-// `if tokens > 0`), así que no hace falta ni una consulta nueva ni un método más en codeStore.
+// proyecto, así que decirlo una vez alcanza. El ledger lleva una cuenta POR SESIÓN, así que la marca
+// de esta sesión no la borra ninguna otra: `LedgerAdd` con 0 tokens es una LECTURA pura —no crea la
+// sesión ni la sube en el orden de desalojo—, así que no hace falta ni una consulta nueva ni un método
+// más en codeStore. La marca sólo se pierde si la sesión es desalojada (tope de 64, desalojo por
+// menor total): entonces el aviso se repite UNA vez más, que es el costo aceptado.
 //
 // SÓLO EN EL CAMINO DE EDICIÓN, a propósito. En la LECTURA el silencio no afirma nada peligroso
 // —igual vas a leer el archivo, y el gist y la telemetría hablan por su cuenta—; acá el silencio
@@ -429,6 +423,14 @@ const (
 	cegueraDelGrafo      = "el grafo no ve llamadas por interfaz ni métodos pasados como valor"
 )
 
+// impactMessage arma el RADIO DE IMPACTO de un archivo que se va a editar: qué símbolos suyos
+// tienen quien los llame, cuántos son de forma directa y cuántos arrastrando el cierre transitivo.
+// "" si el archivo no está en el grafo — inerte hasta que se indexe, igual que codeGraphMessage.
+//
+// El caso "ningún símbolo tiene llamadas DIRECTAS en el grafo" NO devuelve vacío: cuesta una línea
+// decirlo, y callar ahí sería confundir "no hay riesgo" con "no sé". Pero tampoco afirma que el
+// archivo esté aislado: el grafo no ve llamadas por interfaz ni métodos pasados como valor (ver
+// ceroLlamadasDirectas), así que lo que dice es lo que vio, no lo que no existe.
 func impactMessage(store codeStore, root, key, sessionID string) string {
 	ctx := context.Background()
 	nodes, err := store.ListGraphNodesForFileCtx(ctx, key)

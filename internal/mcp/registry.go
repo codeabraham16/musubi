@@ -40,26 +40,6 @@ const (
 	lockSelf
 )
 
-// toolEntry liga el schema público de una tool (lo que ve tools/list) con su handler
-// (lo que ejecuta tools/call). Es la unidad atómica del registro.
-//
-// readOnly marca las tools que NO mutan estado (ni DB, ni índice, ni ledger, ni bumpAccess). Decide
-// la AUTORIZACIÓN (un principal reader sólo puede llamar tools de lectura, ver Principal.canCall) y
-// es además el DEFAULT del candado de despacho. El default es false = se asume que muta y corre
-// bajo Lock exclusivo (fail-safe: una tool nueva es segura por defecto; recién marcás readOnly tras
-// VERIFICAR que es pura lectura).
-//
-// lock pisa ese default SÓLO para la concurrencia. No toca la autorización: una tool en lockSelf no
-// queda por eso llamable por un reader.
-//
-// dormant es un TERCER eje —la VISIBILIDAD— y no toca ni la autorización ni la capacidad. Una tool
-// dormida sigue implementada, testeada y DESPACHABLE por tools/call; lo único que pierde es el
-// lugar que ocupaba en tools/list. Existe porque el catálogo se paga por sesión: medido sobre
-// testdata/toolslist.golden.json —que congela la salida real— tools/list pesa 93.037 caracteres
-// en JSON compacto (~25.000 tokens) sobre 75 tools visibles, y cada tool que nadie invoca
-// se lo cobra igual a todos los repos, en cada arranque. Dormir NO es retirar: retirar borra
-// trabajo y capacidad, dormir sólo deja de proponer. Es reversible por tool con un booleano, y
-// MUSUBI_TOOLS_ALL=1 las devuelve todas al listado sin recompilar.
 // roClass dice si una tool sirve cuando la base NO se puede escribir (escalón de sólo lectura).
 //
 // ES UN CUARTO EJE, Y NACE DEL MISMO PROBLEMA QUE lockClass: `readOnly` ya gobernaba autorización
@@ -84,6 +64,26 @@ const (
 	roLeeConEscrituraIncidental
 )
 
+// toolEntry liga el schema público de una tool (lo que ve tools/list) con su handler
+// (lo que ejecuta tools/call). Es la unidad atómica del registro.
+//
+// readOnly marca las tools que NO mutan estado (ni DB, ni índice, ni ledger, ni bumpAccess). Decide
+// la AUTORIZACIÓN (un principal reader sólo puede llamar tools de lectura, ver Principal.canCall) y
+// es además el DEFAULT del candado de despacho. El default es false = se asume que muta y corre
+// bajo Lock exclusivo (fail-safe: una tool nueva es segura por defecto; recién marcás readOnly tras
+// VERIFICAR que es pura lectura).
+//
+// lock pisa ese default SÓLO para la concurrencia. No toca la autorización: una tool en lockSelf no
+// queda por eso llamable por un reader.
+//
+// dormant es un TERCER eje —la VISIBILIDAD— y no toca ni la autorización ni la capacidad. Una tool
+// dormida sigue implementada, testeada y DESPACHABLE por tools/call; lo único que pierde es el
+// lugar que ocupaba en tools/list. Existe porque el catálogo se paga por sesión: medido sobre
+// testdata/toolslist.golden.json —que congela la salida real— tools/list pesa 93.037 caracteres
+// en JSON compacto (~25.000 tokens) sobre 75 tools visibles, y cada tool que nadie invoca
+// se lo cobra igual a todos los repos, en cada arranque. Dormir NO es retirar: retirar borra
+// trabajo y capacidad, dormir sólo deja de proponer. Es reversible por tool con un booleano, y
+// MUSUBI_TOOLS_ALL=1 las devuelve todas al listado sin recompilar.
 type toolEntry struct {
 	Tool
 	handler  toolHandler
@@ -873,11 +873,12 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_tokens",
-				Description: "Ledger de tokens (model-free): cuántos tokens inyectó Musubi en el contexto, por superficie (arranque, por turno, PreToolUse, hidratación). Devuelve total, desglose ordenado por gasto, y —si hay presupuesto— restante, % usado y estado (ok | watch | over). action ∈ {status, reset}. ⚠️ MIRÁ `session_id` ANTES DE INTERPRETAR EL TOTAL: quien marca el corte de sesión son los hooks, y el camino MCP llama con session_id VACÍO. Con `session_id` vacío el total es un ACUMULADO DE POR VIDA del proceso —en un servidor always-on como el cerebro central el ledger no rota nunca— y NO se compara contra el techo: ahí un `pct_used` de miles por ciento y un `status: over` permanente son lo esperado, no una alarma. El techo además es BLANDO: no recorta nada, así que `over` NUNCA es una orden de achicar el contexto.",
+				Description: "Ledger de tokens (model-free): cuántos tokens inyectó Musubi en el contexto, por superficie (arranque, por turno, PreToolUse, hidratación). Devuelve total, desglose ordenado por gasto, y —si hay presupuesto— restante, % usado y estado (ok | watch | over). action ∈ {status, reset}. ⚠️ MIRÁ `session_id` ANTES DE INTERPRETAR EL TOTAL: quien marca el corte de sesión son los hooks, y el camino MCP llama con session_id VACÍO. Con `session_id` vacío el total es un ACUMULADO DE POR VIDA del proceso —en un servidor always-on como el cerebro central el ledger no rota nunca— y NO se compara contra el techo: ahí un `pct_used` de miles por ciento y un `status: over` permanente son lo esperado, no una alarma. El techo además es BLANDO: no recorta nada, así que `over` NUNCA es una orden de achicar el contexto. El ledger lleva UNA CUENTA POR SESIÓN: el reporte es de la sesión escrita más recientemente, que con varias terminales abiertas puede no ser la tuya — `sesiones` lista todas con su `session_id`, su total, su orden y la hora de su última escritura (la que escribió recién es la tuya). `reset` pone en cero UNA sola sesión: la de `session_id`; sin él, sólo si hay una única sesión — con más de una SE NIEGA y lista las sesiones, porque «la última que escribió» suele ser otra terminal.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"action": {Type: "string", Description: "status | reset (default status)"},
+						"action":     {Type: "string", Description: "status | reset (default status)"},
+						"session_id": {Type: "string", Description: "Sesión a reportar o a poner en cero. Opcional para status (sin ella, la escrita más recientemente); obligatoria para reset cuando hay más de una sesión. Los ids están en `sesiones`."},
 					},
 				},
 			},
