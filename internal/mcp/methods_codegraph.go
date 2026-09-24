@@ -687,6 +687,11 @@ func (s *McpServer) toolCodegraphIndex(ctx context.Context, raw json.RawMessage)
 	// quedó bien). Sólo reportamos `federated` cuando de verdad se intentó (gate encendido).
 	if attempted, ok := s.pushCodeGraphToCentral(ctx); attempted {
 		res["federated"] = ok
+		if !ok {
+			if m := s.ultimoMotivoDelPush(); m != "" {
+				res["federated_motivo"] = m
+			}
+		}
 	}
 	return jsonResult(res)
 }
@@ -775,12 +780,34 @@ func (s *McpServer) empujarFotoDelGrafo(ctx context.Context) bool {
 	// reintenta.
 	//
 	// Lo custodia TestUnaFotoQueFallaNoMandaNadaAlCentral, que saca el `return false` de acá abajo.
+	s.motivoDelPush = ""
+	pub, publicable, motivo := s.origenDelGrafo()
+	if !publicable {
+		// Sin marcar la generación como empujada: si después se checkoutea main, el próximo tick tiene
+		// que publicar. Preguntar cuesta tres `git` locales por tick, no un grafo por la red.
+		s.motivoDelPush = motivo
+		logx.Info("federación del grafo: no se publica", "motivo", motivo)
+		return false
+	}
 	foto, err := s.engine.FotoDelGrafoCtx(s.scopedCtx(ctx))
 	if err != nil {
 		logx.Error("federación del grafo: no se pudo leer la foto local (se aborta el push para no borrar lo del central)", "error", err)
 		return false
 	}
-	if err := s.syncClient.PushGraph(foto.Nodes, foto.Edges, foto.Gists); err != nil {
+	if err := s.syncClient.PushGraphDe(pub, foto.Nodes, foto.Edges, foto.Gists); err != nil {
+		if errors.Is(err, errGrafoViejo) || errors.Is(err, errGrafoIgnorado) {
+			// El central tiene uno más nuevo, o no aplicó el push porque no decía de qué commit era:
+			// reintentar ESTA foto no lo cambia, y cada reintento es el grafo entero por la red. Se
+			// marca como empujada para que el scheduler espere a una generación nueva (o a la higiene
+			// de 24 h), igual que tras un push aceptado.
+			s.motivoDelPush = err.Error()
+			if merr := s.engine.MarcarGrafoEmpujado(foto.Generacion, time.Now()); merr != nil {
+				logx.Error("federación del grafo: rechazado por viejo, y no se pudo registrar para no reintentarlo", "error", merr)
+			}
+			logx.Info("federación del grafo: el central conserva un grafo más nuevo", "detalle", err.Error())
+			return false
+		}
+		s.motivoDelPush = err.Error()
 		// La empujada NO avanza: el próximo tick del scheduler ve generación > empujada y reintenta,
 		// sea este push de la tool o del propio scheduler.
 		logx.Error("federación del grafo: el push al central falló (best-effort, no rompe el index)", "error", err)
@@ -794,6 +821,10 @@ func (s *McpServer) empujarFotoDelGrafo(ctx context.Context) bool {
 	logx.Info("federación del grafo: empujado al central", "nodes", len(foto.Nodes), "edges", len(foto.Edges), "gists", len(foto.Gists), "generacion", foto.Generacion)
 	return true
 }
+
+// topeFechaFutura es cuánto puede adelantarse la fecha de commit de un push respecto del reloj del
+// central antes de toparla: holgura para relojes apenas corridos, no para un commit del mes que viene.
+const topeFechaFutura = time.Hour
 
 // toolCodegraphPush RECIBE el grafo de código federado de un proyecto (Track 20 · F6): el daemon
 // local, tras indexar, empuja su grafo entero y el central lo REEMPLAZA scopeado por el project_id
@@ -812,9 +843,29 @@ func (s *McpServer) toolCodegraphPush(ctx context.Context, raw json.RawMessage) 
 		// y dice que no tiene ninguno ⇒ se reemplaza por vacío. Sin esta distinción, un cliente
 		// viejo empujando el mismo proyecto desde otra máquina le borraría los gists a uno nuevo.
 		Gists *[]memory.CodeMemory `json:"gists"`
+		// Head y HeadAt dicen DE QUÉ ÁRBOL es el grafo: el commit indexado y su fecha de commit
+		// (RFC3339). Los usa la guarda de antigüedad (memory.decidirPublicacion). Un cliente viejo
+		// no los manda.
+		Head   string `json:"head"`
+		HeadAt string `json:"head_at"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
+	}
+	var pub memory.PublicacionDelGrafo
+	if strings.TrimSpace(args.Head) != "" {
+		en, err := time.Parse(time.RFC3339, strings.TrimSpace(args.HeadAt))
+		if err != nil {
+			return nil, rpcErrorf(codeInvalidParams, "head_at tiene que ser la fecha de commit de head en RFC3339: %v", err)
+		}
+		// Una fecha de commit en el futuro (un reloj mal puesto, GIT_COMMITTER_DATE) se topa en la
+		// hora del central: sin el tope, quedaría publicada y todo commit real posterior —con su fecha
+		// verdadera, anterior a ésa— se rechazaría hasta que el reloj la alcanzara, sin ninguna tool
+		// para destrabarlo.
+		if ahora := time.Now(); en.After(ahora.Add(topeFechaFutura)) {
+			en = ahora
+		}
+		pub = memory.PublicacionDelGrafo{Head: strings.TrimSpace(args.Head), En: en}
 	}
 	origin, ok := writeOriginFor(principalFrom(ctx), args.ProjectID)
 	if !ok {
@@ -831,7 +882,18 @@ func (s *McpServer) toolCodegraphPush(ctx context.Context, raw json.RawMessage) 
 	for i := range args.Nodes {
 		args.Nodes[i].Name = s.redactIfForced(args.Nodes[i].Name)
 	}
-	if err := s.engine.ReplaceProjectGraphFrom(origin, args.Nodes, args.Edges); err != nil {
+	// El reemplazo pasa por la guarda de antigüedad: un grafo de un árbol más viejo que el publicado
+	// no lo pisa. Si se rechaza, TAMPOCO se tocan los gists: son del mismo árbol viejo.
+	if err := s.engine.ReplaceProjectGraphPublicado(origin, pub, args.Nodes, args.Edges); err != nil {
+		if errors.Is(err, memory.ErrGrafoMasViejo) {
+			return nil, rpcErrorf(codeGrafoViejo, "%v", err)
+		}
+		if errors.Is(err, memory.ErrGrafoIgnorado) {
+			// Un RESULTADO y no un error, a propósito: esto lo manda un binario anterior a la guarda,
+			// que no conoce -32006 y lo reintentaría en cada tick como falla transitoria. Con un
+			// resultado marca su generación y se calla hasta tener un árbol nuevo.
+			return jsonResult(map[string]interface{}{"nodes": 0, "edges": 0, "ignored": true, "motivo": err.Error()})
+		}
 		return nil, rpcErrorf(codeInternalError, "error al persistir el grafo federado: %v", err)
 	}
 	res := map[string]interface{}{"nodes": len(args.Nodes), "edges": len(args.Edges)}
@@ -861,6 +923,166 @@ func (s *McpServer) commitDeHEAD() string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// gitDelArbol corre git sobre el árbol del proyecto con el mismo tope que commitDeHEAD: va dentro
+// del push y un git colgado no puede arrastrarlo. Devuelve la salida recortada y el código de salida
+// (-1 si git ni siquiera terminó).
+func (s *McpServer) gitDelArbol(args ...string) (string, int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", s.projectPath}, args...)...)
+	out, err := cmd.Output()
+	if err != nil {
+		var salida *exec.ExitError
+		if errors.As(err, &salida) {
+			return "", salida.ExitCode()
+		}
+		return "", -1
+	}
+	return strings.TrimSpace(string(out)), 0
+}
+
+// ramaPrincipalRemota devuelve la rama que el central tiene que reflejar —la principal del remoto
+// `origin`, tal como este clon la conoce— o "" si no hay forma de saberla (sin remoto, un nombre
+// raro). Primero pregunta a origin/HEAD, que es lo que el remoto declara; si el clon no lo tiene
+// (un `git remote add` a mano no lo crea), prueba los dos nombres de siempre.
+func (s *McpServer) ramaPrincipalRemota() string {
+	if ref, rc := s.gitDelArbol("rev-parse", "--abbrev-ref", "origin/HEAD"); rc == 0 && ref != "" && ref != "origin/HEAD" {
+		return ref
+	}
+	for _, ref := range []string{"origin/main", "origin/master"} {
+		if _, rc := s.gitDelArbol("rev-parse", "--verify", "--quiet", ref); rc == 0 {
+			return ref
+		}
+	}
+	return ""
+}
+
+// origenDelGrafo averigua DE QUÉ ÁRBOL es el grafo local y si corresponde publicarlo en el central.
+//
+// ⚠️ POR QUÉ. El central guarda UN grafo por proyecto y lo leen todas las máquinas, así que tiene
+// que describir el código COMPARTIDO, no lo que alguien tenga checkouteado. Medido el 2026-09-24:
+// la laptop estaba en una rama del 2026-09-12, 174 commits detrás de main; su terminal indexó esa
+// rama y la publicó encima del grafo al día, y el central quedó doce días atrás. El grafo LOCAL
+// sigue indexando lo checkouteado —es lo que esa terminal necesita para su precheck—; lo que cambia
+// es qué se publica.
+//
+// La regla tiene tres preguntas, y cada una la agregó un caso que la anterior dejaba pasar:
+//
+//  1. ¿El sello es el HEAD de ahora? Con un directorio fallido el índice no re-sella, y el sello
+//     queda en el commit ANTERIOR: una terminal que pasó de main a una rama publicaba el grafo de
+//     la rama con el sello de main (lo reprodujo la revisión, contra un central real).
+//  2. ¿El commit está en la cadena de PRIMER PADRE de la rama principal remota? No alcanza con ser
+//     ancestro: con merge commits —este repo tiene—, el commit de una rama ya mergeada es ancestro
+//     de origin/main, puede ser más nuevo que el main publicado, y no tiene los cambios que main
+//     sumó en paralelo. Sobre el primer padre, además, las fechas de commit sí crecen, que es lo
+//     que la mitad del central compara. Esto deja afuera ramas de trabajo y commits sin empujar.
+//  3. ¿El árbol está limpio en lo que el grafo indexa? El índice lee el DISCO, no el commit: un
+//     archivo .go editado o nuevo sin commitear sobre la punta de main entraba al grafo y salía
+//     publicado con el commit de main.
+//
+// Un checkout VIEJO de main pasa las tres, y para ése está la otra mitad de la guarda, en el
+// central: no acepta un commit más viejo que el publicado.
+//
+// Ante la duda se publica y decide el central: sin commit sellado, sin rama principal conocida o
+// con un git que falla por otra cosa que la respuesta que se busca. Callar el push por no poder
+// preguntar dejaría al central atrás sin que nadie lo vea, que es el defecto de siempre.
+func (s *McpServer) origenDelGrafo() (pub memory.PublicacionDelGrafo, publicable bool, motivo string) {
+	sellado, _, _ := s.engine.GetMeta(memory.MetaCodegraphHead)
+	if strings.TrimSpace(sellado) == "" {
+		return memory.PublicacionDelGrafo{}, true, ""
+	}
+	linea, rc := s.gitDelArbol("show", "-s", "--format=%H%x1f%cI", sellado)
+	completo, fecha, ok := strings.Cut(linea, "\x1f")
+	if rc != 0 || !ok {
+		return memory.PublicacionDelGrafo{}, true, ""
+	}
+	en, err := time.Parse(time.RFC3339, fecha)
+	if err != nil {
+		return memory.PublicacionDelGrafo{}, true, ""
+	}
+	pub = memory.PublicacionDelGrafo{Head: completo, En: en}
+	if head, rc := s.gitDelArbol("rev-parse", "HEAD"); rc == 0 && head != "" && head != completo {
+		return pub, false, "el índice está sellado en " + sellado + " pero el árbol ya está en " + abreviar(head) +
+			": el último índice no llegó a derivarlo entero, y publicarlo le pondría la etiqueta de otro commit"
+	}
+	principal := s.ramaPrincipalRemota()
+	if principal == "" {
+		return pub, true, ""
+	}
+	if cadena, rc := s.gitDelArbol("rev-list", "--first-parent", principal); rc == 0 && !contieneLinea(cadena, completo) {
+		return pub, false, "el árbol indexado (" + sellado + ") no está en la línea principal de " + principal +
+			": al central se publica sólo esa línea, y este grafo describe otra cosa (una rama de trabajo, una ya mergeada o commits sin empujar)"
+	}
+	if sucio := s.primerArchivoIndexableSinCommitear(); sucio != "" {
+		return pub, false, "hay cambios sin commitear en archivos que el grafo indexa (" + sucio +
+			"): el grafo describe el disco, no " + sellado + ", y se publicaría con una etiqueta que no le corresponde"
+	}
+	return pub, true, ""
+}
+
+// primerArchivoIndexableSinCommitear devuelve un archivo modificado o sin trackear que el grafo
+// indexaría, o "" si no hay (o si git no pudo contestar: ante la duda decide el central). Mira lo
+// MISMO que walkSourceTree —misma función de extensiones, mismos directorios salteados—: un .yaml
+// suelto o un respaldo sin trackear no cambian el grafo y no tienen por qué frenar la publicación.
+func (s *McpServer) primerArchivoIndexableSinCommitear() string {
+	salida, rc := s.gitDelArbol("status", "--porcelain=v1", "-z", "--untracked-files=all")
+	if rc != 0 {
+		return ""
+	}
+	campos := strings.Split(salida, "\x00")
+	for i := 0; i < len(campos); i++ {
+		c := campos[i]
+		if len(c) < 4 {
+			continue
+		}
+		xy, ruta := c[:2], c[3:]
+		if xy[0] == 'R' || xy[0] == 'C' {
+			i++ // renombre o copia: el campo que sigue es el nombre de origen
+		}
+		if rutaIndexable(ruta) {
+			return ruta
+		}
+	}
+	return ""
+}
+
+// rutaIndexable aplica a una ruta relativa las mismas reglas que walkSourceTree.
+func rutaIndexable(ruta string) bool {
+	partes := strings.Split(filepath.ToSlash(ruta), "/")
+	for _, dir := range partes[:len(partes)-1] {
+		if strings.HasPrefix(dir, ".") || dir == "vendor" || dir == "testdata" ||
+			dir == "node_modules" || dir == "dist" || dir == "coverage" {
+			return false
+		}
+	}
+	return codeintel.IndexableForGraph(partes[len(partes)-1])
+}
+
+// contieneLinea dice si alguna línea de texto es exactamente s.
+func contieneLinea(texto, s string) bool {
+	for _, l := range strings.Split(texto, "\n") {
+		if strings.TrimSpace(l) == s {
+			return true
+		}
+	}
+	return false
+}
+
+// abreviar corta un commit a 7 caracteres para un mensaje.
+func abreviar(commit string) string {
+	if len(commit) > 7 {
+		return commit[:7]
+	}
+	return commit
+}
+
+// ultimoMotivoDelPush devuelve por qué el último push no salió o no se aceptó ("" si salió).
+func (s *McpServer) ultimoMotivoDelPush() string {
+	s.pushMu.Lock()
+	defer s.pushMu.Unlock()
+	return s.motivoDelPush
 }
 
 // pathConocido marca si el ARCHIVO del node_key existe en este árbol (indexado o en disco), aunque

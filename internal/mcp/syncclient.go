@@ -37,6 +37,13 @@ const umbralCompresionPush = 1 << 20 // 1 MiB
 var (
 	errTransient = errors.New("fallo transitorio de sync")
 	errPermanent = errors.New("fallo permanente de sync")
+	// errGrafoViejo: el central rechazó el push del grafo porque tiene publicado uno de un árbol más
+	// nuevo (codeGrafoViejo). Viaja JUNTO con errPermanent: reintentar el mismo grafo no lo arregla.
+	errGrafoViejo = errors.New("el central tiene publicado un grafo de un árbol más nuevo")
+	// errGrafoIgnorado: el central NO aplicó el push porque no decía de qué commit era y el publicado
+	// sí. Llega como resultado (no como error JSON-RPC) para que un binario viejo no reintente; el
+	// cliente nuevo lo lee del resultado para no loguear «empujado» cuando no se tocó nada.
+	errGrafoIgnorado = errors.New("el central ignoró el push del grafo")
 )
 
 // SyncClient empuja filas del outbox al cerebro central. Se construye una vez desde SyncConfig
@@ -246,6 +253,14 @@ func (c *SyncClient) Push(item memory.OutboxItem) error {
 // devolver. El campo va SIEMPRE, aunque esté vacío — es lo que le dice al receptor "reemplazá los
 // míos"; un central viejo ignora la clave desconocida y se comporta como antes.
 func (c *SyncClient) PushGraph(nodes []memory.GraphNode, edges []memory.GraphEdge, gists []memory.CodeMemory) error {
+	return c.PushGraphDe(memory.PublicacionDelGrafo{}, nodes, edges, gists)
+}
+
+// PushGraphDe es PushGraph diciendo DE QUÉ ÁRBOL es el grafo: el commit indexado y su fecha de
+// commit, que el central usa para no dejar que un árbol viejo pise uno nuevo. Con la publicación
+// vacía los campos no viajan y el push es idéntico al de antes. Un central anterior a la guarda
+// ignora las dos claves.
+func (c *SyncClient) PushGraphDe(pub memory.PublicacionDelGrafo, nodes []memory.GraphNode, edges []memory.GraphEdge, gists []memory.CodeMemory) error {
 	if gists == nil {
 		gists = []memory.CodeMemory{}
 	}
@@ -256,9 +271,11 @@ func (c *SyncClient) PushGraph(nodes []memory.GraphNode, edges []memory.GraphEdg
 		Params  struct {
 			Name      string `json:"name"`
 			Arguments struct {
-				Nodes []memory.GraphNode  `json:"nodes"`
-				Edges []memory.GraphEdge  `json:"edges"`
-				Gists []memory.CodeMemory `json:"gists"`
+				Nodes  []memory.GraphNode  `json:"nodes"`
+				Edges  []memory.GraphEdge  `json:"edges"`
+				Gists  []memory.CodeMemory `json:"gists"`
+				Head   string              `json:"head,omitempty"`
+				HeadAt string              `json:"head_at,omitempty"`
 			} `json:"arguments"`
 		} `json:"params"`
 	}{JsonRpc: "2.0", ID: "codegraph-push", Method: "tools/call"}
@@ -266,6 +283,10 @@ func (c *SyncClient) PushGraph(nodes []memory.GraphNode, edges []memory.GraphEdg
 	reqBody.Params.Arguments.Nodes = nodes
 	reqBody.Params.Arguments.Edges = edges
 	reqBody.Params.Arguments.Gists = gists
+	if !pub.Vacia() {
+		reqBody.Params.Arguments.Head = pub.Head
+		reqBody.Params.Arguments.HeadAt = pub.En.UTC().Format(time.RFC3339)
+	}
 
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
@@ -322,7 +343,36 @@ func (c *SyncClient) PushGraph(nodes []memory.GraphNode, edges []memory.GraphEdg
 		return fmt.Errorf("%w: %v", errTransient, err)
 	}
 	defer resp.Body.Close()
-	return classifyResponse(resp)
+	result, err := leerRespuesta(resp)
+	if err != nil {
+		return err
+	}
+	if motivo, ignorado := pushIgnorado(result); ignorado {
+		return fmt.Errorf("%w: %w: %s", errPermanent, errGrafoIgnorado, motivo)
+	}
+	return nil
+}
+
+// pushIgnorado mira si el resultado de musubi_codegraph_push dice `ignored`. El resultado de una tool
+// es {content:[{type,text}]} con el JSON adentro del texto. Un resultado que no se entiende NO es un
+// ignorado: un central viejo contesta {nodes, edges} y eso es un push aplicado.
+func pushIgnorado(result json.RawMessage) (string, bool) {
+	var envoltura struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(result, &envoltura) != nil || len(envoltura.Content) == 0 {
+		return "", false
+	}
+	var cuerpo struct {
+		Ignored bool   `json:"ignored"`
+		Motivo  string `json:"motivo"`
+	}
+	if json.Unmarshal([]byte(envoltura.Content[0].Text), &cuerpo) != nil || !cuerpo.Ignored {
+		return "", false
+	}
+	return cuerpo.Motivo, true
 }
 
 // syncPullArguments son los argumentos del musubi_sync_pull remoto (sync ENTRANTE C5.3b).
@@ -449,31 +499,41 @@ var permanentRPCCodes = map[int]bool{
 // permanente. Un error JSON-RPC es permanente SÓLO si está en permanentRPCCodes (ver arriba).
 // Un body ilegible o no-JSON en un 200 se trata como transitorio (el POST pudo llegar).
 func classifyResponse(resp *http.Response) error {
+	_, err := leerRespuesta(resp)
+	return err
+}
+
+// leerRespuesta es classifyResponse devolviendo además el `result` de un 200 sin error, para el
+// llamador que necesita mirarlo (PushGraphDe).
+func leerRespuesta(resp *http.Response) (json.RawMessage, error) {
 	switch {
 	case resp.StatusCode == http.StatusOK:
 		var body syncRPCResponse
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-			return fmt.Errorf("%w: respuesta 200 ilegible del central: %v", errTransient, err)
+			return nil, fmt.Errorf("%w: respuesta 200 ilegible del central: %v", errTransient, err)
 		}
 		if body.Error != nil {
+			if body.Error.Code == codeGrafoViejo {
+				return nil, fmt.Errorf("%w: %w: %s", errPermanent, errGrafoViejo, body.Error.Message)
+			}
 			if permanentRPCCodes[body.Error.Code] {
-				return fmt.Errorf("%w: el central RECHAZÓ la entrega (JSON-RPC %d): %s",
+				return nil, fmt.Errorf("%w: el central RECHAZÓ la entrega (JSON-RPC %d): %s",
 					errPermanent, body.Error.Code, body.Error.Message)
 			}
 			// Fallo del central procesando un pedido válido (incl. -32603 SQLITE_BUSY y -32002
 			// cuota): se libera solo. Reintentar con backoff, y SIN TOPE POR CONTEO — ver
 			// config.SyncConfig.MaxAttempts, que es donde esa regla vive escrita una sola vez.
-			return fmt.Errorf("%w: el central FALLÓ al procesar (JSON-RPC %d): %s",
+			return nil, fmt.Errorf("%w: el central FALLÓ al procesar (JSON-RPC %d): %s",
 				errTransient, body.Error.Code, body.Error.Message)
 		}
 		if len(body.Result) == 0 {
-			return fmt.Errorf("%w: respuesta 200 sin result ni error", errTransient)
+			return nil, fmt.Errorf("%w: respuesta 200 sin result ni error", errTransient)
 		}
-		return nil
+		return body.Result, nil
 	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
-		return fmt.Errorf("%w: el central devolvió HTTP %d", errTransient, resp.StatusCode)
+		return nil, fmt.Errorf("%w: el central devolvió HTTP %d", errTransient, resp.StatusCode)
 	default:
 		// 4xx (400/401/403/404, etc.): request mal formado o no autorizado → permanente.
-		return fmt.Errorf("%w: el central devolvió HTTP %d", errPermanent, resp.StatusCode)
+		return nil, fmt.Errorf("%w: el central devolvió HTTP %d", errPermanent, resp.StatusCode)
 	}
 }

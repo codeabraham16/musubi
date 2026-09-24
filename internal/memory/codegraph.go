@@ -124,7 +124,19 @@ func (e *DbEngine) ReplaceProjectGraphFrom(originProjectID string, nodes []Graph
 		return fmt.Errorf("error al iniciar transacción de reemplazo del grafo: %w", err)
 	}
 	defer tx.Rollback()
+	if err := reemplazarGrafoTx(tx, projectID, nodes, edges); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("error al commitear el reemplazo del grafo: %w", err)
+	}
+	return nil
+}
 
+// reemplazarGrafoTx es el cuerpo del reemplazo, dentro de la transacción del llamador: borra todo
+// lo del proyecto, reinserta el set y avanza la generación. Lo comparten ReplaceProjectGraphFrom y
+// ReplaceProjectGraphPublicado, que agrega la guarda de antigüedad alrededor.
+func reemplazarGrafoTx(tx *sql.Tx, projectID string, nodes []GraphNode, edges []GraphEdge) error {
 	if _, err := tx.Exec(`DELETE FROM code_graph_nodes WHERE project_id=?`, projectID); err != nil {
 		return fmt.Errorf("error al limpiar nodos del proyecto %q: %w", projectID, err)
 	}
@@ -158,13 +170,7 @@ func (e *DbEngine) ReplaceProjectGraphFrom(originProjectID string, nodes []Graph
 			return fmt.Errorf("error al guardar arista %s→%s: %w", ed.FromKey, ed.ToKey, err)
 		}
 	}
-	if err := avanzarGeneracionDelGrafo(tx); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("error al commitear el reemplazo del grafo: %w", err)
-	}
-	return nil
+	return avanzarGeneracionDelGrafo(tx)
 }
 
 // GetGraphNodeCtx devuelve un nodo por su clave, acotado al proyecto de la credencial (Track
