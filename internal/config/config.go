@@ -1405,17 +1405,26 @@ func ConfigSombra(projectPath string) string {
 // hablaba de otra. Nadie lo vio en cinco días porque una rama de larga vida SIN PR es invisible
 // para CI —lo dice `ci.yml:14-21`— y el lint sólo corre ahí.
 func Load(projectPath string) (Config, error) {
-	cfg := Default()
 	path := filepath.Join(projectPath, DirName, ConfigFile)
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return cfg, nil
+			return Default(), nil
 		}
-		return cfg, fmt.Errorf("error al leer %s: %w", path, err)
+		return Default(), fmt.Errorf("error al leer %s: %w", path, err)
 	}
+	return Parse(data)
+}
 
+// Parse interpreta el contenido de un config.yaml exactamente como Load, con los mismos defaults.
+//
+// Existe aparte para poder VALIDAR un config ANTES de escribirlo: `musubi provision` edita el YAML
+// del proyecto, y una revisión adversarial mostró que un editor de texto puede dejarlo ilegible
+// —una clave duplicada por una línea en blanco— mientras el paso reporta «hecho». Con Parse, quien
+// edita comprueba el resultado con el mismo parser que lo va a leer después, y si no pasa, no escribe.
+func Parse(data []byte) (Config, error) {
+	cfg := Default()
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("error al parsear config.yaml: %w", err)
 	}
@@ -1474,12 +1483,6 @@ func presentBlockKeys(data []byte, block string) map[string]bool {
 	return keys
 }
 
-// applyMemoryDefaults restaura los defaults de los bool default-ON de MemoryConfig cuya clave
-// puede faltar dentro de un bloque `memory` presente. La detección de bloque top-level de
-// applyDefaults no alcanza: un bloque `memory` presente pero sin `recall_graph_centrality`
-// deja el bool en su cero-valor (false), que es indistinguible de un opt-out explícito. Acá se
-// mira la presencia de la SUB-CLAVE: ausente ⇒ default (ON); explícita (true/false) ⇒ se
-// respeta. Si el bloque `memory` está ausente, applyDefaults ya puso el default completo.
 // applyConflictsDefaults resuelve la sub-clave `cosine_floor` con el criterio ausente-vs-explícito:
 // ausente ⇒ default (0.85); explícita ⇒ se respeta, INCLUIDO el 0 (que apaga el coseno y devuelve el
 // dedup a su comportamiento léxico histórico). Con el `== 0 ⇒ default` de applyDefaults, un
@@ -1499,6 +1502,12 @@ func (c *Config) applyConflictsDefaults(data []byte) {
 	}
 }
 
+// applyMemoryDefaults restaura los defaults de los bool default-ON de MemoryConfig cuya clave
+// puede faltar dentro de un bloque `memory` presente. La detección de bloque top-level de
+// applyDefaults no alcanza: un bloque `memory` presente pero sin `recall_graph_centrality`
+// deja el bool en su cero-valor (false), que es indistinguible de un opt-out explícito. Acá se
+// mira la presencia de la SUB-CLAVE: ausente ⇒ default (ON); explícita (true/false) ⇒ se
+// respeta. Si el bloque `memory` está ausente, applyDefaults ya puso el default completo.
 func (c *Config) applyMemoryDefaults(data []byte) {
 	if !presentBlocks(data)["memory"] {
 		return

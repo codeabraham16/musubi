@@ -661,13 +661,17 @@
     },
     {
       "name": "musubi_tokens",
-      "description": "Ledger de tokens (model-free): cuántos tokens inyectó Musubi en el contexto, por superficie (arranque, por turno, PreToolUse, hidratación). Devuelve total, desglose ordenado por gasto, y —si hay presupuesto— restante, % usado y estado (ok | watch | over). action ∈ {status, reset}. ⚠️ MIRÁ `session_id` ANTES DE INTERPRETAR EL TOTAL: quien marca el corte de sesión son los hooks, y el camino MCP llama con session_id VACÍO. Con `session_id` vacío el total es un ACUMULADO DE POR VIDA del proceso —en un servidor always-on como el cerebro central el ledger no rota nunca— y NO se compara contra el techo: ahí un `pct_used` de miles por ciento y un `status: over` permanente son lo esperado, no una alarma. El techo además es BLANDO: no recorta nada, así que `over` NUNCA es una orden de achicar el contexto.",
+      "description": "Ledger de tokens (model-free): cuántos tokens inyectó Musubi en el contexto, por superficie (arranque, por turno, PreToolUse, hidratación). Devuelve total, desglose ordenado por gasto, y —si hay presupuesto— restante, % usado y estado (ok | watch | over). action ∈ {status, reset}. ⚠️ MIRÁ `session_id` ANTES DE INTERPRETAR EL TOTAL: quien marca el corte de sesión son los hooks, y el camino MCP llama con session_id VACÍO. Con `session_id` vacío el total es un ACUMULADO DE POR VIDA del proceso —en un servidor always-on como el cerebro central el ledger no rota nunca— y NO se compara contra el techo: ahí un `pct_used` de miles por ciento y un `status: over` permanente son lo esperado, no una alarma. El techo además es BLANDO: no recorta nada, así que `over` NUNCA es una orden de achicar el contexto. El ledger lleva UNA CUENTA POR SESIÓN: el reporte es de la sesión escrita más recientemente, que con varias terminales abiertas puede no ser la tuya — `sesiones` lista todas con su `session_id`, su total, su orden y la hora de su última escritura (la que escribió recién es la tuya). `reset` pone en cero UNA sola sesión: la de `session_id`; sin él, sólo si hay una única sesión — con más de una SE NIEGA y lista las sesiones, porque «la última que escribió» suele ser otra terminal.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "action": {
             "type": "string",
             "description": "status | reset (default status)"
+          },
+          "session_id": {
+            "type": "string",
+            "description": "Sesión a reportar o a poner en cero. Opcional para status (sin ella, la escrita más recientemente); obligatoria para reset cuando hay más de una sesión. Los ids están en `sesiones`."
           }
         }
       }
@@ -1421,7 +1425,7 @@
     },
     {
       "name": "musubi_fleet_services",
-      "description": "Qué CORRE ADENTRO de cada máquina de la flota: units de systemd, servicios de Windows, contenedores. Requiere la capacidad `metrics` SOBRE CADA MÁQUINA (sección `fleet:` de principals.yaml): qué corre en un host es telemetría del host, del mismo peso que su uso de CPU — accionar sobre un servicio sigue siendo `exec`, con su allowlist por comando. `estado` es corriendo | detenido | fallado | desconocido, y `desconocido` NO ES `detenido`: una máquina que no pudo enumerar sus servicios no está diciendo que el postgres esté caído. Un servicio DECLARADO Y TODAVÍA SIN MEDIR es un estado legítimo y distinto de «caído»: viaja con `ultimo_reporte` en null. `fresco` dice si el último reporte entra en el umbral de esa máquina — un servicio con noticias de hace dos días no está corriendo, está sin noticias. Guarda el PRESENTE, no la historia: no hay serie temporal (ésa la guarda Prometheus). Devuelve además cuántos servicios quedaron fuera por permiso, sin nombrarlos.",
+      "description": "Qué CORRE ADENTRO de cada máquina de la flota: units de systemd, servicios de Windows, contenedores. Requiere la capacidad `metrics` SOBRE CADA MÁQUINA (sección `fleet:` de principals.yaml): qué corre en un host es telemetría del host, del mismo peso que su uso de CPU — accionar sobre un servicio sigue siendo `exec`, con su allowlist por comando. `estado` es corriendo | detenido | fallado | desconocido | ocioso. `ocioso` es un servicio apagado PORQUE NADIE LO PIDIÓ (un automático de Windows que arranca a demanda, con código de salida 0): no es una falla ni una duda. Y `desconocido` NO ES `detenido`: una máquina que no pudo enumerar sus servicios no está diciendo que el postgres esté caído. Un servicio DECLARADO Y TODAVÍA SIN MEDIR es un estado legítimo y distinto de «caído»: viaja con `ultimo_reporte` en null. `fresco` dice si el último reporte entra en el umbral de esa máquina — un servicio con noticias de hace dos días no está corriendo, está sin noticias. Guarda el PRESENTE, no la historia: no hay serie temporal (ésa la guarda Prometheus). Devuelve además cuántos servicios quedaron fuera por permiso, sin nombrarlos.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1748,7 +1752,7 @@
     },
     {
       "name": "musubi_sharpen",
-      "description": "AFILADOR del acervo de diseño (pilar 'Musubi Renaissance'), el gemelo del destilador: pase OFFLINE que junta las tarjetas `design-corpus/*` que dicen la MISMA lección con otras palabras (gemelas por COSENO de embeddings, que el Consolidate por trigramas no ve). Halla pares sobre un piso de coseno y un JUEZ LLM decide, par por par, si son redundantes (MERGE: archiva la más débil, conservando accesos e importancia en la más fuerte — soft-delete REVERSIBLE) o facetas distintas (KEEP: las marca `not_duplicate` para no volver a juzgarlas). CONSERVADOR: ante la duda, conserva. Requiere admin y un motor de cognición (opt-in: sin motor, falla explícito). Procesa de a tandas (default 6 pares, máx 25); corré en bucle. Pasá `dry_run:true` para ver los pares candidatos sin juzgar ni escribir, `pairs` para el tamaño de la tanda, o `floor` para el piso de coseno (default 0.84).",
+      "description": "AFILADOR del acervo de diseño (pilar 'Musubi Renaissance'), el gemelo del destilador: pase OFFLINE que junta las tarjetas `design-corpus/*` que dicen la MISMA lección con otras palabras (gemelas por COSENO de embeddings, que el Consolidate por trigramas no ve). Halla pares sobre un piso de coseno y un JUEZ LLM decide, par por par, si son redundantes (MERGE: archiva la más débil, conservando accesos e importancia en la más fuerte — soft-delete REVERSIBLE) o facetas distintas (KEEP: las marca `not_duplicate` para no volver a juzgarlas). CONSERVADOR: ante la duda, conserva. Requiere admin y un motor de cognición (opt-in: sin motor, falla explícito). Procesa de a tandas (default 6 pares, máx 25); corré en bucle. Pasá `dry_run:true` para ver los pares candidatos sin juzgar ni escribir, `pairs` para el tamaño de la tanda, o `floor` para el piso de coseno (default 0.82).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1758,7 +1762,7 @@
           },
           "floor": {
             "type": "number",
-            "description": "Piso de coseno para proponer un par al juez (default 0.84). Más bajo = más pares candidatos."
+            "description": "Piso de coseno para proponer un par al juez (default 0.82). Más bajo = más pares candidatos."
           },
           "pairs": {
             "type": "number",

@@ -316,10 +316,10 @@ func TestRunEmptyTokenSkipsAuth(t *testing.T) {
 // input donde `"http://" + brain` y `direccionDelCerebro(brain)` dan el mismo byte. Este test
 // entra por el otro lado.
 //
-// Sabotaje que lo hace fallar: devolverle a `ensureSyncConfig` su `"  central_url: http://%s\n"`.
+// Sabotaje que lo hace fallar: devolverle a `ensureSyncConfig` su esquema `http://` pegado a mano.
 // arnes: archivo="internal/provision/syncconfig.go"
-// arnes: de="\t\t\"  central_url: %s\\n\"+"
-// arnes: a="\t\t\"  central_url: http://%s\\n\"+"
+// arnes: de="\"central_url: \" + base,"
+// arnes: a="\"central_url: http://\" + base,"
 func TestUnBrainConEsquemaLlegaIgualALosDosArtefactos(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PROV_TOKEN", "secreto")

@@ -14,7 +14,7 @@ import (
 	"musubi/internal/fleet"
 )
 
-// conPantalla es un principal con `screen` sobre todo su proyecto.
+// conPantallaTotal es un principal con `screen` sobre todo su proyecto.
 func conPantallaTotal(proyecto string) *Principal {
 	return &Principal{
 		Name: "op", Role: RoleWriter, Read: ReadOwn, Write: WriteOwn, ProjectID: proyecto,

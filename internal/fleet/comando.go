@@ -339,9 +339,21 @@ func ArgvDesdeTexto(s string) []string {
 }
 
 // ResumenArgv arma una línea legible para logs y paneles. NO se guarda: la fuente es el argv.
+//
+// PASA POR ArgvDeBitacora ADENTRO, Y NO ES UNA CORTESÍA. «Legible para logs» es exactamente la
+// superficie que ArgvDeBitacora existe para proteger, y hasta el 2026-09-23 esta función la
+// salteaba: su único llamador, `atenderComandos` en el agente, imprimía
+// `› ejecutando: musubi:pantalla <sesión> <CONTRASEÑA> <ttl>` en el stdout — que en Linux es el
+// journal de `musubi-agente`, persistente. Lo encontró la auditoría A131 como defecto VIVO, sin
+// mutación, con todas las guardas en verde: la que custodia «en ninguna superficie» miraba sólo
+// las del cerebro.
+//
+// Se tapa ACÁ y no en el llamador para que el camino malo no se pueda escribir: quien use esta
+// función para loguear un argv queda protegido sin saberlo. Lo que sigue abierto es unir el argv
+// a mano (`strings.Join(c.Argv, " ")`); eso lo caza la guarda sobre el stdout real del agente.
 func ResumenArgv(argv []string) string {
 	if len(argv) == 0 {
 		return ""
 	}
-	return strings.Join(argv, " ")
+	return strings.Join(ArgvDeBitacora(argv), " ")
 }

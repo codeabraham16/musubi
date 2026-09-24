@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"musubi/internal/cognition"
@@ -37,7 +38,31 @@ const (
 	// gemelas reales viven en 0.82-0.89 (los blobs distintos de verdad quedan debajo). El piso es un
 	// FILTRO GRUESO barato; la precisión la pone el juez LLM, así que conviene un piso algo bajo (más
 	// pares a juzgar) antes que perderse gemelas legítimas.
-	dedupDefaultFloor = 0.84
+	//
+	// HASTA EL 2026-09-23 VALÍA 0.84, Y CONTRADECÍA LA POLÍTICA QUE TIENE ESCRITA ARRIBA. La frase dice
+	// «las gemelas viven desde 0.82» y «antes que perderse gemelas legítimas»; el valor cortaba la
+	// franja 0.82-0.84 entera. Medido ese día corriendo ESTA función (SemanticDuplicateCandidates)
+	// contra una copia del acervo del cerebro —1.523 tarjetas, vectores `ollama:bge-m3`—:
+	//
+	//	piso 0.84 -> 0 candidatos sin juzgar: el afilado de fondo ya se había comido todo lo de arriba
+	//	piso 0.82 -> 33 candidatos, que con 0.84 no llegaban NUNCA al juez
+	//
+	// LA PRUEBA DE QUE EL PISO CORTABA GEMELAS Y NO RUIDO no es que haya 33 pares: es cómo decidió el
+	// juez justo arriba de la raya. En la franja más angosta sobre el piso, 0.84-0.85, fusionó 6 de 8.
+	// Si las gemelas se terminaran en 0.84, esa tasa se desplomaría al acercarse al borde; no se
+	// desploma, la corta el piso. Y la muestra de abajo lo confirma a simple vista:
+	// `tamano-objetivo-tactil` | `touch-target-48px` (0.838), `marcar-campos-opcionales` |
+	// `campo-opcional-marcado` (0.832), `contraste-color-texto` | `contraste-4-5-a-1` (0.833) — éste
+	// último, el mismo concepto que el comentario del paquete usa de ejemplo de gemela semántica.
+	//
+	// NO SE BAJÓ MÁS, Y ES A PROPÓSITO. En 0.80-0.82 hay otros 74 pares y nadie midió si son gemelas.
+	// 0.82 es el valor más bajo que la evidencia sostiene; debajo sería adivinar.
+	//
+	// OJO AL TOCARLO: no es sólo el default de la herramienta manual. `sharpenBatchOnce` lo usa en el
+	// afilado de fondo, que en el cerebro está PRENDIDO (`auto_sharpen_pairs: 2`) y fusiona solo. Subir
+	// este número vuelve invisible una franja de gemelas sin que nada falle; bajarlo manda más pares al
+	// juez en un job que corre sin principal, o sea sin cuota de motor por-principal.
+	dedupDefaultFloor = 0.82
 	// dedupDefaultPairs / dedupMaxPairs acotan cuántos pares juzga una tanda. Cada par es una llamada al
 	// motor; la tanda chica mantiene la latencia y la cuota manejables y se corre en bucle.
 	dedupDefaultPairs = 6
@@ -254,6 +279,11 @@ CRITERIO:
 
 SALIDA: SÓLO un objeto JSON, sin prosa antes ni después: {"verdict":"MERGE"} o {"verdict":"KEEP"}.`
 
+// pisoPorDefaultEnTexto es el piso tal como lo lee quien consulta la herramienta. SALE DE LA CONSTANTE
+// y no se escribe a mano: la descripción decía «default 0.84» en dos lugares, y un número copiado en
+// prosa es justo lo que queda viejo el día que alguien cambia el de verdad sin buscar sus copias.
+var pisoPorDefaultEnTexto = strconv.FormatFloat(dedupDefaultFloor, 'f', -1, 64)
+
 // sharpenToolEntry registra musubi_sharpen. Va en el central (donde vive el acervo `musubi-design` y hay
 // motor); en stdio local sin motor, falla explícito (opt-in). NO es readOnly: archiva tarjetas + escribe
 // marcadores. Es lockSelf porque hace I/O externa (juez LLM) por cada par — sostener el candado del
@@ -262,12 +292,12 @@ func (s *McpServer) sharpenToolEntry() toolEntry {
 	return toolEntry{
 		Tool: Tool{
 			Name:        "musubi_sharpen",
-			Description: "AFILADOR del acervo de diseño (pilar 'Musubi Renaissance'), el gemelo del destilador: pase OFFLINE que junta las tarjetas `design-corpus/*` que dicen la MISMA lección con otras palabras (gemelas por COSENO de embeddings, que el Consolidate por trigramas no ve). Halla pares sobre un piso de coseno y un JUEZ LLM decide, par por par, si son redundantes (MERGE: archiva la más débil, conservando accesos e importancia en la más fuerte — soft-delete REVERSIBLE) o facetas distintas (KEEP: las marca `not_duplicate` para no volver a juzgarlas). CONSERVADOR: ante la duda, conserva. Requiere admin y un motor de cognición (opt-in: sin motor, falla explícito). Procesa de a tandas (default 6 pares, máx 25); corré en bucle. Pasá `dry_run:true` para ver los pares candidatos sin juzgar ni escribir, `pairs` para el tamaño de la tanda, o `floor` para el piso de coseno (default 0.84).",
+			Description: "AFILADOR del acervo de diseño (pilar 'Musubi Renaissance'), el gemelo del destilador: pase OFFLINE que junta las tarjetas `design-corpus/*` que dicen la MISMA lección con otras palabras (gemelas por COSENO de embeddings, que el Consolidate por trigramas no ve). Halla pares sobre un piso de coseno y un JUEZ LLM decide, par por par, si son redundantes (MERGE: archiva la más débil, conservando accesos e importancia en la más fuerte — soft-delete REVERSIBLE) o facetas distintas (KEEP: las marca `not_duplicate` para no volver a juzgarlas). CONSERVADOR: ante la duda, conserva. Requiere admin y un motor de cognición (opt-in: sin motor, falla explícito). Procesa de a tandas (default 6 pares, máx 25); corré en bucle. Pasá `dry_run:true` para ver los pares candidatos sin juzgar ni escribir, `pairs` para el tamaño de la tanda, o `floor` para el piso de coseno (default " + pisoPorDefaultEnTexto + ").",
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
 					"pairs":   {Type: "number", Description: "Cuántos pares juzgar en esta tanda (default 6, máximo 25). Cada par es una llamada al juez LLM."},
-					"floor":   {Type: "number", Description: "Piso de coseno para proponer un par al juez (default 0.84). Más bajo = más pares candidatos."},
+					"floor":   {Type: "number", Description: "Piso de coseno para proponer un par al juez (default " + pisoPorDefaultEnTexto + "). Más bajo = más pares candidatos."},
 					"dry_run": {Type: "boolean", Description: "Si es true, lista los pares candidatos por coseno SIN llamar al juez ni archivar nada."},
 				},
 			},

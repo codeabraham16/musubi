@@ -17,14 +17,14 @@ import (
 	"musubi/internal/memory"
 )
 
-// acervoDirigido siembra observaciones a similitudes CONOCIDAS de la consulta "CONSULTA": cada
-// entrada declara su topic, su texto y a qué similitud queda. Igual que en el banco de F3, esto no
-// simula calidad de recuperación — fija los números para poder ejercitar la lógica de selección.
 type entradaDirigida struct {
 	topic, texto string
 	sim          float64
 }
 
+// acervoDirigido siembra observaciones a similitudes CONOCIDAS de la consulta "CONSULTA": cada
+// entrada declara su topic, su texto y a qué similitud queda. Igual que en el banco de F3, esto no
+// simula calidad de recuperación — fija los números para poder ejercitar la lógica de selección.
 func acervoDirigido(t *testing.T, entradas []entradaDirigida) *McpServer {
 	t.Helper()
 	engine, err := memory.NewDbEngine(t.TempDir())

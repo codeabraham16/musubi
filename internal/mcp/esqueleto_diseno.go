@@ -402,9 +402,6 @@ func minF(a, b float64) float64 {
 	return b
 }
 
-// bocetosDe arma los bocetos de las candidatas, listos para mirar uno al lado del otro. Cada uno
-// lleva EN QUÉ GANA porque el boceto solo no lo dice: dos wireframes se parecen mucho más entre sí
-// que las pantallas que van a salir de ellos, y sin la etiqueta la elección se vuelve estética.
 type bocetoCandidata struct {
 	Forma    string `json:"forma"`
 	Nombre   string `json:"nombre"`
@@ -413,6 +410,9 @@ type bocetoCandidata struct {
 	SVG      string `json:"svg"`
 }
 
+// bocetosDe arma los bocetos de las candidatas, listos para mirar uno al lado del otro. Cada uno
+// lleva EN QUÉ GANA porque el boceto solo no lo dice: dos wireframes se parecen mucho más entre sí
+// que las pantallas que van a salir de ellos, y sin la etiqueta la elección se vuelve estética.
 func bocetosDe(formas []string) []bocetoCandidata {
 	var out []bocetoCandidata
 	for _, f := range formas {

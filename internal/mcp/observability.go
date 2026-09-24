@@ -24,11 +24,11 @@ import (
 
 const headerRequestID = "X-Request-Id"
 
+const numToolBuckets = 12
+
 // toolBuckets son los límites (en segundos) del histograma de latencia de tools/call. Cubren
 // desde sub-milisegundo (recall léxico chico) hasta decenas de segundos (embedding + save o un
 // mantenimiento pesado). Fijos y ordenados: el render los acumula en formato Prometheus.
-const numToolBuckets = 12
-
 var toolBuckets = [numToolBuckets]float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
 
 // latencyHistogram es un histograma Prometheus MÍNIMO (buckets acumulativos + _sum + _count),

@@ -312,9 +312,6 @@ func resumirStack(resultados []detector.StackResult) string {
 	return resumen
 }
 
-// assembleHookContext combina los bloques no vacíos (en orden) en el envelope
-// JSON de hookSpecificOutput para el evento eventName (ej. "SessionStart" o
-// "UserPromptSubmit"). Devuelve "" si no hay nada que inyectar.
 // eventosQueLlevanContexto son los eventos de hook cuyo hookSpecificOutput ACEPTA el campo
 // additionalContext. No es una lista de preferencias: es el contrato del otro lado.
 //
@@ -336,6 +333,9 @@ var eventosQueLlevanContexto = map[string]bool{
 	"SubagentStop":     true, // documentado en el esquema del validador
 }
 
+// assembleHookContext combina los bloques no vacíos (en orden) en el envelope
+// JSON de hookSpecificOutput para el evento eventName (ej. "SessionStart" o
+// "UserPromptSubmit"). Devuelve "" si no hay nada que inyectar.
 func assembleHookContext(eventName string, bloques ...string) string {
 	var partes []string
 	for _, b := range bloques {
