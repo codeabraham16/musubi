@@ -190,6 +190,10 @@ func latirEnLaPuerta(t *testing.T, ts *httptest.Server, token, cuerpo string) {
 //
 // Sabotaje que la hace fallar: en internal/mcp/fleet_http.go, volver a escribir el autorreporte en
 // cada latido, o sea reemplazar la guarda
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\tif (version != \"\" && version != d.AgentVer) || (direccion != \"\" && direccion != d.Address) {"
+// arnes: a="\tif version != \"\" || direccion != \"\" {"
+// arnes: colision_ok="TestElInventarioNoLeAgregaMasQueSuEscrituraAlLatido"
 //
 //	if (version != "" && version != d.AgentVer) || (direccion != "" && direccion != d.Address) {
 //
@@ -228,6 +232,10 @@ func TestUnLatidoEstableEsUnaSolaTransaccionDeEscritura(t *testing.T) {
 //
 // Sabotaje que la hace fallar: el mismo de arriba — devolver el autorreporte incondicional en
 // internal/mcp/fleet_http.go hace que un latido con inventario cueste tres.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\tif (version != \"\" && version != d.AgentVer) || (direccion != \"\" && direccion != d.Address) {"
+// arnes: a="\tif version != \"\" || direccion != \"\" || true {"
+// arnes: colision_ok="TestUnLatidoEstableEsUnaSolaTransaccionDeEscritura"
 func TestElInventarioNoLeAgregaMasQueSuEscrituraAlLatido(t *testing.T) {
 	_, ts, token, espia := servidorConEspiaDeEscrituras(t)
 
@@ -262,6 +270,9 @@ func TestElInventarioNoLeAgregaMasQueSuEscrituraAlLatido(t *testing.T) {
 //
 // Sabotaje que la hace fallar: volver a llamar a TomarComandos por separado desde handlerLatido
 // (o sea deshacer LatirYTomarComandos) — el conteo pasa a dos.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\t\tactualizado, pendientes, err := s.engine.LatirYTomarComandos("
+// arnes: a="\t\t_, _ = s.engine.LatirDevice(d.ID, time.Now(), \"\")\n\t\tactualizado, pendientes, err := s.engine.LatirYTomarComandos("
 func TestEntregarUnComandoNoLeCuestaOtraTransaccionAlLatido(t *testing.T) {
 	s, ts, token, espia := servidorConEspiaDeEscrituras(t)
 	cuerpo := cuerpoDelAgenteReal("0.130.0", "100.64.0.7")
@@ -301,6 +312,10 @@ func TestEntregarUnComandoNoLeCuestaOtraTransaccionAlLatido(t *testing.T) {
 // Sabotaje que la hace fallar: INVERTIR la comparación en internal/mcp/fleet_http.go — escribir
 // `version == d.AgentVer` y `direccion == d.Address` en vez de `!=` — o borrar la llamada a
 // ActualizarAutoreporte y quedarse con la guarda sola.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\t\t_ = s.engine.ActualizarAutoreporte(d.ID, version, direccion)"
+// arnes: a="\t\t_ = d.ID"
+// arnes: colision_ok="TestElAutorreporteSoloTocaLaFilaDelToken"
 func TestUnAgenteQueSeActualizoSiEscribeSuVersionNueva(t *testing.T) {
 	s, ts, token, espia := servidorConEspiaDeEscrituras(t)
 
@@ -339,6 +354,9 @@ func TestUnAgenteQueSeActualizoSiEscribeSuVersionNueva(t *testing.T) {
 //
 // Sabotaje que la hace fallar: invertir la comparación en fleet_http.go
 // (`*cuerpo.PuedePreguntar == d.PuedePreguntar`), o sacar la llamada de adentro de la guarda.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\t\tif *cuerpo.PuedePreguntar != d.PuedePreguntar {"
+// arnes: a="\t\tif *cuerpo.PuedePreguntar == d.PuedePreguntar {"
 func TestUnaMaquinaQuePerdioSuEscritorioSiEscribeElFalse(t *testing.T) {
 	s, ts, token, _ := servidorConEspiaDeEscrituras(t)
 

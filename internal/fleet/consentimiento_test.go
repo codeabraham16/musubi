@@ -19,6 +19,12 @@ import "testing"
 // arnes: archivo="internal/fleet/consentimiento.go"
 // arnes: de="\t\tres = MasRestrictivo(res, f)"
 // arnes: a="\t\tres = f"
+//
+// Sabotaje que la hace fallar: bajarle el nivel a `prohibido` hasta que empate con `avisa` — el
+// candado del dueño deja de ganarle a `pide`.
+// arnes: archivo="internal/fleet/consentimiento.go"
+// arnes: de="\tConsentimientoProhibido: 3,"
+// arnes: a="\tConsentimientoProhibido: 1,"
 func TestGanaLaFuenteMasRestrictivaYNoLaMasEspecifica(t *testing.T) {
 	casos := []struct {
 		nombre  string
@@ -28,6 +34,14 @@ func TestGanaLaFuenteMasRestrictivaYNoLaMasEspecifica(t *testing.T) {
 		{"el proyecto endurece y la máquina afloja", []Consentimiento{ConsentimientoPide, ConsentimientoLibre}, ConsentimientoPide},
 		{"la máquina endurece y el proyecto afloja", []Consentimiento{ConsentimientoLibre, ConsentimientoPide}, ConsentimientoPide},
 		{"prohibido gana a todo", []Consentimiento{ConsentimientoLibre, ConsentimientoProhibido, ConsentimientoAvisa}, ConsentimientoProhibido},
+		// LOS DOS PELDAÑOS DE ARRIBA, QUE ESTABAN SIN CLAVAR. La fila de acá arriba sólo le pide a
+		// `prohibido` que le gane a `libre` y a `avisa`; nunca lo enfrenta a `pide`. Medido el
+		// 2026-09-21: con `nivel[prohibido] = 1` —o intercambiando los niveles de `pide` y
+		// `prohibido`— esta guarda quedaba VERDE mientras el candado del dueño perdía contra un
+		// `pide`, y el paquete entero también. Las dos órdenes, porque un máximo que depende del
+		// orden es una cascada disfrazada.
+		{"el candado del dueño gana a `pide`", []Consentimiento{ConsentimientoPide, ConsentimientoProhibido}, ConsentimientoProhibido},
+		{"y gana también si viene primero", []Consentimiento{ConsentimientoProhibido, ConsentimientoPide}, ConsentimientoProhibido},
 		{"todas libres, queda libre", []Consentimiento{ConsentimientoLibre, ConsentimientoLibre}, ConsentimientoLibre},
 		{"sin fuentes, el default", nil, ConsentimientoPorDefecto},
 	}
@@ -45,6 +59,13 @@ func TestGanaLaFuenteMasRestrictivaYNoLaMasEspecifica(t *testing.T) {
 	b := ResolverConsentimiento(ConsentimientoAvisa, ConsentimientoLibre, ConsentimientoPide)
 	if a != b {
 		t.Errorf("el orden de las fuentes cambió el resultado: %q contra %q", a, b)
+	}
+	// Y EL VALOR VA CLAVADO, porque `a == b` sola no dice nada: la satisface cualquier función
+	// constante. Con `nivel[prohibido] = 1` las dos daban `pide` y esta comprobación seguía en
+	// verde — una simetría no clava un valor.
+	if a != ConsentimientoPide {
+		t.Errorf("las dos órdenes coinciden en %q y el máximo de {pide, libre, avisa} es `pide`: "+
+			"coinciden, pero en el valor equivocado", a)
 	}
 }
 
@@ -68,6 +89,18 @@ func TestGanaLaFuenteMasRestrictivaYNoLaMasEspecifica(t *testing.T) {
 // arnes: archivo="internal/fleet/consentimiento.go"
 // arnes: de="\t\t\tf = ConsentimientoPorDefecto"
 // arnes: a="\t\t\tf = ConsentimientoLibre"
+// LA COLISIÓN ES CON EL ANCLA DE ABAJO, DE ESTA MISMA PRUEBA, y está contestada porque se
+// corrieron las dos: aquélla cae en «"" se resolvió a `libre`» (el ilegible aterriza en el grado
+// más flojo) y la de abajo en «`libre` junto a "" resolvió "libre"» (el ilegible desaparece en vez
+// de aportar el default). Son dos defectos distintos sobre las mismas cuatro líneas, y el aviso va
+// acá porque es el `a` de ESTA directiva el que le rompe el ancla a la otra.
+// arnes: colision_ok="TestUnValorIlegibleNoAbreLaPuerta"
+//
+// Sabotaje que la hace fallar: saltear el ilegible cuando NO es la primera fuente — deja de
+// aportar el default y la fuente más floja decide sola.
+// arnes: archivo="internal/fleet/consentimiento.go"
+// arnes: de="\t\tif !f.Valido() {\n\t\t\tf = ConsentimientoPorDefecto\n\t\t}\n\t\tif !visto {"
+// arnes: a="\t\tif !f.Valido() {\n\t\t\tf = ConsentimientoPorDefecto\n\t\t\tif visto {\n\t\t\t\tcontinue\n\t\t\t}\n\t\t}\n\t\tif !visto {"
 func TestUnValorIlegibleNoAbreLaPuerta(t *testing.T) {
 	basura := []Consentimiento{"", "Pide", "ask", "PROHIBIDO", "sí", "libre "}
 	for _, b := range basura {
@@ -85,6 +118,17 @@ func TestUnValorIlegibleNoAbreLaPuerta(t *testing.T) {
 			// Y combinado con algo estricto, no puede aflojarlo.
 			if ResolverConsentimiento(ConsentimientoProhibido, b) != ConsentimientoProhibido {
 				t.Errorf("%q aflojó un `prohibido`", b)
+			}
+			// Y COMBINADO CON ALGO MÁS FLOJO QUE EL DEFAULT, TIENE QUE ENDURECERLO. Es el único
+			// caso donde la basura DECIDE, y era el que faltaba: arriba la basura va sola —donde
+			// es la primera fuente y sí se normaliza— o contra `prohibido`, que gana igual.
+			// Medido el 2026-09-21: salteando el ilegible cuando no es la primera fuente, esta
+			// guarda quedaba verde y `libre + typo` resolvía `libre`. Es exactamente lo que el
+			// comentario de esa línea advierte en prosa: «un typo en la fuente más restrictiva
+			// desaparece sin dejar rastro».
+			if got := ResolverConsentimiento(ConsentimientoLibre, b); got != ConsentimientoPorDefecto {
+				t.Errorf("`libre` junto a %q resolvió %q: el ilegible tiene que aportar el default, "+
+					"y en vez de eso desapareció", b, got)
 			}
 		})
 	}
@@ -105,6 +149,12 @@ func TestUnValorIlegibleNoAbreLaPuerta(t *testing.T) {
 // arnes: archivo="internal/fleet/consentimiento.go"
 // arnes: de="const ConsentimientoPorDefecto = ConsentimientoAvisa"
 // arnes: a="const ConsentimientoPorDefecto = ConsentimientoLibre"
+//
+// Sabotaje que la hace fallar: dejar la CONSTANTE intacta y hacer que lo no declarado se normalice
+// a `libre` — el default de facto deja de coincidir con la etiqueta.
+// arnes: archivo="internal/fleet/consentimiento.go"
+// arnes: de="func normalizar(c Consentimiento) Consentimiento {\n\tif c.Valido() {\n\t\treturn c\n\t}\n\treturn ConsentimientoPorDefecto\n}"
+// arnes: a="func normalizar(c Consentimiento) Consentimiento {\n\tif c.Valido() {\n\t\treturn c\n\t}\n\tif c == \"\" {\n\t\treturn ConsentimientoLibre\n\t}\n\treturn ConsentimientoPorDefecto\n}"
 func TestElDefaultAvisaYNoBloquea(t *testing.T) {
 	d := ConsentimientoPorDefecto
 	if !d.AvisaAlUsuario() {
@@ -116,6 +166,21 @@ func TestElDefaultAvisaYNoBloquea(t *testing.T) {
 	}
 	if d.Bloquea() {
 		t.Error("el default bloquea")
+	}
+
+	// EL DEFAULT NO ACTÚA COMO CONSTANTE: ACTÚA CUANDO `normalizar` CONVIERTE LO NO DECLARADO.
+	//
+	// Las tres preguntas de arriba se le hacen a la etiqueta. Medido el 2026-09-21: dejando la
+	// constante intacta y haciendo que `normalizar("")` devuelva `libre`, esta guarda quedaba
+	// VERDE y el default de facto —el que le toca a la máquina que no declaró nada— pasaba a ser
+	// `libre`: se la mira en silencio. La guarda leía la etiqueta; el default vive en la función.
+	if got := normalizar(""); got != ConsentimientoPorDefecto {
+		t.Errorf("lo NO DECLARADO se normalizó a %q y no al default %q: la constante dice una cosa "+
+			"y la máquina recién dada de alta recibe otra", got, ConsentimientoPorDefecto)
+	}
+	if sinDeclarar := Consentimiento(""); !sinDeclarar.AvisaAlUsuario() {
+		t.Error("una máquina que no declaró nada no avisa: se la puede mirar en silencio sin que " +
+			"nadie haya elegido eso")
 	}
 }
 
@@ -158,6 +223,12 @@ func TestPedirImplicaAvisar(t *testing.T) {
 // arnes: archivo="internal/fleet/consentimiento.go"
 // arnes: de="\tvar res Consentimiento\n\tvisto := false"
 // arnes: a="\tres := ConsentimientoPorDefecto\n\tvisto := true"
+//
+// Sabotaje que la hace fallar: preguntar por la ORTOGRAFÍA nil del slice en vez de por «no vi
+// ninguna fuente» — el vacío no-nil deja de recibir el default.
+// arnes: archivo="internal/fleet/consentimiento.go"
+// arnes: de="\tif !visto {\n\t\treturn ConsentimientoPorDefecto\n\t}"
+// arnes: a="\tif fuentes == nil {\n\t\treturn ConsentimientoPorDefecto\n\t}"
 func TestLibreEsAlcanzableCuandoTodasLasFuentesLoDicen(t *testing.T) {
 	if got := ResolverConsentimiento(ConsentimientoLibre); got != ConsentimientoLibre {
 		t.Errorf("una sola fuente `libre` resolvió %q: el default está actuando de piso", got)
@@ -169,6 +240,16 @@ func TestLibreEsAlcanzableCuandoTodasLasFuentesLoDicen(t *testing.T) {
 	// dijeron libre», que son dos cosas distintas y tienen que resolverse distinto.
 	if got := ResolverConsentimiento(); got != ConsentimientoPorDefecto {
 		t.Errorf("sin fuentes resolvió %q, se esperaba el default", got)
+	}
+	// LA AUSENCIA TIENE DOS ORTOGRAFÍAS Y ACÁ SE PREGUNTAN LAS DOS. `ResolverConsentimiento()` sin
+	// argumentos pasa un slice NIL; un llamador que junte las fuentes declaradas pasa uno VACÍO
+	// pero no nil. Medido el 2026-09-21: cambiando el cierre a `if fuentes == nil` esta guarda
+	// quedaba verde —contesta bien la única ortografía que probaba— y el vacío devolvía `""`, que
+	// ni siquiera es un grado válido: la basura se escapaba del resolvedor.
+	vacias := make([]Consentimiento, 0, 3)
+	if got := ResolverConsentimiento(vacias...); got != ConsentimientoPorDefecto {
+		t.Errorf("un slice VACÍO pero no nil resolvió %q, se esperaba el default: «nadie dijo nada» "+
+			"no puede depender de cómo se escribió la lista", got)
 	}
 }
 
@@ -253,6 +334,66 @@ func TestPedirDondeNadiePuedeContestarCierraLaPuerta(t *testing.T) {
 	// degradación por el camino de atrás.
 	if got := Consentimiento("Pide").AplicarACapacidadDePreguntar(false); got != ConsentimientoPorDefecto {
 		t.Errorf("un valor ilegible resolvió %q en vez del default", got)
+	}
+}
+
+// TestLasTresPreguntasSeContestanParaLosCuatroGrados — LA MATRIZ, Y NO LAS CELDAS DE SIEMPRE.
+//
+// Los tres predicados son toda la superficie por la que el resto del árbol lee el eje, y las
+// guardas que los tocan preguntan celdas sueltas: `TestPedirImplicaAvisar` verifica que `libre` y
+// `avisa` NO piden aprobación, y nunca que `pide` SÍ; `TestPedirDondeNadiePuedeContestar…` usa
+// `Bloquea` sin comprobar nunca que `prohibido` bloquee.
+//
+// Medido el 2026-09-21: `PideAprobacion` comparando contra `prohibido`, y `Bloquea` devolviendo
+// siempre falso, dejaban las dos guardas en VERDE y `./internal/fleet` entero también. Los cazaban
+// pruebas de `internal/mcp` —cinco, en el caso de `Bloquea`— y eso no alcanza: un invariante que
+// cae de rebote no está guardado. El día que esas pruebas cambien su fixture, la detección se
+// evapora y nada lo dice.
+//
+// LOS DOCE VALORES VAN CLAVADOS, uno por uno. Derivarlos de `nivelDe` o de `normalizar` —«avisa es
+// nivel ≥ 1»— dejaría esta tabla midiéndose contra la misma escala que custodia: una mutación del
+// mapa movería los dos lados y la guarda la certificaría sana.
+//
+// Sabotaje que la hace fallar: que `PideAprobacion` compare contra `prohibido` en vez de `pide`.
+// arnes: archivo="internal/fleet/consentimiento.go"
+// arnes: de="func (c Consentimiento) PideAprobacion() bool { return normalizar(c) == ConsentimientoPide }"
+// arnes: a="func (c Consentimiento) PideAprobacion() bool { return normalizar(c) == ConsentimientoProhibido }"
+//
+// Sabotaje que la hace fallar: que `Bloquea` pregunte por un nivel MAYOR que el máximo, o sea
+// nunca.
+// arnes: archivo="internal/fleet/consentimiento.go"
+// arnes: de="func (c Consentimiento) Bloquea() bool { return normalizar(c) == ConsentimientoProhibido }"
+// arnes: a="func (c Consentimiento) Bloquea() bool { return nivelDe(c) > nivel[ConsentimientoProhibido] }"
+func TestLasTresPreguntasSeContestanParaLosCuatroGrados(t *testing.T) {
+	casos := []struct {
+		grado   Consentimiento
+		avisa   bool
+		pide    bool
+		bloquea bool
+	}{
+		{ConsentimientoLibre, false, false, false},
+		{ConsentimientoAvisa, true, false, false},
+		{ConsentimientoPide, true, true, false},
+		{ConsentimientoProhibido, true, false, true},
+	}
+	if len(casos) != len(nivel) {
+		t.Fatalf("la tabla cubre %d grados y el dominio tiene %d: un grado nuevo sin fila acá entra "+
+			"al árbol sin que nadie diga qué contestan sus tres preguntas", len(casos), len(nivel))
+	}
+	for _, c := range casos {
+		t.Run(string(c.grado), func(t *testing.T) {
+			if got := c.grado.AvisaAlUsuario(); got != c.avisa {
+				t.Errorf("AvisaAlUsuario() = %v y la regla dice %v", got, c.avisa)
+			}
+			if got := c.grado.PideAprobacion(); got != c.pide {
+				t.Errorf("PideAprobacion() = %v y la regla dice %v: `pide` es el ÚNICO grado que "+
+					"promete que alguien acepte antes de que pase algo", got, c.pide)
+			}
+			if got := c.grado.Bloquea(); got != c.bloquea {
+				t.Errorf("Bloquea() = %v y la regla dice %v: `prohibido` es el candado del dueño, y "+
+					"un candado que no cierra es decoración", got, c.bloquea)
+			}
+		})
 	}
 }
 

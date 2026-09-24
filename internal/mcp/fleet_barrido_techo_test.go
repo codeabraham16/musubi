@@ -41,6 +41,9 @@ import (
 //
 // Sabotaje que la pone roja: volver a poner `proyectosParaExportar` en cualquiera de los dos
 // barridos, o definir `const proyectosParaVigilar = proyectosParaExportar`.
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\tproyectos, err := s.engine.ProyectosConDevices(proyectosParaVigilar + 1)"
+// arnes: a="\tproyectos, err := s.engine.ProyectosConDevices(proyectosParaExportar + 1)"
 func TestElBarridoDeLaFlotaNoCuelgaDelTechoDelExport(t *testing.T) {
 	fset := token.NewFileSet()
 	archivo, err := parser.ParseFile(fset, "scheduler_flota.go", nil, 0) // sin comentarios
@@ -66,6 +69,9 @@ func TestElBarridoDeLaFlotaNoCuelgaDelTechoDelExport(t *testing.T) {
 //
 // Sabotaje que la pone roja: borrar el avisoMientras de proyectosAVigilar, o devolver la lista
 // entera sin marcar el recorte.
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\ts.avisoMientras(\"barrido_truncado:\"+barrido, recorto, func() {"
+// arnes: a="\ts.avisoMientras(\"barrido_truncado:\"+barrido, false, func() {"
 func TestElBarridoDeLaFlotaAvisaCuandoDejaTenantsAfueraYSeRearma(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()

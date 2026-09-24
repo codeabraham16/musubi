@@ -8,6 +8,40 @@ import (
 	"musubi/internal/redact"
 )
 
+// formasDeUnaCredencial son las formas EN QUE UNA CREDENCIAL APARECE DE VERDAD EN UNA SALIDA DE
+// COMANDO. No son inventadas: las dos primeras son las dos formas EXACTAS en que los cuatro tokens
+// medidos quedaron en el transcripto.
+//
+// Viven a nivel de paquete —y no adentro de una prueba— desde que hay DOS guardas que las usan: ésta
+// y TestLaCredencialPropiaLaTapaLaReglaYNoLaSuerte. Copiarlas en la segunda habría sido exactamente
+// el defecto que este repo cataloga: un derivado escrito a mano es una copia, y la copia es la
+// próxima en envejecer cuando aparezca la décima forma.
+var formasDeUnaCredencial = []struct{ nombre, plantilla string }{
+	{"rótulo de guion, con relleno", "  token   : %T"},
+	{"respuesta JSON de enroll", `{"name":"nas","project_id":"casa","tier":"B","token":"%T"}`},
+	{"rótulo corto", "token: %T"},
+	{"JSON con espacio", `{"token": "%T"}`},
+	{"línea pelada de un cat", "%T"},
+	{"argumento de CLI", "musubi agent --token %T"},
+	{"export de shell", "export MUSUBI_DEVICE_TOKEN=%T"},
+	{"dentro de una URL", "https://cerebro/latido?t=%T"},
+	{"pegada a texto", "la credencial es %T y vence mañana"},
+}
+
+// atraviesaElRedactor devuelve los nombres de las formas por las que `secreto` sale EN CLARO.
+func atraviesaElRedactor(t *testing.T, secreto string) []string {
+	t.Helper()
+	var fugas []string
+	for _, f := range formasDeUnaCredencial {
+		entrada := strings.ReplaceAll(f.plantilla, "%T", secreto)
+		salida, _ := redact.Redact(entrada)
+		if strings.Contains(salida, secreto) {
+			fugas = append(fugas, f.nombre)
+		}
+	}
+	return fugas
+}
+
 // TestNingunaCredencialQueAcunamosAtraviesaElRedactor exige que lo que este paquete EMITE no pueda
 // salir en claro por una salida de comando.
 //
@@ -55,40 +89,6 @@ import (
 // arnes: de="\treturn tokenPrefijo + base64.RawURLEncoding.EncodeToString(b), nil"
 // arnes: a="\t_ = base64.RawURLEncoding\n\treturn hex.EncodeToString(b), nil"
 // arnes: prueba="TestNingunaCredencialQueAcunamosAtraviesaElRedactor"
-// formasDeUnaCredencial son las formas EN QUE UNA CREDENCIAL APARECE DE VERDAD EN UNA SALIDA DE
-// COMANDO. No son inventadas: las dos primeras son las dos formas EXACTAS en que los cuatro tokens
-// medidos quedaron en el transcripto.
-//
-// Viven a nivel de paquete —y no adentro de una prueba— desde que hay DOS guardas que las usan: ésta
-// y TestLaCredencialPropiaLaTapaLaReglaYNoLaSuerte. Copiarlas en la segunda habría sido exactamente
-// el defecto que este repo cataloga: un derivado escrito a mano es una copia, y la copia es la
-// próxima en envejecer cuando aparezca la décima forma.
-var formasDeUnaCredencial = []struct{ nombre, plantilla string }{
-	{"rótulo de guion, con relleno", "  token   : %T"},
-	{"respuesta JSON de enroll", `{"name":"nas","project_id":"casa","tier":"B","token":"%T"}`},
-	{"rótulo corto", "token: %T"},
-	{"JSON con espacio", `{"token": "%T"}`},
-	{"línea pelada de un cat", "%T"},
-	{"argumento de CLI", "musubi agent --token %T"},
-	{"export de shell", "export MUSUBI_DEVICE_TOKEN=%T"},
-	{"dentro de una URL", "https://cerebro/latido?t=%T"},
-	{"pegada a texto", "la credencial es %T y vence mañana"},
-}
-
-// atraviesaElRedactor devuelve los nombres de las formas por las que `secreto` sale EN CLARO.
-func atraviesaElRedactor(t *testing.T, secreto string) []string {
-	t.Helper()
-	var fugas []string
-	for _, f := range formasDeUnaCredencial {
-		entrada := strings.ReplaceAll(f.plantilla, "%T", secreto)
-		salida, _ := redact.Redact(entrada)
-		if strings.Contains(salida, secreto) {
-			fugas = append(fugas, f.nombre)
-		}
-	}
-	return fugas
-}
-
 func TestNingunaCredencialQueAcunamosAtraviesaElRedactor(t *testing.T) {
 	t.Run("el token de dispositivo no sale en claro por NINGUNA forma", func(t *testing.T) {
 		tok, err := NuevoToken()

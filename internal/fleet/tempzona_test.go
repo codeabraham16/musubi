@@ -17,6 +17,9 @@ import "testing"
 // salió `ok`. Ese hueco lo cubre TestMuestraDesdeEligeLaZonaYNoParseaElListadoEntero, más
 // abajo. Queda anotado porque este comentario llegó a afirmar lo contrario, y un doc que
 // nombra un sabotaje que no funciona enseña a confiar en una red que no está.
+// arnes: archivo="internal/fleet/procparse.go"
+// arnes: de="var preferenciaDeZonaTermica = []string{\n\t\"x86_pkg_temp\","
+// arnes: a="var preferenciaDeZonaTermica = []string{\n\t\"x86_pkg_temp_SABOTEADA\","
 func TestElegirTemperaturaPrefiereElSensorDeCPUYNoElDeChasis(t *testing.T) {
 	casos := []struct {
 		nombre string
@@ -169,6 +172,9 @@ func f(v float64) *float64 { return &v }
 // Sabotaje verificado que SÍ la pone en rojo: `m.TempC = ParsearTempMiligrados(l.TempMil)` en
 // MuestraDesde. Con el listado de varias zonas, ParsearTempMiligrados no puede parsearlo y
 // devuelve nil.
+// arnes: archivo="internal/fleet/procparse.go"
+// arnes: de="\treturn m\n}"
+// arnes: a="\tm.TempC = ParsearTempMiligrados(l.TempMil)\n\treturn m\n}"
 func TestMuestraDesdeEligeLaZonaYNoParseaElListadoEntero(t *testing.T) {
 	l := LecturasProc{
 		// Las tres zonas de musubi-server, en el formato que producen los dos colectores.

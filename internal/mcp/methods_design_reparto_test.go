@@ -87,6 +87,9 @@ func TestDesignElCorpusViajaCompletoNoEnTitular(t *testing.T) {
 // tope en 999999, y el modo de falla es peor de lo que esperaba: el corpus sale VACÍO. Sin tope por
 // tarjeta el artículo no desborda el brief —la escalera del presupuesto lo impide— sino que se lleva
 // puesto al material entero para hacerle lugar. El tope duro se respeta y el brief queda sin nada.
+// arnes: archivo="internal/mcp/methods_design.go"
+// arnes: de="const designPatronItemMax = 1800"
+// arnes: a="const designPatronItemMax = 999999"
 func TestDesignUnPatronGordoNoSeLlevaElBrief(t *testing.T) {
 	// UN SOLO patrón sembrado, y es el gordo. La primera versión sembraba también una tarjeta normal
 	// y buscaba el artículo entre lo servido: cuando el artículo no entraba por esa consulta, el test
@@ -124,6 +127,9 @@ func TestDesignUnPatronGordoNoSeLlevaElBrief(t *testing.T) {
 //
 // SABOTAJE: volver a cortar por byte crudo ⇒ el texto servido deja de ser UTF-8 válido. Verificado
 // en rojo reemplazando recortarTexto por txt[:max].
+// arnes: archivo="internal/mcp/methods_design.go"
+// arnes: de="\tcorte := max\n\tfor corte > 0 && !utf8.RuneStart(txt[corte]) {\n\t\tcorte--\n\t}"
+// arnes: a="\tcorte := max\n\tfor corte > 0 && !utf8.RuneStart(txt[corte]) && false {\n\t\tcorte--\n\t}"
 func TestDesignElRecorteNoParteUnCaracter(t *testing.T) {
 	// EL FIXTURE VERIFICA SU PROPIA PREMISA. La primera versión elegía el largo del prefijo a mano
 	// para que el corte cayera adentro de un carácter de dos bytes, y le erré dos veces: el corte caía
@@ -166,6 +172,9 @@ func TestDesignElRecorteNoParteUnCaracter(t *testing.T) {
 //
 // SABOTAJE: reponer la escalera vieja (los casos `len(b.Method) > 0` / `len(b.Corpus) > 0` antes de
 // tocar la marca) ⇒ el corpus vuelve a cero. Verificado en rojo: "el corpus cayó a 0".
+// arnes: archivo="internal/mcp/methods_design.go"
+// arnes: de="\tcase len(b.Method) > designPisoBloque:\n\t\tb.Method = b.Method[:len(b.Method)-1]\n\tcase len(b.Corpus) > designPisoCorpus:\n\t\tb.Corpus = b.Corpus[:len(b.Corpus)-1]"
+// arnes: a="\tcase len(b.Method) > 0:\n\t\tb.Method = b.Method[:len(b.Method)-1]\n\tcase len(b.Corpus) > 0:\n\t\tb.Corpus = b.Corpus[:len(b.Corpus)-1]"
 func TestDesignLaMarcaCedeAntesDeVaciarElMaterial(t *testing.T) {
 	engine, err := memory.NewDbEngine(t.TempDir())
 	if err != nil {
@@ -226,6 +235,9 @@ func TestDesignLaMarcaCedeAntesDeVaciarElMaterial(t *testing.T) {
 //
 // SABOTAJE: igualar los dos pisos ⇒ este test se pone rojo y deja de haber nada que defienda al
 // material específico por encima del universal.
+// arnes: archivo="internal/mcp/methods_design.go"
+// arnes: de="const designPisoCorpus = 5"
+// arnes: a="const designPisoCorpus = 3"
 func TestDesignElCorpusSeDefiendeMasQueElMetodo(t *testing.T) {
 	if designPisoCorpus <= designPisoBloque {
 		t.Errorf("el piso del corpus (%d) tiene que ser MÁS ALTO que el del método (%d): cuando falta lugar sobrevive lo específico, no lo universal",

@@ -163,6 +163,7 @@ func TestCadaDimensionDelTruncadoTieneSuPropioPuntoYSeDerivaDelTipo(t *testing.T
 // suponerse: con 200 a los dos lados, un cable roto y uno sano se escriben igual.
 //
 // Sabotaje que la pone roja: en http.go, pasar la constante en vez del campo del servidor.
+// arnes: colision_ok="TestLaPerillaGobiernaElMetricsDeVerdadYNoSoloAlRenderFlota"
 // arnes: archivo="internal/mcp/http.go"
 // arnes: de="s.techoServiciosPorProyecto, s.techoAprobacionesPorProyecto)"
 // arnes: a="s.techoServiciosPorProyecto, aprobacionesPorProyectoDefault)"

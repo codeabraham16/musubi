@@ -45,6 +45,9 @@ func llamarMCP(t *testing.T, url, bearer string) int {
 //
 // Sabotaje que la hace fallar: mover el chequeo de limiter.locked() de vuelta ARRIBA de resolver el
 // token en HTTPHandler.
+// arnes: archivo="internal/mcp/http.go"
+// arnes: de="func autenticarPersona(opt httpOptions, w http.ResponseWriter, r *http.Request) (*Principal, bool) {\n\tbearer := bearerToken(r.Header.Get(\"Authorization\"))"
+// arnes: a="func autenticarPersona(opt httpOptions, w http.ResponseWriter, r *http.Request) (*Principal, bool) {\n\tif opt.candado != nil && opt.candado.locked(clientIP(r), time.Now()) {\n\t\thttp.Error(w, \"too many failed auth attempts\", http.StatusTooManyRequests)\n\t\treturn nil, false\n\t}\n\tbearer := bearerToken(r.Header.Get(\"Authorization\"))"
 func TestUnaCredencialValidaEntraAunqueLaIPEsteCastigada(t *testing.T) {
 	ts := servidorConRegistro(t)
 

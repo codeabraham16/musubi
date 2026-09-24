@@ -17,14 +17,14 @@ import (
 	"musubi/internal/memory"
 )
 
-// acervoDirigido siembra observaciones a similitudes CONOCIDAS de la consulta "CONSULTA": cada
-// entrada declara su topic, su texto y a qué similitud queda. Igual que en el banco de F3, esto no
-// simula calidad de recuperación — fija los números para poder ejercitar la lógica de selección.
 type entradaDirigida struct {
 	topic, texto string
 	sim          float64
 }
 
+// acervoDirigido siembra observaciones a similitudes CONOCIDAS de la consulta "CONSULTA": cada
+// entrada declara su topic, su texto y a qué similitud queda. Igual que en el banco de F3, esto no
+// simula calidad de recuperación — fija los números para poder ejercitar la lógica de selección.
 func acervoDirigido(t *testing.T, entradas []entradaDirigida) *McpServer {
 	t.Helper()
 	engine, err := memory.NewDbEngine(t.TempDir())
@@ -195,6 +195,10 @@ func TestDesignElTopKNoColapsaEnLoMismo(t *testing.T) {
 	// SABOTAJE: con la diversidad apagada (λ=0) los clones ganan por similitud pura y el distinto
 	// queda afuera. Se comprueba sobre la función directamente para que el invariante no dependa de
 	// que alguien recuerde tocar la constante.
+	// arnes: prueba="TestDesignLosArticulosCompletosTienenLugar"
+	// arnes: archivo="internal/mcp/methods_design.go"
+	// arnes: de="const designLambdaMMR = 0.45"
+	// arnes: a="const designLambdaMMR = 0.0"
 	fuentes := make([]searchSource, 0, len(entradas))
 	for i, e := range entradas {
 		fuentes = append(fuentes, searchSource{

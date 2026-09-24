@@ -21,14 +21,14 @@ const countCap = 10000
 // directoriosOmitidos es el conjunto de nombres de directorio que el bounded walk
 // siempre omite para evitar ruido (deps vendoreadas, build output, VCS, etc.).
 var directoriosOmitidos = map[string]bool{
-	".git":          true,
-	"node_modules":  true,
-	"vendor":        true,
-	"dist":          true,
-	"build":         true,
-	"target":        true,
-	"__pycache__":   true,
-	".musubi":       true,
+	".git":         true,
+	"node_modules": true,
+	"vendor":       true,
+	"dist":         true,
+	"build":        true,
+	"target":       true,
+	"__pycache__":  true,
+	".musubi":      true,
 }
 
 // IsApplicable evalúa si una CatalogEntry aplica al proyecto dado por (root, deps, stacks).

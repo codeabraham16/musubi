@@ -13,6 +13,9 @@ import (
 // lea como una máquina rota.
 //
 // Sabotaje que la hace fallar: poner el exit code distinto de cero en `Error`.
+// arnes: archivo="cmd/musubi/ejecutor.go"
+// arnes: de="\t\t\tcode := salida.ExitCode()\n\t\t\tres.ExitCode = &code"
+// arnes: a="\t\t\tcode := salida.ExitCode()\n\t\t\tres.ExitCode = &code\n\t\t\tres.Error = fmt.Sprintf(\"el comando terminó con exit %d\", code)"
 func TestUnExitDistintoDeCeroEsResultadoNoError(t *testing.T) {
 	casos := []struct {
 		nombre     string
@@ -52,6 +55,10 @@ func TestUnExitDistintoDeCeroEsResultadoNoError(t *testing.T) {
 // expandirla: si expandiera, el comando registrado en la bitácora no sería el comando corrido.
 //
 // Sabotaje: pasar el argv por `sh -c`.
+// arnes: colision_ok="TestElTimeoutMataElComando"
+// arnes: archivo="cmd/musubi/ejecutor.go"
+// arnes: de="\tcmd := exec.CommandContext(ctx, argv[0], argv[1:]...)\n\t// WaitDelay: sin esto el timeout no libera al agente."
+// arnes: a="\tcmd := exec.CommandContext(ctx, \"sh\", \"-c\", strings.Join(argv, \" \"))\n\t// WaitDelay: sin esto el timeout no libera al agente."
 func TestNoHayShellImplicito(t *testing.T) {
 	res := ejecutar(comandoRecibido{ID: "x", Argv: []string{"echo", "$HOME y *"}, TimeoutSeg: 5}, "", "")
 	if res.Error != "" {
@@ -70,6 +77,7 @@ func TestNoHayShellImplicito(t *testing.T) {
 
 // F8 — el timeout MATA el comando y lo dice.
 // Sabotaje: usar exec.Command en vez de exec.CommandContext → el proceso sobrevive al agente.
+// arnes: colision_ok="TestNoHayShellImplicito"
 // arnes: archivo="cmd/musubi/ejecutor.go"
 // arnes: de="cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)"
 // arnes: a="cmd := exec.Command(argv[0], argv[1:]...)"
@@ -93,6 +101,9 @@ func TestElTimeoutMataElComando(t *testing.T) {
 // de la máquina que este agente existe para cuidar.
 //
 // Sabotaje: usar un bytes.Buffer sin tope.
+// arnes: archivo="cmd/musubi/ejecutor.go"
+// arnes: de="\tso.tope, se.tope = fleet.SalidaMaxBytes, fleet.SalidaMaxBytes"
+// arnes: a="\tso.tope, se.tope = 1<<30, 1<<30"
 func TestLaSalidaSeAcotaEnElAgenteYDejaLaMarca(t *testing.T) {
 	// Genera bastante más que el tope.
 	res := ejecutar(comandoRecibido{
@@ -159,6 +170,9 @@ func iptr(v int) *int { return &v }
 // a la máquina sin atender nada más, y el cerebro la ve latiendo pero muda.
 //
 // Sabotaje que la hace fallar: quitar `cmd.WaitDelay`.
+// arnes: archivo="cmd/musubi/ejecutor.go"
+// arnes: de="\tcmd.WaitDelay = 2 * time.Second"
+// arnes: a="\tcmd.WaitDelay = 0"
 func TestUnHijoEnBackgroundNoDerrotaElTimeout(t *testing.T) {
 	arranque := time.Now()
 	res := ejecutar(comandoRecibido{

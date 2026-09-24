@@ -37,6 +37,9 @@ const claveDelTechoDeServicios = "services_per_project_export"
 //
 // Sabotaje que la pone roja: cambiar la etiqueta `yaml:` de ServicesPerProjectExport en
 // config.go (con las dos pruebas de literal quedaba todo verde).
+// arnes: archivo="internal/config/config.go"
+// arnes: de="\tServicesPerProjectExport int `yaml:\"services_per_project_export,omitempty\"`"
+// arnes: a="\tServicesPerProjectExport int `yaml:\"techo_saboteado,omitempty\"`"
 func TestElTechoDeServiciosLlegaDesdeElYAMLYNoSoloDesdeUnLiteralDeGo(t *testing.T) {
 	casos := []struct {
 		nombre  string

@@ -18,6 +18,9 @@ import "testing"
 // que quedaba era el costo de una invocación más, no la imposibilidad.
 //
 // Sabotaje que la hace fallar: sacar el `/10`, o cambiar el signo del ajuste de Kelvin.
+// arnes: archivo="internal/fleet/tempwindows.go"
+// arnes: de="\t\tc := dk/10 - 273.15"
+// arnes: a="\t\tc := dk - 273.15"
 func TestLaZonaTermicaDeWindowsSeLeeEnDecikelvin(t *testing.T) {
 	casos := []struct {
 		nombre  string

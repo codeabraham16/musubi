@@ -86,6 +86,13 @@ fi
 #     commits que no están en ningún lado—; uno desprendido es un vigía. Mover la rama de otro es
 #     exactamente cómo el árbol compartido terminó parado 81 commits atrás.
 #
+# Y EL CHECKOUT TIENE QUE SER UN CLON, NO UN WORKTREE — la receta de abajo lo dice porque
+# ANTES DECÍA LO CONTRARIO. Medido el 2026-09-22: era un worktree, alguien barrió worktrees
+# viejos, el directorio desapareció, y la unidad salió con `203/EXEC` en las cuatro corridas
+# siguientes. Ojo con dónde falla eso: systemd no llega a ejecutar NI UNA LÍNEA de este
+# guion, así que ninguna verificación de acá adentro podía enterarse. 18 horas sin comparar,
+# y lo único que lo delató fue `ComparacionRepoServidorSinCorrer`.
+#
 # Cuando no se cumplen, NO se toca y SE DICE por qué: un guion que se salta su propio paso en
 # silencio deja al informe hablando de un árbol que nadie eligió.
 if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
@@ -95,8 +102,14 @@ if git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
     printf '▶ el checkout tiene %s archivo(s) sin commitear: NO se actualiza (alguien está trabajando acá)\n' "$_sucio"
   elif [ -n "$_rama" ]; then
     printf '▶ el checkout está en la rama «%s», no en HEAD desprendido: NO se actualiza.\n' "$_rama"
-    printf '  Un árbol con rama es de alguien. Para que el vigía se ponga al día solo, dale un checkout propio:\n'
-    printf '    git worktree add --detach <ruta> origin/main   y apuntá WorkingDirectory/ExecStart ahí.\n'
+    printf '  Un árbol con rama es de alguien. Para que el vigía se ponga al día solo, dale un CLON propio:\n'
+    printf '    git clone <url-del-remoto> <ruta> && git -C <ruta> checkout --detach origin/main\n'
+    printf '    y después apuntá WorkingDirectory/ExecStart de la unidad a <ruta>.\n'
+    printf '  QUE SEA UN CLON Y NO UN WORKTREE NO ES UN DETALLE: cualquier limpieza de worktrees se\n'
+    printf '  lleva el directorio, y entonces systemd falla con 203/EXEC ANTES de correr este guion,\n'
+    printf '  así que nada de acá adentro puede avisarte. Pasó el 2026-09-22: 18 h sin comparación.\n'
+    printf '  Y si clonás desde un DIRECTORIO LOCAL, origin queda apuntando a esa ruta y el vigía se\n'
+    printf '  pondría al día contra el árbol del vecino: arreglalo con git remote set-url origin <url>.\n'
   elif ! git -C "$REPO" fetch --quiet origin "+refs/heads/main:refs/remotes/origin/main" 2>/dev/null; then
     printf '▶ no se pudo traer origin/main (sin red o sin remoto): se compara con lo que había\n'
   elif git -C "$REPO" checkout --quiet --detach origin/main 2>/dev/null; then

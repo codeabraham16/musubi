@@ -40,6 +40,10 @@ import (
 //
 // Sabotajes verificados que la ponen en rojo: crear `algo_windows_test.go`, y agregarle
 // `//go:build etiqueta_inventada` a un archivo de prueba cualquiera.
+// arnes: prueba="TestNingunaPruebaQuedaFueraDeLaCompilacionSinDecirlo"
+// arnes: archivo="internal/config/quota_default_test.go"
+// arnes: de="package config\n\nimport \"testing\"\n"
+// arnes: a="//go:build etiqueta_inventada\n\npackage config\n\nimport \"testing\"\n"
 
 // pruebasExcluidasAProposito son las que NO corren en CI y está bien, cada una con su motivo.
 // Un allowlist sin razones se llena solo; con razones, agregar una entrada obliga a defenderla.

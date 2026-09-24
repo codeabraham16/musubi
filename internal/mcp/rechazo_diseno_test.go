@@ -14,6 +14,9 @@ import (
 // repite el defecto que vino a arreglar.
 //
 // SABOTAJE: devolver "" cuando no hay eje ⇒ el pedido que no rutea se queda sin criterio de rechazo.
+// arnes: archivo="internal/mcp/rechazo_diseno.go"
+// arnes: de="\tif eje == \"\" {\n\t\treturn b.String()\n\t}"
+// arnes: a="\tif eje == \"\" {\n\t\treturn \"\"\n\t}"
 func TestRechazoElNucleoViajaSiempre(t *testing.T) {
 	sinEje := tellsPara("")
 	if !strings.Contains(sinEje, "NO ENTREGUES ESTO") {
@@ -38,6 +41,9 @@ func TestRechazoElNucleoViajaSiempre(t *testing.T) {
 // Es lo que lo mantiene VARIABLE. Servir los catorce avisos siempre sería el sermón que M5 frena.
 //
 // SABOTAJE: ignorar el eje y devolver todos los tells ⇒ aparecen los de otros temas y M5 cae.
+// arnes: archivo="internal/mcp/rechazo_diseno.go"
+// arnes: de="\t\tif t.Eje != \"\" {\n\t\t\tcontinue\n\t\t}"
+// arnes: a="\t\tif t.Eje != \"\" && false {\n\t\t\tcontinue\n\t\t}"
 func TestRechazoElEjeFiltra(t *testing.T) {
 	tabla := tellsPara("tabla")
 	if !strings.Contains(tabla, "columnas numéricas") && !strings.Contains(tabla, "numéricas") {
@@ -64,6 +70,9 @@ func TestRechazoElEjeFiltra(t *testing.T) {
 // Sin tope, un eje con muchos tells desbalancea el brief y se come el lugar del material.
 //
 // SABOTAJE: sacar designTellsPorEje ⇒ un eje cargado entrega un bloque sin límite.
+// arnes: archivo="internal/mcp/rechazo_diseno.go"
+// arnes: de="\t\tif t.Eje != eje || n >= designTellsPorEje {"
+// arnes: a="\t\tif t.Eje != eje && n >= designTellsPorEje {"
 func TestRechazoElBloqueDeEjeTieneTope(t *testing.T) {
 	for _, e := range ejesDeDiseno {
 		conEje := strings.Count(tellsPara(e.Nombre), "\n- ")
@@ -102,6 +111,9 @@ func TestRechazoCadaTellDiceElPorQue(t *testing.T) {
 // cuándo se escribió.
 //
 // SABOTAJE: sacar el año del bloque ⇒ este test se pone rojo y la lista pierde su fecha de revisión.
+// arnes: archivo="internal/mcp/rechazo_diseno.go"
+// arnes: de="\t{\"\", \"NO caigas en las dos paletas por defecto de 2026: crema #F4F1EA con serifa de display y acento terracota, o casi-negro con un solo acento verde ácido o bermellón. Las dos se reconocen a un metro. Elegir una a propósito para una marca que la pide está bien; llegar a ella sin decidir es la firma de que nadie eligió.\"},"
+// arnes: a="\t{\"\", \"NO caigas en las dos paletas por defecto del momento: crema #F4F1EA con serifa de display y acento terracota, o casi-negro con un solo acento verde ácido o bermellón. Las dos se reconocen a un metro. Elegir una a propósito para una marca que la pide está bien; llegar a ella sin decidir es la firma de que nadie eligió.\"},"
 func TestRechazoLosTellsDeIALlevanSuAnio(t *testing.T) {
 	// El año vive en el comentario del bloque, así que se verifica sobre el texto de los tells que
 	// nombran defaults concretos: si una paleta se cita como «el default de <año>», el año está.

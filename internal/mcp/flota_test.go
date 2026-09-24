@@ -71,6 +71,9 @@ func recogerEventos(t *testing.T, ch <-chan LiveEvent, n int) []LiveEvent {
 // cruza la red ni una vez; y un evento que no sea de origen local (p. ej. "flota" relayado)
 // jamás se re-reenvía — el freno estructural anti-loop.
 // Sabotaje visto rojo: esDeFlota ⇒ `return ev.Tool != ""`.
+// arnes: archivo="internal/mcp/flota.go"
+// arnes: de="\treturn ev.Kind == KindTrabajo && ev.Origen == \"local\" && ev.Tool != \"\""
+// arnes: a="\treturn ev.Tool != \"\""
 func TestFlotaSoloElTrabajoViaja(t *testing.T) {
 	casos := []struct {
 		ev     LiveEvent
@@ -92,6 +95,9 @@ func TestFlotaSoloElTrabajoViaja(t *testing.T) {
 // I2 — LA IDENTIDAD LA SELLA EL SERVER. El principal y el project del evento publicado salen del
 // TOKEN autenticado; el body ni siquiera tiene dónde declararlos (I4 rechaza el intento).
 // Sabotaje visto rojo: en handlerFlota, no estampar principal (dejar ev.Principal vacío).
+// arnes: archivo="internal/mcp/flota.go"
+// arnes: de="\t\t\t\tev.Principal = principal.Name // I2: la identidad la sella el token"
+// arnes: a="\t\t\t\t_ = principal"
 func TestFlotaIdentidadLaSellaElServer(t *testing.T) {
 	s, ts := servidorFlota(t)
 	id, ch, _ := s.live.subscribe("", false)
@@ -127,7 +133,12 @@ func TestFlotaSinCredencialNoEntra(t *testing.T) {
 }
 
 // I3 — EL RECEPTOR ACOTA. Un batch más grande que el tope rebota entero con 400 y no publica
-// nada. Sabotaje visto rojo: quitar el chequeo de flotaBatchTope.
+// nada.
+//
+// Sabotaje que la hace fallar: quitar el chequeo de flotaBatchTope del receptor.
+// arnes: archivo="internal/mcp/flota.go"
+// arnes: de="\t\tif len(entrantes) > flotaBatchTope {"
+// arnes: a="\t\tif len(entrantes) > flotaBatchTope && false {"
 func TestFlotaElReceptorAcota(t *testing.T) {
 	s, ts := servidorFlota(t)
 	id, ch, _ := s.live.subscribe("", false)
@@ -150,7 +161,12 @@ func TestFlotaElReceptorAcota(t *testing.T) {
 
 // I4 — SIN CONTENIDO, POR CONSTRUCCIÓN. El decode es estricto: un campo extra (content, args,
 // principal — lo que sea) rechaza el batch entero. Es la mitad receptora del invariante L1 del
-// feed. Sabotaje visto rojo: quitar DisallowUnknownFields.
+// feed.
+//
+// Sabotaje que la hace fallar: quitar DisallowUnknownFields del decoder.
+// arnes: archivo="internal/mcp/flota.go"
+// arnes: de="\t\tdec.DisallowUnknownFields()\n"
+// arnes: a=""
 func TestFlotaSinContenidoPorConstruccion(t *testing.T) {
 	_, ts := servidorFlota(t)
 	body := []byte(`[{"tool":"musubi_recall","outcome":"ok","ms":3,"content":"el secreto que no debe viajar"}]`)
@@ -164,6 +180,9 @@ func TestFlotaSinContenidoPorConstruccion(t *testing.T) {
 // por venir de afuera (clasificarTool se recomputa), y un nombre de tool que no tiene forma de
 // tool se descarta contado, no publicado.
 // Sabotaje visto rojo: estampar Kind: KindTrabajo fijo en el receptor.
+// arnes: archivo="internal/mcp/flota.go"
+// arnes: de="\t\t\t\tKind:       clasificarTool(tool), // I5: la clase la decide el server"
+// arnes: a="\t\t\t\tKind:       KindTrabajo,"
 func TestFlotaElKindLoDecideElServer(t *testing.T) {
 	s, ts := servidorFlota(t)
 	id, ch, _ := s.live.subscribe("", false)
@@ -361,6 +380,10 @@ func (backendConListaIlegible) ProyectosConDevices(int) ([]string, error) {
 // —`ps, tr, _ := proyectosVisibles(...)` y `return ps, tr, true`—, que es literalmente lo que
 // escribe un resolve ingenuo del conflicto. Los tres subtests pasan a recibir
 // `{"total": 0, "devices": []}` en verde. (Dejar el `!ilegible` por `true` a secas NO sirve de
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="\tps, tr, ilegible := proyectosVisibles(s.engine, p)\n\treturn ps, tr, !ilegible"
+// arnes: a="\tps, tr, _ := proyectosVisibles(s.engine, p)\n\treturn ps, tr, true"
+// arnes: colision_ok="TestUnaBusquedaPARCIALNoDesempataSolaNiDeclaraInexistente"
 // sabotaje: el compilador lo ataja con «declared and not used», así que no es la forma en que
 // este defecto puede volver.)
 func TestUnaListaDeProyectosILEGIBLENoSeContestaComoInventarioVacio(t *testing.T) {
@@ -438,6 +461,10 @@ func (b backendConListaRecortada) DevicePorNombre(projectID, name string) (fleet
 //
 // SABOTAJE QUE LA HACE FALLAR: volver la línea a `proyectos, _, vacioLegitimo :=` y sacar los dos
 // bloques de `truncado`. Verificado: el subtest de la homónima pasa a recibir un device sin error.
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="\tps, tr, ilegible := proyectosVisibles(s.engine, p)\n\treturn ps, tr, !ilegible"
+// arnes: a="\tps, _, ilegible := proyectosVisibles(s.engine, p)\n\treturn ps, false, !ilegible"
+// arnes: colision_ok="TestUnaListaDeProyectosILEGIBLENoSeContestaComoInventarioVacio"
 func TestUnaBusquedaPARCIALNoDesempataSolaNiDeclaraInexistente(t *testing.T) {
 	casos := []struct {
 		nombre   string

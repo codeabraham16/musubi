@@ -16,7 +16,8 @@ import (
 	"musubi/internal/embedding"
 )
 
-// respConflictos vive en conflicts_triage_test.go; acá se leen los campos nuevos del mapa crudo.
+// campoDeConflictos lee un campo nuevo del mapa crudo de la respuesta (respConflictos vive en
+// conflicts_triage_test.go).
 func campoDeConflictos(t *testing.T, s *McpServer, args map[string]interface{}, campo string) (string, bool) {
 	t.Helper()
 	res, e := call(t, s, "musubi_conflicts", args)

@@ -347,6 +347,9 @@ func gitInit(t *testing.T, dir string) {
 // `arbolFueraDeAlcance`.
 //
 // Sabotaje verificado que lo pone en rojo: que `arbolFueraDeAlcance` devuelva `false` siempre.
+// arnes: archivo="internal/mcp/methods_codegraph.go"
+// arnes: de="func (s *McpServer) arbolFueraDeAlcance() bool { return s.forceRedact }"
+// arnes: a="func (s *McpServer) arbolFueraDeAlcance() bool { return false }"
 func TestEnElCentralElMissNoAfirmaQueElArchivoEsDeOtraRama(t *testing.T) {
 	s, dir := proyectoIndexado(t)
 

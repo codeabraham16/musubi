@@ -38,6 +38,9 @@ func entradaDeEdicion(path, sesion string) string { return entradaDeHook("Edit",
 // se lee igual que «no hay nada que decir». El caso raro tratado con cuidado, el común sin tratar.
 //
 // Sabotaje: hacer que avisoSinGrafo devuelva "" siempre → vuelve el mudo y esta prueba se pone roja.
+// arnes: archivo="cmd/musubi/precheck.go"
+// arnes: de="func avisoSinGrafo(store codeStore, key, sessionID string) string {"
+// arnes: a="func avisoSinGrafo(store codeStore, key, sessionID string) string {\n\tif key != \"\" {\n\t\treturn \"\"\n\t}"
 func TestAntesDeEditarUnArchivoSinGrafoElHookLoDICE(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "migraciones/alertas.sql", "create table alertas (id int);\n")
@@ -83,6 +86,9 @@ func TestSiElLenguajeSeIndexaElAvisoMandaAIndexarYNoAResignarse(t *testing.T) {
 // archivo: decirlo una vez por sesión alcanza.
 //
 // Sabotaje: sacarle la guarda del ledger a avisoSinGrafo → el aviso se repite y esto se pone rojo.
+// arnes: archivo="cmd/musubi/precheck.go"
+// arnes: de="\tif l, err := store.LedgerAdd(sessionID, superficie, 0); err == nil {\n\t\tif l.Surfaces[superficie] > 0 {"
+// arnes: a="\tif l, err := store.LedgerAdd(sessionID, superficie, 0); err == nil {\n\t\tif l.Surfaces[superficie] < 0 {"
 func TestElAvisoSinGrafoSeDiceUnaVezPorSesionYNoEnCadaEdicion(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "a.sql", "create table a (id int);\n")
@@ -132,6 +138,9 @@ func TestAlLEERUnArchivoSinGrafoElHookSigueCallado(t *testing.T) {
 // la próxima, el caso de Windows se ejercita ACÁ, con una ruta literal con barras invertidas.
 //
 // Sabotaje: volver a armar el JSON por concatenación → esta prueba se pone roja en Linux también.
+// arnes: archivo="cmd/musubi/precheck_singrafo_test.go"
+// arnes: de="\tin := precheckInput{ToolName: tool, SessionID: sesion}\n\tin.ToolInput.FilePath = path\n\tb, err := json.Marshal(in)\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\treturn string(b)"
+// arnes: a="\tin := precheckInput{ToolName: tool, SessionID: sesion}\n\tin.ToolInput.FilePath = path\n\tb, err := json.Marshal(in)\n\tif err != nil {\n\t\tpanic(err)\n\t}\n\t_ = b\n\treturn `{\"tool_name\":\"` + tool + `\",\"tool_input\":{\"file_path\":\"` + path + `\"},\"session_id\":\"` + sesion + `\"}`"
 func TestUnaRutaConBarrasInvertidasNoRompeLaEntradaDelHook(t *testing.T) {
 	const rutaWindows = `C:\Users\RUNNER~1\AppData\Local\Temp\Test001\a.sql`
 

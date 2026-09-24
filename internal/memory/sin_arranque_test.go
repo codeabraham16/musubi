@@ -170,8 +170,13 @@ func TestSinArranqueRechazaUnEsquemaMasNuevo(t *testing.T) {
 // El hook escribe el ledger mientras el daemon escribe, y precheck.go descarta el error de
 // LedgerAdd: una escritura perdida por SQLITE_BUSY no se ve en ningún lado. El DSN del engine
 // liviano era una COPIA del de NewDbEngine, y sacarle `busy_timeout` dejaba todo verde (X1–X3 miden
-// NewDbEngine, no este engine). Sabotaje: sacar `busy_timeout(5000)` de dsnEscribible → rojo acá, con
+// NewDbEngine, no este engine).
+//
+// Sabotaje que la hace fallar: sacar `busy_timeout(5000)` de dsnEscribible → rojo acá, con
 // «database is locked» al instante.
+// arnes: archivo="internal/memory/database.go"
+// arnes: de="?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+// arnes: a="?_txlock=immediate&_pragma=journal_mode(WAL)"
 //
 // NO PASA POR TIMING, y por eso tiene tres piezas y no una:
 //   - El otro escritor abre SU PROPIA conexión con un DSN a mano, sin dsnEscribible: si usara el
@@ -271,7 +276,12 @@ func TestSinArranqueElLedgerEsperaAlOtroEscritor(t *testing.T) {
 // el encabezado de sin_arranque.go). Ningún caso lo miraba, y no por descuido visible:
 // SembrarPlantillaDePruebas deja la base en la ÚLTIMA versión, donde migrar es un no-op, así que un
 // runMigrations metido en NewDbEngineSinArranque pasaba verde. Por eso acá la base se baja a
-// latest-1 antes de abrirla. Sabotaje: llamar runMigrations(db) después de SetMaxIdleConns → rojo.
+// latest-1 antes de abrirla.
+//
+// Sabotaje que la hace fallar: llamar runMigrations(db) después de SetMaxIdleConns → rojo.
+// arnes: archivo="internal/memory/sin_arranque.go"
+// arnes: de="\tdb.SetMaxIdleConns(2)\n"
+// arnes: a="\tdb.SetMaxIdleConns(2)\n\t_ = runMigrations(db)\n"
 //
 // El CONTROL abre la misma base con NewDbEngine y verifica que ésa sí sube a latest: sin él,
 // «quedó en latest-1» también sería verde si la migración no pudiera correr sobre esta base.

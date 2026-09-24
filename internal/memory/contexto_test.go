@@ -24,6 +24,9 @@ import (
 // espacio contra la `T` decide (0x20 < 0x54): la fila queda del lado de afuera.
 //
 // Sabotaje: `const formatoDeMemoria = time.RFC3339` → falla acá (y NO falla con una ventana de 24 h).
+// arnes: archivo="internal/memory/contexto.go"
+// arnes: de="const formatoDeMemoria = \"2006-01-02 15:04:05\"\n"
+// arnes: a="const formatoDeMemoria = time.RFC3339\n"
 func TestLaVentanaDeMemoriaUsaElFormatoDeSQLiteYNoRFC3339(t *testing.T) {
 	e := newTestEngine(t)
 	if err := e.SaveObservationTypedFrom("infra", "", "obs-fija", "infra/tema",
@@ -82,6 +85,9 @@ func TestLaVentanaDeMemoriaUsaElFormatoDeSQLiteYNoRFC3339(t *testing.T) {
 // Sabotaje: sacar `visibleObsPredicate` del WHERE → falla acá. (Lo encontré ejecutándolo: la
 // primera versión de estas pruebas no sembraba ninguna fila tapada, así que ese sabotaje quedaba
 // verde y la muralla estaba sin custodiar por este lado.)
+// arnes: archivo="internal/memory/contexto.go"
+// arnes: de="\t\tWHERE created_at >= ? AND created_at < ? AND `+visibleObsPredicate+scopeSQL+`\n"
+// arnes: a="\t\tWHERE created_at >= ? AND created_at < ? `+scopeSQL+`\n"
 func TestElContextoNoTraeObservacionesTapadas(t *testing.T) {
 	e := newTestEngine(t)
 	const cuando = "2026-05-05 12:00:00"
@@ -203,6 +209,9 @@ func TestLasLecturasDeContextoRechazanUnaVentanaInvalida(t *testing.T) {
 //
 // Sabotajes: `const formatoDeMemoria = time.RFC3339` rompe la segunda mitad; declarar la columna
 // como TEXT en vez de DATETIME rompe la primera.
+// arnes: archivo="internal/memory/database.go"
+// arnes: de="\t\t`CREATE TABLE IF NOT EXISTS observations (\n\t\t\tid TEXT PRIMARY KEY,\n\t\t\ttopic_key TEXT NOT NULL,\n\t\t\tcontent TEXT NOT NULL,\n\t\t\tcreated_at DATETIME DEFAULT CURRENT_TIMESTAMP\n\t\t);`,\n"
+// arnes: a="\t\t`CREATE TABLE IF NOT EXISTS observations (\n\t\t\tid TEXT PRIMARY KEY,\n\t\t\ttopic_key TEXT NOT NULL,\n\t\t\tcontent TEXT NOT NULL,\n\t\t\tcreated_at TEXT DEFAULT CURRENT_TIMESTAMP\n\t\t);`,\n"
 func TestElDriverConvierteAlLeerYNoAlComparar(t *testing.T) {
 	e := newTestEngine(t)
 

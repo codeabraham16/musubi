@@ -24,6 +24,9 @@ import (
 //
 // Sabotaje que la hace fallar: borrar el `INSERT OR IGNORE ... SELECT` de la migración.
 // ────────────────────────────────────────────────────────────────────────────────────────────
+// arnes: archivo="internal/memory/migrations.go"
+// arnes: de="INSERT OR IGNORE INTO fleet_policy_state_v2 (policy, device_id, alcance, last_fired)"
+// arnes: a="INSERT OR IGNORE INTO fleet_policy_state_v2 (policy, device_id, alcance, last_fired) WHERE 0"
 func TestMigracionV39ConservaLosCooldownsDeUnaBaseVieja(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, config.DirName, config.DBFile)

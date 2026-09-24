@@ -33,6 +33,9 @@ import (
 // Y uno que el arnés ya encontró mientras se escribía: el aviso «no restaures» explicaba qué no
 // hacer escribiendo el comando entre backticks. La prueba no podía distinguir la receta de su
 // propia advertencia — y un humano apurado con una terminal tampoco. Ahora se dice en palabras.
+// arnes: archivo="deploy/redesplegar-cerebro.sh"
+// arnes: de="    echo \"    cp -a $RESPALDO $BASE && rm -f $BASE-wal $BASE-shm && chown musubi:musubi $BASE\"\n"
+// arnes: a=""
 func TestLaRecetaDeVueltaAtrasNoRestauraLaBaseSiNoHuboMigracion(t *testing.T) {
 	// El `t.Skipf` de `exec.LookPath("bash")` que había acá salteaba TAMBIÉN EN LINUX: sin bash esta
 	// guarda no existía y `go test` contestaba `ok`. La compuerta lo convierte en un fallo.

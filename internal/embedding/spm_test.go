@@ -22,9 +22,9 @@ func writeUnigramTokenizer(t *testing.T, dir string) {
 		},
 		"pre_tokenizer": map[string]any{"type": "Metaspace", "replacement": "▁", "prepend_scheme": "always", "split": false},
 		"model": map[string]any{
-			"type":    "Unigram",
-			"unk_id":  1,
-			"vocab":   []any{[]any{"[PAD]", 0.0}, []any{"[UNK]", -20.0}, []any{"▁ab", -1.0}, []any{"▁a", -2.0}, []any{"b", -3.0}, []any{"▁", -5.0}},
+			"type":   "Unigram",
+			"unk_id": 1,
+			"vocab":  []any{[]any{"[PAD]", 0.0}, []any{"[UNK]", -20.0}, []any{"▁ab", -1.0}, []any{"▁a", -2.0}, []any{"b", -3.0}, []any{"▁", -5.0}},
 		},
 	}
 	b, _ := json.Marshal(doc)
@@ -44,11 +44,11 @@ func TestUnigramEncode(t *testing.T) {
 		t.Fatalf("esperaba *unigram, obtuve %T", tok)
 	}
 	cases := map[string][]int{
-		"ab":  {2},       // "▁ab" (score -1.0) gana sobre "▁a"+"b" (-5.0)
-		"a":   {3},       // "▁a"
-		"z":   {5, 1},    // "▁" + z(unk): z no está en el vocab
-		" ab": {2},       // Strip recorta el espacio de borde ⇒ igual que "ab"
-		"":    nil,       // vacío ⇒ sin tokens
+		"ab":  {2},    // "▁ab" (score -1.0) gana sobre "▁a"+"b" (-5.0)
+		"a":   {3},    // "▁a"
+		"z":   {5, 1}, // "▁" + z(unk): z no está en el vocab
+		" ab": {2},    // Strip recorta el espacio de borde ⇒ igual que "ab"
+		"":    nil,    // vacío ⇒ sin tokens
 	}
 	for in, want := range cases {
 		got := tok.EncodeIDs(in)

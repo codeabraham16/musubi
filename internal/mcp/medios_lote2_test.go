@@ -30,6 +30,9 @@ import (
 // por una condición que habla de otra cosa, y no hay ningún error que lo diga.
 //
 // Sabotaje que lo hace fallar: volver a comparar contra `s.ultimaPoda` en vez del reloj propio.
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\tif !s.ultimaPodaDePoliticas.IsZero() && ahora.Sub(s.ultimaPodaDePoliticas) < podaCadaTanto {\n\t\treturn\n\t}\n\ts.ultimaPodaDePoliticas = ahora\n"
+// arnes: a="\tif !s.ultimaPoda.Equal(s.ultimaPodaDePoliticas) {\n\t\ts.ultimaPodaDePoliticas = s.ultimaPoda\n\t} else {\n\t\treturn\n\t}\n"
 func TestLaPodaDeCooldownsNoDependeDeLaRetencionDeSalidas(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	// LA RETENCIÓN DE SALIDAS, APAGADA. Es el escenario entero de la prueba.
@@ -123,6 +126,9 @@ func politicasConEstado(t *testing.T, s *McpServer) map[string]bool {
 // única forma que prueba algo: en secuencia, mirando quién sobrevive.
 //
 // Sabotaje que lo hace fallar: sacar `AND estado != ?` del WHERE.
+// arnes: archivo="internal/memory/comandos.go"
+// arnes: de="\t\t  WHERE id = ? AND estado != ?`,\n"
+// arnes: a="\t\t  WHERE id = ? AND (estado != ? OR 1)`,\n"
 func TestDosReportesDelMismoComandoNoSePisan(t *testing.T) {
 	s, d := servidorConMaquina(t)
 	nuevoComando := func() fleet.Comando {

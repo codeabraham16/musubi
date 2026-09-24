@@ -43,6 +43,9 @@ func escribirConfig(t *testing.T, dir, cuerpo string) {
 // proyecto con el sync encendido. Leer el del home invirtió la conclusión del diagnóstico.
 //
 // Sabotaje que la hace fallar: comparar sólo la existencia de los dos archivos y no su contenido.
+// arnes: archivo="internal/memory/doctor_config.go"
+// arnes: de="\tif len(dif) == 0 {"
+// arnes: a="\tif len(dif) >= 0 {"
 func TestElDoctorSePoneAmarilloSiElOtroConfigDiceLoContrario(t *testing.T) {
 	home := t.TempDir()
 	fijarHome(t, home)

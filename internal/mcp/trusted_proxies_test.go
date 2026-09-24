@@ -16,6 +16,9 @@ import (
 //
 // Sabotaje que la hace fallar: leer el header sin mirar `ipConfiable` (rompe el primer caso), o
 // devolver siempre `RemoteAddr` (rompe el segundo).
+// arnes: archivo="internal/mcp/http.go"
+// arnes: de="\tif len(proxiesConfiables) == 0 || !ipConfiable(host) {\n\t\treturn host\n\t}\n"
+// arnes: a="\tif len(proxiesConfiables) == 0 {\n\t\treturn host\n\t}\n"
 func TestElHeaderDeProxySoloSeCreeDesdeUnOrigenDeclarado(t *testing.T) {
 	anterior := proxiesConfiables
 	t.Cleanup(func() { proxiesConfiables = anterior })
@@ -81,6 +84,9 @@ func TestElHeaderDeProxySoloSeCreeDesdeUnOrigenDeclarado(t *testing.T) {
 // falla de un typo tiene que ser ruidoso, igual que en `expires:` y en el resto del arranque.
 //
 // Sabotaje: que fijarProxiesConfiables saltee el CIDR malo en vez de devolver error.
+// arnes: archivo="internal/mcp/http.go"
+// arnes: de="\t\t\treturn fmt.Errorf(\"service.trusted_proxies: %q no es un CIDR válido (ej: 10.0.0.0/8): %w\", c, err)\n"
+// arnes: a="\t\t\tcontinue\n"
 func TestUnCidrIlegibleImpideArrancar(t *testing.T) {
 	anterior := proxiesConfiables
 	t.Cleanup(func() { proxiesConfiables = anterior })

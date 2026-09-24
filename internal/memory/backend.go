@@ -308,7 +308,12 @@ type WorkflowStore interface {
 type LedgerStore interface {
 	LedgerStatus() (TokenLedger, error)
 	LedgerAdd(sessionID, surface string, tokens int) (TokenLedger, error)
-	LedgerReset() error
+	LedgerStatusDe(sessionID string) (TokenLedger, error)
+	// LedgerReset pone en cero UNA sesión: la indicada, o la última que escribió si sessionID es vacío.
+	LedgerReset(sessionID string) error
+	// LedgerSesiones lista todas las sesiones con su total: musubi_tokens corre por MCP, no sabe cuál
+	// es la suya, y sin la lista mostraba el número de otra terminal sin decir de quién era.
+	LedgerSesiones() ([]SesionLedger, error)
 }
 
 // PhaseStore — pipeline por fases del loop dirigido (explore→plan→code→verify).
@@ -359,6 +364,11 @@ type OutboxStore interface {
 	MarkOutboxRetry(obsID string, backoffSeconds int, errMsg string) error
 	MarkOutboxDead(obsID, errMsg string) error
 	OutboxStats() (pending, sent, dead int, err error)
+	// ReclamarBajada y AvanzarCursorBajada son el lease y el cursor monótono de la BAJADA: el mismo
+	// resguardo que ClaimOutboxBatch le da a la subida, que la bajada no tenía (ver bajada_lease.go).
+	ReclamarBajada(dueno string, leaseSeconds int) (bool, error)
+	SoltarBajada(dueno string) error
+	AvanzarCursorBajada(key string, v int64) error
 	// ListSharedForPull sirve el sync ENTRANTE (C5.3): lista la memoria 'shared' del proyecto del
 	// ctx (aislamiento T17-19) con rowid > afterRowID, paginada. La corre el central en un pull.
 	ListSharedForPull(ctx context.Context, afterRowID int64, limit int) ([]SharedObs, error)

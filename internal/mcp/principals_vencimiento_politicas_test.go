@@ -44,6 +44,10 @@ func relojDeVencimiento(t *testing.T, ahora time.Time) {
 // vencimiento) es lo que impide que esto pase con un motor de políticas que no hace nada.
 //
 // Sabotaje que la hace fallar: sacar el `p.Vencida(...)` de porNombre en principals.go.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="\tif !existe || p.Vencida(ahoraParaVencimiento()) {"
+// arnes: a="\tif !existe {"
+// arnes: colision_ok="TestElEmpujeOTLPNoExportaConUnaCredencialVencida"
 func TestUnaCredencialVencidaNoActuaPorUnaPolitica(t *testing.T) {
 	vence := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	contratista := autoHeal()
@@ -111,6 +115,10 @@ func TestUnaCredencialVencidaNoActuaPorUnaPolitica(t *testing.T) {
 // datos, que es peor.
 //
 // Sabotaje que la hace fallar: sacar el `p.Vencida(...)` de porNombre en principals.go.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="\tif !existe || p.Vencida(ahoraParaVencimiento()) {"
+// arnes: a="\tif !existe {"
+// arnes: colision_ok="TestUnaCredencialVencidaNoActuaPorUnaPolitica"
 func TestElEmpujeOTLPNoExportaConUnaCredencialVencida(t *testing.T) {
 	vence := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	pr := autoHeal()
@@ -143,6 +151,9 @@ func TestElEmpujeOTLPNoExportaConUnaCredencialVencida(t *testing.T) {
 //
 // Sabotaje que la hace fallar: cambiar porNombreAunqueVencida por porNombre en
 // validarPrincipalDePolitica / validarPrincipalDeEmpuje (scheduler_flota.go).
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\tpr, existe := lookup.porNombreAunqueVencida(pol.Principal)"
+// arnes: a="\tpr, existe := lookup.porNombre(pol.Principal)"
 func TestUnaCredencialVencidaNoImpideArrancar(t *testing.T) {
 	vence := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	relojDeVencimiento(t, vence.Add(24*time.Hour))
@@ -184,6 +195,9 @@ func TestUnaCredencialVencidaNoImpideArrancar(t *testing.T) {
 // modo de falla exacto que el vencimiento vino a eliminar.
 //
 // Sabotaje que la hace fallar: no poblar Expires/Vencimiento en ListPrincipalsInfo.
+// arnes: archivo="internal/mcp/principals_admin.go"
+// arnes: de="\t\t\tVencimiento: estadoDeVencimiento(p.Name, p.Expires),"
+// arnes: a="\t\t\tVencimiento: estadoDeVencimiento(p.Name, \"\"),"
 func TestElListadoDePrincipalsDiceQueLaCredencialVencio(t *testing.T) {
 	relojDeVencimiento(t, time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC))
 
@@ -269,6 +283,9 @@ func comandosDePolitica(t *testing.T, s *McpServer) int {
 //
 // Sabotaje que la hace fallar: en principals_reload.go, que rr.porNombre delegue en
 // reg.porNombreAunqueVencida.
+// arnes: archivo="internal/mcp/principals_reload.go"
+// arnes: de="\treturn reg.porNombre(nombre)"
+// arnes: a="\treturn reg.porNombreAunqueVencida(nombre)"
 func TestElEnvoltorioDeProduccionTampocoDejaActuarAUnaVencida(t *testing.T) {
 	vence := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	contratista := autoHeal()

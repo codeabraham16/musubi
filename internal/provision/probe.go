@@ -94,18 +94,12 @@ func direccionDelCerebro(brain string) (base, hostPort string, ok bool) {
 // lleva sólo el nombre como SAN y ninguna IP. El .mcp.json que escribe `provision` lo consume el
 // host MCP, que NO declara ServerName — así que ahí eso no anda, y el self-check de este paquete
 // tampoco lo ve, porque él sí sale por otro camino.
-func elCertificadoNoVaAServirParaUnaIP(base string) bool {
-	if !strings.HasPrefix(strings.ToLower(base), "https://") {
-		return false
-	}
-	hostPort := base[len("https://"):]
-	host := hostPort
-	if i := strings.LastIndex(hostPort, ":"); i >= 0 && !strings.Contains(hostPort[i+1:], "]") {
-		host = hostPort[:i]
-	}
-	host = strings.Trim(host, "[]")
-	return net.ParseIP(host) != nil
-}
+//
+// EL PREDICADO SE MUDÓ A `internal/cerebro` EL 2026-09-22 y acá quedó el nombre. Vive allá porque
+// allá vive el ARREGLO —`Cliente` es quien sabe declarar el ServerName—, y mientras vivió acá el
+// resto del árbol no podía preguntarlo sin escribirlo de nuevo, cada copia con su propio criterio
+// de qué es una IP.
+func elCertificadoNoVaAServirParaUnaIP(base string) bool { return cerebro.HTTPSContraIPPelada(base) }
 
 // httpVerifier hace el self-check real contra el cerebro con el stack HTTP de musubi (el mismo
 // que usa el sync saliente): reach por /readyz y auth por tools/list.

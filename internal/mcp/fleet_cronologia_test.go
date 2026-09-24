@@ -39,6 +39,16 @@ func sembrarLosTresPlanos(t *testing.T, s *McpServer, proyecto, nombre string) f
 	if err != nil || !existe {
 		t.Fatalf("no quedó la máquina: %v %v", existe, err)
 	}
+	// LA MÁQUINA DECLARA QUE SABE AVISAR, y sin esto las pruebas que cuelgan de este fixture miden
+	// otra cosa. El aviso sólo se encola si el agente declaró `puede_preguntar`: una máquina recién
+	// enrolada llega en `false`, así que antes de que la precondición viviera en el embudo esto no
+	// se notaba y ahora sí. Es la misma razón por la que
+	// `TestElAutoHealPasaPorElEjeDeConsentimiento` lo fija explícitamente: con `false` la prueba
+	// pasaría a medir la DEGRADACIÓN del eje en vez del eje.
+	if err := s.engine.FijarCapacidadDePreguntar(d.ID, true); err != nil {
+		t.Fatalf("FijarCapacidadDePreguntar: %v", err)
+	}
+	d, _, _ = s.engine.DevicePorNombre(proyecto, nombre)
 	if _, err := s.engine.EncolarComando(fleet.Comando{
 		DeviceID: d.ID, ProjectID: proyecto, Principal: "gio",
 		Argv: []string{"systemctl", "restart", "MARCASCRIPT"}, Timeout: 30 * time.Second,
@@ -208,6 +218,7 @@ func TestUnaOperacionDePantallaNoSeLeMuestraAQuienSoloPuedeEjecutar(t *testing.T
 //
 // Sabotaje: traer las últimas N filas y filtrar por fecha en Go → con `limite: 3` y cinco hechos
 // nuevos encima, el hecho viejo NUNCA aparece.
+// arnes: colision_ok="TestLaCronologiaNoCruzaTenants TestLaVentanaViajaEnLaConsultaYNoEnGo"
 // arnes: archivo="internal/memory/cronologia.go"
 // arnes: de="\t\t`SELECT `+columnasComando+` FROM device_commands\n\t\t  WHERE project_id = ? AND device_id = ? AND creado >= ? AND creado < ?\n\t\t  ORDER BY creado DESC LIMIT ?`,\n\t\tprojectID, deviceID, desde, hasta, tope)"
 // arnes: a="\t\t`SELECT * FROM (SELECT `+columnasComando+` FROM device_commands\n\t\t  WHERE project_id = ? AND device_id = ?\n\t\t  ORDER BY creado DESC LIMIT ?) WHERE creado >= ? AND creado < ?`,\n\t\tprojectID, deviceID, tope, desde, hasta)"
@@ -797,8 +808,8 @@ func TestElOrigenAutomaticoSeDistingueYLoDesconocidoNoSeInventa(t *testing.T) {
 // Sabotaje que lo hace fallar: ponerle `fleet.HechoCanalPantalla` a avisoExec o a avisoShell, o
 // hacer que encolarAvisoDeAcceso ignore `a.clase`.
 // arnes: archivo="internal/mcp/methods_pantalla.go"
-// arnes: de="\tavisoExec     = avisoDeAcceso{\"está ejecutando comandos en esta máquina.\", fleet.HechoCanalExec}"
-// arnes: a="\tavisoExec     = avisoDeAcceso{\"está ejecutando comandos en esta máquina.\", fleet.HechoCanalPantalla}"
+// arnes: de="\tavisoExec     = avisoDeAcceso{\"está ejecutando comandos en esta máquina.\", fleet.HechoCanalExec, \"exec\"}"
+// arnes: a="\tavisoExec     = avisoDeAcceso{\"está ejecutando comandos en esta máquina.\", fleet.HechoCanalPantalla, \"exec\"}"
 func TestElAvisoDeUnExecNoLoVeQuienSoloMiraLaPantalla(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")

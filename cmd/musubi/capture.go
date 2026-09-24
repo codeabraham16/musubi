@@ -260,6 +260,10 @@ func hasWord(s string, words ...string) bool {
 	return false
 }
 
+// detectFunc corre la detección de relaciones sobre una observación recién guardada. Se inyecta
+// (como embed) para que el core siga testeable sin engine real. nil = sin detección.
+type detectFunc func(obsID string)
+
 // captureCommits es el core testeable: captura los commits nuevos desde el último HEAD guardado.
 // El SCOPE lo decide el caller (C5.2): 'local' en un proyecto personal, 'shared' en team mode —
 // donde la captura es CENTRAL por naturaleza y los commits deben llegar a las demás máquinas del
@@ -268,10 +272,6 @@ func hasWord(s string, words ...string) bool {
 // Si embed no es nil, cada commit se guarda CON su embedding (participa del recall semántico); si
 // es nil, guardado léxico. Devuelve cuántas guardó. No-op silencioso si no es repo git o no hay
 // commits nuevos.
-// detectFunc corre la detección de relaciones sobre una observación recién guardada. Se inyecta
-// (como embed) para que el core siga testeable sin engine real. nil = sin detección.
-type detectFunc func(obsID string)
-
 func captureCommits(store captureStore, git gitLog, embed embedFunc, detect detectFunc, scope string) (int, error) {
 	return captureCommitsKeyed(store, git, embed, detect, scope, metaCaptureLastCommit, 0)
 }

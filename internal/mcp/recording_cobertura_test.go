@@ -47,6 +47,9 @@ var seriesQueSeCongelan = []string{
 //
 // Sabotaje que lo hace fallar: sacar el `unless` de musubi:service_up:norm, o borrar la regla
 // musubi:service_up:cobertura30d.
+// arnes: archivo="deploy/musubi-recording.yml"
+// arnes: de="        expr: max by(device, project, os, tier, service, class) (musubi_fleet_service_up)\n          unless on(project, device) (musubi_fleet_device_up == 0)\n"
+// arnes: a="        expr: max by(device, project, os, tier, service, class) (musubi_fleet_service_up)\n"
 func TestNingunaReglaPromediaUnaSerieCongelableSinDecirloDeQue(t *testing.T) {
 	texto := leerDeploy(t, "musubi-recording.yml")
 
@@ -169,6 +172,9 @@ func TestNingunaReglaPromediaUnaSerieCongelableSinDecirloDeQue(t *testing.T) {
 // que el formato no tiene.
 //
 // Sabotaje: cambiar el umbral de UNA de las tres reglas.
+// arnes: archivo="deploy/musubi-recording.yml"
+// arnes: de="(musubi:project_up:cobertura30d >= 0.95)\n"
+// arnes: a="(musubi:project_up:cobertura30d >= 0.9)\n"
 func TestTodasLasSeriesDeSlaUsanElMismoUmbralDeCobertura(t *testing.T) {
 	texto := leerDeploy(t, "musubi-recording.yml")
 	reUmbral := regexp.MustCompile(`:cobertura30d\s*>=\s*([0-9.]+)`)

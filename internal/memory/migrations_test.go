@@ -253,6 +253,9 @@ func mustExec(t *testing.T, db *sql.DB, query string, args ...any) {
 //
 // Sabotaje que la pone roja: sacar el bucle de «estrictamente creciente» del principio de
 // `applyMigrations`.
+// arnes: archivo="internal/memory/migrations.go"
+// arnes: de="\tfor i := 1; i < len(migs); i++ {\n\t\tif migs[i].version > migs[i-1].version {\n"
+// arnes: a="\tfor i := 1; i < 0; i++ {\n\t\tif migs[i].version > migs[i-1].version {\n"
 func TestDosMigracionesConElMismoNumeroNoSeAplicanAMedias(t *testing.T) {
 	nada := func(execQuerier) error { return nil }
 

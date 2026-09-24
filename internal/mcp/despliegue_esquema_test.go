@@ -28,6 +28,9 @@ import (
 // —`musubi version --esquema`— y que algo se ponga rojo si alguien vuelve a tipearlo.
 //
 // Sabotaje: volver a poner un `-ge 44` en el guion, o sacarle el `version --esquema`.
+// arnes: archivo="deploy/redesplegar-cerebro.sh"
+// arnes: de="elif [[ \"$ESQUEMA\" != \"$ESPERADO\" ]]; then"
+// arnes: a="elif [[ \"$ESQUEMA\" -ge 44 ]]; then"
 func TestElRedespliegueNoTipeaLaVersionDeEsquema(t *testing.T) {
 	crudo, err := leerArchivoDeDespliegue("../../deploy/redesplegar-cerebro.sh")
 	if err != nil {
@@ -66,6 +69,9 @@ func TestElRedespliegueNoTipeaLaVersionDeEsquema(t *testing.T) {
 // el guion verificaría contra un número equivocado con toda confianza.
 //
 // Sabotaje: que EsquemaEsperado devuelva una constante.
+// arnes: archivo="internal/memory/migrations.go"
+// arnes: de="func EsquemaEsperado() int { return latestSchemaVersion() }"
+// arnes: a="func EsquemaEsperado() int { return 44 }"
 func TestElBinarioDiceElEsquemaAlQueApunta(t *testing.T) {
 	// La lista de migraciones es la única fuente: se compara contra la MAYOR versión declarada,
 	// leída del propio archivo, para que agregar una migración sin tocar nada más rompa esto si
@@ -107,6 +113,9 @@ func TestElBinarioDiceElEsquemaAlQueApunta(t *testing.T) {
 // Y el código de salida de ese guion es el que decide si un despliegue sigue.
 //
 // Sabotaje: sacar el `if` que compara GOOS/GOARCH con los del host.
+// arnes: archivo="deploy/construir.sh"
+// arnes: de="if [[ \"$DESTINO_OS\" == \"$(go env GOHOSTOS)\" && \"$DESTINO_ARCH\" == \"$(go env GOHOSTARCH)\" ]]; then"
+// arnes: a="if true; then"
 func TestConstruirNoIntentaCorrerUnBinarioDeOtraPlataforma(t *testing.T) {
 	crudo, err := leerArchivoDeDespliegue("../../deploy/construir.sh")
 	if err != nil {
@@ -193,6 +202,9 @@ func TestConstruirNoIntentaCorrerUnBinarioDeOtraPlataforma(t *testing.T) {
 //
 // Sabotaje: renombrar nombreVidaDeRed a `musubi_fleet_device_*`; o agregar una serie al
 // exportador sin declararla; o cambiar el regex del prometheus.yml sin mirar el exportador.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="const nombreVidaDeRed = \"musubi_fleet_net_up\""
+// arnes: a="const nombreVidaDeRed = \"musubi_fleet_device_net_up\""
 func TestNingunaSerieDelCerebroCaeEnElDescarteDelScrape(t *testing.T) {
 	promYml, err := leerArchivoDeDespliegue("../../deploy/prometheus/prometheus.yml")
 	if err != nil {

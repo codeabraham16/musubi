@@ -19,6 +19,9 @@ import (
 // decisión legal antes que técnica, y no se toma de rebote agregando un campo.
 //
 // Sabotaje que la hace fallar: agregarle a SesionShell un campo `Salida`, `Buffer` o similar.
+// arnes: archivo="internal/fleet/shell.go"
+// arnes: de="type SesionShell struct {\n\tID        string\n\tDeviceID  string\n"
+// arnes: a="type SesionShell struct {\n\tSalida    string\n\tID        string\n\tDeviceID  string\n"
 func TestSesionShellNoTienePorDondeGuardarLoQuePasoPorLaTerminal(t *testing.T) {
 	tipo := reflect.TypeOf(SesionShell{})
 	prohibidos := []string{"contenido", "salida", "grabacion", "transcripcion", "buffer", "stdout", "stdin", "entrada", "historial", "bytes"}

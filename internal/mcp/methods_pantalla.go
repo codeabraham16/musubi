@@ -643,12 +643,17 @@ func (s *McpServer) sesionEsperandoDe(d fleet.Device, quien string, ahora time.T
 type avisoDeAcceso struct {
 	haciendo string
 	clase    fleet.TipoDeHecho
+	// operacion es el nombre del PLANO, y existe para el aviso de «no se pudo entregar». No se
+	// deriva de `clase` a propósito: `avisoExec` y `avisoPolitica` comparten `HechoCanalExec`
+	// —la política encola un exec— así que derivarlo de ahí juntaría en una sola clave de log dos
+	// caminos que hay que poder distinguir. Es un dato del camino, no de la bitácora.
+	operacion string
 }
 
 var (
-	avisoPantalla = avisoDeAcceso{"está abriendo una sesión de pantalla en esta máquina.", fleet.HechoCanalPantalla}
-	avisoShell    = avisoDeAcceso{"está abriendo una terminal en esta máquina.", fleet.HechoCanalShell}
-	avisoExec     = avisoDeAcceso{"está ejecutando comandos en esta máquina.", fleet.HechoCanalExec}
+	avisoPantalla = avisoDeAcceso{"está abriendo una sesión de pantalla en esta máquina.", fleet.HechoCanalPantalla, "pantalla"}
+	avisoShell    = avisoDeAcceso{"está abriendo una terminal en esta máquina.", fleet.HechoCanalShell, "shell"}
+	avisoExec     = avisoDeAcceso{"está ejecutando comandos en esta máquina.", fleet.HechoCanalExec, "exec"}
 	// EL CUARTO CAMINO, y el que no tenía aviso hasta A91. Va con HechoCanalExec porque lo que la
 	// política encola ES un exec: darle una clase propia partiría la bitácora del plano de actuar
 	// en dos, y la mitad automática es justo la que nadie miró ejecutarse (I16).
@@ -658,7 +663,7 @@ var (
 	// aviso que dijera «auto-heal está ejecutando comandos» se lee como si hubiera un humano
 	// llamado así; decir que es automático es la única forma de que la persona sepa que no hay a
 	// quién preguntarle.
-	avisoPolitica = avisoDeAcceso{"corrió una acción automática de mantenimiento en esta máquina.", fleet.HechoCanalExec}
+	avisoPolitica = avisoDeAcceso{"corrió una acción automática de mantenimiento en esta máquina.", fleet.HechoCanalExec, "politica"}
 )
 
 // encolarAvisoDeAcceso le manda al agente el aviso que `avisa` promete (A57).
@@ -688,6 +693,28 @@ var (
 // por eso queda la línea, con la operación adentro para que diga cuál fue.
 // ════════════════════════════════════════════════════════════════════════════════════════════
 func (s *McpServer) encolarAvisoDeAcceso(d fleet.Device, p *Principal, a avisoDeAcceso) {
+	// LA PRECONDICIÓN VIVE ACÁ, Y NO EN LOS LLAMADORES. ES EL ARREGLO, y tiene su medición.
+	//
+	// A83 dedujo bien la mitad del problema: había DOS copias del bloque que encola, se agregó un
+	// tercer camino, nadie se acordó de copiarlo, y el eje quedó escrito y sin efecto. La salida
+	// fue este embudo. Pero se dedujo la ACCIÓN y se dejó la PRECONDICIÓN copiada: el
+	// `case consent.AvisaAlUsuario() && !d.PuedePreguntar:` estaba escrito en `methods_pantalla`,
+	// `methods_exec` y `methods_shell`, y el CUARTO camino —`aplicarPoliticas`, que reusó el
+	// embudo como A83 mandaba— nació sin él.
+	//
+	// Medido el 2026-09-21 con control: una política sobre una máquina en `avisa` con
+	// `puede_preguntar=false` encolaba un `musubi:avisar` igual que con `true`. Prometer una
+	// notificación que el agente de esa máquina no sabe dar es exactamente lo que este eje viene a
+	// evitar, y era el único de los cuatro planos que no dejaba ni constancia.
+	//
+	// Con la precondición en el embudo —que es el ÚNICO sitio del cerebro que encola `OpAvisar`—
+	// el camino malo deja de ser representable: un quinto plano no puede olvidarse de una guarda
+	// que no tiene que escribir. No se bloquea, porque `avisa` no bloquea: se deja la constancia
+	// UNA vez por máquina y por plano, igual que hacían los tres llamadores.
+	if !d.PuedePreguntar {
+		s.avisarUnaVezPorDevice(d.ID, d.Name, a.operacion, d.ConsentimientoEfectivo())
+		return
+	}
 	quien := nombrePrincipal(p)
 	if quien == "" {
 		quien = "un operador"
