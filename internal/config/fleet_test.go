@@ -15,6 +15,9 @@ import (
 // Sabotaje que la hace fallar: tratar cualquier valor <= 0 como "desactivado", que es el atajo
 // obvio y deja al que no configuró nada sin sondeo — y por lo tanto con toda la flota sin agente
 // figurando caída para siempre.
+// arnes: archivo="internal/config/config.go"
+// arnes: de="\tif f.ProbeMinutes < 0 {"
+// arnes: a="\tif f.ProbeMinutes <= 0 {"
 func TestElIntervaloDeSondeoDistingueElDefaultDelApagado(t *testing.T) {
 	casos := []struct {
 		nombre  string

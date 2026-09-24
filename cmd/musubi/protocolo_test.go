@@ -43,6 +43,9 @@ var camposQueElAgenteIgnoraAProposito = map[string]string{
 // contrato y no esté ni consumido ni declarado acá la pone roja.
 //
 // Sabotaje que la hace fallar: agregar un campo a fleet.RespuestaLatido sin tocar nada más.
+// arnes: archivo="internal/fleet/protocolo.go"
+// arnes: de="\tTokenNuevo string `json:\"token_nuevo,omitempty\"`\n}"
+// arnes: a="\tTokenNuevo string `json:\"token_nuevo,omitempty\"`\n\tSaboteoCampoNuevo string `json:\"saboteo_campo_nuevo,omitempty\"`\n}"
 func TestNingunCampoDeLaRespuestaDelLatidoSePierdeEnSilencio(t *testing.T) {
 	// Los que el agente sí consume, cada uno verificado de verdad más abajo.
 	consumidos := map[string]bool{
@@ -86,6 +89,9 @@ func TestNingunCampoDeLaRespuestaDelLatidoSePierdeEnSilencio(t *testing.T) {
 // exactamente el atajo que convierte una guarda en decoración.
 //
 // Sabotaje que la hace fallar: quitar cualquiera de los cinco del decode de latir().
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="\t\t\tif r.Protocolo != \"\" {"
+// arnes: a="\t\t\tif r.Protocolo != \"\" && false {"
 func TestLosCincoCamposQueElAgenteConsumeLleganDeVerdad(t *testing.T) {
 	cuerpo, err := json.Marshal(fleet.RespuestaLatido{
 		OK: true, Device: "pc-gio", Project: "casa",
@@ -159,6 +165,9 @@ func TestLosCincoCamposQueElAgenteConsumeLleganDeVerdad(t *testing.T) {
 // una mención, que es lo que la hace usable en vez de un falso positivo permanente.
 //
 // Sabotaje que la hace fallar: volver a poner `const comandoAvisarAgente = "musubi:avisar"`.
+// arnes: archivo="cmd/musubi/avisador.go"
+// arnes: de="const comandoAvisarAgente = fleet.OpAvisar"
+// arnes: a="const comandoAvisarAgente = \"musubi:avisar\""
 func TestNingunValorDeCableSeRedeclaraFueraDelDominio(t *testing.T) {
 	valores := map[string]string{
 		fleet.OpAvisar:                "fleet.OpAvisar",

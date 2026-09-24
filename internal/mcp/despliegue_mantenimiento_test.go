@@ -154,6 +154,9 @@ func TestTodaAlertaDeUnaMaquinaRespetaLaVentanaDeMantenimiento(t *testing.T) {
 //
 // Sabotaje verificado que la pone en rojo: sacarle el `on(project, device)` a cualquiera de las
 // guardas (probado sobre MaquinaCaida, que es donde la primera versión fallaba).
+// arnes: archivo="deploy/musubi-alerts-flota.yml"
+// arnes: de="          musubi_fleet_device_up == 0\n          unless on(project, device) musubi_fleet_net_up == 1\n          unless on(project, device) (musubi_fleet_device_maintenance == 1)"
+// arnes: a="          musubi_fleet_device_up == 0\n          unless on(project, device) musubi_fleet_net_up == 1\n          unless (musubi_fleet_device_maintenance == 1)"
 func TestLaGuardaDeMantenimientoEmparejaPorMaquinaYNoAlAzar(t *testing.T) {
 	flota, _ := cargarReglas(t, "musubi-alerts-flota.yml")
 

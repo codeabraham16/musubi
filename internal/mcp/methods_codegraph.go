@@ -51,13 +51,6 @@ func (s *McpServer) refreshCodeGraphForPackage(ctx context.Context, dir string) 
 	return err
 }
 
-// refreshCodeGraphPkg es refreshCodeGraphForPackage y además informa CUÁNTAS llamadas cross-paquete
-// quedaron sin resolver. Ese número no es diagnóstico: lo usa el índice COMPLETO para saber qué
-// paquetes vale la pena re-derivar en una segunda pasada. En un índice desde cero los paquetes se
-// recorren en algún orden, así que cuando se deriva el primero los símbolos del segundo todavía no
-// están en el grafo y sus llamadas cross no pueden resolverse — no por un defecto, sino porque el
-// destino aún no existe. Sin la segunda pasada el grafo quedaría correcto recién al segundo índice,
-// que es justo la clase de "se arregla solo más tarde" que nadie verifica.
 // errFueraDelProyecto lo devuelve la guarda de contención. Es un centinela para que un llamador
 // pueda distinguirlo de un error de disco: los dos hacen saltar el paquete, pero uno es una falla y
 // el otro es la política funcionando.
@@ -97,6 +90,13 @@ func (s *McpServer) dentroDelProyecto(p string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// refreshCodeGraphPkg es refreshCodeGraphForPackage y además informa CUÁNTAS llamadas cross-paquete
+// quedaron sin resolver. Ese número no es diagnóstico: lo usa el índice COMPLETO para saber qué
+// paquetes vale la pena re-derivar en una segunda pasada. En un índice desde cero los paquetes se
+// recorren en algún orden, así que cuando se deriva el primero los símbolos del segundo todavía no
+// están en el grafo y sus llamadas cross no pueden resolverse — no por un defecto, sino porque el
+// destino aún no existe. Sin la segunda pasada el grafo quedaría correcto recién al segundo índice,
+// que es justo la clase de "se arregla solo más tarde" que nadie verifica.
 func (s *McpServer) refreshCodeGraphPkg(ctx context.Context, dir string) (unresolved int, err error) {
 	// La guarda va ANTES del ReadDir: el directorio ajeno EXISTE en disco, así que el error de
 	// lectura nunca iba a frenarlo.
@@ -242,10 +242,6 @@ type cgNodeView struct {
 	Stale bool   `json:"stale,omitempty"`
 }
 
-// cgStale compara el fingerprint guardado de un nodo con el ACTUAL del archivo (en la capa MCP,
-// que tiene fs — como gistStale). Los nodos sin archivo (paquetes externos) nunca son stale. Un
-// archivo AUSENTE o ilegible cuenta como stale (nodo fantasma): mostrar código borrado como
-// fresco era un bug de correctitud — impact/callers apuntarían a símbolos que ya no existen.
 // arbolFueraDeAlcance dice si este servidor NO tiene en disco el árbol que su grafo describe.
 //
 // En el central COMPARTIDO el grafo es FEDERADO: los nodos vienen de otros proyectos y sus archivos
@@ -261,6 +257,10 @@ type cgNodeView struct {
 // cambia para los tres.
 func (s *McpServer) arbolFueraDeAlcance() bool { return s.forceRedact }
 
+// cgStale compara el fingerprint guardado de un nodo con el ACTUAL del archivo (en la capa MCP,
+// que tiene fs — como gistStale). Los nodos sin archivo (paquetes externos) nunca son stale. Un
+// archivo AUSENTE o ilegible cuenta como stale (nodo fantasma): mostrar código borrado como
+// fresco era un bug de correctitud — impact/callers apuntarían a símbolos que ya no existen.
 func (s *McpServer) cgStale(n memory.GraphNode) bool {
 	if n.Path == "" {
 		return false

@@ -52,6 +52,9 @@ import (
 // deduce. Esto no se deduce de nada.
 //
 // Sabotaje que la pone roja: mover cualquiera de las dos constantes.
+// arnes: archivo="internal/guiones/compuerta.go"
+// arnes: de="const ElSistemaDondeCorren = \"linux\""
+// arnes: a="const ElSistemaDondeCorren = \"darwin\""
 func TestLosSistemasDondeCadaModoMideSonLosQueSeDeclaran(t *testing.T) {
 	if ElSistemaDondeCorren != "linux" {
 		t.Errorf("ElSistemaDondeCorren es %q y tiene que ser \"linux\".\n"+
@@ -100,6 +103,9 @@ func TestLosSistemasDondeCadaModoMideSonLosQueSeDeclaran(t *testing.T) {
 // Y ESTA PRUEBA TAMBIÉN EJECUTA UNA SHELL a propósito (`bash -c :`): así queda del lado correcto
 // de la guarda de alcance de más abajo en vez de necesitar una excepción, y de paso comprueba que
 // lo que la compuerta acaba de declarar presente se puede ejecutar de verdad.
+// arnes: archivo="internal/guiones/compuerta.go"
+// arnes: de="\tif runtime.GOOS == ElSistemaDondeCorren {"
+// arnes: a="\tif runtime.GOOS == ElSistemaDondeCorren && false {"
 func TestLaCompuertaNuncaSalteaEnLinux(t *testing.T) {
 	siguio := false
 	t.Run("sonda", func(t *testing.T) {
@@ -157,6 +163,9 @@ func elArnesSeSostieneAca() bool {
 // SABOTAJE QUE LA PONE EN ROJO (verificado): en compuerta.go, cambiar el `for` sobre
 // `LosSistemasDondeElArnesSeSostiene` por `if runtime.GOOS == ElSistemaDondeCorren`. En linux
 // sigue verde y en macOS muere — que es exactamente el defecto que este modo vino a evitar.
+// arnes: archivo="internal/guiones/compuerta.go"
+// arnes: de="\t\tif runtime.GOOS != sistema {"
+// arnes: a="\t\tif runtime.GOOS != sistema || true {"
 func TestLaCompuertaUnixNoSalteaDondeElArnesSeSostiene(t *testing.T) {
 	siguio := false
 	t.Run("sonda", func(t *testing.T) {

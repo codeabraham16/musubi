@@ -998,6 +998,11 @@ var alertasSinUmbralNumerico = map[string]string{}
 //   - `delta(musubi:project_service_up:cobertura30d[6h]) < -5`   (umbral fuera del rango)
 //   - `deriv(...)` en vez de `delta(...)` con el umbral intacto  (unidades por segundo)
 //   - cualquiera de los dos sobre `CoberturaDelSlaSeCayo`, la alerta de máquinas
+//
+// arnes: colision_ok="TestCadaCoberturaDeSlaPorProyectoTieneUnaAlertaQueLaLee"
+// arnes: archivo="deploy/musubi-alerts-flota.yml"
+// arnes: de="        expr: delta(musubi:service_up:cobertura30d[6h]) < -0.05\n"
+// arnes: a="        expr: delta(musubi:service_up:cobertura30d[6h]) < -5\n"
 func TestElUmbralDeCadaAlertaSobreUnaSerieGrabadaEsAlcanzable(t *testing.T) {
 	mira, grabadas := alertasEnMira(t)
 	crudas := rangosDeclaradosDeMetricasCrudas(t)
@@ -1182,6 +1187,9 @@ func textoDe(n *nodoProm) string {
 //
 // Sabotaje que la hace fallar (verificado): cambiar `for: 30m` por `for: 30d` en cualquiera de las
 // dos alertas de cobertura.
+// arnes: archivo="deploy/musubi-alerts-flota.yml"
+// arnes: de="        expr: delta(musubi:device_up:cobertura30d[6h]) < -0.05\n        for: 30m\n"
+// arnes: a="        expr: delta(musubi:device_up:cobertura30d[6h]) < -0.05\n        for: 30d\n"
 func TestElPlazoDeCadaAlertaSobreUnaSerieGrabadaEsAlcanzable(t *testing.T) {
 	mira, _ := alertasEnMira(t)
 	revisadas, conVentana := 0, 0
@@ -1348,6 +1356,9 @@ var seriesSinLectorConMotivo = map[string]string{
 //
 // Sabotaje que la hace fallar: agregar un `- record:` nuevo a musubi-recording.yml sin darle
 // lector ni entrada acá; o borrar el motivo de `musubi:project_up:min30d`.
+// arnes: archivo="deploy/musubi-recording.yml"
+// arnes: de="      - record: musubi:project_service_up:cobertura30d\n        expr: min by(project) (musubi:service_up:cobertura30d)\n"
+// arnes: a="      - record: musubi:project_service_up:cobertura30d\n        expr: min by(project) (musubi:service_up:cobertura30d)\n\n      - record: musubi:service_up:avg7d\n        expr: avg_over_time(musubi:service_up:norm[7d])\n"
 func TestCadaSerieGrabadaTieneUnLectorOUnMotivoEscrito(t *testing.T) {
 	grabadas := reglasGrabadasDelRepo(t)
 	if len(grabadas) < 10 {

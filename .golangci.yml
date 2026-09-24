@@ -30,3 +30,27 @@ linters:
       - path: _test\.go
         linters:
           - errcheck
+
+# --- FORMATO: NADIE LO EXIGÍA, Y OCHO ARCHIVOS YA HABÍAN ENTRADO SIN FORMATEAR -------------------
+#
+# golangci-lint v2 separa `linters` de `formatters`, y un formatter que no se nombra acá sale
+# «Disabled by your configuration». Como `ci.yml` tampoco corre `gofmt` en ningún paso, el repo
+# NO TENÍA NINGUNA guarda de formato: ni el linter ni el workflow.
+#
+# Medido el 2026-09-21 sobre `git ls-files` (no sobre el disco: un worktree trae archivos que el
+# repo no versiona): 8 de 1031 archivos .go estaban sin formatear, en cuatro paquetes distintos
+# —cognition, detector, embedding, skills, skillsource—. Todos eran alineación de campos de struct
+# o de claves de mapa, la reescritura clásica de gofmt: 45 inserciones y 45 borrados con `git
+# diff -w` COMPLETAMENTE VACÍO, o sea cero código cambiado.
+#
+# POR QUÉ IMPORTA MÁS QUE EL ESTILO. El árbol ya usa `gofmt -d` como instrumento en otros lados
+# —el arnés de sabotaje ancla en líneas exactas, y gofmt le mueve el ancla al realinear—, así que
+# un archivo sin formatear es una mina para el próximo que escriba una directiva ahí. Eso ya pasó
+# y está anotado: «gofmt te mueve el ancla y el sabotaje no se aplica».
+#
+# `gofmt` A SECAS Y NO `gofumpt`/`goimports`: los otros dos imponen reglas ADEMÁS del estándar, y
+# eso es una decisión de estilo que este commit no viene a tomar. `gofmt` es el piso que la
+# herramienta oficial de Go ya define, y contra el que el árbol entero ya estaba al día menos ocho.
+formatters:
+  enable:
+    - gofmt

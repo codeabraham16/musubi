@@ -27,6 +27,9 @@ import (
 // quedar mudo en la única plataforma donde hace falta.
 //
 // Sabotaje que la hace fallar: borrar `os.Getenv("ProgramFiles")` de candidatosRustdeskPara.
+// arnes: archivo="cmd/musubi/rustdesk_ruta.go"
+// arnes: de="\t\t\tenv(\"ProgramFiles\"),"
+// arnes: a="\t\t\tenv(\"ProgramFilesQueYaNadieLee\"),"
 func TestEnWindowsSeBuscaDondeLoDejaElInstaladorOficial(t *testing.T) {
 	// Cada variable se prueba SOLA. La primera versión de esta prueba las ponía todas juntas con
 	// los valores reales de una máquina —donde ProgramW6432 y ProgramFiles valen lo mismo— y
@@ -93,6 +96,9 @@ func normalizarRutas(rutas []string) string {
 // por qué. Un override que no se respeta es peor que no tenerlo.
 //
 // Sabotaje que la hace fallar: reemplazar el return por un `// seguir buscando`.
+// arnes: archivo="cmd/musubi/rustdesk_ruta.go"
+// arnes: de="\t\tif !esEjecutable(forzado) {"
+// arnes: a="\t\tif !esEjecutable(forzado) && false {"
 func TestUnOverrideQueApuntaANadaFallaEnVezDeSeguirBuscando(t *testing.T) {
 	t.Setenv("MUSUBI_RUSTDESK_BIN", filepath.Join(t.TempDir(), "no-existe"))
 	_, err := rutaRustdesk()
@@ -132,6 +138,9 @@ func TestUnOverrideValidoSeUsaTalCual(t *testing.T) {
 // MUSUBI_RUSTDESK_BIN.
 //
 // Sabotaje que la hace fallar: volver el error a un fmt.Errorf sin los candidatos.
+// arnes: archivo="cmd/musubi/rustdesk_ruta.go"
+// arnes: de="\treturn fmt.Errorf(\"%w: se buscó en el PATH y en %s. Si está en otro lado, poné MUSUBI_RUSTDESK_BIN con la ruta completa\",\n\t\terrSinRustdesk, strings.Join(candidatos, \", \"))"
+// arnes: a="\treturn fmt.Errorf(\"%w. Si está en otro lado, poné MUSUBI_RUSTDESK_BIN con la ruta completa\",\n\t\terrSinRustdesk)"
 func TestCuandoNoApareceElErrorDiceDondeSeBusco(t *testing.T) {
 	// Se prueba el mensaje, no la máquina. La versión anterior vaciaba el PATH y se salteaba
 	// (t.Skip) en cualquier equipo que tuviera RustDesk instalado — como el que escribió esto,

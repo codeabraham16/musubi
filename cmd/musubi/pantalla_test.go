@@ -111,6 +111,9 @@ func TestElResultadoQueVaALaBitacoraNoTraeLaContrasena(t *testing.T) {
 // Borrarla dejaría a RustDesk sin contraseña, que es abrir la máquina, no cerrarla.
 //
 // Sabotaje: llamar a `--password ""` al cerrar.
+// arnes: archivo="cmd/musubi/pantalla.go"
+// arnes: de="\t\tif err := ponerPassRustdesk(nueva); err != nil {"
+// arnes: a="\t\tif err := ponerPassRustdesk(nueva[:0]); err != nil {"
 func TestAlVencerSeReemplazaLaContrasenaNoSeBorra(t *testing.T) {
 	reg := rustdeskFalso(t, "exit 0")
 	// TTL mínimo para no esperar: la duración se parsea del argv.
@@ -178,6 +181,9 @@ func TestUnaOperacionMalFormadaNoRompeAlAgente(t *testing.T) {
 //
 // Sabotaje: quitar la guarda de prefijo `musubi:` de `ejecutar` → el error diría «no such file»
 // y —peor— podría arrastrar la contraseña que va en el argv.
+// arnes: archivo="cmd/musubi/ejecutor.go"
+// arnes: de="\tif strings.HasPrefix(argv[0], \"musubi:\") {"
+// arnes: a="\tif strings.HasPrefix(argv[0], \"musubi:\") && false {"
 func TestLaOperacionInternaSeInterceptaYNoSeLanzaComoBinario(t *testing.T) {
 	rustdeskFalso(t, "exit 0")
 	const clave = "NoDebeAparecer42"

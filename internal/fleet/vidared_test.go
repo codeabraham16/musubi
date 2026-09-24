@@ -8,6 +8,9 @@ import "testing"
 //
 // Sabotaje: devolver VidaAusente cuando no hay coincidencias, o quedarse con la primera cuando
 // hay dos.
+// arnes: archivo="internal/fleet/vidared.go"
+// arnes: de="\tencontrado := VidaNoMedida"
+// arnes: a="\tencontrado := VidaAusente"
 func TestLaVidaDeRedNoAfirmaLoQueNoPudoMedir(t *testing.T) {
 	casos := []struct {
 		nombre   string

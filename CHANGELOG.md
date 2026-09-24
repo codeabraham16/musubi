@@ -8,6 +8,192 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
+  El ledger era UNA casilla de `meta` que guardaba UNA sesión, y `LedgerAdd` la reiniciaba entera
+  con `if sessionID != l.SessionID`. Con varias terminales sobre el mismo cuaderno —10 procesos
+  `musubi` en davantis-1, más los sub-agentes, que traen su propio id— cada sesión que escribía
+  borraba la de todas. Medido el 2026-09-23: `musubi_tokens` decía **262 tokens de una sola
+  superficie** para una sesión que llevaba el día entero inyectando contexto de arranque, de turno
+  y de PreToolUse. El número no era «lo que gastó esta sesión» sino «lo que sobrevivió desde el
+  último cambio de sesión».
+
+  Ahora el mismo valor de `meta` guarda una entrada **por sesión**, con tope de 16 y desalojo de la
+  menos recientemente escrita (por número de escritura, no por reloj: determinista y sin depender
+  de que dos máquinas tengan la hora igual). `LedgerStatus` devuelve la sesión escrita más
+  recientemente —con una sola terminal, exactamente lo de antes— y `LedgerStatusDe(id)` una
+  concreta. El caller **sin** id (el camino MCP, que no ve el id del hook) sigue acumulando en la
+  última que escribió, que es el contrato de siempre: lo cazó `TestLedgerEmptySessionKeepsCurrent`
+  cuando la primera versión lo mandaba a una cuenta aparte.
+
+  **La suma corre dentro de una transacción** (el DSN ya lleva `_txlock=immediate`). Con la casilla
+  única la carrera costaba un incremento; ahora el valor lleva a todas las sesiones, así que una
+  escritura pisada costaría la cuenta entera de otra terminal. Y el **formato viejo se migra** en
+  vez de descartarse, o instalar este binario pondría en cero la sesión en curso sin decir nada.
+
+  *Cuatro invariantes, cada uno con su sabotaje corrido: volver a borrar al cambiar de sesión deja a
+  la sesión anterior en `Total:0`; quitar la migración lee el formato viejo como vacío; quitar el
+  tope deja 20 sesiones de 16; y leer y escribir SIN transacción hace que cuatro goroutines
+  concurrentes se coman sumas — **8 de 8 corridas rojas sin la transacción, 5 de 5 verdes con
+  ella**, así que la prueba de concurrencia no pasa por suerte. `TestLedgerResetsOnNewSession` se
+  renombró a `TestLedgerSesionNuevaArrancaDeCero`: su nombre describía el defecto como contrato, y
+  como sólo miraba el valor de la sesión nueva, pasaba igual con el arreglo y sin él.*
+
+  **Y lo que encontró una revisión adversarial antes del merge**, cinco cosas, dos de ellas peores
+  que el defecto original. (1) La alerta de presupuesto y la brevedad automática de una terminal
+  leían «la última sesión que escribió», así que la terminal A recibía «esta sesión (9000 tokens)
+  superó el presupuesto» habiendo gastado 100: ahora el hook lee **su propia** cuenta
+  (`LedgerStatusDe`), que es la que conoce. (2) Un servidor MCP con el binario **viejo** —son procesos
+  largos que siguen vivos después de instalar— leía el formato nuevo como un ledger vacío y lo pisaba:
+  todas las sesiones en cero, en cada hidratación. El formato nuevo vive ahora en **otra clave**
+  (`token_ledger_v2`); la vieja sólo se lee, para migrar, y el binario viejo pisa únicamente su
+  casilla. (3) El `reset` de `musubi_tokens` vaciaba el valor entero —una terminal borrando la cuenta
+  de todas, el mismo defecto por otra puerta—: ahora pone en cero **una**. (4) El desalojo por
+  antigüedad sacaba a la terminal principal mientras esperaba a sus sub-agentes: ahora el tope es 64 y
+  se desaloja por **menor total**, nunca la recién escrita. (5) Leer con 0 tokens —así pregunta
+  precheck por su marca— escribía y ocupaba un lugar: ahora es una lectura pura. `musubi_tokens`
+  suma la lista de `sesiones` y un `session_id` opcional para reportar o resetear una en concreto,
+  porque corre por MCP y no sabe cuál es la suya. *Doce invariantes con su sabotaje, los doce rojos,
+  incluidos los de la primera ronda repetidos sobre el código nuevo; las pruebas del revisor quedaron
+  como regresión (`ledger_revision_test.go`).*
+
+  **Una segunda ronda encontró tres más, uno de ellos el mismo defecto de fondo por otra puerta.**
+  (1) Desalojar SÓLO por menor total volvía inmortales a las sesiones más gordas de la historia
+  —terminales de días anteriores, ya cerradas— y toda sesión viva que todavía no las alcanzaba era la
+  candidata apenas escribía otra: con el ledger lleno, dos terminales abiertas se borraban la cuenta
+  en cada escritura (A y B gastaron 2.500 cada una y el ledger decía 0 y 500), y la principal volvía
+  a quedar en cero con la primera escritura de un sub-agente. Llenarlo no es raro: 32 sesiones en
+  menos de dos días en este repo. Ahora cada escritura estampa su hora, las **8 últimas** que
+  escribieron nunca se desalojan, y entre las demás salen **primero las inactivas** (más de 2 h sin
+  escribir, la más vieja antes) y recién después la de menor total. (2) La marca de «ya avisado» de
+  la alerta de presupuesto y de la brevedad seguía siendo UNA casilla con UN id: con la cuenta por
+  sesión el total ya no baja, así que dos terminales pasadas del techo se re-avisaban en cada
+  alternancia —una alerta en 20 turnos alternados en main, veinte con la rama—. La marca es ahora
+  por sesión, acotada a 64. (3) El `reset` sin `session_id` ponía en cero «la última que escribió»,
+  que suele ser OTRA terminal: ahora, con más de una sesión, se niega y lista las sesiones con la
+  hora de su última escritura, que es de donde el agente reconoce la suya. *Ocho invariantes nuevos
+  con su sabotaje, los ocho rojos, incluida la vuelta a la marca de casilla única.*
+- **La bajada del central ya tiene candado: dos terminales en el mismo proyecto dejan de bajar lo
+  mismo.** La subida estaba protegida desde siempre —`ClaimOutboxBatch` toma un lease de 60 s— pero
+  la bajada no tenía nada: `drainInboundOnce` leía el cursor con `GetMeta`, lo escribía con
+  `SetMeta` y no reclamaba nada. Con dos terminales abiertas sobre la misma base, las dos bajaban
+  las mismas páginas en cada tick. Medido en el central el 2026-09-23, en 24 h y contra las 2.880
+  consultas que haría UN proceso cada 30 s: **la laptop tiró 4.997 (1,7 procesos) y Altura 4.374
+  (1,5)**.
+
+  Ahora `ReclamarBajada` deja bajar a un solo proceso por base: una sentencia atómica sobre una
+  fila de `meta` (`dueño|vence`) con el vencimiento del reloj de SQLite, igual que el lease del
+  outbox, así que todos los procesos que comparten la base comparten también el reloj. El dueño
+  **renueva** en cada tick en vez de soltar —soltar dejaría que el otro bajara en su tick siguiente
+  y los dos volverían a alternarse—, y si muere, el candado vence solo. El lease dura cuatro ticks
+  con piso de dos minutos: tiene que ganarle al intervalo, o vencería entre ticks y el defecto
+  volvería disfrazado de arreglo. Y `AvanzarCursorBajada` escribe el cursor **monótono en la misma
+  sentencia**: un tick más lento que el lease podía escribir después de que otro tomara el candado,
+  y con `SetMeta` a secas el cursor retrocedía y se re-bajaba lo ya bajado.
+
+  *Nueve invariantes con su sabotaje, los nueve rojos. La prueba de integración cuenta los pedidos
+  que LLEGAN al central —el costo real— y no una variable interna. Dos cosas que la verificación
+  cazó: `AvanzarCursorBajada` tenía prueba unitaria pero **nada comprobaba que el scheduler la
+  llamara** —volver a `SetMeta` no rompía ninguna prueba—, así que se sumó una donde el central falso
+  adelanta el cursor a mitad del tick, simulando a la otra terminal. Y la prueba de dueños con
+  prefijo común **siguió verde con el candado comparando por prefijo**: estaba armada al revés. El
+  agujero real es guardado el largo (`proc-a-otro`) y reclamando el corto, donde
+  `'proc-a-otro|…' LIKE 'proc-a%'` regala el candado ajeno; ahora cubre las dos direcciones.*
+
+  **Y lo que encontró una revisión adversarial antes del merge**, que era grave: el dueño renovaba
+  el candado al EMPEZAR cada tick, antes de ir a la red. Una terminal que falla siempre —el token
+  vencido de una que arrancó antes de rotarlo (`NewSyncClient` lee el token una sola vez), un
+  `central_url` viejo— lo renovaba igual, y **la terminal sana no bajaba nunca más**: reproducido,
+  cinco ticks cada una y la sana hizo cero pedidos. Sin candado la sana bajaba sola, así que el
+  arreglo dejaba las cosas peor que antes. Ahora, si el `Pull` falla, el dueño **suelta** el candado
+  (`SoltarBajada`, sólo si es suyo) y la sana lo toma en su tick siguiente. Y un valor que no tiene la
+  forma `dueño|vence` cuenta como libre: una escritura cortada —un apagón deja archivos en ceros en
+  esta PC— ya no puede trabar la bajada para siempre. *Tres invariantes nuevos con su sabotaje, más
+  los cuatro del reclamo repetidos por el cambio en el `WHERE`: siete de siete rojos. Uno de los
+  repetidos salió VERDE la primera vez, y no por el código: el ancla del sabotaje (`if !ok {`)
+  aparecía tres veces en el archivo y el reemplazo cayó en otra función. Con un ancla única, rojo.*
+
+  **Una segunda revisión encontró que soltar no alcanzaba, y cuatro cosas más.** (1) Soltar sólo
+  cubría las fallas RÁPIDAS: si el `Pull` del dueño muere por *timeout* —30 s, igual que el tick por
+  defecto—, al soltar el tick siguiente ya está encolado en el `Ticker` y lo retoma en microsegundos,
+  y la terminal sana, que tickea en otra fase, lo encontraba tomado siempre: cero pedidos en seis
+  ticks, y en `main` la misma prueba bajaba. Ahora quien falla además **cede dos ticks enteros** sin
+  reclamar. (2) La vectorización de lo bajado dependía del embebedor del dueño: si arrancó léxico,
+  lo bajado quedaba sin vector aunque otra terminal semántica estuviera viva. Ahora quien no es dueño
+  mira el cursor —una lectura local por tick— y si avanzó, vectoriza él. (3) Un cierre ordenado no
+  soltaba el candado, y la terminal que seguía abierta pasaba hasta dos minutos y medio sin bajar: el
+  scheduler lo suelta al salir, y `runDaemon` lo suelta además de forma sincrónica antes de cerrar la
+  base. (4) El dueño renueva **antes de cada página** y corta si otro lo tomó: veinte páginas con su
+  timeout duran más que el lease. (5) Un dueño con `|` trababa el candado para siempre: se rechaza, y
+  el valor se lee desde la derecha —el vencimiento tiene ancho fijo—, así que ni uno viejo traba.
+  *Siete invariantes nuevos con su sabotaje, los siete rojos; las cuatro pruebas de los revisores
+  quedaron como regresión. Uno documentado como no custodiado a propósito: leer el dueño por el
+  primer `|` o desde la derecha es equivalente para dueños válidos. El `SoltarBajada` sincrónico de
+  `runDaemon` no tiene prueba propia: es el cinturón del que suelta el scheduler, que sí la tiene.*
+- **La captura de commits vuelve a avanzar: el cursor guarda el progreso por commit, no al final
+  del lote.** El hook `Stop` tiene 10 s (`.claude/settings.json`) y `captureCommitsKeyed` avanzaba
+  `capture:last_commit` **una sola vez, después del bucle**. Con un rango largo —546 commits en este
+  repo, porque el cursor había quedado en `e928e67`, un commit que existe pero ya no es ancestro de
+  `HEAD`— cada corrida moría a mitad, el cursor no se movía, y la siguiente arrancaba por el mismo
+  commit para morir en el mismo lugar: **20 días con progreso cero y 10 s de peaje en cada turno**,
+  y ni un solo commit de septiembre anotado en ninguna de las dos bases. Ahora el cursor avanza al
+  SHA de cada commit ya procesado, así que lo que una corrida alcanzó a hacer queda hecho.
+
+  Va con un tope por corrida, `maxCommitsPorCorrida = 25`, **sólo en modo hook**: el modo
+  origin-side corre en un timer y no tiene ese presupuesto encima. El tope trae las dos guardas que
+  son el invariante de verdad: cortar por tope **no** salta el cursor al `HEAD` —eso se tragaría en
+  silencio lo que quedó sin mirar—, y el tope **no se aplica si el cursor no pudo avanzar** (commits
+  sin SHA), porque cortar sin guardar progreso cambiaría una captura trabada por otra.
+
+  Lo que **no** se hizo, y conviene que quede escrito porque parecía el arreglo obvio: detectar el
+  cursor huérfano con `git merge-base --is-ancestor` y caer a capturar sólo el `HEAD`. El síntoma lo
+  invita —`git log huerfano..HEAD` no falla, así que el fallback por error de `CommitsSince` nunca se
+  entera— pero **tira los 546 commits de historia real**. No hace falta: todos los commits de ese
+  rango sí son ancestros de `HEAD`, así que el cursor durable los consume por tandas y el rango se
+  achica solo hasta vaciarse. Lo que estaba roto no era el rango: era que el progreso no se guardaba.
+  *Los tres invariantes van con su sabotaje verificado: quitar el avance por commit deja el cursor en
+  `""`; saltar al `HEAD` tras cortar pierde el commit que quedaba; aplicar el tope sin progreso
+  captura 1 de 3 para siempre. Los dos últimos sabotajes, escritos como borrado, no compilaban
+  —`declared and not used`— y la prueba se ponía roja por el build y no por el invariante; se
+  reescribieron como `if true || completo` y `(avanzo || true)` para que el rojo signifique lo que
+  dice.*
+
+  **Y lo que encontró una revisión adversarial antes del merge: la premisa de arriba era FALSA.**
+  «Todos los commits de ese rango son ancestros de `HEAD`, así que el rango se achica solo» no vale
+  en un historial con merges —éste tiene más de cien—: `cursor..HEAD` excluye sólo los ancestros del
+  cursor, y si el último procesado queda en una rama, lo ya procesado de la rama paralela vuelve a
+  entrar al rango. Tres revisores lo simularon por separado sobre la historia real, desde el cursor
+  huérfano `e928e67`: **a la corrida 15 caía en un ciclo de tres cursores y no llegaba nunca al
+  `HEAD`**, gastando 25 commits por turno. Agregar `--topo-order` no alcanzaba: ciclaba con período
+  dos. Ahora el avance es una **tanda congelada**: al empezar se fija su objetivo —el `HEAD` de ese
+  momento— en `<cursor>:objetivo`, se recorre la lista determinística `base..objetivo` guardando el
+  último commit hecho en `<cursor>:hecho`, la corrida siguiente recalcula la MISMA lista y sigue desde
+  ahí, y recién al terminarla la base salta al objetivo. El avance es una posición en una lista fija,
+  no un commit suelto en un grafo que no es una línea; lo que llega mientras tanto va a la tanda
+  siguiente. Si el objetivo desaparece (rebase + gc), la tanda se abandona y la siguiente arranca de
+  nuevo. **Contra la historia real, desde `e928e67`: converge en 22 corridas y captura 392 commits.**
+  *Ocho invariantes con su sabotaje, incluida la vuelta al diseño de la primera ronda, que las dos
+  pruebas con repos git reales de los revisores ponen en rojo (ramas intercaladas y orden no
+  topológico). `--topo-order` queda, pero NO se custodia como invariante, a propósito: con la tanda
+  congelada el orden no puede perder commits —se recorre la lista entera—, así que es orden causal de
+  la memoria, no corrección; su sabotaje sigue verde y está documentado así.*
+
+  **Una segunda revisión encontró que la tanda también se podía trabar, y dos bordes más.** (1) Un
+  commit que falla SIEMPRE —un cuerpo que termina en `</content>`, que la guarda del sobre rechaza
+  mirándolo, o dos repos con el mismo primer commit que chocan de tenant en el central— congelaba la
+  tanda para siempre: la base no se movía y nada posterior entraba nunca, y en la primera corrida era
+  regresión contra `main`. Ahora esos errores (`ErrPayloadInvalido`, `ErrCrossTenant`) son
+  incapturables por construcción: el commit se avisa y se saltea, y sólo un error transitorio corta
+  la corrida. (2) Ante CUALQUIER error del rango, `CommitsEntre` caía a capturar sólo el HEAD y la
+  tanda se cerraba dando por capturado todo lo del medio sin mirarlo: base borrada por un gc y cuatro
+  commits nuevos, se capturaba uno. Ahora pregunta qué falló: si la base ya no existe toma una
+  VENTANA de 200 hacia atrás (repasar es UPSERT); si el objetivo ya no existe abandona la tanda; y
+  cualquier otro error —un timeout, un lock— la conserva con su progreso. (3) Un mensaje con los
+  separadores del parseo adentro fabricaba un registro con un SHA real repetido, y si el progreso
+  caía en esa segunda aparición el tramo se repetía para siempre: los repetidos se descartan. Contra
+  la historia real desde `e928e67` sigue convergiendo: 24 corridas, 412 commits. *Siete invariantes
+  nuevos con su sabotaje, los siete rojos; los de la primera ronda repetidos, rojos también. Uno
+  documentado como no custodiado: que el fallback pregunte si la base existe, porque git real no deja
+  hacer fallar el rango con la base viva sin simularlo.*
 - **`musubi provision` ya deja el sync en los DOS sentidos: una máquina nueva dejaba de subir y no
   bajar.** `ensureSyncConfig` escribía sólo el bloque `sync:`, y `RunInboundScheduler` se apaga solo
   sin `memory.team_mode` (`internal/mcp/scheduler.go`), así que la máquina recién dada de alta

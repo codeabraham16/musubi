@@ -58,6 +58,9 @@ import (
 //
 // Sabotaje: devolverle a `RecentObservations` su `WHERE archived = 0`. Sale ROJA nombrando cuál de
 // las dos clases se escapó.
+// arnes: archivo="internal/memory/operations.go"
+// arnes: de="\t\tFROM observations\n\t\tWHERE `+visibleObsPredicate+`\n\t\tORDER BY created_at DESC, rowid DESC\n"
+// arnes: a="\t\tFROM observations\n\t\tWHERE archived = 0\n\t\tORDER BY created_at DESC, rowid DESC\n"
 func TestElPanelNoPublicaLoQueElRecallNoDevuelve(t *testing.T) {
 	e := newTestEngine(t)
 	ctx := context.Background()

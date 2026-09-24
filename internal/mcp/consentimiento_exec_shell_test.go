@@ -23,8 +23,16 @@ import (
 // decir «acá no entra nadie de forma interactiva». `avisa` y `pide` sobre exec son otra cosa y
 // siguen abiertos a propósito (ver A75 en specs/control-de-flota/ABIERTO.md).
 //
-// Sabotaje que la hace fallar: sacar el `if consent.Bloquea()` de toolFleetExec, o el
-// `case consent.Bloquea()` de toolFleetShell. Cada uno rompe su propio subtest.
+// Sabotaje que la hace fallar: sacar el `case consent.Bloquea()` de toolFleetExec, o el
+// `if consent.Bloquea()` de toolFleetShell. Cada uno rompe su propio subtest.
+//
+// (Las dos formas estaban CRUZADAS en esta línea hasta el 2026-09-21. Medido: el `case` vive en
+// `methods_exec.go:62`, adentro de un switch, y el `if` en `methods_shell.go:76`. El corte valía
+// igual de los dos lados —por eso nadie lo notó— pero mandaba a buscar la forma equivocada en
+// cada archivo.)
+// arnes: archivo="internal/mcp/methods_exec.go"
+// arnes: de="\tcase consent.Bloquea():"
+// arnes: a="\tcase consent.Bloquea() && false:"
 func TestElConsentimientoProhibidoTambienCierraExecYShell(t *testing.T) {
 	casos := []struct {
 		nombre string
@@ -97,6 +105,9 @@ func TestElConsentimientoProhibidoTambienCierraExecYShell(t *testing.T) {
 // Sabotaje que la hace fallar: sacar el `case consent.AvisaAlUsuario()` de
 // aplicarConsentimientoDeExec (deja de avisar), o sacar el chequeo de la ventana en
 // encolarAvisoDeExecConVentana (avisa en cada comando).
+// arnes: archivo="internal/mcp/methods_exec.go"
+// arnes: de="\tcase consent.AvisaAlUsuario():\n\t\ts.encolarAvisoDeExecConVentana(d, p)\n"
+// arnes: a=""
 func TestElAvisaDelExecAvisaUnaVezPorVentanaYNoUnaPorComando(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
@@ -279,7 +290,34 @@ func TestTodoCaminoQueHonraAvisaLeAvisaAlUsuario(t *testing.T) {
 // el agente no lo sabe entregar— la dejaría en verde, y estaríamos prometiendo una notificación
 // que nadie va a mostrar. Que es literalmente lo que el eje viene a evitar.
 //
-// Sabotaje que la hace fallar: encolar el aviso sin mirar PuedePreguntar.
+// Sabotaje que la hace fallar: encolar el aviso sin mirar PuedePreguntar en toolFleetShell.
+//
+// EL CAMINO QUE ESTA PRUEBA MIDE ES EL DE LA SHELL, y conviene que lo diga la directiva y no haya
+// que deducirlo: abre con `toolFleetShell`, así que el `case` que le importa es el de
+// `methods_shell.go`. Mecanizarla primero contra `methods_exec.go` —el nombre del archivo de
+// pruebas dice «exec_shell» y el `case` es idéntico en los dos— la dejó en VERDE sobre su propio
+// sabotaje. Son tres hermanas con la misma forma, una por camino.
+//
+// Y AL BUSCAR A LAS OTRAS DOS APARECIÓ QUE EXEC NO TIENE HERMANA. Pantalla la tiene en
+// `aviso_test.go` (`TestSinCapacidadDeAvisarNoSeEncolaUnAvisoQueNadieVaAMostrar`) y shell la tiene
+// acá. Exec no tiene ninguna que lo diga: `TestTodoCaminoQueHonraAvisaLeAvisaAlUsuario` recorre los
+// tres, pero prueba la dirección CONTRARIA —que un `avisa` sí avisa—, que es otra cosa.
+//
+// No es que nadie lo note: es que lo notan por aritmética ajena. Medido el 2026-09-21 poniéndole
+// `&& false` al `case` de `methods_exec.go` y corriendo el paquete entero — la suite se pone roja,
+// pero en tres pruebas que no hablan de esto y por CONTAR comandos:
+//
+//	fleet_exec_test.go:323     se entregaron 6 comandos distintos, esperaba 5
+//	fleet_exec_test.go:454     esperaba 1 comando encolado, hay 2
+//	fleet_pantalla_test.go:194 quedaron 1 comandos encolados pese al rechazo
+//
+// Ninguna dice «se encoló un aviso para una máquina que no declara saber notificar». El aviso de
+// más les corre un conteo, y eso alcanza HOY: el día que cualquiera de las tres cambie su fixture,
+// la detección se evapora sin que nada lo diga. Un invariante detectado de rebote no está
+// guardado; falta la hermana que lo nombre.
+// arnes: archivo="internal/mcp/methods_shell.go"
+// arnes: de="\tcase consent.AvisaAlUsuario() && !d.PuedePreguntar:"
+// arnes: a="\tcase consent.AvisaAlUsuario() && !d.PuedePreguntar && false:"
 func TestUnaMaquinaQueNoSabeAvisarNoRecibeUnAvisoQueNadieVaAMostrar(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
@@ -306,6 +344,78 @@ func TestUnaMaquinaQueNoSabeAvisarNoRecibeUnAvisoQueNadieVaAMostrar(t *testing.T
 		if len(c.Argv) > 0 && c.Argv[0] == comandoAviso {
 			t.Errorf("se encoló un aviso para una máquina que no declara saber notificar: %v — "+
 				"prometer una notificación que no se puede entregar es lo que este eje evita", c.Argv)
+		}
+	}
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// Y POR EXEC TAMPOCO. ESTA ES LA HERMANA QUE FALTABA.
+//
+// El invariante es uno solo —a una máquina cuyo agente no declara saber notificar no se le encola
+// un aviso que nadie va a mostrar— y el código lo implementa TRES VECES, con el mismo `case`
+// idéntico carácter por carácter: `methods_pantalla.go`, `methods_exec.go` y `methods_shell.go`.
+// Pantalla lo custodiaba `aviso_test.go` y shell la prueba de acá arriba. Exec no tenía a nadie.
+//
+// NO ES QUE NADIE LO NOTARA: ES QUE LO NOTABAN POR ARITMÉTICA AJENA, y esa diferencia es todo el
+// punto. Medido el 2026-09-21 poniéndole `&& false` al `case` de `methods_exec.go` y corriendo
+// `go test ./internal/mcp` entero: la suite SE PONE ROJA, pero en tres pruebas que no hablan de
+// esto y que fallan CONTANDO comandos —
+//
+//	fleet_exec_test.go:323      se entregaron 6 comandos distintos, esperaba 5
+//	fleet_exec_test.go:454      esperaba 1 comando encolado, hay 2
+//	fleet_pantalla_test.go:194  quedaron 1 comandos encolados pese al rechazo
+//
+// El aviso de más les corre un conteo. Ninguna dice «se encoló un aviso para una máquina que no
+// declara saber notificar», así que el día que cualquiera de las tres cambie su fixture la
+// detección se evapora y nada lo dice. Un invariante detectado de rebote no está guardado: la
+// prueba que lo NOMBRA es la que sobrevive a que le muevan el decorado alrededor.
+//
+// (Y lo que lo destapó vale para el próximo: la prueba de shell de acá arriba se mecanizó primero
+// contra `methods_exec.go` —el nombre del archivo dice «exec_shell» y el `case` es el mismo— y
+// quedó en VERDE sobre su propio sabotaje, porque abre con `toolFleetShell`. Al ir a corregir el
+// archivo apareció que exec no tenía guarda propia.)
+//
+// `TestTodoCaminoQueHonraAvisaLeAvisaAlUsuario` recorre los tres caminos y NO cubre esto: prueba la
+// dirección contraria —que un `avisa` sí avisa—, que es la otra mitad del eje.
+//
+// Sabotaje que la hace fallar: sacar el `&& !d.PuedePreguntar` del case de aplicarConsentimientoDeExec.
+// arnes: archivo="internal/mcp/methods_exec.go"
+// arnes: de="\tcase consent.AvisaAlUsuario() && !d.PuedePreguntar:"
+// arnes: a="\tcase consent.AvisaAlUsuario() && !d.PuedePreguntar && false:"
+func TestUnaMaquinaQueNoSabeAvisarTampocoRecibeUnAvisoPorExec(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
+		"name": "pc-gio", "tier": "A", "caps": []string{"metrics", "exec"},
+		"project": "casa", "os": "linux", "arch": "amd64",
+	}); e != nil {
+		t.Fatalf("no se pudo enrolar: %+v", e)
+	}
+	d, _, _ := s.engine.DevicePorNombre("casa", "pc-gio")
+	if _, err := s.engine.FijarConsentimiento(d.ID, fleet.ConsentimientoAvisa); err != nil {
+		t.Fatal(err)
+	}
+	// NO se llama a FijarCapacidadDePreguntar: `puede_preguntar` queda en false, que es el default
+	// de una máquina cuyo agente nunca declaró saber notificar. Es justamente el caso que se fija.
+
+	ctx := context.Background()
+	if _, e := s.toolFleetExec(ctx, json.RawMessage(`{"project":"casa","device":"pc-gio","argv":["echo","hola"]}`)); e != nil {
+		t.Fatalf("el exec se rechazó, y `avisa` NO bloquea —ése es el grado siguiente—: %s", e.Message)
+	}
+
+	cmds, err := s.engine.TomarComandos(d.ID, time.Now(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// CONTROL DE «MIRÓ ALGO»: si el exec no llegó a encolarse, no hay nada que contar y el verde
+	// sería sobre la nada. Tiene que haber exactamente el comando del exec y ninguno más.
+	if len(cmds) == 0 {
+		t.Fatal("no se encoló ni el propio exec: la prueba no llegó a ejercitar el camino del aviso")
+	}
+	for _, c := range cmds {
+		if len(c.Argv) > 0 && c.Argv[0] == comandoAviso {
+			t.Errorf("se encoló un aviso POR EXEC para una máquina que no declara saber notificar: %v — "+
+				"prometer una notificación que no se puede entregar es lo que este eje evita, y la "+
+				"constancia va al log una vez por máquina", c.Argv)
 		}
 	}
 }

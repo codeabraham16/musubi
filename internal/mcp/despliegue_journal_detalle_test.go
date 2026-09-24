@@ -49,6 +49,10 @@ import (
 //   - volver cualquiera de los cinco sitios a `printf ... | sed 's/^/...'`;
 //   - agregar un `echo ... | awk ...` nuevo a nivel de sentencia en cualquiera de los dos guiones;
 //   - emitir un prefijo de detalle sin pasar por `detalle`.
+//
+// arnes: archivo="deploy/verificar-despliegue.sh"
+// arnes: de="      detalle 'falta: ' \"$faltan\""
+// arnes: a="      echo \"$faltan\" | sed 's/^/      falta: /'"
 func TestElDetalleDelInformeLoEscribeLaShellYNoUnProcesoEfimero(t *testing.T) {
 	// LOS DOS GUIONES QUE CORREN BAJO LA UNIDAD. `comparar-y-latir.sh` es el ExecStart y
 	// `verificar-despliegue.sh` es lo que invoca; los dos escriben al journal por el mismo fd.

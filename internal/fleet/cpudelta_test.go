@@ -46,6 +46,9 @@ func TestElDeltaDeCPUDevuelveNilCuandoNoSabe(t *testing.T) {
 // Tras un retroceso, la base se REARMA: la lectura siguiente vuelve a dar número.
 // Sabotaje: no actualizar el estado en el camino de retorno nil → el colector queda mudo para
 // siempre después de un solo reinicio.
+// arnes: archivo="internal/fleet/cpudelta.go"
+// arnes: de="\tc.previoOcupado, c.previoTotal, c.tienePrevio = ocupado, total, true"
+// arnes: a="\tif !tenia || (total > previoTotal && ocupado >= previoOcupado) {\n\t\tc.previoOcupado, c.previoTotal, c.tienePrevio = ocupado, total, true\n\t}"
 func TestTrasUnRetrocesoElContadorSeRearma(t *testing.T) {
 	var c contadorCPU
 	c.delta(500, 5000) // base

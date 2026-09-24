@@ -221,7 +221,47 @@ type Directiva struct {
 	// cosmética: se midió que un `:línea` se pudre solo. La respuesta en prosa que #494 dejó
 	// escrita nombraba `colector_test.go:152`, y al aterrizar ese mismo PR corrió el ancla a la
 	// 166. Un nombre de prueba no se mueve cuando alguien agrega un comentario arriba.
+	//
+	// LLEVA VARIOS NOMBRES, SEPARADOS POR ESPACIOS, y eso NO es comodidad: un ancla se puede pisar
+	// con más de una, y con un solo nombre la respuesta era estructuralmente imposible de dar. Se
+	// midió el 2026-09-21 mecanizando setenta y ocho anclas de una vez: el `WHERE` de la cronología
+	// lo cubren TRES guardas —la ventana del dominio, la ventana del envoltorio y el tenant— y el
+	// UPDATE de `servicios.go`, CUATRO. Contestarle a una dejaba las otras dos gritando para
+	// siempre, que es exactamente el «aviso verdadero que nadie puede contestar» que este campo
+	// vino a evitar. Quedaron cinco pares sin respuesta por el techo de la clave, no por descuido.
+	//
+	// Se separan por espacios como `env`, y cada nombre se valida por separado: uno que no se pise
+	// con nadie se denuncia como rancio aunque sus hermanos sí contesten. Declarar de más es la
+	// misma falla que declarar de menos — un «ya lo miré» sobre algo que nadie miró.
 	ColisionOk string
+}
+
+// ColisionesOk devuelve los nombres declarados en `colision_ok`, ya separados.
+//
+// Vive acá y no en cada llamador para que la forma de separarlos sea UNA: un `Fields` escrito dos
+// veces es un derivado a mano, y el día que uno acepte comas y el otro no, la guarda y su censo
+// dejan de hablar del mismo conjunto sin que nada se ponga rojo.
+func (d Directiva) ColisionesOk() []string { return strings.Fields(d.ColisionOk) }
+
+// ContestaA dice si esta declaración le responde a `prueba`.
+//
+// Es una función y no un `slices.Contains` en el llamador por una razón medida: el sabotaje que
+// custodia esa línea la reemplaza por una que no mira los nombres, y con `slices` usado ahí y en
+// ningún otro lado el sabotaje dejaba el import colgado y NO COMPILABA — un rojo de compilación no
+// prueba nada sobre la guarda. Con la pregunta adentro de un método, el sabotaje es una
+// sustitución limpia y su rojo significa lo que tiene que significar.
+//
+// El nombre vacío nunca contesta: una directiva sin `prueba` no es a quien se le puede responder.
+func (d Directiva) ContestaA(prueba string) bool {
+	if prueba == "" {
+		return false
+	}
+	for _, n := range d.ColisionesOk() {
+		if n == prueba {
+			return true
+		}
+	}
+	return false
 }
 
 // Censo es lo que el árbol declara, contado.
@@ -266,7 +306,7 @@ type Censo struct {
 	// decirlo, no restarlo del total en silencio.
 	SinUbicar []string
 
-	// SinTrackear son `_test.go` que existen en el árbol y NO están en el índice de git.
+	// SinTrackear son `.go` que existen en el árbol y NO están en el índice de git.
 	//
 	// ESTO ME PASÓ ESCRIBIENDO ESTE PAQUETE Y POR ESO ESTÁ ACÁ. El censo deriva de `git ls-files`
 	// —que es lo correcto: barrer el disco mete adentro `.claude/` con sus ~64k `.go` ajenos— pero
@@ -301,24 +341,38 @@ type Censo struct {
 //
 // La cuarta —Rotas— existe porque la primera versión no la tenía y contaba como mecanizada una
 // directiva ilegible: la cobertura subía con sabotajes que nadie podía correr.
+// LAS CUATRO PARTEN EL CENSO DE VERDAD, Y NO LO HACÍAN. La queja se pregunta PRIMERO y en las
+// cuatro, así que ninguna ancla puede quedar afuera de las cuatro ni entrar en dos.
+//
+// Antes, `Rotas` pedía `Directiva != nil`, así que un ancla con queja y SIN directiva —el caso de
+// una exención que además trae un sabotaje muerto— caía en `Exentas`, con la queja adentro y sin
+// que nada la mirara: la única guarda que corre en CI pregunta por `Rotas()`, y el aviso salía
+// sólo por el CLI. Medido el 2026-09-21: el censo denunciaba `internal/mcp/aviso_test.go:94` y
+// `TestLaDeudaDeSabotajesNoCreceYElCorpusNoSePodre` pasaba en verde.
+//
+// Una categoría de más que nadie nombra se ve exactamente igual que un árbol sano. Por eso hay una
+// guarda que suma las cuatro y exige que dé el total: la quinta deja de poder existir.
 func (c Censo) Mecanizadas() []Ancla {
-	return c.filtrar(func(a Ancla) bool { return a.Directiva != nil && len(a.Quejas) == 0 })
+	return c.filtrar(func(a Ancla) bool { return len(a.Quejas) == 0 && a.Directiva != nil })
 }
 
-// Rotas son las anclas que declararon una directiva y la directiva no se pudo leer.
+// Rotas son las anclas que declararon algo y ese algo no se pudo leer. La queja manda: una
+// exención con queja es una declaración rota, no una exención.
 func (c Censo) Rotas() []Ancla {
-	return c.filtrar(func(a Ancla) bool { return a.Directiva != nil && len(a.Quejas) > 0 })
+	return c.filtrar(func(a Ancla) bool { return len(a.Quejas) > 0 })
 }
 
 // Exentas son las anclas que declararon POR QUÉ su sabotaje no se puede mecanizar.
 func (c Censo) Exentas() []Ancla {
-	return c.filtrar(func(a Ancla) bool { return a.Directiva == nil && a.NoMecanizable != "" })
+	return c.filtrar(func(a Ancla) bool {
+		return len(a.Quejas) == 0 && a.Directiva == nil && a.NoMecanizable != ""
+	})
 }
 
 // Pendientes son las anclas que siguen sólo en prosa: la deuda que este arnés mide.
 func (c Censo) Pendientes() []Ancla {
 	return c.filtrar(func(a Ancla) bool {
-		return a.Directiva == nil && a.NoMecanizable == "" && len(a.Quejas) == 0
+		return len(a.Quejas) == 0 && a.Directiva == nil && a.NoMecanizable == ""
 	})
 }
 
@@ -332,14 +386,26 @@ func (c Censo) filtrar(ok func(Ancla) bool) []Ancla {
 	return out
 }
 
-// ArchivosDePrueba pregunta a git qué `_test.go` trackea el repo.
+// ArchivosDelCorpus pregunta a git qué `.go` trackea el repo: LOS DE PRUEBA Y LOS DE PRODUCCIÓN.
 //
 // `git ls-files` Y NO UN BARRIDO DEL DISCO, y no es una preferencia de estilo: `.claude/` tiene
 // ~64.149 `.go` de otros proyectos y un respaldo sin trackear en `.musubi/` ya hizo que una guarda
 // acusara a tres lectores que no existían. Un barrido falla SÓLO EN LOCAL y pasa SIEMPRE en CI,
 // que es el peor de los dos mundos.
-func ArchivosDePrueba(raiz string) ([]string, error) {
-	salida, err := exec.Command("git", "-C", raiz, "ls-files", "-z", "*_test.go").Output()
+//
+// MIRA TAMBIÉN EL CÓDIGO DE PRODUCCIÓN, y eso es un arreglo, no una comodidad. Mientras este
+// enumerador pedía `*_test.go` y nada más, «cobertura ejecutable 98,5 %» NO era una propiedad del
+// árbol: era una propiedad de los `_test.go`. `cmd/musubi/precheck.go` llevaba dos anclas y el
+// censo no las contaba ni podía contarlas, y una de ellas —«mover la apertura antes de
+// leerEventoPrecheck»— era la ÚNICA promesa de `TestPrecheckNoAbreLaBaseSiNoLeToca`, que no tiene
+// ancla propia. Un filtro por UBICACIÓN se lee como una propiedad del árbol exactamente igual que
+// uno por redacción, y sale más barato de creer porque nadie lo escribe en el número.
+//
+// Lo que entra por acá NO se mecaniza solo: un ancla en código de producción no está pegada a un
+// `func Test…`, así que tiene que declarar su `prueba="…"` a mano o el censo la denuncia. Ver
+// `censarArchivo`, donde el mapa de pruebas sólo acepta funciones que son pruebas de verdad.
+func ArchivosDelCorpus(raiz string) ([]string, error) {
+	salida, err := exec.Command("git", "-C", raiz, "ls-files", "-z", "*.go").Output()
 	if err != nil {
 		return nil, fmt.Errorf("no pude preguntarle a git qué trackea desde %s: %w — no medí nada", raiz, err)
 	}
@@ -356,21 +422,21 @@ func ArchivosDePrueba(raiz string) ([]string, error) {
 		out = append(out, rel)
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("git no listó NI UN `_test.go` trackeado desde %s: eso no es «no hay pruebas», "+
+		return nil, fmt.Errorf("git no listó NI UN `.go` trackeado desde %s: eso no es «no hay código», "+
 			"es que este enumerador no miró nada", raiz)
 	}
 	sort.Strings(out)
 	return out, nil
 }
 
-// pruebasSinTrackear pregunta por los `_test.go` que están en el árbol y no en el índice.
+// goSinTrackear pregunta por los `.go` que están en el árbol y no en el índice.
 //
 // `--exclude-standard` respeta `.gitignore`, así que lo ignorado a propósito no aparece. Un fallo
 // de git acá no es fatal —esto es un aviso, no una medición— pero tampoco se inventa un vacío:
 // devolver nil cuando no se pudo preguntar es lo correcto sólo porque el llamador ya no depende de
 // esto para decidir nada.
-func pruebasSinTrackear(raiz string) []string {
-	salida, err := exec.Command("git", "-C", raiz, "ls-files", "-z", "-o", "--exclude-standard", "*_test.go").Output()
+func goSinTrackear(raiz string) []string {
+	salida, err := exec.Command("git", "-C", raiz, "ls-files", "-z", "-o", "--exclude-standard", "*.go").Output()
 	if err != nil {
 		return nil
 	}
@@ -386,11 +452,11 @@ func pruebasSinTrackear(raiz string) []string {
 
 // Censar lee todo el árbol y devuelve lo que declara.
 func Censar(raiz string) (Censo, error) {
-	archivos, err := ArchivosDePrueba(raiz)
+	archivos, err := ArchivosDelCorpus(raiz)
 	if err != nil {
 		return Censo{}, err
 	}
-	c := Censo{Raiz: raiz, Archivos: len(archivos), SinTrackear: pruebasSinTrackear(raiz)}
+	c := Censo{Raiz: raiz, Archivos: len(archivos), SinTrackear: goSinTrackear(raiz)}
 	for _, rel := range archivos {
 		r, err := censarArchivo(raiz, rel)
 		if err != nil {
@@ -409,13 +475,6 @@ func Censar(raiz string) (Censo, error) {
 	return c, nil
 }
 
-// censarArchivo parsea UN archivo de prueba.
-//
-// `parser.ParseComments` Y NO EL MODO 0, y acá eso es todo el punto: con el modo 0 el parser
-// DESCARTA los comentarios, así que este lector encontraría cero anclas y diría que el árbol no
-// promete nada. Es la trampa simétrica de la que ya pagamos en la guarda del candado, donde el
-// modo 0 hacía que ningún comentario pudiera satisfacer la guarda: ahí el bug era ver comentarios,
-// acá es no verlos.
 // loDeUnArchivo es lo que sale de censarArchivo. Es un struct y no seis valores de retorno
 // porque seis valores posicionales es cómo se termina pasando `quejas` donde iba `sinUbicar`.
 type loDeUnArchivo struct {
@@ -427,6 +486,13 @@ type loDeUnArchivo struct {
 	pruebasConAncla int
 }
 
+// censarArchivo parsea UN archivo de prueba.
+//
+// `parser.ParseComments` Y NO EL MODO 0, y acá eso es todo el punto: con el modo 0 el parser
+// DESCARTA los comentarios, así que este lector encontraría cero anclas y diría que el árbol no
+// promete nada. Es la trampa simétrica de la que ya pagamos en la guarda del candado, donde el
+// modo 0 hacía que ningún comentario pudiera satisfacer la guarda: ahí el bug era ver comentarios,
+// acá es no verlos.
 func censarArchivo(raiz, rel string) (loDeUnArchivo, error) {
 	ruta := filepath.Join(raiz, filepath.FromSlash(rel))
 	src, err := os.ReadFile(ruta)
@@ -458,8 +524,19 @@ func censarArchivo(raiz, rel string) (loDeUnArchivo, error) {
 		if fn.Doc == nil {
 			continue
 		}
+		// SÓLO LAS PRUEBAS ENTRAN AL MAPA, y el `esPrueba` de acá no es una repetición del de
+		// arriba: sin él, un ancla pegada al doc de un HELPER heredaba el nombre del helper como
+		// si fuera su prueba. La queja que existe para ese caso dice «el ancla no está pegada a un
+		// `func Test…`» y nunca se disparaba: no faltaba el nombre, venía uno EQUIVOCADO, y un
+		// `-run ^clavesPermitidasDelLatido$` no matchea nada. El árbol tiene dos anclas en esa
+		// posición exacta —`cmd/musubi/agent_test.go:488` e
+		// `internal/mcp/despliegue_alertas_test.go:459`— y las salva un `prueba="…"` explícito, o
+		// sea la casualidad de que quien las escribió no se apoyó en la derivación.
+		if !esPrueba {
+			continue
+		}
 		dePrueba[fn.Doc] = fn.Name.Name
-		if esPrueba && grupoTieneAncla(fset, fn.Doc) {
+		if grupoTieneAncla(fset, fn.Doc) {
 			conAncla++
 		}
 	}
@@ -748,6 +825,30 @@ func directivaDe(lineas []lineaCom, rel, pruebaDerivada string) (*Directiva, str
 				"la clase estructural medida es «borrar la guarda deja el import huérfano y no compila», "+
 				"y sin el motivo escrito esta salida se vuelve un `skip`")
 		}
+		// Y UNA EXENCIÓN NO PUEDE CONVIVIR CON UN SABOTAJE: el `return` de abajo se lleva puesto
+		// todo lo demás, en silencio. Esto NO es una precaución teórica — es el defecto que se
+		// midió en `internal/mcp/aviso_test.go`, donde cuatro líneas escritas para el ancla de
+		// ARRIBA quedaron una línea por debajo de la de abajo, que sí lleva exención. El alcance
+		// de un ancla termina donde empieza la siguiente, así que se las quedó la exenta y acá se
+		// evaporaron: el ancla de arriba figuraba «EN PROSA Y NADA MÁS» con su sabotaje escrito
+		// tres renglones más abajo, y nada lo decía. El autor hasta dejó anotado que «tenían que
+		// ir ACÁ y no después» y aun así el censo se quedó callado.
+		//
+		// Se DENUNCIA y no se elige una de las dos: adivinar cuál quiso el autor es exactamente
+		// cómo una directiva muerta pasa por viva.
+		var sobran []string
+		for _, k := range []string{"archivo", "de", "a", "arreglo_de", "arreglo_a", "colision_ok", "paquete", "tags", "env"} {
+			if _, hay := campos[k]; hay {
+				sobran = append(sobran, k)
+			}
+		}
+		if len(sobran) > 0 {
+			quejas = append(quejas, "esta directiva declara `no_mecanizable` Y "+strings.Join(sobran, ", ")+
+				": la exención se lleva puesto todo lo demás y esas claves NO HACEN NADA. "+
+				"Si el sabotaje es de OTRA ancla, movelo ARRIBA de la línea «Sabotaje» que le "+
+				"corresponde — el alcance de un ancla termina donde empieza la siguiente. Si es de "+
+				"ésta, sacá el `no_mecanizable`.")
+		}
 		return nil, motivo, quejas
 	}
 
@@ -816,11 +917,13 @@ func directivaDe(lineas []lineaCom, rel, pruebaDerivada string) (*Directiva, str
 	// número y la respuesta pasa a apuntar a otro lado, sin que nada se ponga rojo. Se midió
 	// pasando: la respuesta en prosa de #494 nombraba `colector_test.go:152` y el propio PR que la
 	// escribió movió esa ancla a la 166.
-	if d.ColisionOk != "" && !esNombreDePrueba(d.ColisionOk) {
-		quejas = append(quejas, fmt.Sprintf("`colision_ok` trae %q, y tiene que ser el NOMBRE de la "+
-			"otra prueba (`TestLoQueSea`), no un `archivo:línea`: un número de línea se corre solo "+
-			"en cuanto alguien agrega una línea arriba, y la respuesta quedaría apuntando a otro lado",
-			d.ColisionOk))
+	for _, nombre := range d.ColisionesOk() {
+		if !esNombreDePrueba(nombre) {
+			quejas = append(quejas, fmt.Sprintf("`colision_ok` trae %q, y tiene que ser el NOMBRE de la "+
+				"otra prueba (`TestLoQueSea`), no un `archivo:línea`: un número de línea se corre solo "+
+				"en cuanto alguien agrega una línea arriba, y la respuesta quedaría apuntando a otro lado. "+
+				"Si contestás a varias, van separadas por ESPACIOS", nombre))
+		}
 	}
 	if len(quejas) > 0 {
 		return d, "", quejas
@@ -992,8 +1095,12 @@ func Colisiones(c Censo) []string {
 	// Las respuestas que de verdad taparon una colisión. Lo que quede declarado y NO esté acá es una
 	// respuesta a algo que ya no pasa: se denuncia, porque una respuesta rancia es peor que ninguna
 	// —dice «esto ya se miró» sobre algo que nadie miró—.
+	// SE RASTREA NOMBRE POR NOMBRE Y NO SITIO POR SITIO. Un ancla puede contestarle a varias, y si
+	// se marcara «usada» la declaración entera, un nombre rancio quedaría tapado por sus hermanos:
+	// bastaría que UNO de los tres se pise de verdad para que los otros dos pasen sin que nadie los
+	// relea. La clave es `sitio\x00nombre`, que es el par que de verdad contesta o no contesta.
 	usadas := map[string]bool{}
-	declaradas := map[string]string{} // sitio → a qué prueba dice contestarle
+	declaradas := map[string]string{} // sitio\x00nombre → sitio (para poder nombrarlo al quejarse)
 	for archivo, anclas := range porArchivo {
 		if len(anclas) < 2 {
 			continue
@@ -1007,8 +1114,8 @@ func Colisiones(c Censo) []string {
 				continue // idem: eso es de `Validar`
 			}
 			sitio := fmt.Sprintf("%s:%d", x.Archivo, x.Linea)
-			if x.Directiva.ColisionOk != "" {
-				declaradas[sitio] = x.Directiva.ColisionOk
+			for _, nombre := range x.Directiva.ColisionesOk() {
+				declaradas[sitio+"\x00"+nombre] = sitio
 			}
 			despues := strings.Replace(string(b), x.Directiva.De, x.Directiva.A, 1)
 			for _, y := range anclas {
@@ -1021,8 +1128,8 @@ func Colisiones(c Censo) []string {
 				// LA RESPUESTA, SI ESTÁ Y ES PARA ESTA COLISIÓN. Tiene que nombrar a la prueba que
 				// se pisa con ésta y no a cualquier otra: contestar «ya lo miré» señalando a un
 				// tercero sería apagar el aviso sin haberlo mirado.
-				if x.Directiva.ColisionOk != "" && x.Directiva.ColisionOk == y.Directiva.Prueba {
-					usadas[sitio] = true
+				if x.Directiva.ContestaA(y.Directiva.Prueba) {
+					usadas[sitio+"\x00"+y.Directiva.Prueba] = true
 					continue
 				}
 				males = append(males, fmt.Sprintf(
@@ -1040,8 +1147,9 @@ func Colisiones(c Censo) []string {
 	// `colision_ok` queda, nadie lo relee, y lo que era una medición se vuelve una afirmación
 	// heredada. Es la forma de siempre —lo que se midió una vez se cita para siempre— y sale barato
 	// denunciarla acá, que es donde alguien está mirando las colisiones.
-	for sitio, aQuien := range declaradas {
-		if !usadas[sitio] {
+	for clave, sitio := range declaradas {
+		if !usadas[clave] {
+			aQuien := clave[strings.IndexByte(clave, 0)+1:]
 			males = append(males, fmt.Sprintf(
 				"%s declara `colision_ok=%q` y NO se pisa con esa prueba — la respuesta quedó rancia. "+
 					"O la otra guarda cambió y hay que releer las dos, o la colisión ya no existe y la "+

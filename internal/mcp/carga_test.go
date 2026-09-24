@@ -139,6 +139,9 @@ func TestBancoDeCarga(t *testing.T) {
 //
 // Sabotaje que la hace fallar: borrar el `if !bancoDeCargaHabilitado(...) { t.Skip(...) }` de
 // TestBancoDeCarga, o hacer que bancoDeCargaHabilitado devuelva true sin mirar la variable.
+// arnes: archivo="internal/mcp/carga_test.go"
+// arnes: de="func bancoDeCargaHabilitado(env func(string) string, short bool) bool {\n\treturn env(\"MUSUBI_CARGA\") == \"1\" && !short\n}"
+// arnes: a="func bancoDeCargaHabilitado(env func(string) string, short bool) bool {\n\treturn !short\n}"
 func TestElBancoDeCargaEstaGateado(t *testing.T) {
 	sin := func(string) string { return "" }
 	con := func(k string) string {

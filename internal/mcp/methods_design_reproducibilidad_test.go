@@ -59,6 +59,10 @@ func TestDesignElRuidoNoCambiaElMaterial(t *testing.T) {
 
 	// SABOTAJE: con el corte por oraciones apagado (n=0) el relleno vuelve a entrar entero. Se compara
 	// contra la función real para que el invariante no dependa de recordar tocar una constante.
+	// arnes: prueba="TestDesignElRuidoNoCambiaElMaterial"
+	// arnes: archivo="internal/mcp/methods_design.go"
+	// arnes: de="const designConsultaFrases = 2"
+	// arnes: a="const designConsultaFrases = 0"
 	if sin := primerasOraciones(pedido+" "+ruido, 0); !strings.Contains(sin, "Contexto adicional del proyecto que no describe el pedido. Contexto") {
 		t.Error("el sabotaje no sabotea: sin corte por oraciones el relleno debería entrar")
 	}
@@ -111,6 +115,10 @@ func TestDesignUnEmpateSeResuelveIgualSiempre(t *testing.T) {
 
 	// SABOTAJE: sin cuantizar, 0,9002 le gana a 0,9000 y el orden de llegada SÍ importa — que es el
 	// comportamiento que producía el 0,09 de estabilidad.
+	// arnes: prueba="TestDesignUnEmpateSeResuelveIgualSiempre"
+	// arnes: archivo="internal/mcp/methods_design.go"
+	// arnes: de="\treturn int(math.Round(float64(sim) / designResolucionSim))"
+	// arnes: a="\treturn int(math.Round(float64(sim) / designResolucionSim * 1e6))"
 	if cuantizarSim(0.9000) != cuantizarSim(0.9002) {
 		t.Error("0,9000 y 0,9002 difieren por menos que la resolución: deberían empatar")
 	}

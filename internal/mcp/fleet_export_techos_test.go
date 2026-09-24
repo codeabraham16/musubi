@@ -76,6 +76,11 @@ func proyectoDeLaLinea(l string) string {
 // línea `s.techoServiciosPorProyecto = cfg.EffectiveServicesPerProjectExport()` de
 // ConfigurarFlota — el campo se queda en el default 2000, salen los seis servicios y la serie de
 // truncado dice 0.
+// Sabotaje que la pone roja: borrar la línea `s.techoServiciosPorProyecto =
+// cfg.EffectiveServicesPerProjectExport()` de ConfigurarFlota.
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\ts.techoServiciosPorProyecto = cfg.EffectiveServicesPerProjectExport()\n\ts.techoAprobacionesPorProyecto = cfg.EffectiveApprovalsPerProjectExport()"
+// arnes: a="\ts.techoAprobacionesPorProyecto = cfg.EffectiveApprovalsPerProjectExport()"
 func TestElTechoDeServiciosLoDecideLaConfiguracionYNoLaConstante(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()
@@ -137,6 +142,9 @@ func TestElTechoDeServiciosLoDecideLaConfiguracionYNoLaConstante(t *testing.T) {
 //
 // Sabotaje que la pone roja: volver `for _, proy := range orden` a
 // `for proy, devices := range porProyecto` en serviciosVisiblesParaMetricas.
+// arnes: archivo="internal/mcp/fleet_prometheus_servicios.go"
+// arnes: de="\tfor _, proy := range orden {\n\t\tdevices := porProyecto[proy]"
+// arnes: a="\tfor proy, devices := range porProyecto {"
 func TestElOrdenDeLosProyectosSobreviveAlReagrupadoYNoSoloAlSort(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()
@@ -201,6 +209,9 @@ func TestElOrdenDeLosProyectosSobreviveAlReagrupadoYNoSoloAlSort(t *testing.T) {
 //
 // Sabotaje que la pone roja: volver el aviso a uno solo con el texto de proyectos, o volver a
 // fusionar las dos mitades en un bool.
+// arnes: archivo="internal/mcp/fleet_otlp.go"
+// arnes: de="\ts.avisoMientras(\"empuje_truncado_servicios\", truncado.Servicios, func() {"
+// arnes: a="\ts.avisoMientras(\"empuje_truncado_servicios\", false, func() {"
 func TestElAvisoDelEmpujeNombraElTechoQueCortoYNoElOtro(t *testing.T) {
 	destino := nuevoReceptor(t, http.StatusOK)
 	s := prepararEmpuje(t, destino.URL, registroDePrueba(principalDePrometheus()), nil)

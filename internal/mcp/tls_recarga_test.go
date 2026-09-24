@@ -68,6 +68,9 @@ func certificadoDePrueba(t *testing.T, dir string, vence time.Time, cn string) (
 // 90 días, eso se descubre el día 91.
 //
 // Sabotaje que la pone roja: en `GetCertificate`, devolver `c.par` sin mirar el sello.
+// arnes: archivo="internal/mcp/tls_recarga.go"
+// arnes: de="\tigual := sello == c.sello || sello == \"\""
+// arnes: a="\tigual := sello != c.sello || sello == \"\""
 func TestElCertificadoRenovadoEnDiscoEMPIEZAaSERVIRSE(t *testing.T) {
 	dir := t.TempDir()
 	viejo := time.Now().Add(3 * 24 * time.Hour).Truncate(time.Second)

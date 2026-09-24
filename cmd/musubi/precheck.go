@@ -340,14 +340,6 @@ func esEdicion(tool string) bool {
 	return false
 }
 
-// impactMessage arma el RADIO DE IMPACTO de un archivo que se va a editar: qué símbolos suyos
-// tienen quien los llame, cuántos son de forma directa y cuántos arrastrando el cierre transitivo.
-// "" si el archivo no está en el grafo — inerte hasta que se indexe, igual que codeGraphMessage.
-//
-// El caso "ningún símbolo tiene llamadas DIRECTAS en el grafo" NO devuelve vacío: cuesta una línea
-// decirlo, y callar ahí sería confundir "no hay riesgo" con "no sé". Pero tampoco afirma que el
-// archivo esté aislado: el grafo no ve llamadas por interfaz ni métodos pasados como valor (ver
-// ceroLlamadasDirectas), así que lo que dice es lo que vio, no lo que no existe.
 // avisoSinGrafo dice, ANTES DE EDITAR, que el radio de impacto no se pudo mirar.
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════
@@ -368,16 +360,21 @@ func esEdicion(tool string) bool {
 // CADA edición: un aviso por archivo convertiría un proyecto de React o de SQL en una pared de
 // texto repetido, y una advertencia que aparece siempre se deja de leer —que es exactamente cómo
 // se pierde una advertencia que sí importa—. El dato no es del archivo, es del binario y del
-// proyecto, así que decirlo una vez alcanza. El ledger ya lleva la cuenta por sesión y se
-// reinicia solo al cambiar de sesión: `LedgerAdd` con 0 tokens LEE sin sumar (ver ledger.go, el
-// `if tokens > 0`), así que no hace falta ni una consulta nueva ni un método más en codeStore.
+// proyecto, así que decirlo una vez alcanza. El ledger lleva una cuenta POR SESIÓN, así que la marca
+// de esta sesión no la borra ninguna otra: `LedgerAdd` con 0 tokens es una LECTURA pura —no crea la
+// sesión ni la sube en el orden de desalojo—, así que no hace falta ni una consulta nueva ni un método
+// más en codeStore. La marca sólo se pierde si la sesión es desalojada (tope de 64, desalojo por
+// menor total): entonces el aviso se repite UNA vez más, que es el costo aceptado.
 //
 // SÓLO EN EL CAMINO DE EDICIÓN, a propósito. En la LECTURA el silencio no afirma nada peligroso
 // —igual vas a leer el archivo, y el gist y la telemetría hablan por su cuenta—; acá el silencio
 // ocupa el lugar de «fijate quién depende de esto antes de tocarlo».
 //
-// Sabotaje: hacer que devuelva "" siempre → vuelve el mudo. Sacarle la guarda del ledger → el
-// aviso se repite en cada edición.
+// SUS DOS SABOTAJES YA ESTÁN MECANIZADOS, y del lado de la prueba: `precheck_singrafo_test.go`
+// declara «devolver "" siempre» (vuelve el mudo) y «sacarle la guarda del ledger» (el aviso se
+// repite en cada edición). Acá queda la referencia y no la promesa: escrita como promesa, el
+// censo la contaba una segunda vez y dos directivas idénticas sobre esta misma función fallan
+// igual —que es como una guarda se cuenta dos veces—.
 func avisoSinGrafo(store codeStore, key, sessionID string) string {
 	const superficie = "precheck_sin_grafo"
 	if l, err := store.LedgerAdd(sessionID, superficie, 0); err == nil {
@@ -426,6 +423,14 @@ const (
 	cegueraDelGrafo      = "el grafo no ve llamadas por interfaz ni métodos pasados como valor"
 )
 
+// impactMessage arma el RADIO DE IMPACTO de un archivo que se va a editar: qué símbolos suyos
+// tienen quien los llame, cuántos son de forma directa y cuántos arrastrando el cierre transitivo.
+// "" si el archivo no está en el grafo — inerte hasta que se indexe, igual que codeGraphMessage.
+//
+// El caso "ningún símbolo tiene llamadas DIRECTAS en el grafo" NO devuelve vacío: cuesta una línea
+// decirlo, y callar ahí sería confundir "no hay riesgo" con "no sé". Pero tampoco afirma que el
+// archivo esté aislado: el grafo no ve llamadas por interfaz ni métodos pasados como valor (ver
+// ceroLlamadasDirectas), así que lo que dice es lo que vio, no lo que no existe.
 func impactMessage(store codeStore, root, key, sessionID string) string {
 	ctx := context.Background()
 	nodes, err := store.ListGraphNodesForFileCtx(ctx, key)
@@ -750,6 +755,10 @@ func abrirMemoriaDelHook(root string) (storeDelHook, error) {
 // evento que no le tocaba —un Bash, un Grep, cualquier tool sin file_path— pagaba la apertura
 // completa (y, con un matcher más ancho, la pagaría en cada tool de la sesión) para devolver "".
 // Sabotaje: mover la apertura antes de leerEventoPrecheck → TestPrecheckNoAbreLaBaseSiNoLeToca.
+// arnes: prueba="TestPrecheckNoAbreLaBaseSiNoLeToca"
+// arnes: archivo="cmd/musubi/precheck.go"
+// arnes: de="\tin, aplica := leerEventoPrecheck(stdin)\n\tif !aplica {\n\t\treturn \"\"\n\t}\n\tstore, err := abrir(root)\n"
+// arnes: a="\tstore, err := abrir(root)\n\tin, aplica := leerEventoPrecheck(stdin)\n\tif !aplica {\n\t\treturn \"\"\n\t}\n"
 func precheckHook(root string, stdin io.Reader, abrir abridorDelHook, stderr io.Writer) string {
 	in, aplica := leerEventoPrecheck(stdin)
 	if !aplica {

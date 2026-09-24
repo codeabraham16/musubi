@@ -20,6 +20,9 @@ import (
 // Sabotaje que la hace fallar: declararla con `version: 35` (versión repetida: no se aplica sobre
 // una base que ya está en 35 y la tabla nunca se crea), o sacarle los `IF NOT EXISTS` a la tabla y
 // a los tres índices (la segunda corrida revienta).
+// arnes: archivo="internal/memory/migrations.go"
+// arnes: de="\t\t\t\tif _, err := x.Exec(`CREATE TABLE IF NOT EXISTS services (\n"
+// arnes: a="\t\t\t\tif _, err := x.Exec(`CREATE TABLE services (\n"
 func TestMigracionV36CreaLosServiciosSinPerderLaFlota(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, config.DirName, config.DBFile)
@@ -100,6 +103,9 @@ func TestMigracionV36CreaLosServiciosSinPerderLaFlota(t *testing.T) {
 //
 // Sabotaje que la hace fallar: agregarle a la migración 36 una columna `healthy INTEGER NOT NULL
 // DEFAULT 0` (o `status`, `up`, `activo`, `online`).
+// arnes: archivo="internal/memory/migrations.go"
+// arnes: de="\t\t\t\t\t\trevoked       INTEGER NOT NULL DEFAULT 0\n\t\t\t\t\t)`); err != nil {\n"
+// arnes: a="\t\t\t\t\t\trevoked       INTEGER NOT NULL DEFAULT 0,\n\t\t\t\t\t\thealthy       INTEGER NOT NULL DEFAULT 0\n\t\t\t\t\t)`); err != nil {\n"
 func TestNoExisteColumnaDeEstadoEnServices(t *testing.T) {
 	e := newTestEngine(t)
 	rows, err := e.db.Query(`PRAGMA table_info(services)`)

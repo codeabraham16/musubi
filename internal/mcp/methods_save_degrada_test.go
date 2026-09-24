@@ -16,6 +16,9 @@ import (
 //
 // Sabotaje que lo pone rojo: volver fatal el error de embed en el camino del save (el estado en
 // que estaba el código cuando este test se escribió — nació rojo contra ese código, verificado).
+// arnes: archivo="internal/mcp/methods.go"
+// arnes: de="\temb := s.embedIfEnabled(content)\n\n"
+// arnes: a="\tvar emb []float32\n\tif embedding.Enabled(s.embedder) {\n\t\tv, errEmb := s.embedder.Embed(ctx, content)\n\t\tif errEmb != nil {\n\t\t\treturn nil, rpcErrorf(codeInternalError, \"error al embeber: %v\", errEmb)\n\t\t}\n\t\temb = v\n\t}\n\n"
 func TestSaveObservationSobreviveAlEmbedderCaido(t *testing.T) {
 	engine, err := memory.NewDbEngine(t.TempDir())
 	if err != nil {

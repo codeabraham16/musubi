@@ -43,6 +43,14 @@ import (
 // llevar. Medido: con el cambio de abajo, rc=1 → rc=0.
 // arnes: arreglo_de="no imprimió NINGUNA prueba fallando"
 // arnes: arreglo_a="no nombró NINGUNA prueba fallando"
+//
+// Sabotaje que la hace fallar: sacarle a la rama de «cayó en otro archivo» la condición de que el
+// ancla viva en un `_test.go` → un ancla de producción, cuya aserción NUNCA puede estar en su
+// propio archivo, pasa a quejarse siempre.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\tif strings.HasSuffix(base, \"_test.go\") && arch != base {"
+// arnes: a="\tif arch != base {"
+// arnes: prueba="TestElRojoSeLeeYNoSeDeduceDelExitCode"
 func TestElRojoSeLeeYNoSeDeduceDelExitCode(t *testing.T) {
 	// La forma EXACTA que imprime deploy/pruebas/sabotaje.sh, copiada de una corrida real.
 	sano := "" +
@@ -120,6 +128,22 @@ func TestElRojoSeLeeYNoSeDeduceDelExitCode(t *testing.T) {
 			motivo:       "ayudantes_test.go:12: algo",
 			clase:        quejaOtroArchivo,
 			debeLlevar:   []string{"ayudantes_test.go", "x_test.go"},
+		},
+		{
+			// EL ANCLA VIVE EN CÓDIGO DE PRODUCCIÓN: la aserción NO PUEDE estar en su archivo.
+			//
+			// Es el control de la rama de arriba. Desde que el censo mira también los `.go` que no
+			// son de prueba, «cayó en otro archivo» es cierto SIEMPRE para esas anclas, y una queja
+			// que se cumple sola no informa: entrena a saltearla, y con ella se saltea la de al
+			// lado. La condición de la rama es `_test.go`, y este caso es el que la sostiene.
+			nombre: "un ancla en codigo de produccion no se queja de caer en otro archivo",
+			salida: "  ✓ ROJO, y falla en:\n      TestX\n" +
+				"  ── motivo (la primera línea de cada fallo, para poder compararlos) ──\n" +
+				"      TestX · x_test.go:12: algo\n",
+			archivoAncla: "internal/x/x.go",
+			prueba:       "TestX",
+			motivo:       "x_test.go:12: algo",
+			clase:        sinQueja,
 		},
 		{
 			nombre: "el motivo no trae numero de linea",

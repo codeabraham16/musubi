@@ -41,6 +41,10 @@ import (
 //   - agregar un `deploy/musubi-slo.yml` con `# despliegue:` (no lo matchea ningún glob de hoy);
 //   - sacar `musubi-recording.yml` de la lista de globs del verificador;
 //   - borrar el bucle de comparación entero.
+//
+// arnes: archivo="deploy/verificar-despliegue.sh"
+// arnes: de="  for f_r in \"$REPO\"/deploy/musubi-alerts*.yml \"$REPO\"/deploy/musubi-recording.yml; do"
+// arnes: a="  for f_r in \"$REPO\"/deploy/musubi-alerts*.yml; do"
 func TestTodoArchivoDeReglasDesplegableSeComparaPorContenido(t *testing.T) {
 	guion := filepath.Join("..", "..", "deploy", "verificar-despliegue.sh")
 	crudo, err := os.ReadFile(guion)

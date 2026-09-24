@@ -461,7 +461,7 @@ func imprimirCenso(c arnes.Censo, detalle bool) {
 	}
 
 	fmt.Printf("CENSO DE SABOTAJES DECLARADOS\n")
-	fmt.Printf("  archivos de prueba mirados : %d\n", c.Archivos)
+	fmt.Printf("  archivos `.go` mirados     : %d  (pruebas Y producción)\n", c.Archivos)
 	fmt.Printf("  anclas encontradas         : %d  (en %d archivos)\n", len(c.Anclas), len(porArchivo))
 	fmt.Printf("  ├─ mecanizadas (`arnes:`)  : %d\n", len(mec))
 	fmt.Printf("  ├─ ROTAS (directiva ilegible): %d\n", len(rot))
@@ -478,7 +478,7 @@ func imprimirCenso(c arnes.Censo, detalle bool) {
 		// VA ANTES QUE CUALQUIER OTRO NÚMERO: si estás escribiendo pruebas nuevas, el censo NO las
 		// ve, y su «0 mecanizadas» significa «todavía no las agregaste», no «no hay ninguna». Me
 		// pasó escribiendo esto.
-		fmt.Printf("\n! %d `_test.go` SIN TRACKEAR: este censo deriva de `git ls-files`, así que NO los mira.\n", len(c.SinTrackear))
+		fmt.Printf("\n! %d `.go` SIN TRACKEAR: este censo deriva de `git ls-files`, así que NO los mira.\n", len(c.SinTrackear))
 		for _, s := range c.SinTrackear {
 			fmt.Println("   ", s)
 		}
@@ -570,31 +570,6 @@ func elOverlayPuedeTocar(archivo string) bool {
 	return base == "go.mod" || base == "go.sum"
 }
 
-// contraOverlay corre cada sabotaje SIN TOCAR EL DISCO y compara contra el veredicto de disco.
-//
-// LA IDEA NO ES MÍA Y SALE DE UN ACCIDENTE. Un refutador ajeno midió VERDE una directiva que este
-// arnés medía en ROJO, y las dos mediciones eran correctas: él aplicaba con `go test -overlay`, que
-// le cambia el archivo AL COMPILADOR, y la guarda en cuestión lee ese archivo DEL DISCO en tiempo de
-// ejecución con `os.ReadFile`. Bajo overlay el disco está sano, así que el daño colateral que
-// producía su rojo no ocurría. Ese rojo era falso: la prueba caía por el daño al corpus y no por el
-// defecto declarado.
-//
-// De ahí sale el detector, que es exacto para la clase:
-//
-//	ROJO al disco  ∧  VERDE bajo overlay  ⇒  el rojo depende de un efecto en el DISCO,
-//	                                          no del cambio de comportamiento
-//
-// El conjunto que sobrevive es chico y se separa a ojo: o es daño colateral —un rojo falso— o es un
-// defecto real que sólo se ve leyendo el disco, que en este árbol son contados.
-//
-// ES MÁS COMPLETO QUE `arnes.Colisiones` Y NO LO REEMPLAZA. `Colisiones` caza el daño al CORPUS DE
-// DIRECTIVAS —el `de` de uno es el ancla de otro— y dice POR QUÉ. Esto caza cualquier efecto que
-// dependa del archivo en disco, incluyendo los que no tienen ninguna directiva adentro, y dice
-// CUÁLES. Si esto marca uno que `Colisiones` no explica, ahí hay una tercera causa que ninguno de
-// los dos previó, y ése es el caso que más vale mirar.
-//
-// NO REIMPLEMENTA NINGUNA DE LAS OCHO COMPROBACIONES DE `sabotaje.sh`: no es un veredicto, es un
-// bit por directiva para cruzar contra el veredicto que ya dio el guion.
 // tramoACorrer dice QUÉ PEDAZO de la lista ya filtrada por paquete hay que correr.
 //
 // POR QUÉ EXISTE `-desde` Y NO ALCANZABA CON `-limite`: un barrido de `./internal/mcp` son ~165
@@ -622,6 +597,31 @@ func tramoACorrer(total, desde, limite int) (inicio, fin int) {
 	return inicio, fin
 }
 
+// contraOverlay corre cada sabotaje SIN TOCAR EL DISCO y compara contra el veredicto de disco.
+//
+// LA IDEA NO ES MÍA Y SALE DE UN ACCIDENTE. Un refutador ajeno midió VERDE una directiva que este
+// arnés medía en ROJO, y las dos mediciones eran correctas: él aplicaba con `go test -overlay`, que
+// le cambia el archivo AL COMPILADOR, y la guarda en cuestión lee ese archivo DEL DISCO en tiempo de
+// ejecución con `os.ReadFile`. Bajo overlay el disco está sano, así que el daño colateral que
+// producía su rojo no ocurría. Ese rojo era falso: la prueba caía por el daño al corpus y no por el
+// defecto declarado.
+//
+// De ahí sale el detector, que es exacto para la clase:
+//
+//	ROJO al disco  ∧  VERDE bajo overlay  ⇒  el rojo depende de un efecto en el DISCO,
+//	                                          no del cambio de comportamiento
+//
+// El conjunto que sobrevive es chico y se separa a ojo: o es daño colateral —un rojo falso— o es un
+// defecto real que sólo se ve leyendo el disco, que en este árbol son contados.
+//
+// ES MÁS COMPLETO QUE `arnes.Colisiones` Y NO LO REEMPLAZA. `Colisiones` caza el daño al CORPUS DE
+// DIRECTIVAS —el `de` de uno es el ancla de otro— y dice POR QUÉ. Esto caza cualquier efecto que
+// dependa del archivo en disco, incluyendo los que no tienen ninguna directiva adentro, y dice
+// CUÁLES. Si esto marca uno que `Colisiones` no explica, ahí hay una tercera causa que ninguno de
+// los dos previó, y ése es el caso que más vale mirar.
+//
+// NO REIMPLEMENTA NINGUNA DE LAS OCHO COMPROBACIONES DE `sabotaje.sh`: no es un veredicto, es un
+// bit por directiva para cruzar contra el veredicto que ya dio el guion.
 func contraOverlay(raiz string, c arnes.Censo, soloPaquete string, desde, limite int) int {
 	tmp, err := os.MkdirTemp("", "arnes-overlay-")
 	if err != nil {
@@ -866,7 +866,13 @@ func revisarElRojo(salida, archivoAncla, pruebaDeclarada, raiz, paquete string) 
 	if !ok {
 		return "", quejaMotivoIlegible, "el motivo no nombra un `_test.go:línea`: " + primerasRunas(primera, 80)
 	}
-	if base := archivoAncla[strings.LastIndex(archivoAncla, "/")+1:]; arch != base {
+	// LA COMPROBACIÓN NO SE LE HACE A UN ANCLA DE PRODUCCIÓN, porque ahí es imposible que dé otra
+	// cosa: la aserción vive en un `_test.go` y el ancla, por definición, no. Desde que el censo
+	// mira también el código de producción, dejarla puesta imprimía una queja segura en cada una de
+	// esas anclas — y una advertencia que aparece siempre se deja de leer, que es exactamente cómo
+	// se pierde la que sí importa.
+	base := archivoAncla[strings.LastIndex(archivoAncla, "/")+1:]
+	if strings.HasSuffix(base, "_test.go") && arch != base {
 		clase = quejaOtroArchivo
 		queja = "la aserción que cayó vive en " + arch + " y el ancla está en " + base
 		return primera, clase, queja

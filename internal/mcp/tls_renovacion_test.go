@@ -64,6 +64,9 @@ func periodoDelTimer(t *testing.T, archivo string) time.Duration {
 // `OnCalendar=` del timer a mensual dejando el umbral en 21 días, o bajar el umbral de la alerta
 // a 7 días dejando el timer semanal. Los dos archivos siguen siendo válidos por separado, que es
 // justamente por qué hace falta una guarda que los cruce.
+// arnes: archivo="deploy/musubi-alerts.yml"
+// arnes: de="        expr: musubi_tls_certificate_expiry_seconds < 21 * 24 * 3600"
+// arnes: a="        expr: musubi_tls_certificate_expiry_seconds < 7 * 24 * 3600"
 func TestElUmbralDeVencimientoDejaTresCorridasDeMargen(t *testing.T) {
 	periodo := periodoDelTimer(t, "musubi-tls-renovar.timer")
 

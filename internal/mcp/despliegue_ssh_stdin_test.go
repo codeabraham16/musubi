@@ -46,6 +46,10 @@ import (
 //   - sacarle el `-n` a la espera de red de `comparar-y-latir.sh`;
 //   - agregar un `ssh` nuevo sin `-n` en cualquier `.sh` de `deploy/`;
 //   - poner el `-n` sólo adentro de un comentario que lo nombre.
+//
+// arnes: archivo="deploy/verificar-despliegue.sh"
+// arnes: de="    ssh -n -o BatchMode=yes -o ConnectTimeout=10 \"$SSH_HOST\" \"$1\" 2>/dev/null || true"
+// arnes: a="    ssh -o BatchMode=yes -o ConnectTimeout=10 \"$SSH_HOST\" \"$1\" 2>/dev/null || true"
 func TestTodoSSHDeDespliegueLlevaMenosNSalvoLosQueDeclaranUsarStdin(t *testing.T) {
 	// LAS EXCEPCIONES SE DECLARAN ACÁ, UNA POR UNA, CON SU RAZÓN. Una excepción por REGLA
 	// («si tiene un pipe, pasa») le daría vía libre a un pipe accidental, que es un defecto tan

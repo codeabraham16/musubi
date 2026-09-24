@@ -129,6 +129,9 @@ func servidorConEngineContado(t *testing.T) (*McpServer, *engineQueCuentaCierres
 //
 // Sabotaje que la pone roja: sacar la consulta a `s.shells.buscar` del goroutine de
 // `abrirShellConSesion`. Quedan dos llamados en vez de uno.
+// arnes: archivo="internal/mcp/methods_shell.go"
+// arnes: de="\tgo func() {\n\t\t<-canal.Terminado()\n\t\tif vigente, sigue := s.shells.buscar(ses.ID); !sigue || vigente != canal {\n\t\t\treturn\n\t\t}\n\t\ts.cerrarShell(ses.ID, fleet.ShellCerrada, \"la shell remota terminó\", time.Now())\n\t}()"
+// arnes: a="\tgo func() {\n\t\t<-canal.Terminado()\n\t\ts.cerrarShell(ses.ID, fleet.ShellCerrada, \"la shell remota terminó\", time.Now())\n\t}()"
 func TestElVigiaNoReescribeLaFilaQueYaCerramosNosotros(t *testing.T) {
 	s, contado := servidorConEngineContado(t)
 	enrolarConShell(t, s, "casa", "nas")

@@ -111,6 +111,26 @@ import (
 // arnes: archivo="internal/mcp/sonda_permiso_test.go"
 // arnes: de="package mcp"
 // arnes: a="package mcp\n\n// Sabotaje: un ancla nueva SIN su directiva, puesta a propósito para que suba la deuda."
+//
+// LOS OTROS DOS CANALES, Y POR QUÉ SÓLO UNO SE PUEDE SABOTEAR. Esta guarda es la única del árbol
+// que corre el censo en CI, y hasta el 2026-09-21 miraba dos de sus cuatro avisos: `SinUbicar` y
+// `Rotas`. `Huerfanas` y `Quejas` salían sólo por el CLI, o sea que un aviso real podía imprimirse
+// en la terminal de quien lo corriera a mano y el CI seguía verde. Se midió: el censo denunciaba
+// una directiva muerta en `aviso_test.go:94` y esta prueba pasaba.
+//
+// El ancla de abajo ejercita el canal de las HUÉRFANAS, agregándole al corpus una línea `arnes:`
+// que no cuelga de ningún ancla. La otra mitad de `Quejas` —un archivo que el lector no puede
+// PARSEAR— no se puede sabotear: cualquier mutación que rompa el parser de Go rompe también el
+// build, y el rojo sería del compilador. Queda escrito en vez de dejarlo como un hueco mudo.
+//
+// Sabotaje que la hace fallar: meterle al corpus una línea `// arnes:` que no cuelgue de ningún
+// ancla. El sabotaje es un COMENTARIO, así que compila igual y el rojo es el del canal, no el del
+// build. Se elige `package main` de la CLI del arnés —no un `_test.go` ajeno— y el `a` contiene al
+// `de` entero, así que no le rompe el ancla a nadie.
+// arnes: prueba="TestLaDeudaDeSabotajesNoCreceYElCorpusNoSePodre"
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="package main"
+// arnes: a="package main\n\n// arnes: de=\"una directiva hu\u00e9rfana: no cuelga de ning\u00fan ancla\""
 
 // anclasEnProsaAlDia es LA DEUDA MEDIDA, con su fecha. Es un hecho del mundo —cuántas promesas sin
 // ejecutar tenía el árbol ese día— así que va clavado: derivarlo del árbol dejaría a esta guarda
@@ -552,7 +572,265 @@ import (
 // la otra renombraba el job a `alertmanager-apagado`, que SIGUE CONTENIENDO «alertmanager» — y la
 // prueba busca por subcadena. Un renombre no es un borrado si el nombre viejo sobrevive adentro del
 // nuevo.
-const anclasEnProsaAlDia = 218
+//
+// Y DE 218 A 200 EL 2026-09-21: las dieciocho anclas del LATIDO Y EL INVENTARIO DE LA FLOTA
+// —`latido_una_tx_test.go`, `flota_test.go`, `fleet_vidared_test.go` y `fleet_renombrar_test.go`—.
+// 18 de 18 en rojo, y el lote entró SIN una sola hueca: es el primero en el que el diseño acertó de
+// entrada, y no por suerte.
+//
+// LO QUE CAMBIÓ ES EL MÉTODO: VERIFICAR LOS LITERALES ANTES DE APLICAR NADA. El guion de aplicación
+// ahora desescapa cada `de` —DOS veces, una por su propia fuente y otra por el formato de la
+// directiva— y cuenta sus apariciones en el archivo destino; si alguno no es único, aborta sin
+// tocar el árbol. Los lotes anteriores gastaban tres o cuatro vueltas de aplicar → validar →
+// corregir en unicidad; éste, ninguna.
+//
+// TRES PAREJAS DE `colision_ok` EN UN SOLO LOTE, y las tres son la misma forma: una LÍNEA que dos
+// pruebas miran desde ángulos opuestos. El autorreporte del latido lo cortan el techo de
+// transacciones y el inventario; `proyectosParaLeer` lo cortan «no pude leer la lista» y «la lista
+// vino truncada»; y el autorreporte además choca con la guarda de que sólo toca la fila del token.
+// Cuando una línea concentra varios invariantes, las colisiones no son un problema del arnés: son
+// el mapa de cuántas cosas dependen de esa línea.
+//
+// Y UN SABOTAJE QUE NO COMPILÓ, quinta cara: `if false {` sobre una condición deja SIN USAR las
+// variables que la condición leía. El corte que compila las conserva —`if !hay && v == X && false`—
+// y dice lo mismo.
+//
+// Y DE 200 A 192 EL 2026-09-21: las ocho anclas de LO QUE EL DESPLIEGUE DA POR SENTADO —la
+// configuración que el cerebro lee del disco (`exposicion_config_test.go`) y el esquema que el
+// redespliegue verifica contra el binario (`despliegue_esquema_test.go`)—. 8 de 8 en rojo, segundo
+// lote consecutivo sin una sola corrección: la verificación previa de literales ya es rutina.
+//
+// EL LOTE SE CORTÓ EN OCHO A PROPÓSITO, y vale decir por qué. El grupo natural eran dieciséis —con
+// las alertas de Altura y la custodia de reglas— pero esas sabotean YAML de alertas y globs de
+// Prometheus, donde cada corte pide leer con cuidado QUÉ REGEX mira la prueba. Entregar ocho bien
+// atadas es mejor que dieciséis a medias, y las otras ocho quedan anotadas para un lote propio.
+//
+// LO QUE ESTAS OCHO CUSTODIAN, dicho corto: que una credencial no pueda entrar por la URL, que una
+// variable declarada y ausente sea un ERROR y no «un endpoint sin credencial», que un YAML roto no
+// se confunda con un archivo ausente, que una configuración rota no tumbe a las máquinas que no
+// están en ella, y —del otro lado— que el redespliegue no vuelva a comparar el esquema contra un
+// número tipeado a mano, que es el cabo A111 letra por letra.
+// Y DE 192 A 184 EL 2026-09-21: las ocho que el lote anterior dejó anotadas a propósito —ALERTAS DE
+// ALTURA (`despliegue_altura_test.go`) y CUSTODIA DE REGLAS (`despliegue_custodia_test.go`)—. 8 de 8
+// en rojo, y cada rojo nombrando el invariante suyo y no el de un vecino.
+//
+// UNA DE LAS OCHO PROMETÍA DOS CORTES Y NINGUNO CORTA. Decía «sacarle el `\\.` o el `;` a cualquiera
+// de las dos regex» de la custodia cruzada, y las dos lecturas quedan en VERDE, medido contra las
+// seis etiquetas que la propia prueba lleva: desescapar el punto deja el mismo conjunto
+// seleccionado, porque el comodín igual necesita `yml;` inmediatamente después y en la otra ruta lo
+// que sigue a `musubi-alerts` es `-flota.yml;`; y sacarle el `;` tampoco suma un grupo ajeno, por la
+// razón que el encabezado de esa misma prueba ya dice bien — `musubi-alerts.yml` no es prefijo de
+// `musubi-alerts-flota.yml`. O sea que el encabezado tenía razón Y la línea de sabotaje no, en el
+// mismo bloque de comentario. El corte que sí la ejercita estaba escrito dos párrafos más arriba:
+// ENSANCHAR el matcher a `.*musubi-alerts.*`, que agarra los cinco grupos de los dos archivos. Se
+// mecanizó ése y se dejó la medición escrita, porque una promesa que no corta enseña a confiar en
+// una red que no está.
+//
+// Y UNA SEGUNDA MECANIZA LA OTRA DIRECCIÓN, que hasta hoy era una afirmación en prosa. El bloque de
+// `TestLosJobsVigiladosSonLosQueElRepoDeclara` cuenta que la primera versión de esa guarda no veía
+// `- job_name: 'altura-db'` —comillas simples, YAML válido, el estilo de media documentación de
+// Prometheus— y que se midió en las dos direcciones el 2026-09-05. Ahora eso se corre: el sabotaje
+// agrega un job que la alerta no vigila y la pone ROJA, y el `arreglo_` requota un job existente y
+// tiene que dejarla VERDE. Una guarda invertida contesta bien al sabotaje y manda a sacar la línea
+// correcta; con las dos direcciones atadas, eso ya no puede pasar sin que el arnés lo diga.
+//
+// EL CORTE DE ESTE LOTE NO ES POR CANTIDAD SINO POR ARCHIVO: se eligió el par que sabotea YAML de
+// despliegue porque comparten superficie, y uno de los ocho tuvo que reanclarse. Su `de` natural
+// —`  - job_name: alertmanager`— ya era el de otra guarda, en otro archivo, sobre la misma línea:
+// una asegura que ese job EXISTA, la otra que todo job declarado esté VIGILADO. Son dos guardas
+// distintas, no una contada dos veces, pero en vez de declarar la colisión se movió el ancla a otro
+// job: una colisión declarada hay que mantenerla verdadera para siempre, y no haberla es más barato.
+// Y DE 184 A 171 EL 2026-09-21: las trece de LA SHELL REMOTA Y SU CONSENTIMIENTO —el buffer
+// interactivo (`internal/fleet/shell_buffer_test.go`), la CLI que abre la terminal
+// (`cmd/musubi/shell_test.go`), el eje de consentimiento sobre exec y shell y la serie de alcance—.
+// 13 de 13 en rojo, pero recién en la segunda vuelta, y lo que pasó en la primera es el hallazgo.
+//
+// UNA VOLVIÓ EN VERDE Y LA CULPA ERA MÍA, NO DE LA GUARDA. `TestUnaMaquinaQueNoSabeAvisarNoRecibe
+// UnAvisoQueNadieVaAMostrar` la mecanicé contra `methods_exec.go` y la prueba abre con
+// `toolFleetShell`: el sabotaje no tocaba el camino que ella mide. Lo que lo hace fácil de repetir
+// es que el `case consent.AvisaAlUsuario() && !d.PuedePreguntar:` es IDÉNTICO en los tres archivos
+// —pantalla, exec y shell— y el archivo de pruebas se llama `consentimiento_exec_shell_test.go`,
+// o sea que nombra los dos caminos. Elegir el archivo por el nombre del test acierta el texto y
+// yerra el camino. Se elige por la llamada que la prueba HACE, no por cómo se llama el archivo.
+//
+// Y AL BUSCAR A LAS HERMANAS APARECIÓ QUE EXEC NO TIENE. Pantalla la tiene en `aviso_test.go`,
+// shell la tiene en la que se acaba de mecanizar, y exec no tiene ninguna que diga «no se le encola
+// un aviso a una máquina que no sabe mostrarlo» — la que recorre los tres caminos prueba la
+// dirección contraria. Medido poniéndole `&& false` a ese `case` y corriendo el paquete entero: la
+// suite se pone roja, sí, pero en tres pruebas que no hablan de esto y por CONTAR comandos («se
+// entregaron 6 comandos distintos, esperaba 5»). El aviso de más les corre un conteo. Eso alcanza
+// hoy y se evapora el día que cualquiera de las tres cambie su fixture, sin que nada lo diga: un
+// invariante detectado de rebote no está guardado. Queda escrito en el bloque de esa prueba, con
+// la medición, en vez de arreglado acá — escribir la hermana que falta es otra clase de trabajo
+// que el de mecanizar lo que el árbol ya promete.
+//
+// DOS SABOTAJES COMPARTEN LÍNEA Y EL INSTRUMENTO PROBÓ QUE SON DOS. Los del buffer: uno lo vuelve
+// un ring que descarta, el otro le saca la contrapresión entera, y los dos tocan el mismo `for`.
+// Se declaró `colision_ok` cruzado, y los motivos que devolvió el arnés lo confirman sin que haya
+// que creerle a nadie — «se perdieron 786 432 bytes en el camino» contra «el escritor NO se frenó
+// con el buffer lleno». Dos fallas distintas con el mismo arreglo NO son una guarda contada dos
+// veces; dos fallas distintas con motivos distintos, tampoco.
+//
+// Y UNA SE MECANIZÓ AGREGANDO UN MÉTODO, no sustituyendo una línea: `Alcance` obligatorio en el
+// JSON no se puede pedir con una etiqueta de campo, así que el sabotaje INSERTA un `UnmarshalJSON`
+// sobre `Muestra` que falla si el campo no está. Vale anotarlo porque abre una forma que estaba
+// sin usar: cuando el defecto no existe como línea, el arnés igual lo puede fabricar como bloque,
+// y eso es preferible a declarar `no_mecanizable`, que baja el número igual y es mucho más barato.
+// Y DE 171 A 163 EL 2026-09-21, que es donde el corpus cruza el 80 %: las ocho del VENCIMIENTO DE
+// UNA CREDENCIAL —`principals_expires_test.go` y `principals_vencimiento_politicas_test.go`—, o sea
+// hasta cuándo vale una identidad y quién se acuerda de mirarlo. 8 de 8 en rojo.
+//
+// DOS DE LAS OCHO PROMETEN EL MISMO CORTE y el instrumento probó que son dos guardas. Las dos dicen
+// «sacar el `p.Vencida(...)` de porNombre», la misma línea de `principals.go`, así que el validador
+// las denuncia como colisión. Declarar `colision_ok` AFIRMA que son dos, y eso no se sabe hasta
+// correrlas: lo decide si los motivos difieren. Difieren —«el indicador dice que una credencial
+// VENCIDA puede actuar» contra «el empuje OTLP sigue exportando la telemetría de la flota con una
+// credencial VENCIDA»— y el censo cerró con `motivos repetidos: 0`. Si hubieran salido iguales, lo
+// que había que cambiar era el corte de una de las dos, no la declaración.
+//
+// Y HAY UNA TERCERA SOBRE LA MISMA GUARDA que NO colisiona, porque ataca otro eslabón: el
+// envoltorio recargable (`principals_reload.go`), donde el sabotaje hace que `rr.porNombre` delegue
+// en `reg.porNombreAunqueVencida`. Su motivo lo dice con todas las letras —«POR EL ENVOLTORIO DE
+// PRODUCCIÓN el indicador dice que una credencial VENCIDA puede actuar»— y es la distinción que
+// importa: el registro de abajo puede estar sano y el envoltorio que usa producción, no.
+//
+// EL AVISO DE COLISIÓN TRAE EL NOMBRE DE LA PRUEBA; NO SE ESCRIBE DE MEMORIA. Las dos `colision_ok`
+// de este lote entraron mal la primera vez porque las deduje de la prosa, y el validador contestó
+// las dos cosas por separado: que la respuesta quedaba RANCIA («un "esto ya se miró" sobre algo que
+// nadie miró es peor que el aviso») y, aparte, la colisión real con el nombre exacto listo para
+// copiar. Se corre `-validar` y se copia lo que imprime.
+//
+// EL LOTE SE CORTÓ EN OCHO dejando afuera `internal/config/secreto_env_test.go`, que tiene cuatro:
+// dos de las suyas BARREN EL REPO buscando una frase en vez de sabotear una línea de código, y eso
+// pide leerlas con calma en vez de apurarlas al final de un lote.
+// Y DE 163 A 159 EL 2026-09-21: las cuatro de EL SECRETO QUE SALE DEL ENTORNO
+// —`internal/config/secreto_env_test.go`—, o sea de dónde sale una credencial y qué pasa cuando el
+// archivo que la tiene está roto. Tres en rojo y UNA que NO SE PUEDE MECANIZAR, con un motivo que
+// vale más que el ancla.
+//
+// EL SABOTAJE ES LA FRASE QUE LA GUARDA BUSCA, Y LA DIRECTIVA QUE LA LLEVE CAE ADENTRO DEL ÁRBOL
+// QUE BARRE. `TestNadieDiceQueElArchivoDeTokensTraeElMasNuevoPrimero` recorre todos los `.go`,
+// `.md`, `.sh`, `.yml`, `.ps1` y `.cmd` que git lista y denuncia al que afirme «el más nuevo
+// primero» del archivo de tokens. El arnés sabotea por sustitución de TEXTO LITERAL, así que la
+// directiva tiene que llevar la frase escrita entera — y las directivas viven en un comentario de
+// un `_test.go`, que es exactamente uno de los archivos que la guarda mira. Al escribirla, el único
+// culpable del árbol pasó a ser el archivo de la directiva, y el arnés se abstuvo con «CONTROL EN
+// ROJO: la prueba ya falla SIN el sabotaje, así que su rojo no prueba nada».
+//
+// Abstenerse fue lo correcto y el diagnóstico salió de ahí: un `grep` de la frase sobre el repo
+// devolvió UN solo archivo, el de la directiva. O sea que el instrumento no falló — detectó que el
+// corpus estaba contaminado por su propia declaración, que es el modo de falla que más cuesta ver.
+//
+// Y ES LA MISMA TRAMPA QUE ESA PRUEBA YA DOCUMENTA, UN NIVEL MÁS ARRIBA: veinte líneas más abajo
+// arma la frase por partes (`"el más " + "nuevo primero"`) porque «escrita entera acá, este archivo
+// sería su propio culpable: la guarda se disparó con su propia documentación en la primera
+// corrida». Allá el peligro era el comentario de la prueba; acá es el corpus del arnés. No hay
+// dónde esconder la directiva, porque una guarda que busca un literal en el repo entero no puede
+// tener su sabotaje escrito en el repo. Queda `no_mecanizable` con eso como motivo — no por
+// comodidad, que es el riesgo que esta constante ya se anotó más arriba, sino porque el camino malo
+// es irrepresentable.
+// Y DE 159 A 83 EL 2026-09-21, EL SALTO MÁS GRANDE DEL TRINQUETE: setenta y ocho anclas de seis
+// superficies a la vez —alertas y reglas, export de flota y sus techos, la memoria, el eje de
+// diseño, el despliegue del cerebro y la CLI—. 87 sabotajes corridos (las 78 más nueve vecinas
+// que caían en el rango): 87 en ROJO, 0 verdes, 0 sin veredicto, 0 motivos repetidos, 0 rojos
+// sospechosos, y los cuatro árboles de barrido restaurados.
+//
+// EL DISEÑO SE HIZO EN PARALELO Y CADA CORTE TUVO UN REFUTADOR PROPIO, que es lo que volvió
+// abordable un lote de este tamaño. Seis agentes leyeron una superficie cada uno y propusieron 80
+// cortes; después un agente por corte intentó DEMOSTRAR QUE NO SERVÍA, midiendo sobre el árbol.
+// Cayeron dos, y los dos por razones que costaban una vuelta de barrido cada una: un literal que
+// aparecía CERO veces porque las líneas reales van indentadas dentro de una función, y un corte
+// que era copia exacta —mismo archivo, mismo `de`, mismo `a`— de una directiva que ya existía.
+// Después volví a verificar los 78 por mi cuenta: las 78 anclas y los 78 `de`, presentes y únicos.
+//
+// LO QUE EL DISEÑO NO PUEDE VER SE DESTAPA AL ESCRIBIR, y fueron tres cosas:
+//
+//	· 39 de 78 quedaron encajadas A MITAD DE FRASE. La prosa de estas superficies es multilínea, a
+//	  diferencia de los lotes anteriores; las directivas van al FINAL del bloque, pegadas al `func`.
+//	  Y si el bloque termina en lista con viñetas, gofmt exige una línea `//` sola antes.
+//	· dos quedaron ILEGIBLES: su ancla vive ADENTRO del cuerpo de la prueba, así que el arnés no
+//	  puede derivar qué test correr. Se declara `prueba=` y listo — la denuncia es correcta.
+//	· y dos quedaron HUÉRFANAS, que es el hallazgo. Su frase de sabotaje está A MITAD DE LÍNEA
+//	  («… las dos bocas). Sabotaje que la pone roja: …»), así que NUNCA fueron ancla para el censo.
+//	  O sea que la deuda medida SUBESTIMA: hay promesas que ni se reclaman porque el instrumento no
+//	  las ve. Una de ellas documenta un sabotaje que la versión ANTERIOR de su guarda dejaba pasar
+//	  en verde. Se les dio línea propia; nacen mecanizadas, así que suben `anclas encontradas` y no
+//	  mueven esta deuda. Se buscan comparando `grep "Sabotaje"` contra `grep "^// *Sabotaje"`.
+//
+// SOBRE LAS COLISIONES, Y ES UNA CORRECCIÓN AL PÁRRAFO DE ARRIBA: el censo denunció 18 pares. Leí
+// los DOS motivos de cada uno, midiéndolos —incluidas seis guardas preexistentes que hubo que
+// barrer sólo para poder compararlas—, y en todos los casos son distintos: «el argv pasó por una
+// shell» contra «el timeout no lo mató»; «nadie lee la serie» contra «el umbral no puede cruzarse
+// nunca»; la ventana contra el tenant sobre el MISMO `WHERE` de la cronología. Se declaró
+// `colision_ok` de los dos lados donde se pudo y quedaron 5 pares sin contestar, porque
+// `ColisionOk` es UN string: un ancla que se pisa con tres sólo puede nombrar a una. No es
+// negligencia — es el techo de la clave, y el resto queda como el aviso que esta guarda quiere.
+// Y DE 83 A 3 EL 2026-09-21, QUE ES EL FONDO DE ESTA CUENTA: las ochenta y una anclas de la COLA
+// LARGA —lo que quedaba después de los lotes grandes, repartido en 62 archivos con una a cuatro
+// anclas cada uno—. 74 sabotajes corridos con la herramienta real: 74 en ROJO, 0 verdes, 0 sin
+// veredicto, 0 motivos repetidos. El corpus queda en 98,3 % ejecutable.
+//
+// LAS DOS QUE QUEDAN NO SON OLVIDO: cayeron fuera del reparto por superficies. La tercera se
+// cobró acá mismo, y enseña algo del instrumento: su `de` —«cp -a "$RESPALDO" "$BASE"»— aparece DOS
+// veces en `redesplegar-cerebro.sh`, la sentencia real y una cita adentro de un comentario. La
+// PRUEBA no ve la segunda, porque lee por el filtro que blanquea las líneas que empiezan con `#`;
+// EL ARNÉS SÍ, porque sabotea el archivo CRUDO. Único en el código no es único en el disco, y el
+// `de` se ancla contra lo que ve el arnés: se le sumó la línea de arriba como contexto y quedó en
+// ROJO con el motivo suyo («la vuelta atrás no restaura la BASE»).
+//
+// EL BARRIDO MIDIÓ EL CORPUS EQUIVOCADO LA PRIMERA VEZ, Y DIO PERFECTO. Los cuatro worktrees de
+// barrido se crearon desde la RAMA con las directivas todavía SIN COMMITEAR, así que salieron sin
+// una sola: los 27 rojos que devolvió eran de anclas preexistentes que caían en los mismos rangos
+// de índice. No lo dijo ningún error — lo dijeron dos detalles que no cerraban: un «rojo
+// sospechoso» cuyo `archivo=` no era ninguno de los objetivos, y números de línea que no coincidían
+// con el listado propio, siendo la diferencia justamente las líneas que las directivas insertan.
+// Antes de barrer en un worktree recién creado, `grep -c` de un texto de tu directiva tiene que dar
+// 1. Commitear primero; el commit es lo único que viaja.
+//
+// Y GOFMT VOLVIÓ A CORROMPER DOS DIRECTIVAS, convirtiendo un par de comillas simples en una comilla
+// tipográfica de cierre, dentro del comentario. (No se escriben acá los caracteres porque gofmt
+// haría con este párrafo exactamente lo que el párrafo denuncia: se comprobó, quiso reescribirlo.)
+// Las dos
+// saboteaban SQL con una cadena vacía. `-validar` las denunció («el `de` … YA NO ESTÁ»), y el
+// arreglo fue elegir otro punto de corte SIN comillas simples — que de paso resolvió once
+// colisiones, porque el `de` viejo era tan grueso que lo pisaba todo lo que tocara `migrations.go`.
+// Regla: ninguna comilla simple en un `de` ni en un `a`, y `-validar` después de cada `gofmt -w`.
+//
+// SOBRE LA DIRECCIÓN DE `colision_ok`, que es una precisión al párrafo de más arriba: la respuesta
+// va en el AGRESOR. El aviso lo dice —«X pisa a Y» significa que el `a` de X rompe el `de` de Y— y
+// ponerla en Y produce una RANCIA. Lo de «declarar de los dos lados» vale cuando el censo denuncia
+// LAS DOS direcciones, que es lo normal cuando cada `a` destruye el `de` del otro; cuando denuncia
+// una sola, declarar la otra es afirmar que alguien miró algo que nadie miró. Se cuentan las
+// direcciones que el aviso imprime y se declaran exactamente ésas.
+//
+// Y EL CORPUS CAMBIÓ SIN QUE EL NÚMERO SE MOVIERA, el mismo 2026-09-21. Hasta ese día el censo
+// enumeraba `*_test.go` y nada más, así que este techo y la «cobertura ejecutable» eran propiedades
+// de los `_test.go` y se leían como propiedades del ÁRBOL. No lo eran: `cmd/musubi/precheck.go`
+// llevaba dos anclas que el instrumento no contaba ni podía contar, y una de ellas —«mover la
+// apertura antes de leerEventoPrecheck»— era la ÚNICA promesa de
+// `TestPrecheckNoAbreLaBaseSiNoLeToca`, que no tiene ancla propia. Es la misma forma que las dos
+// entradas de más arriba sobre los filtros por REDACCIÓN, salvo que acá el filtro era por
+// UBICACIÓN, que sale más barato de creer porque nadie lo escribe en el número.
+//
+// Con el enumerador abierto a todos los `.go` trackeados: +2 anclas de producción, −1 (la de
+// `avisoSinGrafo` era una promesa YA CUMPLIDA del lado de la prueba y se reescribió como
+// referencia; dejarla puesta contaba dos veces la misma guarda) y −1 (la de `precheckHook` se
+// mecanizó). El mismo número por cuatro movimientos y no por quietud.
+//
+// Y DE 2 A 1 EL MISMO DÍA, QUE ES LA ÚLTIMA QUE SE PODÍA BAJAR SIN UN PROMETHEUS DE VERDAD. La que
+// bajó no era un ancla sin escribir: su sabotaje estaba escrito TRES RENGLONES MÁS ABAJO y muerto.
+// `internal/mcp/aviso_test.go` tiene dos anclas en un mismo bloque de comentario, y las cuatro
+// directivas de la PRIMERA quedaron un renglón por DEBAJO de la segunda, que lleva `no_mecanizable`.
+// El alcance de un ancla termina donde empieza la siguiente, así que se las quedó la exenta, y la
+// exención devuelve temprano y se lleva puesto todo lo demás: el ancla de arriba figuraba «EN PROSA
+// Y NADA MÁS» con su directiva completa a la vista. Movidas de lado, el sabotaje da ROJO con motivo
+// propio («no se encoló ningún aviso … `avisa` sigue prometiendo una notificación que no viaja»).
+//
+// LA QUE QUEDA NO ES OLVIDO: `TestContraUnPrometheusDeVerdadAceptaElSobreYQuedaConsultable` se
+// saltea sin `MUSUBI_OTLP_REAL`, así que su directiva se podría escribir con `env=` pero NADIE la
+// habría visto en rojo. Una directiva sin verificar es la clase de cobertura que este arnés existe
+// para no contar.
+const anclasEnProsaAlDia = 1
 
 // holguraDelTecho es cuánto se deja bajar antes de exigir que el techo se ajuste.
 //
@@ -600,6 +878,30 @@ func TestLaDeudaDeSabotajesNoCreceYElCorpusNoSePodre(t *testing.T) {
 		t.Errorf("%d directiva/s `arnes:` no se pueden leer. NO cuentan como mecanizadas a propósito: "+
 			"una directiva ilegible que se cuenta como cubierta hace subir la cobertura con sabotajes "+
 			"que nadie puede correr.\n  %s", len(rotas), strings.Join(lineas, "\n  "))
+	}
+
+	// LOS OTROS DOS CANALES DE ALARMA, QUE HASTA HOY SÓLO SALÍAN POR EL CLI.
+	//
+	// El censo tiene CUATRO formas de decir «acá hay un agujero» —`SinUbicar`, `Rotas`, `Huerfanas`
+	// y `Quejas`— y esta guarda, que es la única que corre en CI, miraba dos. Medido el 2026-09-21:
+	// el CLI denunciaba una directiva muerta en `internal/mcp/aviso_test.go:94` y esta prueba pasaba
+	// en VERDE. Un aviso que sólo existe cuando alguien corre la herramienta a mano no es una guarda:
+	// es documentación con suerte.
+	//
+	// `Huerfanas` son líneas `// arnes:` que no cuelgan de ningún ancla — escritas, con el trabajo
+	// hecho, y sin correr nunca. `Quejas` junta eso con los archivos que el lector NO PUDO PARSEAR,
+	// que es el caso peor: un archivo invisible para el censo no baja la cobertura, la desaparece.
+	if len(c.Huerfanas) > 0 {
+		t.Errorf("%d línea/s `// arnes:` NO cuelgan de ningún ancla, así que NO EXISTEN para esta "+
+			"herramienta: el sabotaje está escrito y no se corre, y la cobertura sube igual. Dales "+
+			"una línea propia que empiece con «Sabotaje» arriba de ellas.\n  %s",
+			len(c.Huerfanas), strings.Join(c.Huerfanas, "\n  "))
+	}
+
+	if len(c.Quejas) > 0 {
+		t.Errorf("el censo juntó %d queja/s. Cada una es un archivo que no pudo leer o una directiva "+
+			"que no pudo interpretar, y las dos se ven desde afuera como «este archivo no promete "+
+			"nada»:\n  %s", len(c.Quejas), strings.Join(c.Quejas, "\n  "))
 	}
 
 	// LOS SABOTAJES QUE SE PISAN SE INFORMAN Y NO FALLAN, y la distinción la enseñó la medición.

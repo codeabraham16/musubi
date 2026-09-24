@@ -13,6 +13,9 @@ import (
 //
 // Sabotaje: agregar los servicios antes que la máquina → con más de TerminosMax servicios, el
 // nombre de la máquina queda afuera y el contexto pierde su único enlace garantizado.
+// arnes: archivo="internal/fleet/contexto.go"
+// arnes: de="\tagregar(device, TerminoDeMaquina)\n\tfor _, s := range declarados {\n\t\tagregar(s, TerminoDeServicio)\n\t}\n\tfor _, s := range reportados {\n\t\tagregar(s, TerminoDeServicio)\n\t}\n"
+// arnes: a="\tfor _, s := range declarados {\n\t\tagregar(s, TerminoDeServicio)\n\t}\n\tfor _, s := range reportados {\n\t\tagregar(s, TerminoDeServicio)\n\t}\n\tagregar(device, TerminoDeMaquina)\n"
 func TestElNombreDeLaMaquinaSiempreEsUnTermino(t *testing.T) {
 	muchos := make([]string, 0, TerminosMax+10)
 	for i := 0; i < TerminosMax+10; i++ {
@@ -35,6 +38,9 @@ func TestElNombreDeLaMaquinaSiempreEsUnTermino(t *testing.T) {
 // el nombre completo no encuentra nada y el vacío se lee como «no hay nada escrito sobre nginx».
 //
 // Sabotaje: no sacar el sufijo → falla acá.
+// arnes: archivo="internal/fleet/contexto.go"
+// arnes: de="\t\t\tif strings.HasSuffix(strings.ToLower(texto), sufijo) {\n"
+// arnes: a="\t\t\tif strings.HasPrefix(strings.ToLower(texto), sufijo) {\n"
 func TestElSufijoDeUnidadNoLlegaALaBusqueda(t *testing.T) {
 	ts := TerminosDeContexto("pc", nil, []string{"nginx.service", "backup.timer", "api.altura"})
 	textos := map[string]bool{}
@@ -59,6 +65,9 @@ func TestElSufijoDeUnidadNoLlegaALaBusqueda(t *testing.T) {
 // dos consultas idénticas devuelven cada acierto dos veces con dos enlaces que dicen lo mismo.
 //
 // Sabotaje: deduplicar sensible a mayúsculas → falla acá.
+// arnes: archivo="internal/fleet/contexto.go"
+// arnes: de="\t\tclave := strings.ToLower(texto)\n"
+// arnes: a="\t\tclave := texto\n"
 func TestLosTerminosNoSeRepiten(t *testing.T) {
 	ts := TerminosDeContexto("nginx", nil, []string{"nginx", "NGINX.service", "Nginx"})
 	if len(ts) != 1 {
@@ -114,6 +123,10 @@ func TestLosHuecosDelContextoDicenQueNoEsCausa(t *testing.T) {
 // alguien escribió algo alguna vez.
 //
 // Sabotaje: recorrer los reportados antes que los declarados → falla acá.
+// arnes: colision_ok="TestElNombreDeLaMaquinaSiempreEsUnTermino"
+// arnes: archivo="internal/fleet/contexto.go"
+// arnes: de="\tfor _, s := range declarados {\n\t\tagregar(s, TerminoDeServicio)\n\t}\n\tfor _, s := range reportados {\n\t\tagregar(s, TerminoDeServicio)\n\t}\n"
+// arnes: a="\tfor _, s := range reportados {\n\t\tagregar(s, TerminoDeServicio)\n\t}\n\tfor _, s := range declarados {\n\t\tagregar(s, TerminoDeServicio)\n\t}\n"
 func TestUnServicioDeclaradoGanaLaRanuraAntesQueUnaUnitDelSistema(t *testing.T) {
 	reportados := make([]string, 0, TerminosMax+5)
 	for i := 0; i < TerminosMax+5; i++ {

@@ -91,11 +91,17 @@ func bloqueDelWatchdog(t *testing.T) string {
 // destapó al escribirla.
 //
 // POR QUÉ CORRER Y NO GREPEAR. La versión anterior pedía que los literales «rojo », «ok » y
-// «dudoso » estuvieran en el bloque. Sabotaje medido: borrando ENTERO el
-// `for palabra in $WD_YO; do [ "$palabra" = "$WD_HOST" ] && WD_ADENTRO=1; done` —o sea la única
-// línea que COMPARA— los tres literales seguían ahí y el paquete entero quedaba en verde. Con ese
-// sabotaje puesto, un watchdog apuntado al hostname propio del cerebro (no a `localhost`, que el
-// `case` sí atrapa) se reporta `ok`. Es el dead-man adentro del cajón con una guarda que lo tapa.
+// «dudoso » estuvieran en el bloque. Borrando la única línea que COMPARA, los tres literales
+// seguían ahí y el paquete entero quedaba en verde. Con ese sabotaje puesto, un watchdog apuntado
+// al hostname propio del cerebro (no a `localhost`, que el `case` sí atrapa) se reporta `ok`. Es
+// el dead-man adentro del cajón con una guarda que lo tapa.
+//
+// Sabotaje que la hace fallar: neutralizar la comparación `[ "$palabra" = "$WD_HOST" ]` del lazo
+// sobre `$WD_YO`. Se reemplaza por `:` y no se borra la línea: un `for … do done` con el cuerpo
+// vacío no es bash válido, así que borrarla daría un rojo de SINTAXIS y no del invariante.
+// arnes: archivo="deploy/verificar-despliegue.sh"
+// arnes: de="    [ \"$palabra\" = \"$WD_HOST\" ] && WD_ADENTRO=1\n"
+// arnes: a="    :\n"
 //
 // EL CASO QUE APARECIÓ AL EJERCITARLO, y que ninguna lectura había visto: con `WD_YO` VACÍO
 // —el ssh no anduvo, o `hostname` no está— el `for` daba cero vueltas, `WD_ADENTRO` se quedaba en

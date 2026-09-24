@@ -318,6 +318,9 @@ func (p *prometheusDeMentira) consultar(w http.ResponseWriter, req *http.Request
 // nombre que no termina en `_bytes`— y exige que renombre.
 //
 // Sabotaje que la hace fallar: hacer que nombreNormalizadoPorUnidad devuelva el nombre tal cual.
+// arnes: archivo="internal/mcp/otlp_prometheus_de_mentira_test.go"
+// arnes: de="func nombreNormalizadoPorUnidad(nombre, unidad string) (string, error) {\n\tif unidad == \"\" {\n"
+// arnes: a="func nombreNormalizadoPorUnidad(nombre, unidad string) (string, error) {\n\tif unidad == \"\" || true {\n"
 func TestElReceptorOTLPDeMentiraRenombraLaSerieCuandoLaUnidadNoEstaEnElNombre(t *testing.T) {
 	prom := nuevoPrometheusDeMentira(t)
 	sobre := `{"resourceMetrics":[{"scopeMetrics":[{"metrics":[{"name":"musubi_fleet_device_up","unit":"By",` +
@@ -345,6 +348,9 @@ func TestElReceptorOTLPDeMentiraRenombraLaSerieCuandoLaUnidadNoEstaEnElNombre(t 
 // tiene que poder producirlo para que la cadena entera se ejercite contra él.
 //
 // Sabotaje que la hace fallar: atender cualquier POST en el doble en vez de sólo pathOTLPDePrometheus.
+// arnes: archivo="internal/mcp/otlp_prometheus_de_mentira_test.go"
+// arnes: de="\t\tcase req.Method == http.MethodPost && req.URL.Path == pathOTLPDePrometheus:\n"
+// arnes: a="\t\tcase req.Method == http.MethodPost:\n"
 func TestElReceptorOTLPDeMentiraContesta404EnElPathEquivocado(t *testing.T) {
 	prom := nuevoPrometheusDeMentira(t)
 	resp, err := http.Post(prom.URL+"/api/v1/otlp/metrics", "application/json", strings.NewReader(`{}`))

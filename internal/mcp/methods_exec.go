@@ -43,7 +43,6 @@ const (
 	bitacoraTopeMax     = 200
 )
 
-// toolFleetExec encola un comando y espera su resultado hasta el timeout.
 // ventanaDeAvisoDeExec es cuánto calla el aviso de `avisa` después de haber avisado, por máquina.
 //
 // Una hora y no cinco minutos: el aviso responde «¿alguien está trabajando en mi máquina?», y esa
@@ -135,6 +134,7 @@ func (s *McpServer) encolarAvisoDeExecConVentana(d fleet.Device, p *Principal) {
 	s.encolarAvisoDeAcceso(d, p, avisoExec)
 }
 
+// toolFleetExec encola un comando y espera su resultado hasta el timeout.
 func (s *McpServer) toolFleetExec(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	p := principalFrom(ctx)
 	var args struct {

@@ -130,6 +130,9 @@ func TestDesignAbstieneBajoElPiso(t *testing.T) {
 // SABOTAJE de I-ABS1 en la otra dirección: si el piso fuera inofensivo, subirlo por encima de TODOS
 // los candidatos de un pedido bueno no cambiaría nada. Tiene que abstener igual — así el test no pasa
 // por casualidad de los números elegidos.
+// arnes: archivo="internal/mcp/methods_design.go"
+// arnes: de="\t\tif s.sim >= piso {"
+// arnes: a="\t\tif s.sim >= piso/2 {"
 func TestDesignElPisoMuerdeEnLasDosDirecciones(t *testing.T) {
 	casos := []struct {
 		nombre  string

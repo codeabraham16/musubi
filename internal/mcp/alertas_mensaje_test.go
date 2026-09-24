@@ -135,6 +135,9 @@ func unaAlerta(st string, inicio time.Time, extra map[string]string) alertaDePru
 // fuera una buena noticia.
 //
 // Sabotaje: sacar el `{{ if eq .Status "firing" }}` de la primera línea → falla acá.
+// arnes: archivo="deploy/prometheus/alertmanager.yml"
+// arnes: de="{{ if eq .Status \"firing\" }}🔴 EMPIEZA{{ else }}✅ SE RESOLVIÓ{{ end }}"
+// arnes: a="🔴 EMPIEZA"
 func TestUnaAlertaResueltaNoSeLeeIgualQueUnaQueEmpieza(t *testing.T) {
 	tpl := plantillaDeTelegram(t)
 	inicio := time.Date(2026, 9, 2, 3, 12, 0, 0, time.UTC)
@@ -244,6 +247,9 @@ func TestUnGrupoNoRepiteLaCabeceraPorCadaAlerta(t *testing.T) {
 //
 // Sabotaje: sacar el `{{ if .CommonLabels.severity }}` → falla en la comprobación de `<no value>`
 // que hace `rendir`.
+// arnes: archivo="deploy/prometheus/alertmanager.yml"
+// arnes: de="{{ if .CommonLabels.severity }}{{ .CommonLabels.severity }}{{ else }}severidad mixta{{ end }}"
+// arnes: a="{{ .CommonLabels.severity }}"
 func TestUnGrupoConSeveridadesDistintasNoImprimeBasura(t *testing.T) {
 	tpl := plantillaDeTelegram(t)
 	inicio := time.Date(2026, 9, 2, 3, 12, 0, 0, time.UTC)

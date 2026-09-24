@@ -95,6 +95,9 @@ func exprDeAlerta(a archivoDeReglas, alerta string) (string, bool) {
 // arreglando algo— o, peor, alguien la "arregla" bajando el número y la custodia deja de custodiar.
 //
 // Sabotaje: agregar una alerta a cualquiera de los dos archivos sin tocar el número del otro.
+// arnes: archivo="deploy/musubi-alerts-flota.yml"
+// arnes: de="      - alert: ReglasDelCerebroSinDesplegar"
+// arnes: a="      - alert: ReglasFantasma\n        expr: vector(0) > 1\n        labels: { severity: warning }\n      - alert: ReglasDelCerebroSinDesplegar"
 func TestCadaArchivoDeReglasCustodiaElConteoDelOtro(t *testing.T) {
 	base, _ := cargarReglas(t, "musubi-alerts.yml")
 	flota, _ := cargarReglas(t, "musubi-alerts-flota.yml")
@@ -146,7 +149,25 @@ func TestCadaArchivoDeReglasCustodiaElConteoDelOtro(t *testing.T) {
 // dos. Si la de un archivo matchea también al otro, los conteos se suman y la custodia compara
 // contra un total que no es el de nadie: pasa a estar rota en verde.
 //
-// Sabotaje: sacarle el `\\.` o el `;` a cualquiera de las dos regex → falla acá.
+// LOS DOS CORTES QUE ESTE COMENTARIO PROMETÍA NO CORTAN NADA, medido el 2026-09-21 contra las seis
+// etiquetas de abajo. Decía «sacarle el `\\.` o el `;` a cualquiera de las dos regex → falla acá», y
+// las dos lecturas quedan en VERDE en las tres alertas.
+//
+// Desescapar el punto (`.*musubi-alerts\\.yml;.*` → `.*musubi-alerts.yml;.*`) selecciona las mismas
+// dos etiquetas y ninguna ajena: el `.` comodín igual necesita `yml;` justo después, y en la otra
+// ruta lo que sigue a `musubi-alerts` es `-flota.yml;`. Sacarle el `;` tampoco cambia nada, y por
+// la razón que el párrafo de arriba ya dice bien — `musubi-alerts.yml` no es prefijo de
+// `musubi-alerts-flota.yml`, así que acá el separador no desambigua y quitarlo no suma un grupo ajeno.
+//
+// El corte que sí ejercita esta guarda es el de ese párrafo: ENSANCHAR el matcher a
+// `.*musubi-alerts.*`, que agarra los cinco grupos de los dos archivos. Ése es el que se mecaniza.
+// (Borrar el `\\.` entero —`musubi-alertsyml`— también da rojo, pero por la OTRA rama: selecciona
+// cero grupos y la denuncia pasa a ser «la custodia queda muda», no «los conteos se suman».)
+//
+// Sabotaje: ensanchar una de las dos regex a `.*musubi-alerts.*`, que agarra los dos archivos.
+// arnes: archivo="deploy/musubi-alerts-flota.yml"
+// arnes: de="absent(sum(prometheus_rule_group_rules{rule_group=~\".*musubi-alerts\\\\.yml;.*\"}))"
+// arnes: a="absent(sum(prometheus_rule_group_rules{rule_group=~\".*musubi-alerts.*\"}))"
 func TestLaCustodiaNoConfundeUnArchivoDeReglasConElOtro(t *testing.T) {
 	base, _ := cargarReglas(t, "musubi-alerts.yml")
 	flota, _ := cargarReglas(t, "musubi-alerts-flota.yml")
@@ -228,6 +249,9 @@ func TestLaCustodiaNoConfundeUnArchivoDeReglasConElOtro(t *testing.T) {
 // `deploy/verificar-despliegue.sh`.
 //
 // Sabotaje: borrar la línea `# despliegue:` de cualquiera de los cuatro archivos.
+// arnes: archivo="deploy/musubi-alerts-backup-offhost.yml"
+// arnes: de="# despliegue: condicional"
+// arnes: a="# sin marca de despliegue:"
 func TestCadaArchivoDeReglasDeclaraCuandoSeDespliega(t *testing.T) {
 	rutas, err := filepath.Glob(filepath.Join("..", "..", "deploy", "musubi-alerts*.yml"))
 	if err != nil || len(rutas) < 4 {
@@ -261,6 +285,11 @@ func TestCadaArchivoDeReglasDeclaraCuandoSeDespliega(t *testing.T) {
 // falta una métrica suya.
 //
 // Sabotaje: agregar un `job_name:` a prometheus.yml sin sumarlo a la alerta → falla acá.
+// arnes: archivo="deploy/prometheus/prometheus.yml"
+// arnes: de="  - job_name: prometheus"
+// arnes: a="  - job_name: prometheus\n  - job_name: job-fantasma\n    static_configs:\n      - targets: [\"127.0.0.1:9999\"]"
+// arnes: arreglo_de="  - job_name: prometheus"
+// arnes: arreglo_a="  - job_name: 'prometheus'"
 func TestLosJobsVigiladosSonLosQueElRepoDeclara(t *testing.T) {
 	cfg := leerDeploy(t, "prometheus", "prometheus.yml")
 
@@ -486,39 +515,6 @@ func TestElPinDelGuionDeRedespliegueEsElVerdadero(t *testing.T) {
 	}
 }
 
-// TestCadaGuionQueSeInstalaEnElServidorSeCompara — que la tabla de guiones derivados no se quede
-// corta cuando alguien agregue el tercero (A111).
-//
-// EL CABO ES DE UN PISO MÁS ARRIBA QUE EL DE A111. Arreglar la deriva del redespliegue agregando
-// una fila a mano en `verificar-despliegue.sh` deja el mismo agujero para el PRÓXIMO guion: una
-// lista escrita a mano no tiene cómo enterarse de que apareció un archivo nuevo. Es el defecto de
-// A93 —`verificar-cobertura.sh` con su lista de archivos a mano y el argumento contra las listas a
-// mano escrito al lado— y no se cierra escribiendo mejor la lista, se cierra derivándola.
-//
-// LA FUENTE MECÁNICA ES EL INSTALADOR, Y LA LISTA DE INSTALADORES TAMBIÉN SE DERIVA. Todo lo que
-// llega al servidor con `install` está declarado en un guion, con su destino. La versión anterior
-// de esta prueba leía UN instalador —`install-musubi-brain.sh`, nombrado a mano— y ahí quedaba su
-// propio agujero: `redesplegar-cerebro.sh` TAMBIÉN tiene un `install -m` (línea 132), corre en el
-// servidor con `sudo`, y un segundo `install` ahí habría llegado sin que nada lo cruzara contra su
-// fuente, con esta guarda en verde. Es la lección de N-1 de N caminos, adentro de la guarda escrita
-// para cerrarla.
-//
-// EL CONJUNTO CORRECTO SE DERIVA DE LA TABLA. Los guiones que corren EN el servidor del cerebro son
-// exactamente los que `GUIONES_DERIVADOS` declara que se instalan allá. Así que los instaladores a
-// mirar son: el instalador raíz, más cada `.sh` del lado izquierdo de la tabla. Si mañana alguien
-// agrega un tercer guion a la tabla, entra a este barrido SOLO. No hay lista que actualizar.
-//
-// Los otros `install -m` del repo (`deploy/prometheus/install-musubi-prometheus.sh`,
-// `deploy/docker/preparar.sh`, `deploy/rustdesk/preparar.sh`) quedan afuera por una razón y no por
-// olvido: ninguno se instala en el servidor del cerebro —se corren a mano desde el repo, sobre otros
-// roles— y lo que SÍ depositan desde el repo son archivos de reglas, que `verificar-despliegue.sh`
-// compara por su propio camino (el barrido de `$DIR_REGLAS_ALLA`, no esta tabla).
-//
-// Y NO SE CUENTA LO QUE MATCHEÓ, SE EXIGE QUE NO QUEDE NINGUNO SIN PARSEAR. Una guarda que enumera
-// formas no converge: el día que un `install` se escriba distinto, un regex que sólo cuenta sus
-// aciertos mira hacia otro lado y se queda en verde. Acá cada línea de CÓDIGO que diga `install -m`
-// tiene que resolverse a un destino; una que no se pueda parsear es un ROJO que pide enseñarle la
-// forma nueva, no un silencio.
 // filaDerivada es una fila de GUIONES_DERIVADOS ya partida: el archivo del repo y su destino en el
 // servidor.
 type filaDerivada struct{ rel, destino string }
@@ -584,6 +580,40 @@ func rutasAsignadasEn(crudo []byte, soloLiterales bool) map[string]string {
 	return fuera
 }
 
+// TestCadaGuionQueSeInstalaEnElServidorSeCompara — que la tabla de guiones derivados no se quede
+// corta cuando alguien agregue el tercero (A111).
+//
+// EL CABO ES DE UN PISO MÁS ARRIBA QUE EL DE A111. Arreglar la deriva del redespliegue agregando
+// una fila a mano en `verificar-despliegue.sh` deja el mismo agujero para el PRÓXIMO guion: una
+// lista escrita a mano no tiene cómo enterarse de que apareció un archivo nuevo. Es el defecto de
+// A93 —`verificar-cobertura.sh` con su lista de archivos a mano y el argumento contra las listas a
+// mano escrito al lado— y no se cierra escribiendo mejor la lista, se cierra derivándola.
+//
+// LA FUENTE MECÁNICA ES EL INSTALADOR, Y LA LISTA DE INSTALADORES TAMBIÉN SE DERIVA. Todo lo que
+// llega al servidor con `install` está declarado en un guion, con su destino. La versión anterior
+// de esta prueba leía UN instalador —`install-musubi-brain.sh`, nombrado a mano— y ahí quedaba su
+// propio agujero: `redesplegar-cerebro.sh` TAMBIÉN tiene un `install -m` (línea 132), corre en el
+// servidor con `sudo`, y un segundo `install` ahí habría llegado sin que nada lo cruzara contra su
+// fuente, con esta guarda en verde. Es la lección de N-1 de N caminos, adentro de la guarda escrita
+// para cerrarla.
+//
+// EL CONJUNTO CORRECTO SE DERIVA DE LA TABLA. Los guiones que corren EN el servidor del cerebro son
+// exactamente los que `GUIONES_DERIVADOS` declara que se instalan allá. Así que los instaladores a
+// mirar son: el instalador raíz, más cada `.sh` del lado izquierdo de la tabla. Si mañana alguien
+// agrega un tercer guion a la tabla, entra a este barrido SOLO. No hay lista que actualizar.
+//
+// Los otros `install -m` del repo (`deploy/prometheus/install-musubi-prometheus.sh`,
+// `deploy/docker/preparar.sh`, `deploy/rustdesk/preparar.sh`) quedan afuera por una razón y no por
+// olvido: ninguno se instala en el servidor del cerebro —se corren a mano desde el repo, sobre otros
+// roles— y lo que SÍ depositan desde el repo son archivos de reglas, que `verificar-despliegue.sh`
+// compara por su propio camino (el barrido de `$DIR_REGLAS_ALLA`, no esta tabla).
+//
+// Y NO SE CUENTA LO QUE MATCHEÓ, SE EXIGE QUE NO QUEDE NINGUNO SIN PARSEAR. Una guarda que enumera
+// formas no converge: el día que un `install` se escriba distinto, un regex que sólo cuenta sus
+// aciertos mira hacia otro lado y se queda en verde. Acá cada línea de CÓDIGO que diga `install -m`
+// tiene que resolverse a un destino; una que no se pueda parsear es un ROJO que pide enseñarle la
+// forma nueva, no un silencio.
+//
 // MECANIZADA. El sabotaje es sacar una fila de GUIONES_DERIVADOS: un guion que el instalador
 // deposita en el servidor deja de compararse contra el repo, que es el defecto A111 original.
 // Medido: la prueba nombra al culpable con archivo y linea («install-musubi-brain.sh instala

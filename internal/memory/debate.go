@@ -85,7 +85,7 @@ const (
 	EvidenciaNinguna = "ninguna"
 )
 
-// evidenciaValida acepta sólo las tres clases. Una cuarta cadena cualquiera pasaría por
+// claseEvidenciaValida acepta sólo las tres clases. Una cuarta cadena cualquiera pasaría por
 // la compuerta como si fuera evidencia real, así que el conjunto es cerrado.
 // OJO: en este mismo paquete hay otra familia Evidencia* (skillusage.go: Alcance, Glob,
 // Comodin) que es OTRO vocabulario, de otro subsistema. Por eso el validador lleva

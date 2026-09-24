@@ -18,6 +18,9 @@ import (
 // TestCadaRunbookDeUnaAlertaApuntaAUnaSeccionQueExiste recorre las reglas y verifica el ancla.
 //
 // Sabotaje que la hace fallar: renombrar una sección del RUNBOOK sin tocar la regla que la cita.
+// arnes: archivo="deploy/RUNBOOK.md"
+// arnes: de="## MantenimientoEterno\n"
+// arnes: a="## MantenimientoPerpetuo\n"
 func TestCadaRunbookDeUnaAlertaApuntaAUnaSeccionQueExiste(t *testing.T) {
 	reglas := []byte(reglasDeAlerta(t))
 	runbook, err := leerArchivoDeDespliegue("../../deploy/RUNBOOK.md")
@@ -98,6 +101,9 @@ func reglasDeAlerta(t *testing.T) string {
 // la default: se envía por el canal equivocado, o con la cadencia equivocada, sin que nada falle.
 //
 // Sabotaje que la hace fallar: duplicar el nombre de una alerta, o quitarle su severity.
+// arnes: archivo="deploy/musubi-alerts-flota.yml"
+// arnes: de="      - alert: AllowlistDeFlotaRechazando\n        expr: increase(musubi_tool_rejections_total{reason=\"fleet_allowlist\"}[1h]) > 5\n"
+// arnes: a="      - alert: PoliticaSinPermiso\n        expr: increase(musubi_tool_rejections_total{reason=\"fleet_allowlist\"}[1h]) > 5\n"
 func TestLasAlertasTienenNombreUnicoYSeveridadDeclarada(t *testing.T) {
 	texto := reglasDeAlerta(t)
 
@@ -176,6 +182,9 @@ func TestElDeadMansSwitchSigueSiendoIncondicional(t *testing.T) {
 // un nombre: fijarlo obligaba a elegir entre tener el guarda o poder declarar que no hay watchdog.
 //
 // Sabotaje que la hace fallar: borrar la ruta de MusubiSiempreViva, o apuntarla a 'default'.
+// arnes: archivo="deploy/prometheus/alertmanager.yml"
+// arnes: de="      receiver: 'watchdog'\n      group_wait: 0s\n"
+// arnes: a="      receiver: 'default'\n      group_wait: 0s\n"
 func TestElDeadMansSwitchTieneSuPropiaRutaYReceptor(t *testing.T) {
 	b, err := leerArchivoDeDespliegue("../../deploy/prometheus/alertmanager.yml")
 	if err != nil {

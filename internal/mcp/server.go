@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"musubi/internal/codeintel"
 	"musubi/internal/cognition"
 	"musubi/internal/config"
@@ -159,6 +161,17 @@ type McpServer struct {
 	// por tick es exactamente lo que la Ola 0 sacó del camino caliente.
 	vidaDeRed sync.Map
 	engine    memory.StorageBackend
+	// duenoBajada identifica a ESTE proceso ante el candado de la bajada (ver
+	// memory.ReclamarBajada). Es uno por servidor y no el PID: dos servidores en el mismo proceso
+	// —las pruebas— tienen que poder competir por el candado como dos terminales de verdad.
+	duenoBajada string
+	// bajadaCedidaHasta (unix nanos) es hasta cuándo ESTE proceso no reclama la bajada después de un
+	// Pull fallido; intervaloBajada es el tick real del scheduler (0 hasta que arranca); y
+	// cursorBajadaVisto es el último cursor de bajada que este proceso vio, para vectorizar lo que bajó
+	// OTRO. Ver drainInboundOnce.
+	bajadaCedidaHasta atomic.Int64
+	intervaloBajada   atomic.Int64
+	cursorBajadaVisto atomic.Int64
 	// sondaEscritura es el estado del sondeo de ESCRITURA de /readyz (ver observability.go). Vive
 	// acá y no en el handler porque tiene que sobrevivir entre pedidos: es lo que evita lanzar una
 	// goroutine nueva por cada sondeo mientras una escritura está colgada. El cero vale como
@@ -520,6 +533,7 @@ func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder emb
 	estamparProcedenciaDelVector(engine, embedder)
 	s := &McpServer{
 		engine:      engine,
+		duenoBajada: uuid.NewString(),
 		resolver:    skills.NewResolver(projectPath),
 		embedder:    embedder,
 		cognition:   cognition.NoopProvider{},

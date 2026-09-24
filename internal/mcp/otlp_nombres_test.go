@@ -56,6 +56,9 @@ var unidadCanonica = map[string]string{
 //
 // Sabotaje: devolverle `"ms"` a la serie de latencia → falla acá nombrando la serie y el sufijo
 // que le agregarían.
+// arnes: archivo="internal/mcp/fleet_prometheus_servicios.go"
+// arnes: de="\t\t\t// TestNingunaSerieCambiaDeNombreAlEntrarPorOTLP custodia esto para todas.\n\t\t\t\"\",\n"
+// arnes: a="\t\t\t// TestNingunaSerieCambiaDeNombreAlEntrarPorOTLP custodia esto para todas.\n\t\t\t\"ms\",\n"
 func TestNingunaSerieCambiaDeNombreAlEntrarPorOTLP(t *testing.T) {
 	ahora := time.Now()
 	revisar := func(nombre, unidad string) {

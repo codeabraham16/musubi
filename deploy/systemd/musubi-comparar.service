@@ -18,6 +18,27 @@
 # despliegue quedan calladas — que es indistinguible de «todo bien». Por eso existe
 # `ComparacionRepoServidorSinCorrer`: es lo que convierte ese silencio en ruido.
 
+# ⚠️ EL CHECKOUT DEL VIGÍA TIENE QUE SER UN CLON, NO UN WORKTREE DE GIT. Medido el 2026-09-22, y
+# costó 18 horas de ceguera: el `@REPO@` de esta unidad apuntaba a un `git worktree add`, alguien
+# barrió worktrees viejos, y el directorio desapareció. La unidad empezó a salir con `203/EXEC`
+# —«no pude ejecutar el archivo»— en las CUATRO corridas siguientes, o sea que el único aparato
+# que compara el repo contra producción estuvo mudo tres cuartos de día.
+#
+# Un worktree es borrable por cualquier limpieza y `git worktree prune` se lleva su registro
+# detrás; un clon es un directorio común que ninguna herramienta de git barre sola. Se crea así:
+#
+#   git clone <url-del-remoto> ~/musubi-vigia && cd ~/musubi-vigia && git checkout --detach origin/main
+#
+# OJO AL CLONAR DESDE UN DIRECTORIO LOCAL: el clon hereda `origin` = ESA RUTA, no el remoto de
+# verdad. Si queda así, el vigía se pone «al día» contra el checkout del vecino en vez de contra
+# GitHub, y compara producción contra un árbol que nadie eligió. Se arregla con
+# `git remote set-url origin <url-real>` y se COMPRUEBA con `git remote get-url origin`.
+#
+# LO QUE NO SE PUEDE ARREGLAR DESDE ACÁ, y por eso se escribe: si el ejecutable no está, systemd
+# falla ANTES de correr una sola línea del guion, así que ninguna verificación interna alcanza.
+# La única defensa es que el directorio no sea barrible y que `ComparacionRepoServidorSinCorrer`
+# siga armada — fue ella la que delató este caso.
+
 [Unit]
 Description=Compara lo que el repo declara contra lo que el servidor corre, y late
 Documentation=file://%h/musubi/deploy/RUNBOOK.md
@@ -58,23 +79,43 @@ Environment=MUSUBI_ESPERA_RED=300
 # sola nunca, y el día que alguien migrara el transporte nada iba a comprobar que la migración
 # quedó completa.
 #
-# ARRANCA EN 0 A PROPÓSITO Y NO ES UN OLVIDO: hoy el cerebro sirve HTTP en claro (lo cifra el
-# tailnet, no el transporte) y ponerla en 1 dejaría la unidad en rojo todos los días por una
-# postura que está decidida. La decisión de migrar no es de este archivo.
+# ESTÁ EN 1 DESDE EL 2026-09-21, Y ESE DÍA DEJÓ DE SER UNA DECISIÓN PENDIENTE. Hasta entonces
+# valía 0 a propósito: el cerebro escuchaba en claro en `0.0.0.0:7717` y exigir TLS habría dejado
+# la unidad en rojo todos los días por una postura que estaba decidida. Hoy el cerebro escucha
+# SÓLO en `127.0.0.1:7717` y el TLS lo termina `tailscale serve` por delante, así que la exigencia
+# ya no acusa a nadie: se midió corriendo el verificador contra producción con la perilla en 0 y
+# en 1, y las dos corridas dieron el MISMO veredicto.
 #
-# CUÁNDO SE PONE EN 1 — las cuatro cosas, en este orden, y la última es ésta:
-#   1. `tailscale cert <nodo>` en el servidor del cerebro;
-#   2. `tls_cert_file` / `tls_key_file` en su config, y `allow_insecure_token` afuera;
-#   3. `MUSUBI_BRAIN_TLS_NAME` en cada agente de la flota;
+# O SEA QUE PRENDERLA NO CAMBIA NADA HOY, Y ÉSE ES EXACTAMENTE EL PUNTO. Es un trinquete, no un
+# juicio: lo que compra es el día que alguien REVIERTA —desate el cerebro de loopback, o saque el
+# proxy—. Con la perilla en 0 eso sale `~` y la corrida sigue verde; con la perilla en 1 sale
+# ROJO. Un trinquete se prende cuando no cuesta nada, que es el único momento en que se puede.
+#
+# CÓMO SE LLEGÓ ACÁ — el orden real, y NO es el que decía este bloque hasta hoy:
+#   1. `tailscale serve` termina HTTPS por delante y reenvía a `http://127.0.0.1:7717`;
+#   2. el nombre TLS + la URL https en cada cliente del cerebro — que NO son sólo los agentes:
+#      también el `sync` del `.musubi/config.yaml` (`central_url` + `tls_server_name`, #597),
+#      `MUSUBI_CENTRAL_URL` y el `.mcp.json` que lee el editor;
+#   3. el cerebro atado a `127.0.0.1`, para que usar el proxy deje de ser optativo;
 #   4. esta línea a 1.
 #
-# LA QUINTA YA NO BLOQUEA, y se deja escrita porque explica por qué los pasos son cinco y no
-# cuatro: el certificado de `tailscale cert` VENCE CADA 90 DÍAS, y sin renovación el cerebro se
-# apaga solo a los tres meses. Eso ya está resuelto —`musubi-tls-renovar.timer` en el servidor del
-# cerebro, la recarga en caliente en `internal/mcp/tls_recarga.go`, y `CertificadoTLSPorVencer`
-# avisando con tres corridas de margen—, así que lo que queda es la decisión de migrar, que no es
-# de este archivo.
-Environment=MUSUBI_EXIGIR_TLS=0
+# ⚠️ EL PASO 2 DE LA RECETA VIEJA ERA AL REVÉS Y HABRÍA ROTO EL CEREBRO. Decía «`tls_cert_file` /
+# `tls_key_file` en su config, y `allow_insecure_token` afuera», que es la receta para terminar el
+# TLS ADENTRO del cerebro. Con el TLS terminado por delante, el cerebro recibe HTTP en claro por
+# loopback y `allow_insecure_token: true` TIENE QUE QUEDAR — sacarlo lo deja rechazando al propio
+# proxy. La receta vieja sobrevivió porque el verificador la recomendaba, y su recomendación
+# heredaba su punto ciego: leía el config del cerebro, donde un TLS de adelante no se ve.
+#
+# EL VENCIMIENTO A 90 DÍAS NO APLICA POR ESTE CAMINO, y se deja escrito porque la receta vieja lo
+# listaba como quinto paso: el certificado lo administra `tailscale serve`, que lo renueva solo.
+# `musubi-tls-renovar.timer`, la recarga en caliente de `internal/mcp/tls_recarga.go` y
+# `CertificadoTLSPorVencer` cubren el otro camino —el certificado adentro del cerebro— y siguen
+# ahí por si algún día se toma.
+#
+# SI ALGUIEN LA BAJA A 0, SUENA `ExigenciaDeTLSApagada` (deploy/musubi-alerts.yml) a la hora. No
+# puede sonar por estar en 0 desde siempre: sólo dispara si estuvo en 1 antes. Y borrar la línea
+# entera no la esquiva — el latido emite `${MUSUBI_EXIGIR_TLS:-0}`, así que ausente vale 0.
+Environment=MUSUBI_EXIGIR_TLS=1
 ExecStart=@REPO@/deploy/comparar-y-latir.sh
 
 # EL CÓDIGO DE SALIDA 1 NO ES UN FALLO DE LA UNIDAD, Y ESTO IMPORTA.

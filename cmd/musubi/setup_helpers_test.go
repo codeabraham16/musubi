@@ -283,6 +283,9 @@ func TestWriteMCPConfigAbsoluto(t *testing.T) {
 //
 // Sabotaje que la hace fallar: que `workspaceDirConOrigen` devuelva el mismo origen en los tres
 // casos, o que vuelva a preferir CLAUDE_PROJECT_DIR sobre MUSUBI_HOME.
+// arnes: archivo="cmd/musubi/setup.go"
+// arnes: de="\tif home := os.Getenv(\"MUSUBI_HOME\"); home != \"\" {\n\t\treturn home, \"MUSUBI_HOME\"\n\t}\n\tif proj := os.Getenv(\"CLAUDE_PROJECT_DIR\"); proj != \"\" {\n\t\treturn proj, \"CLAUDE_PROJECT_DIR\"\n\t}"
+// arnes: a="\tif proj := os.Getenv(\"CLAUDE_PROJECT_DIR\"); proj != \"\" {\n\t\treturn proj, \"CLAUDE_PROJECT_DIR\"\n\t}\n\tif home := os.Getenv(\"MUSUBI_HOME\"); home != \"\" {\n\t\treturn home, \"MUSUBI_HOME\"\n\t}"
 func TestElOrigenDeLaRaizSeDiceYNoSeAdivina(t *testing.T) {
 	casos := []struct {
 		nombre, musubiHome, claudeDir, raiz, origen string

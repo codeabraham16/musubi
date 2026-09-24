@@ -93,9 +93,6 @@ func (rr *reloadableRegistry) resolve(token string) (*Principal, bool) {
 	return reg.resolve(token)
 }
 
-// porNombre busca en el snapshot vigente (lock-free), igual que resolve. Que las dos preguntas
-// salgan del MISMO snapshot es lo que hace que revocar a alguien en principals.yaml apague, en el
-// mismo instante, tanto su token como las políticas que actuaban en su nombre.
 // impactoDeNombre delega en el snapshot VIGENTE, igual que las otras dos. Que las tres lean el
 // mismo puntero es lo que impide que el informe de impacto de un rename describa un registro que
 // ya no es el que autoriza.
@@ -106,6 +103,9 @@ func (rr *reloadableRegistry) impactoDeNombre(device string) ImpactoDeNombre {
 	return ImpactoDeNombre{}
 }
 
+// porNombre busca en el snapshot vigente (lock-free), igual que resolve. Que las dos preguntas
+// salgan del MISMO snapshot es lo que hace que revocar a alguien en principals.yaml apague, en el
+// mismo instante, tanto su token como las políticas que actuaban en su nombre.
 func (rr *reloadableRegistry) porNombre(nombre string) (*Principal, bool) {
 	reg := rr.cur.Load()
 	if reg == nil {
