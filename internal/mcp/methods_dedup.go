@@ -37,32 +37,40 @@ const (
 	// dedupDefaultFloor es el piso de coseno para proponer un par al juez. Medido en el acervo: las
 	// gemelas reales viven en 0.82-0.89 (los blobs distintos de verdad quedan debajo). El piso es un
 	// FILTRO GRUESO barato; la precisión la pone el juez LLM, así que conviene un piso algo bajo (más
-	// pares a juzgar) antes que perderse gemelas legítimas.
+	// pares a juzgar) antes que perderse gemelas legítimas — SIEMPRE QUE EL JUEZ PONGA ESA PRECISIÓN.
+	// Hoy no la pone, y por eso vale 0.84 y no 0.82.
 	//
-	// HASTA EL 2026-09-23 VALÍA 0.84, Y CONTRADECÍA LA POLÍTICA QUE TIENE ESCRITA ARRIBA. La frase dice
-	// «las gemelas viven desde 0.82» y «antes que perderse gemelas legítimas»; el valor cortaba la
-	// franja 0.82-0.84 entera. Medido ese día corriendo ESTA función (SemanticDuplicateCandidates)
-	// contra una copia del acervo del cerebro —1.523 tarjetas, vectores `ollama:bge-m3`—:
+	// LA FRANJA 0.82-0.84 TIENE GEMELAS: eso quedó medido el 2026-09-23 corriendo ESTA función
+	// (SemanticDuplicateCandidates) contra una copia del acervo del cerebro —1.523 tarjetas, vectores
+	// `ollama:bge-m3`—. Con 0.84 salían 0 candidatos sin juzgar y con 0.82 salían 33, y justo arriba
+	// de la raya (0.84-0.85) el juez fusionaba 6 de 8. #644 bajó el piso a 0.82 con esa evidencia.
 	//
-	//	piso 0.84 -> 0 candidatos sin juzgar: el afilado de fondo ya se había comido todo lo de arriba
-	//	piso 0.82 -> 33 candidatos, que con 0.84 no llegaban NUNCA al juez
+	// Y SE VOLVIÓ A SUBIR AL DÍA SIGUIENTE, PORQUE ESA EVIDENCIA MEDÍA EL LADO EQUIVOCADO. Que haya
+	// gemelas en la franja dice que conviene mandarle esos pares al juez; no dice que el juez los
+	// resuelva bien. Eso se midió el 2026-09-24 con un etiquetado a ciegas pre-registrado: tres
+	// lectores que no sabían qué había decidido el juez, más una réplica del juez corrida tres veces
+	// por par.
 	//
-	// LA PRUEBA DE QUE EL PISO CORTABA GEMELAS Y NO RUIDO no es que haya 33 pares: es cómo decidió el
-	// juez justo arriba de la raya. En la franja más angosta sobre el piso, 0.84-0.85, fusionó 6 de 8.
-	// Si las gemelas se terminaran en 0.84, esa tasa se desplomaría al acercarse al borde; no se
-	// desploma, la corta el piso. Y la muestra de abajo lo confirma a simple vista:
-	// `tamano-objetivo-tactil` | `touch-target-48px` (0.838), `marcar-campos-opcionales` |
-	// `campo-opcional-marcado` (0.832), `contraste-color-texto` | `contraste-4-5-a-1` (0.833) — éste
-	// último, el mismo concepto que el comentario del paquete usa de ejemplo de gemela semántica.
+	//	de las 28 fusiones que el juez YA HABÍA HECHO sobre 0.84, 8 perdieron algo que la otra
+	//	tarjeta no decía (Wilson [0.15, 0.47]); en 7 de esas 8 la A cabía entera en la B y se
+	//	archivó la B, que era la más completa
+	//	en la franja hay 7 gemelas de 33, pero con este juez vienen con ~9,7 fusiones con pérdida
+	//	esperadas
 	//
-	// NO SE BAJÓ MÁS, Y ES A PROPÓSITO. En 0.80-0.82 hay otros 74 pares y nadie midió si son gemelas.
-	// 0.82 es el valor más bajo que la evidencia sostiene; debajo sería adivinar.
+	// La causa de la dirección es de sistema, no de criterio: runDedupBatch archiva SIEMPRE la B, y el
+	// prompt del juez no lo sabe. Le pregunta «¿son la misma lección?», y la pregunta que decide la
+	// pérdida es otra: «¿archivar la B pierde algo?». La regla fijada ANTES de ver las etiquetas decía
+	// que si el juez fusiona con pérdida, 0.82 no se despliega, sea cual sea el beneficio.
+	//
+	// PARA VOLVER A BAJARLO no alcanza con cambiar el prompt: hay que medir el juez nuevo contra las
+	// mismas etiquetas y ver que ya no fusiona con pérdida. La franja no se vuelve segura porque el
+	// juez cambie; se vuelve segura cuando se MIDE que el juez cambió.
 	//
 	// OJO AL TOCARLO: no es sólo el default de la herramienta manual. `sharpenBatchOnce` lo usa en el
 	// afilado de fondo, que en el cerebro está PRENDIDO (`auto_sharpen_pairs: 2`) y fusiona solo. Subir
 	// este número vuelve invisible una franja de gemelas sin que nada falle; bajarlo manda más pares al
 	// juez en un job que corre sin principal, o sea sin cuota de motor por-principal.
-	dedupDefaultFloor = 0.82
+	dedupDefaultFloor = 0.84
 	// dedupDefaultPairs / dedupMaxPairs acotan cuántos pares juzga una tanda. Cada par es una llamada al
 	// motor; la tanda chica mantiene la latencia y la cuota manejables y se corre en bucle.
 	dedupDefaultPairs = 6
