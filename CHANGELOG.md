@@ -72,6 +72,63 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   que suele ser OTRA terminal: ahora, con más de una sesión, se niega y lista las sesiones con la
   hora de su última escritura, que es de donde el agente reconoce la suya. *Ocho invariantes nuevos
   con su sabotaje, los ocho rojos, incluida la vuelta a la marca de casilla única.*
+- **La bajada del central ya tiene candado: dos terminales en el mismo proyecto dejan de bajar lo
+  mismo.** La subida estaba protegida desde siempre —`ClaimOutboxBatch` toma un lease de 60 s— pero
+  la bajada no tenía nada: `drainInboundOnce` leía el cursor con `GetMeta`, lo escribía con
+  `SetMeta` y no reclamaba nada. Con dos terminales abiertas sobre la misma base, las dos bajaban
+  las mismas páginas en cada tick. Medido en el central el 2026-09-23, en 24 h y contra las 2.880
+  consultas que haría UN proceso cada 30 s: **la laptop tiró 4.997 (1,7 procesos) y Altura 4.374
+  (1,5)**.
+
+  Ahora `ReclamarBajada` deja bajar a un solo proceso por base: una sentencia atómica sobre una
+  fila de `meta` (`dueño|vence`) con el vencimiento del reloj de SQLite, igual que el lease del
+  outbox, así que todos los procesos que comparten la base comparten también el reloj. El dueño
+  **renueva** en cada tick en vez de soltar —soltar dejaría que el otro bajara en su tick siguiente
+  y los dos volverían a alternarse—, y si muere, el candado vence solo. El lease dura cuatro ticks
+  con piso de dos minutos: tiene que ganarle al intervalo, o vencería entre ticks y el defecto
+  volvería disfrazado de arreglo. Y `AvanzarCursorBajada` escribe el cursor **monótono en la misma
+  sentencia**: un tick más lento que el lease podía escribir después de que otro tomara el candado,
+  y con `SetMeta` a secas el cursor retrocedía y se re-bajaba lo ya bajado.
+
+  *Nueve invariantes con su sabotaje, los nueve rojos. La prueba de integración cuenta los pedidos
+  que LLEGAN al central —el costo real— y no una variable interna. Dos cosas que la verificación
+  cazó: `AvanzarCursorBajada` tenía prueba unitaria pero **nada comprobaba que el scheduler la
+  llamara** —volver a `SetMeta` no rompía ninguna prueba—, así que se sumó una donde el central falso
+  adelanta el cursor a mitad del tick, simulando a la otra terminal. Y la prueba de dueños con
+  prefijo común **siguió verde con el candado comparando por prefijo**: estaba armada al revés. El
+  agujero real es guardado el largo (`proc-a-otro`) y reclamando el corto, donde
+  `'proc-a-otro|…' LIKE 'proc-a%'` regala el candado ajeno; ahora cubre las dos direcciones.*
+
+  **Y lo que encontró una revisión adversarial antes del merge**, que era grave: el dueño renovaba
+  el candado al EMPEZAR cada tick, antes de ir a la red. Una terminal que falla siempre —el token
+  vencido de una que arrancó antes de rotarlo (`NewSyncClient` lee el token una sola vez), un
+  `central_url` viejo— lo renovaba igual, y **la terminal sana no bajaba nunca más**: reproducido,
+  cinco ticks cada una y la sana hizo cero pedidos. Sin candado la sana bajaba sola, así que el
+  arreglo dejaba las cosas peor que antes. Ahora, si el `Pull` falla, el dueño **suelta** el candado
+  (`SoltarBajada`, sólo si es suyo) y la sana lo toma en su tick siguiente. Y un valor que no tiene la
+  forma `dueño|vence` cuenta como libre: una escritura cortada —un apagón deja archivos en ceros en
+  esta PC— ya no puede trabar la bajada para siempre. *Tres invariantes nuevos con su sabotaje, más
+  los cuatro del reclamo repetidos por el cambio en el `WHERE`: siete de siete rojos. Uno de los
+  repetidos salió VERDE la primera vez, y no por el código: el ancla del sabotaje (`if !ok {`)
+  aparecía tres veces en el archivo y el reemplazo cayó en otra función. Con un ancla única, rojo.*
+
+  **Una segunda revisión encontró que soltar no alcanzaba, y cuatro cosas más.** (1) Soltar sólo
+  cubría las fallas RÁPIDAS: si el `Pull` del dueño muere por *timeout* —30 s, igual que el tick por
+  defecto—, al soltar el tick siguiente ya está encolado en el `Ticker` y lo retoma en microsegundos,
+  y la terminal sana, que tickea en otra fase, lo encontraba tomado siempre: cero pedidos en seis
+  ticks, y en `main` la misma prueba bajaba. Ahora quien falla además **cede dos ticks enteros** sin
+  reclamar. (2) La vectorización de lo bajado dependía del embebedor del dueño: si arrancó léxico,
+  lo bajado quedaba sin vector aunque otra terminal semántica estuviera viva. Ahora quien no es dueño
+  mira el cursor —una lectura local por tick— y si avanzó, vectoriza él. (3) Un cierre ordenado no
+  soltaba el candado, y la terminal que seguía abierta pasaba hasta dos minutos y medio sin bajar: el
+  scheduler lo suelta al salir, y `runDaemon` lo suelta además de forma sincrónica antes de cerrar la
+  base. (4) El dueño renueva **antes de cada página** y corta si otro lo tomó: veinte páginas con su
+  timeout duran más que el lease. (5) Un dueño con `|` trababa el candado para siempre: se rechaza, y
+  el valor se lee desde la derecha —el vencimiento tiene ancho fijo—, así que ni uno viejo traba.
+  *Siete invariantes nuevos con su sabotaje, los siete rojos; las cuatro pruebas de los revisores
+  quedaron como regresión. Uno documentado como no custodiado a propósito: leer el dueño por el
+  primer `|` o desde la derecha es equivalente para dueños válidos. El `SoltarBajada` sincrónico de
+  `runDaemon` no tiene prueba propia: es el cinturón del que suelta el scheduler, que sí la tiene.*
 - **El sync saliente ya puede apuntar a la IP del tailnet: el nombre TLS va en el config, al lado
   de la URL** (clave nueva `sync.tls_server_name`). El certificado del cerebro en `:10000` lleva
   sólo `DNS:musubi-server.tail89e295.ts.net`, sin SAN de IP, y con NordVPN el MagicDNS no resuelve,
