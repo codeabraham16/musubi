@@ -147,14 +147,6 @@ func atributosOTLP(d fleet.Device) []otlpAtributo {
 	return out
 }
 
-// armarPayloadOTLP construye el sobre con lo que `p` —y sólo `p`— puede ver.
-//
-// `ahora` es UN SOLO RELOJ: el mismo con el que se decide `up` es el que sella todos los puntos.
-// Con dos llamadas a time.Now() el sello y la decisión se separan por lo que tarde el barrido, y
-// una máquina puede quedar marcada viva con un punto que dice otra cosa.
-//
-// Devuelve cuerpo nil (sin error) cuando no hay NADA que mandar: un sobre con cero métricas es un
-// POST que no dice nada, y el gauge musubi_push_datapoints en 0 ya cuenta esa historia.
 // atributosDeServicioOTLP son los mismos labels que usa el scrape, en el sobre de OTLP.
 //
 // Sale de labelsDeServicio y no de una segunda lista: dos juegos de labels para el mismo dato
@@ -169,6 +161,14 @@ func atributosDeServicioOTLP(sv fleet.Servicio, d fleet.Device) []otlpAtributo {
 	return out
 }
 
+// armarPayloadOTLP construye el sobre con lo que `p` —y sólo `p`— puede ver.
+//
+// `ahora` es UN SOLO RELOJ: el mismo con el que se decide `up` es el que sella todos los puntos.
+// Con dos llamadas a time.Now() el sello y la decisión se separan por lo que tarde el barrido, y
+// una máquina puede quedar marcada viva con un punto que dice otra cosa.
+//
+// Devuelve cuerpo nil (sin error) cuando no hay NADA que mandar: un sobre con cero métricas es un
+// POST que no dice nada, y el gauge musubi_push_datapoints en 0 ya cuenta esa historia.
 func armarPayloadOTLP(engine memory.StorageBackend, p *Principal, ahora time.Time,
 	intervaloSonda time.Duration, versionCerebro string, techoServicios int) (cuerpo []byte, puntos int, truncado truncadoDeExport, err error) {
 
@@ -363,9 +363,6 @@ func nuevoEmpujadorOTLP(cfg config.OTLPPushConfig) (*empujadorOTLP, error) {
 	}, nil
 }
 
-// esLoopback dice si el host es la propia máquina. `localhost` entra por nombre porque es lo que
-// la gente escribe; el resto se resuelve como IP y no por DNS: preguntarle al resolver si un
-// nombre apunta a loopback es una decisión de seguridad que depende de quién conteste.
 // urlSinSecretos deja la URL mostrable: esquema, host y path, y el query string TAPADO ENTERO.
 //
 // La guarda de arriba rechaza el `usuario:clave@host` de la URL, y eso cubría el caso obvio. No
@@ -389,6 +386,9 @@ func urlSinSecretos(crudo string) string {
 	return u.String()
 }
 
+// esLoopback dice si el host es la propia máquina. `localhost` entra por nombre porque es lo que
+// la gente escribe; el resto se resuelve como IP y no por DNS: preguntarle al resolver si un
+// nombre apunta a loopback es una decisión de seguridad que depende de quién conteste.
 func esLoopback(host string) bool {
 	if strings.EqualFold(host, "localhost") {
 		return true

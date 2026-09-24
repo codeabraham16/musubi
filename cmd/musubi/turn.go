@@ -37,6 +37,7 @@ type turnStore interface {
 	SetMeta(key, value string) error
 	LedgerAdd(sessionID, surface string, tokens int) (memory.TokenLedger, error)
 	LedgerStatus() (memory.TokenLedger, error)
+	LedgerStatusDe(sessionID string) (memory.TokenLedger, error)
 }
 
 // Claves de meta del loop dirigido para el recordatorio de captura.
@@ -150,14 +151,13 @@ func buildBudgetAlert(store turnStore, sessionID string, budget int) string {
 	if budget <= 0 {
 		return ""
 	}
-	l, err := store.LedgerStatus()
+	l, err := ledgerDeLaSesion(store, sessionID)
 	if err != nil || l.Total < budget {
 		return ""
 	}
-	if prev, ok, _ := store.GetMeta(metaBudgetAlerted); ok && prev == sessionID {
+	if !marcarUnaVezPorSesion(store, metaBudgetAlerted, sessionID, "1") {
 		return "" // ya avisado en esta sesión
 	}
-	_ = store.SetMeta(metaBudgetAlerted, sessionID)
 	return fmt.Sprintf("[Musubi — presupuesto] El contexto que Musubi inyectó esta sesión (%d tokens) superó el presupuesto blando (%d). Mirá el desglose por superficie con musubi_tokens; si querés bajar el ruido, ajustá memory.session_token_budget o apagá superficies en loop/startup.", l.Total, budget)
 }
 
@@ -175,7 +175,7 @@ func buildBrevityNudge(store turnStore, sessionID, mode string, budget int) stri
 		if budget <= 0 {
 			return ""
 		}
-		l, err := store.LedgerStatus()
+		l, err := ledgerDeLaSesion(store, sessionID)
 		if err != nil || l.Total < budget {
 			return "" // todavía bajo presupuesto: no inyectar (costo cero)
 		}
@@ -183,12 +183,69 @@ func buildBrevityNudge(store turnStore, sessionID, mode string, budget int) stri
 	// Una sola vez por sesión y modo: la directiva persiste en contexto, no hace falta
 	// repetirla turno a turno (y reinyectarla solo gastaría tokens). El estado lleva el
 	// modo, así que cambiarlo a mitad de sesión vuelve a inyectar.
-	want := sessionID + "\x00" + mode
-	if prev, ok, _ := store.GetMeta(metaBrevityInjected); ok && prev == want {
+	if !marcarUnaVezPorSesion(store, metaBrevityInjected, sessionID, mode) {
 		return ""
 	}
-	_ = store.SetMeta(metaBrevityInjected, want)
 	return brevityDirective(mode)
+}
+
+// marcasPorSesion es el valor de una marca «ya hecho en esta sesión»: qué valor quedó marcado para
+// cada sesión, y en qué orden se marcaron, para poder acotarlo.
+type marcasPorSesion struct {
+	Orden []string          `json:"orden"`
+	Valor map[string]string `json:"valor"`
+}
+
+// maxMarcasPorSesion acota cuántas sesiones recuerda una marca: lo mismo que el ledger, y por lo mismo.
+const maxMarcasPorSesion = 64
+
+// marcarUnaVezPorSesion marca `valor` para la sesión en la clave `key` y dice si es la PRIMERA vez:
+// false si esa sesión ya tenía marcado ese mismo valor.
+//
+// ⚠️ POR QUÉ POR SESIÓN. La marca era UNA casilla con UN id. Mientras el ledger era una casilla única
+// no se notaba: cada cambio de sesión ponía la cuenta en cero y dos terminales rara vez estaban
+// pasadas de presupuesto a la vez. Con la cuenta por sesión el total ya no baja, así que una vez que
+// A y B cruzaron el techo quedaban pasadas para siempre, y cada turno de una después de uno de la otra
+// encontraba la casilla con el id ajeno y volvía a avisar. Medido en la segunda revisión: una alerta
+// en 20 turnos alternados en main, veinte con la cuenta por sesión.
+//
+// Un valor viejo (el id suelto, o «id\x00modo») no es JSON y se lee como «nada marcado»: a lo sumo
+// un aviso de más, una vez, al instalar el binario.
+func marcarUnaVezPorSesion(store turnStore, key, sessionID, valor string) bool {
+	m := marcasPorSesion{Valor: map[string]string{}}
+	if raw, ok, _ := store.GetMeta(key); ok && raw != "" {
+		var leidas marcasPorSesion
+		if json.Unmarshal([]byte(raw), &leidas) == nil && leidas.Valor != nil {
+			m = leidas
+		}
+	}
+	if previo, ok := m.Valor[sessionID]; ok && previo == valor {
+		return false
+	}
+	if _, ok := m.Valor[sessionID]; !ok {
+		m.Orden = append(m.Orden, sessionID)
+	}
+	m.Valor[sessionID] = valor
+	for len(m.Orden) > maxMarcasPorSesion {
+		delete(m.Valor, m.Orden[0])
+		m.Orden = m.Orden[1:]
+	}
+	if b, err := json.Marshal(m); err == nil {
+		_ = store.SetMeta(key, string(b))
+	}
+	return true
+}
+
+// ledgerDeLaSesion lee la cuenta de ESTA sesión. El hook sí conoce su id, así que no tiene por qué
+// adivinar: con LedgerStatus() a secas —«la última que escribió»— la alerta de presupuesto y la
+// brevedad automática de la terminal A se disparaban con el total de la terminal B. Una revisión
+// adversarial lo reprodujo antes del merge: A gastó 20 tokens y recibió «esta sesión (9000 tokens)
+// superó el presupuesto». Sin id (una llamada que no viene de un hook), se cae a la última.
+func ledgerDeLaSesion(store turnStore, sessionID string) (memory.TokenLedger, error) {
+	if sessionID == "" {
+		return store.LedgerStatus()
+	}
+	return store.LedgerStatusDe(sessionID)
 }
 
 // brevityDirective devuelve el texto de la directiva por modo. Mantiene exacto lo que no

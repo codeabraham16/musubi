@@ -8,6 +8,7 @@ import (
 
 	"musubi/internal/config"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // fakeTurnStore implementa turnStore para tests deterministas de la inyección por
@@ -76,6 +77,14 @@ func (f *fakeTurnStore) LedgerAdd(sessionID, surface string, tokens int) (memory
 	f.ledger[surface] += tokens
 	f.ledgerSession = sessionID
 	return memory.TokenLedger{SessionID: sessionID, Total: tokens, Surfaces: f.ledger}, nil
+}
+
+// LedgerStatusDe: el fake lleva una sola sesión; otra cualquiera está en cero.
+func (f *fakeTurnStore) LedgerStatusDe(sessionID string) (memory.TokenLedger, error) {
+	if sessionID != f.ledgerSession {
+		return memory.TokenLedger{SessionID: sessionID, Surfaces: map[string]int{}}, nil
+	}
+	return f.LedgerStatus()
 }
 
 func (f *fakeTurnStore) LedgerStatus() (memory.TokenLedger, error) {
@@ -689,5 +698,29 @@ func TestBuildTurnRecallDegradaSinEmbebedor(t *testing.T) {
 	// Y los toggles model-free siguen puestos: degradar es perder la señal vectorial, nada más.
 	if !store.lastOpts.Stemming || !store.lastOpts.Cooccurrence {
 		t.Error("degradar a sólo-léxico no puede apagar además las señales model-free")
+	}
+}
+
+// HALLAZGO DE LA REVISIÓN ADVERSARIAL: la alerta de presupuesto y la brevedad automática de la
+// terminal A se disparaban con el total de la terminal B, porque leían «la última sesión que
+// escribió». Reproducido antes del arreglo: A gastó 100 tokens y recibió «esta sesión (9000 tokens)
+// superó el presupuesto». El hook conoce su id; ahora lee su propia cuenta. Motor real, no el fake:
+// el fake lleva una sola sesión y no puede mostrar el cruce.
+func TestAvisosDePresupuestoSonDeLaSesionQuePregunta(t *testing.T) {
+	eng, err := memory.NewDbEngine(memtest.DirSembrado(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	eng.LedgerAdd("A", "turn_recall", 100)
+	eng.LedgerAdd("B", "precheck_code", 9000) // B lleva el día entero y escribió último
+	if msg := buildBudgetAlert(eng, "A", 8000); msg != "" {
+		t.Errorf("A (100 tokens) recibió la alerta con el total de B: %q", msg)
+	}
+	if msg := buildBrevityNudge(eng, "A", "auto", 8000); msg != "" {
+		t.Errorf("A (100 tokens) recibió la brevedad automática por el gasto de B: %q", msg)
+	}
+	if msg := buildBudgetAlert(eng, "B", 8000); msg == "" {
+		t.Error("B sí cruzó el presupuesto y tenía que recibir la alerta")
 	}
 }

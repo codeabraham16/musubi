@@ -1009,9 +1009,6 @@ func (s *McpServer) toolDebate(raw json.RawMessage) (interface{}, *RpcError) {
 	}
 }
 
-// toolWorkflow es la interfaz MCP del motor de orquestación DAG (model-free).
-// Musubi NO ejecuta los steps: define el grafo, persiste el estado y devuelve los
-// steps listos; el agente ejecuta y reporta con 'complete'. El estado es resumible.
 // workflowRunLean es la vista del run para las acciones INCREMENTALES: espeja
 // memory.WorkflowRun pero OMITE la definición (Def), que es inmutable tras start y el
 // caller ya recibió. En un run de varios pasos, el DAG completo (títulos + directivas
@@ -1040,6 +1037,9 @@ func leanRun(r memory.WorkflowRun) workflowRunLean {
 	}
 }
 
+// toolWorkflow es la interfaz MCP del motor de orquestación DAG (model-free).
+// Musubi NO ejecuta los steps: define el grafo, persiste el estado y devuelve los
+// steps listos; el agente ejecuta y reporta con 'complete'. El estado es resumible.
 func (s *McpServer) toolWorkflow(raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Action         string `json:"action"`
@@ -1827,30 +1827,70 @@ func (s *McpServer) toolMemoryExpand(ctx context.Context, raw json.RawMessage) (
 
 func (s *McpServer) toolTokens(raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
-		Action string `json:"action"`
+		Action    string `json:"action"`
+		SessionID string `json:"session_id"`
 	}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &args); err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
 		}
 	}
+	sid := strings.TrimSpace(args.SessionID)
 	switch strings.TrimSpace(args.Action) {
 	case "reset":
-		if err := s.engine.LedgerReset(); err != nil {
+		// Pone en cero UNA sesión, no todas: ver memory.LedgerReset. Sin session_id y con más de una
+		// sesión en el ledger, SE NIEGA en vez de adivinar: esta tool corre por MCP y no conoce su
+		// propia sesión, y «la última que escribió» es a menudo OTRA terminal —su precheck cobra en
+		// cada edición—. La segunda revisión lo midió: el reset pedido desde A puso en cero la cuenta
+		// de B. La lista que acompaña la negativa trae la última escritura de cada una, que es de
+		// donde el agente reconoce la suya.
+		if sid == "" {
+			sesiones, err := s.engine.LedgerSesiones()
+			if err != nil {
+				return nil, rpcErrorf(codeInternalError, "error al leer las sesiones del ledger: %v", err)
+			}
+			if len(sesiones) > 1 {
+				var b strings.Builder
+				for i, se := range sesiones {
+					if i > 0 {
+						b.WriteString(", ")
+					}
+					fmt.Fprintf(&b, "%s (%d tokens, última escritura %s)", se.SessionID, se.Total, se.UltimaEscritura)
+				}
+				return nil, rpcErrorf(codeInvalidParams, "hay %d sesiones en el ledger y esta tool no sabe cuál es la tuya: pasá session_id. Sesiones, de la más reciente a la más vieja: %s", len(sesiones), b.String())
+			}
+		}
+		if err := s.engine.LedgerReset(sid); err != nil {
 			return nil, rpcErrorf(codeInternalError, "error al reiniciar el ledger: %v", err)
 		}
-		return jsonResult(memory.TokenLedger{Surfaces: map[string]int{}}.Budget(s.memory.SessionTokenBudget))
+		return s.reporteTokens(sid)
 	case "", "status":
-		l, err := s.engine.LedgerStatus()
-		if err != nil {
-			return nil, rpcErrorf(codeInternalError, "error al leer el ledger: %v", err)
-		}
-		// Reporte del gobernador: ledger contra el presupuesto blando de sesión
-		// (total, restante, % usado, estado y desglose por superficie).
-		return jsonResult(l.Budget(s.memory.SessionTokenBudget))
+		return s.reporteTokens(sid)
 	default:
 		return nil, rpcErrorf(codeInvalidParams, "action inválida: %q (status | reset)", args.Action)
 	}
+}
+
+// reporteTokens es la respuesta de musubi_tokens: el reporte del gobernador de la sesión escrita más
+// recientemente (total, restante, % usado, estado y desglose por superficie) MÁS la lista de todas
+// las sesiones. La lista está porque esta tool corre por MCP y no conoce su propia sesión: con varias
+// terminales, «la última que escribió» puede ser otra, y un número suelto no dice de quién es.
+func (s *McpServer) reporteTokens(sessionID string) (interface{}, *RpcError) {
+	l, err := s.engine.LedgerStatus()
+	if sessionID != "" {
+		l, err = s.engine.LedgerStatusDe(sessionID)
+	}
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al leer el ledger: %v", err)
+	}
+	sesiones, err := s.engine.LedgerSesiones()
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al leer las sesiones del ledger: %v", err)
+	}
+	return jsonResult(struct {
+		memory.BudgetStatus
+		Sesiones []memory.SesionLedger `json:"sesiones"`
+	}{l.Budget(s.memory.SessionTokenBudget), sesiones})
 }
 
 func (s *McpServer) toolSaveCode(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
