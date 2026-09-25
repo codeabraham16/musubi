@@ -1073,16 +1073,17 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_codegraph_push",
-				Description: "Federación del grafo de código (Track 20 · F6): RECIBE el grafo (nodos + aristas + gists) que un proyecto empuja tras indexar y REEMPLAZA lo de ESE proyecto en el cerebro central, scopeado por el project_id de la credencial (aislamiento por tenant: un write=own no puede plantar el grafo en otro proyecto; sólo write=any puede declarar destino). Lo llama el daemon local automáticamente tras codegraph_index; no es para uso manual. Parámetros: nodes, edges (arrays del grafo), gists (opcional; OMITIRLO deja intactos los guardados, mandarlo vacío los borra), project_id (opcional, sólo lo respeta write=any), head y head_at (el commit indexado y su fecha de commit: el central NO acepta un grafo de un árbol más viejo que el publicado, ni uno sin commit si el publicado lo tiene, y contesta -32006).",
+				Description: "Federación del grafo de código (Track 20 · F6): RECIBE el grafo (nodos + aristas + gists) que un proyecto empuja tras indexar y REEMPLAZA lo de ESE proyecto en el cerebro central, scopeado por el project_id de la credencial (aislamiento por tenant: un write=own no puede plantar el grafo en otro proyecto; sólo write=any puede declarar destino). Lo llama el daemon local automáticamente tras codegraph_index; no es para uso manual. Parámetros: nodes, edges (arrays del grafo), gists (opcional; OMITIRLO deja intactos los guardados, mandarlo vacío los borra; el daemon lo omite cuando no tiene gists, así una máquina sin gists no borra los del central), project_id (opcional, sólo lo respeta write=any), head y head_at (el commit indexado y su fecha de commit: el central NO acepta un grafo de un árbol más viejo que el publicado, ni uno sin commit si el publicado lo tiene, y contesta -32006), huella (opcional: sha256 del contenido; el mismo head con otra huella se acepta con un `aviso`). Contesta lo recibido (nodes, edges, gists), lo GUARDADO (guardados) y la publicación (publicado: head, head_at, por, huella).",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
 						"nodes":      {Type: "array", Description: "nodos del grafo de código a federar", Items: &Property{Type: "object"}},
 						"edges":      {Type: "array", Description: "aristas del grafo de código a federar", Items: &Property{Type: "object"}},
-						"gists":      {Type: "array", Description: "gists de archivo (memoria de código) a federar. OMITIRLO deja intactos los que ya haya en el central; mandarlo vacío los reemplaza por nada", Items: &Property{Type: "object"}},
+						"gists":      {Type: "array", Description: "gists de archivo (memoria de código) a federar. OMITIRLO deja intactos los que ya haya en el central; mandarlo vacío los reemplaza por nada. El daemon lo omite cuando no tiene gists", Items: &Property{Type: "object"}},
 						"project_id": {Type: "string", Description: "proyecto destino (opcional; sólo lo respeta una credencial write=any; un write=own usa siempre el suyo)"},
 						"head":       {Type: "string", Description: "commit del árbol indexado (opcional; sin él, el push no puede pisar un grafo publicado con commit)"},
 						"head_at":    {Type: "string", Description: "fecha de COMMIT de head en RFC3339 (obligatoria si va head): es lo que se compara contra lo publicado"},
+						"huella":     {Type: "string", Description: "sha256 del contenido del grafo (node_key y aristas), calculado por el emisor (opcional): con el mismo head y otra huella el push se acepta con un aviso"},
 					},
 					Required: []string{"nodes", "edges"},
 				},
