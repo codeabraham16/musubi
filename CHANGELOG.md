@@ -181,6 +181,48 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **El mapa publicado describe el commit, no el disco: lo que git ignora ya no sube al central.**
+  El índice lee el disco y el central guarda la foto con la etiqueta de un commit. #647 frenaba lo
+  modificado y lo sin trackear, pero `git status` no lista los **ignorados**, y `walkSourceTree` no
+  lee `.gitignore`. Medido el 2026-09-24: `cmd/musubi/assets/boceto/boceto-g.js`, que el
+  `.gitignore` de su carpeta deja afuera, le sumaba **1.222 nodos** al mapa del central con la
+  etiqueta `eb2cdb7`, un commit que no lo contiene. La laptop, con el mismo commit y sin el bundle,
+  publicaba otro mapa, y ganaba el último que empujaba.
+
+  Ahora `filtrarFotoAlCommit` recorta la foto **antes del push**. Deja sólo los nodos, aristas y
+  gists de archivos que están en el commit (`git ls-tree -r` sobre el commit de la etiqueta, o HEAD
+  si la foto viaja sin etiqueta). Una arista con una punta recortada también sale, y los nodos sin
+  archivo (paquetes importados) se quedan. **El grafo local no se toca**, porque sirve para el
+  trabajo en curso. **Si git no puede listar el commit, no se publica**: la foto entera sería el
+  disco con la etiqueta del commit, y una vacía borraría el mapa del central. **Tampoco se publica
+  un recorte que no deja ni un archivo**: un proyecto sin `.git` propio, adentro de un repo padre
+  que lo ignora entero, se publicaba con el sello del padre y el reemplazo vacío le borraba el mapa
+  al central, con `federated:true` (lo encontró la revisión). La tool lo dice en
+  `federated_motivo`. Un proyecto que no es un repo git (sin `.git` en su directorio ni en sus
+  padres) publica como antes: no tiene etiqueta de commit ni lista contra la cual recortar.
+
+  **Cambio de conducta, a propósito: un repo donde git no corre deja de publicar.** Antes, con git
+  fuera del `PATH` del daemon o con `dubious ownership` sobre el repo de otro usuario, la foto
+  viajaba sin etiqueta. Ahora `git ls-tree` falla, `federated_motivo` dice `git no pudo listar los
+  archivos de HEAD` (código -1 sin git en el `PATH`, 128 si git se niega) y el próximo tick reintenta (tres `git` locales y la lectura de la
+  foto, sin tráfico al central). Es la letra de la decisión: nunca se publica sin recortar, y una
+  foto sin recortar trae lo ignorado. Si se prefiere que esos proyectos federen, la salida es tratar
+  «sin sello y git que no corre» como el caso sin repo.
+
+  *Lo que va a salir del mapa de `musubi` en el central con el primer push de un cliente que tenga
+  este cambio, medido contra `eb2cdb7`: 1.222 de 13.329 nodos (todos de `boceto-g.js`), 2.404 de
+  32.664 aristas y 39 de 117 gists. De esos gists, 36 tienen rutas absolutas de otros árboles
+  (`musubi-body`, temporales, el CRM del escritorio) y 3 son rutas relativas que el commit no
+  tiene.*
+
+  *Trece sabotajes corridos, trece rojos: no recortar nodos, dejar las aristas con una sola punta
+  recortada (AND→OR), no recortar gists, desconectar el recorte del push, seguir de largo cuando git
+  falla, tratar todo directorio como repo git, callar el motivo, listar el commit con rutas desde
+  la raíz del repo (un proyecto que es un subdirectorio del repo dejaría de publicar), publicar un
+  recorte que no dejó ni un archivo, y los cuatro que la revisión encontró verdes: listar el HEAD
+  de ahora en vez del commit de la etiqueta, recortar también los nodos sin archivo (188 de los
+  13.329 de `musubi` en el central), que `hayRepoGit` no suba a los padres y comparar las rutas sin
+  normalizarlas contra el proyecto.*
 - **El aviso de intérpretes en la allowlist de `exec` ve los de Windows.** `fleet.EsInterprete`
   comparaba el basename contra un mapa que sólo tenía `powershell.exe` y `cmd.exe`, y con
   `filepath.Base`, que en el central (Linux) no parte una ruta con barras invertidas. Como
