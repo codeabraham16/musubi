@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -33,17 +34,33 @@ func enrolarDePrueba(t *testing.T, s *McpServer, proyecto, nombre string) string
 }
 
 // servidorConFlota levanta un HTTP real con auth de principals + un dispositivo enrolado.
+//
+// LAS OPCIONES SON LAS QUE ARMA `serve`, Y NO UNA VERSIÓN MÁS CORTA. Decía «auth de principals»
+// y pasaba sólo `token`: la puerta de /mcp entraba por la rama legacy de autenticarPersona, que
+// `serve` NUNCA recorre — con un token configurado, loadPrincipals devuelve un registro aunque no
+// haya principals.yaml (http.go, el armado de httpOptions en serve), y el registro gana el switch.
+// Así la guarda del token de dispositivo custodiaba una rama muerta: la corrida nocturna del
+// arnés (#652, caso 712) le rompió la rama VIVA y la prueba siguió en verde.
 func servidorConFlota(t *testing.T) (*McpServer, *httptest.Server, string, string) {
 	t.Helper()
 	s := newTestServer(t, embedding.NoopProvider{})
 	tokenDevice := enrolarDePrueba(t, s, "casa", "pc-gio")
 
 	const tokenPersona = "token-de-una-persona"
-	ts := httptest.NewServer(s.HTTPHandler(httpOptions{
-		reqTimeout: 10 * time.Second, token: tokenPersona,
-	}))
+	ts := httptest.NewServer(s.HTTPHandler(opcionesComoServe(t, tokenPersona)))
 	t.Cleanup(ts.Close)
 	return s, ts, tokenDevice, tokenPersona
+}
+
+// opcionesComoServe arma httpOptions por el MISMO camino que `serve`: loadPrincipals con el token
+// legacy y un principals.yaml que no existe, y los dos campos puestos.
+func opcionesComoServe(t *testing.T, tokenPersona string) httpOptions {
+	t.Helper()
+	reg, err := loadPrincipals(filepath.Join(t.TempDir(), "principals.yaml"), tokenPersona)
+	if err != nil || reg == nil {
+		t.Fatalf("loadPrincipals sin archivo y con token: reg=%v err=%v", reg, err)
+	}
+	return httpOptions{reqTimeout: 10 * time.Second, token: tokenPersona, registry: reg}
 }
 
 func postCon(t *testing.T, url, auth, body string) (int, string) {
@@ -86,17 +103,29 @@ func postCon(t *testing.T, url, auth, body string) (int, string) {
 // arnes: archivo="internal/mcp/http.go"
 // arnes: de="\tcase opt.registry != nil:\n\t\tp, ok = opt.registry.resolve(bearer)"
 // arnes: a="\tcase opt.registry != nil:\n\t\tp, ok = opt.registry.resolve(bearer)\n\t\tif !ok && bearer != \"\" {\n\t\t\tp, ok = &Principal{Name: \"dispositivo\"}, true\n\t\t}"
+//
+// LAS DOS FORMAS DE LA PUERTA, PORQUE autenticarPersona TIENE DOS RAMAS. La que arma `serve`
+// (registro de principals) es la que corre en producción; la de sólo `token` sigue existiendo en
+// HTTPHandler y la usan las pruebas que lo arman a mano. Esta prueba miraba únicamente la segunda,
+// y un sabotaje en la primera la dejaba en verde (caso 712 de la corrida nocturna, #652).
 func TestTokenDeDispositivoNoAbreElMCP(t *testing.T) {
-	_, ts, tokenDevice, tokenPersona := servidorConFlota(t)
+	s, tsServe, tokenDevice, tokenPersona := servidorConFlota(t)
+	tsLegacy := httptest.NewServer(s.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second, token: tokenPersona}))
+	t.Cleanup(tsLegacy.Close)
 	const rpc = `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
 
-	code, _ := postCon(t, ts.URL+mcpHTTPPath, tokenDevice, rpc)
-	if code != http.StatusUnauthorized {
-		t.Fatalf("un token de DISPOSITIVO entró a /mcp con status %d: la flota abriría la memoria del equipo", code)
-	}
-	// Control: la puerta funciona para quien sí corresponde.
-	if code, _ := postCon(t, ts.URL+mcpHTTPPath, tokenPersona, rpc); code != http.StatusOK {
-		t.Fatalf("el token de la PERSONA no entró a /mcp: status %d", code)
+	for _, puerta := range []struct {
+		forma string
+		url   string
+	}{{"como la arma serve (registro)", tsServe.URL}, {"sólo token legacy", tsLegacy.URL}} {
+		code, _ := postCon(t, puerta.url+mcpHTTPPath, tokenDevice, rpc)
+		if code != http.StatusUnauthorized {
+			t.Fatalf("[%s] un token de DISPOSITIVO entró a /mcp con status %d: la flota abriría la memoria del equipo", puerta.forma, code)
+		}
+		// Control: la puerta funciona para quien sí corresponde.
+		if code, _ := postCon(t, puerta.url+mcpHTTPPath, tokenPersona, rpc); code != http.StatusOK {
+			t.Fatalf("[%s] el token de la PERSONA no entró a /mcp: status %d", puerta.forma, code)
+		}
 	}
 }
 
@@ -106,13 +135,27 @@ func TestTokenDeDispositivoNoAbreElMCP(t *testing.T) {
 // panel mostraría vivas máquinas apagadas.
 //
 // MISMA ASIMETRÍA QUE LA DE ARRIBA, Y POR ESO EL CORTE TAMPOCO ES LITERAL: `handlerLatido` no tiene
-// el registro de personas a mano. Lo que se corta es lo que la prueba afirma: que una credencial que
-// el resolutor de DISPOSITIVOS no reconoce no late igual.
+// el registro de personas a mano. Lo que se corta es lo que la prueba afirma: que el resolutor de
+// DISPOSITIVOS le da una identidad a una credencial que no es la de ninguno.
 //
-// Sabotaje: que el latido acepte igual una credencial que DevicePorTokenConRotacion no resolvió.
-// arnes: archivo="internal/mcp/fleet_http.go"
-// arnes: de="\t\td, conElNuevo, ok, err := s.engine.DevicePorTokenConRotacion(token, time.Now())"
-// arnes: a="\t\td, conElNuevo, ok, err := s.engine.DevicePorTokenConRotacion(token, time.Now())\n\t\tif !ok && token != \"\" {\n\t\t\tok = true\n\t\t}"
+// EL SABOTAJE VIEJO ERA INERTE, NO LA GUARDA. Forzaba `ok = true` en el handler después de
+// DevicePorTokenConRotacion, pero sin identidad: `d` quedaba vacío, LatirYTomarComandos no
+// encontraba la fila de id "" y el `!actualizado` devolvía el mismo 401. La corrida nocturna
+// (#652, caso 713) lo dio verde en Linux y en Windows igual: un `ok` sin máquina detrás no late,
+// y eso es una segunda cerca que funciona, no un defecto. El defecto de verdad es que la persona
+// LATA COMO ALGUIEN, y eso sólo pasa si el resolutor deja de discriminar por el token.
+//
+// Sabotaje: que la consulta del token vigente deje de filtrar por el hash.
+//
+// Se pisa con la guarda del token vacío (internal/memory/devices_test.go) porque su `de` incluye
+// esta misma línea del SELECT. Son dos guardas y no una contada dos veces, medido: ésta cae en
+// «un token de PERSONA latió con status 200»; aquélla, sin su guarda, en «una peticion SIN
+// credencial autentico como "switch-sala"», y con ESTE sabotaje sigue verde (el vacío sale antes
+// de la consulta). Ninguna de las dos lee el corpus, así que ninguna cae por el daño a la otra.
+// arnes: archivo="internal/memory/devices.go"
+// arnes: de="FROM devices WHERE token_sha256 = ? AND revoked = 0`"
+// arnes: a="FROM devices WHERE (token_sha256 = ? OR 1 = 1) AND revoked = 0`"
+// arnes: colision_ok="TestTokenVacioNoAutenticaNiConUnaFilaQueHasheoElVacio"
 func TestTokenDePersonaNoLate(t *testing.T) {
 	_, ts, tokenDevice, tokenPersona := servidorConFlota(t)
 
@@ -167,7 +210,7 @@ func TestElRechazoNoDiceCualExistio(t *testing.T) {
 // Sabotaje: leer un `device_id` del cuerpo y usarlo en vez del token.
 // arnes: archivo="internal/mcp/fleet_http.go"
 // arnes: de="\t\tmuestraJSON, notaMuestra, notaServicios, notaProtocolo := s.leerCuerpoDelLatido(r, d)"
-// arnes: a="\t\tif b, _ := io.ReadAll(io.LimitReader(r.Body, latidoMaxBytes+1)); len(b) > 0 {\n\t\t\tvar sup struct {\n\t\t\t\tDeviceID string `json:\"device_id\"`\n\t\t\t}\n\t\t\tif jsonpkg.Unmarshal(b, &sup) == nil && sup.DeviceID != \"\" {\n\t\t\t\tif otro, hay, e := s.engine.DevicePorID(sup.DeviceID); e == nil && hay {\n\t\t\t\t\td = otro\n\t\t\t\t}\n\t\t\t}\n\t\t\tr.Body = io.NopCloser(bytes.NewReader(b))\n\t\t}\n\t\tmuestraJSON, notaMuestra, notaServicios, notaProtocolo := s.leerCuerpoDelLatido(r, d)"
+// arnes: a="\t\tif b, _ := io.ReadAll(io.LimitReader(r.Body, latidoMaxBytes+1)); len(b) > 0 {\n\t\t\tvar sup struct {\n\t\t\t\tDeviceID string `json:\"device_id\"`\n\t\t\t}\n\t\t\tif jsonpkg.Unmarshal(b, &sup) == nil && sup.DeviceID != \"\" {\n\t\t\t\tif otro, hay, e := s.engine.DevicePorID(sup.DeviceID); e == nil && hay {\n\t\t\t\t\td = otro\n\t\t\t\t}\n\t\t\t}\n\t\t\tr.Body = io.NopCloser(strings.NewReader(string(b)))\n\t\t}\n\t\tmuestraJSON, notaMuestra, notaServicios, notaProtocolo := s.leerCuerpoDelLatido(r, d)"
 // arnes: colision_ok="TestElServidorNoLeeElCuerpoEnteroAMemoria"
 func TestElCuerpoDelLatidoNoPuedeSuplantar(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)

@@ -2,10 +2,15 @@ package main
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"musubi/internal/arnes"
 )
 
 // TestElRojoSeLeeYNoSeDeduceDelExitCode fija lo que `revisarElRojo` tiene que distinguir.
@@ -673,5 +678,503 @@ func TestElLimiteCuentaDesdeDondeArrancaYNoDesdeElPrincipio(t *testing.T) {
 	// Un `desde` más grande que la lista no corre nada, y no explota.
 	if i, f := tramoACorrer(165, 900, 0); i != f {
 		t.Errorf("un `-desde` más allá del final devolvió [%d,%d), se esperaba un tramo vacío", i, f)
+	}
+}
+
+// mecanizadasDePrueba arma `total` mecanizadas de un mismo paquete, cada una con su línea igual a
+// su posición: así una prueba puede comprobar que la posición que devuelve `seleccionar` es la del
+// ancla que trae, y no sólo un número.
+func mecanizadasDePrueba(total int, sistemas ...string) []arnes.Ancla {
+	mec := make([]arnes.Ancla, total)
+	for i := range mec {
+		nombre := fmt.Sprintf("TestX%d", i+1)
+		mec[i] = arnes.Ancla{
+			Archivo: "internal/x/x_test.go", Linea: i + 1, Prueba: nombre,
+			Directiva: &arnes.Directiva{Paquete: "./internal/x", Prueba: nombre, Sistemas: sistemas},
+		}
+	}
+	return mec
+}
+
+// LOS FRAGMENTOS PARTICIONAN: CADA MECANIZADA CAE EN EXACTAMENTE UNO.
+//
+// Es la misma propiedad que las dos mitades de un barrido cortado, un piso más arriba: un hueco es
+// un sabotaje que NINGUNA noche corre y que el informe da por corrido, y un repetido infla la
+// cuenta. Se prueba sobre `seleccionar` y no sobre `enFragmento` suelta, porque `seleccionar` es
+// lo que el corredor recorre: una aritmética perfecta que nadie llama también deja pasar las dos.
+//
+// Los totales incluyen los bordes del reparto por turno —menos mecanizadas que fragmentos, justo
+// n, n+1— y el tamaño que tenía el árbol cuando entró el nocturno (968 el 2026-09-24).
+//
+// Sabotaje que la hace fallar: que `seleccionar` deje de preguntarle a `enFragmento` → cada
+// fragmento corre la lista entera.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\t\tif !enFragmento(p.pos, k, n) {"
+// arnes: a="\t\tif !enFragmento(p.pos, k, n) && false {"
+//
+// Sabotaje que la hace fallar: correr el turno un lugar → el resto 0 no le toca a ningún
+// fragmento y esas posiciones no corren nunca. El arreglo es la misma cuenta escrita al revés, que
+// tiene que seguir en verde: la guarda fija la partición, no la forma de la aritmética.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\treturn (pos-1)%n == k-1"
+// arnes: a="\treturn (pos-1)%n == k"
+// arnes: arreglo_de="\treturn (pos-1)%n == k-1"
+// arnes: arreglo_a="\treturn (pos-1)%n+1 == k"
+func TestLosFragmentosCubrenLaListaEnteraUnaSolaVez(t *testing.T) {
+	for _, total := range []int{1, 7, 8, 9, 968} {
+		mec := mecanizadasDePrueba(total)
+		for n := 1; n <= 12; n++ {
+			visto := make([]int, total+1)
+			for k := 1; k <= n; k++ {
+				aCorrer, noAplican := seleccionar(mec, "", 0, 0, k, n, "linux")
+				if len(noAplican) != 0 {
+					t.Fatalf("sin `sistema=` en ninguna directiva, el fragmento %d/%d apartó %d como «no aplica»",
+						k, n, len(noAplican))
+				}
+				for _, p := range aCorrer {
+					if p.pos < 1 || p.pos > total || p.ancla.Linea != p.pos {
+						t.Fatalf("el fragmento %d/%d devolvió la posición %d con el ancla de la línea %d: "+
+							"el número impreso tiene que ser la posición del ancla que se corre", k, n, p.pos, p.ancla.Linea)
+					}
+					visto[p.pos]++
+				}
+			}
+			for pos := 1; pos <= total; pos++ {
+				if visto[pos] != 1 {
+					t.Fatalf("con %d mecanizadas en %d fragmentos, la posición %d se corrió %d veces (se "+
+						"esperaba exactamente 1): un hueco es un sabotaje que ninguna noche corre, un "+
+						"repetido infla la cuenta", total, n, pos, visto[pos])
+				}
+			}
+		}
+	}
+
+	// CONTROL: sin `-fragmento` corre todo, que es lo que `-correr` hacía antes de que existiera.
+	if aCorrer, _ := seleccionar(mecanizadasDePrueba(968), "", 0, 0, 0, 0, "linux"); len(aCorrer) != 968 {
+		t.Errorf("sin fragmento se seleccionaron %d de 968", len(aCorrer))
+	}
+}
+
+// EL ORDEN DE `seleccionar` ES PAQUETE → TRAMO → FRAGMENTO → SISTEMA, Y LA POSICIÓN ES ABSOLUTA.
+//
+// La prueba de arriba llama a `seleccionar` sin `-paquete`, sin `-desde` y sin `-limite`, y así
+// dejaba sin custodia tres de los cuatro pasos. Lo midió la revisión del PR: apagar el filtro de
+// paquete, ignorar el tramo o numerar relativo al tramo dejaban el paquete entero en verde. Y las
+// tres cosas se usan: el nocturno imprime `══ 517` y quien reanuda escribe `-desde 517 -fragmento
+// 7/8`. Eso tiene que correr el RESTO DE ESE fragmento, con los mismos números, y nada de otro
+// paquete.
+//
+// El censo tiene dos paquetes intercalados y dos directivas de Windows en el pedido —una antes del
+// tramo y otra adentro—, y se pide `-paquete ./internal/x -desde 5 -limite 3` en cada fragmento de
+// 1 a 4. Se exige, en este orden: que no se cuele nada de `./internal/y`; que cada posición traiga
+// el ancla de esa posición; que no se salga del tramo 5..7; que cada posición caiga en el mismo
+// fragmento que en la corrida sin tramo; que Linux y Windows repartan igual; y que la unión de los
+// fragmentos sea el tramo, una vez cada posición. El orden importa: cada sabotaje de abajo cae en
+// SU aserción, y el arnés no los cuenta como un motivo repetido.
+//
+// Lo que NO fija: QUÉ fragmento le toca a cada posición (eso es de la prueba de arriba, que a
+// propósito tampoco lo fija), ni el orden de salida dentro de un fragmento.
+//
+// Sabotaje que la hace fallar: apagar el filtro de paquete → se cuelan las de `./internal/y`, y
+// `-correr -paquete ./internal/arnes` correría el árbol entero.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\t\tif paquete != \"\" && a.Directiva.Paquete != paquete {"
+// arnes: a="\t\tif false && paquete != \"\" && a.Directiva.Paquete != paquete {"
+//
+// Sabotaje que la hace fallar: ignorar `-desde` y `-limite` → reanudar vuelve a empezar desde la 1
+// y el límite deja de limitar.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\tinicio, fin := tramoACorrer(len(delPaquete), desde, limite)"
+// arnes: a="\tinicio, fin := tramoACorrer(len(delPaquete), 0, 0)"
+//
+// Sabotaje que la hace fallar: numerar relativo al tramo → `-desde 517 -fragmento 7/8` corre otro
+// fragmento e imprime números que no sirven para volver a reanudar.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\t\tp := puesto{pos: i + 1, ancla: delPaquete[i]}"
+// arnes: a="\t\tp := puesto{pos: i + 1 - inicio, ancla: delPaquete[i]}"
+//
+// Sabotaje que la hace fallar: filtrar por sistema ANTES de numerar → en Linux se corre la
+// numeración, el fragmento 3 deja de ser el mismo que en Windows y lo apartado no se nombra.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\t\tdelPaquete = append(delPaquete, a)\n"
+// arnes: a="\t\tif aplicaEn(a.Directiva, goos) {\n\t\t\tdelPaquete = append(delPaquete, a)\n\t\t}\n"
+func TestPaqueteTramoFragmentoYSistemaEnEseOrden(t *testing.T) {
+	const pedido = "./internal/x"
+	// Diez de `./internal/x` con la línea igual a su posición EN EL PAQUETE, y cinco de
+	// `./internal/y` intercaladas con líneas que no se confunden. La 2 y la 6 de x son de Windows.
+	var mec []arnes.Ancla
+	var x, y int
+	for _, c := range "yxxyxxyxxxyxxxy" {
+		if c == 'x' {
+			x++
+			nombre := fmt.Sprintf("TestX%d", x)
+			d := &arnes.Directiva{Paquete: pedido, Prueba: nombre}
+			if x == 2 || x == 6 {
+				d.Sistemas = []string{"windows"}
+			}
+			mec = append(mec, arnes.Ancla{Archivo: "internal/x/x_test.go", Linea: x, Prueba: nombre, Directiva: d})
+			continue
+		}
+		y++
+		nombre := fmt.Sprintf("TestY%d", y)
+		mec = append(mec, arnes.Ancla{Archivo: "internal/y/y_test.go", Linea: 100 + y, Prueba: nombre,
+			Directiva: &arnes.Directiva{Paquete: "./internal/y", Prueba: nombre}})
+	}
+
+	// elegidas junta lo corrido y lo apartado: el reparto es de los dos, el sistema sólo decide
+	// cuál de las dos listas. El mapa es «posición → línea del ancla».
+	elegidas := func(goos string, desde, limite, k, n int) (map[int]int, []puesto) {
+		aCorrer, noAplican := seleccionar(mec, pedido, desde, limite, k, n, goos)
+		todo := append(append([]puesto{}, aCorrer...), noAplican...)
+		m := map[int]int{}
+		for _, p := range todo {
+			m[p.pos] = p.ancla.Linea
+		}
+		return m, todo
+	}
+
+	for n := 1; n <= 4; n++ {
+		veces := map[int]int{}
+		for k := 1; k <= n; k++ {
+			win, todo := elegidas("windows", 5, 3, k, n)
+			for _, p := range todo {
+				if p.ancla.Directiva.Paquete != pedido {
+					t.Fatalf("`-paquete %s -fragmento %d/%d` trajo %s, que es de %s: el filtro de paquete no "+
+						"filtra y `-correr -paquete` correría el árbol entero", pedido, k, n,
+						p.ancla.Prueba, p.ancla.Directiva.Paquete)
+				}
+			}
+			for _, p := range todo {
+				if p.ancla.Linea != p.pos {
+					t.Fatalf("`-desde 5 -limite 3 -fragmento %d/%d` imprime la posición %d para el ancla que es "+
+						"la %d del paquete: ese número no sirve para reanudar con `-desde`", k, n, p.pos, p.ancla.Linea)
+				}
+			}
+			for _, p := range todo {
+				if p.pos < 5 || p.pos > 7 {
+					t.Fatalf("`-desde 5 -limite 3 -fragmento %d/%d` trajo la posición %d y se pidieron la 5, la 6 "+
+						"y la 7: reanudar volvería a empezar, o el límite no limita", k, n, p.pos)
+				}
+			}
+			completo, _ := elegidas("windows", 0, 0, k, n)
+			for pos := range win {
+				if _, ok := completo[pos]; !ok {
+					t.Fatalf("con `-desde 5 -limite 3` la posición %d cayó en el fragmento %d/%d, y en la corrida "+
+						"sin tramo no es de ése: reanudar un fragmento correría sabotajes de otro", pos, k, n)
+				}
+			}
+			if lin, _ := elegidas("linux", 5, 3, k, n); fmt.Sprint(lin) != fmt.Sprint(win) {
+				t.Fatalf("el fragmento %d/%d reparte distinto según la máquina (posición → línea): linux %v, "+
+					"windows %v. El sistema tiene que decidirse DESPUÉS de numerar", k, n, lin, win)
+			}
+			for pos := range win {
+				veces[pos]++
+			}
+		}
+		for pos := 5; pos <= 7; pos++ {
+			if veces[pos] != 1 {
+				t.Errorf("con %d fragmentos, la posición %d del tramo salió %d veces (se esperaba 1)", n, pos, veces[pos])
+			}
+		}
+	}
+
+	// Y en Linux la de Windows que cae en el tramo (la 6) sale apartada con su número, no corrida.
+	aCorrer, noAplican := seleccionar(mec, pedido, 5, 3, 0, 0, "linux")
+	if len(aCorrer) != 2 || len(noAplican) != 1 || noAplican[0].pos != 6 || noAplican[0].ancla.Linea != 6 {
+		t.Errorf("en linux, `-paquete %s -desde 5 -limite 3` dejó %d a correr y %d apartadas (%v): esperaba "+
+			"la 5 y la 7 a correr y la 6 apartada", pedido, len(aCorrer), len(noAplican), noAplican)
+	}
+}
+
+// UN FRAGMENTO MAL ESCRITO ES UN ERROR, NO UN VALOR POR DEFECTO.
+//
+// El `-fragmento` lo arma el workflow con la aritmética de la matriz. Si un error ahí se leyera
+// como «sin fragmento», un job correría la lista entera y se cortaría a las seis horas; si se leyera como
+// un fragmento imposible (`9/8`), no correría ninguno. Las dos tienen que ser un exit 2 con la
+// causa, antes de censar nada.
+//
+// Sabotaje que la hace fallar: no exigir 1 ≤ k ≤ n → `9/8` y `0/8` pasan.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\tif k < 1 || k > n {"
+// arnes: a="\tif false {"
+func TestUnFragmentoMalEscritoSeRechazaYNoCorreNadaPorAccidente(t *testing.T) {
+	for _, s := range []string{"0/8", "9/8", "8", "a/8", "3/0", "3/-1", "3/", "/8", "3/8/1"} {
+		if k, n, err := parsearFragmento(s); err == nil {
+			t.Errorf("parsearFragmento(%q) = %d/%d sin error: ese fragmento correría todo o nada, "+
+				"y ninguna de las dos es lo que se pidió", s, k, n)
+		}
+	}
+	for _, c := range []struct {
+		s    string
+		k, n int
+	}{{"3/8", 3, 8}, {"1/1", 1, 1}, {"8/8", 8, 8}, {"", 0, 0}} {
+		k, n, err := parsearFragmento(c.s)
+		if err != nil || k != c.k || n != c.n {
+			t.Errorf("parsearFragmento(%q) = %d, %d, %v; esperaba %d, %d, nil", c.s, k, n, err, c.k, c.n)
+		}
+	}
+}
+
+// CERO CORRIDAS NO ES UNA NOCHE LIMPIA.
+//
+// Medido antes de este cambio: `arnes -correr -paquete ./internal/noexiste` imprimía «corridas : 0
+// … ✓ el árbol quedó como estaba» y salía 0. En el nocturno eso es un fragmento vacío en verde.
+//
+// Sabotaje que la hace fallar: volver a la condición vieja, que no mira las corridas.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\tif corridas == 0 || verdes > 0 || errores > 0 {"
+// arnes: a="\tif verdes > 0 || errores > 0 {"
+func TestCeroCorridasNoEsUnaNocheLimpia(t *testing.T) {
+	for _, c := range []struct {
+		corridas, verdes, errores, quiero int
+		por                               string
+	}{
+		{0, 0, 0, 1, "cero corridas es «no medí», no «todo bien»"},
+		{5, 0, 0, 0, "CONTROL: cinco rojos sanos y nada más es la noche limpia"},
+		{5, 1, 0, 1, "una guarda hueca es el hallazgo"},
+		{5, 0, 1, 1, "sin veredicto no es un verde"},
+	} {
+		if got := codigoDeSalida(c.corridas, c.verdes, c.errores); got != c.quiero {
+			t.Errorf("codigoDeSalida(%d, %d, %d) = %d, esperaba %d: %s",
+				c.corridas, c.verdes, c.errores, got, c.quiero, c.por)
+		}
+	}
+}
+
+// UNA DIRECTIVA DE OTRO SISTEMA SE APARTA COMO «NO APLICA», Y NO CUENTA COMO CORRIDA.
+//
+// `TestEscribirArchivoAtomicoConElDestinoAbiertoEnWindows` hace `t.Skip` fuera de Windows. En el
+// runner Linux, sin `sistema=`, `sabotaje.sh` la daba por «NO SE MIDIÓ NADA» y su fragmento salía
+// rojo todas las noches. Y la otra mitad importa igual: si lo apartado contara como corrida, un
+// fragmento hecho SÓLO de directivas ajenas diría «corridas : N» sin haber medido nada.
+//
+// Sabotaje que la hace fallar: que `aplicaEn` conteste siempre que sí. Conserva el uso de `slices`
+// a propósito: un `return true` dejaría el import huérfano, no compilaría, y el arnés contestaría
+// «sin veredicto» en vez de rojo.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\treturn len(d.Sistemas) == 0 || slices.Contains(d.Sistemas, goos)"
+// arnes: a="\treturn len(d.Sistemas) >= 0 || slices.Contains(d.Sistemas, goos)"
+//
+// Sabotaje que la hace fallar: que `seleccionar` deje de preguntarle a `aplicaEn` → la de Windows
+// vuelve a correr en Linux.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\t\tif !aplicaEn(p.ancla.Directiva, goos) {"
+// arnes: a="\t\tif !aplicaEn(p.ancla.Directiva, goos) && false {"
+func TestUnaDirectivaDeOtroSistemaNoApareceComoSinVeredicto(t *testing.T) {
+	sin := &arnes.Directiva{}
+	win := &arnes.Directiva{Sistemas: []string{"windows"}}
+	for _, c := range []struct {
+		d      *arnes.Directiva
+		goos   string
+		quiero bool
+	}{
+		{sin, "linux", true}, {sin, "windows", true}, {sin, "darwin", true},
+		{win, "linux", false}, {win, "darwin", false}, {win, "windows", true},
+	} {
+		if got := aplicaEn(c.d, c.goos); got != c.quiero {
+			t.Errorf("aplicaEn(sistema=%v, %s) = %v, esperaba %v", c.d.Sistemas, c.goos, got, c.quiero)
+		}
+	}
+
+	// Mezcladas: la 2 y la 4 son de Windows.
+	mec := mecanizadasDePrueba(5)
+	for _, i := range []int{1, 3} {
+		mec[i].Directiva.Sistemas = []string{"windows"}
+	}
+	aCorrer, noAplican := seleccionar(mec, "", 0, 0, 0, 0, "linux")
+	if len(aCorrer) != 3 || len(noAplican) != 2 || noAplican[0].pos != 2 || noAplican[1].pos != 4 {
+		t.Errorf("en linux, con la 2 y la 4 de Windows, quedaron %d a correr y %d apartadas (%v): "+
+			"esperaba 3 a correr y apartadas la 2 y la 4", len(aCorrer), len(noAplican), noAplican)
+	}
+	if aCorrer, noAplican := seleccionar(mec, "", 0, 0, 0, 0, "windows"); len(aCorrer) != 5 || len(noAplican) != 0 {
+		t.Errorf("en windows se apartaron %d de 5: la de Windows tiene que correr donde existe", len(noAplican))
+	}
+
+	// EL FRAGMENTO HECHO SÓLO DE DIRECTIVAS AJENAS SALE ROJO: nada corrió, así que nada se midió.
+	ajenas := mecanizadasDePrueba(3, "windows")
+	aCorrer, noAplican = seleccionar(ajenas, "", 0, 0, 0, 0, "linux")
+	if len(aCorrer) != 0 || len(noAplican) != 3 {
+		t.Fatalf("tres directivas de Windows en linux: %d a correr, %d apartadas; esperaba 0 y 3",
+			len(aCorrer), len(noAplican))
+	}
+	if rc := codigoDeSalida(len(aCorrer), 0, 0); rc != 1 {
+		t.Errorf("un fragmento que sólo apartó directivas de otro sistema salió %d: no midió nada", rc)
+	}
+}
+
+// LAS FUNCIONES DE ARRIBA SON PURAS, Y ESO NO ALCANZA: HAY QUE VER QUE EL CORREDOR LAS USE.
+//
+// Es la forma que este repo ya midió como «guarda definida y desconectada»: pruebas en verde sobre
+// una función que nadie llama. `correrTodos` y `main` no tienen prueba —corren `sabotaje.sh` y
+// `os.Exit`—, así que si alguien le saca el fragmento a la llamada, o el corredor vuelve a recorrer
+// la lista entera, o el cierre vuelve a `if verdes > 0 || errores > 0`, las cuatro de arriba siguen
+// en verde y cada fragmento correría la lista entera, o cero corridas volvería a salir 0.
+//
+// Así que se lee `main.go` y se exige el cableado: `main` le pasa a `correrTodos` y a
+// `contraOverlay` lo que devolvió `parsearFragmento`; las dos le pasan a `seleccionar` sus propios
+// k y n, recorren lo que dejó para correr y no le reasignan esa lista en ningún lado; y
+// `correrTodos` termina en `return codigoDeSalida(corridas, verdes, errores)`.
+//
+// LA REASIGNACIÓN SE MIRA APARTE porque el `range` sobre el nombre correcto no alcanza: la revisión
+// del PR midió que `aCorrer = append(aCorrer, noAplican...)` antes del bucle dejaba esta guarda en
+// verde, y en Linux la de Windows volvía a correr. Lo que sigue sin ver: tocar la lista por índice
+// (`aCorrer[0] = …`) o por un puntero. Es una lectura del texto, no un análisis de flujo.
+//
+// Sabotaje que la hace fallar: `main` le pasa 0, 0 a `correrTodos` → cada fragmento corre todo.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="correrTodos(*raiz, censo, *paquete, *desde, *limite, fragK, fragN)"
+// arnes: a="correrTodos(*raiz, censo, *paquete, *desde, *limite, 0, 0)"
+//
+// Sabotaje que la hace fallar: `correrTodos` le pasa 0, 0 a `seleccionar`.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="aCorrer, noAplican := seleccionar(c.Mecanizadas(), soloPaquete, desde, limite, k, n, runtime.GOOS)"
+// arnes: a="aCorrer, noAplican := seleccionar(c.Mecanizadas(), soloPaquete, desde, limite, 0, 0, runtime.GOOS)"
+//
+// Sabotaje que la hace fallar: `correrTodos` recorre también lo apartado → la de Windows vuelve a
+// correr en Linux.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\tfor _, p := range aCorrer {"
+// arnes: a="\tfor _, p := range append(aCorrer, noAplican...) {"
+//
+// Sabotaje que la hace fallar: el cierre vuelve a la condición vieja, sin `codigoDeSalida`.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\treturn codigoDeSalida(corridas, verdes, errores)\n"
+// arnes: a="\tif verdes > 0 || errores > 0 {\n\t\treturn 1\n\t}\n\treturn 0\n"
+//
+// Sabotaje que la hace fallar: `contraOverlay` le re-agrega lo apartado a su lista antes del
+// bucle. Va en `contraOverlay` y no en `correrTodos` porque las dos anclas de `correrTodos` ya son
+// de los sabotajes de arriba, y el arnés contaría la pisada como colisión; la comprobación es la
+// misma para los dos corredores.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\timprimirNoAplican(noAplican, runtime.GOOS)\n\tfor _, p := range aMedir {"
+// arnes: a="\timprimirNoAplican(noAplican, runtime.GOOS)\n\taMedir = append(aMedir, noAplican...)\n\tfor _, p := range aMedir {"
+func TestElCorredorUsaLaSeleccionYCeroCorridasSaleRojo(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("no pude leer main.go: %v", err)
+	}
+	funcs := map[string]*ast.FuncDecl{}
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Recv == nil && fd.Body != nil {
+			funcs[fd.Name.Name] = fd
+		}
+	}
+	for _, nombre := range []string{"main", "correrTodos", "contraOverlay"} {
+		if funcs[nombre] == nil {
+			t.Fatalf("main.go ya no tiene `%s`: esta guarda no puede mirar lo que dice mirar", nombre)
+		}
+	}
+	ident := func(e ast.Expr) string {
+		if id, ok := e.(*ast.Ident); ok {
+			return id.Name
+		}
+		return ""
+	}
+	llamadas := func(n ast.Node, a string) []*ast.CallExpr {
+		var out []*ast.CallExpr
+		ast.Inspect(n, func(x ast.Node) bool {
+			if c, ok := x.(*ast.CallExpr); ok && ident(c.Fun) == a {
+				out = append(out, c)
+			}
+			return true
+		})
+		return out
+	}
+
+	// 1 · `main` pasa lo que parseó.
+	var fragK, fragN string
+	ast.Inspect(funcs["main"], func(x ast.Node) bool {
+		if as, ok := x.(*ast.AssignStmt); ok && len(as.Rhs) == 1 && len(as.Lhs) == 3 {
+			if c, ok := as.Rhs[0].(*ast.CallExpr); ok && ident(c.Fun) == "parsearFragmento" {
+				fragK, fragN = ident(as.Lhs[0]), ident(as.Lhs[1])
+			}
+		}
+		return true
+	})
+	if fragK == "" || fragN == "" {
+		t.Fatal("`main` no asigna el resultado de `parsearFragmento` a dos variables: el flag no llega a ningún lado")
+	}
+	for _, corredor := range []string{"correrTodos", "contraOverlay"} {
+		cs := llamadas(funcs["main"], corredor)
+		if len(cs) != 1 {
+			t.Errorf("`main` llama %d veces a `%s`, esperaba 1", len(cs), corredor)
+			continue
+		}
+		args := cs[0].Args
+		if len(args) < 2 || ident(args[len(args)-2]) != fragK || ident(args[len(args)-1]) != fragN {
+			t.Errorf("`main` no le pasa a `%s` el fragmento parseado (%s, %s) en sus dos últimos "+
+				"argumentos: cada fragmento correría la lista entera", corredor, fragK, fragN)
+		}
+	}
+
+	// 2 · Los dos corredores le pasan a `seleccionar` sus propios k y n, y recorren lo que devuelve.
+	for _, corredor := range []string{"correrTodos", "contraOverlay"} {
+		fd := funcs[corredor]
+		var params []string
+		for _, campo := range fd.Type.Params.List {
+			for _, nm := range campo.Names {
+				params = append(params, nm.Name)
+			}
+		}
+		if len(params) < 2 {
+			t.Errorf("`%s` no recibe un fragmento", corredor)
+			continue
+		}
+		k, n := params[len(params)-2], params[len(params)-1]
+		cs := llamadas(fd.Body, "seleccionar")
+		if len(cs) != 1 || len(cs[0].Args) != 7 || ident(cs[0].Args[4]) != k || ident(cs[0].Args[5]) != n {
+			t.Errorf("`%s` no le pasa a `seleccionar` sus propios `%s, %s`: el fragmento que recibe no "+
+				"decide lo que corre", corredor, k, n)
+			continue
+		}
+		var lista string
+		ast.Inspect(fd.Body, func(x ast.Node) bool {
+			if as, ok := x.(*ast.AssignStmt); ok && len(as.Rhs) == 1 && as.Rhs[0] == cs[0] && len(as.Lhs) == 2 {
+				lista = ident(as.Lhs[0])
+			}
+			return true
+		})
+		recorre := false
+		ast.Inspect(fd.Body, func(x ast.Node) bool {
+			if r, ok := x.(*ast.RangeStmt); ok && lista != "" && ident(r.X) == lista {
+				recorre = true
+			}
+			return true
+		})
+		if !recorre {
+			t.Errorf("`%s` no recorre la lista que `seleccionar` dejó para correr (%q): lo apartado "+
+				"por fragmento o por sistema volvería a correr", corredor, lista)
+		}
+		// Y NADIE LE REASIGNA ESA LISTA: `aCorrer = append(aCorrer, noAplican...)` antes del bucle
+		// deja intacto el `range` de arriba y vuelve a correr lo apartado. Un `:=` que la sombree en
+		// un bloque de adentro también es un AssignStmt, así que cae acá.
+		ast.Inspect(fd.Body, func(x ast.Node) bool {
+			s, ok := x.(*ast.AssignStmt)
+			if !ok || (len(s.Rhs) == 1 && s.Rhs[0] == cs[0]) {
+				return true
+			}
+			for _, e := range s.Lhs {
+				if lista != "" && ident(e) == lista {
+					t.Errorf("`%s` le vuelve a asignar `%s` en la línea %d, después de `seleccionar`: lo que "+
+						"recorre ya no es lo que se eligió, y lo apartado por fragmento o por sistema puede "+
+						"volver a correr", corredor, lista, fset.Position(e.Pos()).Line)
+				}
+			}
+			return true
+		})
+	}
+
+	// 3 · `correrTodos` termina en `codigoDeSalida`, y con los tres contadores.
+	cuerpo := funcs["correrTodos"].Body.List
+	ret, ok := cuerpo[len(cuerpo)-1].(*ast.ReturnStmt)
+	var c *ast.CallExpr
+	if ok && len(ret.Results) == 1 {
+		c, _ = ret.Results[0].(*ast.CallExpr)
+	}
+	if c == nil || ident(c.Fun) != "codigoDeSalida" || len(c.Args) != 3 ||
+		ident(c.Args[0]) != "corridas" || ident(c.Args[1]) != "verdes" || ident(c.Args[2]) != "errores" {
+		t.Error("`correrTodos` ya no termina en `return codigoDeSalida(corridas, verdes, errores)`: " +
+			"cero corridas puede volver a salir 0 y un fragmento vacío dejaría la noche en verde")
 	}
 }
