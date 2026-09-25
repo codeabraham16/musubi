@@ -1439,16 +1439,29 @@ que faltaba era este paso en la receta.
 
 ```bash
 # 1. ANTES de tocar nada. La respuesta trae el `id` de la ventana: guardalo.
+#    Desde un clon del repo en la laptop. En davantis-1 este guion no arranca: mirá abajo.
 ./deploy/musubi-tool.sh musubi_fleet_maintenance '{"device":"gio","minutos":30,"motivo":"<qué vas a tocar>","project":"musubi"}'
 
 # 2. Al terminar, con el agente latiendo otra vez. Y también si salió MAL (abajo).
 ./deploy/musubi-tool.sh musubi_fleet_maintenance '{"device":"gio","cancelar":"<id>","project":"musubi"}'
 ```
 
-Desde una sesión con el MCP del cerebro es la misma tool con los mismos argumentos. El guion toma
-la credencial y `MUSUBI_CENTRAL_URL` del entorno: sin la URL le habla a `127.0.0.1:7717`, que sólo
-sirve corriéndolo en el server. Treinta minutos alcanzan para reinstalar una tarea; si va a llevar
-más, pedí más desde el principio en vez de encadenar ventanas.
+**Dónde se corre, porque el guion no anda en todos lados** (medido el 2026-09-25):
+
+- **En `davantis-1`, por el MCP del cerebro**: la misma tool con los mismos argumentos. Esa sesión
+  entra como `davantis-mando-admin`, que tiene `metrics` sobre todas las máquinas. El guion ahí NO
+  arranca: `python3` es el acceso directo de la Microsoft Store y sale con 49 antes de mandar nada,
+  y aunque arrancara, el `curl` de MinGW no ve la malla.
+- **En la laptop**, el guion desde el repo, con
+  `MUSUBI_CENTRAL_URL=https://musubi-server.tail89e295.ts.net:10000`: con el NOMBRE, no con la IP.
+  El certificado del tailnet lleva el nombre del nodo como único SAN y el guion no tiene
+  `--resolve`, así que contra `https://100.79.126.62:10000` el handshake falla (`curl: (35)`) y un
+  cerebro vivo contesta 000.
+- **En el server**, el guion está en `/home/musubi/musubi-tool.sh`, no en `./deploy/`, y sin
+  `MUSUBI_CENTRAL_URL` le habla a `127.0.0.1:7717`, que ahí sí contesta.
+
+Treinta minutos alcanzan para reinstalar una tarea; si va a llevar más, pedí más desde el principio
+en vez de encadenar ventanas.
 
 **Cerrala aunque la intervención haya fallado, y sobre todo entonces.** Mientras la ventana está
 activa se callan las reglas de esa máquina —`MaquinaCaida` y `ServicioCaido` incluidas, no sólo

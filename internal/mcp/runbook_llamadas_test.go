@@ -16,6 +16,8 @@ package mcp
 import (
 	"encoding/json"
 	"math"
+	"net"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -181,22 +183,13 @@ func seccionDelRunbook(runbook, titulo string) (string, bool) {
 	return resto, true
 }
 
-// TestAntesDeTocarUnAgenteElRunbookDeclaraLaVentana custodia la receta Y el camino hasta ella.
+// recetaDeLaVentana devuelve el título de la sección que ABRE una ventana con
+// musubi_fleet_maintenance (`minutos`) y la CIERRA (`cancelar`), más lo que encontró de cada lado.
 //
-// La receta tiene que ABRIR la ventana (`minutos`) y CERRARLA (`cancelar`) en la misma sección:
-// una ventana que se abre y no se cierra calla la máquina hasta que venza, y si la intervención
-// salió mal ése es justo el rato en que el agente muerto no avisa. Y `AgenteCaidoConMaquinaViva`
-// —la alerta que suena cuando esto se olvida— tiene que mandar a esa sección con un enlace que
-// llegue: quien la lee es quien está por tocar el agente otra vez.
-//
-// Sabotaje que la hace fallar: renombrar la sección de la receta sin tocar el enlace que la cita.
-// arnes: archivo="deploy/RUNBOOK.md"
-// arnes: de="## Antes de tocar un agente a mano: declarar la ventana\n"
-// arnes: a="## Antes de tocar el agente: declarar la ventana\n"
-func TestAntesDeTocarUnAgenteElRunbookDeclaraLaVentana(t *testing.T) {
-	runbook := leerDeploy(t, "RUNBOOK.md")
+// La sección se reconoce por lo que HACE y no por su título: así renombrarla no deja a las guardas
+// que la leen mirando a la nada, y la que tiene que denunciar el cambio es la del enlace.
+func recetaDeLaVentana(runbook string) (titulo string, abre, cierra map[string]bool) {
 	lineas := strings.Split(runbook, "\n")
-
 	// La sección de cada línea es el último `## ` que la precede.
 	tituloDeLinea := func(n int) string {
 		for i := n - 1; i >= 0; i-- {
@@ -206,7 +199,7 @@ func TestAntesDeTocarUnAgenteElRunbookDeclaraLaVentana(t *testing.T) {
 		}
 		return ""
 	}
-	abre, cierra := map[string]bool{}, map[string]bool{}
+	abre, cierra = map[string]bool{}, map[string]bool{}
 	for _, ll := range llamadasDelRunbook(runbook) {
 		if ll.tool != "musubi_fleet_maintenance" {
 			continue
@@ -223,12 +216,43 @@ func TestAntesDeTocarUnAgenteElRunbookDeclaraLaVentana(t *testing.T) {
 			cierra[sec] = true
 		}
 	}
-	var receta string
 	for sec := range abre {
 		if cierra[sec] {
-			receta = sec
+			titulo = sec
 		}
 	}
+	return titulo, abre, cierra
+}
+
+// textoDeLaReceta devuelve el texto de la receta de la ventana, o corta la prueba: sin receta, la
+// guarda que la pide es TestAntesDeTocarUnAgenteElRunbookDeclaraLaVentana, y las demás no tienen
+// qué mirar.
+func textoDeLaReceta(t *testing.T, runbook string) string {
+	t.Helper()
+	titulo, _, _ := recetaDeLaVentana(runbook)
+	texto, ok := seccionDelRunbook(runbook, titulo)
+	if titulo == "" || !ok {
+		t.Fatal("no encontré la receta de la ventana (la sección que abre y cierra con musubi_fleet_maintenance): " +
+			"eso lo denuncia TestAntesDeTocarUnAgenteElRunbookDeclaraLaVentana, y sin ella esta guarda no mira nada")
+	}
+	return texto
+}
+
+// TestAntesDeTocarUnAgenteElRunbookDeclaraLaVentana custodia la receta Y el camino hasta ella.
+//
+// La receta tiene que ABRIR la ventana (`minutos`) y CERRARLA (`cancelar`) en la misma sección:
+// una ventana que se abre y no se cierra calla la máquina hasta que venza, y si la intervención
+// salió mal ése es justo el rato en que el agente muerto no avisa. Y `AgenteCaidoConMaquinaViva`
+// —la alerta que suena cuando esto se olvida— tiene que mandar a esa sección con un enlace que
+// llegue: quien la lee es quien está por tocar el agente otra vez.
+//
+// Sabotaje que la hace fallar: renombrar la sección de la receta sin tocar el enlace que la cita.
+// arnes: archivo="deploy/RUNBOOK.md"
+// arnes: de="## Antes de tocar un agente a mano: declarar la ventana\n"
+// arnes: a="## Antes de tocar el agente: declarar la ventana\n"
+func TestAntesDeTocarUnAgenteElRunbookDeclaraLaVentana(t *testing.T) {
+	runbook := leerDeploy(t, "RUNBOOK.md")
+	receta, abre, cierra := recetaDeLaVentana(runbook)
 	if receta == "" {
 		t.Fatalf("el runbook no tiene una sección que abra una ventana con musubi_fleet_maintenance (`minutos`) Y la cierre (`cancelar`).\n"+
 			"  Abren: %v · cierran: %v\n"+
@@ -255,4 +279,89 @@ func TestAntesDeTocarUnAgenteElRunbookDeclaraLaVentana(t *testing.T) {
 			t.Errorf("el runbook enlaza a #%s y ninguna sección tiene esa ancla", m[1])
 		}
 	}
+}
+
+// reURLDelCerebro reconoce una URL del cerebro que el runbook manda a exportar.
+var reURLDelCerebro = regexp.MustCompile("MUSUBI_CENTRAL_URL=([^\\s`'\"]+)")
+
+// esURLConNombre dice si una URL es https contra un NOMBRE, que es la única forma en que el curl
+// de musubi-tool.sh valida el certificado del tailnet.
+func esURLConNombre(crudo string) bool {
+	u, err := url.Parse(crudo)
+	return err == nil && u.Scheme == "https" && u.Hostname() != "" && net.ParseIP(u.Hostname()) == nil
+}
+
+// TestLaRecetaDeLaVentanaDiceDondeSeCorre custodia que la receta no mande a un camino que no anda.
+//
+// La primera versión decía que el guion anda en cualquier lado con `MUSUBI_CENTRAL_URL` puesta, y
+// en davantis-1 —la sala de mando, desde donde se opera— no arranca. Medido el 2026-09-25: el guion
+// arma el cuerpo con `python3`, que ahí es el acceso directo de la Microsoft Store, y sale con 49
+// antes de mandar nada; y aunque arrancara, le habla al cerebro con el `curl` que resuelva el PATH,
+// que es el de MinGW y no ve la malla. Mientras el guion dependa de cualquiera de las dos cosas, la
+// receta tiene que dar la otra vía, el MCP del cerebro, en el mismo párrafo que nombra davantis-1.
+//
+// Y ninguna URL del cerebro que el runbook mande a exportar puede ser https contra la IP pelada: el
+// certificado del tailnet lleva el NOMBRE del nodo como único SAN y el guion no tiene `--resolve`,
+// así que contra la IP el handshake falla y un cerebro vivo contesta 000 (medido desde la laptop:
+// `curl: (35)`). La receta, además, tiene que dar la URL buena: la que trae el entorno de
+// davantis-1 es justamente la de la IP.
+//
+// Sabotaje que la hace fallar: que la receta dé la URL del cerebro con la IP en vez del nombre.
+// arnes: archivo="deploy/RUNBOOK.md"
+// arnes: de="`MUSUBI_CENTRAL_URL=https://musubi-server.tail89e295.ts.net:10000`"
+// arnes: a="`MUSUBI_CENTRAL_URL=https://100.79.126.62:10000`"
+func TestLaRecetaDeLaVentanaDiceDondeSeCorre(t *testing.T) {
+	runbook := leerDeploy(t, "RUNBOOK.md")
+	receta := textoDeLaReceta(t, runbook)
+
+	for n, l := range strings.Split(runbook, "\n") {
+		for _, m := range reURLDelCerebro.FindAllStringSubmatch(l, -1) {
+			u, err := url.Parse(m[1])
+			if err != nil || u.Hostname() == "" {
+				t.Errorf("RUNBOOK.md:%d exporta MUSUBI_CENTRAL_URL=%s y eso no es una URL", n+1, m[1])
+				continue
+			}
+			if u.Scheme == "https" && !esURLConNombre(m[1]) {
+				t.Errorf("RUNBOOK.md:%d exporta MUSUBI_CENTRAL_URL=%s: https contra la IP pelada. El certificado del "+
+					"tailnet lleva el NOMBRE del nodo como único SAN y musubi-tool.sh no tiene --resolve: el "+
+					"handshake falla y un cerebro vivo contesta 000", n+1, m[1])
+			}
+		}
+	}
+	conNombre := 0
+	for _, m := range reURLDelCerebro.FindAllStringSubmatch(receta, -1) {
+		if esURLConNombre(m[1]) {
+			conNombre++
+		}
+	}
+	if conNombre == 0 {
+		t.Errorf("la receta de la ventana no dice a qué URL apuntar el guion (MUSUBI_CENTRAL_URL=https://<nombre>:10000).\n" +
+			"  Sin eso se usa la del entorno, y la de davantis-1 es la IP pelada, contra la que el certificado no valida")
+	}
+
+	guion := leerDeploy(t, "musubi-tool.sh")
+	var noAnda []string
+	if strings.Contains(guion, "python3") {
+		noAnda = append(noAnda, "arma el cuerpo con python3, que en davantis-1 es el acceso directo de la Store")
+	}
+	if !strings.Contains(guion, "--resolve") {
+		noAnda = append(noAnda, "le habla al cerebro con curl sin --resolve")
+	}
+	if len(noAnda) == 0 {
+		return // el guion ya anda en davantis-1: la otra vía deja de ser obligatoria
+	}
+	// Un párrafo o un ítem de lista: la vía tiene que estar AL LADO del nombre de la máquina, no
+	// perdida en otra parte de la sección.
+	var trozos []string
+	for _, p := range strings.Split(receta, "\n\n") {
+		trozos = append(trozos, strings.Split(p, "\n- ")...)
+	}
+	for _, tr := range trozos {
+		if strings.Contains(tr, "davantis-1") && strings.Contains(tr, "MCP") {
+			return
+		}
+	}
+	t.Errorf("la receta de la ventana no dice que en davantis-1 se usa el MCP del cerebro, y el guion ahí no arranca: %s.\n"+
+		"  Quien opera desde la sala de mando copia el paso 1 y la ventana no se declara: se repite el 2026-09-20",
+		strings.Join(noAnda, "; "))
 }
