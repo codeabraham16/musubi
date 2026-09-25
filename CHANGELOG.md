@@ -34,11 +34,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   (`musubi-body`, temporales, el CRM del escritorio) y 3 son rutas relativas que el commit no
   tiene.*
 
-  *Nueve sabotajes corridos, nueve rojos: no recortar nodos, dejar las aristas con una sola punta
+  *Trece sabotajes corridos, trece rojos: no recortar nodos, dejar las aristas con una sola punta
   recortada (AND→OR), no recortar gists, desconectar el recorte del push, seguir de largo cuando git
   falla, tratar todo directorio como repo git, callar el motivo, listar el commit con rutas desde
-  la raíz del repo (vaciaría el mapa de un proyecto que es un subdirectorio del repo) y publicar un
-  recorte que no dejó ni un archivo.*
+  la raíz del repo (un proyecto que es un subdirectorio del repo dejaría de publicar), publicar un
+  recorte que no dejó ni un archivo, y los cuatro que la revisión encontró verdes: listar el HEAD
+  de ahora en vez del commit de la etiqueta, recortar también los nodos sin archivo (188 de los
+  13.329 de `musubi` en el central), que `hayRepoGit` no suba a los padres y comparar las rutas sin
+  normalizarlas contra el proyecto.*
 
 - **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
   El ledger era UNA casilla de `meta` que guardaba UNA sesión, y `LedgerAdd` la reiniciaba entera
