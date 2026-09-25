@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -30,6 +31,21 @@ var frasesDeAlcance = map[string]string{
 	FaseRevisar:     "estés cerrando o revisando un cambio",
 	TareaAuditar:    "te pidan auditar un codebase o un área",
 	TareaOrquestar:  "la tarea sea grande y paralelizable",
+}
+
+// FraseDeAlcance devuelve la frase de un valor del vocabulario de alcance («estés planificando…»), o
+// "" si el valor no es del vocabulario. La usan la descripción del SKILL.md y el mapa de skills que
+// Musubi le manda al agente al conectarse: las dos tienen que decir CUÁNDO con las mismas palabras.
+func FraseDeAlcance(v string) string { return frasesDeAlcance[v] }
+
+// DirSkillsAgente es donde el agente (Claude Code) busca sus skills, relativo a la raíz del
+// proyecto. Vive acá y no en el comando que exporta porque lo leen dos: el que escribe los SKILL.md
+// y el servidor, que sólo le nombra al agente las skills que de verdad puede cargar.
+const DirSkillsAgente = ".claude/skills"
+
+// RutaSkillAgente es el SKILL.md de una skill en el formato del agente.
+func RutaSkillAgente(root, nombre string) string {
+	return filepath.Join(root, filepath.FromSlash(DirSkillsAgente), nombre, "SKILL.md")
 }
 
 // CuandoUsarla devuelve la cláusula que dice CUÁNDO aplica la skill, o "" si no hay con qué.
