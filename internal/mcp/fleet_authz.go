@@ -26,14 +26,14 @@ import (
 	"musubi/internal/fleet"
 )
 
-// comodinFlota es el selector "todas las máquinas de mi alcance". Explícito a propósito: hay que
-// escribirlo. Un default que significara "todas" convertiría un registro a medio llenar en una
-// concesión total, y los registros a medio llenar existen.
-//
-// Es el del dominio y no un literal propio: el comodín de las concesiones y el de las políticas
-// son el mismo selector (fleet.SelectorAlcanza), y un segundo `"*"` escrito acá es lo primero que
-// se separa.
-const comodinFlota = fleet.ComodinMaquinas
+// EL COMODÍN —el selector «todas las máquinas de mi alcance»— NO SE ESCRIBE ACÁ. Es explícito a
+// propósito, hay que escribirlo: un default que significara «todas» convertiría un registro a medio
+// llenar en una concesión total, y los registros a medio llenar existen. Pero se LEE sólo con la
+// gramática del dominio (fleet.EsComodin, y por ella SelectorAlcanza y EntradaDeAllowlist). Acá vivía
+// `comodinFlota`, un alias de fleet.ComodinMaquinas, y era la puerta de las lecturas propias: con él
+// puedeOtorgar comparaba `selector == comodinFlota` y la allowlist buscaba `p.ExecAllow[comodinFlota]`,
+// las dos sin recortar (A131·T3 y su revisión 2). Que no vuelva lo mide
+// TestLaAllowlistYElComodinSeLeenSoloConLaGramatica.
 
 // PuedeSobreDevice es la compuerta. Las tres condiciones, en orden de costo.
 func PuedeSobreDevice(p *Principal, d fleet.Device, c fleet.Cap) bool {
@@ -184,6 +184,17 @@ func puedeOtorgar(p *Principal, c fleet.Cap) bool {
 // El paso 4 es el que hace que agregar una máquina a la flota NO le abra exec irrestricto a
 // alguien que creía tener una allowlist. Que el default de "no lo pensé" sea "no puede" es la
 // única forma en que una allowlist a medio escribir falla del lado correcto.
+//
+// LOS PASOS 2 Y 3 LOS DECIDE fleet.EntradaDeAllowlist, la gramática de las máquinas: la clave de
+// `fleet_exec_allow` es un selector, y se lee con SelectorNombra y EsComodin como los de `fleet:` y
+// `devices:` (A131·T3, revisión 2). Acá había `p.ExecAllow[d.Name]` y `p.ExecAllow[comodinFlota]`,
+// una búsqueda por clave sin recortar, mientras el informe del rename leía la misma clave con
+// SelectorNombra: una clave ` davantis ` era «la allowlist de davantis» para el informe y no existía
+// para esta compuerta. La MISMA búsqueda la hacen comandosPermitidos (lo que muestra el inventario) y
+// impactoDeNombre (lo que avisa el rename), así que los tres no pueden discrepar sobre qué entrada
+// manda. Lo miden TestUnaClaveDeLaAllowlistConBordesSeLeeComoLaLimpia, con la clave cruda, y
+// TestLaAllowlistYElComodinSeLeenSoloConLaGramatica, que no deja leer la allowlist por clave fuera de
+// la gramática.
 func argvPermitido(p *Principal, d fleet.Device, argv []string) bool {
 	if p == nil {
 		return true // stdio local: misma confianza local que PuedeSobreDevice
@@ -191,11 +202,8 @@ func argvPermitido(p *Principal, d fleet.Device, argv []string) bool {
 	if p.ExecAllow == nil {
 		return true // 1
 	}
-	if lista, hay := p.ExecAllow[d.Name]; hay {
-		return fleet.PermiteArgv(lista, argv) // 2
-	}
-	if lista, hay := p.ExecAllow[comodinFlota]; hay {
-		return fleet.PermiteArgv(lista, argv) // 3
+	if comandos, _, hay := fleet.EntradaDeAllowlist(p.ExecAllow, d.Name); hay {
+		return fleet.PermiteArgv(comandos, argv) // 2 y 3
 	}
 	return false // 4
 }
@@ -204,15 +212,15 @@ func argvPermitido(p *Principal, d fleet.Device, argv []string) bool {
 // inventario. nil ⇒ sin restricción, que es distinto de una lista vacía (⇒ nada permitido) y el
 // inventario tiene que poder decir la diferencia: si las dibujara igual, nadie podría distinguir
 // «puede todo» de «no puede nada» mirando la misma celda.
+//
+// La entrada la busca fleet.EntradaDeAllowlist, la MISMA que decide en argvPermitido: lo que el
+// inventario muestra como permitido es lo que la compuerta deja pasar, con la clave leída igual.
 func comandosPermitidos(p *Principal, d fleet.Device) ([]string, bool) {
 	if p == nil || p.ExecAllow == nil {
 		return nil, false
 	}
-	if lista, hay := p.ExecAllow[d.Name]; hay {
-		return lista, true
-	}
-	if lista, hay := p.ExecAllow[comodinFlota]; hay {
-		return lista, true
+	if comandos, _, hay := fleet.EntradaDeAllowlist(p.ExecAllow, d.Name); hay {
+		return comandos, true
 	}
 	return []string{}, true
 }

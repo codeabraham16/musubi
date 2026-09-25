@@ -422,6 +422,12 @@ func avisosDeInterpretes(p Principal) []string {
 // una sonda sobre la punta de T3: `Concesiones=[]` y `Allowlists=["op"]` para un `op` con `exec:
 // ["*"]` y `fleet_exec_allow: {"*": …}`. Exposición: 0, ninguna máquina del cerebro se llama `*`
 // (auditoría A131: altura-db, davantis-1, gio, musubi-server).
+//
+// Y LA DE ALLOWLISTS LA BUSCA fleet.EntradaDeAllowlist, LA MISMA QUE LA COMPUERTA (revisión 2). El
+// recorrido con SelectorNombra que dejó la revisión leía bien la clave, pero la compuerta
+// (argvPermitido) seguía buscándola por su cuenta y sin recortar: con una clave ` davantis `, este
+// informe avisaba que el rename rompía una allowlist que la compuerta ni siquiera encontraba. Ahora
+// «la entrada que nombra a esta máquina» es una sola respuesta para los tres que la preguntan.
 func (r *PrincipalRegistry) impactoDeNombre(device string) ImpactoDeNombre {
 	var imp ImpactoDeNombre
 	if r == nil || strings.TrimSpace(device) == "" {
@@ -441,11 +447,8 @@ func (r *PrincipalRegistry) impactoDeNombre(device string) ImpactoDeNombre {
 			}
 		}
 	allow:
-		for clave := range p.ExecAllow {
-			if fleet.SelectorNombra(clave, device) {
-				imp.Allowlists = append(imp.Allowlists, p.Name)
-				break
-			}
+		if _, nombrada, _ := fleet.EntradaDeAllowlist(p.ExecAllow, device); nombrada {
+			imp.Allowlists = append(imp.Allowlists, p.Name)
 		}
 	}
 	return imp

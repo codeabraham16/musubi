@@ -8,15 +8,15 @@ import "testing"
 // ════════════════════════════════════════════════════════════════════════════════════════════
 // POR QUÉ HACE FALTA
 //
-// Los PISOS de las dos tablas de alcance —la del dominio en internal/fleet y la de los consumidores
-// en internal/mcp— cuentan las formas que DeParecido les devuelve, y exigen cada una. Si una forma
-// aceptara cualquier par, el piso la encontraría en pares que no se parecen en nada (`nas` frente a
-// `davantis`) y quedaría satisfecho sin que la tabla trajera la fila que la ejercita: la guarda se
-// volvería hueca desde el instrumento que la mide, que es el mismo agujero que dejó al glob afuera
-// de la tabla de los consumidores. Y si una forma dejara de reconocer su par, los dos pisos pedirían
-// una fila que no se puede escribir. Esta prueba fija las dos direcciones.
+// Los PISOS de las tablas de alcance —las dos de máquinas y, desde la revisión 2 de T3, las dos de
+// servicios, en internal/fleet y en internal/mcp— cuentan las formas que DeParecido les devuelve, y
+// exigen cada una. Si una forma aceptara cualquier par, el piso la encontraría en pares que no se
+// parecen en nada (`nas` frente a `davantis`) y quedaría satisfecho sin que la tabla trajera la fila
+// que la ejercita: la guarda se volvería hueca desde el instrumento que la mide, que es el mismo
+// agujero que dejó al glob afuera de la tabla de los consumidores. Y si una forma dejara de reconocer
+// su par, los pisos pedirían una fila que no se puede escribir. Esta prueba fija las dos direcciones.
 //
-// No hay producción detrás: es el instrumento de los dos pisos, y lo que se mide es que no mienta.
+// No hay producción detrás: es el instrumento de los pisos, y lo que se mide es que no mienta.
 //
 // PISO: la tabla trae un par de cada forma de Formas(), y pares sin forma.
 //

@@ -26,6 +26,9 @@ import (
 //	argvPermitido     → la allowlist de comandos por máquina (`exec_allow`)
 //	Politica.Alcanza  → a qué máquinas alcanza una política (`config.yaml`)
 //
+// Los tres leen el nombre con la misma gramática (fleet.SelectorAlcanza y fleet.EntradaDeAllowlist),
+// y este informe también: ver methods_renombrar.go.
+//
 // Así que un rename le puede SACAR `exec` a alguien, o DÁRSELO, o meter una máquina adentro del
 // alcance de una política — sin que nadie lo haya pedido y sin que quede rastro de por qué. Este
 // tipo es lo que permite decirlo ANTES, en vez de que se descubra cuando algo deja de andar.

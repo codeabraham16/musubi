@@ -39,10 +39,12 @@ import (
 // Sin el primero, una comparación sin recorte pasa; sin el segundo, una compuerta que acepte
 // cualquier asterisco pasa.
 //
-// Sabotaje: la compuerta vuelve a leer el comodín por su cuenta, sin recortar.
+// Sabotaje: la compuerta vuelve a leer el comodín por su cuenta, sin recortar. (Con
+// fleet.ComodinMaquinas: el alias local `comodinFlota` que usaba este sabotaje se borró en la
+// revisión 2 de T3, justamente por ser la puerta de estas lecturas propias.)
 // arnes: archivo="internal/mcp/fleet_authz.go"
 // arnes: de="\t\tif fleet.EsComodin(selector) {\n"
-// arnes: a="\t\tif selector == comodinFlota {\n"
+// arnes: a="\t\tif selector == fleet.ComodinMaquinas {\n"
 func TestPuedeOtorgarLeeElComodinComoLaGramatica(t *testing.T) {
 	filas := []struct {
 		selector string

@@ -292,13 +292,21 @@ const ComodinMaquinas = "*"
 
 // EsComodin dice si un selector es el comodín: con los bordes recortados, como todo selector.
 //
-// ES LA ÚNICA LECTURA DEL COMODÍN (A131·T3, revisión). La hacen SelectorAlcanza y SelectorNombra, y
-// también puedeOtorgar (internal/mcp), la compuerta que decide si alguien puede CONCEDER una
-// capacidad a una máquina que se está dando de alta. Esa compuerta comparaba `selector == "*"` sin
-// recortar mientras SelectorAlcanza recortaba: con ` * `, la misma concesión alcanzaba a todas las
-// máquinas y no dejaba otorgarla en ninguna que naciera. Hoy no muerde, porque parsearFleet recorta
-// antes de que el selector llegue a la compuerta; justamente por eso nadie iba a ver el día que
-// mordiera.
+// ES LA ÚNICA LECTURA DEL COMODÍN (A131·T3 y sus dos revisiones). La hacen SelectorAlcanza,
+// SelectorNombra y EntradaDeAllowlist, y también puedeOtorgar (internal/mcp), la compuerta que decide
+// si alguien puede CONCEDER una capacidad a una máquina que se está dando de alta. Esa compuerta
+// comparaba `selector == "*"` sin recortar mientras SelectorAlcanza recortaba: con ` * `, la misma
+// concesión alcanzaba a todas las máquinas y no dejaba otorgarla en ninguna que naciera. Y la
+// allowlist de comandos buscaba su entrada `"*"` por su cuenta, también sin recortar. Hoy ninguna de
+// las dos muerde, porque parsearFleet y parsearExecAllow recortan antes de que el selector llegue a
+// una compuerta; justamente por eso nadie iba a ver el día que mordiera.
+//
+// Y LO SOSTIENE UNA GUARDA, NO ESTE COMENTARIO. La revisión 2 de T3 encontró que esta misma frase ya
+// estaba escrita y era falsa: argvPermitido y comandosPermitidos leían la entrada del comodín con
+// `p.ExecAllow[comodinFlota]`. TestLaAllowlistYElComodinSeLeenSoloConLaGramatica (internal/mcp) barre
+// el código de producción de internal/fleet y de internal/mcp, y falla con cualquier otra lectura del
+// comodín —ComodinMaquinas fuera de esta función, o un `"*"` escrito— y con cualquier lectura de
+// `fleet_exec_allow` por clave que no pase por EntradaDeAllowlist.
 func EsComodin(selector string) bool {
 	return strings.TrimSpace(selector) == ComodinMaquinas
 }
@@ -306,9 +314,10 @@ func EsComodin(selector string) bool {
 // SelectorAlcanza dice si un selector de máquina —de una política o de una concesión— alcanza a esta
 // máquina: el comodín, o su nombre EXACTO. Es LA gramática de «qué máquinas» del track y la leen
 // todos los que la necesitan: Politica.Alcanza, la compuerta de las concesiones (tieneGrant, en
-// internal/mcp) y, por SelectorNombra, las tres listas de los informes del rename (políticas,
-// concesiones y allowlists). Es una sola función para que no se puedan separar: de dos copias de una
-// comparación, la que se afloja no avisa.
+// internal/mcp), las tres listas de los informes del rename (políticas, concesiones y allowlists, por
+// SelectorNombra) y la allowlist de comandos (argvPermitido y comandosPermitidos, por
+// EntradaDeAllowlist, que lee la clave con SelectorNombra y el comodín con EsComodin). Es una sola
+// función para que no se puedan separar: de dos copias de una comparación, la que se afloja no avisa.
 //
 // EXACTO QUIERE DECIR EXACTO: sin prefijos, sin sufijos, sin mayúsculas indistintas y sin globs. En
 // la malla conviven `davantis` y `davantis-1`, que son dos máquinas distintas (la laptop Linux y la
@@ -339,6 +348,43 @@ func SelectorAlcanza(selector, nombreDevice string) bool {
 func SelectorNombra(selector, nombreDevice string) bool {
 	s := strings.TrimSpace(selector)
 	return s != "" && !EsComodin(s) && s == nombreDevice
+}
+
+// EntradaDeAllowlist busca, en una allowlist de comandos por máquina —la `fleet_exec_allow` de una
+// credencial: selector de máquina → argv[0] permitidos—, la entrada que manda sobre esta máquina.
+// Devuelve sus comandos, si esa entrada NOMBRA a la máquina (o es la del comodín), y si hay alguna.
+//
+// LA PRECEDENCIA ES LA DE argvPermitido (internal/mcp): la entrada que nombra a la máquina manda,
+// aunque esté VACÍA —así se apaga `exec` sobre una máquina puntual sin sacarla de la concesión—; si
+// ninguna la nombra, la del comodín. Sin ninguna de las dos, `hay` es false, y qué significa lo decide
+// quien llama: para la compuerta, que no pasa nada; para el informe del rename, que no hay entrada que
+// se rompa.
+//
+// LA CLAVE ES UN SELECTOR DE MÁQUINA, Y SE LEE CON LA GRAMÁTICA (A131·T3, revisión 2): SelectorNombra
+// para el nombre y EsComodin para el comodín, con los bordes recortados, como se leen `fleet:` y
+// `devices:`. argvPermitido y comandosPermitidos buscaban `p.ExecAllow[d.Name]` y
+// `p.ExecAllow[comodinFlota]` —una búsqueda por clave, sin recortar— mientras el informe del rename
+// leía la misma clave con SelectorNombra. Medido en la revisión 2 con una sonda: con la clave
+// ` davantis `, el informe listaba la allowlist como «se rompe» y argvPermitido no la encontraba; con
+// ` * `, EsComodin decía que era el comodín y argvPermitido lo ignoraba. Exposición: 0, porque
+// parsearExecAllow recorta cada clave y es el único constructor en producción. Lo que se cierra es la
+// tercera lectura del mismo selector, que es la que se separa sin avisar.
+//
+// En lo que arma parsearExecAllow hay a lo sumo una clave por máquina (recorta y guarda en un mapa).
+// En un mapa armado a mano con dos claves que nombran a la misma —`nas` y ` nas `—, cuál manda depende
+// del orden del recorrido.
+func EntradaDeAllowlist(porMaquina map[string][]string, nombreDevice string) (comandos []string, nombrada, hay bool) {
+	var delComodin []string
+	hayComodin := false
+	for clave, lista := range porMaquina {
+		if SelectorNombra(clave, nombreDevice) {
+			return lista, true, true
+		}
+		if EsComodin(clave) {
+			delComodin, hayComodin = lista, true
+		}
+	}
+	return delComodin, false, hayComodin
 }
 
 // LimpiarSelectores normaliza una lista de selectores de máquina.

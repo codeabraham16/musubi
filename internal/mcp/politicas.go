@@ -130,6 +130,14 @@ func (s *McpServer) ventanasParaPoliticas(ahora time.Time, contexto ...any) map[
 // EL ALCANCE NO SE MIRA ACÁ: lo decide aplicarPoliticas antes de llegar, antes incluso que la ventana
 // de mantenimiento (ver el porqué ahí). Quien llame a esta función ya eligió una máquina que la
 // política alcanza.
+//
+// Y POR ESO NO PUEDE TENER OTRO LLAMADOR (revisión 2 de T3). Una tool que la llamara sobre una máquina
+// elegida por otro criterio —«probar esta política acá»— actuaría fuera del alcance, y la tabla de
+// alcance no se pondría roja: mide al barrido, no a esta función. Lo sostiene
+// TestLaCadenaDeAccionDeUnaPoliticaTieneUnaSolaEntrada, que lee del código quién nombra a cada eslabón
+// de la cadena que termina en ejecutar. Repetir acá pol.Alcanza —el mismo predicado, y barato— se midió
+// y se descartó: con esa segunda lectura puesta, el glob propio que la tabla siembra en el barrido
+// queda en verde, y P2-m5 sólo se ve por el contador `mantenimiento`. El porqué entero, en esa prueba.
 func (s *McpServer) evaluarPolitica(pol fleet.Politica, d fleet.Device, ahora time.Time) bool {
 	if d.Revoked {
 		return false

@@ -1,18 +1,26 @@
 // Package fleettest les da a las pruebas de internal/fleet y de internal/mcp UNA clasificación de
-// las formas en que un selector de máquina se le parece a un nombre sin ser él (A131·T3).
+// las formas en que un nombre buscado —el selector de una máquina, o el `service:` de una política—
+// se le parece a un nombre del registro sin ser él (A131·T3).
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════
 // POR QUÉ ES UN PAQUETE Y NO UNA LISTA EN CADA TABLA
 //
-// Dos tablas recorren esas formas. La del dominio, TestUnSelectorAlcanzaSoloAlComodinOAlNombreExacto,
-// mide SelectorAlcanza, SelectorNombra y Politica.Alcanza, y exigía cada forma en un PISO. La de los
-// consumidores, TestUnaPoliticaActuaYFiguraSoloSobreLasMaquinasQueNombra, mide el barrido, el
-// inventario, la compuerta de las concesiones y los informes del rename, y tenía su lista de filas
+// Cuatro tablas recorren esas formas, dos de máquinas y dos de servicios. La del dominio,
+// TestUnSelectorAlcanzaSoloAlComodinOAlNombreExacto, mide SelectorAlcanza, SelectorNombra,
+// EntradaDeAllowlist y Politica.Alcanza, y exigía cada forma en un PISO. La de los consumidores,
+// TestUnaPoliticaActuaYFiguraSoloSobreLasMaquinasQueNombra, mide el barrido, el inventario, las
+// compuertas de las concesiones y de los comandos y los informes del rename, y tenía su lista de filas
 // escrita a mano, sin piso: le faltaba el GLOB. Medido en la revisión de T3 sobre la punta de la
 // rama: con una regla glob agregada a tieneGrant (`davan*` alcanzando a `davantis` y a
 // `davantis-1`), el paquete internal/mcp ENTERO quedaba en verde (ok 114,6 s); con la misma regla
 // en el barrido de aplicarPoliticas, también (ok 83,4 s). Una concesión o una política actuando
 // sobre máquinas que no nombran, y nada rojo.
+//
+// Y las dos de servicios —TestUnaPoliticaDeServicioEncuentraSuServicioPorElNombreExacto en el
+// dominio, TestUnaPoliticaDeServicioSoloMiraElServicioQueNombra en el barrido— tenían cada una la
+// suya, también escrita a mano y sin glob, hasta la revisión 2 de T3: una regla glob o la
+// normalización de `.service` en ServicioEn dejaban verdes a los dos paquetes. Ahora las cuatro
+// clasifican con DeParecido y exigen Formas(); las de servicios, en los dos sentidos del par.
 //
 // Un _test.go no se importa desde otro paquete, así que la clasificación que comparten vive acá,
 // como internal/memory/memtest. Dos copias de «qué es un parecido» se separan como se separaron las
@@ -86,6 +94,10 @@ func Formas() []Forma {
 //
 // Sólo tiene sentido para un par que el selector NO alcanza. El comodín alcanza a todas —y como
 // patrón calzaría con cualquiera—, así que quien llama saltea los pares que su fila alcanza.
+//
+// Para un servicio, el «selector» es el `service:` de la política y el «nombre», el que reporta la
+// máquina; las tablas de servicios lo piden además al revés —el reportado como selector del
+// buscado—, porque una búsqueda floja puede comparar en cualquiera de los dos sentidos.
 func DeParecido(selector, nombre string) Forma {
 	s := strings.TrimSpace(selector)
 	if s == "" || nombre == "" || s == nombre {

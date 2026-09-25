@@ -6,17 +6,21 @@ package fleet
 // contra el que la política declara— y las dos tenían la misma forma de agujero: una comparación
 // escrita a mano, custodiada por una prueba cuyo vecino no compartía nada con el nombre buscado.
 // Así, aflojar la comparación a un prefijo no ponía nada en rojo. Estas tablas recorren las formas
-// en que un nombre se le parece a otro sin ser él, contra las dos funciones del dominio que ahora
-// son las únicas que comparan: SelectorAlcanza/SelectorNombra y Politica.ServicioEn.
+// en que un nombre se le parece a otro sin ser él, contra las funciones del dominio que ahora son
+// las únicas que comparan: SelectorAlcanza/SelectorNombra (y EntradaDeAllowlist, que lee con ellas la
+// clave de una allowlist de comandos) y Politica.ServicioEn.
 //
 // Lo que estas tablas NO pueden ver es que un consumidor deje de usarlas y vuelva a comparar por
 // su cuenta. Eso lo miden, del lado de internal/mcp, TestUnaPoliticaActuaYFiguraSoloSobreLasMaquinasQueNombra
-// (el barrido, el inventario, la compuerta de las concesiones y los informes del rename, contra
-// hechos escritos y con un PISO sobre las MISMAS formas de parecido que exige la tabla de acá: las
-// dos las toman de internal/fleet/fleettest) y TestUnaPoliticaDeServicioSoloMiraElServicioQueNombra
-// (el barrido, contra cada forma de ausencia del servicio). Hasta la revisión de T3 la de los
-// consumidores tenía su lista de formas escrita a mano, sin piso, y le faltaba el glob: una regla
-// glob en tieneGrant, o en el barrido, dejaba internal/mcp entero en verde.
+// (el barrido, el inventario, la compuerta de las concesiones, la de los comandos y los informes del
+// rename, contra hechos escritos) y TestUnaPoliticaDeServicioSoloMiraElServicioQueNombra (el barrido,
+// contra cada forma de ausencia y de parecido del servicio), y TestLaAllowlistYElComodinSeLeenSoloConLaGramatica
+// mira el código: nadie lee `fleet_exec_allow` por clave ni el comodín fuera de la gramática. Las
+// cuatro tablas —dos de máquinas, dos de servicios— exigen en su PISO las MISMAS formas de parecido,
+// las de internal/fleet/fleettest. Hasta la revisión de T3 la de los consumidores tenía su lista de
+// formas escrita a mano y le faltaba el glob; hasta la revisión 2, las dos de servicios tenían la
+// suya, sin glob, y una regla glob o la normalización de `.service` en ServicioEn dejaban verdes a
+// los dos paquetes.
 
 import (
 	"strings"
@@ -54,9 +58,12 @@ import (
 // Cada fila es un selector y un nombre de máquina con dos HECHOS escritos: si el selector la
 // ALCANZA y si la NOMBRA (el comodín alcanza sin nombrar). Se miden las dos funciones de la
 // gramática y Politica.Alcanza, con el selector solo y detrás de otro que no nombra a nadie (una
-// lista es un «o»). Las filas recorren las formas en que un selector se le parece a un nombre sin
-// serlo: prefijo, sufijo, subcadena, el nombre como prefijo del selector, mayúsculas, un glob; y
-// las dos normalizaciones que sí valen: el comodín, y los espacios de los bordes del selector.
+// lista es un «o»); y EntradaDeAllowlist con el selector como única clave de una allowlist de
+// comandos, que manda sobre la máquina donde el selector la alcanza y la nombra donde la nombra
+// (revisión 2 de T3: la clave de `fleet_exec_allow` también es un selector). Las filas recorren las
+// formas en que un selector se le parece a un nombre sin serlo: prefijo, sufijo, subcadena, el
+// nombre como prefijo del selector, mayúsculas, un glob; y las dos normalizaciones que sí valen: el
+// comodín, y los espacios de los bordes del selector.
 //
 // PISO: la tabla tiene que traer al menos una fila de cada forma de parecido —se clasifican
 // mirando el par, no el nombre del caso, con fleettest.DeParecido—, todas con «no alcanza». Una
@@ -74,6 +81,13 @@ import (
 // arnes: archivo="internal/fleet/politica.go"
 // arnes: de="return s != \"\" && !EsComodin(s) && s == nombreDevice"
 // arnes: a="return s != \"\" && !EsComodin(s) && strings.EqualFold(s, nombreDevice)"
+//
+// Sabotaje: la búsqueda de la allowlist lee la clave CRUDA, sin recortar y con `==` —lo que hacían
+// argvPermitido y comandosPermitidos con `p.ExecAllow[d.Name]` hasta la revisión 2—, aunque sigue
+// excluyendo al comodín.
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="\t\tif SelectorNombra(clave, nombreDevice) {\n"
+// arnes: a="\t\tif clave == nombreDevice && !EsComodin(clave) {\n"
 func TestUnSelectorAlcanzaSoloAlComodinOAlNombreExacto(t *testing.T) {
 	type fila struct {
 		selector, maquina string
@@ -151,6 +165,13 @@ func TestUnSelectorAlcanzaSoloAlComodinOAlNombreExacto(t *testing.T) {
 			t.Errorf("una política con `devices: [\"otra-pc\", %q]` alcanza a %q = %v y la fila dice %v: una lista es "+
 				"un «o», y un selector que no nombra a nadie no puede tapar ni ampliar al siguiente", f.selector, f.maquina, got, f.alcanza)
 		}
+		// La allowlist de comandos con el selector como única clave: su entrada manda sobre la máquina
+		// exactamente donde el selector la alcanza, y la NOMBRA donde el selector la nombra.
+		if _, nombrada, hay := EntradaDeAllowlist(map[string][]string{f.selector: {"uptime"}}, f.maquina); hay != f.alcanza || nombrada != f.nombra {
+			t.Errorf("EntradaDeAllowlist con la clave %q sobre %q da manda=%v y nombra=%v, y la fila dice alcanza=%v y "+
+				"nombra=%v (%s): la allowlist de comandos lee su clave con otra gramática que la de las máquinas, y "+
+				"acota (o deja de acotar) a una máquina que no nombró", f.selector, f.maquina, hay, nombrada, f.alcanza, f.nombra, f.porque)
+		}
 	}
 
 	// Y una política sin selectores no alcanza a nadie: la ausencia nunca significa «todas».
@@ -184,14 +205,30 @@ func TestUnSelectorAlcanzaSoloAlComodinOAlNombreExacto(t *testing.T) {
 // encontraba NUNCA su servicio, porque todo nombre guardado está recortado. Exposición: 0, por lo
 // mismo (ninguna política de servicio).
 //
+// Y SU LISTA DE FORMAS ERA OTRA COPIA ESCRITA A MANO (revisión 2 de T3). El PISO de esta tabla era un
+// `switch` propio con cinco formas —el buscado como prefijo y como sufijo del reportado, el reportado
+// como prefijo y como subcadena del buscado, mayúsculas—, sin glob: el defecto que la revisión 1 marcó
+// BLOQUEANTE en la tabla de máquinas de internal/mcp, y que el doc de fleettest describe («dos copias
+// de "qué es un parecido" se separan»). Medido en la revisión 2 sobre 5b19840, contra los dos
+// paquetes enteros: una regla glob propia en ServicioEn (`service: "ngin*"` alcanza a lo que empieza
+// con `ngin`, NS3) → internal/fleet ok 3,888 s e internal/mcp ok 88,222 s; normalizar el sufijo
+// `.service` (NS2, el vecino que el manifiesto de P4-m7 pedía) → ok 3,907 s y ok 92,258 s.
+//
 // ════════════════════════════════════════════════════════════════════════════════════════════
 // QUÉ MIDE
 //
 // Politica.ServicioEn sobre cada forma del inventario: vacío, sólo parecidos, el exacto entre
 // parecidos (y tiene que devolver EL exacto, no el primer parecido), el nombre de la política con
-// bordes; y una política de host, que no mira ningún servicio. Los parecidos son las formas de
-// parecido del par —prefijo, sufijo, el buscado como prefijo del reportado, subcadena, mayúsculas—,
-// y un PISO exige que estén todas.
+// bordes, una política cuyo `service:` es un PATRÓN con lo que el patrón calza en el inventario; y
+// una política de host, que no mira ningún servicio.
+//
+// PISO: entre el servicio de cada política de la tabla y los nombres de su inventario, cada forma de
+// fleettest.Formas() —la MISMA clasificación que exigen las tablas de máquinas— en los DOS sentidos:
+// el buscado como selector del reportado (`nginx` frente a `nginx-exporter`) y al revés (`gin` frente
+// a `nginx`). Clasificado mirando el par y no el nombre del caso, así que una forma nueva de fleettest
+// se vuelve obligatoria acá sin tocar esta prueba. Y el nombre con el sufijo `.service`, que no es una
+// forma sino un HECHO de systemd —`systemctl` toma `nginx` y `nginx.service` como la misma unidad—,
+// así que es la normalización que alguien va a querer agregar.
 //
 // Sabotaje: la búsqueda vuelve a ser un recorrido con prefijo (P4-m7, portada a ServicioEn).
 // arnes: archivo="internal/fleet/politica.go"
@@ -202,32 +239,24 @@ func TestUnSelectorAlcanzaSoloAlComodinOAlNombreExacto(t *testing.T) {
 // arnes: archivo="internal/fleet/politica.go"
 // arnes: de="\tbuscado := strings.TrimSpace(p.Servicio)\n"
 // arnes: a="\tbuscado := p.Servicio\n"
+//
+// Sabotaje: la búsqueda normaliza el sufijo de unidad de systemd y toma `nginx.service` por `nginx`
+// (NS2 de la revisión 2, tal cual lo midió).
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="\t\tporNombre[sv.Nombre] = sv\n"
+// arnes: a="\t\tporNombre[strings.TrimSuffix(sv.Nombre, \".service\")] = sv\n"
+//
+// Sabotaje: la búsqueda suma una regla GLOB propia —un `service:` que termina en `*` alcanza a lo que
+// empieza igual— (NS3 de la revisión 2: el mismo bloque, insertado antes de armar el mapa para no
+// pisar el `de` de P4-m7).
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="\tporNombre := make(map[string]Servicio, len(inventario))\n"
+// arnes: a="\tif n := len(buscado) - 1; n > 0 && buscado[n] == '*' {\n\t\tfor _, sv := range inventario {\n\t\t\tif strings.HasPrefix(sv.Nombre, buscado[:n]) {\n\t\t\t\treturn sv, true\n\t\t\t}\n\t\t}\n\t}\n\tporNombre := make(map[string]Servicio, len(inventario))\n"
 func TestUnaPoliticaDeServicioEncuentraSuServicioPorElNombreExacto(t *testing.T) {
-	parecidos := []string{"nginx-exporter", "openresty-nginx", "ngin", "gin", "NGINX", "Nginx"}
-	// PISO: cada forma de parecido contra `nginx`, clasificada por el par.
-	formas := map[string]bool{}
-	for _, p := range parecidos {
-		switch {
-		case p == "nginx":
-			t.Fatalf("la lista de parecidos trae el nombre exacto: no mide nada")
-		case strings.HasPrefix(p, "nginx"):
-			formas["el buscado es prefijo del reportado"] = true
-		case strings.HasSuffix(p, "nginx"):
-			formas["el buscado es sufijo del reportado"] = true
-		case strings.HasPrefix("nginx", p):
-			formas["el reportado es prefijo del buscado"] = true
-		case strings.Contains("nginx", p):
-			formas["el reportado es subcadena del buscado"] = true
-		case strings.EqualFold(p, "nginx"):
-			formas["mayúsculas"] = true
-		}
-	}
-	for _, forma := range []string{"el buscado es prefijo del reportado", "el buscado es sufijo del reportado",
-		"el reportado es prefijo del buscado", "el reportado es subcadena del buscado", "mayúsculas"} {
-		if !formas[forma] {
-			t.Errorf("PISO: ningún parecido de la tabla tiene la forma %q; una búsqueda que la acepte queda en verde", forma)
-		}
-	}
+	// Los parecidos de `nginx`. Qué forma tiene cada uno no lo dice esta lista: lo clasifica fleettest
+	// en el PISO de abajo, mirando el par.
+	parecidos := []string{"nginx-exporter", "openresty-nginx", "lua-nginx-module", "nginx.service",
+		"ngin", "gin", "ginx", "NGINX", "Nginx", "*ginx"}
 
 	inventario := func(nombres ...string) []Servicio {
 		out := make([]Servicio, 0, len(nombres))
@@ -251,10 +280,12 @@ func TestUnaPoliticaDeServicioEncuentraSuServicioPorElNombreExacto(t *testing.T)
 		{"inventario vacío", deServicio("nginx"), inventario(), false, "la máquina dijo que no corre nada"},
 		{"sólo parecidos", deServicio("nginx"), inventario(parecidos...), false,
 			"cada uno es OTRO servicio: actuar por su estado es reiniciar nginx porque se cayó su exportador"},
-		{"el exacto entre parecidos", deServicio("nginx"), inventario(append([]string{"NGINX", "nginx-exporter", "ngin"}, "nginx")...), true,
+		{"el exacto entre parecidos", deServicio("nginx"), inventario(append(append([]string{}, parecidos...), "nginx")...), true,
 			"está, y tiene que ser ÉL y no el primer parecido del recorrido"},
 		{"el nombre de la política con bordes", deServicio(" nginx "), inventario("nginx-exporter", "nginx"), true,
 			"Validar y ClaveDeCooldown lo recortan: la búsqueda no puede ser la única que no"},
+		{"el `service:` es un patrón", deServicio("ngin*"), inventario("nginx", "nginx-exporter"), false,
+			"el nombre de un servicio es un NOMBRE: `ngin*` no es nginx ni su exportador, y leerlo como patrón es reiniciar lo que nadie nombró"},
 		{"política de host", Politica{Nombre: "vaciar", Principal: "curador", Cuando: CondMemPct, Sobre: []string{"*"},
 			Hacer: []string{"journalctl"}}, inventario("nginx", ""), false,
 			"una política de host no mira ningún servicio, ni siquiera uno sin nombre"},
@@ -262,10 +293,55 @@ func TestUnaPoliticaDeServicioEncuentraSuServicioPorElNombreExacto(t *testing.T)
 			Sobre: []string{"*"}, Servicio: "nginx", Hacer: []string{"journalctl"}}, inventario("nginx"), false,
 			"Validar la rechaza; si llegara igual, no se lee como una de servicio"},
 	}
+
+	// PISO: entre el servicio de cada política de servicio de la tabla y los nombres de su inventario,
+	// cada forma de fleettest en los DOS sentidos, clasificada por el par; y el sufijo de unidad de
+	// systemd. Es la MISMA clasificación que exigen las tablas de máquinas: hasta la revisión 2 de T3
+	// esta tabla tenía la suya, escrita a mano y sin glob.
+	for _, p := range parecidos {
+		if p == "nginx" {
+			t.Fatalf("la lista de parecidos trae el nombre exacto: no mide nada")
+		}
+	}
+	directas, inversas := map[fleettest.Forma]int{}, map[fleettest.Forma]int{}
+	conSufijoDeUnidad := 0
+	for _, c := range casos {
+		buscado := strings.TrimSpace(c.pol.Servicio)
+		if !c.pol.EsDeServicio() || buscado == "" {
+			continue
+		}
+		for _, sv := range c.inv {
+			if sv.Nombre == buscado {
+				continue
+			}
+			directas[fleettest.DeParecido(buscado, sv.Nombre)]++
+			inversas[fleettest.DeParecido(sv.Nombre, buscado)]++
+			if sv.Nombre == buscado+".service" {
+				conSufijoDeUnidad++
+			}
+		}
+	}
+	for _, forma := range fleettest.Formas() {
+		if directas[forma] == 0 {
+			t.Errorf("PISO: ninguna fila pone el servicio de su política frente a un nombre del inventario con la forma "+
+				"%q (el buscado como selector del reportado); una búsqueda que la acepte queda en verde", forma)
+		}
+		if inversas[forma] == 0 {
+			t.Errorf("PISO: ninguna fila pone un nombre del inventario frente al servicio de su política con la forma "+
+				"%q (el reportado como selector del buscado); una búsqueda que compare al revés queda en verde", forma)
+		}
+	}
+	if conSufijoDeUnidad == 0 {
+		t.Errorf("PISO: ninguna fila trae el servicio buscado con el sufijo `.service` en el inventario: `systemctl` los " +
+			"toma como la misma unidad, y una búsqueda que los normalice decidiría por el estado de otro nombre")
+	}
+
 	for _, c := range casos {
 		sv, esta := c.pol.ServicioEn(c.inv)
 		if esta != c.esta {
-			t.Errorf("%s: ServicioEn dice está=%v y la fila dice %v (%s)", c.caso, esta, c.esta, c.porque)
+			// Con el nombre que devolvió: dos búsquedas flojas distintas (un prefijo, el sufijo `.service`)
+			// caen en la misma fila, y lo que las distingue es a QUIÉN confundieron con el buscado.
+			t.Errorf("%s: ServicioEn dice está=%v (devolvió %q) y la fila dice %v (%s)", c.caso, esta, sv.Nombre, c.esta, c.porque)
 			continue
 		}
 		if esta && sv.Nombre != strings.TrimSpace(c.pol.Servicio) {

@@ -12,14 +12,15 @@ package mcp
 //
 // Las dos tablas de este archivo recorren los ejes enteros, y entran por el barrido que corre en
 // producción (aplicarPoliticas): las formas de parecerse sin ser, cada condición declarada (leída
-// del AST), los cuatro lugares que leen un selector —el barrido que actúa, el inventario que lo
-// cuenta, la compuerta de las concesiones y el informe del rename— y cada forma en que un servicio
-// puede faltar. Los hechos contra los que comparan están ESCRITOS en cada fila: no se derivan de
-// Alcanza ni de ServicioEn, que son lo que miden. Las mismas formas, contra las funciones del
-// dominio solas, las recorren las tablas de internal/fleet/politica_alcance_test.go; las formas de
-// parecido de las máquinas las exigen las dos con un PISO sobre la MISMA clasificación
-// (internal/fleet/fleettest), porque en la revisión de T3 la de acá tenía su lista escrita a mano y
-// le faltaba el glob.
+// del AST), los cinco lugares que leen un selector —el barrido que actúa, el inventario que lo
+// cuenta, la compuerta de las concesiones, la de los comandos (`fleet_exec_allow`) y el informe del
+// rename— y cada forma en que un servicio puede faltar o parecerse. Los hechos contra los que
+// comparan están ESCRITOS en cada fila: no se derivan de Alcanza ni de ServicioEn, que son lo que
+// miden. Las mismas formas, contra las funciones del dominio solas, las recorren las tablas de
+// internal/fleet/politica_alcance_test.go; las formas de parecido las exigen las cuatro —dos de
+// máquinas, dos de servicios— con un PISO sobre la MISMA clasificación (internal/fleet/fleettest):
+// en la revisión de T3 la tabla de máquinas de acá tenía su lista escrita a mano y le faltaba el
+// glob, y en la revisión 2 las dos de servicios tenían la suya, sin glob ni subcadena.
 
 import (
 	"slices"
@@ -201,6 +202,14 @@ func condicionCumplida(t *testing.T, s *McpServer, pol fleet.Politica, d fleet.D
 // de las credenciales con sus dos listas, la de concesiones y la de allowlists (`fleet_exec_allow`
 // con el mismo selector de clave, también por su parser).
 //
+// Y LA COMPUERTA DE LOS COMANDOS, que esa misma allowlist acota (revisión 2 de T3): sin entrada `*`
+// —sus claves son los selectores de la fila—, el comando pasa exactamente en las máquinas que la fila
+// alcanza (argvPermitido), y el inventario muestra la lista ahí y sólo ahí (comandosPermitidos). La
+// revisión 2 midió que faltaba: una regla de prefijo en argvPermitido (la allowlist de `davantis`
+// aplicada a `davantis-1`, también para las políticas) dejaba internal/mcp entero sin una sola prueba
+// de comportamiento en rojo —sólo el censo, por un `de` que la mutación borraba—, porque las pruebas
+// de la allowlist usan `nas`, `pc-gio` y `produccion`: el mismo eje clavado que tenía P2-m4.
+//
 // No es un t.Helper A PROPÓSITO: cada aserción tiene que reportar su propia línea, que es con lo que
 // el arnés distingue un sabotaje de otro.
 func exigirLosOtrosLectoresDelSelector(t *testing.T, sobre []string, alcanza, nombra map[string]bool) {
@@ -248,6 +257,17 @@ func exigirLosOtrosLectoresDelSelector(t *testing.T, sobre []string, alcanza, no
 				"que la nombra = %v: el mismo informe lee las concesiones y las allowlists con dos criterios, y avisa que se "+
 				"rompe una entrada que sobrevive al rename (o calla una que no)", n, sobre, got, nombra[n])
 		}
+		if got := argvPermitido(&concesion, maquinas[n], []string{"journalctl"}); got != alcanza[n] {
+			t.Errorf("una allowlist `fleet_exec_allow` con claves %q y sin entrada `*` deja correr `journalctl` en %s = %v, "+
+				"y la fila dice que el selector la alcanza = %v: la compuerta de los comandos lee la clave con otra gramática "+
+				"que la de las máquinas, y le abre (o le cierra) un comando a una máquina que la allowlist no nombró",
+				sobre, n, got, alcanza[n])
+		}
+		if comandos, acotada := comandosPermitidos(&concesion, maquinas[n]); !acotada || slices.Contains(comandos, "journalctl") != alcanza[n] {
+			t.Errorf("el inventario de %s muestra la allowlist con claves %q como %q (acotada=%v), y la fila dice que el "+
+				"selector la alcanza = %v: lo que el inventario dice que se puede correr no es lo que la compuerta deja pasar",
+				n, sobre, comandos, acotada, alcanza[n])
+		}
 	}
 }
 
@@ -285,6 +305,12 @@ func exigirLosOtrosLectoresDelSelector(t *testing.T, sobre []string, alcanza, no
 //     allowlists, había quedado comparando por su cuenta (`p.ExecAllow[device]`): para una máquina
 //     `*` listaba la entrada del comodín mientras la de concesiones ya no listaba la concesión `*`.
 //
+// Y UN TERCERO, medido en la revisión 2 de T3 (sobre 5b19840, contra internal/mcp ENTERO): LA
+// COMPUERTA DE LOS COMANDOS. La misma clave de `fleet_exec_allow` que el informe del rename ya leía
+// con la gramática, argvPermitido y comandosPermitidos la buscaban por su cuenta (`p.ExecAllow[d.Name]`,
+// sin recortar), y la tabla no los miraba: con una regla de prefijo en argvPermitido (NS1), la única
+// prueba roja fue el censo. Ahora los dos preguntan a fleet.EntradaDeAllowlist, y la tabla los mide.
+//
 // Y UN DEFECTO VIVO DEL MISMO EJE, encontrado al mover el alcance: el barrido contaba la ventana de
 // mantenimiento ANTES de mirar el alcance (vivía adentro de evaluarPolitica), así que una ventana en
 // una máquina que la política ni nombra le sumaba `mantenimiento` a esa política. El contador que
@@ -309,9 +335,11 @@ func exigirLosOtrosLectoresDelSelector(t *testing.T, sobre []string, alcanza, no
 //
 //  1. LOS OTROS LECTORES DEL SELECTOR, que no dependen de la condición: la compuerta de una
 //     concesión con el MISMO selector, parseada como la de principals.yaml, alcanza exactamente donde
-//     la política alcanza, en cada capacidad que la máquina admite; y los dos informes del rename
-//     —el de las políticas, y el de las credenciales con sus listas de concesiones y de allowlists—
-//     la listan como «se rompe» exactamente donde la nombra.
+//     la política alcanza, en cada capacidad que la máquina admite; una `fleet_exec_allow` con el
+//     mismo selector de clave y sin entrada `*` deja pasar el comando exactamente ahí, y el
+//     inventario muestra esa lista ahí; y los dos informes del rename —el de las políticas, y el de
+//     las credenciales con sus listas de concesiones y de allowlists— la listan como «se rompe»
+//     exactamente donde la nombra.
 //  2. En CADA condición declarada (AST), con la condición cumplida en todas las máquinas: el barrido
 //     actúa exactamente en las que alcanza y cuenta `ok` esas veces y nada más; el inventario publica
 //     `politicas_activas` —nunca en cero— exactamente en ésas, con el detalle de la política; y con
@@ -391,14 +419,26 @@ func exigirLosOtrosLectoresDelSelector(t *testing.T, sobre []string, alcanza, no
 // arnes: arreglo_de="if fleet.SelectorNombra(sel, device) {"
 // arnes: arreglo_a="if sel == device && !fleet.EsComodin(sel) {"
 //
-// Sabotaje: la lista de allowlists del informe vuelve a comparar la clave por su cuenta, que es lo
-// que hacía `p.ExecAllow[device]` antes de la revisión. El arreglo vuelve a esa búsqueda por clave
-// pero excluye el comodín: la guarda mide lo que la lista dice, no cómo se recorre el mapa.
+// Sabotaje: la lista de allowlists del informe vuelve a buscar la clave por su cuenta, con el
+// `p.ExecAllow[device]` de antes de la revisión: para la máquina `*` encuentra la entrada del
+// comodín. Desde la revisión 2 la lista pregunta a fleet.EntradaDeAllowlist, la misma búsqueda que
+// la compuerta; el arreglo le pregunta lo mismo con otras palabras (`hay && nombrada`), porque la
+// guarda mide lo que la lista dice y no cómo se pregunta. (El arreglo de antes —la búsqueda por
+// clave con el comodín excluido— ya no es un cambio correcto: lo prohíbe
+// TestLaAllowlistYElComodinSeLeenSoloConLaGramatica.)
 // arnes: archivo="internal/mcp/principals.go"
-// arnes: de="if fleet.SelectorNombra(clave, device) {"
-// arnes: a="if clave == device {"
-// arnes: arreglo_de="\t\tfor clave := range p.ExecAllow {\n\t\t\tif fleet.SelectorNombra(clave, device) {\n\t\t\t\timp.Allowlists = append(imp.Allowlists, p.Name)\n\t\t\t\tbreak\n\t\t\t}\n\t\t}\n"
-// arnes: arreglo_a="\t\tif _, hay := p.ExecAllow[device]; hay && !fleet.EsComodin(device) {\n\t\t\timp.Allowlists = append(imp.Allowlists, p.Name)\n\t\t}\n"
+// arnes: de="if _, nombrada, _ := fleet.EntradaDeAllowlist(p.ExecAllow, device); nombrada {"
+// arnes: a="if _, nombrada := p.ExecAllow[device]; nombrada {"
+// arnes: arreglo_de="if _, nombrada, _ := fleet.EntradaDeAllowlist(p.ExecAllow, device); nombrada {"
+// arnes: arreglo_a="if _, nombrada, hay := fleet.EntradaDeAllowlist(p.ExecAllow, device); hay && nombrada {"
+//
+// Sabotaje: la compuerta de los comandos acepta una clave de `fleet_exec_allow` que sea PREFIJO del
+// nombre (NS1 de la revisión 2, portado: la búsqueda propia ya no está en argvPermitido, así que el
+// sabotaje la vuelve a poner, con el prefijo, antes de preguntarle a la gramática). La allowlist de
+// `davantis` se aplica a `davantis-1`, también para las políticas.
+// arnes: archivo="internal/mcp/fleet_authz.go"
+// arnes: de="\t\treturn true // 1\n\t}\n"
+// arnes: a="\t\treturn true // 1\n\t}\n\tfor clave, lista := range p.ExecAllow {\n\t\tif !fleet.EsComodin(clave) && len(clave) <= len(d.Name) && d.Name[:len(clave)] == clave {\n\t\t\treturn fleet.PermiteArgv(lista, argv)\n\t\t}\n\t}\n"
 func TestUnaPoliticaActuaYFiguraSoloSobreLasMaquinasQueNombra(t *testing.T) {
 	filas := []struct {
 		caso    string
@@ -649,6 +689,15 @@ func TestUnaPoliticaActuaYFiguraSoloSobreLasMaquinasQueNombra(t *testing.T) {
 // ni históricos—, y en el inventario real hay tres pares donde un nombre es prefijo de otro
 // (NetworkManager/NetworkManager-wait-online, agora-searx/agora-searxng, forgejo/forgejo-runner).
 //
+// Y LAS FORMAS DE PARECERSE ERAN OTRA LISTA ESCRITA A MANO, la de esta misma tabla (revisión 2 de T3).
+// Lo que decidía si un parecido «se parece de verdad» eran cuatro predicados —prefijo en los dos
+// sentidos, sufijo, mayúsculas—, sin subcadena ni glob: el defecto que la revisión 1 marcó en la
+// tabla de máquinas, en la de servicios. Medido en la revisión 2 sobre 5b19840, contra los dos
+// paquetes enteros: una regla glob propia en ServicioEn (`service: "ngin*"` alcanza a lo que empieza
+// con `ngin`, NS3) dejó internal/fleet e internal/mcp en ok; normalizar el sufijo `.service` (NS2, el
+// vecino que el manifiesto de P4-m7 pedía), también. Ahora las formas salen de fleettest, las MISMAS
+// que exige la tabla de máquinas.
+//
 // ════════════════════════════════════════════════════════════════════════════════════════════
 // QUÉ MIDE
 //
@@ -657,15 +706,22 @@ func TestUnaPoliticaActuaYFiguraSoloSobreLasMaquinasQueNombra(t *testing.T) {
 // (`WHERE device_id = ? AND revoked = 0`): una máquina sin filas, con filas de otros nombres, o con
 // la de este nombre dada de baja. A eso se suman el servicio presente pero sano entre parecidos que
 // cumplen, su espejo (presente y cumpliendo entre parecidos sanos), el control (presente y
-// cumpliendo, solo) y el nombre de la política con bordes. En las formas de la ausencia los parecidos
-// CUMPLEN la condición: si la política los mirara, actuaría. Todo entra por aplicarPoliticas, y se
-// mira la bitácora de la máquina, la marca de cooldown (prueba que la decisión llegó al tramo de
-// acción) y el contador de la política.
+// cumpliendo, solo), el nombre de la política con bordes, el nombre con el sufijo de unidad de
+// systemd (`nginx.service`) solo y cumpliendo, y una política cuyo `service:` es un PATRÓN (`ngin*`)
+// con lo que el patrón calza cumpliendo: el nombre de un servicio es un nombre. En
+// las formas de la ausencia los parecidos CUMPLEN la condición: si la política los mirara, actuaría.
+// Todo entra por aplicarPoliticas, y se mira la bitácora de la máquina, la marca de cooldown (prueba
+// que la decisión llegó al tramo de acción) y el contador de la política.
 //
 // PISO: cada forma se relee del registro y tiene que ser la que dice (vacío, sin el nombre, con el
-// nombre revocado), con lo último que reportó la máquina entero en el inventario activo; y los
-// parecidos se parecen de verdad —una comparación laxa los confunde con el buscado— y están en el
-// estado que la fila dice.
+// nombre revocado), con lo último que reportó la máquina entero en el inventario activo; los
+// parecidos se parecen de verdad —fleettest los clasifica— y están en el estado que la fila dice;
+// entre el servicio de cada política y lo que reporta la máquina, la tabla trae cada forma de
+// fleettest.Formas() en los DOS sentidos (el buscado como selector del reportado, y al revés),
+// clasificada por el par, así que una forma nueva se vuelve obligatoria acá y en las otras tres
+// tablas a la vez; y el nombre con el sufijo `.service`, que no es una forma sino un HECHO de
+// systemd —`systemctl` toma `nginx` y `nginx.service` como la misma unidad—, así que es la
+// normalización que alguien va a querer agregar.
 //
 // Sabotaje: el barrido trata un inventario vacío como el servicio caído (P4-m8, portada: la
 // búsqueda ya no es un bucle y el umbral ya no es una variable local).
@@ -678,6 +734,20 @@ func TestUnaPoliticaActuaYFiguraSoloSobreLasMaquinasQueNombra(t *testing.T) {
 // arnes: archivo="internal/mcp/politicas.go"
 // arnes: de="\tif !esta {\n"
 // arnes: a="\tfor _, x := range servicios {\n\t\tif !esta && strings.HasPrefix(x.Nombre, strings.TrimSpace(pol.Servicio)) {\n\t\t\tsv, esta = x, true\n\t\t}\n\t}\n\tif !esta {\n"
+//
+// Sabotaje: ServicioEn suma una regla GLOB propia —un `service:` que termina en `*` alcanza a lo que
+// empieza igual— (NS3 de la revisión 2, el mismo bloque, insertado después del corte de las de host
+// para no pisar el `de` de las directivas del dominio).
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="\tif !p.EsDeServicio() || buscado == \"\" {\n\t\treturn Servicio{}, false\n\t}\n"
+// arnes: a="\tif !p.EsDeServicio() || buscado == \"\" {\n\t\treturn Servicio{}, false\n\t}\n\tif n := len(buscado) - 1; n > 0 && buscado[n] == '*' {\n\t\tfor _, sv := range inventario {\n\t\t\tif strings.HasPrefix(sv.Nombre, buscado[:n]) {\n\t\t\t\treturn sv, true\n\t\t\t}\n\t\t}\n\t}\n"
+//
+// Sabotaje: ServicioEn toma `nginx.service` por `nginx` —normaliza el sufijo de unidad de systemd—
+// (NS2 de la revisión 2, con otra forma: un recorrido antes de la búsqueda por clave, para no pisar
+// el `de` de la directiva del dominio).
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="func (p Politica) ServicioEn(inventario []Servicio) (Servicio, bool) {\n"
+// arnes: a="func (p Politica) ServicioEn(inventario []Servicio) (Servicio, bool) {\n\tif b := strings.TrimSpace(p.Servicio); p.EsDeServicio() && b != \"\" {\n\t\tfor _, sv := range inventario {\n\t\t\tif strings.TrimSuffix(sv.Nombre, \".service\") == b {\n\t\t\t\treturn sv, true\n\t\t\t}\n\t\t}\n\t}\n"
 func TestUnaPoliticaDeServicioSoloMiraElServicioQueNombra(t *testing.T) {
 	var condiciones []fleet.Condicion
 	for c := range condicionesDeclaradas(t) {
@@ -702,11 +772,29 @@ func TestUnaPoliticaDeServicioSoloMiraElServicioQueNombra(t *testing.T) {
 		fleet.CondServicioReinicios: {supera: 3, cumple: fleet.SaludServicio{Estado: fleet.EstadoCorriendo, Reinicios: &nueve},
 			sana: fleet.SaludServicio{Estado: fleet.EstadoCorriendo, Reinicios: &cero}},
 	}
-	parecidos := []string{"nginx-exporter", "openresty-nginx", "ngin", "NGINX"}
+	// Los parecidos de `nginx`: cada forma de fleettest en los dos sentidos —el PISO de abajo la exige,
+	// clasificada por el par y no por esta lista—. El sufijo de unidad de systemd va APARTE, en una fila
+	// propia: `nginx.service` también es un prefijo, y en la misma fila que los demás, una búsqueda que
+	// normalice el sufijo y una que acepte prefijos caerían en el mismo renglón con el mismo mensaje, y
+	// el arnés las contaría como un solo sabotaje.
+	parecidos := []string{"nginx-exporter", "openresty-nginx", "lua-nginx-module",
+		"ngin", "gin", "ginx", "NGINX", "*ginx"}
+	const conSufijo = "nginx.service"
 
 	type reporte struct {
 		nombre string
 		cumple bool
+	}
+	// conParecidos es un lote con el servicio buscado (si va) y todos los parecidos en una salud.
+	conParecidos := func(buscado *reporte, parecidosCumplen bool) []reporte {
+		var out []reporte
+		if buscado != nil {
+			out = append(out, *buscado)
+		}
+		for _, p := range parecidos {
+			out = append(out, reporte{p, parecidosCumplen})
+		}
+		return out
 	}
 	// Cada forma dice también cómo tiene que quedar el registro antes del barrido —sin filas activas,
 	// con el servicio buscado activo, con él dado de baja—, y el PISO lo relee: una fila que no deja
@@ -726,18 +814,24 @@ func TestUnaPoliticaDeServicioSoloMiraElServicioQueNombra(t *testing.T) {
 		{"inventario vacío: la máquina nunca enumeró", "nginx", nil,
 			registroEsperado{vacio: true}, false,
 			"la forma más común de la ausencia; no saber no es una razón para tocar una máquina"},
-		{"sólo parecidos, y todos cumplen la condición", "nginx", [][]reporte{
-			{{parecidos[0], true}, {parecidos[1], true}, {parecidos[2], true}, {parecidos[3], true}}},
+		{"sólo parecidos, y todos cumplen la condición", "nginx", [][]reporte{conParecidos(nil, true)},
 			registroEsperado{}, false,
 			"cada uno es OTRO servicio: actuar por su estado es reiniciar nginx porque se cayó su exportador"},
+		{"sólo el nombre con el sufijo de unidad, y cumple la condición", "nginx", [][]reporte{{{conSufijo, true}}},
+			registroEsperado{}, false,
+			"`systemctl` toma `nginx.service` por `nginx`, pero el inventario los guarda como dos nombres y la política nombra uno"},
 		{"el servicio está sano y los parecidos cumplen", "nginx", [][]reporte{
-			{{"nginx", false}, {parecidos[0], true}, {parecidos[1], true}, {parecidos[2], true}, {parecidos[3], true}}},
+			append(conParecidos(&reporte{"nginx", false}, true), reporte{conSufijo, true})},
 			registroEsperado{activo: true}, false,
 			"la política juzga SU servicio, no el primero que se le parezca"},
 		{"el servicio cumple y los parecidos están sanos", "nginx", [][]reporte{
-			{{"nginx", true}, {parecidos[0], false}, {parecidos[1], false}, {parecidos[2], false}, {parecidos[3], false}}},
+			append(conParecidos(&reporte{"nginx", true}, false), reporte{conSufijo, false})},
 			registroEsperado{activo: true}, true,
 			"el espejo de la anterior: una búsqueda que se quede con un parecido sano deja caído al servicio que sí nombra"},
+		{"el `service:` es un patrón, y lo que el patrón calza cumple", "ngin*", [][]reporte{
+			{{"nginx", true}, {"nginx-exporter", true}}},
+			registroEsperado{}, false,
+			"el nombre de un servicio es un NOMBRE: `ngin*` no es nginx ni su exportador, y leerlo como patrón es reiniciar lo que nadie nombró"},
 		{"el servicio está dado de baja con la última salud cumpliendo", "nginx", [][]reporte{
 			{{"nginx", true}, {"sshd", false}}, {{"sshd", false}}},
 			registroEsperado{revocado: true}, false,
@@ -745,6 +839,44 @@ func TestUnaPoliticaDeServicioSoloMiraElServicioQueNombra(t *testing.T) {
 		{"la política escribe el nombre con espacios en los bordes", " nginx ", [][]reporte{{{"nginx", true}}},
 			registroEsperado{activo: true}, true,
 			"Validar y ClaveDeCooldown recortan el nombre, y la búsqueda no puede ser la única que no"},
+	}
+
+	// PISO: entre el servicio de cada política y lo que reporta la máquina, cada forma de parecido de
+	// fleettest —las MISMAS que exigen las tablas de máquinas— en los DOS sentidos, clasificada mirando
+	// el par y no la lista de parecidos; y el nombre con el sufijo de unidad de systemd. Sin esto la
+	// lista de parecidos vuelve a ser una enumeración a mano, que es como le faltaron el glob y
+	// `.service`.
+	directas, inversas := map[fleettest.Forma]int{}, map[fleettest.Forma]int{}
+	conSufijoDeUnidad := 0
+	for _, f := range formas {
+		buscado := strings.TrimSpace(f.servicio)
+		for _, lote := range f.lotes {
+			for _, r := range lote {
+				if r.nombre == buscado {
+					continue
+				}
+				directas[fleettest.DeParecido(buscado, r.nombre)]++
+				inversas[fleettest.DeParecido(r.nombre, buscado)]++
+				if r.nombre == buscado+".service" {
+					conSufijoDeUnidad++
+				}
+			}
+		}
+	}
+	for _, forma := range fleettest.Formas() {
+		if directas[forma] == 0 {
+			t.Errorf("PISO: ninguna fila pone el servicio de su política frente a un nombre reportado con la forma %q "+
+				"(el buscado como selector del reportado). Sin ese par, una búsqueda que acepte esa forma —en ServicioEn o "+
+				"en el barrido— deja esta tabla en verde, como la dejaban una regla glob y el sufijo `.service`", forma)
+		}
+		if inversas[forma] == 0 {
+			t.Errorf("PISO: ninguna fila pone un nombre reportado frente al servicio de su política con la forma %q "+
+				"(el reportado como selector del buscado): una búsqueda que compare al revés queda en verde", forma)
+		}
+	}
+	if conSufijoDeUnidad == 0 {
+		t.Errorf("PISO: ninguna fila reporta el servicio buscado con el sufijo `.service`: `systemctl` los toma como la " +
+			"misma unidad, y una búsqueda que los normalice actuaría por el estado de otro nombre sin que nada lo diga")
 	}
 
 	for _, cond := range condiciones {
@@ -813,9 +945,11 @@ func TestUnaPoliticaDeServicioSoloMiraElServicioQueNombra(t *testing.T) {
 					}
 				}
 				dominio := s.politicas[0]
-				// Los parecidos se parecen DE VERDAD —una comparación laxa los confunde con el buscado— y
-				// están en el estado que la fila dice: si cumplen, la política actuaría mirándolos; si
-				// están sanos, mirarlos la dejaría quieta.
+				// Los parecidos se parecen DE VERDAD —fleettest los clasifica, en los dos sentidos: la MISMA
+				// clasificación que exigen las tablas de máquinas— y están en el estado que la fila dice: si
+				// cumplen, la política actuaría mirándolos; si están sanos, mirarlos la dejaría quieta. Un
+				// vecino que no se parece en nada (`sshd`) no es una trampa y no se mira; uno de la lista de
+				// parecidos que no se parezca es una fila mal escrita.
 				reportado := map[string]bool{}
 				if n := len(f.lotes); n > 0 {
 					for _, r := range f.lotes[n-1] {
@@ -823,16 +957,25 @@ func TestUnaPoliticaDeServicioSoloMiraElServicioQueNombra(t *testing.T) {
 					}
 				}
 				for _, sv := range activos {
-					if sv.Nombre == buscado || !slices.Contains(parecidos, sv.Nombre) {
+					if sv.Nombre == buscado {
 						continue
 					}
-					parece := strings.HasPrefix(sv.Nombre, buscado) || strings.HasPrefix(buscado, sv.Nombre) ||
-						strings.HasSuffix(sv.Nombre, buscado) || strings.EqualFold(sv.Nombre, buscado)
+					forma := fleettest.DeParecido(buscado, sv.Nombre)
+					if forma == "" {
+						forma = fleettest.DeParecido(sv.Nombre, buscado)
+					}
+					if forma == "" {
+						if slices.Contains(parecidos, sv.Nombre) {
+							t.Fatalf("PISO: el parecido %q no se parece a %q en ninguna forma de fleettest: no es la trampa que la fila dice",
+								sv.Nombre, buscado)
+						}
+						continue
+					}
 					otra := dominio
 					otra.Servicio = sv.Nombre
-					if _, dispara := otra.DisparaSobreServicio(sv, servicioFresco(sv, ahora)); !parece || dispara != reportado[sv.Nombre] {
-						t.Fatalf("PISO: el parecido %q se parece=%v y cumple=%v (la fila lo reportó cumpliendo=%v): no es la trampa que la fila dice",
-							sv.Nombre, parece, dispara, reportado[sv.Nombre])
+					if _, dispara := otra.DisparaSobreServicio(sv, servicioFresco(sv, ahora)); dispara != reportado[sv.Nombre] {
+						t.Fatalf("PISO: el parecido %q (%s) cumple=%v y la fila lo reportó cumpliendo=%v: no es la trampa que la fila dice",
+							sv.Nombre, forma, dispara, reportado[sv.Nombre])
 					}
 				}
 
