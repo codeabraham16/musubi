@@ -200,6 +200,7 @@ func TestElArgvDeBitacoraNuncaLlevaLaContrasena(t *testing.T) {
 // arnes: archivo="internal/fleet/cronologia.go"
 // arnes: de="\treturn !t.Before(v.Desde) && t.Before(v.Hasta)"
 // arnes: a="\treturn !t.Before(v.Desde) && !t.After(v.Hasta)"
+// arnes: colision_ok="TestUnMosaicoDeVentanasCuentaCadaInstanteUnaVez"
 func TestLaVentanaEsSemiabierta(t *testing.T) {
 	base := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 	manana := Ventana{Desde: base.Add(-12 * time.Hour), Hasta: base}
