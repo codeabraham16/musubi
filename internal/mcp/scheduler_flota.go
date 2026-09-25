@@ -144,7 +144,7 @@ func (s *McpServer) validarPrincipalDePolitica(pol fleet.Politica, lookup princi
 	//     política inerte (que ya se avisa y se cuenta en cada tick) en una caída total;
 	//   - y el error diría «no existe en principals.yaml» de alguien que está ahí escrito, que
 	//     manda a buscar el problema donde no está.
-	// La ejecución la cierra porNombre en actuarSiCorresponde/politicaPuedeActuar, no esto.
+	// La ejecución la cierra porNombre en autoridadDePolitica (acción e inventario), no esto.
 	pr, existe := lookup.porNombreAunqueVencida(pol.Principal)
 	if !existe {
 		return fmt.Errorf("política %q: el principal %q no existe en principals.yaml", pol.Nombre, pol.Principal)

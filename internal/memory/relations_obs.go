@@ -74,6 +74,27 @@ type ObsRelation struct {
 // nuevo). Es idempotente por par: el mismo par actualiza el veredicto en vez de
 // duplicar.
 func (e *DbEngine) UpsertObsRelation(r ObsRelation) (string, error) {
+	r, err := upsertObsRelationCon(e.db, r)
+	if err != nil {
+		return "", err
+	}
+	// El par puede haber existido con otro id (ON CONFLICT no cambia el id): devolver
+	// el id realmente persistido.
+	var id string
+	if err := e.db.QueryRow(
+		`SELECT id FROM observation_relations WHERE source_id=? AND target_id=?`,
+		r.SourceID, r.TargetID,
+	).Scan(&id); err != nil {
+		return r.ID, nil // best-effort: si falla la relectura, devolver el tentativo
+	}
+	return id, nil
+}
+
+// upsertObsRelationCon es el upsert de UpsertObsRelation sobre el ejecutor que le den: la base o una
+// transacción. Existe para que quien tiene que escribir la relación JUNTO con otra cosa —deshacer una
+// fusión y marcar el par en el mismo commit— use este SQL y no una copia de él. Devuelve la relación
+// con los defaults aplicados.
+func upsertObsRelationCon(ex execQuerier, r ObsRelation) (ObsRelation, error) {
 	if r.Relation == "" {
 		r.Relation = RelPending
 	}
@@ -86,7 +107,7 @@ func (e *DbEngine) UpsertObsRelation(r ObsRelation) (string, error) {
 	// lex/cosine viajan como NULL cuando el caller no los conoce (un upsert a mano, un test, un
 	// veredicto que no re-scorea). El COALESCE del UPDATE conserva lo que ya había en vez de pisarlo
 	// con NULL: juzgar una relación no debería borrar cómo se la detectó.
-	_, err := e.db.Exec(`
+	_, err := ex.Exec(`
 		INSERT INTO observation_relations (id, source_id, target_id, relation, confidence, status, resolved_by, reason, lex_score, cosine_score, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(source_id, target_id) DO UPDATE SET
@@ -101,18 +122,9 @@ func (e *DbEngine) UpsertObsRelation(r ObsRelation) (string, error) {
 	`, r.ID, r.SourceID, r.TargetID, r.Relation, r.Confidence, r.Status, nullable(r.ResolvedBy), nullable(r.Reason),
 		floatOrNil(r.Lex), floatOrNil(r.Cosine))
 	if err != nil {
-		return "", fmt.Errorf("error al upsertar relación de observaciones: %w", err)
+		return r, fmt.Errorf("error al upsertar relación de observaciones: %w", err)
 	}
-	// El par puede haber existido con otro id (ON CONFLICT no cambia el id): devolver
-	// el id realmente persistido.
-	var id string
-	if err := e.db.QueryRow(
-		`SELECT id FROM observation_relations WHERE source_id=? AND target_id=?`,
-		r.SourceID, r.TargetID,
-	).Scan(&id); err != nil {
-		return r.ID, nil // best-effort: si falla la relectura, devolver el tentativo
-	}
-	return id, nil
+	return r, nil
 }
 
 // PendingObsRelations devuelve las relaciones que aún esperan veredicto.

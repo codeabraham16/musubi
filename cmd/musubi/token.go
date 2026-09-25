@@ -108,11 +108,24 @@ func tokenList(args []string) {
 		// que quien lee haga la cuenta contra el reloj es cómo una credencial muerta pasa
 		// desapercibida en una lista de veinte.
 		vence := p.Vencimiento
+		// Y CUÁNTO FALTA cuando falta poco: «por vencer» con la fecha sola deja la resta de cabeza
+		// a quien llegó acá por la alerta, que es justo quien está apurado.
+		if p.Vencimiento == mcp.VencimientoPorVencer {
+			vence += ", " + faltanDias(p.DiasParaVencer)
+		}
 		if p.Expires != "" {
 			vence += " (" + p.Expires + ")"
 		}
 		fmt.Printf("  %-20s  %-10s  %-12s  %-5s  %-8s  %s\n", p.Name, p.Role, proj, ve, p.Write, vence)
 	}
+}
+
+// faltanDias dice los días que le quedan a una credencial «por vencer», en castellano de fila.
+func faltanDias(n int) string {
+	if n == 1 {
+		return "falta 1 día"
+	}
+	return fmt.Sprintf("faltan %d días", n)
 }
 
 func tokenRevoke(args []string) {
@@ -134,5 +147,11 @@ func tokenRevoke(args []string) {
 		fmt.Printf("No existe un principal %q en %s.\n", *name, path)
 		return
 	}
-	fmt.Printf("Principal %q revocado. Reiniciá musubi-brain.service para aplicar.\n", *name)
+	// NO SE PIDE REINICIO: el cerebro vigila el mtime de este archivo y lo relee solo cada 10 s
+	// (internal/mcp/principals_reload.go). Pedirlo era falso y además caro — un reinicio del
+	// central corta el sync de todas las máquinas para aplicar algo que ya se aplicaba solo. Las
+	// dos excepciones reales van dichas, porque son justo los casos en que la revocación NO entra.
+	fmt.Printf("Principal %q revocado. El cerebro que sirve este archivo lo relee solo: su token deja de autenticar en ≤10 s, sin reiniciar.\n", *name)
+	fmt.Println("  Salvo dos casos: si el cerebro arrancó cuando este archivo todavía no existía, no lo vigila y hay que reiniciarlo;")
+	fmt.Println("  y si otra línea del archivo está rota, la relectura se rechaza entera (musubi_principals_reload_failing = 1 en /metrics).")
 }

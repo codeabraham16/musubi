@@ -147,8 +147,8 @@ Gestionalo con **`musubi token`** (genera el token, guarda solo su SHA-256 y man
 ```bash
 # Alta: imprime el token UNA vez — entregáselo al miembro por un canal seguro.
 musubi token new --name alice --project crm-musubi --role writer
-musubi token list                 # nombre / rol / proyecto (nunca el token ni el hash)
-musubi token revoke --name alice  # baja; reiniciá musubi-brain.service para aplicar
+musubi token list                 # nombre / rol / proyecto / vencimiento (nunca el token ni el hash)
+musubi token revoke --name alice  # baja; el cerebro relee el archivo solo, en ≤10 s, sin reiniciar
 ```
 
 El archivo resultante (600, fuera de control de versiones):
@@ -168,10 +168,15 @@ principals:
   token vale para siempre. Formato RFC3339; ausente significa «no vence». Pasada la fecha la
   credencial deja de autenticar por los DOS caminos que la resuelven, no sólo por el del bearer:
   **tampoco puede ejecutar comandos por las políticas de flota.**
-- **`musubi token list` muestra cuatro estados**, y son cuatro y no un sí/no a propósito:
-  `no vence` · `vigente` · `VENCIDA` · `ilegible`. Con un booleano, una fecha que no parsea saldría
-  como «no vencida» — o sea «no pude medir» disfrazado de «medí y está bien», que en el eje que
-  decide quién ejecuta comandos es el peor error posible.
+- **`musubi token list` muestra cinco estados**, y son cinco y no un sí/no a propósito:
+  `no vence` · `vigente` · `por vencer` · `VENCIDA` · `ilegible`. Con un booleano, una fecha que no
+  parsea saldría como «no vencida» — o sea «no pude medir» disfrazado de «medí y está bien», que en
+  el eje que decide quién ejecuta comandos es el peor error posible.
+  `por vencer` es una credencial que todavía autentica y a la que le quedan menos de 14 días; la
+  fila dice cuántos (`por vencer, faltan 3 días (…)`). Es el mismo umbral de la alerta
+  `CredencialPorVencer`, así que quien llega por el aviso la encuentra acá. Renovarla es editar su
+  `expires:` —el cerebro lo relee solo en ≤10 s—, no revoke + new, que le borra las concesiones de
+  flota.
   `ilegible` **no deja pasar nada**: el cerebro se niega a cargar un registro con un `expires` que
   no sea RFC3339 y no arranca, diciendo qué principal y qué valor. O sea que ese estado lo vas a
   ver en el CLI —que lee el archivo directo— y no en un cerebro corriendo. Falla cerrado.
