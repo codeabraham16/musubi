@@ -29,7 +29,11 @@ import (
 // comodinFlota es el selector "todas las máquinas de mi alcance". Explícito a propósito: hay que
 // escribirlo. Un default que significara "todas" convertiría un registro a medio llenar en una
 // concesión total, y los registros a medio llenar existen.
-const comodinFlota = "*"
+//
+// Es el del dominio y no un literal propio: el comodín de las concesiones y el de las políticas
+// son el mismo selector (fleet.SelectorAlcanza), y un segundo `"*"` escrito acá es lo primero que
+// se separa.
+const comodinFlota = fleet.ComodinMaquinas
 
 // PuedeSobreDevice es la compuerta. Las tres condiciones, en orden de costo.
 func PuedeSobreDevice(p *Principal, d fleet.Device, c fleet.Cap) bool {
@@ -90,6 +94,11 @@ func alcanzaElProyecto(p *Principal, projectID string) bool {
 //
 // Nil map ⇒ false, que es el caso más importante de todos: un principal sin sección `fleet:`
 // —incluido un admin con write=any— no puede nada (C1).
+//
+// EL SELECTOR LO EVALÚA fleet.SelectorAlcanza, la misma función que usa el alcance de una política
+// (A131·T3). Era una copia de la comparación, y la guarda que la miraba (TestLaConcesionEsPorMaquina)
+// sólo probaba nombres sin nada en común con los nombrados: comparar por prefijo acá le habría dado
+// `exec` sobre `davantis-1` a quien lo tenía sobre `davantis`, sin que nada se pusiera rojo.
 func tieneGrant(p *Principal, c fleet.Cap, nombreDevice string) bool {
 	// SE RECORREN TODAS LAS CONCESIONES, no sólo la de la capacidad pedida, porque una puede
 	// IMPLICAR a otra: quien tiene `screen` (controlar) puede mirar, y pedirle además un
@@ -103,7 +112,7 @@ func tieneGrant(p *Principal, c fleet.Cap, nombreDevice string) bool {
 			continue
 		}
 		for _, selector := range selectores {
-			if selector == comodinFlota || selector == nombreDevice {
+			if fleet.SelectorAlcanza(selector, nombreDevice) {
 				return true
 			}
 		}

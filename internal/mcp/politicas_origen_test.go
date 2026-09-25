@@ -150,47 +150,9 @@ func bitacoraComoLaLeeUnaPersona(t *testing.T, s *McpServer) []map[string]any {
 // arnes: de="\"politica\", fleet.OrigenPolitica}"
 // arnes: a="\"politica\", fleet.OrigenPersona}"
 func TestLaAccionYElAvisoDeUnaPoliticaSeLeenComoAutomaticosEnCadaCondicion(t *testing.T) {
-	type disparo struct {
-		servicio string   // "" en las de host
-		supera   float64  // el umbral de la política
-		hacer    []string // el comando que corre
-		// preparar deja la condición cumplida en `ahora`: una muestra fresca para las de host, un
-		// inventario fresco para las de servicio.
-		preparar func(t *testing.T, s *McpServer, d fleet.Device, ahora time.Time)
-	}
-	deHost := []string{"journalctl", "--vacuum-size=200M"}
-	deServicio := []string{"systemctl", "restart", "nginx"}
-	conMuestra := func(tocar func(*fleet.Muestra)) func(*testing.T, *McpServer, fleet.Device, time.Time) {
-		return func(t *testing.T, s *McpServer, d fleet.Device, ahora time.Time) {
-			m := muestraSana(50, ahora)
-			tocar(&m)
-			latir(t, s, d.ID, m, ahora)
-		}
-	}
-	conServicio := func(salud fleet.SaludServicio) func(*testing.T, *McpServer, fleet.Device, time.Time) {
-		return func(t *testing.T, s *McpServer, d fleet.Device, ahora time.Time) {
-			salud.Tomada = ahora
-			if _, _, err := s.engine.ReportarServicios(d.ID, ahora, []fleet.ReporteServicio{
-				{Nombre: "nginx", Clase: "systemd", Salud: salud}}); err != nil {
-				t.Fatalf("ReportarServicios: %v", err)
-			}
-		}
-	}
-	valor := func(v float64) *float64 { return &v }
-	discoLleno := func(m *fleet.Muestra) { m.DiscoUsado, m.DiscoDisponible = 960<<30, 10<<30 }
-	reinicios := 9
-	filas := map[fleet.Condicion]disparo{
-		fleet.CondDiscoPct:      {supera: 90, hacer: deHost, preparar: conMuestra(discoLleno)},
-		fleet.CondDiscoLibrePct: {supera: 10, hacer: deHost, preparar: conMuestra(discoLleno)},
-		fleet.CondMemPct:        {supera: 90, hacer: deHost, preparar: conMuestra(func(m *fleet.Muestra) { m.MemUsada = m.MemTotal / 100 * 95 })},
-		fleet.CondCPUPct:        {supera: 90, hacer: deHost, preparar: conMuestra(func(m *fleet.Muestra) { m.CPUPct = valor(97) })},
-		fleet.CondCargaPorCore:  {supera: 2, hacer: deHost, preparar: conMuestra(func(m *fleet.Muestra) { m.Load5 = valor(40) })},
-		fleet.CondTempC:         {supera: 80, hacer: deHost, preparar: conMuestra(func(m *fleet.Muestra) { m.TempC = valor(95) })},
-		fleet.CondServicioCaido: {servicio: "nginx", hacer: deServicio,
-			preparar: conServicio(fleet.SaludServicio{Estado: fleet.EstadoFallado})},
-		fleet.CondServicioReinicios: {servicio: "nginx", supera: 3, hacer: deServicio,
-			preparar: conServicio(fleet.SaludServicio{Estado: fleet.EstadoCorriendo, Reinicios: &reinicios})},
-	}
+	// Cómo se cumple cada condición vive en disparosPorCondicion (politicas_alcance_test.go) y no acá:
+	// la tabla del alcance de A131·T3 recorre las mismas condiciones y las tiene que cumplir igual.
+	filas := disparosPorCondicion()
 
 	// LA TABLA RECORRE EL CONJUNTO ENTERO, derivado de su fuente, en los dos sentidos.
 	declaradas := condicionesDeclaradas(t)

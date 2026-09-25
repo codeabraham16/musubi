@@ -421,7 +421,10 @@ func (r *PrincipalRegistry) impactoDeNombre(device string) ImpactoDeNombre {
 		p := &r.principals[i]
 		for _, selectores := range p.Fleet {
 			for _, sel := range selectores {
-				if sel == device {
+				// La MISMA gramática que la compuerta (fleet.SelectorAlcanza, vía SelectorNombra): el
+				// informe dice qué se rompe con el rename, y sólo lo sabe si lee el selector igual que
+				// quien lo aplica (A131·T3).
+				if fleet.SelectorNombra(sel, device) {
 					imp.Concesiones = append(imp.Concesiones, p.Name)
 					goto allow
 				}

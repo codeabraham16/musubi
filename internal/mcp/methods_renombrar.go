@@ -156,10 +156,12 @@ func (s *McpServer) impactoDe(nombre string) ImpactoDeNombre {
 func (s *McpServer) politicasQueNombran(nombre string) []string {
 	var out []string
 	for _, pol := range s.politicas {
-		// `Sobre` y no un helper: `Alcanza` también acepta el comodín, y acá interesa lo que
-		// NOMBRA a esta máquina — una política sobre todas sobrevive al rename.
-		for _, d := range fleet.LimpiarSelectores(pol.Sobre) {
-			if d == nombre {
+		// SelectorNombra y no `Alcanza`: `Alcanza` también acepta el comodín, y acá interesa lo que
+		// NOMBRA a esta máquina — una política sobre todas sobrevive al rename. Es la misma gramática
+		// que decide el alcance (fleet.SelectorAlcanza), así que el informe no puede listar como
+		// «se rompe» algo que la política en realidad no alcanzaba, ni callar algo que sí (A131·T3).
+		for _, sel := range pol.Sobre {
+			if fleet.SelectorNombra(sel, nombre) {
 				out = append(out, pol.Nombre)
 				break
 			}
