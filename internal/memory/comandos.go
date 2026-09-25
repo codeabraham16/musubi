@@ -143,7 +143,9 @@ func (e *DbEngine) TomarComandos(deviceID string, ahora time.Time, tope int) ([]
 func tomarComandosEnTx(tx *sql.Tx, deviceID string, ahora time.Time, tope int) ([]fleet.Comando, error) {
 	// Primero vencer lo viejo. Se hace acá y no en un barrido de fondo porque el momento en que
 	// importa es JUSTO antes de entregar: es la única ventana donde un comando podría colarse.
-	limite := ahora.Add(-fleet.ComandoVidaMax).UTC().Format(time.RFC3339)
+	// El límite es el que lee la vista (fleet.Comando.Vencido): lo que una superficie muestra
+	// `expirado` es exactamente lo que acá no se entrega.
+	limite := fleet.LimiteDeVida(ahora).UTC().Format(time.RFC3339)
 	// Lo que vence sin entregarse también lleva su secreto encima, y ya no va a servirle a nadie:
 	// se tapa ANTES de marcarlo, en la misma transacción, por la misma razón que abajo.
 	if err := taparPantallasPendientesVencidas(tx, deviceID, limite); err != nil {

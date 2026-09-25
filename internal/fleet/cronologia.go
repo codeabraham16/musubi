@@ -437,7 +437,21 @@ type Hecho struct {
 
 // Duracion devuelve cuánto duró, y si eso se sabe. El booleano es el punto: un `0` devuelto a
 // secas se dibuja como «duró nada» y lo que pasa es que todavía está corriendo.
+//
+// SE SABE SÓLO CON LAS DOS PUNTAS Y EN ORDEN. Un cero en cualquiera de las dos es «no se sabe»: en
+// `termino` es lo que no terminó; en `cuando`, una fila cuyo comienzo no se pudo leer
+// (escanearComando deja el cero si `creado` es ilegible). La regla del `cuando` faltó hasta A131
+// (tema T9): el fin menos el cero de Go daba la duración saturada —unos 292 años— con `hay=true`.
+// Un fin ANTERIOR al comienzo es dato corrupto, no una duración negativa; uno IGUAL sí se sabe, y
+// es cero: la tabla guarda segundos enteros, así que es lo que deja lo que terminó en el mismo
+// segundo en que empezó.
+//
+// La regla del `termino` en cero va escrita aunque el `Before` parezca cubrirla: con un `cuando`
+// anterior al año 1 el cero de Go queda DESPUÉS del comienzo, y ahí es ella la que decide.
 func (h Hecho) Duracion() (time.Duration, bool) {
+	if h.Cuando.IsZero() {
+		return 0, false
+	}
 	if h.Termino.IsZero() || h.Termino.Before(h.Cuando) {
 		return 0, false
 	}

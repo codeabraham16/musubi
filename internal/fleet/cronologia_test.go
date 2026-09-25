@@ -333,9 +333,11 @@ func TestOrdenarHechosEsEstableYDelMasNuevoAlMasViejo(t *testing.T) {
 // que sigue en curso — el mismo cero mentiroso que persigue todo el track, en el eje del tiempo.
 //
 // Sabotaje: devolver sólo la duración → un comando pendiente se dibuja como instantáneo.
+// (Desde A131·T9 el corte se INSERTA adelante en vez de reemplazar el cuerpo: así no pisa los tres
+// cortes de TestLaDuracionSeSabeSoloConLasDosPuntasEnOrden, que viven en las líneas de abajo.)
 // arnes: archivo="internal/fleet/cronologia.go"
-// arnes: de="func (h Hecho) Duracion() (time.Duration, bool) {\n\tif h.Termino.IsZero() || h.Termino.Before(h.Cuando) {\n\t\treturn 0, false\n\t}\n\treturn h.Termino.Sub(h.Cuando), true\n}"
-// arnes: a="func (h Hecho) Duracion() (time.Duration, bool) {\n\treturn h.Termino.Sub(h.Cuando), true\n}"
+// arnes: de="func (h Hecho) Duracion() (time.Duration, bool) {\n"
+// arnes: a="func (h Hecho) Duracion() (time.Duration, bool) {\n\tif true {\n\t\treturn h.Termino.Sub(h.Cuando), true\n\t}\n"
 func TestLaDuracionDiceSiSeSabe(t *testing.T) {
 	inicio := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
 	if _, hay := (Hecho{Cuando: inicio}).Duracion(); hay {
@@ -429,6 +431,7 @@ func TestUnComandoPendienteYViejoSeMuestraExpirado(t *testing.T) {
 // arnes: archivo="internal/fleet/comando.go"
 // arnes: de="func (o OrigenComando) EsAutomatico() bool { return o == OrigenPolitica }"
 // arnes: a="func (o OrigenComando) EsAutomatico() bool { return o != OrigenPersona }"
+// arnes: colision_ok="TestElOrigenEsUnaListaBlancaCerradaContraSuEnum"
 func TestUnOrigenDesconocidoNoEsPersonaNiAutomatico(t *testing.T) {
 	if OrigenDesconocido.EsAutomatico() {
 		t.Error("lo desconocido no puede contarse como automático")
@@ -479,8 +482,13 @@ func TestElHechoArrastraElOrigenDelComando(t *testing.T) {
 	if h.Origen != OrigenPolitica {
 		t.Errorf("el hecho perdió el origen: %q", h.Origen)
 	}
-	// Una sesión no tiene origen: la abre siempre alguien, y un campo vacío ahí se leería como
-	// «no se sabe» cuando sí se sabe.
+	// Una sesión NO LLEVA origen, y no porque no se sepa —la abre siempre una persona—: el origen
+	// es la columna A59 de device_commands, la que separa lo que se EJECUTÓ por una persona de lo
+	// que disparó una regla, y una sesión no es una fila de esa tabla. La superficie lo dibuja null
+	// y es el `tipo` de la fila lo que dice que es una sesión. (Este comentario decía que el campo
+	// vacío «se leería como no se sabe cuando sí se sabe», o sea que pedía llenarlo: la auditoría
+	// A131 lo llenó sólo en la pantalla (C4-m2) y todo quedó verde. La regla por puerta, entera, la
+	// recorre TestElOrigenDelHechoLoDecideSuPuerta.)
 	if s := HechoDeSesionShell(SesionShell{}, "pc"); s.Origen != OrigenDesconocido {
 		t.Errorf("una sesión no debería llevar origen: %q", s.Origen)
 	}

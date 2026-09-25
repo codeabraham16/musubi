@@ -305,6 +305,23 @@ func OrigenValido(o OrigenComando) OrigenComando {
 	return OrigenDesconocido
 }
 
+// LimiteDeVida es el `creado` MÁS VIEJO que todavía se entrega a esta hora: un pendiente creado
+// ANTES está vencido (F10).
+//
+// ES LA ÚNICA CUENTA DEL RELOJ DE LA COLA, y la leen los dos lados: la toma (tomarComandosEnTx, que
+// DECIDE que no se ejecute) y la vista (Vencido, que dice qué mostrar). Hasta A131 (tema T9) cada
+// uno hacía la suya y no eran la misma: la toma compara contra un texto RFC3339 —la tabla guarda
+// segundos enteros, así que el límite queda truncado al segundo— y la vista restaba con
+// nanosegundos. En el segundo del borde la vista dibujaba `expirado` sobre un comando que la toma,
+// a esa misma hora, todavía le entregaba al agente.
+//
+// SE TRUNCA ACÁ Y NO SÓLO EN EL FORMATO porque la granularidad es parte de la decisión: con el
+// límite en un segundo entero, comparar contra un `creado` leído de la tabla o contra uno que
+// todavía tiene fracción da lo mismo.
+func LimiteDeVida(ahora time.Time) time.Time {
+	return ahora.Add(-ComandoVidaMax).Truncate(time.Second)
+}
+
 // Vencido dice si el comando esperó demasiado sin que nadie lo levantara (F10).
 //
 // ESTUVO ESCRITA Y SIN LLAMAR desde S5. La derivación existía, estaba probada, y ninguna
@@ -314,8 +331,12 @@ func OrigenValido(o OrigenComando) OrigenComando {
 // Sólo aplica a los PENDIENTES: uno ya entregado está corriendo, y su reloj es el timeout, no
 // éste. Confundirlos haría que un comando legítimo de 9 minutos se marque expirado a los 15 y
 // aparezca dos veces en la bitácora.
+//
+// EL RELOJ ES EL DE LA TOMA, y por eso no se escribe acá: esta función muestra lo que
+// tomarComandosEnTx decide, con el mismo límite (LimiteDeVida) y la misma comparación estricta
+// (`creado < límite`).
 func (c Comando) Vencido(ahora time.Time) bool {
-	return c.Estado == EstadoPendiente && ahora.Sub(c.Creado) > ComandoVidaMax
+	return c.Estado == EstadoPendiente && c.Creado.Before(LimiteDeVida(ahora))
 }
 
 // Perdido dice si un comando ENTREGADO ya no va a reportar nunca (A60).
