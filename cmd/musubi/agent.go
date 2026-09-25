@@ -188,14 +188,10 @@ func runAgent(args []string) {
 
 	// CON QUIÉN SE ENUMERA, antes del primer latido y también con --once: el primer inventario de
 	// un agente root que enumera como root da de baja los contenedores del dueño (el porqué está
-	// en identidad_servicios.go). El runtime heredado va PRIMERO porque la identidad propia toma el
-	// XDG_RUNTIME_DIR que van a ver los hijos.
-	if d, ok := runtimeParaHeredar(os.Getenv, os.Getuid(), func(d string) bool {
-		return esDeUid(d, uint32(os.Getuid()))
-	}); ok {
-		_ = os.Setenv("XDG_RUNTIME_DIR", d)
-	}
-	id, errId := resolverIdentidadDeServicios(os.Getuid(), os.Getenv, buscarCuenta)
+	// en identidad_servicios.go). TestElAgenteEnumeraConLaIdentidadQueResolvio custodia que la
+	// asignación de abajo exista y vaya antes de cualquier latido: las pruebas de comportamiento
+	// fijan identidadParaEnumerar a mano, así que sin ella todo quedaba verde con el cable cortado.
+	id, errId := prepararIdentidadDeServicios(os.Getuid(), os.Getenv, os.Setenv, buscarCuenta, esDeUid)
 	if errId != nil {
 		// Un usuario que no existe NO se degrada a «enumerar como root»: ese inventario diría que
 		// los 18 contenedores del dueño dejaron de existir, y el cerebro los daría de baja.

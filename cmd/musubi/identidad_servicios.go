@@ -217,5 +217,20 @@ func entornoPara(id identidadDeServicios, base []string, esDe func(dir string, u
 	return append(out, "XDG_RUNTIME_DIR="+id.Runtime)
 }
 
+// prepararIdentidadDeServicios es lo que runAgent hace antes del primer latido: exportar el runtime
+// propio si hace falta (runtimeParaHeredar) y, RECIÉN DESPUÉS, resolver con quién se enumera.
+//
+// EL ORDEN ES LA MITAD DEL CONTRATO. La identidad propia toma su Runtime del XDG_RUNTIME_DIR del
+// entorno —el que van a heredar los hijos—, y systemd no lo exporta en una unidad de sistema con
+// `User=`. Resolver primero dejaba al agente `musubi` de musubi-server con Runtime vacío: la fuente
+// `--user` se leía como «ausente», en silencio, y ninguna `usuario:*` llegaba al inventario.
+func prepararIdentidadDeServicios(uid int, getenv func(string) string, setenv func(string, string) error,
+	buscar func(string) (cuentaDelSistema, error), esDe func(dir string, uid uint32) bool) (identidadDeServicios, error) {
+	if d, ok := runtimeParaHeredar(getenv, uid, func(d string) bool { return esDe(d, uint32(uid)) }); ok {
+		_ = setenv("XDG_RUNTIME_DIR", d)
+	}
+	return resolverIdentidadDeServicios(uid, getenv, buscar)
+}
+
 // identidadParaEnumerar es la que runAgent resolvió al arrancar. El valor cero es «no bajar».
 var identidadParaEnumerar identidadDeServicios
