@@ -97,7 +97,7 @@ func SDDPhaseDirective(phase, change string) string {
 	case "implement":
 		return fmt.Sprintf("Fase IMPLEMENT. Recuperá los artefactos previos con "+
 			"musubi_recall query='sdd/%s' (no releas archivos ya gisteados: usá musubi_recall_code). "+
-			"Implementá según spec/design siguiendo las convenciones (musubi_resolve_skills). "+
+			"Implementá según spec/design siguiendo las convenciones y las skills del proyecto (musubi_list_skills). "+
 			"Guardá decisiones no obvias con musubi_save_observation.", slug)
 	case "verify":
 		return "Fase VERIFY. Corré musubi_detect_changes para acotar qué símbolos tocaste y qué " +

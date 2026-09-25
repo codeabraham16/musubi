@@ -77,7 +77,7 @@ func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 			AlwaysBecause: sinStack,
 			Rules: "Cuando empieces a trabajar en este proyecto:\n" +
 				"- Mapeá la estructura: manifests, entrypoints, carpetas clave y scripts de build/test.\n" +
-				"- Usá musubi_detect_stack para confirmar ecosistemas y frameworks.\n" +
+				"- Confirmá ecosistemas y frameworks en los manifests (go.mod, package.json, pyproject.toml, Cargo.toml…).\n" +
 				"- Capturá los hallazgos NO obvios con musubi_save_observation (topic_key 'analysis/...').\n" +
 				"- No re-analices lo que ya esté en memoria: primero recuperá con musubi_recall.\n",
 		},
@@ -89,7 +89,7 @@ func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 			AlwaysBecause: sinStack,
 			Rules: "A partir del código existente, deducí (no inventes) las convenciones del proyecto:\n" +
 				"- Naming, estructura de carpetas, estilo de tests y manejo de errores.\n" +
-				"- Guardá cada convención estable como hecho con musubi_save_fact (ej. sujeto='proyecto', predicado='usa', objeto='gofmt').\n" +
+				"- Proponé cada convención estable como hecho con musubi_propose_facts (ej. sujeto='proyecto', predicado='usa', objeto='gofmt'): la deducís vos, así que entra en cuarentena hasta que alguien la corrobore.\n" +
 				"- Ante dudas o señales contradictorias, marcá la incertidumbre en vez de asumir.\n",
 		},
 		{

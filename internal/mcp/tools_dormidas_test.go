@@ -17,13 +17,14 @@ import (
 // dormidas son las que este commit durmió, con el motivo medido al lado. La lista está acá y no
 // derivada del registro a propósito: si alguien duerme una tool nueva, tiene que venir a declararla
 // y a decir por qué.
+//
+// DESPERTADAS el 2026-09-25: save_fact, log_error, resolve_telemetry y debate. Cada una era la ÚNICA
+// forma de hacer algo que un texto de Musubi le pide al agente —corroborar un hecho propuesto,
+// registrar un fallo en VERIFY, resolver un error conocido, cerrar una revisión adversaria—, así
+// que dormidas dejaban esos textos pidiendo lo imposible. Ver TestNingunTextoNombraUnaToolDormida.
 var dormidas = map[string]string{
-	"musubi_save_fact":         "cero invocaciones; el grafo de hechos se llena por propose_facts",
-	"musubi_log_error":         "cero invocaciones; telemetry_logs tiene 1 fila en el repo más usado",
-	"musubi_resolve_telemetry": "por arrastre: sin log_error no hay nada que resolver",
-	"musubi_debate":            "cero invocaciones; debates/debate_postures/debate_votes en cero",
-	"musubi_promote":           "con team_mode:true save_observation ya escribe 'shared' de entrada",
-	"musubi_workflow":          "cero invocaciones; los 68 workflow_runs son 'sdd-*', los crea musubi_sdd",
+	"musubi_promote":  "con team_mode:true save_observation ya escribe 'shared' de entrada",
+	"musubi_workflow": "cero invocaciones; los 68 workflow_runs son 'sdd-*', los crea musubi_sdd",
 
 	// Segunda tanda (2026-08-14). Cruce de los DOS ledgers a 90 días —central y local— contra
 	// tools/list: 13 tools en cero. Sólo estas TRES se durmieron, y el criterio que las separó de

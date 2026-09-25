@@ -257,7 +257,7 @@
     },
     {
       "name": "musubi_corroborate",
-      "description": "Saca de CUARENTENA una observación propuesta con musubi_propose_observation, y la vuelve visible al recall. Es la única salida: nada sale de cuarentena solo, ni por antigüedad ni por accesos. CONSERVA el sello de procedencia — corroborar no convierte una inferencia de un LLM en una nota humana, sólo la hace visible. OJO: no es lo mismo que musubi_promote, que es otro eje (local → shared, o sea si viaja al cerebro central).",
+      "description": "Saca de CUARENTENA una observación propuesta con musubi_propose_observation, y la vuelve visible al recall. Es la única salida: nada sale de cuarentena solo, ni por antigüedad ni por accesos. CONSERVA el sello de procedencia — corroborar no convierte una inferencia de un LLM en una nota humana, sólo la hace visible. OJO: no es lo mismo que promover a 'shared', que es otro eje (local → shared, o sea si viaja al cerebro central).",
       "inputSchema": {
         "type": "object",
         "properties": {

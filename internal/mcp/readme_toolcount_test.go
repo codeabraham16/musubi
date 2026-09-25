@@ -17,8 +17,8 @@ func TestReadmeToolCountMatchesRegistry(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 
 	// SE CUENTA LO QUE tools/list DEVUELVE, no lo que el registro contiene. Son dos números
-	// distintos y los dos son ciertos: hay 84 tools registradas y el catálogo lista 75, porque
-	// nueve están DORMIDAS (toolEntry.dormant). Una dormida sigue siendo despachable por nombre;
+	// distintos y los dos son ciertos: hay 84 tools registradas y el catálogo lista 79, porque
+	// cinco están DORMIDAS (toolEntry.dormant; eran nueve hasta el 2026-09-25). Una dormida sigue siendo despachable por nombre;
 	// lo único que pierde es el lugar en el listado.
 	//
 	// Acá iba `len(s.tools)`, o sea las registradas. Con eso, un README que decía la verdad

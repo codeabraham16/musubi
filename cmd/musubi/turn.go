@@ -341,7 +341,7 @@ func buildCaptureReminder(store turnStore, sessionID string, cfg config.LoopConf
 	}
 	if turns >= threshold {
 		_ = store.SetMeta(turnsKey, "0") // reiniciar para no repetir cada turno
-		return fmt.Sprintf("[Musubi — captura] Van %d turnos sin guardar nada. Capturá lo durable de lo que venís haciendo — una decisión (el porqué), un gotcha/aprendizaje no obvio, o el estado del trabajo — con musubi_save_observation (hechos estables → musubi_save_fact, gists → musubi_save_code). Solo lo reusable, no trivialidades.", turns)
+		return fmt.Sprintf("[Musubi — captura] Van %d turnos sin guardar nada. Capturá lo durable de lo que venís haciendo — una decisión (el porqué), un gotcha/aprendizaje no obvio, o el estado del trabajo — con musubi_save_observation (hechos estables → musubi_propose_facts, gists → musubi_save_code). Solo lo reusable, no trivialidades.", turns)
 	}
 	_ = store.SetMeta(turnsKey, strconv.Itoa(turns))
 	return ""

@@ -18,8 +18,10 @@ const metaLastMaintenance = "last_maintenance"
 const MetaLastHealth = "last_health"
 
 // MetaStackFingerprint es la clave de meta donde se guarda la huella del stack
-// para el cual ya se generaron skills. La comparten el hook SessionStart (que
-// detecta drift del stack) y musubi_save_skill (que la actualiza al guardar).
+// para el cual ya se generaron —o ya se OFRECIÓ generar— skills. La comparten el hook
+// SessionStart (que detecta drift del stack, y la escribe al ofrecer la generación
+// completa para no repetirla en cada arranque) y musubi_save_skill (que la actualiza
+// al guardar).
 const MetaStackFingerprint = "skills_stack"
 
 // MetaCodegraphHead es la clave de meta donde el indexador del grafo de código deja el commit

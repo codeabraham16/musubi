@@ -304,10 +304,11 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: s.countingSaveCtx(s.toolSaveFact),
-			// DORMIDA. Cero invocaciones en los 400 días del ledger central. El grafo de hechos se
-			// llena por musubi_propose_facts (12 llamadas, 15 entidades en altura-erp): esta era la
-			// escritura DIRECTA, sin proponer, y nadie la eligió nunca.
-			dormant: true,
+			// DESPERTADA (2026-09-25). Estuvo dormida por cero invocaciones, pero es la ÚNICA salida
+			// de la cuarentena de hechos: musubi_propose_facts le dice al agente que corrobore con
+			// ésta. Dormida, lo propuesto no tenía salida (en el central, los 1.377 hechos del
+			// extractor nocturno tenían 0 corroborados, medido 2026-09-25). Lo que el agente DEDUCE
+			// va a propose_facts; ésta es para corroborar.
 		},
 		{
 			Tool: Tool{
@@ -394,7 +395,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_corroborate",
-				Description: "Saca de CUARENTENA una observación propuesta con musubi_propose_observation, y la vuelve visible al recall. Es la única salida: nada sale de cuarentena solo, ni por antigüedad ni por accesos. CONSERVA el sello de procedencia — corroborar no convierte una inferencia de un LLM en una nota humana, sólo la hace visible. OJO: no es lo mismo que musubi_promote, que es otro eje (local → shared, o sea si viaja al cerebro central).",
+				Description: "Saca de CUARENTENA una observación propuesta con musubi_propose_observation, y la vuelve visible al recall. Es la única salida: nada sale de cuarentena solo, ni por antigüedad ni por accesos. CONSERVA el sello de procedencia — corroborar no convierte una inferencia de un LLM en una nota humana, sólo la hace visible. OJO: no es lo mismo que promover a 'shared', que es otro eje (local → shared, o sea si viaja al cerebro central).",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
@@ -492,9 +493,9 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: s.toolLogError,
-			// DORMIDA. Cero invocaciones, y la tabla lo confirma: telemetry_logs tiene 1 fila en el
-			// repo más usado. El bucle de telemetría nunca arrancó.
-			dormant: true,
+			// DESPERTADA (2026-09-25). Estuvo dormida por cero invocaciones, pero la fase VERIFY de
+			// SDD le pide al agente registrar los fallos con esta tool: dormida, esa instrucción era
+			// un callejón que el agente no podía recorrer.
 		},
 		{
 			Tool: Tool{
@@ -514,9 +515,8 @@ func (s *McpServer) buildRegistry() []toolEntry {
 			// deja el embed afuera. Ver el comentario del handler: partir el candado es seguro acá
 			// porque las dos escrituras tocan filas independientes.
 			lock: lockSelf,
-			// DORMIDA por ARRASTRE: resolver un log de telemetría sólo tiene sentido si antes alguien
-			// llamó a musubi_log_error, que está dormida. Despertar una sin la otra no sirve.
-			dormant: true,
+			// DESPERTADA junto con musubi_log_error (2026-09-25): dormía por arrastre, y el aviso de
+			// «errores conocidos» del precheck le dice al agente que resuelva con ésta.
 		},
 		{
 			Tool: Tool{
@@ -837,11 +837,10 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: noCtx(s.toolDebate),
-			// DORMIDA, y es la más cara de las que nadie usa después de workflow: ~575 tokens de
-			// catálogo. Las tres tablas que la respaldan —debates, debate_postures, debate_votes—
-			// están en CERO en los 9 repos. El andamiaje está entero; lo que falta es que alguien
-			// lo estrene.
-			dormant: true,
+			// DESPERTADA (2026-09-25). Estuvo dormida con sus tres tablas en cero, pero la skill
+			// adversarial-review que Musubi instala la llama cinco veces y el gate de revisión la
+			// nombra: dormida, la revisión se cortaba justo en el paso que la cierra. Con Claude Code
+			// las tools llegan diferidas, así que despertarla cuesta el nombre, no los ~575 tokens.
 		},
 		{
 			Tool: Tool{
