@@ -258,7 +258,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_memory_expand",
-				Description: "Hidrata el contenido completo de observaciones por id (hidratación perezosa tras un musubi_recall). Solo traé lo que realmente necesitás para ahorrar tokens.",
+				Description: "Hidrata el contenido completo de observaciones por id (hidratación perezosa tras un musubi_recall). Solo traé lo que realmente necesitás para ahorrar tokens. Si la observación es una ficha destilada del acervo trae `salio_de` (sus fuentes crudas); si es material ingerido trae `destilado_en` (las fichas que salieron de él). Expandir esos ids baja o sube un nivel.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{

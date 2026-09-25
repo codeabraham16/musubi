@@ -1,0 +1,92 @@
+name: Arnés nocturno
+
+# LOS SABOTAJES SE CONTABAN EN CADA PR Y NO SE CORRÍAN NUNCA.
+#
+# La guarda del censo (internal/mcp, job `test`) comprueba que cada directiva `// arnes:` apunte a
+# un literal único. Eso impide que el corpus se pudra, pero no dice si la guarda se pone ROJA con su
+# sabotaje: una directiva puede apuntar bien y su guarda estar hueca. Eso sólo lo dice
+# `arnes -correr`, que aplica cada sabotaje en el disco, corre la prueba y restaura.
+#
+# En serie son horas (4,5 h medidas en davantis-1, hasta ~8 h con el dato histórico de mcp) y un
+# job de GitHub se corta a las 6 h, así que se parte en fragmentos POR TURNO: `-fragmento k/n`
+# corre las posiciones k, k+n, k+2n… y los 532 de internal/mcp quedan repartidos entre todos.
+#
+# NO ES UN CHECK OBLIGATORIO. Es un canario: una noche roja llega por mail de GitHub. El job no se
+# llama `test` porque el ruleset de main exige un check con ese nombre y chocaría.
+on:
+  schedule:
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+  # El PR que toca este archivo trae su propia medición completa.
+  pull_request:
+    paths:
+      - '.github/workflows/arnes-nocturno.yml'
+
+# Sin esto, cada push al PR y cada PR de Dependabot que actualiza los SHA de abajo dispararían
+# otros 8 jobs de ~1 h, y los checks obligatorios de otros PRs quedarían en cola.
+concurrency:
+  group: arnes-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sabotajes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      # Un fragmento rojo no cancela a los otros siete: cada uno es su propia medición.
+      fail-fast: false
+      matrix:
+        fragmento: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.6'
+
+      # La directiva de internal/embedding/charsmap_fijado_test.go declara env=MUSUBI_SPM_TESTDATA:
+      # sin la tabla, el corredor la cuenta «sin veredicto» y el fragmento que la reciba sale rojo.
+      # Misma ruta y misma clave que el job recall-gate de ci.yml, así que comparten la caché.
+      - name: Cache POTION table
+        id: potion
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: .musubi/embeddings/potion-multilingual-128M
+          key: potion-multilingual-128M-v1
+
+      - name: Download POTION table (cache miss)
+        if: steps.potion.outputs.cache-hit != 'true'
+        # Checksum SHA-256 pinneado dentro de `embed pull`.
+        run: go run ./cmd/musubi embed pull --out "${{ github.workspace }}/.musubi/embeddings/potion-multilingual-128M"
+
+      # EL BINARIO SE COMPILA FUERA DEL ÁRBOL Y ANTES DE SABOTEAR NADA. El mutador es este mismo
+      # programa invocado por os.Executable(): tiene que venir del árbol LIMPIO, y no puede vivir en
+      # el workspace porque la corrida compara `git status` antes y después.
+      - name: Compilar el arnés
+        run: go build -o "$RUNNER_TEMP/arnes" ./deploy/cmd/arnes
+
+      # k sale de job-index y n de job-total: el tamaño de la matriz se escribe una sola vez.
+      #
+      # `set +e` y PIPESTATUS: con `shell: bash` el paso corre con pipefail, y un exit 1 del arnés
+      # cortaría el paso en el `| tee` antes de copiar el resumen. Justo la noche roja se quedaría
+      # sin él. Mismo patrón que el paso de race de ci.yml.
+      #
+      # GOFLAGS=-timeout=5m: un sabotaje que CUELGA consumiría los 10 min por defecto dos veces (la
+      # corrida y el control verboso que el guion repite cuando no ve un FAIL). Sale igual «sin
+      # veredicto», pero en la mitad de tiempo.
+      - name: Correr el fragmento
+        shell: bash
+        env:
+          MUSUBI_SPM_TESTDATA: ${{ github.workspace }}/.musubi/embeddings/potion-multilingual-128M
+          GOFLAGS: -timeout=5m
+        run: |
+          set +e
+          "$RUNNER_TEMP/arnes" -correr -fragmento "$(( ${{ strategy.job-index }} + 1 ))/${{ strategy.job-total }}" 2>&1 | tee "$RUNNER_TEMP/arnes.txt"
+          rc=${PIPESTATUS[0]}
+          set -e
+          sed -n '/^════/,$p' "$RUNNER_TEMP/arnes.txt" >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"

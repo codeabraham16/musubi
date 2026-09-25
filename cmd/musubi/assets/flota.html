@@ -165,6 +165,28 @@ function edad(seg, conMetricas) {
 }
 function lista(xs) { return Array.isArray(xs) && xs.length ? xs.join(' ') : '—'; }
 
+// POR QUÉ UNA POLÍTICA ESTÁ INERTE, según la compuerta que la frena (`inerte_por`, A131).
+//
+// Hasta A131 el texto era fijo y nombraba dos causas —la concesión y la allowlist— cuando la
+// acción ya atravesaba tres: una máquina en `pide` o `prohibido` se dibujaba con el motivo
+// equivocado, y eso manda a arreglarla a principals.yaml, donde no está el problema. Las claves
+// son las constantes de `frenoDePolitica` (internal/mcp/politicas.go), y
+// TestElPanelTieneTextoParaCadaFrenoDePolitica exige que estén todas;
+// TestElPanelDibujaPorQueCadaPoliticaEstaInerte ejecuta este script en node y exige que
+// automatico() DIBUJE el texto de cada una. Un motivo que este mapa no conozca se muestra crudo,
+// nunca como una causa inventada. La ventana de mantenimiento está acá aunque no sea una
+// compuerta de autoridad: mientras dura la política no actúa, y hasta la revisión de A131 el
+// panel no mostraba una ventana abierta en ningún lado.
+const INERTE_POR = {
+  sin_registro: 'no hay registro de principals, así que no hay a quién nombrar',
+  sin_principal: 'su principal no está en principals.yaml, o su credencial venció',
+  sin_exec: 'su principal no tiene `exec` sobre esta máquina, o la máquina no lo admite',
+  allowlist: 'el comando no está en la allowlist de su principal',
+  consentimiento_prohibido: 'la máquina tiene el consentimiento en `prohibido` (o en `pide` sin forma de preguntar)',
+  consentimiento_pide: 'la máquina exige que su usuario acepte, y un barrido automático no puede esperar la respuesta',
+  mantenimiento: 'la máquina está en una ventana de mantenimiento, y ninguna política actúa sobre ella hasta que la ventana cierre o se cancele',
+};
+
 // AUTOMÁTICO — qué actúa en esta máquina SIN una persona detrás.
 //
 // Es la columna que S10 volvió necesaria: el cerebro ejecuta comandos por su cuenta y hasta acá
@@ -179,6 +201,10 @@ function lista(xs) { return Array.isArray(xs) && xs.length ? xs.join(' ') : '—
 // El ⚠ es lo que más importa. Una política cuyo principal perdió la concesión se ve idéntica a
 // una que funciona —las dos figuran en la lista y ninguna hace nada visible hasta que la
 // condición se cumple—, así que es una alarma apagada. Acá se ve antes del incidente.
+//
+// SIN ⚠ NO QUIERE DECIR «VA A ACTUAR». `puede_actuar` contesta por las compuertas de ESTA máquina
+// (la autoridad del principal y la ventana de mantenimiento); no mira si el barrido del cerebro
+// corre —apagado, o con el proyecto fuera de su tope—. Ver porQueNoActuaria en politicas.go.
 function automatico(e) {
   const total = e.politicas_activas || 0;
   if (!total) return ND;
@@ -193,7 +219,7 @@ function automatico(e) {
     const clase = p.puede_actuar ? 'auto' : 'auto inerte';
     const marca = p.puede_actuar ? '' : ' ⚠';
     const porque = p.puede_actuar ? '' :
-      ' — INERTE: su principal no tiene `exec` sobre esta máquina, o el comando no está en su allowlist. No va a actuar.';
+      ` — INERTE: ${INERTE_POR[p.inerte_por] || 'la frena la compuerta «' + (p.inerte_por || 'sin motivo informado') + '»'}. No va a actuar.`;
     return `<span class="${clase}" title="${esc(t + porque)}">⚙ ${esc(p.nombre)}${marca}</span>`;
   }).join(' ');
 }

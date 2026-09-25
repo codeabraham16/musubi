@@ -197,9 +197,9 @@ func TestElAvisaDelExecAvisaUnaVezPorVentanaYNoUnaPorComando(t *testing.T) {
 // que declara saber notificar. Las de shell probaban `prohibido` (que bloquea) y las de aviso
 // probaban pantalla y exec.
 //
-// Sabotaje que la hace fallar: sacar el `case consent.AvisaAlUsuario()` de cualquiera de los tres.
+// Sabotaje que la hace fallar: sacar el `if` que encola el aviso en cualquiera de los tres.
 // arnes: archivo="internal/mcp/methods_shell.go"
-// arnes: de="\tcase consent.AvisaAlUsuario():\n\t\ts.encolarAvisoDeAcceso(d, p, avisoShell)\n"
+// arnes: de="\tif d.ConsentimientoEfectivo().AvisaAlUsuario() {\n\t\ts.encolarAvisoDeAcceso(d, p, avisoShell)\n\t}\n"
 // arnes: a=""
 func TestTodoCaminoQueHonraAvisaLeAvisaAlUsuario(t *testing.T) {
 	for _, c := range []struct {
@@ -290,7 +290,8 @@ func TestTodoCaminoQueHonraAvisaLeAvisaAlUsuario(t *testing.T) {
 // el agente no lo sabe entregar— la dejaría en verde, y estaríamos prometiendo una notificación
 // que nadie va a mostrar. Que es literalmente lo que el eje viene a evitar.
 //
-// Sabotaje que la hace fallar: encolar el aviso sin mirar PuedePreguntar en toolFleetShell.
+// Sabotaje que la hace fallar: que el embudo (encolarAvisoDeAcceso) deje pasar a la shell como si
+// su máquina supiera avisar.
 //
 // EL CAMINO QUE ESTA PRUEBA MIDE ES EL DE LA SHELL, y conviene que lo diga la directiva y no haya
 // que deducirlo: abre con `toolFleetShell`, así que el `case` que le importa es el de
@@ -315,9 +316,17 @@ func TestTodoCaminoQueHonraAvisaLeAvisaAlUsuario(t *testing.T) {
 // más les corre un conteo, y eso alcanza HOY: el día que cualquiera de las tres cambie su fixture,
 // la detección se evapora sin que nada lo diga. Un invariante detectado de rebote no está
 // guardado; falta la hermana que lo nombre.
-// arnes: archivo="internal/mcp/methods_shell.go"
-// arnes: de="\tcase consent.AvisaAlUsuario() && !d.PuedePreguntar:"
-// arnes: a="\tcase consent.AvisaAlUsuario() && !d.PuedePreguntar && false:"
+//
+// Y EL SABOTAJE SE MUDÓ AL EMBUDO, sin dejar de ser de la shell (2026-09-24). La directiva ponía
+// `&& false` en el `case` de `methods_shell.go`, y la primera corrida nocturna del arnés (PR #652)
+// la dejó en VERDE en Linux y acá: desde #621 la misma precondición vivía TAMBIÉN en el embudo,
+// que la atajaba igual. No era la guarda: era un sabotaje que ya no rompía nada. Se sacaron las
+// copias de los llamadores y el sabotaje exceptúa SÓLO al plano de la shell en el embudo —la
+// forma exacta del defecto que #621 cerró para la política—, así que la que se pone roja es ésta y
+// no sus hermanas de exec y pantalla.
+// arnes: archivo="internal/mcp/methods_pantalla.go"
+// arnes: de="func (s *McpServer) encolarAvisoDeAcceso(d fleet.Device, p *Principal, a avisoDeAcceso) bool {"
+// arnes: a="func (s *McpServer) encolarAvisoDeAcceso(d fleet.Device, p *Principal, a avisoDeAcceso) bool {\n\tif a.operacion == \"shell\" {\n\t\td.PuedePreguntar = true\n\t}"
 func TestUnaMaquinaQueNoSabeAvisarNoRecibeUnAvisoQueNadieVaAMostrar(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
@@ -378,10 +387,14 @@ func TestUnaMaquinaQueNoSabeAvisarNoRecibeUnAvisoQueNadieVaAMostrar(t *testing.T
 // `TestTodoCaminoQueHonraAvisaLeAvisaAlUsuario` recorre los tres caminos y NO cubre esto: prueba la
 // dirección contraria —que un `avisa` sí avisa—, que es la otra mitad del eje.
 //
-// Sabotaje que la hace fallar: sacar el `&& !d.PuedePreguntar` del case de aplicarConsentimientoDeExec.
-// arnes: archivo="internal/mcp/methods_exec.go"
-// arnes: de="\tcase consent.AvisaAlUsuario() && !d.PuedePreguntar:"
-// arnes: a="\tcase consent.AvisaAlUsuario() && !d.PuedePreguntar && false:"
+// Sabotaje que la hace fallar: que el embudo (encolarAvisoDeAcceso) deje pasar al plano de exec
+// como si su máquina supiera avisar. Antes era sacar el `&& !d.PuedePreguntar` del `case` de
+// aplicarConsentimientoDeExec, y la corrida nocturna del PR #652 lo dejó en VERDE: esa copia de la
+// precondición la tapaba el embudo, que desde #621 la tenía también. Las copias se sacaron y la
+// precondición vive en un solo lugar; el sabotaje la exceptúa sólo para exec.
+// arnes: archivo="internal/mcp/methods_pantalla.go"
+// arnes: de="func (s *McpServer) encolarAvisoDeAcceso(d fleet.Device, p *Principal, a avisoDeAcceso) bool {"
+// arnes: a="func (s *McpServer) encolarAvisoDeAcceso(d fleet.Device, p *Principal, a avisoDeAcceso) bool {\n\tif a.operacion == \"exec\" {\n\t\td.PuedePreguntar = true\n\t}"
 func TestUnaMaquinaQueNoSabeAvisarTampocoRecibeUnAvisoPorExec(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{

@@ -435,6 +435,9 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 		// proceso es el único que sabe qué par está presentando de verdad. No emite nada si el
 		// cerebro no sirve TLS.
 		s.renderCertificadoTLS(&b, ahora)
+		// Y EL VENCIMIENTO DE LAS CREDENCIALES, por lo mismo: sólo el proceso sabe qué registro
+		// cargó de verdad. Sin nombres, y sólo para quien ve todo (principals_metricas.go).
+		s.renderVencimientoDeCredenciales(&b, opt.registry, quien)
 		_, _ = w.Write([]byte(b.String()))
 	})))
 

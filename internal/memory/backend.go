@@ -54,6 +54,10 @@ type ObservationStore interface {
 	// `derived_from` (o sea, que aún no produjeron tarjetas). FIFO, model-free. Ver memory/distill.go.
 	ObservationsMissingRelation(projectID, topicPrefix, relation string, limit int) ([]ObsLite, error)
 	CountObservationsMissingRelation(projectID, topicPrefix, relation string) (int, error)
+	// LinajeCtx es la VUELTA de esas mismas aristas: de una ficha a los blobs de los que salió y de
+	// un blob a las fichas que salieron de él, con cada punta resuelta a su versión viva y acotada
+	// al ProjectScope del ctx. Sólo ids y topics. Ver memory/linaje.go.
+	LinajeCtx(ctx context.Context, ids []string) (map[string]Linaje, error)
 	// SemanticDuplicateCandidates / NearestVisibleByVector / ArchiveAsDuplicate alimentan el AFILADOR del
 	// acervo (Musubi Renaissance): hallar tarjetas gemelas por COSENO (no por trigramas), evitar escribir
 	// una gemela nueva en la destilación, y archivar la más débil cuando un juez confirma la redundancia.
@@ -61,6 +65,8 @@ type ObservationStore interface {
 	SemanticDuplicateCandidates(projectID, topicPrefix string, floor float64, maxPairs int) ([]SemDupCandidate, error)
 	NearestVisibleByVector(projectID, topicPrefix string, vec []float32, excludeID string) (id, topic string, cosine float64, err error)
 	ArchiveAsDuplicate(projectID, loserID, canonicalID string) (archived bool, err error)
+	// RestoreDuplicate deshace una fusión de ArchiveAsDuplicate y marca el par `not_duplicate`.
+	RestoreDuplicate(projectID, loserID, resolvedBy string) (restored bool, canonicalID string, err error)
 	GetObservationsBudget(ids []string, budget int) ([]Observation, int, error)
 	// GetObservationsBudgetCtx hidrata por id respetando el ctx (deadline + ProjectScope de
 	// aislamiento multi-tenant, Track 17). El MCP la usa para acotar la expansión a la credencial.
@@ -377,6 +383,10 @@ type OutboxStore interface {
 	ReclamarBajada(dueno string, leaseSeconds int) (bool, error)
 	SoltarBajada(dueno string) error
 	AvanzarCursorBajada(key string, v int64) error
+	// ReiniciarBajadaPorAlcance es la ÚNICA excepción a esa monotonía, y existe porque el filtro de
+	// proyecto del central SALTA filas en vez de ocultarlas: al ensanchar la credencial, lo saltado
+	// queda debajo del cursor para siempre. Ver bajada_lease.go.
+	ReiniciarBajadaPorAlcance(claveCursor, claveAlcance, alcance string) error
 	// ListSharedForPull sirve el sync ENTRANTE (C5.3): lista la memoria 'shared' del proyecto del
 	// ctx (aislamiento T17-19) con rowid > afterRowID, paginada. La corre el central en un pull.
 	ListSharedForPull(ctx context.Context, afterRowID int64, limit int) ([]SharedObs, error)

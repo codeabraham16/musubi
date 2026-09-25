@@ -91,7 +91,7 @@
     },
     {
       "name": "musubi_memory_expand",
-      "description": "Hidrata el contenido completo de observaciones por id (hidratación perezosa tras un musubi_recall). Solo traé lo que realmente necesitás para ahorrar tokens.",
+      "description": "Hidrata el contenido completo de observaciones por id (hidratación perezosa tras un musubi_recall). Solo traé lo que realmente necesitás para ahorrar tokens. Si la observación es una ficha destilada del acervo trae `salio_de` (sus fuentes crudas); si es material ingerido trae `destilado_en` (las fichas que salieron de él). Expandir esos ids baja o sube un nivel.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1764,7 +1764,7 @@
     },
     {
       "name": "musubi_sharpen",
-      "description": "AFILADOR del acervo de diseño (pilar 'Musubi Renaissance'), el gemelo del destilador: pase OFFLINE que junta las tarjetas `design-corpus/*` que dicen la MISMA lección con otras palabras (gemelas por COSENO de embeddings, que el Consolidate por trigramas no ve). Halla pares sobre un piso de coseno y un JUEZ LLM decide, par por par, si son redundantes (MERGE: archiva la más débil, conservando accesos e importancia en la más fuerte — soft-delete REVERSIBLE) o facetas distintas (KEEP: las marca `not_duplicate` para no volver a juzgarlas). CONSERVADOR: ante la duda, conserva. Requiere admin y un motor de cognición (opt-in: sin motor, falla explícito). Procesa de a tandas (default 6 pares, máx 25); corré en bucle. Pasá `dry_run:true` para ver los pares candidatos sin juzgar ni escribir, `pairs` para el tamaño de la tanda, o `floor` para el piso de coseno (default 0.84).",
+      "description": "AFILADOR del acervo de diseño (pilar 'Musubi Renaissance'), el gemelo del destilador: pase OFFLINE que junta las tarjetas `design-corpus/*` que dicen la MISMA lección con otras palabras (gemelas por COSENO de embeddings, que el Consolidate por trigramas no ve). Halla pares sobre un piso de coseno y un JUEZ LLM decide, par por par, si son redundantes (MERGE: archiva la más débil, conservando accesos e importancia en la más fuerte — soft-delete REVERSIBLE) o facetas distintas (KEEP: las marca `not_duplicate` para no volver a juzgarlas). CONSERVADOR: ante la duda, conserva. Requiere admin y un motor de cognición (opt-in: sin motor, falla explícito). Procesa de a tandas (default 6 pares, máx 25); corré en bucle. Pasá `dry_run:true` para ver los pares candidatos sin juzgar ni escribir, `pairs` para el tamaño de la tanda, o `floor` para el piso de coseno (default 0.84). Para DESHACER una fusión pasá `undo` con los ids de las tarjetas archivadas: vuelven al acervo, el par queda `not_duplicate` para que no se fusione de nuevo, y no hace falta motor.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1779,6 +1779,14 @@
           "pairs": {
             "type": "number",
             "description": "Cuántos pares juzgar en esta tanda (default 6, máximo 25). Cada par es una llamada al juez LLM."
+          },
+          "undo": {
+            "type": "array",
+            "description": "Ids de tarjetas que una fusión archivó (hasta 25): se devuelven al acervo y el par queda marcado not_duplicate. No se combina con los otros argumentos ni necesita motor.",
+            "items": {
+              "type": "string",
+              "description": "id de la tarjeta archivada"
+            }
           }
         }
       }

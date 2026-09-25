@@ -454,17 +454,23 @@ type syncPullArguments struct {
 	Limit      int   `json:"limit"`
 }
 
-// pullPayload es el JSON que el tool devuelve DENTRO de content[0].text: el lote + el cursor.
+// pullPayload es el JSON que el tool devuelve DENTRO de content[0].text: el lote + el cursor + la
+// huella del recorte con el que se sirvió.
+//
+// `alcance` lo agregó el arreglo del cursor que saltaba filas. Un central VIEJO no lo manda, y
+// entonces se lee como cadena vacía: el cliente trata el vacío como «no sé» y no reinicia nada, o sea
+// que se comporta exactamente como antes. Ésa es la compatibilidad, y es por omisión, no por versión.
 type pullPayload struct {
 	Items      []memory.SharedObs `json:"items"`
 	NextCursor int64              `json:"next_cursor"`
+	Alcance    string             `json:"alcance"`
 }
 
 // Pull baja un lote de la memoria 'shared' del proyecto DESDE el central (sync ENTRANTE, C5.3b): un
 // tools/call remoto de musubi_sync_pull con el cursor afterRowID. Devuelve los items + el cursor
 // siguiente. Cualquier fallo (red, HTTP, JSON-RPC) devuelve error: el scheduler entrante lo trata
 // como transitorio (reintenta en el próximo tick) — es best-effort, no rompe nada.
-func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int64, error) {
+func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int64, string, error) {
 	reqBody := struct {
 		JsonRpc string `json:"jsonrpc"`
 		ID      string `json:"id"`
@@ -479,13 +485,13 @@ func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int6
 
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, afterRowID, fmt.Errorf("%w: serializar pull: %v", errPermanent, err)
+		return nil, afterRowID, "", fmt.Errorf("%w: serializar pull: %v", errPermanent, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), c.http.Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(payload))
 	if err != nil {
-		return nil, afterRowID, fmt.Errorf("%w: construir pull: %v", errPermanent, err)
+		return nil, afterRowID, "", fmt.Errorf("%w: construir pull: %v", errPermanent, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.token != "" {
@@ -493,15 +499,15 @@ func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int6
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, afterRowID, fmt.Errorf("%w: %v", errTransient, err)
+		return nil, afterRowID, "", fmt.Errorf("%w: %v", errTransient, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, afterRowID, fmt.Errorf("%w: pull HTTP %d", errTransient, resp.StatusCode)
+		return nil, afterRowID, "", fmt.Errorf("%w: pull HTTP %d", errTransient, resp.StatusCode)
 	}
 	var rpcResp syncRPCResponse
 	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
-		return nil, afterRowID, fmt.Errorf("%w: decodificar pull: %v", errTransient, err)
+		return nil, afterRowID, "", fmt.Errorf("%w: decodificar pull: %v", errTransient, err)
 	}
 	if rpcResp.Error != nil {
 		// Misma disciplina que classifyResponse: permanente SÓLO si el central RECHAZÓ el pedido
@@ -511,22 +517,22 @@ func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int6
 		if permanentRPCCodes[rpcResp.Error.Code] {
 			kind = errPermanent
 		}
-		return nil, afterRowID, fmt.Errorf("%w: pull JSON-RPC %d: %s", kind, rpcResp.Error.Code, rpcResp.Error.Message)
+		return nil, afterRowID, "", fmt.Errorf("%w: pull JSON-RPC %d: %s", kind, rpcResp.Error.Code, rpcResp.Error.Message)
 	}
-	// result = {content:[{type,text}]}; el text es el JSON {items, next_cursor}.
+	// result = {content:[{type,text}]}; el text es el JSON {items, next_cursor, alcance}.
 	var toolResult struct {
 		Content []struct {
 			Text string `json:"text"`
 		} `json:"content"`
 	}
 	if err := json.Unmarshal(rpcResp.Result, &toolResult); err != nil || len(toolResult.Content) == 0 {
-		return nil, afterRowID, fmt.Errorf("%w: pull sin content parseable", errTransient)
+		return nil, afterRowID, "", fmt.Errorf("%w: pull sin content parseable", errTransient)
 	}
 	var pl pullPayload
 	if err := json.Unmarshal([]byte(toolResult.Content[0].Text), &pl); err != nil {
-		return nil, afterRowID, fmt.Errorf("%w: pull payload inválido: %v", errPermanent, err)
+		return nil, afterRowID, "", fmt.Errorf("%w: pull payload inválido: %v", errPermanent, err)
 	}
-	return pl.Items, pl.NextCursor, nil
+	return pl.Items, pl.NextCursor, pl.Alcance, nil
 }
 
 // permanentRPCCodes enumera los errores del central que NO se arreglan reintentando el MISMO

@@ -55,16 +55,9 @@ func (s *McpServer) aplicarPoliticas(proyecto string, ahora time.Time) int {
 	// para todas las políticas del barrido, y preguntarlo adentro del bucle sería una consulta por
 	// combinación.
 	//
-	// Si la consulta falla NO se saltea nada: un error leyendo las ventanas no puede convertirse
-	// en «no hay mantenimiento» (dispararía en medio de uno) ni en «hay mantenimiento en todas»
-	// (apagaría el auto-heal de la flota entera). Se sigue con el comportamiento de siempre y se
-	// dice, que es el sesgo con el que ya se equivocaba antes de que esto existiera.
-	enMantenimiento, err := s.engine.DevicesEnMantenimiento(ahora)
-	if err != nil {
-		logx.Error("políticas: no se pudieron leer las ventanas de mantenimiento; se evalúa como si no hubiera ninguna",
-			"proyecto", proyecto, "error", err)
-		enMantenimiento = nil
-	}
+	// La lectura, y qué se hace si falla, es ventanasParaPoliticas: la MISMA que usa el inventario
+	// para publicar `inerte_por: "mantenimiento"` (A131).
+	enMantenimiento := s.ventanasParaPoliticas(ahora, "proyecto", proyecto)
 
 	acciones := 0
 	for _, pol := range s.politicas {
@@ -83,6 +76,36 @@ func (s *McpServer) aplicarPoliticas(proyecto string, ahora time.Time) int {
 		}
 	}
 	return acciones
+}
+
+// ventanasParaPoliticas dice qué máquinas están AHORA en una ventana de mantenimiento, para decidir
+// políticas. La leen los dos lados de la decisión: el barrido que actúa (aplicarPoliticas) y el
+// inventario que contesta si actuaría (toolFleetList → politicasSobre → porQueNoActuaria).
+//
+// Si la consulta falla NO se saltea nada: un error leyendo las ventanas no puede convertirse en
+// «no hay mantenimiento» (dispararía en medio de uno) ni en «hay mantenimiento en todas»
+// (apagaría el auto-heal de la flota entera). Se sigue con el comportamiento de siempre y se dice,
+// que es el sesgo con el que ya se equivocaba antes de que esto existiera.
+//
+// ES UNA SOLA FUNCIÓN PARA QUE EL SESGO SEA UNO SOLO. Si el inventario leyera las ventanas por su
+// cuenta y ante el error eligiera el otro lado —«en la duda, inerte», que suena prudente—, el día
+// que la base no contesta diría `puede_actuar: false` de una política que el barrido está
+// ejecutando: la misma contradicción entre indicador y acción que A131 vino a cerrar, sólo que
+// escondida en la rama de error, que es la que nadie prueba.
+//
+// Y ESO LO CUSTODIA UNA PRUEBA, NO ESTE COMENTARIO:
+// TestConLasVentanasIlegiblesElInventarioDiceLoQueHaceElBarrido rompe SÓLO esta consulta y exige
+// que el `puede_actuar` de musubi_fleet_list y lo que hace aplicarPoliticas coincidan sobre la
+// misma máquina. Hasta la revisión 2 de A131 la frase no tenía guarda: con el inventario eligiendo
+// el otro sesgo, ninguna prueba de comportamiento del paquete se ponía roja.
+func (s *McpServer) ventanasParaPoliticas(ahora time.Time, contexto ...any) map[string]bool {
+	en, err := s.engine.DevicesEnMantenimiento(ahora)
+	if err != nil {
+		logx.Error("políticas: no se pudieron leer las ventanas de mantenimiento; se evalúa como si no hubiera ninguna",
+			append(contexto, "error", err)...)
+		return nil
+	}
+	return en
 }
 
 // evaluarPolitica decide y, si corresponde, actúa sobre UNA máquina. Devuelve si actuó.
@@ -200,124 +223,127 @@ func (s *McpServer) actuarSiCorresponde(pol fleet.Politica, d fleet.Device, valo
 		}
 	}
 
-	// El principal se resuelve AHORA, en cada evaluación, contra el snapshot vigente del registro
-	// (que se recarga en caliente cada 10 s). Resolverlo una vez al arranque habría dejado a las
-	// políticas actuando en nombre de credenciales ya revocadas.
-	if s.buscarPrincipal == nil {
+	// ── QUÉ COMPUERTAS HAY SE DECIDE EN UNA SOLA FUNCIÓN, Y EL INVENTARIO LLAMA A LA MISMA (A131) ──
+	//
+	// Acá queda sólo lo que la decisión PRODUCE: los avisos, las métricas y el aviso al usuario de
+	// la máquina. Qué principal, qué compuertas y en qué orden lo contesta autoridadDePolitica, que
+	// es también lo que lee `puede_actuar` en el inventario. Hasta A131 el indicador era una copia
+	// a mano de esta cadena: A91 le agregó aquí la tercera compuerta y la copia se quedó con dos,
+	// así que una máquina en `pide` o `prohibido` figuraba «puede actuar» y la política no actuaba
+	// nunca. Ver el doc de autoridadDePolitica.
+	pr, freno, consent := s.autoridadDePolitica(pol, d)
+	if freno == frenoSinRegistro {
+		// Sin registro de principals no hay a quién nombrar. Con políticas configuradas el
+		// arranque ya lo rechaza (vincularRegistroDeFlota); acá sólo se cierra el camino.
 		return false
 	}
-	pr, existe := s.buscarPrincipal.porNombre(pol.Principal)
-	if !existe {
-		// Se revocó o se le cambió el nombre entre el arranque y ahora. Se dice fuerte: una
-		// política que dejó de poder actuar es una alarma apagada, y las alarmas apagadas en
-		// silencio son la razón por la que existe la mitad de este slice.
-		//
-		// PERO SE DICE UNA SOLA VEZ. Esto no es un estado transitorio: dura hasta que alguien
-		// edite principals.yaml. Un WARN por tick son 288 líneas idénticas por día, que es
-		// exactamente cómo se entierra la línea que sí importa — el mismo criterio con el que el
-		// resto del scheduler sólo se anuncia cuando hubo trabajo. Lo destapó el e2e: 17 avisos
-		// idénticos en un minuto. La MÉTRICA sí se incrementa siempre, porque de ella vive la
-		// alerta PoliticaSinPermiso: lo que se acota es el ruido, no la señal.
-		// El MOTIVO se distingue: «revocado» y «vencido» apagan la política igual, pero mandan a
-		// dos lugares distintos a arreglarla. Decir «ya no está en principals.yaml» de alguien
-		// que está ahí escrito manda a buscar donde no está el problema — por eso el segundo
-		// lookup es el de diagnóstico, que sí ve la credencial muerta.
+
+	// LOS AVISOS SON ESTADOS, NO EVENTOS: cada uno se da UNA vez mientras su compuerta sea la que
+	// frena, y se rearma en cuanto deja de serlo. Un WARN por tick son 288 líneas idénticas por
+	// día, que es exactamente cómo se entierra la línea que sí importa — el mismo criterio con el
+	// que el resto del scheduler sólo se anuncia cuando hubo trabajo. Lo destapó el e2e: 17 avisos
+	// idénticos en un minuto.
+	//
+	// Van con avisoMientras y no con avisarUnaVez + un Delete suelto por la misma razón que la
+	// escribió: el rearme en una rama aparte se puede borrar sin que nada se ponga rojo.
+	par := pol.Nombre + "\x00" + d.ID
+
+	// SIN PRINCIPAL: se revocó, venció o se le cambió el nombre entre el arranque y ahora. Se dice
+	// fuerte: una política que dejó de poder actuar es una alarma apagada, y las alarmas apagadas
+	// en silencio son la razón por la que existe la mitad de este slice. La clave es por POLÍTICA
+	// y no por máquina: el principal falta para todas a la vez.
+	//
+	// El MOTIVO se distingue: «revocado» y «vencido» apagan la política igual, pero mandan a dos
+	// lugares distintos a arreglarla. Decir «ya no está en principals.yaml» de alguien que está
+	// ahí escrito manda a buscar donde no está el problema — por eso el segundo lookup es el de
+	// diagnóstico, que sí ve la credencial muerta.
+	s.avisoMientras("sin_principal:"+pol.Nombre, freno == frenoSinPrincipal, func() {
 		nota := "el principal ya no está en principals.yaml; la política quedó inerte"
 		if p, hay := s.buscarPrincipal.porNombreAunqueVencida(pol.Principal); hay && p.Vencida(ahoraParaVencimiento()) {
 			nota = "la credencial VENCIÓ el " + p.Expires.UTC().Format(time.RFC3339) +
 				"; sigue escrita en principals.yaml pero ya no ejecuta nada: renovále el `expires:`"
 		}
-		s.avisarUnaVez("sin_principal:"+pol.Nombre, func() {
-			logx.Warn("política sin principal: no actúa (no se repite este aviso hasta que se resuelva)",
-				"politica", pol.Nombre, "principal", pol.Principal, "device", d.Name,
-				"nota", nota)
-		})
-		s.metrics.contarPolitica(pol.Nombre, "sin_principal")
-		return false
-	}
-	// Volvió a resolver: se rearma el aviso, para que una segunda revocación se vuelva a avisar.
-	s.avisosDados.Delete("sin_principal:" + pol.Nombre)
-
-	// LAS TRES COMPUERTAS, LAS MISMAS QUE PARA UNA PERSONA. No hay atajo por ser automático.
-	//
-	// Eran DOS —capacidad y allowlist— y el comentario decía «las mismas que para una persona»
-	// mientras una persona ya pasaba TRES. Esa tercera es el eje de consentimiento, y su ausencia
-	// acá es A91: medido el 2026-09-05 corriendo el barrido real, una máquina en `prohibido`
-	// recibía el comando igual, y bajo `avisa` no se encolaba ningún aviso. El eje se describe en
-	// todas las superficies como «el candado del dueño de la máquina, que no se abre NUNCA» y
-	// cerraba los tres caminos con una persona detrás y ninguno cuando la orden la dispara un
-	// temporizador. Decisión de gio (2026-09-05): el eje GOBIERNA al auto-heal.
-	if !PuedeSobreDevice(pr, d, fleet.CapExec) {
-		// Por máquina, y una vez: un rechazo de compuerta también es un estado que dura hasta que
-		// alguien edite el registro, no un evento.
-		s.avisarUnaVez("compuerta:"+pol.Nombre+"\x00"+d.ID, func() {
-			logx.Warn("política rechazada por la compuerta: el principal no tiene `exec` sobre esa máquina",
-				"politica", pol.Nombre, "principal", pol.Principal, "device", d.Name)
-		})
-		s.metrics.contarPolitica(pol.Nombre, "rechazada")
-		return false
-	}
-	s.avisosDados.Delete("compuerta:" + pol.Nombre + "\x00" + d.ID)
-	if !argvPermitido(pr, d, pol.Hacer) {
+		logx.Warn("política sin principal: no actúa (no se repite este aviso hasta que se resuelva)",
+			"politica", pol.Nombre, "principal", pol.Principal, "device", d.Name,
+			"nota", nota)
+	})
+	// Por máquina: un rechazo de compuerta también es un estado que dura hasta que alguien edite
+	// el registro o la máquina, no un evento. El texto separa los dos lados que PuedeSobreDevice
+	// junta, porque mandan a arreglar en lugares distintos: el alta de la máquina o principals.yaml.
+	s.avisoMientras("compuerta:"+par, freno == frenoSinExec, func() {
+		porque := "el principal no tiene `exec` sobre esa máquina (su proyecto o su concesión no la alcanzan)"
+		if !d.Permite(fleet.CapExec) {
+			porque = "la máquina no admite `exec` (su tier o sus caps no lo incluyen, o está revocada)"
+		}
+		logx.Warn("política rechazada por la compuerta: "+porque,
+			"politica", pol.Nombre, "principal", pol.Principal, "device", d.Name)
+	})
+	s.avisoMientras("allowlist:"+par, freno == frenoAllowlist, func() {
 		permitidos, _ := comandosPermitidos(pr, d)
-		s.avisarUnaVez("allowlist:"+pol.Nombre+"\x00"+d.ID, func() {
-			logx.Warn("política rechazada por la allowlist del principal",
-				"politica", pol.Nombre, "principal", pol.Principal, "device", d.Name,
-				"pidio", pol.Hacer[0], "permitidos", permitidos)
-		})
-		s.metrics.contarPolitica(pol.Nombre, "rechazada")
-		return false
-	}
-	s.avisosDados.Delete("allowlist:" + pol.Nombre + "\x00" + d.ID)
-
-	// ── TERCERA COMPUERTA · EL EJE DE CONSENTIMIENTO (A91) ─────────────────────────────────────
-	//
-	// EL ORDEN DEL SWITCH NO ES ESTÉTICO Y ES EL DEFECTO DE A83/A85: `AvisaAlUsuario()` es true
-	// para `pide` TAMBIÉN —es `nivel >= avisa`—, así que preguntar por `avisa` primero manda un
-	// aviso y ejecuta igual en una máquina que exigía una respuesta. `pide` va antes.
-	//
-	// `ConsentimientoEfectivo()` ya endurece `pide` a `prohibido` cuando la máquina no sabe
-	// preguntar, así que acá `pide` sólo llega desde una máquina que SÍ podría — y aun así frena.
-	switch consent := d.ConsentimientoEfectivo(); {
-	case consent.Bloquea():
-		// El candado del dueño. Es su decisión y no una falla, así que se dice UNA vez y se cuenta:
-		// esto dura hasta que alguien cambie el grado o saque la máquina de la política, no es un
-		// evento.
-		s.avisarUnaVez("consentimiento:"+pol.Nombre+"\x00"+d.ID, func() {
-			logx.Warn("política frenada por el consentimiento de la máquina: no actúa",
-				"politica", pol.Nombre, "device", d.Name, "grado", string(consent),
-				"nota", "es la decisión del dueño de esa máquina, no un error de configuración; "+
-					"para automatizarla hay que bajarle el grado o sacarla del alcance de la política")
-		})
-		s.metrics.contarPolitica(pol.Nombre, "consentimiento_prohibido")
-		return false
-	case consent == fleet.ConsentimientoPide:
-		// MISMA RAZÓN QUE A86 EN `exec`, Y VALE MÁS ACÁ: `pide` promete que su usuario ACEPTE antes
-		// de que pase algo, y un barrido por temporizador no tiene dónde esperar esa respuesta. Un
-		// `exec` a mano al menos tiene una persona del otro lado que puede reintentar; una política
-		// corre sola, así que actuar sería romper la promesa sin nadie que lo note.
-		//
-		// LA PUERTA QUE QUEDA ABIERTA, dicha para que no se descubra desplegando: se podría encolar
-		// un `musubi:preguntar` y actuar en el tick siguiente si la respuesta llegó. Eso exige
-		// guardar el estado de una aprobación por (política × máquina) y expirarlo, que es un
-		// mecanismo entero y no una rama de un switch. No se hizo, y se cuenta aparte de
-		// `prohibido` justamente para poder medir cuánto costaría.
-		s.avisarUnaVez("consentimiento:"+pol.Nombre+"\x00"+d.ID, func() {
+		logx.Warn("política rechazada por la allowlist del principal",
+			"politica", pol.Nombre, "principal", pol.Principal, "device", d.Name,
+			"pidio", pol.Hacer[0], "permitidos", permitidos)
+	})
+	// El candado del dueño es su decisión y no una falla, así que se dice UNA vez: dura hasta que
+	// alguien cambie el grado o saque la máquina de la política. `pide` y `prohibido` comparten la
+	// clave porque son el mismo eje; lo que cambia es qué hacer para destrabarla.
+	s.avisoMientras("consentimiento:"+par, freno == frenoConsentimientoProhibido || freno == frenoConsentimientoPide, func() {
+		if freno == frenoConsentimientoPide {
 			logx.Warn("política frenada porque la máquina exige que su usuario ACEPTE, y un barrido no puede esperar",
 				"politica", pol.Nombre, "device", d.Name, "grado", string(consent),
 				"nota", "mismo criterio que A86 para `exec`; si esta máquina tiene que automatizarse, "+
 					"bajala a `avisa`, que sí notifica y no bloquea")
-		})
+			return
+		}
+		logx.Warn("política frenada por el consentimiento de la máquina: no actúa",
+			"politica", pol.Nombre, "device", d.Name, "grado", string(consent),
+			"nota", "es la decisión del dueño de esa máquina, no un error de configuración; "+
+				"para automatizarla hay que bajarle el grado o sacarla del alcance de la política")
+	})
+
+	// LA SEÑAL, EN CAMBIO, SE CUENTA SIEMPRE: de ella viven PoliticaSinPermiso y
+	// PoliticaFrenadaPorConsentimiento. Lo que se acota es el ruido, no la señal.
+	//
+	// Los resultados van LITERALES en cada rama, y no derivados del freno, a propósito:
+	// TestSeSiembranTodosLosResultadosQueSeEmiten lee del AST los literales que recibe
+	// `contarPolitica` para exigir que cada uno esté sembrado, y con una variable no podría.
+	switch freno {
+	case sinFreno:
+	case frenoSinPrincipal:
+		s.metrics.contarPolitica(pol.Nombre, "sin_principal")
+		return false
+	case frenoSinExec, frenoAllowlist:
+		s.metrics.contarPolitica(pol.Nombre, "rechazada")
+		return false
+	case frenoConsentimientoProhibido:
+		s.metrics.contarPolitica(pol.Nombre, "consentimiento_prohibido")
+		return false
+	case frenoConsentimientoPide:
+		// Se cuenta aparte de `prohibido` justamente para poder medir cuánto costaría la puerta
+		// que queda abierta (ver autoridadDePolitica).
 		s.metrics.contarPolitica(pol.Nombre, "consentimiento_pide")
 		return false
-	case consent.AvisaAlUsuario():
-		// Y ACÁ SE REUSA EL ENCOLADOR ÚNICO, que es todo el punto de A83: había DOS copias del
-		// bloque de aviso, se agregó un tercer camino, nadie se acordó de copiarlo, y el eje quedó
-		// escrito y sin efecto. Escribir una cuarta copia acá habría dejado la causa intacta para
-		// el quinto camino. Se agrega una frase a `avisoPolitica` y se llama a la función.
+	default:
+		// UN FRENO QUE ESTE SWITCH NO SABE NOMBRAR FRENA IGUAL. Si autoridadDePolitica gana una
+		// compuerta y nadie la agrega acá, la política tiene que quedarse quieta y decirlo, no
+		// caer al final del switch y actuar: el lado seguro de «no sé qué me frenó» es no hacer.
+		logx.Error("política frenada por una compuerta que actuarSiCorresponde no sabe nombrar: no actúa",
+			"politica", pol.Nombre, "device", d.Name, "freno", string(freno))
+		s.metrics.contarPolitica(pol.Nombre, "rechazada")
+		return false
+	}
+
+	// Y ACÁ SE REUSA EL ENCOLADOR ÚNICO, que es todo el punto de A83: había DOS copias del bloque
+	// de aviso, se agregó un tercer camino, nadie se acordó de copiarlo, y el eje quedó escrito y
+	// sin efecto. Escribir una cuarta copia acá habría dejado la causa intacta para el quinto
+	// camino. Se agrega una frase a `avisoPolitica` y se llama a la función.
+	//
+	// `AvisaAlUsuario()` es true para `pide` también (es `nivel >= avisa`), y eso ya no puede
+	// mandar un aviso y ejecutar igual: `pide` salió arriba con su freno, así que acá sólo llegan
+	// `libre` y `avisa`.
+	if consent.AvisaAlUsuario() {
 		s.encolarAvisoDeAcceso(d, pr, avisoPolitica)
 	}
-	s.avisosDados.Delete("consentimiento:" + pol.Nombre + "\x00" + d.ID)
 
 	// El cooldown se marca ANTES de ejecutar. Si se marcara después, un comando lento (o un
 	// cerebro que se cae a mitad) dejaría la puerta abierta para que el próximo tick dispare otra
@@ -346,6 +372,144 @@ func (s *McpServer) actuarSiCorresponde(pol fleet.Politica, d fleet.Device, valo
 	}
 	s.metrics.contarPolitica(pol.Nombre, "ok")
 	return true
+}
+
+// frenoDePolitica nombra la compuerta que frena a una política sobre una máquina.
+//
+// Es un conjunto CERRADO —las constantes de abajo— y viaja tal cual al inventario como
+// `inerte_por`, así que quien mira el panel sabe cuál de las compuertas la dejó inerte en vez de
+// leer una lista fija de causas posibles. La lista fija que había nombraba dos y ya eran tres.
+type frenoDePolitica string
+
+const (
+	// sinFreno: ninguna compuerta de ESTE par (política × máquina) frena. No es «va a actuar»: la
+	// condición, el cooldown y el estado global del barrido quedan afuera (ver porQueNoActuaria).
+	sinFreno frenoDePolitica = ""
+	// frenoSinRegistro: no hay registro de principals, así que no hay a quién nombrar.
+	frenoSinRegistro frenoDePolitica = "sin_registro"
+	// frenoSinPrincipal: el principal no está en el registro vigente, o su credencial venció.
+	frenoSinPrincipal frenoDePolitica = "sin_principal"
+	// frenoSinExec: la compuerta de tres lados (tenencia, concesión, aparato) dice que no.
+	frenoSinExec frenoDePolitica = "sin_exec"
+	// frenoAllowlist: el comando de la política no pasa la allowlist de su principal.
+	frenoAllowlist frenoDePolitica = "allowlist"
+	// frenoConsentimientoProhibido: el candado del dueño de la máquina.
+	frenoConsentimientoProhibido frenoDePolitica = "consentimiento_prohibido"
+	// frenoConsentimientoPide: la máquina exige que su usuario acepte, y un barrido no puede esperar.
+	frenoConsentimientoPide frenoDePolitica = "consentimiento_pide"
+	// frenoMantenimiento: la máquina está en una ventana de mantenimiento. NO lo devuelve
+	// autoridadDePolitica —no es autoridad sino una pausa, y el barrido la mira antes de llegar
+	// ahí—; lo antepone porQueNoActuaria, en el mismo orden en que la frena aplicarPoliticas.
+	frenoMantenimiento frenoDePolitica = "mantenimiento"
+)
+
+// autoridadDePolitica es LA cadena de AUTORIDAD de una política sobre una máquina, entera y en
+// orden: el principal vigente, `exec` sobre esa máquina, la allowlist y el eje de consentimiento.
+// Devuelve con qué principal actuaría, qué compuerta la frena (sinFreno si ninguna) y el grado
+// efectivo de consentimiento, que quien actúa necesita para decidir si avisa.
+//
+// LO QUE NO ESTÁ ACÁ, Y POR QUÉ. La ventana de mantenimiento también frena a una política, pero no
+// es autoridad: es una pausa que el barrido consulta UNA vez por proyecto, en aplicarPoliticas,
+// antes de llegar a esta función (preguntarla acá sería una consulta por política × máquina). El
+// inventario la antepone en el mismo orden en porQueNoActuaria, así que `puede_actuar` sí la ve.
+// Lo que queda fuera de los dos son DOS cosas, con su porqué en el doc de porQueNoActuaria: la
+// CONDICIÓN y lo que la rodea —la muestra fresca, el cooldown—, porque el indicador contesta
+// justamente «si la condición se cumpliera»; y el estado GLOBAL del barrido —apagado, o un
+// proyecto que no entra en su tope—, porque no es una compuerta de política × máquina sino del
+// cerebro entero.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// POR QUÉ ES UNA FUNCIÓN Y NO DOS COPIAS (A131)
+//
+// La decisión se consulta desde dos lados: actuarSiCorresponde, que actúa, y el `puede_actuar`
+// del inventario, que le contesta a un operador «si la condición se cumpliera ahora, ¿alguna
+// compuerta de esta máquina la frenaría?». El indicador se presentaba como «deliberadamente la
+// MISMA cadena de guardas» y era una COPIA escrita a mano de dos compuertas. A91 le agregó a la
+// acción la tercera —el eje de consentimiento— y la copia no se enteró: con la máquina en `pide`
+// o en `prohibido`, el inventario decía `puede_actuar: true` y la política no actuaba nunca. Es
+// la alarma apagada que A23 vino a cerrar, reabierta por el mismo mecanismo de siempre: la guarda
+// en N−1 de N caminos.
+//
+// Medido en la auditoría A131: 0 de 1 pares (política × máquina) expuestos. La única política en
+// producción es `vaciar-journal` sobre `musubi-server`, que no declara grado y resuelve a
+// `avisa`. El defecto era latente y se volvía vivo con el primer `pide` o `prohibido`.
+//
+// Con una sola función, divergir deja de ser algo que se pueda escribir: una cuarta compuerta
+// agregada acá aparece sola en el indicador. Lo que una sola función NO puede ver es un defecto
+// adentro de ella, porque engaña a los dos lados por igual, y hay dos clases:
+//
+//   - una compuerta mal escrita (sin la tenencia, digamos) la caza la tabla de
+//     TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice, que compara cada fila contra
+//     un hecho escrito y no sólo contra el otro lado;
+//   - un principal que ENVEJECE (una copia cacheada que sobrevive a la edición del registro) la
+//     tabla NO la ve: arma un servidor nuevo por fila, así que ninguna copia llega a envejecer.
+//     Lo caza TestCadaFormaDeQuitarleAutoridadAlPrincipalApagaLaPolitica, que sobre UN servidor
+//     dispara, edita el registro y vuelve a disparar. Medido con la mutación P1-m5 portada acá:
+//     la tabla queda en verde y esa prueba cae en los pasos 1, 3 y 5.
+//
+// NO TIENE EFECTOS: ni avisos, ni métricas, ni encolados. El inventario la llama por cada fila
+// que dibuja, y un indicador que al consultarse dejara un aviso o sumara una métrica estaría
+// contando miradas como si fueran disparos.
+func (s *McpServer) autoridadDePolitica(pol fleet.Politica, d fleet.Device) (*Principal, frenoDePolitica, fleet.Consentimiento) {
+	// El principal se resuelve AHORA, en cada evaluación, contra el snapshot vigente del registro
+	// (que se recarga en caliente cada 10 s). Resolverlo una vez al arranque habría dejado a las
+	// políticas actuando en nombre de credenciales ya revocadas. `porNombre` excluye a las
+	// vencidas: una credencial muerta no actúa por este camino.
+	if s.buscarPrincipal == nil {
+		return nil, frenoSinRegistro, ""
+	}
+	pr, existe := s.buscarPrincipal.porNombre(pol.Principal)
+	if !existe {
+		return nil, frenoSinPrincipal, ""
+	}
+
+	// LAS TRES COMPUERTAS, LAS MISMAS QUE PARA UNA PERSONA. No hay atajo por ser automático.
+	//
+	// Eran DOS —capacidad y allowlist— y el comentario decía «las mismas que para una persona»
+	// mientras una persona ya pasaba TRES. Esa tercera es el eje de consentimiento, y su ausencia
+	// acá es A91: medido el 2026-09-05 corriendo el barrido real, una máquina en `prohibido`
+	// recibía el comando igual, y bajo `avisa` no se encolaba ningún aviso. El eje se describe en
+	// todas las superficies como «el candado del dueño de la máquina, que no se abre NUNCA» y
+	// cerraba los tres caminos con una persona detrás y ninguno cuando la orden la dispara un
+	// temporizador. Decisión de gio (2026-09-05): el eje GOBIERNA al auto-heal.
+	//
+	// La capacidad se pregunta ENTERA a PuedeSobreDevice y no por partes: sus tres lados
+	// (tenencia, concesión, aparato) son necesarios, y una compuerta armada acá con dos de ellos
+	// dejaría a la política poder más que su principal en el tercero.
+	if !PuedeSobreDevice(pr, d, fleet.CapExec) {
+		return pr, frenoSinExec, ""
+	}
+	if !argvPermitido(pr, d, pol.Hacer) {
+		return pr, frenoAllowlist, ""
+	}
+
+	// ── TERCERA COMPUERTA · EL EJE DE CONSENTIMIENTO (A91) ─────────────────────────────────────
+	//
+	// EL ORDEN DEL SWITCH NO ES ESTÉTICO Y ES EL DEFECTO DE A83/A85: `AvisaAlUsuario()` es true
+	// para `pide` TAMBIÉN —es `nivel >= avisa`—, así que preguntar por `avisa` primero manda un
+	// aviso y ejecuta igual en una máquina que exigía una respuesta. `pide` va antes.
+	//
+	// `ConsentimientoEfectivo()` ya endurece `pide` a `prohibido` cuando la máquina no sabe
+	// preguntar, así que acá `pide` sólo llega desde una máquina que SÍ podría — y aun así frena.
+	switch consent := d.ConsentimientoEfectivo(); {
+	case consent.Bloquea():
+		// El candado del dueño. Es su decisión y no una falla.
+		return pr, frenoConsentimientoProhibido, consent
+	case consent == fleet.ConsentimientoPide:
+		// MISMA RAZÓN QUE A86 EN `exec`, Y VALE MÁS ACÁ: `pide` promete que su usuario ACEPTE antes
+		// de que pase algo, y un barrido por temporizador no tiene dónde esperar esa respuesta. Un
+		// `exec` a mano al menos tiene una persona del otro lado que puede reintentar; una política
+		// corre sola, así que actuar sería romper la promesa sin nadie que lo note.
+		//
+		// LA PUERTA QUE QUEDA ABIERTA, dicha para que no se descubra desplegando: se podría encolar
+		// un `musubi:preguntar` y actuar en el tick siguiente si la respuesta llegó. Eso exige
+		// guardar el estado de una aprobación por (política × máquina) y expirarlo, que es un
+		// mecanismo entero y no una rama de un switch. No se hizo, y se cuenta aparte de
+		// `prohibido` justamente para poder medir cuánto costaría.
+		return pr, frenoConsentimientoPide, consent
+	default:
+		return pr, sinFreno, consent
+	}
 }
 
 // correrAccionDePolitica encola (Tier A) o ejecuta (Tier B) la acción.
@@ -489,17 +653,24 @@ func (s *McpServer) cargarCooldowns() {
 // hay algo que actúa solo, qué haría, y con la autoridad de quién.
 //
 // EL CAMPO QUE MÁS IMPORTA ES `puede_actuar`. Una política mal configurada —su principal perdió la
-// concesión, o el comando se cayó de la allowlist— se ve EXACTAMENTE IGUAL que una que funciona:
-// las dos figuran en la lista y ninguna hace nada visible hasta que la condición se cumple. Es
-// una alarma apagada, y la única forma de que alguien lo note antes del incidente es decirlo acá.
+// concesión, el comando se cayó de la allowlist, o la máquina pasó a `pide` o `prohibido`— se ve
+// EXACTAMENTE IGUAL que una que funciona: las dos figuran en la lista y ninguna hace nada visible
+// hasta que la condición se cumple. Es una alarma apagada, y la única forma de que alguien lo
+// note antes del incidente es decirlo acá. `inerte_por` dice cuál de esas compuertas es. Una
+// máquina en una ventana de mantenimiento cuenta igual: la política no actúa mientras dure, y una
+// ventana olvidada es exactamente una alarma apagada con el panel en verde. Lo que el campo NO
+// cubre —la condición, y el estado global del barrido— está escrito en porQueNoActuaria.
 //
 // QUIÉN VE QUÉ. El detalle exige `exec` sobre esa máquina, la misma regla que la bitácora: saber
 // qué comando corre en un servidor es casi tan revelador como poder correrlo. Pero el CONTEO se
 // muestra a cualquiera que vea la máquina — que exista algo automático encima no es un secreto, y
 // ocultarlo del todo dejaría a quien sólo tiene `metrics` viendo cambiar una máquina sin ninguna
 // pista de por qué.
+//
+// `enMantenimiento` lo trae el llamador, leído con ventanasParaPoliticas UNA vez para todo el
+// inventario y no una por máquina.
 // ────────────────────────────────────────────────────────────────────────────────────────────
-func (s *McpServer) politicasSobre(p *Principal, d fleet.Device) (detalle []map[string]interface{}, total int) {
+func (s *McpServer) politicasSobre(p *Principal, d fleet.Device, enMantenimiento bool) (detalle []map[string]interface{}, total int) {
 	if len(s.politicas) == 0 {
 		return nil, 0
 	}
@@ -512,15 +683,24 @@ func (s *McpServer) politicasSobre(p *Principal, d fleet.Device) (detalle []map[
 		if !verDetalle {
 			continue
 		}
+		// puede_actuar contesta por la cadena de AUTORIDAD —autoridadDePolitica, la misma función
+		// que decide en actuarSiCorresponde y no una copia de sus compuertas: la copia que había se
+		// quedó con dos de tres (A131)— más la ventana de mantenimiento, evaluadas ahora contra el
+		// registro vigente y el grado de la máquina. Deja afuera la condición (con la muestra y el
+		// cooldown) y el estado GLOBAL del barrido; el porqué de cada una, en porQueNoActuaria.
+		freno := s.porQueNoActuaria(pol, d, enMantenimiento)
 		fila := map[string]interface{}{
 			"nombre":       pol.Nombre,
 			"principal":    pol.Principal,
 			"condicion":    pol.Umbral(),
 			"hacer":        pol.Hacer,
 			"cooldown_min": int(pol.CooldownEfectivo().Minutes()),
-			// puede_actuar es la INTERSECCIÓN real, evaluada ahora contra el registro vigente:
-			// las mismas dos compuertas que la política va a atravesar cuando le toque.
-			"puede_actuar": s.politicaPuedeActuar(pol, d),
+			"puede_actuar": freno == sinFreno,
+		}
+		// inerte_por dice CUÁL compuerta la frena, y sólo viaja cuando alguna frena: un
+		// `inerte_por: ""` en cada política sana sería ruido que entrena a ignorar la columna.
+		if freno != sinFreno {
+			fila["inerte_por"] = string(freno)
 		}
 		// El último disparo viaja como null cuando nunca actuó: «todavía no» y «actuó hace mucho»
 		// son cosas distintas, y una fecha inventada las confundiría — el mismo criterio que
@@ -536,20 +716,57 @@ func (s *McpServer) politicasSobre(p *Principal, d fleet.Device) (detalle []map[
 	return detalle, total
 }
 
-// politicaPuedeActuar responde «si la condición se cumpliera ahora mismo, ¿pasaría algo?».
+// porQueNoActuaria contesta, para UNA política sobre UNA máquina, «si la condición se cumpliera
+// ahora mismo, ¿alguna compuerta de este par la frenaría?»: devuelve la que la frenaría —la
+// ventana de mantenimiento o la cadena de autoridad—, o sinFreno si ninguna. Es lo que el
+// inventario publica como `puede_actuar` e `inerte_por`, y lo ÚNICO que lo calcula.
 //
-// Es deliberadamente la MISMA cadena de guardas que evaluarPolitica, y no una reimplementación
-// aproximada: un indicador que dijera «sí» donde la política dice «no» sería peor que no tenerlo,
-// porque enseñaría a confiar en él.
-func (s *McpServer) politicaPuedeActuar(pol fleet.Politica, d fleet.Device) bool {
-	if d.Revoked || s.buscarPrincipal == nil {
-		return false
+// Un indicador que dijera «sí» donde la política dice «no» sería peor que no tenerlo, porque
+// enseñaría a confiar en él. Por eso no evalúa compuertas propias: antepone la ventana de
+// mantenimiento —en el mismo orden que aplicarPoliticas, que la mira antes que nada— y el resto
+// se lo pregunta a autoridadDePolitica, que es la que decide en actuarSiCorresponde.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// LO QUE NO CONTESTA, Y POR QUÉ: `puede_actuar: true` NO ES «VA A ACTUAR»
+//
+//   - LA CONDICIÓN Y LO QUE LA RODEA —la muestra fresca, el cooldown— quedan afuera a propósito:
+//     el campo contesta justamente «si la condición se cumpliera», y sin esa suposición diría
+//     «inerte» de toda política sana mientras la máquina esté bien.
+//   - EL ESTADO GLOBAL DEL BARRIDO también queda afuera, y no es un olvido: no es una compuerta de
+//     política × máquina sino del cerebro entero. Con `fleet.probe_minutes` negativo el intervalo
+//     efectivo es 0, RunFlotaScheduler vuelve al instante y NINGUNA política actúa en ninguna
+//     máquina; y un proyecto que no entra en el tope de proyectosAVigilar (proyectosParaVigilar
+//     por barrido, en orden de project_id) no se barre, así que sus políticas tampoco corren. En
+//     los dos casos este indicador sigue diciendo `puede_actuar: true`: supone que el barrido
+//     corre sobre el proyecto de la máquina.
+//
+// Medido en las revisiones 2 y 3 de A131 con una sonda temporal (sin commitear) sobre esta rama:
+// con el barrido apagado, y con la máquina en un proyecto fuera del tope, el inventario dice
+// `puede_actuar: true` sin `inerte_por` y la política no actúa. Exposición hoy, medida en la
+// revisión 2: 0 —un solo proyecto con máquinas y el sondeo en su default de 5 min—. Publicarlo (un
+// `inerte_por` como `barrido_apagado` o `fuera_del_barrido`, derivado de la MISMA función que
+// decide el barrido y no de una copia del tope) queda como cabo aparte; hasta entonces, lo que
+// vale es esta frontera.
+//
+// ERA UNA COPIA DE LAS COMPUERTAS Y SE QUEDÓ CON DOS DE TRES (A131). Decía ser «deliberadamente
+// la MISMA cadena de guardas» que la acción, y A91 le agregó a la acción el eje de
+// consentimiento sin tocarla. Ahora no hay cadena que copiar: la decisión es una sola función, y
+// el indicador descarta lo que no necesita —el principal y el grado— de la misma respuesta.
+//
+// Y LA VENTANA ERA EL HERMANO QUE QUEDABA AFUERA: con una abierta y la condición cumplida, el
+// inventario decía `puede_actuar: true` sin `inerte_por`, y el barrido contaba `mantenimiento` y
+// no actuaba. Medido en la revisión de A131 con una sonda sobre esta rama. Exposición en
+// producción: el contador `mantenimiento` de `vaciar-journal` dio 0 como máximo en 30 días
+// (auditoría A131), o sea que ningún barrido encontró una máquina en ventana en ese lapso.
+//
+// Existía también politicaPuedeActuar, un envoltorio de una línea sobre ésta que después de A131
+// sólo llamaban las pruebas; se borró y las pruebas preguntan acá, que es lo que corre.
+func (s *McpServer) porQueNoActuaria(pol fleet.Politica, d fleet.Device, enMantenimiento bool) frenoDePolitica {
+	if enMantenimiento {
+		return frenoMantenimiento
 	}
-	pr, existe := s.buscarPrincipal.porNombre(pol.Principal)
-	if !existe {
-		return false
-	}
-	return PuedeSobreDevice(pr, d, fleet.CapExec) && argvPermitido(pr, d, pol.Hacer)
+	_, freno, _ := s.autoridadDePolitica(pol, d)
+	return freno
 }
 
 // medidoParaLog traduce el «no sé» del dominio al del log.
