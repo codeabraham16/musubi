@@ -236,7 +236,7 @@ func parametrosDeCargaDesdeEnv(t *testing.T) parametrosDeCarga {
 }
 
 // serviciosPorInventario es cuántas units manda una máquina cuando manda el inventario. Sesenta
-// es una máquina real de la flota y queda debajo de fleet.ServiciosPorLatido (64) A PROPÓSITO: el
+// es una máquina real de la flota y queda debajo de fleet.ServiciosPorLatido (96) A PROPÓSITO: el
 // banco tiene que medir el camino que GUARDA, no el que rebota por exceder el techo.
 const serviciosPorInventario = 60
 

@@ -7,6 +7,41 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El agente ve las units `--user` del dueño, y puede correr como root sin quedar ciego.** Dos
+  cosas que tocan la misma pieza, el enumerador del inventario de `musubi-server`:
+
+  *Las units `--user` entran al inventario* como `usuario:<unit>`. Los tres puentes de WhatsApp, el
+  gateway, el CRM y los oneshots de Core01 son units del usuario `musubi`, y el agente sólo le
+  preguntaba al manager del sistema: medido el 2026-09-24, `core01-ensayo-local` (el simulacro de
+  restauración de Core01) estaba FAILED y no figuraba en ninguna alerta. Entra lo que escribió el
+  dueño —`~/.config/systemd/user/` y los quadlets de `~/.config/containers/systemd/`, con
+  `UnitFileState=generated` contando como habilitada, que es como está Vaultwarden— y quedan afuera
+  las de `/usr/lib`. El prefijo es obligatorio: `podman-restart` existe en los dos managers y la
+  deduplicación se comía una. Un `/run/user/<uid>` ausente es una fuente que no está; uno presente
+  sin bus (el arranque antes que `user@1000`) **aborta** el inventario en vez de dejar que el cerebro
+  pode las `usuario:*` y las reviva un latido después. Un agente que corre como el dueño exporta su
+  `XDG_RUNTIME_DIR` a los hijos si falta y el directorio es suyo.
+
+  *Modo root* (decisión del dueño: exec y shell como root, sin allowlist del lado del agente). Con el
+  binario anterior, un agente root corría `podman ps` como root, leía el store rootful vacío, y el
+  cerebro daba de baja los 18 contenedores del dueño. Ahora `MUSUBI_AGENTE_USUARIO=musubi` hace que
+  podman y `systemctl --user` —y sólo ellos— bajen a ese usuario con `SysProcAttr.Credential` (uid,
+  gid y grupos) y con su entorno (`HOME`, `USER`, `LOGNAME`, `XDG_RUNTIME_DIR` sólo si existe y es
+  suyo, sin nada de `XDG_*` de root ni el token del agente). Un usuario inexistente o `root` hace que
+  el agente no arranque. La rotación del token conserva el dueño del archivo si el agente es root, y
+  `--revisar-blindaje` mira el directorio de `MUSUBI_DEVICE_TOKEN_FILE` y el home de la identidad.
+
+  *El techo del latido sube de 64 a 96* (`fleet.ServiciosPorLatido`, agente y cerebro): con las units
+  del dueño y los once oneshots que entran al fallar, `musubi-server` llega a 73, y recortar se
+  llevaba primero a Vaultwarden y suspendía la poda. `latidoMaxBytes` se deriva y queda en ~204 KiB.
+  Los mensajes de capacidad inválida (`principals.yaml` y enroll/consent) nombran ahora las cinco:
+  `metrics, exec, screen, screen:view o shell`.
+
+  El despliegue, la vuelta atrás y los riesgos aceptados están en `deploy/agente-como-root.md`: el
+  binario va antes que el drop-in, el drop-in se llama `zz-root.conf` para ordenar después de
+  `token-por-archivo.conf`, y el token se muda a `/etc/musubi-agente/token`.
+
 ### Fixed
 - **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
   El ledger era UNA casilla de `meta` que guardaba UNA sesión, y `LedgerAdd` la reiniciaba entera

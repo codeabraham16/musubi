@@ -156,7 +156,7 @@ func TestSoloSeReportaLoQueAlguienDeclaroQueCorra(t *testing.T) {
 		t.Error("no se reporta una unit FALLADA sólo porque está deshabilitada: es justo la que hay que ver")
 	}
 	if _, hay := nombres["ruido"]; hay {
-		t.Error("se reporta una unit deshabilitada e inactiva: hay cientos, y llenarían el techo de 64 con ruido")
+		t.Error("se reporta una unit deshabilitada e inactiva: hay cientos, y llenarían el techo del latido con ruido")
 	}
 	// El detalle del roto lleva el POR QUÉ, que es la mitad del diagnóstico.
 	if !strings.Contains(nombres["roto"].Salud.Detalle, "exit-code") {

@@ -388,12 +388,29 @@ func TestElYamlDeGrantsEsFailClosed(t *testing.T) {
 	// Sabotaje: que parsearFleet ignore las claves desconocidas → alguien cree que otorgó `root`.
 	// arnes: prueba="TestElYamlDeGrantsEsFailClosed"
 	// arnes: archivo="internal/mcp/principals.go"
-	// arnes: de="\t\t\treturn nil, fmt.Errorf(\"principal %q: capacidad de flota inválida %q (usá metrics, exec o screen)\", nombrePrincipal, clave)"
+	// arnes: de="\t\t\treturn nil, fmt.Errorf(\"principal %q: capacidad de flota inválida %q (usá metrics, exec, screen, screen:view o shell)\", nombrePrincipal, clave)"
 	// arnes: a="\t\t\tcontinue"
+	// arnes: colision_ok="TestElYamlDeGrantsEsFailClosed"
+	//
+	// Y EL ERROR TIENE QUE NOMBRAR LAS CINCO. Decía «usá metrics, exec o screen», así que quien
+	// fuera a conceder «mirar sin tocar» (screen:view) o la consola (shell) recibía una guía que
+	// no las nombra, justo al escribirlas mal.
+	// Sabotaje: volver al texto viejo del error, que omite screen:view y shell.
+	// arnes: prueba="TestElYamlDeGrantsEsFailClosed"
+	// arnes: archivo="internal/mcp/principals.go"
+	// arnes: de="(usá metrics, exec, screen, screen:view o shell)"
+	// arnes: a="(usá metrics, exec o screen)"
+	// arnes: colision_ok="TestElYamlDeGrantsEsFailClosed"
 	t.Run("capacidad desconocida ⇒ el servidor no arranca", func(t *testing.T) {
 		body := base + "    fleet:\n      root: [\"*\"]\n"
-		if _, err := loadPrincipals(writeRegistry(t, body), ""); err == nil {
+		_, err := loadPrincipals(writeRegistry(t, body), "")
+		if err == nil {
 			t.Fatal("un `fleet: {root: [*]}` se aceptó en silencio: quien lo escribió cree que otorgó algo")
+		}
+		for _, c := range []string{"screen:view", "shell"} {
+			if !strings.Contains(err.Error(), c) {
+				t.Errorf("el error no nombra %q entre las capacidades válidas: %v", c, err)
+			}
 		}
 	})
 

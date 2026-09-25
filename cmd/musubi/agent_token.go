@@ -84,6 +84,11 @@ func cargarCredencial() (*credencial, error) {
 	return nil, nil
 }
 
+// rutaDelArchivoDeToken es la RUTA de MUSUBI_DEVICE_TOKEN_FILE —no su contenido—, o "" si el token
+// viene por variable. Vive acá, con el resto del contrato del token, para que quien sólo necesita
+// saber DÓNDE está (el verificador del blindaje) no vuelva a leer el entorno por su cuenta.
+func rutaDelArchivoDeToken() string { return strings.TrimSpace(os.Getenv(envTokenFile)) }
+
 // Fuente dice de DÓNDE salió el token, y con eso si una rotación se puede adoptar.
 //
 // LA DECISIÓN VIVE EN UN SOLO LUGAR A PROPÓSITO: `cargarCredencial` ya eligió el camino y dejó la
@@ -257,11 +262,20 @@ func apendarToken(ruta, nuevo string) error {
 // del destino: sin esto, una instalación que dejó el token 0400 terminaría en 0600 después de la
 // primera rotación. Donde los bits no existen —Windows no mapea el modo POSIX— el Chmod no hace
 // nada y el permiso lo tiene que dar la ACL del directorio, que es del instalador.
+//
+// Y EL DUEÑO SE PRESERVA CUANDO EL AGENTE ES ROOT, por la misma razón que el modo. El temporal lo
+// crea el proceso, así que un agente root lo crea root:root; el rename se lo lleva, y un token que
+// era de `musubi` queda de root. Con el token en /etc/musubi-agente (root:root) eso es lo correcto
+// y no se toca nada; en la ruta de antes, bajo el home del dueño, dejaría un archivo que un agente
+// que vuelva a correr como `musubi` —la vuelta atrás— ya no puede leer. Si no se puede devolver, NO
+// se reemplaza: el archivo queda con los dos tokens, que es el desenlace ya declarado no fatal.
 func escribirTokens(ruta string, tokens []string) error {
 	dir := filepath.Dir(ruta)
 	modo := os.FileMode(0o600)
+	uid, gid, ok := -1, -1, false
 	if fi, err := os.Stat(ruta); err == nil {
 		modo = fi.Mode().Perm()
+		uid, gid, ok = duenoDeArchivo(ruta)
 	}
 	tmp, err := os.CreateTemp(dir, ".token-*")
 	if err != nil {
@@ -285,8 +299,22 @@ func escribirTokens(ruta string, tokens []string) error {
 	if err := os.Chmod(nombre, modo); err != nil {
 		return fmt.Errorf("no se pudo fijar el modo del token: %w", err)
 	}
+	if ok && esRootElAgente() && uid != 0 {
+		if err := cambiarDueno(nombre, uid, gid); err != nil {
+			return fmt.Errorf("no se pudo devolverle el token a su dueño (uid %d): %w", uid, err)
+		}
+	}
 	if err := os.Rename(nombre, ruta); err != nil {
 		return fmt.Errorf("no se pudo reemplazar %q: %w", ruta, err)
 	}
 	return nil
 }
+
+// Los seams del dueño del token. Son `var` para que la prueba de la rotación como root corra sin
+// ser root: en una máquina de desarrollo un Chown a otro uid falla, y la propiedad que se custodia
+// es QUÉ se le pide al sistema y CUÁNDO, no que el kernel lo cumpla.
+var (
+	esRootElAgente = func() bool { return os.Getuid() == 0 }
+	duenoDeArchivo = duenoRealDeArchivo
+	cambiarDueno   = os.Chown
+)
