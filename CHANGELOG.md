@@ -8,6 +8,34 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Fixed
+- **El mapa publicado describe el commit, no el disco: lo que git ignora ya no sube al central.**
+  El índice lee el disco y el central guarda la foto con la etiqueta de un commit. #647 frenaba lo
+  modificado y lo sin trackear, pero `git status` no lista los **ignorados**, y `walkSourceTree` no
+  lee `.gitignore`. Medido el 2026-09-24: `cmd/musubi/assets/boceto/boceto-g.js`, que el
+  `.gitignore` de su carpeta deja afuera, le sumaba **1.222 nodos** al mapa del central con la
+  etiqueta `eb2cdb7`, un commit que no lo contiene. La laptop, con el mismo commit y sin el bundle,
+  publicaba otro mapa, y ganaba el último que empujaba.
+
+  Ahora `filtrarFotoAlCommit` recorta la foto **antes del push**. Deja sólo los nodos, aristas y
+  gists de archivos que están en el commit (`git ls-tree -r` sobre el commit de la etiqueta, o HEAD
+  si la foto viaja sin etiqueta). Una arista con una punta recortada también sale, y los nodos sin
+  archivo (paquetes importados) se quedan. **El grafo local no se toca**, porque sirve para el
+  trabajo en curso. **Si git no puede listar el commit, no se publica**: la foto entera sería el
+  disco con la etiqueta del commit, y una vacía borraría el mapa del central. La tool lo dice en
+  `federated_motivo`. Un proyecto que no es un repo git (sin `.git` en su directorio ni en sus
+  padres) publica como antes: no tiene etiqueta de commit ni lista contra la cual recortar.
+
+  *Lo que va a salir del mapa de `musubi` en el central con el primer push de un cliente que tenga
+  este cambio, medido contra `eb2cdb7`: 1.222 de 13.329 nodos (todos de `boceto-g.js`), 2.404 de
+  32.664 aristas y 39 de 117 gists. De esos gists, 36 tienen rutas absolutas de otros árboles
+  (`musubi-body`, temporales, el CRM del escritorio) y 3 son rutas relativas que el commit no
+  tiene.*
+
+  *Ocho sabotajes corridos, ocho rojos: no recortar nodos, dejar las aristas con una sola punta
+  recortada (AND→OR), no recortar gists, desconectar el recorte del push, seguir de largo cuando git
+  falla, tratar todo directorio como repo git, callar el motivo y listar el commit con rutas desde
+  la raíz del repo. Este último vaciaría el mapa de un proyecto que es un subdirectorio del repo.*
+
 - **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
   El ledger era UNA casilla de `meta` que guardaba UNA sesión, y `LedgerAdd` la reiniciaba entera
   con `if sessionID != l.SessionID`. Con varias terminales sobre el mismo cuaderno —10 procesos

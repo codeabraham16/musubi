@@ -790,8 +790,13 @@ func (s *McpServer) empujarFotoDelGrafo(ctx context.Context) bool {
 		return false
 	}
 	foto, err := s.engine.FotoDelGrafoCtx(s.scopedCtx(ctx))
+	if err == nil {
+		// Al central viaja el COMMIT, no el disco: sin lo que git ignora (ver filtrarFotoAlCommit).
+		foto, err = s.filtrarFotoAlCommit(foto, pub)
+	}
 	if err != nil {
-		logx.Error("federación del grafo: no se pudo leer la foto local (se aborta el push para no borrar lo del central)", "error", err)
+		s.motivoDelPush = err.Error()
+		logx.Error("federación del grafo: no se pudo armar la foto a publicar (se aborta el push: ni se borra lo del central ni se publica el disco)", "error", err)
 		return false
 	}
 	if err := s.syncClient.PushGraphDe(pub, foto.Nodes, foto.Edges, foto.Gists); err != nil {
@@ -1026,6 +1031,8 @@ func (s *McpServer) origenDelGrafo() (pub memory.PublicacionDelGrafo, publicable
 // indexaría, o "" si no hay (o si git no pudo contestar: ante la duda decide el central). Mira lo
 // MISMO que walkSourceTree —misma función de extensiones, mismos directorios salteados—: un .yaml
 // suelto o un respaldo sin trackear no cambian el grafo y no tienen por qué frenar la publicación.
+// No ve los IGNORADOS (status no los lista): ésos no frenan la publicación, los saca de la foto
+// filtrarFotoAlCommit.
 func (s *McpServer) primerArchivoIndexableSinCommitear() string {
 	salida, rc := s.gitDelArbol("status", "--porcelain=v1", "-z", "--untracked-files=all")
 	if rc != 0 {
