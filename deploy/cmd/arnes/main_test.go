@@ -1012,8 +1012,13 @@ func TestUnaDirectivaDeOtroSistemaNoApareceComoSinVeredicto(t *testing.T) {
 //
 // Así que se lee `main.go` y se exige el cableado: `main` le pasa a `correrTodos` y a
 // `contraOverlay` lo que devolvió `parsearFragmento`; las dos le pasan a `seleccionar` sus propios
-// k y n y recorren lo que dejó para correr; y `correrTodos` termina en
-// `return codigoDeSalida(corridas, verdes, errores)`.
+// k y n, recorren lo que dejó para correr y no le reasignan esa lista en ningún lado; y
+// `correrTodos` termina en `return codigoDeSalida(corridas, verdes, errores)`.
+//
+// LA REASIGNACIÓN SE MIRA APARTE porque el `range` sobre el nombre correcto no alcanza: la revisión
+// del PR midió que `aCorrer = append(aCorrer, noAplican...)` antes del bucle dejaba esta guarda en
+// verde, y en Linux la de Windows volvía a correr. Lo que sigue sin ver: tocar la lista por índice
+// (`aCorrer[0] = …`) o por un puntero. Es una lectura del texto, no un análisis de flujo.
 //
 // Sabotaje que la hace fallar: `main` le pasa 0, 0 a `correrTodos` → cada fragmento corre todo.
 // arnes: archivo="deploy/cmd/arnes/main.go"
@@ -1035,8 +1040,17 @@ func TestUnaDirectivaDeOtroSistemaNoApareceComoSinVeredicto(t *testing.T) {
 // arnes: archivo="deploy/cmd/arnes/main.go"
 // arnes: de="\treturn codigoDeSalida(corridas, verdes, errores)\n"
 // arnes: a="\tif verdes > 0 || errores > 0 {\n\t\treturn 1\n\t}\n\treturn 0\n"
+//
+// Sabotaje que la hace fallar: `contraOverlay` le re-agrega lo apartado a su lista antes del
+// bucle. Va en `contraOverlay` y no en `correrTodos` porque las dos anclas de `correrTodos` ya son
+// de los sabotajes de arriba, y el arnés contaría la pisada como colisión; la comprobación es la
+// misma para los dos corredores.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\timprimirNoAplican(noAplican, runtime.GOOS)\n\tfor _, p := range aMedir {"
+// arnes: a="\timprimirNoAplican(noAplican, runtime.GOOS)\n\taMedir = append(aMedir, noAplican...)\n\tfor _, p := range aMedir {"
 func TestElCorredorUsaLaSeleccionYCeroCorridasSaleRojo(t *testing.T) {
-	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "main.go", nil, 0)
 	if err != nil {
 		t.Fatalf("no pude leer main.go: %v", err)
 	}
@@ -1132,6 +1146,23 @@ func TestElCorredorUsaLaSeleccionYCeroCorridasSaleRojo(t *testing.T) {
 			t.Errorf("`%s` no recorre la lista que `seleccionar` dejó para correr (%q): lo apartado "+
 				"por fragmento o por sistema volvería a correr", corredor, lista)
 		}
+		// Y NADIE LE REASIGNA ESA LISTA: `aCorrer = append(aCorrer, noAplican...)` antes del bucle
+		// deja intacto el `range` de arriba y vuelve a correr lo apartado. Un `:=` que la sombree en
+		// un bloque de adentro también es un AssignStmt, así que cae acá.
+		ast.Inspect(fd.Body, func(x ast.Node) bool {
+			s, ok := x.(*ast.AssignStmt)
+			if !ok || (len(s.Rhs) == 1 && s.Rhs[0] == cs[0]) {
+				return true
+			}
+			for _, e := range s.Lhs {
+				if lista != "" && ident(e) == lista {
+					t.Errorf("`%s` le vuelve a asignar `%s` en la línea %d, después de `seleccionar`: lo que "+
+						"recorre ya no es lo que se eligió, y lo apartado por fragmento o por sistema puede "+
+						"volver a correr", corredor, lista, fset.Position(e.Pos()).Line)
+				}
+			}
+			return true
+		})
 	}
 
 	// 3 · `correrTodos` termina en `codigoDeSalida`, y con los tres contadores.
