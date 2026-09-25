@@ -220,6 +220,10 @@ type McpServer struct {
 	// despachar contra un engine nil. Ver degradado.go.
 	degradado error
 
+	// inerte, cuando NO es "", es por qué este servidor arrancó donde no hay un proyecto de Musubi
+	// (ver inerte.go): habla el protocolo, no ofrece tools y no toca ninguna base.
+	inerte string
+
 	// motivoSoloLectura es TEXTO explicativo del escalón de sólo lectura, no su interruptor: el
 	// modo lo decide el engine (ver solo_lectura.go). Lo pasa main, que es quien tiene el error
 	// con los dos números de esquema.
@@ -672,10 +676,18 @@ func (s *McpServer) Dispatch(ctx context.Context, req JsonRpcRequest) (JsonRpcRe
 		}()
 		switch req.Method {
 		case "initialize":
-			resp = okResponse(req.ID, s.handleInitialize())
+			resp = okResponse(req.ID, s.conAvisoDeInerte(s.handleInitialize()))
 		case "tools/list":
+			if s.inerte != "" {
+				resp = okResponse(req.ID, map[string]interface{}{"tools": []Tool{}})
+				break
+			}
 			resp = okResponse(req.ID, s.handleToolsList())
 		case "tools/call":
+			if s.inerte != "" {
+				resp = errResponse(req.ID, s.errorInerte())
+				break
+			}
 			result, rpcErr := s.handleToolsCall(ctx, req.Params)
 			if rpcErr != nil {
 				resp = errResponse(req.ID, rpcErr)

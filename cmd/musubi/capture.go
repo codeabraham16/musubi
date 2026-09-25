@@ -472,6 +472,15 @@ func runCapture(args []string) {
 	}
 
 	root := workspaceDir()
+	if hookMode {
+		// Como hook (Stop), sólo sobre un proyecto que YA tiene memoria (ver raiz.go). Antes
+		// ensureWorkspace la creaba en la carpeta donde lo arrancaran.
+		r := raizDelProceso()
+		if r.Dir == "" || r.Activar {
+			return
+		}
+		root = r.Dir
+	}
 	if err := ensureWorkspace(root); err != nil {
 		if !hookMode {
 			fmt.Fprintf(os.Stderr, "capture: workspace no disponible: %v\n", err)

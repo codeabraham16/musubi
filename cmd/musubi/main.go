@@ -451,12 +451,22 @@ func runServe(args []string) {
 }
 
 func runDaemon() {
-	root := workspaceDir()
-
-	// Auto-inicializa el workspace si falta (robusto para uso como MCP server).
-	if err := ensureWorkspace(root); err != nil {
-		fmt.Fprintf(os.Stderr, "Error al preparar workspace: %v\n", err)
-		os.Exit(1)
+	// EN QUÉ PROYECTO, O NINGUNO (ver raiz.go). Antes era workspaceDir() + ensureWorkspace: el daemon
+	// creaba `.musubi/` en la carpeta donde lo arrancaran, fuera o no un proyecto. Ahora activa la
+	// memoria sólo en la raíz de un repo git que no la tenía, y donde no hay proyecto —el home, una
+	// carpeta suelta— atiende INERTE: habla el protocolo, no ofrece tools y no crea nada.
+	r := raizDelProceso()
+	if r.Dir == "" {
+		fmt.Fprintf(os.Stderr, "musubi: sin proyecto en esta carpeta (%s): sirviendo INERTE, sin memoria\n", r.Motivo)
+		mcp.NewServidorInerte(".", version, r.Motivo).Start()
+		return
+	}
+	root := r.Dir
+	if r.Activar {
+		if err := activarMemoria(root); err != nil {
+			fmt.Fprintf(os.Stderr, "Error al preparar workspace: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	cfg, err := config.Load(root)
