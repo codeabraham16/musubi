@@ -142,6 +142,31 @@ func TestElRuntimeQueApareceTardeEntraAlInventario(t *testing.T) {
 // arnes: de="enumerarUnitsDeUsuario(identidadParaEnumerar, estadoDelBusDeUsuario, ahora)"
 // arnes: a="enumerarUnitsDeUsuario(identidadDeServicios{}, estadoDelBusDeUsuario, ahora)"
 //
+// LOS ARGUMENTOS TAMBIÉN SON EL CABLE. Un setenv que no escribe, o un esDe que siempre dice que no,
+// dejan al agente sin XDG_RUNTIME_DIR y a la fuente --user ausente en silencio, con todas las pruebas
+// de comportamiento en verde: ésas le pasan sus propios dobles, nunca los de runAgent.
+//
+// Sabotaje que la hace fallar: resolver con un uid fijo en vez del del proceso.
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="os.Getuid(),"
+// arnes: a="1000,"
+// Sabotaje que la hace fallar: resolver con un getenv que no lee el entorno (se pierde MUSUBI_AGENTE_USUARIO).
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="os.Getenv,"
+// arnes: a="func(string) string { return \"\" },"
+// Sabotaje que la hace fallar: exportar el runtime con un setenv que no escribe.
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="os.Setenv,"
+// arnes: a="func(string, string) error { return nil },"
+// Sabotaje que la hace fallar: buscar al usuario en un passwd que devuelve una cuenta vacía.
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="buscarCuenta,"
+// arnes: a="func(string) (cuentaDelSistema, error) { return cuentaDelSistema{}, nil },"
+// Sabotaje que la hace fallar: un esDe que siempre dice que el runtime no es del agente.
+// arnes: archivo="cmd/musubi/agent.go"
+// arnes: de="esDeUid)"
+// arnes: a="func(string, uint32) bool { return false })"
+//
 // Y EL ENUMERADOR DE LINUX LE REINTENTA EL RUNTIME AL HIJO ANTES DE CADA CONSULTA --user
 // (TestElRuntimeQueApareceTardeEntraAlInventario dice por qué).
 //
@@ -162,8 +187,9 @@ func TestElAgenteEnumeraConLaIdentidadQueResolvio(t *testing.T) {
 
 	run := funcionDelArchivo(t, fset, "agent.go", "runAgent")
 	var (
-		resuelta       string    // el nombre al que runAgent le asigna prepararIdentidadDeServicios(...)
-		posResuelta    token.Pos // dónde
+		resuelta       string        // el nombre al que runAgent le asigna prepararIdentidadDeServicios(...)
+		posResuelta    token.Pos     // dónde
+		llamada        *ast.CallExpr // y con qué argumentos
 		asignaciones   []*ast.AssignStmt
 		primerLatido   token.Pos
 		llamadasLatido int
@@ -174,6 +200,7 @@ func TestElAgenteEnumeraConLaIdentidadQueResolvio(t *testing.T) {
 			if len(x.Rhs) == 1 && esLlamadaA(x.Rhs[0], "prepararIdentidadDeServicios") && len(x.Lhs) > 0 {
 				if id, ok := x.Lhs[0].(*ast.Ident); ok {
 					resuelta, posResuelta = id.Name, x.Pos()
+					llamada = x.Rhs[0].(*ast.CallExpr)
 				}
 			}
 			for _, l := range x.Lhs {
@@ -200,6 +227,13 @@ func TestElAgenteEnumeraConLaIdentidadQueResolvio(t *testing.T) {
 	}
 	if llamadasLatido == 0 {
 		t.Fatal("runAgent no llama a latir: la guarda no puede decir si la identidad va antes del primer latido")
+	}
+
+	quiero := []string{"os.Getuid()", "os.Getenv", "os.Setenv", "buscarCuenta", "esDeUid"}
+	if got := argumentosDe(llamada); !reflect.DeepEqual(got, quiero) {
+		t.Errorf("%s: runAgent resuelve la identidad con %v y tienen que ser %v. Con otro setenv o "+
+			"esDe el agente se queda sin XDG_RUNTIME_DIR, y la fuente --user ausente, sin que nada avise",
+			fset.Position(llamada.Pos()), got, quiero)
 	}
 
 	if len(asignaciones) != 1 {

@@ -189,8 +189,9 @@ func runAgent(args []string) {
 	// CON QUIÉN SE ENUMERA, antes del primer latido y también con --once: el primer inventario de
 	// un agente root que enumera como root da de baja los contenedores del dueño (el porqué está
 	// en identidad_servicios.go). TestElAgenteEnumeraConLaIdentidadQueResolvio custodia que la
-	// asignación de abajo exista y vaya antes de cualquier latido: las pruebas de comportamiento
-	// fijan identidadParaEnumerar a mano, así que sin ella todo quedaba verde con el cable cortado.
+	// asignación de abajo exista y vaya antes de cualquier latido, y que la llamada reciba las
+	// funciones de verdad del proceso: las pruebas de comportamiento le pasan sus propios dobles y
+	// fijan identidadParaEnumerar a mano, así que sin eso todo quedaba verde con el cable cortado.
 	id, errId := prepararIdentidadDeServicios(os.Getuid(), os.Getenv, os.Setenv, buscarCuenta, esDeUid)
 	if errId != nil {
 		// Un usuario que no existe NO se degrada a «enumerar como root»: ese inventario diría que
