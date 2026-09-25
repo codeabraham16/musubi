@@ -753,8 +753,10 @@ func (s *McpServer) politicasSobre(p *Principal, d fleet.Device, enMantenimiento
 //
 // Un indicador que dijera «sí» donde la política dice «no» sería peor que no tenerlo, porque
 // enseñaría a confiar en él. Por eso no evalúa compuertas propias: antepone la ventana de
-// mantenimiento —en el mismo orden que aplicarPoliticas, que la mira antes que nada— y el resto
-// se lo pregunta a autoridadDePolitica, que es la que decide en actuarSiCorresponde.
+// mantenimiento —en el mismo orden que aplicarPoliticas, que la mira apenas después del alcance—
+// y el resto se lo pregunta a autoridadDePolitica, que es la que decide en actuarSiCorresponde. El
+// alcance no lo repite: quien la llama (politicasSobre) ya descartó las máquinas que la política
+// no alcanza, con la misma función que el barrido.
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════
 // LO QUE NO CONTESTA, Y POR QUÉ: `puede_actuar: true` NO ES «VA A ACTUAR»

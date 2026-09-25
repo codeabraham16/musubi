@@ -32,8 +32,9 @@ import (
 type ImpactoDeNombre struct {
 	// Concesiones son los principals cuya sección `fleet:` nombra esta máquina.
 	Concesiones []string
-	// Allowlists son los principals con una entrada de `exec_allow` para esta máquina. Van
-	// aparte de las concesiones porque se pierden distinto: quedarse sin concesión niega el
+	// Allowlists son los principals con una entrada de `exec_allow` que NOMBRA esta máquina: la
+	// del comodín no cuenta, igual que en Concesiones, porque sobrevive al rename. Van aparte de
+	// las concesiones porque se pierden distinto: quedarse sin concesión niega el
 	// acceso —ruidoso, se nota—; quedarse sin entrada de allowlist con la SECCIÓN presente
 	// deniega TODO comando por el paso 4 de argvPermitido, que es igual de silencioso y mucho
 	// más confuso.

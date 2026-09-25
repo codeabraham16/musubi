@@ -290,11 +290,25 @@ func (p Politica) Alcanza(nombreDevice string) bool {
 // parsearFleet en internal/mcp).
 const ComodinMaquinas = "*"
 
+// EsComodin dice si un selector es el comodín: con los bordes recortados, como todo selector.
+//
+// ES LA ÚNICA LECTURA DEL COMODÍN (A131·T3, revisión). La hacen SelectorAlcanza y SelectorNombra, y
+// también puedeOtorgar (internal/mcp), la compuerta que decide si alguien puede CONCEDER una
+// capacidad a una máquina que se está dando de alta. Esa compuerta comparaba `selector == "*"` sin
+// recortar mientras SelectorAlcanza recortaba: con ` * `, la misma concesión alcanzaba a todas las
+// máquinas y no dejaba otorgarla en ninguna que naciera. Hoy no muerde, porque parsearFleet recorta
+// antes de que el selector llegue a la compuerta; justamente por eso nadie iba a ver el día que
+// mordiera.
+func EsComodin(selector string) bool {
+	return strings.TrimSpace(selector) == ComodinMaquinas
+}
+
 // SelectorAlcanza dice si un selector de máquina —de una política o de una concesión— alcanza a esta
 // máquina: el comodín, o su nombre EXACTO. Es LA gramática de «qué máquinas» del track y la leen
 // todos los que la necesitan: Politica.Alcanza, la compuerta de las concesiones (tieneGrant, en
-// internal/mcp) y, por SelectorNombra, los dos informes del rename. Es una sola función para que no
-// se puedan separar: de dos copias de una comparación, la que se afloja no avisa.
+// internal/mcp) y, por SelectorNombra, las tres listas de los informes del rename (políticas,
+// concesiones y allowlists). Es una sola función para que no se puedan separar: de dos copias de una
+// comparación, la que se afloja no avisa.
 //
 // EXACTO QUIERE DECIR EXACTO: sin prefijos, sin sufijos, sin mayúsculas indistintas y sin globs. En
 // la malla conviven `davantis` y `davantis-1`, que son dos máquinas distintas (la laptop Linux y la
@@ -306,16 +320,25 @@ const ComodinMaquinas = "*"
 // LimpiarSelectores con `devices:` y parsearFleet con `fleet:`. Del lado de la máquina no hace falta:
 // AltaDevice y RenombrarDevice guardan el nombre recortado.
 func SelectorAlcanza(selector, nombreDevice string) bool {
-	return strings.TrimSpace(selector) == ComodinMaquinas || SelectorNombra(selector, nombreDevice)
+	return EsComodin(selector) || SelectorNombra(selector, nombreDevice)
 }
 
 // SelectorNombra dice si un selector NOMBRA a esta máquina: su nombre exacto, sin el comodín. Es la
 // pregunta del rename —qué se rompe si la máquina cambia de nombre—, y ahí el comodín no cuenta: lo
 // que se escribió para todas sobrevive a cualquier rename, y listarlo sería ruido que tapa lo que sí
 // se rompe.
+//
+// UNA MÁQUINA PUEDE LLAMARSE `*`: NombreDeDeviceValido no lo excluye y ValidarAlta sólo pide un
+// nombre no vacío. A esa máquina el comodín la ALCANZA y no la NOMBRA, y nada puede nombrarla: el
+// único selector que la escribe es el que alcanza a todas. Esto SÍ cambió un comportamiento en
+// A131·T3, aunque el commit dijera que no: los informes del rename comparaban con `==`, y para una
+// máquina `*` listaban como «se rompe» —y como «hereda», renombrando HACIA `*`— cada política y
+// cada concesión sobre `*`, que sobreviven a cualquier rename. Es una corrección (el ruido que este
+// criterio existe para evitar), no un defecto. La revisión de T3 la llevó a la tercera lista del
+// informe, la de `fleet_exec_allow`, que había quedado comparando por su cuenta (impactoDeNombre).
 func SelectorNombra(selector, nombreDevice string) bool {
 	s := strings.TrimSpace(selector)
-	return s != "" && s != ComodinMaquinas && s == nombreDevice
+	return s != "" && !EsComodin(s) && s == nombreDevice
 }
 
 // LimpiarSelectores normaliza una lista de selectores de máquina.

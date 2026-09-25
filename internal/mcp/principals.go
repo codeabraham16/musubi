@@ -412,6 +412,16 @@ func avisosDeInterpretes(p Principal) []string {
 // NO cuenta el comodín `*`: una concesión sobre todas las máquinas sobrevive a cualquier rename y
 // listarla sería ruido que tapa lo que sí importa. Lo que importa es exactamente lo que se rompe:
 // las que nombran a ESTA.
+//
+// LAS DOS LISTAS SE LEEN CON LA MISMA GRAMÁTICA, fleet.SelectorNombra (A131·T3 y su revisión). Una
+// clave de `fleet_exec_allow` es un selector de máquina igual que los de `fleet:` —un nombre exacto
+// o el comodín—, y la lista de allowlists la buscaba por su cuenta, `p.ExecAllow[device]`. Para una
+// máquina que se llama `*` (NombreDeDeviceValido lo deja) eso encontraba la entrada del COMODÍN y la
+// listaba como «se rompe», mientras la lista de concesiones, corregida por T3, ya no listaba la
+// concesión `*` de la misma persona: el mismo informe con dos criterios. Medido en la revisión con
+// una sonda sobre la punta de T3: `Concesiones=[]` y `Allowlists=["op"]` para un `op` con `exec:
+// ["*"]` y `fleet_exec_allow: {"*": …}`. Exposición: 0, ninguna máquina del cerebro se llama `*`
+// (auditoría A131: altura-db, davantis-1, gio, musubi-server).
 func (r *PrincipalRegistry) impactoDeNombre(device string) ImpactoDeNombre {
 	var imp ImpactoDeNombre
 	if r == nil || strings.TrimSpace(device) == "" {
@@ -431,8 +441,11 @@ func (r *PrincipalRegistry) impactoDeNombre(device string) ImpactoDeNombre {
 			}
 		}
 	allow:
-		if _, hay := p.ExecAllow[device]; hay {
-			imp.Allowlists = append(imp.Allowlists, p.Name)
+		for clave := range p.ExecAllow {
+			if fleet.SelectorNombra(clave, device) {
+				imp.Allowlists = append(imp.Allowlists, p.Name)
+				break
+			}
 		}
 	}
 	return imp

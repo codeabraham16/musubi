@@ -11,13 +11,18 @@ package fleet
 //
 // Lo que estas tablas NO pueden ver es que un consumidor deje de usarlas y vuelva a comparar por
 // su cuenta. Eso lo miden, del lado de internal/mcp, TestUnaPoliticaActuaYFiguraSoloSobreLasMaquinasQueNombra
-// (el barrido, el inventario, la compuerta de las concesiones y el informe del rename, contra los
-// mismos hechos) y TestUnaPoliticaDeServicioSoloMiraElServicioQueNombra (el barrido, contra cada
-// forma de ausencia del servicio).
+// (el barrido, el inventario, la compuerta de las concesiones y los informes del rename, contra
+// hechos escritos y con un PISO sobre las MISMAS formas de parecido que exige la tabla de acá: las
+// dos las toman de internal/fleet/fleettest) y TestUnaPoliticaDeServicioSoloMiraElServicioQueNombra
+// (el barrido, contra cada forma de ausencia del servicio). Hasta la revisión de T3 la de los
+// consumidores tenía su lista de formas escrita a mano, sin piso, y le faltaba el glob: una regla
+// glob en tieneGrant, o en el barrido, dejaba internal/mcp entero en verde.
 
 import (
 	"strings"
 	"testing"
+
+	"musubi/internal/fleet/fleettest"
 )
 
 // A131 · T3 — UN SELECTOR DE MÁQUINA ALCANZA AL COMODÍN O AL NOMBRE EXACTO, Y A NADA MÁS.
@@ -54,9 +59,9 @@ import (
 // las dos normalizaciones que sí valen: el comodín, y los espacios de los bordes del selector.
 //
 // PISO: la tabla tiene que traer al menos una fila de cada forma de parecido —se clasifican
-// mirando el par, no el nombre del caso—, todas con «no alcanza». Una tabla a la que se le caen
-// esas filas sigue en verde contra cualquier comparación laxa, que es exactamente la guarda de
-// antes.
+// mirando el par, no el nombre del caso, con fleettest.DeParecido—, todas con «no alcanza». Una
+// tabla a la que se le caen esas filas sigue en verde contra cualquier comparación laxa, que es
+// exactamente la guarda de antes.
 //
 // Sabotaje: Politica.Alcanza compara por prefijo (P2-m4, portada: la comparación ya no está escrita
 // en Alcanza sino en SelectorAlcanza, así que el sabotaje le devuelve a Alcanza el cuerpo que tenía
@@ -67,8 +72,8 @@ import (
 //
 // Sabotaje: la gramática misma deja de distinguir mayúsculas, para todos los que la leen.
 // arnes: archivo="internal/fleet/politica.go"
-// arnes: de="return s != \"\" && s != ComodinMaquinas && s == nombreDevice"
-// arnes: a="return s != \"\" && s != ComodinMaquinas && strings.EqualFold(s, nombreDevice)"
+// arnes: de="return s != \"\" && !EsComodin(s) && s == nombreDevice"
+// arnes: a="return s != \"\" && !EsComodin(s) && strings.EqualFold(s, nombreDevice)"
 func TestUnSelectorAlcanzaSoloAlComodinOAlNombreExacto(t *testing.T) {
 	type fila struct {
 		selector, maquina string
@@ -101,29 +106,19 @@ func TestUnSelectorAlcanzaSoloAlComodinOAlNombreExacto(t *testing.T) {
 	}
 
 	// PISO: la tabla trae cada forma de parecido, clasificada por el PAR y no por el texto del caso.
-	formas := map[string]int{}
+	// La clasificación es la de fleettest, la MISMA que exige la tabla de los consumidores en
+	// internal/mcp: en la revisión de T3 esa tabla tenía su lista escrita a mano y le faltaba el glob.
+	porForma := map[fleettest.Forma]int{}
 	for _, f := range filas {
-		s := strings.TrimSpace(f.selector)
-		if s == "" || s == f.maquina || f.alcanza {
+		if f.alcanza {
 			continue
 		}
-		switch {
-		case strings.HasPrefix(f.maquina, s):
-			formas["prefijo"]++
-		case strings.HasPrefix(s, f.maquina):
-			formas["el nombre como prefijo del selector"]++
-		case strings.HasSuffix(f.maquina, s):
-			formas["sufijo"]++
-		case strings.Contains(f.maquina, s):
-			formas["subcadena"]++
-		case strings.EqualFold(s, f.maquina):
-			formas["mayúsculas"]++
-		case strings.ContainsRune(s, '*'):
-			formas["glob"]++
+		if forma := fleettest.DeParecido(f.selector, f.maquina); forma != "" {
+			porForma[forma]++
 		}
 	}
-	for _, forma := range []string{"prefijo", "el nombre como prefijo del selector", "sufijo", "subcadena", "mayúsculas", "glob"} {
-		if formas[forma] == 0 {
+	for _, forma := range fleettest.Formas() {
+		if porForma[forma] == 0 {
 			t.Errorf("PISO: la tabla no trae ninguna fila de %s que no alcance. Sin ella, una comparación que "+
 				"acepte esa forma de parecido deja esta guarda en verde, como dejaba a la de antes", forma)
 		}

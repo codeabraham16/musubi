@@ -145,12 +145,18 @@ func capsQuePuede(p *Principal, d fleet.Device) []fleet.Cap {
 // de ampliarse el alcance sin que nadie lo autorice. Una máquina recién nacida no figura en
 // ninguna lista de nombres, así que el único criterio honesto es «¿la tendrías igual?» — y sólo
 // el comodín responde que sí.
+//
+// EL COMODÍN LO LEE fleet.EsComodin, la misma lectura que SelectorAlcanza (A131·T3, revisión). Acá
+// había un `selector == comodinFlota` propio, sin recortar: con ` * `, la misma concesión alcanzaba
+// a todas las máquinas en tieneGrant y no dejaba otorgar en ninguna que naciera. Hoy no pasa porque
+// parsearFleet recorta; lo que se evita es la segunda lectura del mismo selector, que es la que se
+// separa sin avisar. Lo mide TestPuedeOtorgarLeeElComodinComoLaGramatica.
 func puedeOtorgar(p *Principal, c fleet.Cap) bool {
 	if p == nil {
 		return true // stdio local: confianza local, igual que arriba
 	}
 	for _, selector := range p.Fleet[c] {
-		if selector == comodinFlota {
+		if fleet.EsComodin(selector) {
 			return true
 		}
 	}

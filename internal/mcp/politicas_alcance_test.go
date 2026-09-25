@@ -16,7 +16,10 @@ package mcp
 // cuenta, la compuerta de las concesiones y el informe del rename— y cada forma en que un servicio
 // puede faltar. Los hechos contra los que comparan están ESCRITOS en cada fila: no se derivan de
 // Alcanza ni de ServicioEn, que son lo que miden. Las mismas formas, contra las funciones del
-// dominio solas, las recorren las tablas de internal/fleet/politica_alcance_test.go.
+// dominio solas, las recorren las tablas de internal/fleet/politica_alcance_test.go; las formas de
+// parecido de las máquinas las exigen las dos con un PISO sobre la MISMA clasificación
+// (internal/fleet/fleettest), porque en la revisión de T3 la de acá tenía su lista escrita a mano y
+// le faltaba el glob.
 
 import (
 	"slices"
@@ -29,6 +32,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/fleet"
+	"musubi/internal/fleet/fleettest"
 )
 
 // disparoDeCondicion es cómo se CUMPLE una condición sobre una máquina: el umbral de la política, el
@@ -115,8 +119,11 @@ func condicionesConDisparo(t *testing.T, sinFila string) ([]fleet.Condicion, map
 
 // maquinasDeLaTablaDeAlcance son las máquinas de la tabla de alcance. `davantis` y `davantis-1` son
 // el par REAL de la malla donde un nombre es prefijo del otro —la laptop Linux y la PC Windows, que
-// Prometheus ya vio juntas—, y `nas` no comparte nada con ellas.
-var maquinasDeLaTablaDeAlcance = []string{"davantis", "davantis-1", "nas"}
+// Prometheus ya vio juntas—, y `nas` no comparte nada con ellas. `*` es una máquina que se llama
+// como el comodín —NombreDeDeviceValido lo deja, y ValidarAlta sólo pide un nombre—: el comodín la
+// alcanza y nada la nombra, y es la única donde leer un selector con `==` en vez de con la
+// gramática contesta distinto. Ahí los informes del rename listaban lo que se escribió para todas.
+var maquinasDeLaTablaDeAlcance = []string{"davantis", "davantis-1", "nas", "*"}
 
 // mundoDeAlcance da de alta en la casa las máquinas de la tabla, con metrics y exec, y les pone
 // encima UNA política con el registro dado. Devuelve las máquinas leídas del registro, por nombre.
@@ -190,8 +197,9 @@ func condicionCumplida(t *testing.T, s *McpServer, pol fleet.Politica, d fleet.D
 // exigirLosOtrosLectoresDelSelector mide, para un `devices:` y los dos hechos de su fila, a los
 // lectores del selector que no dependen de la condición: la compuerta de una concesión con el MISMO
 // selector en cada capacidad que la máquina admite —armada con el parser de principals.yaml, así que
-// llega recortada como llegaría de verdad— y los dos informes del rename, el de las políticas y el de
-// las concesiones.
+// llega recortada como llegaría de verdad— y los dos informes del rename: el de las políticas, y el
+// de las credenciales con sus dos listas, la de concesiones y la de allowlists (`fleet_exec_allow`
+// con el mismo selector de clave, también por su parser).
 //
 // No es un t.Helper A PROPÓSITO: cada aserción tiene que reportar su propia línea, que es con lo que
 // el arnés distingue un sabotaje de otro.
@@ -200,7 +208,16 @@ func exigirLosOtrosLectoresDelSelector(t *testing.T, sobre []string, alcanza, no
 	if err != nil {
 		t.Fatalf("parsearFleet(exec y metrics: %q): %v", sobre, err)
 	}
-	concesion := Principal{Name: "op-selector", Role: RoleWriter, Read: ReadOwn, Write: WriteOwn, ProjectID: "casa", Fleet: grants}
+	porClave := map[string][]string{}
+	for _, sel := range sobre {
+		porClave[sel] = []string{"journalctl"}
+	}
+	allow, err := parsearExecAllow("op-selector", porClave)
+	if err != nil {
+		t.Fatalf("parsearExecAllow(%q): %v", sobre, err)
+	}
+	concesion := Principal{Name: "op-selector", Role: RoleWriter, Read: ReadOwn, Write: WriteOwn, ProjectID: "casa",
+		Fleet: grants, ExecAllow: allow}
 	registro := registroDePrueba(concesion)
 	pol := politicaDeMemoria()
 	pol.Devices = sobre
@@ -226,6 +243,11 @@ func exigirLosOtrosLectoresDelSelector(t *testing.T, sobre []string, alcanza, no
 			t.Errorf("el informe del rename de %s lista a la concesión `exec: %q` = %v, y la fila dice que la nombra = %v",
 				n, sobre, got, nombra[n])
 		}
+		if got := slices.Contains(registro.impactoDeNombre(n).Allowlists, concesion.Name); got != nombra[n] {
+			t.Errorf("el informe del rename de %s lista a la allowlist `fleet_exec_allow` con claves %q = %v, y la fila dice "+
+				"que la nombra = %v: el mismo informe lee las concesiones y las allowlists con dos criterios, y avisa que se "+
+				"rompe una entrada que sobrevive al rename (o calla una que no)", n, sobre, got, nombra[n])
+		}
 	}
 }
 
@@ -247,6 +269,22 @@ func exigirLosOtrosLectoresDelSelector(t *testing.T, sobre []string, alcanza, no
 //     `politicas_activas: 0` cuando hay políticas pero ninguna alcanza a la máquina (P4-m1: `total >
 //     0 || len(s.politicas) > 0`) pasaba: el ruido que esa guarda dice evitar, en cada fila.
 //
+// Y DOS EJES QUE ESTA MISMA TABLA DEJABA QUIETOS, medidos en la revisión de T3 sobre la punta de la
+// rama, cada mutación contra el paquete internal/mcp ENTERO:
+//
+//   - LAS FORMAS. Sus filas eran una lista escrita a mano —prefijo, sufijo, mayúsculas, lista,
+//     bordes—, sin piso, y no traía el GLOB que la tabla del dominio sí exige. Una regla glob en
+//     tieneGrant (`davan*` alcanzando a `davantis` y a `davantis-1`) dio ok 114,6 s; la misma regla
+//     en el barrido, ok 83,4 s: una concesión o una política sobre máquinas que no nombran, y nada
+//     rojo.
+//   - EL NOMBRE `*`. T3 hizo que los informes del rename leyeran el selector con SelectorNombra, y
+//     sobre `davantis`, `davantis-1` y `nas` eso da lo mismo que el `==` de antes: la diferencia
+//     vive sólo en una máquina que se llama `*`, que la tabla no tenía. Volver a `sel == device` en
+//     las concesiones dio ok 99,5 s; en las políticas, la única prueba roja fue el censo, por el
+//     `de` de una directiva que la mutación borraba. Y la tercera lista del mismo informe, la de las
+//     allowlists, había quedado comparando por su cuenta (`p.ExecAllow[device]`): para una máquina
+//     `*` listaba la entrada del comodín mientras la de concesiones ya no listaba la concesión `*`.
+//
 // Y UN DEFECTO VIVO DEL MISMO EJE, encontrado al mover el alcance: el barrido contaba la ventana de
 // mantenimiento ANTES de mirar el alcance (vivía adentro de evaluarPolitica), así que una ventana en
 // una máquina que la política ni nombra le sumaba `mantenimiento` a esa política. El contador que
@@ -265,24 +303,27 @@ func exigirLosOtrosLectoresDelSelector(t *testing.T, sobre []string, alcanza, no
 // QUÉ MIDE
 //
 // Una fila por selector, con dos HECHOS escritos: a qué máquinas ALCANZA y a cuáles NOMBRA (el
-// comodín alcanza sin nombrar). Las máquinas son `davantis`, `davantis-1` y `nas`, y los selectores
-// recorren el nombre exacto de cada lado del par prefijo, un prefijo de las dos, un sufijo, las
-// mayúsculas, una lista y los bordes con espacios. Por fila:
+// comodín alcanza sin nombrar). Las máquinas son `davantis`, `davantis-1`, `nas` y `*`, y los
+// selectores recorren el nombre exacto de cada lado del par prefijo, un prefijo de las dos, un
+// sufijo, una subcadena, las mayúsculas, un glob, una lista y los bordes con espacios. Por fila:
 //
-//  1. LOS OTROS DOS LECTORES DEL SELECTOR, que no dependen de la condición: la compuerta de una
+//  1. LOS OTROS LECTORES DEL SELECTOR, que no dependen de la condición: la compuerta de una
 //     concesión con el MISMO selector, parseada como la de principals.yaml, alcanza exactamente donde
 //     la política alcanza, en cada capacidad que la máquina admite; y los dos informes del rename
-//     (políticas y concesiones) la listan como «se rompe» exactamente donde la nombra.
-//  2. En CADA condición declarada (AST), con la condición cumplida en las tres máquinas: el barrido
+//     —el de las políticas, y el de las credenciales con sus listas de concesiones y de allowlists—
+//     la listan como «se rompe» exactamente donde la nombra.
+//  2. En CADA condición declarada (AST), con la condición cumplida en todas las máquinas: el barrido
 //     actúa exactamente en las que alcanza y cuenta `ok` esas veces y nada más; el inventario publica
 //     `politicas_activas` —nunca en cero— exactamente en ésas, con el detalle de la política; y con
-//     las tres en una ventana de mantenimiento, el segundo barrido cuenta `mantenimiento` una vez por
+//     todas en una ventana de mantenimiento, el segundo barrido cuenta `mantenimiento` una vez por
 //     máquina alcanzada, no por máquina del proyecto.
 //
-// PISO: en cada fila y condición, la condición se cumple en las tres máquinas (si no, «no actuó sobre
-// ésta» no distinguiría alcance de condición); la ventana no está abierta en el primer barrido y sí
-// en el segundo; y la tabla trae, para cada par de máquinas donde un nombre es prefijo del otro, una
-// fila que alcanza a cada una sin la otra.
+// PISO: en cada fila y condición, la condición se cumple en todas las máquinas (si no, «no actuó
+// sobre ésta» no distinguiría alcance de condición); la ventana no está abierta en el primer barrido
+// y sí en el segundo; la tabla trae, para cada par de máquinas donde un nombre es prefijo del otro,
+// una fila que alcanza a cada una sin la otra; para cada forma de parecido de fleettest —las MISMAS
+// que exige la tabla del dominio—, un par selector–máquina que su fila no alcanza, así que una forma
+// nueva se vuelve obligatoria en las dos tablas a la vez; y el comodín frente a la máquina `*`.
 //
 // Sabotaje: el barrido saltea el alcance de las políticas de servicio (P2-m5, portada: el alcance
 // ya no vive en evaluarPolitica sino en el bucle de aplicarPoliticas).
@@ -320,6 +361,44 @@ func exigirLosOtrosLectoresDelSelector(t *testing.T, sobre []string, alcanza, no
 // arnes: archivo="internal/mcp/methods_renombrar.go"
 // arnes: de="if fleet.SelectorNombra(sel, nombre) {"
 // arnes: a="if fleet.SelectorAlcanza(sel, nombre) {"
+//
+// Sabotaje: la compuerta de las concesiones suma una regla GLOB propia (`davan*` alcanza a
+// `davantis` y a `davantis-1`): la que la revisión de T3 midió en verde con el paquete entero.
+// arnes: archivo="internal/mcp/fleet_authz.go"
+// arnes: de="func tieneGrant(p *Principal, c fleet.Cap, nombreDevice string) bool {\n"
+// arnes: a="func tieneGrant(p *Principal, c fleet.Cap, nombreDevice string) bool {\n\tfor _, sel := range p.Fleet[c] {\n\t\tif n := len(sel) - 1; n > 0 && sel[n] == '*' && len(nombreDevice) >= n && nombreDevice[:n] == sel[:n] {\n\t\t\treturn true\n\t\t}\n\t}\n"
+//
+// Sabotaje: el barrido suma una regla GLOB propia antes del alcance, y evalúa las máquinas que el
+// patrón calza aunque la política no las nombre (el hermano del anterior, también medido en verde).
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="\tfor _, pol := range s.politicas {\n\t\tfor _, d := range devices {\n"
+// arnes: a="\tfor _, pol := range s.politicas {\n\t\tfor _, d := range devices {\n\t\t\tif glob := func() bool {\n\t\t\t\tfor _, sel := range pol.Sobre {\n\t\t\t\t\tif n := len(sel) - 1; n > 0 && sel[n] == '*' && len(d.Name) >= n && d.Name[:n] == sel[:n] {\n\t\t\t\t\t\treturn true\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\treturn false\n\t\t\t}(); glob && !enMantenimiento[d.ID] {\n\t\t\t\tif s.evaluarPolitica(pol, d, ahora) {\n\t\t\t\t\tacciones++\n\t\t\t\t}\n\t\t\t\tcontinue\n\t\t\t}\n"
+//
+// Sabotaje: el informe de las políticas vuelve a comparar por su cuenta, como antes de T3 (recortar
+// y `==`): para la máquina `*` lista la política sobre todas. El arreglo compara igual a mano pero
+// excluye el comodín: la tabla mide qué lista el informe, no con qué función.
+// arnes: archivo="internal/mcp/methods_renombrar.go"
+// arnes: de="\t\tfor _, sel := range pol.Sobre {\n"
+// arnes: a="\t\tfor _, sel := range pol.Sobre {\n\t\t\tif strings.TrimSpace(sel) == nombre {\n\t\t\t\tout = append(out, pol.Nombre)\n\t\t\t\tbreak\n\t\t\t}\n"
+// arnes: arreglo_de="if fleet.SelectorNombra(sel, nombre) {"
+// arnes: arreglo_a="if strings.TrimSpace(sel) == nombre && !fleet.EsComodin(sel) {"
+//
+// Sabotaje: la lista de concesiones del informe vuelve a comparar por su cuenta (`sel == device`,
+// el código de antes de T3). El arreglo es la misma comparación con el comodín excluido.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="if fleet.SelectorNombra(sel, device) {"
+// arnes: a="if sel == device {"
+// arnes: arreglo_de="if fleet.SelectorNombra(sel, device) {"
+// arnes: arreglo_a="if sel == device && !fleet.EsComodin(sel) {"
+//
+// Sabotaje: la lista de allowlists del informe vuelve a comparar la clave por su cuenta, que es lo
+// que hacía `p.ExecAllow[device]` antes de la revisión. El arreglo vuelve a esa búsqueda por clave
+// pero excluye el comodín: la guarda mide lo que la lista dice, no cómo se recorre el mapa.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="if fleet.SelectorNombra(clave, device) {"
+// arnes: a="if clave == device {"
+// arnes: arreglo_de="\t\tfor clave := range p.ExecAllow {\n\t\t\tif fleet.SelectorNombra(clave, device) {\n\t\t\t\timp.Allowlists = append(imp.Allowlists, p.Name)\n\t\t\t\tbreak\n\t\t\t}\n\t\t}\n"
+// arnes: arreglo_a="\t\tif _, hay := p.ExecAllow[device]; hay && !fleet.EsComodin(device) {\n\t\t\timp.Allowlists = append(imp.Allowlists, p.Name)\n\t\t}\n"
 func TestUnaPoliticaActuaYFiguraSoloSobreLasMaquinasQueNombra(t *testing.T) {
 	filas := []struct {
 		caso    string
@@ -333,6 +412,8 @@ func TestUnaPoliticaActuaYFiguraSoloSobreLasMaquinasQueNombra(t *testing.T) {
 		{"un prefijo de las dos", []string{"davan"}, nil, nil},
 		{"un sufijo", []string{"antis"}, nil, nil},
 		{"el nombre en mayúsculas", []string{"DAVANTIS"}, nil, nil},
+		{"una subcadena", []string{"vant"}, nil, nil},
+		{"un glob", []string{"davan*"}, nil, nil},
 		{"una lista cuyo primer selector no nombra a nadie", []string{"otra-pc", "nas"}, []string{"nas"}, []string{"nas"}},
 		{"el nombre con espacios en los bordes", []string{" davantis "}, []string{"davantis"}, []string{"davantis"}},
 	}
@@ -361,6 +442,45 @@ func TestUnaPoliticaActuaYFiguraSoloSobreLasMaquinasQueNombra(t *testing.T) {
 	}
 	if pares == 0 {
 		t.Fatalf("PISO: entre %q no hay ningún par donde un nombre sea prefijo del otro, y es el eje que esta tabla vino a recorrer", maquinasDeLaTablaDeAlcance)
+	}
+
+	// PISO: cada forma de parecido de fleettest —las MISMAS que exige la tabla del dominio— tiene un par
+	// selector–máquina que su fila NO alcanza, clasificado mirando el par y no el nombre del caso. Sin
+	// esto la lista de filas vuelve a ser una enumeración a mano, que es como le faltó el glob.
+	porForma := map[fleettest.Forma]int{}
+	for _, f := range filas {
+		for _, sel := range f.sobre {
+			for _, n := range maquinasDeLaTablaDeAlcance {
+				if slices.Contains(f.alcanza, n) {
+					continue
+				}
+				if forma := fleettest.DeParecido(sel, n); forma != "" {
+					porForma[forma]++
+				}
+			}
+		}
+	}
+	for _, forma := range fleettest.Formas() {
+		if porForma[forma] == 0 {
+			t.Errorf("PISO: ninguna fila pone un selector de forma %q frente a una máquina que no alcanza. Sin ese par, "+
+				"un consumidor que acepte esa forma —el barrido, el inventario, la compuerta o el rename— deja esta tabla "+
+				"en verde, como la dejaba el glob en tieneGrant y en el barrido", forma)
+		}
+	}
+
+	// PISO: el comodín frente a una máquina que se llama `*`. Es el único par donde leer el selector con
+	// `==` en vez de con la gramática contesta distinto: sin él, los informes del rename pueden volver a
+	// listar lo que se escribió para todas y esta tabla no lo ve.
+	filaComodin, maquinaComodin := false, slices.Contains(maquinasDeLaTablaDeAlcance, fleet.ComodinMaquinas)
+	for _, f := range filas {
+		if slices.Contains(f.sobre, fleet.ComodinMaquinas) {
+			filaComodin = true
+		}
+	}
+	if !filaComodin || !maquinaComodin {
+		t.Fatalf("PISO: la tabla trae una fila con el comodín = %v y una máquina que se llama %q = %v, y necesita las dos: "+
+			"es el único par donde un informe del rename que compare con `==` lista una política o una concesión sobre todas",
+			filaComodin, fleet.ComodinMaquinas, maquinaComodin)
 	}
 
 	condiciones, disparos := condicionesConDisparo(t, "una condición sin receta es justo la clase por la que el "+
@@ -482,7 +602,7 @@ func TestUnaPoliticaActuaYFiguraSoloSobreLasMaquinasQueNombra(t *testing.T) {
 						}
 					}
 
-					// EL SEGUNDO BARRIDO, CON LAS TRES EN VENTANA: la pausa se cuenta donde la política
+					// EL SEGUNDO BARRIDO, CON TODAS EN VENTANA: la pausa se cuenta donde la política
 					// habría actuado, y en ningún otro lado.
 					if en := s.ventanasParaPoliticas(despues); len(en) != len(maquinasDeLaTablaDeAlcance) {
 						t.Fatalf("PISO: el segundo barrido ve %d máquina(s) en ventana y tienen que ser las %d", len(en), len(maquinasDeLaTablaDeAlcance))
