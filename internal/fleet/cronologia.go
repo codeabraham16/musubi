@@ -67,14 +67,18 @@ const (
 // ejecutableDe es argv[0] TAL COMO EL CANAL LO GUARDA Y EL AGENTE LO DESPACHA: el de LimpiarArgv,
 // o vacío si no queda ninguno.
 //
-// TODA DECISIÓN SOBRE argv[0] DE ESTE ARCHIVO PASA POR ACÁ, y no por el argv crudo. El cerebro
-// decide sobre lo que recibe, pero guarda y ejecuta lo que LimpiarArgv deja; si las dos formas
-// difieren, la decisión se toma sobre un argv que nunca va a correr. La auditoría A131 (tema T7)
-// lo midió en un servidor de prueba: con una credencial de SÓLO `exec`, musubi_fleet_exec aceptó
-// `["", "musubi:pantalla", <sesión>, <contraseña>, <ttl>]`. La guarda miraba argv[0] crudo —vacío,
-// o sea «no es interna»—, el cerebro guardaba `musubi:pantalla` limpio y el agente lo despachaba
-// como sesión de pantalla: la puerta lateral que S6 cerró para exec, abierta otra vez con una
-// parte vacía adelante.
+// TODA DECISIÓN SOBRE argv[0] DE ESTE ARCHIVO PASA POR ACÁ, y no por el argv crudo: las de
+// EsOperacionInterna, TipoDeArgv y ArgvDeBitacora. El cerebro decide sobre lo que recibe, pero
+// guarda y ejecuta lo que LimpiarArgv deja; si las dos formas difieren, la decisión se toma sobre
+// un argv que nunca va a correr. La auditoría A131 (tema T7) lo midió en un servidor de prueba:
+// con una credencial de SÓLO `exec`, musubi_fleet_exec aceptó `["", "musubi:pantalla", <sesión>,
+// <contraseña>, <ttl>]`. La guarda miraba argv[0] crudo —vacío, o sea «no es interna»—, el cerebro
+// guardaba `musubi:pantalla` limpio y el agente lo despachaba como sesión de pantalla: la puerta
+// lateral que S6 cerró para exec, abierta otra vez con una parte vacía adelante.
+//
+// La frase de arriba fue falsa una ronda: ArgvDeBitacora decidía sobre `LimpiarArgv(argv)[0]` por
+// su cuenta. Era la misma forma, pero una segunda copia de la pregunta es una segunda respuesta
+// posible, que es justo lo que esta función existe para impedir. Lo señaló la revisión de T7.
 func ejecutableDe(argv []string) string {
 	limpio := LimpiarArgv(argv)
 	if len(limpio) == 0 {
@@ -105,14 +109,13 @@ func EsOperacionInterna(argv []string) bool {
 // armar la cronología— y ésa es exactamente la duplicación que envejece mal: la copia que se
 // queda vieja es siempre la del camino que se usa menos.
 //
-// TAPA TODO ARGV QUE EL AGENTE DESPACHARÍA COMO PANTALLA, con la forma que venga: decide sobre el
-// argv limpio, igual que el despacho. Comparar el argv[0] crudo dejaba pasar la contraseña con
-// una parte vacía adelante (`["", "musubi:pantalla", <sesión>, <contraseña>]`), que el agente sí
-// ejecuta como pantalla. Por el mismo motivo el id sale del argv limpio: del crudo, en esa forma,
-// saldría el nombre de la operación.
+// TAPA TODO ARGV QUE EL AGENTE DESPACHARÍA COMO PANTALLA, con la forma que venga: decide con
+// ejecutableDe, la cabeza que el despacho mira. Comparar el argv[0] crudo dejaba pasar la
+// contraseña con una parte vacía adelante (`["", "musubi:pantalla", <sesión>, <contraseña>]`), que
+// el agente sí ejecuta como pantalla. Por el mismo motivo el id sale del argv limpio: del crudo,
+// en esa forma, saldría el nombre de la operación.
 func ArgvDeBitacora(argv []string) []string {
-	limpio := LimpiarArgv(argv)
-	if len(limpio) == 0 || limpio[0] != OpPantalla {
+	if ejecutableDe(argv) != OpPantalla {
 		return argv
 	}
 	// Se conserva el id de sesión (sirve para cruzar con la bitácora de pantalla) y se tapa el
@@ -122,7 +125,7 @@ func ArgvDeBitacora(argv []string) []string {
 	// `<oculto>` sale como `\u003coculto\u003e` y una bitácora leída en crudo se vuelve ilegible
 	// justo en la línea que más se mira.
 	id := ""
-	if len(limpio) > 1 {
+	if limpio := LimpiarArgv(argv); len(limpio) > 1 {
 		id = limpio[1]
 	}
 	return []string{OpPantalla, id, "[oculto]"}

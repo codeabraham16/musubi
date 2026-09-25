@@ -216,11 +216,17 @@ func ValidarComando(argv []string, timeout time.Duration) error {
 	return nil
 }
 
-// LimpiarArgv saca las partes vacías del final y de los bordes.
+// LimpiarArgv recorta los blancos alrededor del EJECUTABLE y saca UNA parte vacía de adelante; si
+// la que queda primera también está en blanco, el argv no tiene ejecutable y devuelve nil.
 //
-// NO toca el contenido de cada parte: un argumento con espacios, comillas o saltos de línea es
-// legítimo y el shell no interviene (F7). Alterarlo silenciosamente haría que el comando ejecutado
-// difiera del comando registrado en la bitácora, que es exactamente lo que no puede pasar.
+// NO SACA LAS PARTES VACÍAS DEL FINAL NI DEL MEDIO. Esta línea decía que sí hasta A131 (tema T7),
+// y nunca fue cierto: sólo la primera parte se descarta, y sólo si queda vacía. Está bien que sea
+// así, porque un argumento vacío es legítimo (`grep "" archivo`) y sacarlo cambiaría el comando.
+//
+// Fuera del ejecutable NO toca el contenido de ninguna parte: un argumento con espacios, comillas
+// o saltos de línea es legítimo y el shell no interviene (F7). Alterarlo silenciosamente haría que
+// el comando ejecutado difiera del comando registrado en la bitácora, que es exactamente lo que no
+// puede pasar.
 //
 // ────────────────────────────────────────────────────────────────────────────────────────────
 // ES IDEMPOTENTE, Y ESO ES UN CONTRATO: LO QUE SE GUARDA ES LO QUE SE EJECUTA

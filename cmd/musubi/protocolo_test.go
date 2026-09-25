@@ -170,6 +170,14 @@ func TestLosCincoCamposQueElAgenteConsumeLleganDeVerdad(t *testing.T) {
 // y dejaban pasar una operación interna con una parte vacía adelante. Hoy las tres son
 // fleet.EsOperacionInterna, y esta prueba es la que impide que vuelva la copia de este lado.
 //
+// NO ES GUARDA DE ESE DEFECTO, y conviene no contarla así (lo marcó la revisión de T7): pregunta
+// por un TEXTO —el literal en este paquete—, y el agente limpiaba el argv antes de despachar, así
+// que su copia nunca decidió distinto. Que caiga en la base 5017a45 prueba que el literal estaba,
+// no que la puerta estuviera abierta. La puerta la sostienen las pruebas de comportamiento:
+// TestConExecNoSeEncolaUnaOperacionInternaDisfrazada (mcp) y
+// TestUnaPoliticaNoEncolaUnaOperacionInternaDisfrazada y
+// TestLaCabezaDelArgvSeLeeComoLaDespachaElAgente (fleet).
+//
 // Sabotaje que la hace fallar: volver a poner `const comandoAvisarAgente = "musubi:avisar"`.
 // arnes: archivo="cmd/musubi/avisador.go"
 // arnes: de="const comandoAvisarAgente = fleet.OpAvisar"

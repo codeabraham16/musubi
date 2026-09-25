@@ -127,18 +127,51 @@ func clasificacionPorArgvDecidida() map[string]TipoDeHecho {
 	}
 }
 
-// parecidosA deriva, de una operación conocida, nombres que se le PARECEN y que nadie clasificó:
-// con algo pegado atrás, con la última letra cortada, y en mayúsculas después del prefijo. Son las
-// formas en que un clasificador que no compara la igualdad entera —por prefijo, por contención, sin
-// distinguir mayúsculas— le prestaría a un nombre ajeno la clasificación del conocido.
+// parecidosA deriva, de una operación conocida, nombres que se le PARECEN y que nadie clasificó.
+//
+// LA CONTINUACIÓN SALE DE UN ALFABETO CERRADO, no de una lista: el nombre seguido de CADA byte
+// ASCII (0x00 a 0x7F), solo y con más texto detrás. Así, una regla que compare por prefijo con el
+// separador que sea —`OpPantalla + "-"`, `+ "."`, `+ "/"`, `+ ":"`— encuentra acá el nombre que
+// le presta la clasificación a un ajeno. La única exclusión es la que deshace LimpiarArgv, el
+// recorte de strings.TrimSpace sobre el ejecutable: el nombre seguido de un blanco, solo, queda en
+// el nombre exacto y ES la operación conocida (con texto detrás el blanco queda adentro y sí es
+// otro nombre).
+//
+// Y tres que no continúan el nombre: con la última letra cortada (una regla que compare al revés,
+// «el conocido empieza con esto»), en mayúsculas (una que no distinga) y con el nombre contenido
+// en otro (una que busque contención o sufijo).
+//
+// LO QUE ESTE CONJUNTO NO VE, y hasta la ronda anterior el comentario decía que sí: un separador
+// de DOS caracteres o más (`OpPantalla + "::"`: ningún nombre de acá tiene dos dos-puntos
+// seguidos), o uno fuera de ASCII. La lista era de ocho formas escritas a mano y la revisión de T7
+// la dejó en verde con `OpPantalla + "."`. Agrandar el alfabeto a pares o a runas no converge
+// —cualquier largo tiene su largo más uno—, y por eso el resto del eje no lo cierra un nombre sino
+// la FORMA del código que decide: ver TestLaClasificacionPorNombreSoloComparaElNombreEntero.
 func parecidosA(op string) []string {
 	nombre := strings.TrimPrefix(op, PrefijoOperacionInterna)
-	return []string{
-		op + "-x", op + "_x", op + ":x", op + "x", op + " x",
+	out := []string{
 		op[:len(op)-1],
 		PrefijoOperacionInterna + strings.ToUpper(nombre),
 		PrefijoOperacionInterna + "x" + nombre,
 	}
+	// Los imprimibles primero, para que el primer nombre que cae se lea sin escapes; después, los
+	// de control y el espacio. Son los mismos 128 en cualquier orden.
+	var alfabeto []byte
+	for c := byte(0x21); c <= 0x7e; c++ {
+		alfabeto = append(alfabeto, c)
+	}
+	for c := byte(0x00); c <= 0x20; c++ {
+		alfabeto = append(alfabeto, c)
+	}
+	alfabeto = append(alfabeto, 0x7f)
+	for _, c := range alfabeto {
+		sigue := string(rune(c))
+		if strings.TrimSpace(op+sigue) != op {
+			out = append(out, op+sigue)
+		}
+		out = append(out, op+sigue+"x")
+	}
+	return out
 }
 
 // operacionesDePrueba son las declaradas, con la clasificación decidida, más las desconocidas
@@ -278,6 +311,16 @@ func TestUnaOperacionInternaSeClasificaIgualConCualquierLargo(t *testing.T) {
 // Los parecidos se DERIVAN de cada operación declarada (parecidosA), así que una operación nueva
 // trae los suyos.
 //
+// LO QUE CAZA ES UNA CLASE CERRADA, NO «CUALQUIER REGLA». La primera versión de esta prueba
+// recorría ocho formas escritas a mano, y el comentario de parecidosA prometía que con ellas caía
+// toda regla que no comparara la igualdad entera. La revisión de T7 lo midió falso: un
+// `HasPrefix(…, OpPantalla+".")` antes del switch —prefijo con OTRO separador, la misma clase que
+// C1-m4— dejaba fleet y mcp en verde, y `musubi:pantalla.algo` se habría mostrado como pantalla.
+// Hoy la continuación sale del alfabeto ASCII entero (ver parecidosA), así que cae cualquier
+// prefijo seguido de UN carácter ASCII, sea cual sea. Lo que no cae —un separador de dos
+// caracteres, o uno fuera de ASCII— no lo puede cerrar ningún conjunto de nombres, y lo cierra la
+// guarda de la forma: TestLaClasificacionPorNombreSoloComparaElNombreEntero.
+//
 // EXPOSICIÓN medida por la auditoría: cero. Ninguna fila empieza con el nombre de otra operación
 // sin serlo, y ninguna de las cuatro declaradas es prefijo de otra. Latente.
 //
@@ -286,6 +329,12 @@ func TestUnaOperacionInternaSeClasificaIgualConCualquierLargo(t *testing.T) {
 // arnes: archivo="internal/fleet/cronologia.go"
 // arnes: de="\tswitch ejecutableDe(argv) {"
 // arnes: a="\tif strings.HasPrefix(ejecutableDe(argv), OpPantalla) {\n\t\treturn HechoCanalPantalla\n\t}\n\tswitch ejecutableDe(argv) {"
+// Sabotaje: clasificar como pantalla lo que empiece con `musubi:pantalla.` —el prefijo con otro
+// separador que la lista de ocho formas dejaba en verde— → `musubi:pantalla.x` hereda el plano de
+// pantalla.
+// arnes: archivo="internal/fleet/cronologia.go"
+// arnes: de="\tswitch ejecutableDe(argv) {"
+// arnes: a="\tif strings.HasPrefix(ejecutableDe(argv), OpPantalla+\".\") {\n\t\treturn HechoCanalPantalla\n\t}\n\tswitch ejecutableDe(argv) {"
 func TestUnNombreParecidoAUnaOperacionConocidaEsDesconocido(t *testing.T) {
 	declaradas := opsInternasDeclaradas(t)
 	medidos := 0
@@ -307,6 +356,19 @@ func TestUnNombreParecidoAUnaOperacionConocidaEsDesconocido(t *testing.T) {
 	}
 	if minimo := 4 * len(parecidosA(OpPantalla)); medidos < minimo {
 		t.Fatalf("se midieron %d parecidos y con 4 operaciones son al menos %d: el recorrido no recorrió", medidos, minimo)
+	}
+	// EL PISO DEL ALFABETO. El de arriba se deriva de parecidosA, así que no vería una parecidosA
+	// que perdiera la mitad de los bytes: exigiría menos y pasaría igual. Acá se pregunta por el
+	// alfabeto mismo, que es un hecho: los 128 bytes ASCII, cada uno seguido de texto.
+	enLaLista := map[string]bool{}
+	for _, p := range parecidosA(OpPantalla) {
+		enLaLista[p] = true
+	}
+	for c := 0; c < 0x80; c++ {
+		if n := OpPantalla + string(rune(c)) + "x"; !enLaLista[n] {
+			t.Errorf("parecidosA no continúa el nombre con el byte %#02x (%q): una regla por prefijo con "+
+				"ese separador clasificaría nombres que nadie decidió y esta prueba no la vería", c, n)
+		}
 	}
 }
 
@@ -356,7 +418,7 @@ func formasDeLaCabeza(cabeza string, cola ...string) [][]string {
 // Sabotaje: que ArgvDeBitacora decida sobre argv[0] crudo (la forma de C1-m8) → la contraseña pasa
 // con blancos alrededor o una parte vacía adelante.
 // arnes: archivo="internal/fleet/cronologia.go"
-// arnes: de="\tif len(limpio) == 0 || limpio[0] != OpPantalla {"
+// arnes: de="\tif ejecutableDe(argv) != OpPantalla {"
 // arnes: a="\tif len(argv) == 0 || argv[0] != OpPantalla {"
 // Sabotaje: que LimpiarArgv deje de recortar el ejecutable que QUEDA primero → deja de ser
 // idempotente y lo guardado no es lo que el agente ejecuta.
@@ -529,28 +591,47 @@ func TestElHechoLlevaElPlanoYLaCapacidadDeSuTipoPorLasTresPuertas(t *testing.T) 
 // sí midió la auditoría es la tabla: de sus 12.821 filas, las 7 de origen `politica` son comandos
 // del host, así que ninguna política encoló nunca una operación interna por este camino.
 //
+// EL LARGO TAMBIÉN ES UN EJE, y la primera versión de esta prueba lo clavaba: todas sus formas
+// llevaban cola —cuatro o cinco partes—, así que un `len(p.Hacer) > 1 &&` delante de la guarda la
+// dejaba en verde (lo midió la revisión de T7) y un `hacer: ["musubi:avisar"]` pelado pasaba la
+// validación. La guarda vieja, TestUnaPoliticaNoPuedeFabricarMensajesInternosDelCanal, usa dos
+// partes: tampoco lo ve. Por eso cada forma va también SIN cola, que es el otro extremo del eje, y
+// el piso exige que se hayan medido los dos.
+//
 // Sabotaje: que Validar vuelva a mirar sólo la primera parte cruda → pasa la forma con partes
 // vacías adelante.
 // arnes: archivo="internal/fleet/politica.go"
 // arnes: de="\tif EsOperacionInterna(p.Hacer) {"
 // arnes: a="\tif EsOperacionInterna(p.Hacer[:1]) {"
+// arnes: colision_ok="TestUnaPoliticaNoEncolaUnaOperacionInternaDisfrazada"
+// Sabotaje: que Validar exija dos partes para reconocer una operación interna (el eje del largo,
+// la forma de C1-m3 en este consumidor) → pasa la operación interna sin argumentos.
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="\tif EsOperacionInterna(p.Hacer) {"
+// arnes: a="\tif len(p.Hacer) > 1 && EsOperacionInterna(p.Hacer) {"
+// arnes: colision_ok="TestUnaPoliticaNoEncolaUnaOperacionInternaDisfrazada"
 func TestUnaPoliticaNoEncolaUnaOperacionInternaDisfrazada(t *testing.T) {
 	con := func(hacer []string) Politica {
 		return Politica{Nombre: "n", Principal: "auto", Cuando: CondMemPct, Supera: 90,
 			Sobre: []string{"*"}, Hacer: hacer, Cooldown: time.Hour}
+	}
+	// Cada forma de la cabeza con cola y sin cola: los dos extremos del largo que una política
+	// puede traer.
+	formas := func(cabeza string, cola ...string) [][]string {
+		return append(formasDeLaCabeza(cabeza, cola...), formasDeLaCabeza(cabeza)...)
 	}
 	internas := []string{"musubi:todavia-no-existe"}
 	for op := range opsInternasDeclaradas(t) {
 		internas = append(internas, op)
 	}
 	sort.Strings(internas)
-	medidas := 0
+	porLargo := map[int]int{} // partes del argv que se guardaría → formas medidas
 	for _, op := range internas {
-		for _, hacer := range formasDeLaCabeza(op, "ses-7", "clave", "30m") {
+		for _, hacer := range formas(op, "ses-7", "clave", "30m") {
 			if len(LimpiarArgv(hacer)) == 0 {
 				continue // sin ejecutable no es un comando: lo rechaza ValidarComando, no esta guarda
 			}
-			medidas++
+			porLargo[len(LimpiarArgv(hacer))]++
 			if err := con(hacer).Validar(); err == nil {
 				t.Errorf("una política con `hacer: %q` pasó la validación y cada disparo encolaría %q, "+
 					"una operación interna del canal: la config fabricando mensajes de la pantalla, la "+
@@ -558,12 +639,15 @@ func TestUnaPoliticaNoEncolaUnaOperacionInternaDisfrazada(t *testing.T) {
 			}
 		}
 	}
-	if medidas < len(internas) {
-		t.Fatalf("se midieron %d formas para %d operaciones: la prueba no recorrió", medidas, len(internas))
+	// EL PISO: los dos extremos del largo, para cada operación. Sin el de una parte, esta prueba
+	// vuelve a ser la que dejaba pasar `len(p.Hacer) > 1`.
+	if porLargo[1] < len(internas) || porLargo[4] < len(internas) {
+		t.Fatalf("formas medidas por largo: %v, para %d operaciones: faltan las de una parte o las de "+
+			"cuatro, y la prueba no recorrió el eje del largo", porLargo, len(internas))
 	}
-	// CONTROL: las mismas formas con un comando del host SÍ validan. Sin esto, un Validar que lo
-	// rechazara todo pasaría la mitad de arriba.
-	for _, hacer := range formasDeLaCabeza("systemctl", "restart", "nginx") {
+	// CONTROL: las mismas formas con un comando del host SÍ validan, con cola y sin ella. Sin esto,
+	// un Validar que lo rechazara todo —o todo lo de una parte— pasaría la mitad de arriba.
+	for _, hacer := range formas("systemctl", "restart", "nginx") {
 		if len(LimpiarArgv(hacer)) == 0 {
 			continue
 		}

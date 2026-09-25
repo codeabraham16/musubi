@@ -63,14 +63,25 @@ func TestCadaFilaDeLaCronologiaDiceElPlanoDeSuTipo(t *testing.T) {
 		}
 		vistos[tipo]++
 	}
-	// EL PISO: cada clase de fila que se sembró llegó a la respuesta. Sin esto, una cronología que
-	// dejara afuera los avisos pasaría la comparación de arriba sin haberlos mirado.
-	for _, tipo := range []fleet.TipoDeHecho{
-		fleet.HechoComando, fleet.HechoPantalla, fleet.HechoShell,
-		fleet.HechoCanalPantalla, fleet.HechoCanalShell, fleet.HechoCanalExec,
-	} {
+	// EL PISO: cada clase de fila que se puede MOSTRAR llegó a la respuesta. Sin esto, una
+	// cronología que dejara afuera los avisos pasaría la comparación de arriba sin haberlos mirado.
+	//
+	// Las clases salen del enum (fleet.TiposDeHecho, que TestTiposDeHechoEsElEnumEntero ata al bloque
+	// const) y no de una lista: eran seis escritas a mano, y un tipo nuevo habría quedado sin su plano
+	// medido sin que nada se pusiera rojo. Ahora un tipo nuevo pide que el sembrado de arriba lo
+	// produzca. Queda afuera sólo el que por definición no se muestra.
+	medibles := 0
+	for _, tipo := range fleet.TiposDeHecho {
+		if tipo == fleet.HechoSinClasificar {
+			continue
+		}
+		medibles++
 		if vistos[string(tipo)] == 0 {
 			t.Errorf("no llegó ninguna fila %q a la cronología: la prueba no midió su plano (vistos: %v)", tipo, vistos)
 		}
+	}
+	if medibles < 6 {
+		t.Fatalf("fleet.TiposDeHecho trae %d tipos mostrables y cuando se escribió esta prueba eran 6: "+
+			"el piso de arriba no está midiendo lo que dice", medibles)
 	}
 }
