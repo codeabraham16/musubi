@@ -66,6 +66,7 @@ func alertasDelTablero(t *testing.T) map[string]alertaCruda {
 // arnes: archivo="deploy/musubi-alerts-tablero.yml"
 // arnes: de="max_over_time(flota_rincon_alcanzado[35m]) == 0"
 // arnes: a="flota_rincon_alcanzado == 0"
+// arnes: colision_ok="TestUnaSolaFotoNoAlcanzaParaAvisar"
 // Sabotaje que la hace fallar: una ventana de una sola cadencia.
 // arnes: archivo="deploy/musubi-alerts-tablero.yml"
 // arnes: de="absent_over_time(flota_foto_cuando_segundos[40m])"
@@ -121,6 +122,16 @@ func TestLasAlertasDelTableroLeenSobreUnRango(t *testing.T) {
 // empuje perdido, la ventana tiene UNA muestra y el máximo de una muestra ciega es cero. Por eso
 // toda lectura de un estado del tablero va acompañada de `count_over_time(<la misma>[…]) >= 2`.
 //
+// Y EL CONTEO SOLO TAMPOCO: EL AGREGADOR TIENE QUE DECIR «EN TODAS LAS FOTOS». El conteo dice
+// cuántas fotos hay en la ventana; el agregador, cuántas tienen que mostrar la falla.
+// `min_over_time(flota_pieza_caida[35m]) == 1` es «caída en TODAS»; `max_over_time(…) == 1` es
+// «caída en ALGUNA», y con el `>= 2` intacto una sola foto caída entre dos sanas dispara igual. Lo
+// cazó la revisión, no esta guarda: el cambio de `min` a `max` la dejaba en verde y sólo la prueba
+// de promtool —que la CI no corre— se ponía roja. La regla, para una serie de estado (un 0/1, o un
+// conteo que no baja de cero): comparar hacia arriba (`>`, `>=`, `== N` con N ≥ 1) va con `min`, y
+// hacia abajo (`== 0`, `<`, `<=`) con `max`. `last` y `avg` no dicen «todas»: el último es una
+// sola foto y el promedio las mezcla.
+//
 // Sabotaje que la hace fallar: conformarse con una foto.
 // arnes: archivo="deploy/musubi-alerts-tablero.yml"
 // arnes: de="count_over_time(flota_pieza_caida[35m]) >= 2"
@@ -129,18 +140,54 @@ func TestLasAlertasDelTableroLeenSobreUnRango(t *testing.T) {
 // arnes: archivo="deploy/musubi-alerts-tablero.yml"
 // arnes: de="count_over_time(flota_rincon_alcanzado[35m]) >= 2"
 // arnes: a="count_over_time(flota_foto_cuando_segundos[35m]) >= 2"
+// Sabotaje que la hace fallar: «caída en ALGUNA foto» en vez de «en todas».
+// arnes: archivo="deploy/musubi-alerts-tablero.yml"
+// arnes: de="min_over_time(flota_pieza_caida[35m]) == 1"
+// arnes: a="max_over_time(flota_pieza_caida[35m]) == 1"
+// Sabotaje que la hace fallar: «ciego en ALGUNA foto» en vez de «en todas». Pisa la lectura que
+// TestLasAlertasDelTableroLeenSobreUnRango sabotea volviendo a la métrica pelada, y son dos
+// guardas de verdad sobre esa línea: aquélla mira el rango y ésta el agregador.
+// arnes: archivo="deploy/musubi-alerts-tablero.yml"
+// arnes: de="max_over_time(flota_rincon_alcanzado[35m]) == 0"
+// arnes: a="min_over_time(flota_rincon_alcanzado[35m]) == 0"
+// arnes: colision_ok="TestLasAlertasDelTableroLeenSobreUnRango"
 func TestUnaSolaFotoNoAlcanzaParaAvisar(t *testing.T) {
 	alertas := alertasDelTablero(t)
 
 	// Lo que lee un ESTADO: el máximo, el mínimo, el último. `absent_over_time` no entra: el hombre
 	// muerto pregunta por la ausencia, y ahí no hay fotos que contar.
-	reLectura := regexp.MustCompile(`\b(?:max|min|last|avg)_over_time\(\s*(flota_[a-z0-9_]+)`)
+	reLectura := regexp.MustCompile(`\b(max|min|last|avg)_over_time\(\s*(flota_[a-z0-9_]+)`)
+	// Y con qué se compara, leído desde el mismo punto. Si no se entiende, se dice: una lectura que
+	// esta guarda no sabe juzgar no puede pasar como juzgada.
+	reComparada := regexp.MustCompile(`^[a-z]+_over_time\(\s*flota_[a-z0-9_]+\s*(?:\{[^}]*\})?\s*` +
+		`\[[^\]]+\]\s*\)\s*(==|>=|<=|>|<)\s*([0-9]+(?:\.[0-9]+)?)`)
 
 	revisadas := 0
 	for nombre, a := range alertas {
-		for _, m := range reLectura.FindAllStringSubmatch(a.Expr, -1) {
-			serie := m[1]
+		for _, idx := range reLectura.FindAllStringSubmatchIndex(a.Expr, -1) {
+			agregador, serie := a.Expr[idx[2]:idx[3]], a.Expr[idx[4]:idx[5]]
 			revisadas++
+
+			if comp := reComparada.FindStringSubmatch(a.Expr[idx[0]:]); comp == nil {
+				t.Errorf("%s lee %s con `%s_over_time` y no la compara con un número a continuación:\n  %s\n"+
+					"  Esta guarda no puede decir si exige la falla en TODAS las fotos o en ALGUNA.",
+					nombre, serie, agregador, a.Expr)
+			} else {
+				n, _ := strconv.ParseFloat(comp[2], 64)
+				haciaArriba := comp[1] == ">" || comp[1] == ">=" || (comp[1] == "==" && n >= 1)
+				quiere := "max"
+				if haciaArriba {
+					quiere = "min"
+				}
+				if agregador != quiere {
+					t.Errorf("%s lee `%s_over_time(%s[…]) %s %s`, y eso no es «la falla en TODAS las fotos "+
+						"de la ventana»: con `max`/`min` al revés es «en ALGUNA», con `last` es «en la "+
+						"última» y con `avg`, «en promedio». Con el conteo intacto, una sola foto con la "+
+						"falla dispara igual —el pico que esta regla existe para callar: 113 de 146 caídas "+
+						"medidas duraron una foto—. Comparando así va `%s_over_time`.",
+						nombre, agregador, serie, comp[1], comp[2], quiere)
+				}
+			}
 			reCuenta := regexp.MustCompile(`\bcount_over_time\(\s*` + regexp.QuoteMeta(serie) +
 				`\s*(?:\{[^}]*\})?\s*\[[^\]]+\]\s*\)\s*>=\s*(\d+)`)
 			c := reCuenta.FindStringSubmatch(a.Expr)
