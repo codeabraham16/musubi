@@ -652,7 +652,11 @@ type avisoDeAcceso struct {
 	// que el aviso de una POLÍTICA salía en la bitácora y en la cronología como pedido por alguien
 	// (`automatico: false`), con la fila del comando al lado diciendo lo contrario: una acción que
 	// disparó una regla contada como de una persona, que es lo que A59 cerró para el comando y no
-	// para su aviso. Como campo de un literal posicional, un quinto aviso no compila sin declararlo.
+	// para su aviso. Un literal POSICIONAL no compila sin este campo, pero uno con claves sí, y queda
+	// con origen vacío: el compilador no alcanza. Lo que cierra un quinto aviso es
+	// TestNingunPlanoLePrometeUnAvisoAQuienNoSabeMostrarlo, que recorre los planos con aviso leídos
+	// del código (planosConAviso lee también los literales con claves): sin su fila la pone roja, y
+	// con la fila, su comparación ve un aviso cuyo origen contradiga al de su acción.
 	origen fleet.OrigenComando
 }
 

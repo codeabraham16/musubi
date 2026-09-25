@@ -105,6 +105,13 @@ func avisosEnElLog(log *logCompartido, politica string) int {
 // arnes: archivo="internal/mcp/politicas.go"
 // arnes: de="\ts.avisoMientras(\"compuerta:\"+par, freno == frenoSinExec, func() {\n\t\tporque := \"el principal no tiene `exec` sobre esa máquina (su proyecto o su concesión no la alcanzan)\"\n\t\tif !d.Permite(fleet.CapExec) {\n\t\t\tporque = \"la máquina no admite `exec` (su tier o sus caps no lo incluyen, o está revocada)\"\n\t\t}\n\t\tlogx.Warn(\"política rechazada por la compuerta: \"+porque,\n\t\t\t\"politica\", pol.Nombre, \"principal\", pol.Principal, \"device\", d.Name)\n\t})\n"
 // arnes: a="\ts.avisoMientras(\"compuerta:\"+par, freno == frenoSinExec, func() {})\n\tif freno == frenoSinExec {\n\t\tporque := \"el principal no tiene `exec` sobre esa máquina (su proyecto o su concesión no la alcanzan)\"\n\t\tif !d.Permite(fleet.CapExec) {\n\t\t\tporque = \"la máquina no admite `exec` (su tier o sus caps no lo incluyen, o está revocada)\"\n\t\t}\n\t\tlogx.Warn(\"política rechazada por la compuerta: \"+porque,\n\t\t\t\"politica\", pol.Nombre, \"principal\", pol.Principal, \"device\", d.Name)\n\t}\n"
+//
+// Sabotaje: intercambiar en la tabla las claves de la compuerta y de la allowlist, que comparten
+// resultado y cantidad de líneas. Con la regla de etiquetas sola quedaba verde; ahora cada fila
+// exige que el aviso anotado sea el suyo.
+// arnes: archivo="internal/mcp/politicas_episodios_test.go"
+// arnes: de="{freno: frenoSinExec, clave: \"compuerta:\", resultado: \"rechazada\",\n\t\t\tromper: conRegistro(retocado(func(p *Principal) {\n\t\t\t\tp.Fleet = map[fleet.Cap][]string{fleet.CapExec: {\"otra-maquina\"}, fleet.CapMetrics: {\"*\"}}\n\t\t\t})),\n\t\t\tarreglar: vigente},\n\t\t{freno: frenoAllowlist, clave: \"allowlist:\", resultado: \"rechazada\","
+// arnes: a="{freno: frenoSinExec, clave: \"allowlist:\", resultado: \"rechazada\",\n\t\t\tromper: conRegistro(retocado(func(p *Principal) {\n\t\t\t\tp.Fleet = map[fleet.Cap][]string{fleet.CapExec: {\"otra-maquina\"}, fleet.CapMetrics: {\"*\"}}\n\t\t\t})),\n\t\t\tarreglar: vigente},\n\t\t{freno: frenoAllowlist, clave: \"compuerta:\", resultado: \"rechazada\","
 func TestCadaFrenoSeCuentaEnCadaTickYSeAvisaUnaVezPorEpisodio(t *testing.T) {
 	const nombre = "episodios-a131"
 	type fila struct {
@@ -266,6 +273,14 @@ func TestCadaFrenoSeCuentaEnCadaTickYSeAvisaUnaVezPorEpisodio(t *testing.T) {
 					"Un aviso que sale en cada tick son 288 líneas idénticas por día: el ruido que entierra la línea "+
 					"que sí importa", lineas, avisos)
 			}
+			// LA CLAVE, MEDIDA Y NO DECLARADA. La regla de arriba («cada aviso de politicas.go tiene una
+			// fila») compara ETIQUETAS: intercambiar la `clave` de dos filas que comparten resultado y
+			// cantidad de líneas —la compuerta y la allowlist: `rechazada`, una línea cada una— la dejaba
+			// en verde. Acá se mira qué aviso quedó anotado de verdad al cerrar ESTA compuerta.
+			if f.clave != "" && !hayAvisoConPrefijo(s, f.clave) {
+				t.Errorf("primer episodio: %s cerró la compuerta y no quedó anotado ningún aviso con la clave %q: "+
+					"el aviso que salió es el de OTRA condición, y la fila mide un aviso que no es el suyo", f.freno, f.clave)
+			}
 
 			// 2. EL ARREGLO: la política vuelve a actuar, y eso no deja ninguna línea más.
 			f.arreglar(t, s, d)
@@ -295,4 +310,17 @@ func TestCadaFrenoSeCuentaEnCadaTickYSeAvisaUnaVezPorEpisodio(t *testing.T) {
 			}
 		})
 	}
+}
+
+// hayAvisoConPrefijo contesta si avisosDados tiene anotada alguna clave que empiece con `prefijo`.
+func hayAvisoConPrefijo(s *McpServer, prefijo string) bool {
+	hay := false
+	s.avisosDados.Range(func(k, _ any) bool {
+		if c, ok := k.(string); ok && strings.HasPrefix(c, prefijo) {
+			hay = true
+			return false
+		}
+		return true
+	})
+	return hay
 }

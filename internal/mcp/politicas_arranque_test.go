@@ -196,7 +196,23 @@ func TestElArranqueRealNoSirveConUnaPoliticaQueNoPodriaActuar(t *testing.T) {
 	unaSola := []config.PolicyConfig{pol("vaciar-journal", "auto-heal")}
 	vigente := []Principal{autoHeal()}
 
+	// ── EL HERMANO: el empuje OTLP, validado por el mismo consumidor ──
+	// El destino es un servidor de prueba en memoria: con el arranque sano nadie le habla, y con uno
+	// roto que sirviera igual, el empuje no tendría a quién mandarle nada que no sea esto.
+	//
+	// VA PRIMERO A PROPÓSITO. Es la única fila que sólo «servir igual» (P2-m9) puede hacer servir:
+	// con ella al frente, ese sabotaje cae por esta fila y el del registro ausente (P2-m8) por la
+	// suya. Con el registro ausente primero, los dos caían por la misma línea, y el arnés cuenta dos
+	// sabotajes con el mismo motivo como uno solo contado de más.
+	receptor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	t.Cleanup(receptor.Close)
 	filas := []fila{
+		{
+			caso:       "el empuje OTLP nombra a un principal que no está",
+			principals: vigente,
+			empuje:     config.OTLPPushConfig{Endpoint: receptor.URL + "/api/v1/otlp/v1/metrics", Principal: "prometheus-fantasma", IntervalSeconds: 30},
+			nombra:     `"prometheus-fantasma"`,
+		},
 		{caso: "no hay principals.yaml (resolver nil)", politicas: unaSola, principals: nil,
 			nombra: `política "vaciar-journal"`},
 	}
@@ -254,18 +270,6 @@ func TestElArranqueRealNoSirveConUnaPoliticaQueNoPodriaActuar(t *testing.T) {
 			politicas: tres(i), principals: vigente, nombra: fmt.Sprintf("política %q", n),
 		})
 	}
-
-	// ── EL HERMANO: el empuje OTLP, validado por el mismo consumidor ──
-	// El destino es un servidor de prueba en memoria: con el arranque sano nadie le habla, y con uno
-	// roto que sirviera igual, el empuje no tendría a quién mandarle nada que no sea esto.
-	receptor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
-	t.Cleanup(receptor.Close)
-	filas = append(filas, fila{
-		caso:       "el empuje OTLP nombra a un principal que no está",
-		principals: vigente,
-		empuje:     config.OTLPPushConfig{Endpoint: receptor.URL + "/api/v1/otlp/v1/metrics", Principal: "prometheus-fantasma", IntervalSeconds: 30},
-		nombra:     `"prometheus-fantasma"`,
-	})
 
 	for _, f := range filas {
 		t.Run(f.caso, func(t *testing.T) {
