@@ -42,9 +42,12 @@ nuevo que mande más de 64 servicios a un cerebro viejo ve su inventario entero 
 /usr/local/bin/musubi agent --help | grep -c MUSUBI_AGENTE_USUARIO     # -> 1 (un binario viejo da 0)
 ```
 
-**Con este paso el agente todavía corre como `musubi`**, y ya empieza a mandar las `usuario:*`: salta
-`ServicioCaido` por `usuario:core01-ensayo-local`, que hoy está FAILED y nadie veía. Es lo buscado,
-pero avisalo antes. En el journal tiene que aparecer `inventario de usuario: musubi (uid 1000)`.
+**Con este paso el agente todavía corre como `musubi`**, y ya empieza a mandar las `usuario:*`. Medido
+el 2026-09-25 (`systemctl --user show` real pasado por el parser nuevo): entran **8** —los tres puentes,
+el gateway, `supabase-crm`, el quadlet de Vaultwarden y dos oneshots de Core01 **FAILED**—. Así que
+salta `ServicioCaido` por `usuario:core01-ensayo-local` y por `usuario:core01-respaldo-local`, que
+nadie veía. Es lo buscado, pero avisalo antes. En el journal tiene que aparecer
+`inventario de usuario: musubi (uid 1000)`.
 
 Antes de instalar conviene probar la fuente `--user` **dentro del sandbox real** (pide OK: es un exec
 en el server): `musubi_fleet_exec device=musubi-server` con argv
@@ -65,7 +68,8 @@ sudo install -m 600 -o root -g root /home/musubi/.config/musubi-agente/token /et
 sudo restorecon -Rv /etc/musubi-agente
 ```
 
-El archivo viejo **no se borra todavía**: es la vuelta atrás.
+El archivo viejo **no se borra todavía**: hasta verificar, la vuelta atrás es sólo borrar el drop-in.
+Se retira en el paso 5.
 
 ### 3 · El drop-in (sudo)
 
@@ -120,12 +124,24 @@ sudo systemctl restart musubi-agente
 
 Si las `podman` bajan a 0 o cambian de nombre: **vuelta atrás ya**, antes de que la poda se consolide.
 
+### 5 · Retirar la copia vieja del token (sudo, con la verificación en verde)
+
+Mientras `/home/musubi/.config/musubi-agente/token` exista, cualquier proceso que corra como `musubi`
+puede leer un token **vigente** del agente —y hablarle al cerebro como él—, que es justo el alcance que
+la mudanza a `/etc` vino a cerrar. La vuelta atrás no lo necesita: repone el token desde `/etc`.
+
+```bash
+sudo rm /home/musubi/.config/musubi-agente/token
+ls -la /home/musubi/.config/musubi-agente/     # sin token ni .token-* temporales
+```
+
 ## Vuelta atrás (sudo)
 
 ```bash
 sudo rm /etc/systemd/system/musubi-agente.service.d/zz-root.conf
 # Si el token rotó mientras corría como root, el vigente está en /etc: se lo devuelve a musubi.
 sudo install -m 600 -o musubi -g musubi /etc/musubi-agente/token /home/musubi/.config/musubi-agente/token
+sudo restorecon -v /home/musubi/.config/musubi-agente/token
 sudo systemctl daemon-reload
 sudo systemctl restart musubi-agente
 ```
@@ -147,4 +163,5 @@ estado válido (es el del paso 0): la vuelta atrás no exige reinstalar.
   `setpriv --reuid=musubi --regid=musubi --init-groups env HOME=/home/musubi XDG_RUNTIME_DIR=/run/user/1000 …`
   (por ejemplo, `systemctl --user restart <unit>` de un puente).
 - **Con el token en /etc**, un agente que vuelva a correr como `musubi` sin reponer el archivo del home
-  arranca con un token viejo si hubo rotación: por eso la vuelta atrás lo copia de vuelta.
+  no arranca (después del paso 5 no hay token ahí) o arranca con uno viejo (antes del paso 5, si hubo
+  rotación): por eso la vuelta atrás lo copia de vuelta desde `/etc`.

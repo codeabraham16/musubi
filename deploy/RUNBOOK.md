@@ -576,6 +576,11 @@ avisaría `MaquinaCaida` y esta alerta se inhibe sola).
    es la mitad del diagnóstico.
 2. En la máquina: `musubi_fleet_exec device=<máquina> argv=["systemctl","status","<servicio>"]`
    (o `podman ps -a --filter name=<servicio>` si la clase es `podman`).
+   **Si el nombre empieza con `usuario:`** es una unit `--user` del dueño (en `musubi-server`, del
+   usuario `musubi`), y el `systemctl` del sistema no la encuentra. Sacale el prefijo y preguntale
+   a SU manager; con el agente como root hay que bajar antes:
+   `setpriv --reuid=musubi --regid=musubi --init-groups env HOME=/home/musubi XDG_RUNTIME_DIR=/run/user/1000 systemctl --user show -p ActiveState,Result <unit>`.
+   Su log: `journalctl _SYSTEMD_USER_UNIT=<unit>.service`. El porqué, en `deploy/agente-como-root.md`.
 3. Si el servicio se declaró A MANO y la máquina nunca lo enumeró, el estado va a decir
    `desconocido`: nadie lo está midiendo. Eso no es una caída, es una fila sin dueño.
 
@@ -847,6 +852,10 @@ rara:
    lote entero a propósito, porque el cerebro poda por ausencia y media lista da de baja la otra
    mitad. Buscá el aviso en el log del agente de esa máquina:
    `journalctl -u musubi-agente | grep "no se pudieron enumerar"`. Dice cuál fuente y por qué.
+   Si dice **«el manager de usuario de musubi no contesta»**, es la fuente `--user`: existe
+   `/run/user/1000` y todavía no hay bus, o sea que el agente arrancó antes que `user@1000.service`.
+   Aborta a propósito (tomarlo como «sin units» haría que el cerebro pode las `usuario:*`) y se
+   resuelve solo en cuanto el manager levanta; si no se resuelve, mirá `systemctl is-active user@1000`.
 3. **El blindaje de la unidad prohíbe la fuente.** Pasó en `musubi-server`: `ProtectHome=read-only`
    impedía que `podman ps` abriera sus locks, y el síntoma era `exit status 1` sin más. Ver A54
    y `deploy/systemd/musubi-agente-contenedores.conf`.
