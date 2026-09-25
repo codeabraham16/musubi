@@ -139,6 +139,26 @@ else
 	echo "  Copiá scrapes/altura-db.yml.ejemplo, completá su token, y volvé a correr este script."
 fi
 
+# ── LAS ALERTAS DEL TABLERO DE FLOTA (las 31 piezas del repo `flota`) ────────────────────────────
+#
+# LA CONDICIÓN ES QUE EL TABLERO YA HAYA EMPUJADO, y se le pregunta a Prometheus en vez de suponer:
+# `FlotaSinFoto` es un `absent_over_time`, así que en un servidor al que el tablero nunca le empujó
+# dispararía a los 40 minutos y para siempre. Treinta días de ventana: la retención es de 90.
+#
+# Y UNA VEZ INSTALADAS SE QUEDAN. Con la pregunta sola, re-correr este guion con el tablero muerto
+# más de 30 días DESINSTALARÍA la alerta que avisa justo eso: la guarda miraría lo que la falla
+# borró. Si el tablero se retira a propósito, el archivo se saca a mano de rules/.
+if [ -f "$DEST/rules/musubi-alerts-tablero.yml" ] ||
+   curl -fsS -m 5 -G "${PROM_URL:-http://127.0.0.1:9099}/api/v1/query" \
+     --data-urlencode 'query=count(last_over_time(flota_foto_cuando_segundos[30d]))' 2>/dev/null | grep -q '"result":\[{'; then
+	install -m 0644 "$REPO/deploy/musubi-alerts-tablero.yml" "$DEST/rules/musubi-alerts-tablero.yml"
+	echo "→ alertas del tablero de flota: INSTALADAS"
+else
+	install -m 0644 "$REPO/deploy/musubi-alerts-tablero.yml" "$DEST/musubi-alerts-tablero.yml.cuando-haya-tablero"
+	echo "→ alertas del tablero de flota: NO instaladas — Prometheus no recibió ninguna foto (flota_foto_cuando_segundos)."
+	echo "  Desplegá el flota.exe que empuja métricas y su \`otlp:\` en flota.yaml, y volvé a correr este script."
+fi
+
 BRAIN_URL="${BRAIN_URL:-http://127.0.0.1:7717}"
 if [ -s "$DEST/musubi.token" ] &&
    curl -fsS -m 10 -H "Authorization: Bearer $(cat "$DEST/musubi.token")" "$BRAIN_URL/metrics" 2>/dev/null | grep -q "^musubi_fleet_"; then

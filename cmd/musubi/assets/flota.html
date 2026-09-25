@@ -157,11 +157,21 @@ function duracion(seg) {
 }
 // La EDAD DEL DATO al lado del dato. Una máquina que late pero dejó de medir muestra su última
 // muestra buena para siempre y parece sana; esto es lo que delata ese caso.
-function edad(seg, conMetricas) {
+//
+// «LATE PERO…» SÓLO SI LATE. fleet_metrics incluye también las máquinas que no laten, y a ésas el
+// título les decía lo contrario de lo que pasa. Por eso `online` viaja hasta acá.
+function edad(seg, conMetricas, online) {
   if (!conMetricas || seg === null || seg === undefined) return ND;
   const s = Number(seg);
   const txt = s < 90 ? `${Math.round(s)}s` : duracion(s);
-  return s > 600 ? `<span class="viejo" title="la máquina late pero su última medición es vieja">${txt} ⚠</span>` : txt;
+  const porque = online ? 'la máquina late pero su última medición es vieja' : 'la máquina NO late: es lo último que midió antes de callarse';
+  return s > 600 ? `<span class="viejo" title="${porque}">${txt} ⚠</span>` : txt;
+}
+// CUÁNTO HACE QUE NO LATE, en palabras. Una máquina que nunca latió no tiene silencio que medir, y
+// decir «hace —» de ella se leería como un dato que falta.
+function sinLatirHace(e) {
+  if (!e) return '';
+  return e.nunca_latio ? 'nunca latió' : `sin latir hace ${duracion(e.silencio_segundos)}`;
 }
 function lista(xs) { return Array.isArray(xs) && xs.length ? xs.join(' ') : '—'; }
 
@@ -241,7 +251,7 @@ function seccionVitales(e) {
   return `<section><h4>vitales</h4><div class="rejilla">
     ${d('cpu', pct(e.cpu_pct))}${d('memoria', pct(e.mem_pct))}${d('disco', pct(e.disco_pct))}
     ${d('carga', num(e.load1, '', 2))}${d('núcleos', num(e.num_cpu, '', 0))}${d('temperatura', num(e.temp_c, '°', 0))}
-    ${d('uptime', duracion(e.uptime_seg))}${d('último dato', edad(e.antiguedad_s, e.con_metricas))}
+    ${d('uptime', duracion(e.uptime_seg))}${d('último dato', edad(e.antiguedad_s, e.con_metricas, e.online))}
     ${d('procesos', num(e.num_procesos, '', 0))}${d('RAM libre', bytes(e.mem_libre))}
     ${d('dirección', esc(e.address || '—'))}${d('arquitectura', esc(e.arch || '—'))}
   </div></section>`;
@@ -471,6 +481,16 @@ function pintar(d) {
     avisos.push(`<b>esta lista está recortada</b><br>` +
       `el cerebro tocó su techo de proyectos por consulta: hay máquinas que NO figuran acá. Filtrá por proyecto para verlas.`);
   }
+  // LAS QUE NO LATEN VAN PRIMERO, por delante de los otros dos avisos: una máquina caída es lo
+  // único de esta página que puede estar pasando AHORA. Y se dice que la alerta ya sonó, para que
+  // nadie crea que el panel es el único que se enteró. `mantenimiento` no viaja en fleet_list, así
+  // que el aviso lo nombra como posibilidad en vez de afirmarlo.
+  if (d.sin_latir && d.sin_latir.length) {
+    const porNombre = new Map(equipos.map(x => [x.name, x]));
+    avisos.unshift(`<b>${d.sin_latir.length} máquina(s) sin latir</b><br>` +
+      d.sin_latir.map(n => `${esc(n)}: ${sinLatirHace(porNombre.get(n))}`).join(' · ') +
+      `. Pasados 5 minutos avisa <code>MaquinaCaida</code> por Telegram, salvo que esté en mantenimiento declarado.`);
+  }
   if (avisos.length) {
     aviso.innerHTML = avisos.map(a => `<div class="aviso">${a}</div>`).join('');
   }
@@ -478,7 +498,7 @@ function pintar(d) {
   const cuerpo = document.getElementById('cuerpo');
   cuerpo.innerHTML = equipos.map(e => `
     <tr class="clic" data-maq="${esc(e.name)}">
-      <td><span class="punto ${e.online ? 'viva' : 'caida'}"></span>${e.name}</td>
+      <td><span class="punto ${e.online ? 'viva' : 'caida'}"></span>${e.name}${e.online ? '' : ` <span class="viejo">${sinLatirHace(e)}</span>`}</td>
       <td>${e.tier}</td>
       <td>${e.os || ND}</td>
       <td>${pct(e.cpu_pct)}</td>
@@ -487,7 +507,7 @@ function pintar(d) {
       <td>${num(e.load1, '', 2)}</td>
       <td>${num(e.temp_c, '°', 0)}</td>
       <td>${duracion(e.uptime_seg)}</td>
-      <td>${edad(e.antiguedad_s, e.con_metricas)}</td>
+      <td>${edad(e.antiguedad_s, e.con_metricas, e.online)}</td>
       <!-- admite y puedo, POR SEPARADO: lo primero es de la máquina, lo segundo de tu
            credencial. Mostrar sólo lo primero enseña a ignorar el campo. -->
       <td class="svc-col">${servicios(e)}</td>

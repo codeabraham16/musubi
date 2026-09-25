@@ -45,6 +45,11 @@ type flotaRespuesta struct {
 	// proxy no lo copiaba, así que ese aviso no llegaba a ningún lado donde alguien lo viera. El
 	// panel es literalmente el lector que ese comentario nombra.
 	Truncado bool `json:"truncado,omitempty"`
+	// SinLatir nombra las máquinas que el cerebro da por caídas, para que la página las ponga
+	// ARRIBA de todo. El dato ya viajaba en cada fila (`online`, `silencio_segundos`) y nadie lo
+	// dibujaba: una máquina que no late hace dos días era una fila más con el punto en rojo, igual
+	// de alta que las sanas (punto 32 de la ola 1).
+	SinLatir []string `json:"sin_latir,omitempty"`
 }
 
 // handlerFlota arma la tabla combinando el inventario y las métricas del cerebro.
@@ -94,6 +99,18 @@ func handlerFlota(relay *relayVivo) http.HandlerFunc {
 			}
 			responder(flotaRespuesta{Estado: estado, Destino: relay.host(), Detalle: detalle, SinPermiso: sinPermiso})
 			return
+		}
+		// LAS QUE NO LATEN, CON NOMBRE. Se arma acá y no en la página porque acá se puede probar
+		// ejercitando el camino; la página sólo la dibuja. Dos exclusiones, y las dos son a
+		// propósito: una revocada no late porque se la dio de baja, y un `online` AUSENTE no es «no
+		// late» sino «no se sabe» — avisar sobre un no-sé es ruido.
+		var sinLatir []string
+		for _, e := range equipos {
+			if e["online"] == false && e["revoked"] != true {
+				if n, _ := e["name"].(string); n != "" {
+					sinLatir = append(sinLatir, n)
+				}
+			}
 		}
 
 		// Las métricas son OPCIONALES: si fallan, la tabla se dibuja igual con el inventario.
@@ -182,7 +199,7 @@ func handlerFlota(relay *relayVivo) http.HandlerFunc {
 			}
 		}
 		responder(flotaRespuesta{Estado: "vivo", Destino: relay.host(), Equipos: equipos,
-			SinPermiso: sinPermiso, Truncado: truncado})
+			SinPermiso: sinPermiso, Truncado: truncado, SinLatir: sinLatir})
 	}
 }
 

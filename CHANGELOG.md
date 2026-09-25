@@ -7,6 +7,35 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El tablero de flota avisa cuando se cae, no sólo cuando lo miran.** El tablero de las 31 piezas
+  (repo `flota`) tenía los datos y ninguna alarma: una caída era una fila más, y sólo si alguien abría
+  la página. En su publicar.log hay 51 huecos de más de 40 min sin foto, el mayor de **tres días**, y
+  nadie se enteró; y el `raspberrypi` del fichaje F18 no es máquina de Musubi, así que `MaquinaCaida`
+  no lo ve. `deploy/musubi-alerts-tablero.yml` trae tres alertas sobre lo que el tablero empuja por
+  OTLP: `FlotaSinFoto` (el hombre muerto), `FlotaRinconCiego` y `FlotaPiezaCaida`.
+
+  **Leen siempre sobre un rango.** Una serie empujada cada 15 min vive 5 en el vector instantáneo
+  (`query.lookback-delta: 5m`, medido): escritas con la métrica pelada y un `for: 30m`, como decía el
+  plan, dos de las tres **no podían dispararse nunca**. Y exigen dos fotos (`count_over_time >= 2`):
+  de 146 caídas medidas, 113 duraron una sola. **Se callan con la PC que publica apagada** —decisión
+  del dueño— porque eso ya lo dice `MaquinaCaida{device="davantis-1"}`, y el `for: 20m` del hombre
+  muerto sale de medir cuánto tarda la primera foto al volver la PC (0,8 a 7,1 min con el publicador
+  sano). `preparar.sh` las instala si Prometheus ya recibió alguna foto, y una vez instaladas no las
+  saca: si no, re-correrlo con el tablero muerto desinstalaría la alerta que avisa justo eso.
+
+  Y el panel de máquinas de Musubi dice arriba de todo cuáles **no laten** y desde cuándo: el dato
+  (`silencio_segundos`) viajaba en cada fila y no se dibujaba. `/api/flota` gana `sin_latir`, y el
+  título «la máquina late pero su última medición es vieja» deja de decírselo a una que no late.
+
+  *No hay `promtool` en la CI, así que cuatro guardas de Go custodian la forma de las reglas (el
+  rango, las dos fotos, el silencio de la PC apagada con el `for` del arranque, y que la prueba de
+  promtool tenga para cada alerta un caso que dispara y otro que calla) y dos el panel; cada
+  sabotaje se corrió y cae en su aserción. La semántica la ejecuta
+  `deploy/musubi-alerts-tablero.promtool`, con series cada 15 min: verde con promtool 3.1.0 —la
+  revisión del server— y rojo con cada uno de seis sabotajes, empezando por el defecto del plan. Esa
+  prueba se corre en el despliegue, al lado de las reglas.*
+
 ### Fixed
 - **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
   El ledger era UNA casilla de `meta` que guardaba UNA sesión, y `LedgerAdd` la reiniciaba entera
