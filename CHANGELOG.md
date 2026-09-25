@@ -15,21 +15,33 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   tenía cero filas. La plomería estaba entera; faltaba el paso.
 
   `deploy/RUNBOOK.md` gana la sección «Antes de tocar un agente a mano: declarar la ventana», con
-  la llamada de `./deploy/musubi-tool.sh` que la abre (`minutos`) y la que la cierra (`cancelar`),
-  por qué se cierra aunque la intervención haya fallado, qué credencial puede declararla (`metrics`
-  sobre esa máquina; el rol admin no alcanza) y lo que cambia en `gio` desde el 2026-09-24: rige
-  cuatro ojos y el segundo par de ojos es meir, `exec` no pasa por esa puerta, y el control compara
-  nombres de principal, así que dos credenciales de la misma persona se pueden aprobar entre sí.
+  la llamada de `musubi_fleet_maintenance` que la abre (`minutos`) y la que la cierra (`cancelar`),
+  por qué se cierra aunque la intervención haya fallado y qué credencial puede declararla
+  (`metrics` sobre esa máquina; el rol admin no alcanza). Dice también dónde se corre: en
+  davantis-1 el guion `musubi-tool.sh` no arranca (`python3` es el acceso directo de la Microsoft
+  Store y el `curl` de MinGW no ve la malla), así que ahí va por el MCP del cerebro; en la laptop
+  va con `MUSUBI_CENTRAL_URL` por NOMBRE, porque contra la IP el certificado no valida; y en el
+  server, desde `/home/musubi`. Y cuenta lo que cambia en `gio` desde el 2026-09-24: rige cuatro
+  ojos, el segundo par de ojos es meir (su principal se llama `gio`), una sesión de pantalla tiene
+  quién la apruebe y una shell hoy no —meir no tiene `shell` y la única credencial vigente que la
+  tiene es la que la pediría—, `exec` no pasa por esa puerta, y el control compara nombres de
+  principal, así que dos credenciales de la misma persona se pueden aprobar entre sí.
   `AgenteCaidoConMaquinaViva` enlaza a la receta. No cambia ninguna tool ni el actualizador de
   agentes: la ventana dentro de `actualizar-agente-windows.sh` se descartó porque en las cuatro
   corridas medidas no habría callado nada.
 
-  *Dos guardas nuevas, con su sabotaje corrido. `TestLasLlamadasDelRunbookUsanLasToolsComoSon`
+  *Cuatro guardas nuevas, con su sabotaje corrido. `TestLasLlamadasDelRunbookUsanLasToolsComoSon`
   cruza cada llamada a una tool del runbook con el registro: tool existente, JSON válido, sólo
-  parámetros declarados, con su tipo, y los obligatorios presentes —un parámetro mal escrito lo
-  descarta `json.Unmarshal` en silencio—. `TestAntesDeTocarUnAgenteElRunbookDeclaraLaVentana` exige
-  que la receta abra y cierre la ventana en la misma sección, que `AgenteCaidoConMaquinaViva` enlace
-  a ella y que todo enlace interno del runbook llegue a una sección.*
+  parámetros declarados, con su tipo y dentro del rango que el handler acepta, los obligatorios
+  presentes —un parámetro mal escrito lo descarta `json.Unmarshal` en silencio—, y cada guion que
+  se manda a correr existe en la ruta escrita. `TestAntesDeTocarUnAgenteElRunbookDeclaraLaVentana`
+  exige que la receta abra y cierre la ventana en la misma sección, que `AgenteCaidoConMaquinaViva`
+  enlace a ella y que todo enlace interno del runbook llegue a una sección.
+  `TestLaRecetaDeLaVentanaDiceDondeSeCorre` prohíbe exportar la URL del cerebro como https contra
+  una IP y, mientras el guion dependa de `python3` o de un `curl` sin `--resolve`, exige que la
+  receta dé el MCP en davantis-1. `TestLaRecetaNombraCadaSesionQueFrenaCuatroOjos` saca del código
+  las sesiones que pasan por cuatro ojos y exige que la receta las enumere, ni una más ni una
+  menos.*
 
 ### Fixed
 - **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
