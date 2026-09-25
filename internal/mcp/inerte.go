@@ -24,10 +24,17 @@ func NewServidorInerte(projectPath, version, motivo string) *McpServer {
 	return s
 }
 
-// instruccionesInerte es lo que el agente lee en su system prompt cuando Musubi está inerte.
+// instruccionesInerte es lo que el agente lee en su system prompt cuando este servidor está inerte.
+//
+// HABLA DE ESTE SERVIDOR, NO DE «MUSUBI» EN GENERAL, porque una sesión puede tener otra conexión a
+// Musubi que sí funciona: el adjudicador B1 corre `claude -p` en una carpeta que no es un repo, con
+// su propio Musubi por `--mcp-config`, y con el plugin instalado recibe además este servidor inerte.
+// Un «no hay memoria ni tools de Musubi» absoluto contradecía a las tools que el agente tenía a la
+// vista.
 func (s *McpServer) instruccionesInerte() string {
-	return "Musubi no está activo en esta carpeta (" + s.inerte + "): en esta sesión no hay memoria ni tools de Musubi. " +
-		"Musubi se activa solo al abrir la sesión dentro de un repo git; si la persona lo quiere acá, que corra `musubi init`."
+	return "Este servidor de Musubi no tiene un proyecto en esta carpeta (" + s.inerte + "), así que no ofrece memoria ni tools. " +
+		"Si la sesión tiene otra conexión a Musubi con tools, usá ésa. Musubi se activa solo al abrir la sesión dentro de un repo git; " +
+		"si la persona lo quiere acá, que corra `musubi init`."
 }
 
 // conAvisoDeInerte agrega las instrucciones de inerte al resultado de initialize.
