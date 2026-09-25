@@ -109,8 +109,8 @@ func TestElLinajeNoCruzaTenants(t *testing.T) {
 //
 // Sabotaje que la hace fallar: la cláusula del acervo abre todos los tenants.
 // arnes: archivo="internal/memory/scope.go"
-// arnes: de="\" AND (%s IN (?, ?) OR %s IS NULL"
-// arnes: a="\" AND (%s IN (?, ?) OR 1 OR %s IS NULL"
+// arnes: de="OR (%s = ? AND %s))"
+// arnes: a="OR 1 OR (%s = ? AND %s))"
 func TestLasFuentesDelBriefSeExpandenConLaMismaCredencial(t *testing.T) {
 	s := acervoDePatrones(t, map[string]string{
 		"design-corpus/tabla-densa": "Para una tabla densa, la primera columna ancla la lectura y las numéricas van a la derecha.",
@@ -171,5 +171,83 @@ func TestLasFuentesDelBriefSeExpandenConLaMismaCredencial(t *testing.T) {
 	}
 	if got := expandir("nota-de-web"); strings.Contains(got, "nota-de-web") {
 		t.Errorf("FUGA: abrir el acervo abrió otro tenant; el writer de crm expandió una nota de web: %s", got)
+	}
+}
+
+// TestDelAcervoAjenoSoloSeExpandeLoVisible: abrir el acervo para seguir las `fuentes` de una ficha no
+// abre su cuarentena ni lo que el afilador fundió. musubi_design nunca anuncia esas filas, pero la
+// hidratación por id no filtra visibilidad: sin la cláusula, un writer de otro proyecto que conociera
+// un id podía leer una propuesta de LLM sin corroborar o una ficha ya archivada del acervo.
+//
+// Lo PROPIO no cambia, y eso también se mira: la credencial sigue expandiendo su fila archivada como
+// antes. El control es el admin federado, que ve las tres filas del acervo: sin él, un silencio podría
+// ser «esas filas no existen» y no «la frontera las tapa».
+//
+// Sabotaje que la hace fallar: la cláusula del acervo deja de exigir visibilidad.
+// arnes: archivo="internal/memory/scope.go"
+// arnes: de="vis := visibleObsPredicate"
+// arnes: a="vis := \"1\""
+func TestDelAcervoAjenoSoloSeExpandeLoVisible(t *testing.T) {
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.SetProjectID("")
+	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{})
+
+	seed := func(origin, id, topic, texto string) {
+		if err := engine.SaveObservationTypedFrom(origin, "", id, topic, texto, 1.0, "semantic", "shared", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed(designCorpusScope, "acervo-visible", "design-corpus/visible", "TEXTO-ACERVO-VISIBLE")
+	seed(designCorpusScope, "acervo-fundida", "design-corpus/fundida", "TEXTO-ACERVO-FUNDIDA")
+	if ok, err := engine.ArchiveAsDuplicate(designCorpusScope, "acervo-fundida", "acervo-visible"); err != nil || !ok {
+		t.Fatalf("no se pudo fundir la ficha del acervo: ok=%v err=%v", ok, err)
+	}
+	enCuarentena, err := engine.ProposeObservation(designCorpusScope, "destilador", "design-corpus/propuesta",
+		"TEXTO-ACERVO-CUARENTENA", "prueba", 0.5, "semantic", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed("crm", "propia-canonica", "notas/canonica", "TEXTO-PROPIA-CANONICA")
+	seed("crm", "propia-archivada", "notas/archivada", "TEXTO-PROPIA-ARCHIVADA")
+	if ok, err := engine.ArchiveAsDuplicate("crm", "propia-archivada", "propia-canonica"); err != nil || !ok {
+		t.Fatalf("no se pudo fundir la nota propia: ok=%v err=%v", ok, err)
+	}
+
+	expandir := func(p *Principal, ids ...string) string {
+		raw, _ := json.Marshal(map[string]any{"ids": ids})
+		params, _ := json.Marshal(CallToolRequest{Name: "musubi_memory_expand", Arguments: raw})
+		out, rpcErr := s.handleToolsCall(withPrincipal(context.Background(), p), params)
+		if rpcErr != nil {
+			t.Fatalf("expandir %v: %+v", ids, rpcErr)
+		}
+		return out.(CallToolResponse).Content[0].Text
+	}
+	writer := &Principal{Name: "alice", Role: RoleWriter, ProjectID: "crm"}
+	admin := &Principal{Name: "root", Role: RoleAdmin}
+	delAcervo := []string{"acervo-visible", "acervo-fundida", enCuarentena}
+
+	todo := expandir(admin, delAcervo...)
+	for _, texto := range []string{"TEXTO-ACERVO-VISIBLE", "TEXTO-ACERVO-FUNDIDA", "TEXTO-ACERVO-CUARENTENA"} {
+		if !strings.Contains(todo, texto) {
+			t.Fatalf("control: el admin federado tiene que expandir %s, o esta prueba no mide nada: %s", texto, todo)
+		}
+	}
+
+	got := expandir(writer, delAcervo...)
+	if !strings.Contains(got, "TEXTO-ACERVO-VISIBLE") {
+		t.Errorf("la ficha visible del acervo se tiene que seguir expandiendo desde otro proyecto: %s", got)
+	}
+	if strings.Contains(got, "TEXTO-ACERVO-FUNDIDA") {
+		t.Errorf("FUGA: un writer de crm expandió una ficha del acervo que el afilador ya fundió: %s", got)
+	}
+	if strings.Contains(got, "TEXTO-ACERVO-CUARENTENA") {
+		t.Errorf("FUGA: un writer de crm expandió una propuesta del acervo en cuarentena: %s", got)
+	}
+	if propia := expandir(writer, "propia-archivada"); !strings.Contains(propia, "TEXTO-PROPIA-ARCHIVADA") {
+		t.Errorf("lo propio no cambia: la credencial sigue expandiendo su nota archivada: %s", propia)
 	}
 }

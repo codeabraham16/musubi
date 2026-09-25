@@ -42,7 +42,9 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   `recortado`, que ya venía con el mismo hueco) y al expandirlas le volvía `[]`, sin error ni aviso.
   Ahora la expansión lee, además de lo propio, el tenant `musubi-design` —el mismo que `musubi_design`
   ya le sirve entero— y ningún otro: una nota de otro proyecto sigue fuera, y el linaje usa ese mismo
-  alcance, así que tampoco la nombra.
+  alcance, así que tampoco la nombra. Y del acervo ajeno entra **sólo lo visible**: la hidratación por
+  id no filtra visibilidad, así que sin esa cláusula un writer de otro proyecto que conociera un id
+  podía leer una propuesta en cuarentena o una ficha ya fundida. Lo propio no cambia.
 
   **Queda latente hasta el despliegue y hasta que alguien lo use.** Medido el 2026-09-24:
   `expand_count` sobre las fichas y los artículos de `musubi-design` es cero. Se da por encendido
@@ -50,7 +52,7 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   ya cuelgan hoy de fichas y artículos fundidos las sostiene la lectura por `superseded_by`; copiarlas
   al canónico antes de que la purga las alcance (~2026-11-19) es un backfill aparte en el central.
 
-  *27 sabotajes corridos, 27 rojos: la ida y la vuelta invertidas, los saltos en cero, cada mitad de
+  *28 sabotajes corridos, 28 rojos: el acervo ajeno sin exigir visibilidad, la ida y la vuelta invertidas, los saltos en cero, cada mitad de
   la resolución por separado, sin filtro de visibilidad, sin tope o con el tope subido justo a lo
   sembrado, sin alcance (el writer de `crm` ve un id de `web`, con el admin federado como control),
   sin el `DISTINCT` (una punta repetida antes de la purga), la raíz como su propia punta, las dos
