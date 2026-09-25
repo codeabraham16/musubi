@@ -416,6 +416,9 @@ type McpServer struct {
 	// hablaAlAgente enciende las instrucciones del handshake y el núcleo de tools cargadas (ver
 	// agente.go). Sólo lo pone `musubi daemon`, con WithInstruccionesParaElAgente.
 	hablaAlAgente bool
+	// instrucciones es el texto ya armado (base + mapa de skills), una vez por servidor.
+	instruccionesOnce sync.Once
+	instrucciones     string
 	// principalsFile es la ruta del registro de identidades que el server usa para autenticar.
 	// La fija ListenAndServeHTTP (serve/HTTP); las tools admin (musubi_token_*) la mutan para dar
 	// de alta/baja miembros por la red, sin SSH ni CLI. Vacía en stdio local/tests ⇒ default.
