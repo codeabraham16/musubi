@@ -69,13 +69,20 @@ func TestLasDosSuperficiesDicenElMismoOrigenDeCadaClaseDeFila(t *testing.T) {
 		t.Fatalf("el enum da %d clases de fila y esta prueba siembra %d: sobra alguna", clases, len(argvDe))
 	}
 
+	// Los orígenes también salen del enum, de la lista que fleet cierra contra su bloque const: una
+	// copia a mano acá (la había hasta la revisión de T9) no se entera de un cuarto origen.
+	if len(fleet.OrigenesDeComando) < 3 {
+		t.Fatalf("fleet.OrigenesDeComando trae %d orígenes (%q) y cuando se escribió esta prueba eran 3: "+
+			"las dos superficies quedan sin cruzar para los que faltan", len(fleet.OrigenesDeComando), fleet.OrigenesDeComando)
+	}
+
 	type sembrada struct {
 		clase  fleet.TipoDeHecho
 		origen fleet.OrigenComando
 	}
 	porID := map[string]sembrada{}
 	for clase, argv := range argvDe {
-		for _, o := range []fleet.OrigenComando{fleet.OrigenPersona, fleet.OrigenPolitica, fleet.OrigenDesconocido} {
+		for _, o := range fleet.OrigenesDeComando {
 			c, err := s.engine.EncolarComando(fleet.Comando{
 				DeviceID: d.ID, ProjectID: "infra", Principal: "gio",
 				Argv: argv, Timeout: 30 * time.Second, Clasificacion: clase, Origen: o,

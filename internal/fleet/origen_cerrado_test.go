@@ -62,6 +62,11 @@ func origenesFueraDelEnum(t *testing.T, enum map[OrigenComando]bool) []OrigenCom
 // origen fuera del enum, y las dos puertas del store normalizan con OrigenValido antes de que algo
 // llegue a EsAutomatico. El hueco era de la guarda; lo que cuida esto es el próximo llamador.
 //
+// Y EL ENUM QUE RECORREN LOS OTROS PAQUETES TAMBIÉN SE CIERRA ACÁ. Las pruebas de memory (las puertas
+// de escritura y de lectura) y de mcp (las dos superficies) tenían cada una su lista escrita a mano;
+// la revisión de T9 lo señaló: un cuarto origen se decidía acá y ninguna de las dos lo recorría.
+// Ahora recorren fleet.OrigenesDeComando, y esta prueba exige que sea el bloque const entero.
+//
 // Sabotaje: EsAutomatico como lista NEGRA de dos (C3-m7) → un origen raro se cuenta como automático.
 // arnes: archivo="internal/fleet/comando.go"
 // arnes: de="func (o OrigenComando) EsAutomatico() bool { return o == OrigenPolitica }"
@@ -72,6 +77,10 @@ func origenesFueraDelEnum(t *testing.T, enum map[OrigenComando]bool) []OrigenCom
 // arnes: archivo="internal/fleet/comando.go"
 // arnes: de="\tOrigenDesconocido OrigenComando = \"\"\n)"
 // arnes: a="\tOrigenDesconocido OrigenComando = \"\"\n\tOrigenSistema OrigenComando = \"sistema\"\n)"
+// Sabotaje: que la lista exportada olvide un origen → memory y mcp dejan de recorrerlo sin enterarse.
+// arnes: archivo="internal/fleet/comando.go"
+// arnes: de="var OrigenesDeComando = []OrigenComando{OrigenPersona, OrigenPolitica, OrigenDesconocido}"
+// arnes: a="var OrigenesDeComando = []OrigenComando{OrigenPersona, OrigenDesconocido}"
 func TestElOrigenEsUnaListaBlancaCerradaContraSuEnum(t *testing.T) {
 	decididos := origenesDecididos()
 	declarados := constantesDeclaradas(t, "OrigenComando")
@@ -89,6 +98,25 @@ func TestElOrigenEsUnaListaBlancaCerradaContraSuEnum(t *testing.T) {
 	for o := range decididos {
 		if _, ok := declarados[string(o)]; !ok {
 			t.Errorf("la decisión tiene %q y ninguna constante del paquete lo declara", o)
+		}
+	}
+	// La lista exportada, la que recorren memory y mcp, contra el mismo bloque const.
+	enLista := map[string]bool{}
+	for _, o := range OrigenesDeComando {
+		if enLista[string(o)] {
+			t.Errorf("OrigenesDeComando repite %q", o)
+		}
+		enLista[string(o)] = true
+	}
+	for valor, nombre := range declarados {
+		if !enLista[valor] {
+			t.Errorf("%s (%q) está declarado y falta en OrigenesDeComando: las pruebas de memory (cómo se "+
+				"guarda y cómo se lee) y de mcp (cómo se dibuja) no lo recorren", nombre, valor)
+		}
+	}
+	for valor := range enLista {
+		if _, ok := declarados[valor]; !ok {
+			t.Errorf("OrigenesDeComando tiene %q y ninguna constante del paquete lo declara", valor)
 		}
 	}
 

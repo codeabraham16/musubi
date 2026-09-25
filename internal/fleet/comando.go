@@ -305,15 +305,31 @@ func OrigenValido(o OrigenComando) OrigenComando {
 	return OrigenDesconocido
 }
 
+// OrigenesDeComando es el enum entero de OrigenComando, en el orden del bloque const.
+//
+// EXISTE PARA QUE NADIE LO COPIE. Lo recorren las pruebas de los paquetes que GUARDAN el origen
+// (internal/memory: la puerta de escritura y las de lectura) y de los que lo MUESTRAN (internal/mcp:
+// la cronología y la bitácora). Hasta la revisión de A131 (tema T9) cada una tenía su lista escrita a
+// mano, y un cuarto origen se habría decidido acá sin que ninguna de las dos lo recorriera.
+// TestElOrigenEsUnaListaBlancaCerradaContraSuEnum la cierra contra el bloque const: un origen
+// declarado que falte acá la pone en rojo.
+var OrigenesDeComando = []OrigenComando{OrigenPersona, OrigenPolitica, OrigenDesconocido}
+
 // LimiteDeVida es el `creado` MÁS VIEJO que todavía se entrega a esta hora: un pendiente creado
 // ANTES está vencido (F10).
 //
-// ES LA ÚNICA CUENTA DEL RELOJ DE LA COLA, y la leen los dos lados: la toma (tomarComandosEnTx, que
-// DECIDE que no se ejecute) y la vista (Vencido, que dice qué mostrar). Hasta A131 (tema T9) cada
-// uno hacía la suya y no eran la misma: la toma compara contra un texto RFC3339 —la tabla guarda
-// segundos enteros, así que el límite queda truncado al segundo— y la vista restaba con
-// nanosegundos. En el segundo del borde la vista dibujaba `expirado` sobre un comando que la toma,
-// a esa misma hora, todavía le entregaba al agente.
+// ES LA ÚNICA CUENTA DEL RELOJ DE LA COLA, y la leen los tres lados que dependen de él: la toma
+// (tomarComandosEnTx, que DECIDE que no se ejecute), la vista (Vencido, que dice qué mostrar) y el
+// techo de la cola (EncolarComando, que cuenta sólo lo que todavía podría ejecutarse). Hasta A131
+// (tema T9) la toma y la vista hacían cada una la suya y no eran la misma: la toma compara contra un
+// texto RFC3339 —la tabla guarda segundos enteros, así que el límite queda truncado al segundo— y la
+// vista restaba con nanosegundos. En el segundo del borde la vista dibujaba `expirado` sobre un
+// comando que la toma, a esa misma hora, todavía le entregaba al agente.
+//
+// EL TECHO SE QUEDÓ CON SU COPIA UN COMMIT MÁS, cuando este comentario ya decía «la única»: lo
+// encontró la revisión de T9. La copia daba el mismo texto —el RFC3339 corta la fracción igual que el
+// Truncate de acá—, así que ninguna prueba de comportamiento podía verla. Por eso la unicidad la cuida
+// TestElRelojDeLaColaSeCuentaEnUnSoloLugar, que pregunta por el fuente y no por el resultado.
 //
 // SE TRUNCA ACÁ Y NO SÓLO EN EL FORMATO porque la granularidad es parte de la decisión: con el
 // límite en un segundo entero, comparar contra un `creado` leído de la tabla o contra uno que
@@ -352,6 +368,20 @@ func (c Comando) Perdido(ahora time.Time) bool {
 		return false
 	}
 	return ahora.Sub(c.Entregado) > EsperaMaxDeEntregado
+}
+
+// DuracionDeEjecucion es cuánto corrió el comando EN LA MÁQUINA —de la entrega al resultado— y si
+// eso se sabe. Es el `duracion_ms` de la bitácora y del resultado de musubi_fleet_exec.
+//
+// LA REGLA NO SE ESCRIBE ACÁ: se le pide a Hecho.Duracion, por la misma puerta que usa la cronología
+// (HechoDeComando), con el comienzo corrido a la entrega. Se sabe sólo con las dos puntas y en orden;
+// un resultado anterior a la entrega es dato corrupto, no una duración negativa. Hasta la revisión de
+// A131 (tema T9) la bitácora restaba `Terminado − Entregado` a mano, y una fila con el resultado antes
+// de la entrega salía con una duración negativa: la misma forma que T9 había arreglado en la bitácora
+// de shell, en el hermano que quedó sin mirar. Una segunda copia de la regla es cómo pasó eso.
+func (c Comando) DuracionDeEjecucion() (time.Duration, bool) {
+	c.Creado = c.Entregado
+	return HechoDeComando(c, "").Duracion()
 }
 
 // TruncarSalida acota una salida y DEJA LA MARCA. Devuelve también si cortó, para que el

@@ -424,10 +424,19 @@ type Hecho struct {
 	// «corrió algo sin argumentos».
 	Argv []string
 
-	// Origen es QUIÉN lo originó: una persona o una regla (A59). Vacío = no se sabe, y eso NO es
-	// «persona»: las filas anteriores a la migración 41 no lo dicen, y rellenarlas con «persona»
-	// le atribuiría a alguien lo que disparó una regla. Sólo lo llevan los hechos que salen de
-	// `device_commands`; una sesión la abre siempre alguien.
+	// Origen es QUIÉN lo originó: una persona o una regla (A59). Sólo lo llevan los hechos que
+	// salen de `device_commands`, que es donde vive esa columna.
+	//
+	// EN UN HECHO DE device_commands, VACÍO = NO SE SABE, y eso NO es «persona»: las filas
+	// anteriores a la migración 41 no lo dicen, y rellenarlas con «persona» le atribuiría a alguien
+	// lo que disparó una regla.
+	//
+	// EN UNA SESIÓN, VACÍO = NO APLICA, y no «no se sabe»: la sesión no es una fila de esa tabla, y
+	// el `tipo` del hecho es lo que dice que es una sesión. Este comentario decía, al lado del «no se
+	// sabe», que «una sesión la abre siempre alguien», que es medio argumento para llenarlo: la
+	// auditoría A131 lo llenó sólo en la puerta de pantalla (C4-m2) y todo quedó verde, con dos
+	// sesiones contando historias distintas. La regla por puerta la recorre
+	// TestElOrigenDelHechoLoDecideSuPuerta.
 	Origen OrigenComando
 
 	// Termino es cuándo dejó de estar en curso. Cero = no terminó, o no se sabe. No se rellena

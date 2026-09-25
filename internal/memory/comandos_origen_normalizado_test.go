@@ -10,16 +10,30 @@ import (
 	"musubi/internal/fleet"
 )
 
-// origenesDelEnum son los orígenes que OrigenValido conserva. Son el control positivo de las dos
-// pruebas de abajo; la decisión sobre el enum —y su cierre contra el bloque const— vive en
-// internal/fleet (TestElOrigenEsUnaListaBlancaCerradaContraSuEnum).
-var origenesDelEnum = []fleet.OrigenComando{fleet.OrigenPersona, fleet.OrigenPolitica, fleet.OrigenDesconocido}
+// origenesDelEnum son los orígenes que OrigenValido conserva: el enum entero, tal como lo exporta
+// fleet.OrigenesDeComando. Son el control positivo de las dos pruebas de abajo. Acá NO se copian:
+// hasta la revisión de A131 (tema T9) era una lista escrita a mano, y un origen nuevo se habría
+// decidido en fleet sin que las puertas de escritura y de lectura lo recorrieran. La decisión sobre
+// el enum —y el cierre de la lista contra el bloque const— vive en internal/fleet
+// (TestElOrigenEsUnaListaBlancaCerradaContraSuEnum).
+func origenesDelEnum(t *testing.T) []fleet.OrigenComando {
+	t.Helper()
+	// EL PISO: una lista recortada dejaría a las dos pruebas sin recorrer lo que falta, en verde.
+	if len(fleet.OrigenesDeComando) < 3 {
+		t.Fatalf("fleet.OrigenesDeComando trae %d orígenes (%q) y cuando se escribió esta prueba eran 3: "+
+			"las puertas de escritura y de lectura quedan sin medir para los que faltan",
+			len(fleet.OrigenesDeComando), fleet.OrigenesDeComando)
+	}
+	return fleet.OrigenesDeComando
+}
 
 // origenesRaros deriva del enum los valores que se le parecen sin serlo, y suma dos que no se
 // parecen a nada. Es el mismo corpus que la prueba del dominio, derivado de la misma forma.
-func origenesRaros() []fleet.OrigenComando {
+func origenesRaros(t *testing.T) []fleet.OrigenComando {
+	t.Helper()
+	delEnum := origenesDelEnum(t)
 	enum := map[fleet.OrigenComando]bool{}
-	for _, o := range origenesDelEnum {
+	for _, o := range delEnum {
 		enum[o] = true
 	}
 	vistos := map[fleet.OrigenComando]bool{}
@@ -30,7 +44,7 @@ func origenesRaros() []fleet.OrigenComando {
 			out = append(out, o)
 		}
 	}
-	for _, o := range origenesDelEnum {
+	for _, o := range delEnum {
 		s := string(o)
 		sumar(fleet.OrigenComando(strings.ToUpper(s)))
 		sumar(fleet.OrigenComando(s + " "))
@@ -62,12 +76,12 @@ func origenesRaros() []fleet.OrigenComando {
 func TestLoQueQuedaEnLaTablaEsUnOrigenDelEnum(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "pc-gio")
-	raros := origenesRaros()
+	raros := origenesRaros(t)
 	// EL PISO: sin raros, esto sólo mediría el camino feliz.
 	if len(raros) < 10 {
 		t.Fatalf("sólo %d orígenes raros (%q): la derivación se rompió", len(raros), raros)
 	}
-	for _, o := range append(append([]fleet.OrigenComando{}, origenesDelEnum...), raros...) {
+	for _, o := range append(append([]fleet.OrigenComando{}, origenesDelEnum(t)...), raros...) {
 		c, err := e.EncolarComando(fleet.Comando{
 			DeviceID: d.ID, ProjectID: "casa", Principal: "gio", Creado: time.Now().UTC(),
 			Argv: []string{"uptime"}, Timeout: 30 * time.Second, Origen: o,
@@ -123,7 +137,7 @@ func TestUnOrigenRaroEnLaTablaSeLeeDesconocidoPorCadaPuerta(t *testing.T) {
 	sembrar := func(device fleet.Device) map[string]fleet.OrigenComando {
 		t.Helper()
 		quiero := map[string]fleet.OrigenComando{}
-		for _, o := range append(append([]fleet.OrigenComando{}, origenesDelEnum...), origenesRaros()...) {
+		for _, o := range append(append([]fleet.OrigenComando{}, origenesDelEnum(t)...), origenesRaros(t)...) {
 			c, err := e.EncolarComando(fleet.Comando{
 				DeviceID: device.ID, ProjectID: device.ProjectID, Principal: "gio", Creado: ahora.Add(-time.Minute),
 				Argv: []string{"uptime"}, Timeout: 30 * time.Second, Origen: fleet.OrigenPersona,
