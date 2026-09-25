@@ -22,7 +22,7 @@ func TestUsageDocumentsUserCommands(t *testing.T) {
 
 	// `shell` se agrega acá el mismo día que se cablea: es la razón de ser de esta prueba —
 	// `ingest` y `catalog harvest` vivieron cableados e invisibles hasta que alguien los buscó.
-	for _, cmd := range []string{"ingest", "catalog harvest", "setup", "provision", "doctor", "ingest", "agent", "shell <maquina>"} {
+	for _, cmd := range []string{"ingest", "catalog harvest", "setup", "provision", "doctor", "ingest", "agent", "shell <maquina>", "uso-agente"} {
 		if !strings.Contains(help, cmd) {
 			t.Errorf("printUsage no documenta el comando %q", cmd)
 		}

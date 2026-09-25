@@ -60,6 +60,8 @@ func main() {
 		runTurn()
 	case "arnes":
 		runArnes(os.Args[2:])
+	case "uso-agente":
+		runUsoAgente(os.Args[2:])
 	case "receipt":
 		runReceipt(os.Args[2:])
 	case "precheck":
@@ -189,6 +191,9 @@ func printUsage() {
 	cmd("calibrate", "(opt-in) Mide el estimador de tokens vs count_tokens (requiere ANTHROPIC_API_KEY)")
 	cmd("conflicts backfill [--dry-run]", "Reconstruye el desglose lex/coseno de las relaciones que se guardaron sin él")
 	cmd("conflicts shadow [--json]", "Lee el modo sombra: dónde el motor coincidió con el detector (y nunca lo corrigió)")
+
+	section("Medición")
+	cmd("uso-agente [--desde F] [--hasta F]", "Lee los transcripts de Claude Code: ¿el agente USA las tools y skills de Musubi? (sólo lectura; --dir, --json)")
 
 	section("Ingesta")
 	cmd("ingest [--as ...] [--lang ...] [--json] <url>", "Convierte un link (video/red social/artículo) en texto; --save lo guarda en memoria")
