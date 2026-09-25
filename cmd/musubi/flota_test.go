@@ -1140,6 +1140,10 @@ func TestUnaMaquinaQueNoLateSeAvisaArriba(t *testing.T) {
 // arnes: archivo="cmd/musubi/assets/flota.html"
 // arnes: de="const porque = online ? "
 // arnes: a="const porque = true ? "
+// Sabotaje que la hace fallar: que el aviso de arriba nombre las máquinas y no diga desde cuándo.
+// arnes: archivo="cmd/musubi/assets/flota.html"
+// arnes: de="${esc(n)}: ${sinLatirHace(porNombre.get(n))}"
+// arnes: a="${esc(n)}"
 func TestLaPaginaDeFlotaPoneLasMaquinasSinLatirPrimero(t *testing.T) {
 	pagina := sinComentariosDeHTMLyJS(string(assetsFS(t, "assets/flota.html")))
 
@@ -1155,6 +1159,12 @@ func TestLaPaginaDeFlotaPoneLasMaquinasSinLatirPrimero(t *testing.T) {
 	if !strings.Contains(bloque, "avisos.unshift(") {
 		t.Errorf("el aviso de máquinas sin latir no va PRIMERO (unshift): queda detrás de los de "+
 			"máquinas ocultas y lista recortada, que hablan de lo que no se ve.\n%s", bloque)
+	}
+	// Y DICE DESDE CUÁNDO, no sólo cuáles: «gio» a secas no distingue un minuto de dos días, que
+	// es justo lo que la fila ya dice. Sin esto la revisión le sacó el `sinLatirHace` al aviso y
+	// esta prueba siguió en verde.
+	if !strings.Contains(bloque, "sinLatirHace(") {
+		t.Errorf("el aviso de máquinas sin latir nombra cuáles y no dice desde cuándo (sinLatirHace):\n%s", bloque)
 	}
 
 	k := strings.Index(pagina, "cuerpo.innerHTML = equipos.map(e =>")

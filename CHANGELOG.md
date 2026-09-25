@@ -29,12 +29,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
   Y el panel de máquinas de Musubi dice arriba de todo cuáles **no laten** y desde cuándo: el dato
   (`silencio_segundos`) viajaba en cada fila y no se dibujaba. `/api/flota` gana `sin_latir`, y el
-  título «la máquina late pero su última medición es vieja» deja de decírselo a una que no late.
+  título «la máquina late pero su última medición es vieja» deja de decírselo a una que no late. El
+  aviso dice qué alerta avisa, y como condicional —el panel también corre donde no hay Alertmanager—:
+  `MaquinaCaida`, o `AgenteCaidoConMaquinaViva` si la máquina sigue en la red; los nombres y el
+  plazo se miden contra `deploy/musubi-alerts-flota.yml`.
 
   *No hay `promtool` en la CI, así que cinco guardas de Go custodian la forma de las reglas (el
   rango, las dos fotos y su agregador, la foto perdida, el silencio de la PC apagada con el `for` del
   arranque, y que la prueba de promtool tenga para cada alerta un caso que dispara y otro que calla)
-  y dos el panel; cada sabotaje se corrió y cae en su aserción. La semántica la ejecuta
+  y tres el panel; cada sabotaje se corrió y cae en su aserción. La semántica la ejecuta
   `deploy/musubi-alerts-tablero.promtool`, con series cada 15 min: verde con promtool 3.1.0 —la
   revisión del server— y rojo con cada uno de once sabotajes, empezando por el defecto del plan. Esa
   prueba se corre en el despliegue, al lado de las reglas.*

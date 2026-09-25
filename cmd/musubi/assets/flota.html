@@ -482,14 +482,19 @@ function pintar(d) {
       `el cerebro tocó su techo de proyectos por consulta: hay máquinas que NO figuran acá. Filtrá por proyecto para verlas.`);
   }
   // LAS QUE NO LATEN VAN PRIMERO, por delante de los otros dos avisos: una máquina caída es lo
-  // único de esta página que puede estar pasando AHORA. Y se dice que la alerta ya sonó, para que
-  // nadie crea que el panel es el único que se enteró. `mantenimiento` no viaja en fleet_list, así
-  // que el aviso lo nombra como posibilidad en vez de afirmarlo.
+  // único de esta página que puede estar pasando AHORA. Y se dice qué alerta avisa, para que nadie
+  // crea que el panel es el único que se enteró — pero como CONDICIONAL: este panel es del producto
+  // y un Musubi sin Prometheus ni Alertmanager no avisa nada. Son DOS alertas y no una: «no late»
+  // es `MaquinaCaida` si la máquina tampoco está en la red, y `AgenteCaidoConMaquinaViva` si está
+  // y lo muerto es el agente (el caso de gio, tres días «caída» contestando el ping). El canal
+  // tampoco se nombra: lo decide el Alertmanager de cada uno. `mantenimiento` no viaja en
+  // fleet_list, así que el aviso lo nombra como posibilidad en vez de afirmarlo.
   if (d.sin_latir && d.sin_latir.length) {
     const porNombre = new Map(equipos.map(x => [x.name, x]));
     avisos.unshift(`<b>${d.sin_latir.length} máquina(s) sin latir</b><br>` +
       d.sin_latir.map(n => `${esc(n)}: ${sinLatirHace(porNombre.get(n))}`).join(' · ') +
-      `. Pasados 5 minutos avisa <code>MaquinaCaida</code> por Telegram, salvo que esté en mantenimiento declarado.`);
+      `. Si este Musubi tiene desplegadas las alertas de flota, a los 5 minutos avisa <code>MaquinaCaida</code>` +
+      ` —o <code>AgenteCaidoConMaquinaViva</code> si la máquina sigue en la red—, salvo mantenimiento declarado.`);
   }
   if (avisos.length) {
     aviso.innerHTML = avisos.map(a => `<div class="aviso">${a}</div>`).join('');
