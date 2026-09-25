@@ -50,12 +50,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   ya cuelgan hoy de fichas y artículos fundidos las sostiene la lectura por `superseded_by`; copiarlas
   al canónico antes de que la purga las alcance (~2026-11-19) es un backfill aparte en el central.
 
-  *19 sabotajes corridos, 19 rojos: la ida y la vuelta invertidas, los saltos en cero, cada mitad de
+  *27 sabotajes corridos, 27 rojos: la ida y la vuelta invertidas, los saltos en cero, cada mitad de
   la resolución por separado, sin filtro de visibilidad, sin tope o con el tope subido justo a lo
   sembrado, sin alcance (el writer de `crm` ve un id de `web`, con el admin federado como control),
-  las dos llamadas a la herencia, cada dirección de la copia, la copia que pisa un par existente, el
-  expand sin linaje, cada `omitempty`, el linaje que rompe la expansión al fallar, y el brief sin
-  fuentes.*
+  sin el `DISTINCT` (una punta repetida antes de la purga), la raíz como su propia punta, las dos
+  llamadas a la herencia, cada dirección de la copia, la copia que pisa un par existente, la que
+  copia relaciones que no son linaje, cada arista hacia sí misma, el artículo canónico que se queda
+  en la cola del destilador, el expand sin linaje, cada `omitempty`, el linaje que rompe la expansión
+  al fallar, el brief sin fuentes, el expand sin el acervo de diseño, y la cláusula del acervo que
+  abre todos los tenants.*
 
 ### Fixed
 - **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
