@@ -43,13 +43,39 @@ type SharedObs struct {
 // del proyecto de la credencial que pide el pull; Federate/vacío ⇒ sin filtro, histórico). afterRowID=0
 // trae desde el principio. La corre el central al servir un pull entrante de un cliente.
 //
-// LIMITACIÓN CONOCIDA (auditoría 2026-07-26 #4 — diferida a un slice de diseño): el cursor es por
-// `rowid`, que NO cambia en un UPDATE (el UPSERT reescribe la fila in-place). Por eso una máquina cuyo
-// cursor ya pasó el rowid de una obs shared NO vuelve a bajar sus EDICIONES posteriores: el mirror
-// queda stale (el central igual tiene la verdad — es staleness, no pérdida). Cerrarlo bien requiere un
-// contador MONÓTONO que suba también al actualizar (p. ej. una columna sync_seq bumpeada en cada
-// insert/update de shared) y paginar por él en vez de por rowid — cambio de esquema + write-path +
-// cliente, fuera del alcance de esta pasada de hardening.
+// LIMITACIÓN VIEJA, CERRADA: este comentario decía que el cursor era por `rowid`, que no cambia en un
+// UPDATE. Ya no: la consulta de abajo pagina por `sync_seq`, que sube también al actualizar, y el
+// nombre `afterRowID` quedó sólo por compat del wire (ver SharedObs).
+//
+// 🔴 LIMITACIÓN NUEVA, ABIERTA, Y ES PEOR: EL FILTRO DE PROYECTO NO OCULTA FILAS, LAS SALTA.
+//
+// El acotamiento por tenant (scopeSQL) entra al MISMO WHERE que `sync_seq > ?`, y el LIMIT se aplica
+// DESPUÉS. O sea que el filtro no acorta la página: la corre hacia arriba por encima de las filas
+// ajenas. Y `toolSyncPull` (internal/mcp/methods.go) calcula el `next_cursor` con el máximo de las
+// filas que DEVOLVIÓ —ya filtradas—, así que todo lo que el filtro descartó queda DEBAJO de ese
+// cursor sin haberse entregado. El cliente lo adopta y `AvanzarCursorBajada` (bajada_lease.go) no
+// retrocede nunca: su UPSERT lleva `WHERE ... < ...`. Nada lo rebobina —`musubi_sync_requeue` toca
+// el dead-letter del OUTBOX, no la bajada—, así que la única salida es editar `meta` a mano.
+//
+// EL DAÑO SE COBRA CUANDO LA CREDENCIAL SE ENSANCHA. Mientras el token es read:own la fila ajena no
+// le corresponde y no falta. Cuando pasa a read:all el filtro desaparece, pero el cursor ya está
+// arriba: esa historia no vuelve JAMÁS.
+//
+// MEDIDO EL 2026-09-24 sobre la base real del central cruzada contra la de davantis-1:
+//
+//	3.073 filas pullable en el central · 3.009 presentes acá · 64 AUSENTES
+//	las 64 con sync_seq <= cursor (10.990) · 0 por encima · mayor seq ausente: 855
+//	`altura` 61 de 61 ausentes bajo seq 855, y 0 de 643 por encima. `last-chaos` 1 de 1.
+//	(2 de `musubi` se cuentan aparte: pueden ser un borrado en duro local)
+//
+// La prueba de que es el cursor y no otra cosa es el ENTRELAZADO: seq 709 presente, 711-717 ausentes,
+// 718 PRESENTE, 719 y 721 ausentes, 722 presente. `sync_seq` se asigna MAX+1 al insertar, así que ese
+// orden es el de llegada: cuando el pull entregó la 718, las 711-717 ya existían y no vinieron.
+//
+// ⚠️ Y OJO CON CÓMO SE VERIFICA, porque acá me equivoqué antes: comparar el cursor contra
+// `max(sync_seq)` del central y verlo al día NO prueba nada. El cursor llegando arriba es
+// exactamente el síntoma — avanzó por encima de lo que no entregó. La prueba honesta es cruzar los
+// ids del universo pullable del central contra los de la base local.
 func (e *DbEngine) ListSharedForPull(ctx context.Context, afterRowID int64, limit int) ([]SharedObs, error) {
 	if limit <= 0 {
 		limit = 200
@@ -168,6 +194,36 @@ func (e *DbEngine) IngestShared(o SharedObs) (inserted bool, err error) {
 	//
 	// Se compara el contenido y no content_hash porque el vector se calcula del contenido: es la
 	// entrada exacta, sin depender de que el hash previo de la fila esté cargado.
+	// EL SELLO DE ORIGEN, Y ES LA MITAD QUE FALTABA DEL ANTI-LOOP. No encolar no alcanzaba: la
+	// ausencia de fila es indistinguible de «una shared vieja que nunca se encoló», que es
+	// justamente lo que BackfillOutbox viene a rescatar, y una apertura después la ponía a la cola.
+	// Dejar una fila terminal 'espejo' es lo que convierte el silencio en una afirmación: el central
+	// ya tiene esto. Va en la MISMA transacción que el UPSERT, porque un crash entre las dos dejaría
+	// la observación sin sello y el próximo backfill la volvería a subir.
+	//
+	// enqueued_hash lleva el hash del contenido YA redactado, o sea lo que esta base tiene ahora.
+	// Así, si mañana se edita acá, enqueueOutboxTx compara contra esto, ve el cambio y la encola. Y
+	// se REFRESCA en cada re-entrega (DO UPDATE), porque si no una edición que baja del central
+	// dejaría el sello apuntando a un contenido que ya no existe y el próximo enqueue subiría de más.
+	//
+	// Y el DO UPDATE NO pisa una fila 'pending'/'claimed': ésa es una intención de envío LOCAL que
+	// todavía no salió, y sellarla como espejo la mataría en silencio. Sobre 'sent'/'dead'/'espejo'
+	// sí escribe, que son estados terminales donde el sello sólo agrega información.
+	//
+	// ⚠️ Lo que este arreglo NO toca: el UPSERT de arriba igual pisa el CONTENIDO local con el del
+	// central (último que escribe gana). Eso es el diseño declarado del enlace, no un descuido de
+	// acá, y cambiarlo es otra discusión.
+	if _, err := tx.Exec(`
+		INSERT INTO outbox (obs_id, enqueued_hash, status, attempts, next_attempt_at, created_at, updated_at)
+		VALUES (?, ?, 'espejo', 0, datetime('now'), datetime('now'), datetime('now'))
+		ON CONFLICT(obs_id) DO UPDATE SET
+			status = 'espejo', attempts = 0, last_error = NULL,
+			enqueued_hash = excluded.enqueued_hash, updated_at = datetime('now')
+		WHERE outbox.status NOT IN ('pending','claimed')`,
+		o.ID, hash); err != nil {
+		return false, fmt.Errorf("error al sellar como espejo la obs bajada %s: %w", o.ID, err)
+	}
+
 	cambio := existia && previo != clean
 	if cambio {
 		if _, err := tx.Exec(`DELETE FROM embeddings WHERE observation_id = ?`, o.ID); err != nil {

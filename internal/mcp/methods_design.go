@@ -251,6 +251,10 @@ type patronItem struct {
 	Similarity float32 `json:"similarity,omitempty"`  // sólo por el camino semántico
 	Recortado  bool    `json:"recortado,omitempty"`   // el texto no vino entero (tope por tarjeta)
 	FullTokens int     `json:"full_tokens,omitempty"` // lo que mide entero, si se recortó
+	// Fuentes son los ids de los artículos crudos de los que se destiló esta ficha: su linaje (ver
+	// methods_linaje.go). No confundir con Fuente, que es el TENANT. Expandir uno con
+	// musubi_memory_expand trae el artículo entero.
+	Fuentes []string `json:"fuentes,omitempty"`
 }
 
 // recorteBloque declara qué se sirvió de qué total. Recortar sin declarar el total es el modo de
@@ -490,6 +494,9 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 		// Recall del acervo, best-effort: si algo falla, el brief conserva el NÚCLEO estático (rol +
 		// principios + marca), que ya vale por sí solo. Un fallo del acervo NO tumba la tool.
 		rec = s.recallDesignCorpus(corpusCtx, consulta, prep, limit)
+		// De qué artículos salió cada ficha servida. Es el camino al material entero, y es lo que
+		// enciende el linaje, porque acá es donde el agente ve la ficha. Best-effort.
+		s.adjuntarFuentes(corpusCtx, rec.Patrones)
 
 		// CAPA 2 — el MÉTODO vivo: las tarjetas del sub-acervo arbitrable `design-method/*`. Siguen
 		// viniendo del acervo y siguen siendo judge/supersede-ables —esa es la capacidad de Renaissance—
@@ -545,7 +552,7 @@ func (s *McpServer) toolDesign(ctx context.Context, raw json.RawMessage) (interf
 		BrandTokens:     brandTok,
 		Corpus:          rec.Patrones,
 		CorpusScope:     designCorpusScope,
-		CorpusNote:      "Cada item viene con su texto COMPLETO: usalo directo, no hace falta expandir nada. Sólo si alguno trae 'recortado' vale el viaje a musubi_memory_expand con su id.",
+		CorpusNote:      "Cada item viene con su texto COMPLETO: usalo directo, no hace falta expandir nada. Sólo si alguno trae 'recortado' vale el viaje a musubi_memory_expand con su id. Si trae 'fuentes', son los ids de los artículos de los que salió: expandir uno trae el artículo entero.",
 		Method:          metodo,
 		MethodSource:    methodSource,
 		Emit:            designEmitFor(target, brandTok),

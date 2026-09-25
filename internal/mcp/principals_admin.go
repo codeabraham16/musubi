@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -29,21 +30,38 @@ type PrincipalInfo struct {
 	// Vencimiento es ese campo YA RESUELTO contra el reloj, porque un listado que muestra
 	// «2020-01-01» y nada más obliga a que quien lo lee haga la cuenta de cabeza.
 	//
-	// Es un string con cuatro estados y NO un bool `Expired` a propósito: con un bool, una fecha
+	// Es un string con cinco estados y NO un bool `Expired` a propósito: con un bool, una fecha
 	// ILEGIBLE tendría que salir como `false`, o sea «no vencida» — «no pude medir» disfrazado de
 	// «medí y está bien», que es justo el modo de falla que el vencimiento vino a eliminar. Acá
 	// lo ilegible se llama ilegible.
 	Vencimiento string
+	// DiasParaVencer son los días que le quedan, redondeados hacia ARRIBA (12 h ⇒ 1), y sólo se
+	// llenan cuando Vencimiento es «por vencer». Hacia arriba a propósito: hacia abajo, a la que
+	// le quedan doce horas el listado le diría «faltan 0 días», que se lee como «ya está».
+	DiasParaVencer int
 }
 
-// Los cuatro estados de vencimiento de un principal listado. Ninguno significa «no sé»: el «no
+// Los cinco estados de vencimiento de un principal listado. Ninguno significa «no sé»: el «no
 // sé» tiene su propio nombre (ilegible) y se ve.
 const (
-	VencimientoNoVence  = "no vence" // sin `expires:` — el comportamiento histórico
-	VencimientoVigente  = "vigente"  // tiene fecha y todavía no llegó
-	VencimientoVencida  = "VENCIDA"  // la fecha pasó: no autentica ni actúa
-	VencimientoIlegible = "ilegible" // el `expires:` no es RFC3339 (el cerebro NO arranca así)
+	VencimientoNoVence   = "no vence"   // sin `expires:` — el comportamiento histórico
+	VencimientoVigente   = "vigente"    // tiene fecha y le quedan más de umbralPorVencer
+	VencimientoPorVencer = "por vencer" // tiene fecha y le quedan menos de umbralPorVencer: hay que renovarla
+	VencimientoVencida   = "VENCIDA"    // la fecha pasó: no autentica ni actúa
+	VencimientoIlegible  = "ilegible"   // el `expires:` no es RFC3339 (el cerebro NO arranca así)
 )
+
+// umbralPorVencer es desde cuándo una credencial vigente se lista como «por vencer».
+//
+// Es EL MISMO NÚMERO que la alerta `CredencialPorVencer` de deploy/musubi-alerts.yml, y
+// TestElUmbralDeLaAlertaEsElDelListado lo custodia: si el aviso suena a los 14 días y el listado
+// recién dice «por vencer» a los 7, quien abre `musubi token list` por la alerta ve todo
+// «vigente» y no encuentra cuál es.
+//
+// Catorce días porque renovar no es inmediato: si la credencial es de una máquina que se apaga
+// —la laptop—, el token nuevo le tiene que llegar a ella, y hay que re-encolar el sync. Con una
+// semana de margen, un fin de semana largo se come la mitad.
+const umbralPorVencer = 14 * 24 * time.Hour
 
 // estadoDeVencimiento resuelve el `expires:` crudo contra el reloj del registro.
 func estadoDeVencimiento(nombre, expires string) string {
@@ -54,10 +72,29 @@ func estadoDeVencimiento(nombre, expires string) string {
 	if err != nil {
 		return VencimientoIlegible
 	}
-	if (Principal{Expires: t}).Vencida(ahoraParaVencimiento()) {
+	ahora := ahoraParaVencimiento()
+	if (Principal{Expires: t}).Vencida(ahora) {
 		return VencimientoVencida
 	}
+	if t.Sub(ahora) < umbralPorVencer {
+		return VencimientoPorVencer
+	}
 	return VencimientoVigente
+}
+
+// diasParaVencer dice cuántos días le quedan a una credencial «por vencer», redondeando hacia
+// arriba. Cero en cualquier otro estado: una vigente a 300 días no necesita la cuenta, y una
+// vencida o ilegible no tiene días que faltar.
+func diasParaVencer(nombre, expires string) int {
+	if estadoDeVencimiento(nombre, expires) != VencimientoPorVencer {
+		return 0
+	}
+	t, err := parsearVencimiento(nombre, expires)
+	if err != nil {
+		return 0
+	}
+	const dia = 24 * time.Hour
+	return int((t.Sub(ahoraParaVencimiento()) + dia - 1) / dia)
 }
 
 // GenerateToken produce un token opaco aleatorio (256 bits) con prefijo "msb_". Es el
@@ -204,7 +241,7 @@ func ListPrincipalsInfo(path string) ([]PrincipalInfo, error) {
 	out := make([]PrincipalInfo, 0, len(f.Principals))
 	for _, p := range f.Principals {
 		r, w := EffectiveCaps(p.Role, p.Read, p.Write)
-		out = append(out, PrincipalInfo{
+		info := PrincipalInfo{
 			Name: p.Name, ProjectID: p.ProjectID, Role: p.Role, Read: r, Write: w,
 			// EL VENCIMIENTO VIAJA EN EL LISTADO. Sin esto, una credencial que venció en 2020
 			// se listaba idéntica a una viva: un operador no tenía UNA SOLA superficie donde
@@ -212,13 +249,19 @@ func ListPrincipalsInfo(path string) ([]PrincipalInfo, error) {
 			// justamente el que no lo decía.
 			Expires:     strings.TrimSpace(p.Expires),
 			Vencimiento: estadoDeVencimiento(p.Name, p.Expires),
-		})
+		}
+		// Y CUÁNTO LE QUEDA, cuando le queda poco: «por vencer» sin los días obliga a hacer la
+		// cuenta de cabeza contra la fecha, que es lo mismo que el estado vino a ahorrar.
+		info.DiasParaVencer = diasParaVencer(p.Name, p.Expires)
+		out = append(out, info)
 	}
 	return out, nil
 }
 
 // RemovePrincipal borra el principal de nombre `name` del registro. Devuelve found=false si
-// no existía (sin error). Revocación = el token deja de autenticar en el próximo arranque.
+// no existía (sin error). El cerebro que sirve ESTE archivo lo relee solo (principals_reload.go):
+// el token deja de autenticar en ≤10 s, sin reiniciar — salvo que la relectura se rechace por
+// otro error del archivo, y eso lo dice `musubi_principals_reload_failing`.
 func RemovePrincipal(path, name string) (bool, error) {
 	name = strings.TrimSpace(name)
 	f, err := readPrincipalsFile(path)

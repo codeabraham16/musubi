@@ -15,10 +15,12 @@ import (
 // —o sea, cualquiera que tenga un shell— se salta la allowlist entera plantando un binario con
 // el nombre correcto.
 //
-// Sabotaje que la hace fallar: comparar filepath.Base(limpio[0]) contra filepath.Base(p).
+// Sabotaje que la hace fallar: comparar la entrada contra el basename de limpio[0], no contra
+// limpio[0] entero. (Se escribe con separadoresDeRuta y no con filepath.Base porque politica.go
+// ya no importa filepath: un sabotaje que no compila no es un rojo, es uno inválido.)
 // arnes: archivo="internal/fleet/politica.go"
 // arnes: de="\t\tif strings.TrimSpace(p) == limpio[0] {"
-// arnes: a="\t\tif filepath.Base(strings.TrimSpace(p)) == filepath.Base(limpio[0]) {"
+// arnes: a="\t\tif strings.TrimSpace(p) == limpio[0][strings.LastIndexAny(limpio[0], separadoresDeRuta)+1:] {"
 func TestLaAllowlistNoSeSaltaConUnaRutaQueTermineIgual(t *testing.T) {
 	permitidos := []string{"systemctl", "journalctl"}
 
@@ -64,6 +66,52 @@ func TestSeReconoceAlInterpreteQueAnulaLaAllowlist(t *testing.T) {
 		}
 	}
 	for _, c := range []string{"systemctl", "journalctl", "df", "uptime", ""} {
+		if EsInterprete(c) {
+			t.Errorf("%q no es un intérprete; avisar de más entrena a ignorar el aviso", c)
+		}
+	}
+}
+
+// I10b EN WINDOWS — UN INTÉRPRETE CON `.exe` O CON RUTA DE WINDOWS SIGUE SIENDO UN INTÉRPRETE, y
+// lo tiene que ver el central, que es Linux.
+//
+// PermiteArgv compara argv[0] exacto, así que `pwsh.exe` en la allowlist de una máquina Windows
+// deja lanzar cualquier cosa. El criterio viejo comparaba el basename contra un mapa que sólo
+// tenía `powershell.exe` y `cmd.exe`, y con filepath.Base, que en Linux no parte una ruta con
+// barras invertidas: `pwsh.exe`, `python.exe`, `wsl.exe`, `bash.exe` y `node.exe` pasaban por
+// allowlists que acotan. Lo encontró una revisión adversaria del informe de cuatro ojos, que
+// convierte este criterio en una afirmación de seguridad («exec_sin_acotar»).
+//
+// Sabotaje: no sacarle el `.exe` al nombre.
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="c = strings.TrimSuffix(c, \".exe\")"
+// arnes: a="c = strings.TrimSuffix(c, \"\")"
+//
+// Sabotaje: partir la ruta sólo por la barra de Unix, como filepath.Base en el central.
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="strings.LastIndexAny(c, separadoresDeRuta)"
+// arnes: a="strings.LastIndexAny(c, \"/\")"
+//
+// Sabotaje: sacar `wsl` del mapa.
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="\"wsl\": true"
+// arnes: a="\"wsl\": false"
+func TestUnInterpreteDeWindowsSeReconoceDesdeCualquierSistema(t *testing.T) {
+	for _, c := range []string{
+		"pwsh.exe", "python.exe", "wsl.exe", "bash.exe", "node.exe", "py.exe", "CMD.EXE",
+		`C:\Program Files\PowerShell\7\pwsh.exe`,
+		`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+		"busybox", "/bin/busybox", "systemd-run",
+	} {
+		if !EsInterprete(c) {
+			t.Errorf("%q debería avisarse: puede lanzar cualquier otro comando, y PermiteArgv lo "+
+				"deja pasar tal cual está escrito", c)
+		}
+	}
+	// Normalizar no puede volver intérprete a todo lo que tenga `.exe` o una barra invertida.
+	for _, c := range []string{
+		"ipconfig.exe", `C:\Windows\System32\ipconfig.exe`, "journalctl.exe", ".exe", `C:\`,
+	} {
 		if EsInterprete(c) {
 			t.Errorf("%q no es un intérprete; avisar de más entrena a ignorar el aviso", c)
 		}

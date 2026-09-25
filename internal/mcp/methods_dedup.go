@@ -25,7 +25,8 @@ import (
 //
 // Disciplina del pilar (igual que el destilador): OFFLINE (LLM, jamás en el camino caliente), OPT-IN
 // (sin motor, falla explícito), ADMIN (escribe en el acervo compartido) y CONSERVADOR — el juez fusiona
-// SÓLO si archivar una tarjeta no pierde conocimiento, ante la duda conserva, y toda fusión es un
+// SÓLO si archivar la B (la más débil, la que se archiva siempre, y él lo sabe) no pierde conocimiento,
+// ante la duda conserva, y toda fusión es un
 // soft-delete REVERSIBLE (ArchiveAsDuplicate calca a Consolidate). Un par que el juez decide conservar
 // (KEEP) se marca `not_duplicate` para no volver a gastarle una llamada al motor. Se corre de a tandas.
 
@@ -38,7 +39,7 @@ const (
 	// gemelas reales viven en 0.82-0.89 (los blobs distintos de verdad quedan debajo). El piso es un
 	// FILTRO GRUESO barato; la precisión la pone el juez LLM, así que conviene un piso algo bajo (más
 	// pares a juzgar) antes que perderse gemelas legítimas — SIEMPRE QUE EL JUEZ PONGA ESA PRECISIÓN.
-	// Hoy no la pone, y por eso vale 0.84 y no 0.82.
+	// El juez de antes no la ponía, y por eso vale 0.84 y no 0.82.
 	//
 	// LA FRANJA 0.82-0.84 TIENE GEMELAS: eso quedó medido el 2026-09-23 corriendo ESTA función
 	// (SemanticDuplicateCandidates) contra una copia del acervo del cerebro —1.523 tarjetas, vectores
@@ -65,6 +66,12 @@ const (
 	// PARA VOLVER A BAJARLO no alcanza con cambiar el prompt: hay que medir el juez nuevo contra las
 	// mismas etiquetas y ver que ya no fusiona con pérdida. La franja no se vuelve segura porque el
 	// juez cambie; se vuelve segura cuando se MIDE que el juez cambió.
+	//
+	// Y SE MIDIÓ, EL MISMO DÍA (el porqué del prompt está en sharpenSystemPrompt): con el juez que
+	// sabe cuál se archiva, la pérdida esperada en la franja baja de ~9,7 a ~0,7, y en los 36 pares
+	// de ≥0.84 a 0. La regla fijada de antemano dice que con eso 0.82 se puede volver a PROPONER. Sigue
+	// en 0.84 a propósito: bajarlo es decisión del dueño, y conviene ver primero al juez nuevo trabajar
+	// en el cerebro con el piso de siempre.
 	//
 	// OJO AL TOCARLO: no es sólo el default de la herramienta manual. `sharpenBatchOnce` lo usa en el
 	// afilado de fondo, que en el cerebro está PRENDIDO (`auto_sharpen_pairs: 2`) y fusiona solo. Subir
@@ -104,30 +111,86 @@ type dedupReport struct {
 	Pairs   []dedupPairResult `json:"pairs"`
 }
 
+// dedupUndoResult reporta qué pasó con UNA tarjeta de un pedido de deshacer (`undo`).
+type dedupUndoResult struct {
+	Card      string `json:"card"`
+	Canonical string `json:"canonical,omitempty"` // a quién apuntaba la fusión deshecha
+	Action    string `json:"action"`              // restored | skipped: ... | error: ...
+}
+
+// dedupUndoReport es la respuesta de musubi_sharpen cuando se le pide deshacer fusiones.
+type dedupUndoReport struct {
+	Restored int               `json:"restored"`
+	Note     string            `json:"note"`
+	Cards    []dedupUndoResult `json:"cards"`
+}
+
 func (s *McpServer) toolSharpen(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	// Escribe en el acervo COMPARTIDO (archiva tarjetas): sólo admin, igual que maintain y distill.
 	if !principalFrom(ctx).isAdmin() {
 		return nil, rpcErrorf(codeUnauthorized, "musubi_sharpen es una operación de mantenimiento del acervo: requiere un principal admin")
 	}
-	// Opt-in: el veredicto lo da un juez LLM. Sin motor, falla explícito (no degrada en silencio).
-	if !cognition.Enabled(s.cognition) {
-		return nil, rpcErrorf(codeInvalidParams, "cognición no disponible: musubi_sharpen usa un juez LLM offline y necesita un motor (cognition.provider en .musubi/config.yaml)")
-	}
 	var args struct {
-		Pairs  int     `json:"pairs"`
-		Floor  float64 `json:"floor"`
-		DryRun bool    `json:"dry_run"`
+		Pairs  int      `json:"pairs"`
+		Floor  float64  `json:"floor"`
+		DryRun bool     `json:"dry_run"`
+		Undo   []string `json:"undo"`
 	}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &args); err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
 		}
 	}
+	// DESHACER NO PASA POR EL MOTOR, y va antes de exigirlo a propósito: devolver una tarjeta no se
+	// juzga, se ejecuta. Si dependiera del motor, el día que el endpoint cae —que es cuando más
+	// probable es que alguien esté revisando fusiones malas— no se podría deshacer ninguna.
+	if len(args.Undo) > 0 {
+		if args.DryRun || args.Pairs > 0 || args.Floor > 0 {
+			return nil, rpcErrorf(codeInvalidParams, "`undo` no se combina con pairs, floor ni dry_run: deshacer fusiones y afilar son dos pedidos distintos")
+		}
+		if len(args.Undo) > dedupMaxPairs {
+			return nil, rpcErrorf(codeInvalidParams, "`undo` acepta hasta %d tarjetas por llamada; recibí %d", dedupMaxPairs, len(args.Undo))
+		}
+		return jsonResult(s.runDedupUndo(args.Undo))
+	}
+	// Opt-in: el veredicto lo da un juez LLM. Sin motor, falla explícito (no degrada en silencio).
+	if !cognition.Enabled(s.cognition) {
+		return nil, rpcErrorf(codeInvalidParams, "cognición no disponible: musubi_sharpen usa un juez LLM offline y necesita un motor (cognition.provider en .musubi/config.yaml)")
+	}
 	rep, err := s.runDedupBatch(ctx, args.Floor, args.Pairs, args.DryRun)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}
 	return jsonResult(rep)
+}
+
+// runDedupUndo DESHACE fusiones del afilador: cada id es una tarjeta que una fusión archivó, y vuelve
+// al acervo con el par marcado `not_duplicate` para que el afilado de fondo no la vuelva a fusionar
+// (ver memory.RestoreDuplicate, que es donde vive el porqué). Cada tarjeta va en su propio candado de
+// escritura: una que falla no deja a medias a las demás, y su error va en el reporte.
+func (s *McpServer) runDedupUndo(ids []string) dedupUndoReport {
+	rep := dedupUndoReport{Cards: []dedupUndoResult{}}
+	for _, id := range ids {
+		var restored bool
+		var canonical string
+		var err error
+		s.withWriteLock(func() {
+			restored, canonical, err = s.engine.RestoreDuplicate(dedupScope, id, dedupAuthor)
+		})
+		res := dedupUndoResult{Card: id, Canonical: canonical}
+		switch {
+		case err != nil:
+			res.Action = "error: " + err.Error()
+		case restored:
+			rep.Restored++
+			res.Action = "restored"
+		default:
+			res.Action = "skipped: ya estaba visible, no había fusión que deshacer"
+		}
+		rep.Cards = append(rep.Cards, res)
+	}
+	rep.Note = fmt.Sprintf("devolví %d de %d tarjetas al acervo; cada par deshecho quedó marcado not_duplicate.", rep.Restored, len(ids))
+	return rep
 }
 
 // runDedupBatch es el NÚCLEO del afilador, compartido por la tool musubi_sharpen y el scheduler
@@ -240,8 +303,9 @@ func (s *McpServer) runDedupBatch(ctx context.Context, floor float64, maxPairs i
 	return report, nil
 }
 
-// dedupJudge pregunta al motor si dos tarjetas gemelas son redundantes (MERGE) o facetas distintas
-// (KEEP). FAIL-SAFE: ante un fallo del motor devuelve KEEP —nunca se fusiona por un hipo del endpoint—.
+// dedupJudge pregunta al motor si archivar la B pierde algo que la A no diga (MERGE: no pierde; KEEP:
+// pierde, o dudó). La B va SEGUNDA y rotulada «TARJETA B»: el prompt promete que ésa es la que se
+// archiva. FAIL-SAFE: ante un fallo del motor devuelve KEEP —nunca se fusiona por un hipo del endpoint—.
 func (s *McpServer) dedupJudge(ctx context.Context, c memory.SemDupCandidate) string {
 	user := fmt.Sprintf("TARJETA A (tema %s):\n%s\n\nTARJETA B (tema %s):\n%s", c.TopicA, c.ContentA, c.TopicB, c.ContentB)
 	jctx, cancel := context.WithTimeout(ctx, askTimeout)
@@ -279,11 +343,36 @@ func parseDedupVerdict(answer string) string {
 	return dedupKeep
 }
 
-const sharpenSystemPrompt = `Sos el AFILADOR del acervo de diseño de Musubi (pilar 'Musubi Renaissance'). Recibís DOS tarjetas de conocimiento de diseño que un detector marcó como PARECIDAS por su vector. Tu único trabajo: decidir si son LA MISMA lección accionable —tan redundantes que archivar una NO pierde nada— o si cubren facetas DISTINTAS que conviene conservar por separado.
+// sharpenSystemPrompt LE DICE AL JUEZ CUÁL SE ARCHIVA, porque es la pregunta que decide la pérdida.
+//
+// El prompt anterior preguntaba «¿son la misma lección?», que es simétrica: si la A cabía entera en
+// la B, la respuesta honesta es sí, y runDedupBatch archivaba la B —la más completa— porque archiva
+// SIEMPRE la B. Medido el 2026-09-24 con un etiquetado a ciegas pre-registrado: de las 28 fusiones
+// que ese juez había hecho, 8 perdieron algo, y 7 de las 8 por esa dirección.
+//
+// Este texto se eligió entre tres candidatos con una regla fijada antes de correrlos, contra las
+// mismas etiquetas, con una réplica del juez corrida tres veces por par sobre 84 pares:
+//
+//	juez anterior                     ~15,7 archivos con pérdida esperados · 9,0 fusiones limpias
+//	éste: dice cuál se archiva         ~0,7                                 · 9,0
+//	el juez elige cuál sobra (A o B)   ~2,0                                 · 10,3
+//	el juez describe, decide el código ~5,0                                 · 15,7
+//
+// O sea: las mismas fusiones buenas y casi ninguna mala. Los otros dos fusionan más, pero pierden más.
+// Es concordancia con un panel de LLMs, no verdad humana, y la réplica no es el endpoint de producción
+// (coincidió 30 de 36 con él).
+//
+// QUE LA B SEA LA QUE SE ARCHIVA ES UNA PROMESA DE ESTE TEXTO SOBRE EL CÓDIGO. Si runDedupBatch un día
+// archivara la A, o dedupJudge presentara las tarjetas en otro orden, este prompt le mentiría al juez
+// y la pérdida volvería sin que nada falle. La guarda es
+// TestElJuezSabeCualSeArchivaYEsLaQueSeArchiva: mira las dos puntas a la vez.
+const sharpenSystemPrompt = `Sos el AFILADOR del acervo de diseño de Musubi (pilar 'Musubi Renaissance'). Recibís DOS tarjetas de conocimiento de diseño que un detector marcó como PARECIDAS por su vector. Si decidís MERGE, la TARJETA B se ARCHIVA y la TARJETA A queda como la única versión de esa lección. La A no se edita: lo que diga sólo la B se pierde. Tu único trabajo: decidir si archivar la B pierde algo.
 
 CRITERIO:
-- MERGE sólo si una es redundante con la otra: mismo principio, misma acción, sin matiz propio que se perdería al archivar una. Ejemplos claros de MERGE: la misma regla escrita en inglés y en castellano; dos redacciones de "contraste mínimo 4.5:1".
-- KEEP si aportan algo distinto: distinto disparador, distinto valor, distinta faceta, un ejemplo o una excepción que la otra no tiene. Ante CUALQUIER duda, KEEP — perder una fusión es reversible, perder conocimiento no.
+- MERGE sólo si TODO lo que dice la B ya está en la A, aunque sea con otras palabras, en otro idioma o en otro formato. Que la A diga más cosas que la B no impide el MERGE: lo que decide es qué se pierde al archivar la B.
+- KEEP si la B dice algo que la A no dice: un valor, una regla, un caso en que aplica, una excepción, un paso, un ejemplo o una razón. Aunque la A sea más completa en otras cosas, si la B tiene algo propio, KEEP.
+- KEEP si dan valores o reglas incompatibles para lo mismo: el afilador no decide cuál tiene razón.
+- Ante CUALQUIER duda, KEEP — perder una fusión es reversible, perder conocimiento no.
 
 SALIDA: SÓLO un objeto JSON, sin prosa antes ni después: {"verdict":"MERGE"} o {"verdict":"KEEP"}.`
 
@@ -300,13 +389,14 @@ func (s *McpServer) sharpenToolEntry() toolEntry {
 	return toolEntry{
 		Tool: Tool{
 			Name:        "musubi_sharpen",
-			Description: "AFILADOR del acervo de diseño (pilar 'Musubi Renaissance'), el gemelo del destilador: pase OFFLINE que junta las tarjetas `design-corpus/*` que dicen la MISMA lección con otras palabras (gemelas por COSENO de embeddings, que el Consolidate por trigramas no ve). Halla pares sobre un piso de coseno y un JUEZ LLM decide, par por par, si son redundantes (MERGE: archiva la más débil, conservando accesos e importancia en la más fuerte — soft-delete REVERSIBLE) o facetas distintas (KEEP: las marca `not_duplicate` para no volver a juzgarlas). CONSERVADOR: ante la duda, conserva. Requiere admin y un motor de cognición (opt-in: sin motor, falla explícito). Procesa de a tandas (default 6 pares, máx 25); corré en bucle. Pasá `dry_run:true` para ver los pares candidatos sin juzgar ni escribir, `pairs` para el tamaño de la tanda, o `floor` para el piso de coseno (default " + pisoPorDefaultEnTexto + ").",
+			Description: "AFILADOR del acervo de diseño (pilar 'Musubi Renaissance'), el gemelo del destilador: pase OFFLINE que junta las tarjetas `design-corpus/*` que dicen la MISMA lección con otras palabras (gemelas por COSENO de embeddings, que el Consolidate por trigramas no ve). Halla pares sobre un piso de coseno y un JUEZ LLM decide, par por par, si son redundantes (MERGE: archiva la más débil, conservando accesos e importancia en la más fuerte — soft-delete REVERSIBLE) o facetas distintas (KEEP: las marca `not_duplicate` para no volver a juzgarlas). CONSERVADOR: ante la duda, conserva. Requiere admin y un motor de cognición (opt-in: sin motor, falla explícito). Procesa de a tandas (default 6 pares, máx 25); corré en bucle. Pasá `dry_run:true` para ver los pares candidatos sin juzgar ni escribir, `pairs` para el tamaño de la tanda, o `floor` para el piso de coseno (default " + pisoPorDefaultEnTexto + "). Para DESHACER una fusión pasá `undo` con los ids de las tarjetas archivadas: vuelven al acervo, el par queda `not_duplicate` para que no se fusione de nuevo, y no hace falta motor.",
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
 					"pairs":   {Type: "number", Description: "Cuántos pares juzgar en esta tanda (default 6, máximo 25). Cada par es una llamada al juez LLM."},
 					"floor":   {Type: "number", Description: "Piso de coseno para proponer un par al juez (default " + pisoPorDefaultEnTexto + "). Más bajo = más pares candidatos."},
 					"dry_run": {Type: "boolean", Description: "Si es true, lista los pares candidatos por coseno SIN llamar al juez ni archivar nada."},
+					"undo":    {Type: "array", Description: "Ids de tarjetas que una fusión archivó (hasta 25): se devuelven al acervo y el par queda marcado not_duplicate. No se combina con los otros argumentos ni necesita motor.", Items: &Property{Type: "string", Description: "id de la tarjeta archivada"}},
 				},
 			},
 		},
