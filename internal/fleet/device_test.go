@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -185,8 +186,20 @@ func TestNormalizarCapsDeduplicaYOrdenaPorPoder(t *testing.T) {
 			t.Fatalf("obtuve %v, esperaba %v (orden canónico)", got, quiero)
 		}
 	}
-	if _, err := NormalizarCaps([]string{"root"}); !errors.Is(err, ErrCapDesconocida) {
-		t.Errorf("esperaba ErrCapDesconocida, obtuve %v", err)
+	_, err = NormalizarCaps([]string{"root"})
+	if !errors.Is(err, ErrCapDesconocida) {
+		t.Fatalf("esperaba ErrCapDesconocida, obtuve %v", err)
+	}
+	// El mensaje es lo que lee quien enrola o consiente: tiene que nombrar las cinco que acepta.
+	// Sabotaje: volver al texto viejo del error, que omite screen:view y shell.
+	// arnes: prueba="TestNormalizarCapsDeduplicaYOrdenaPorPoder"
+	// arnes: archivo="internal/fleet/device.go"
+	// arnes: de="(esperaba metrics, exec, screen, screen:view o shell)"
+	// arnes: a="(esperaba metrics, exec o screen)"
+	for _, c := range []string{"screen:view", "shell"} {
+		if !strings.Contains(err.Error(), c) {
+			t.Errorf("el error no nombra %q entre las capacidades válidas: %v", c, err)
+		}
 	}
 }
 

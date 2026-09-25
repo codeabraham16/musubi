@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"time"
 )
@@ -46,11 +47,39 @@ var tiempoDeEnumeracion = 5 * time.Second
 // SE PREGUNTA POR `ctx.Err()` Y NO POR EL CÓDIGO DE SALIDA, porque el código de salida es
 // exactamente lo que no alcanza para distinguirlos.
 var ejecutarParaEnumerar = func(nombre string, args ...string) ([]byte, error) {
+	return correrConPresupuesto(nil, nombre, args...)
+}
+
+// ejecutarComoParaEnumerar corre el comando con la identidad del dueño (identidad_servicios.go).
+//
+// SI NO HAY QUE BAJAR, DELEGA EN ejecutarParaEnumerar, y no es por prolijidad: las pruebas de
+// parseo apuntan esa `var` a un doble, y un camino que la saltara dejaría de pasar por sus dobles
+// —el agente de todas las máquinas menos una iría por acá con la identidad en cero—.
+//
+// Si hay que bajar, es el MISMO cuerpo con el mismo presupuesto: sólo cambian el entorno y la
+// credencial del hijo. El exec y la shell de las personas NO pasan por acá, y siguen como root.
+var ejecutarComoParaEnumerar = func(id identidadDeServicios, nombre string, args ...string) ([]byte, error) {
+	if !id.Bajar {
+		return ejecutarParaEnumerar(nombre, args...)
+	}
+	return correrConPresupuesto(func(cmd *exec.Cmd) {
+		cmd.Env = entornoPara(id, os.Environ(), esDeUid)
+		cmd.SysProcAttr = atributosPara(id)
+	}, nombre, args...)
+}
+
+// correrConPresupuesto es el único lugar que lanza un enumerador: el timeout y la distinción de
+// abajo valen igual para el hijo que hereda al agente y para el que baja al dueño.
+func correrConPresupuesto(preparar func(*exec.Cmd), nombre string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), tiempoDeEnumeracion)
 	defer cancel()
+	cmd := exec.CommandContext(ctx, nombre, args...)
+	if preparar != nil {
+		preparar(cmd)
+	}
 	// Output y no CombinedOutput: el stderr de systemctl trae avisos de units que no existen, y
 	// mezclarlo con el stdout ensucia el parseo con texto que no tiene la forma esperada.
-	b, err := exec.CommandContext(ctx, nombre, args...).Output()
+	b, err := cmd.Output()
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return nil, fmt.Errorf("no terminó en %s y hubo que matarlo: %w", tiempoDeEnumeracion, ctx.Err())
 	}
