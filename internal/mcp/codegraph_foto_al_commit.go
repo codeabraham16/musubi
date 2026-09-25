@@ -37,6 +37,11 @@ import (
 // SI GIT NO PUEDE CONTESTAR, NO SE PUBLICA. Devolver la foto entera sería publicar el disco con la
 // etiqueta del commit, que es justo lo que esto cierra. La única foto que viaja sin recortar es la
 // de un proyecto que no es un repo git: sin commit no hay etiqueta, y no hay contra qué recortar.
+// Eso incluye, a propósito, a un repo donde git no CORRE (fuera del PATH del daemon, «dubious
+// ownership» sobre el repo de otro usuario): antes publicaba su foto sin etiqueta, y ahora no
+// publica. El motivo queda en federated_motivo y el próximo tick reintenta. Si se quisiera que esos
+// repos federen, la salida es tratar «sin sello y git que no corre» como el caso sin repo, sabiendo
+// que esa foto trae lo ignorado.
 //
 // UN RECORTE QUE SACA TODO TAMPOCO SE PUBLICA. Si la foto traía archivos y el commit no tiene
 // ninguno, el grafo no es de ese commit: el caso real es un proyecto sin `.git` propio adentro de un

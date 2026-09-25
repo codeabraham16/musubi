@@ -28,6 +28,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   `federated_motivo`. Un proyecto que no es un repo git (sin `.git` en su directorio ni en sus
   padres) publica como antes: no tiene etiqueta de commit ni lista contra la cual recortar.
 
+  **Cambio de conducta, a propósito: un repo donde git no corre deja de publicar.** Antes, con git
+  fuera del `PATH` del daemon o con `dubious ownership` sobre el repo de otro usuario, la foto
+  viajaba sin etiqueta. Ahora `git ls-tree` falla, `federated_motivo` dice `git no pudo listar los
+  archivos de HEAD` (código -1 sin git en el `PATH`, 128 si git se niega) y el próximo tick reintenta (tres `git` locales y la lectura de la
+  foto, sin tráfico al central). Es la letra de la decisión: nunca se publica sin recortar, y una
+  foto sin recortar trae lo ignorado. Si se prefiere que esos proyectos federen, la salida es tratar
+  «sin sello y git que no corre» como el caso sin repo.
+
   *Lo que va a salir del mapa de `musubi` en el central con el primer push de un cliente que tenga
   este cambio, medido contra `eb2cdb7`: 1.222 de 13.329 nodos (todos de `boceto-g.js`), 2.404 de
   32.664 aristas y 39 de 117 gists. De esos gists, 36 tienen rutas absolutas de otros árboles
