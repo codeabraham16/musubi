@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"musubi/internal/fleet"
@@ -128,6 +129,20 @@ func (p *Principal) caps() (read, write string) {
 type PrincipalRegistry struct {
 	principals []Principal
 	legacyHash string // SHA-256 del MUSUBI_TOKEN legacy (si hay); actúa como admin federado
+	// legacyAciertos cuenta cuántas veces autenticó el bearer legacy desde que arrancó el proceso.
+	//
+	// EXISTE PARA PODER RETIRARLO. El legacy es un admin federado que no figura en `token list` y
+	// no puede vencer, y el ledger de tools no sirve para saber si alguien lo usa: /metrics,
+	// /api/* y /api/flota autentican sin pasar por él, así que un cero en el ledger no prueba nada
+	// para esas puertas. Este contador sí las ve, porque cuenta en resolve(), que es por donde
+	// pasan todas.
+	//
+	// Es un PUNTERO porque el registro se recarga en caliente: cada recarga arma un
+	// PrincipalRegistry nuevo, y el envoltorio le pasa ESTE mismo contador (principals_reload.go).
+	// Sin eso, editar principals.yaml lo pondría en cero, y un contador que vuelve a cero cada vez
+	// que alguien revoca a otro no puede sostener «lleva siete días sin usarse». Nil en un registro
+	// armado a mano (las pruebas): no cuenta.
+	legacyAciertos *atomic.Uint64
 }
 
 type principalEntry struct {
@@ -185,7 +200,7 @@ func loadPrincipals(path, legacyToken string) (*PrincipalRegistry, error) {
 		if legacyToken == "" {
 			return nil, nil
 		}
-		return &PrincipalRegistry{legacyHash: hashToken(legacyToken)}, nil
+		return &PrincipalRegistry{legacyHash: hashToken(legacyToken), legacyAciertos: new(atomic.Uint64)}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("error al leer el registro de principals %q: %w", path, err)
@@ -197,6 +212,7 @@ func loadPrincipals(path, legacyToken string) (*PrincipalRegistry, error) {
 	reg := &PrincipalRegistry{}
 	if legacyToken != "" {
 		reg.legacyHash = hashToken(legacyToken)
+		reg.legacyAciertos = new(atomic.Uint64)
 	}
 	seen := make(map[string]bool)
 	seenNames := make(map[string]bool)
@@ -633,10 +649,68 @@ func (r *PrincipalRegistry) resolve(token string) (*Principal, bool) {
 		return match, true
 	}
 	if r.legacyHash != "" && subtle.ConstantTimeCompare([]byte(h), []byte(r.legacyHash)) == 1 {
+		if r.legacyAciertos != nil {
+			r.legacyAciertos.Add(1)
+		}
 		read, write := capsFromRole(RoleAdmin)
 		return &Principal{Name: "legacy", Role: RoleAdmin, Read: read, Write: write}, true
 	}
 	return nil, false
+}
+
+// ResumenVencimientos es lo que /metrics publica del registro: CUÁNTAS y CUÁNDO, nunca QUIÉNES.
+//
+// Sin nombres a propósito: la lista de identidades es un dato sólo para admin (toolTokenList lo
+// trata así), y una etiqueta `principal=` en /metrics se la entregaría a quien scrapee. La alerta
+// dice que hay una por vencer; cuál es, lo dice `musubi token list`.
+type ResumenVencimientos struct {
+	// Proximo es lo que le queda a la próxima en vencer, entre las que TODAVÍA valen. Sólo tiene
+	// sentido con HayProximo: sin ninguna fecha futura no hay «próxima», y un cero acá se leería
+	// como «vence en este instante».
+	Proximo    time.Duration
+	HayProximo bool
+	// Vencidas cuenta las que ya no autentican. SinVencimiento, las que no vencen nunca.
+	Vencidas       int
+	SinVencimiento int
+	// Legacy dice si el cerebro admite el bearer legacy (MUSUBI_TOKEN): admin federado, fuera de
+	// `token list` y sin vencimiento posible. LegacyAciertos, cuántas veces autenticó.
+	Legacy         bool
+	LegacyAciertos uint64
+	// RecargaFallando y RecargasFallidas los llena sólo el envoltorio recargable: el archivo
+	// cambió y la relectura se rechazó, así que el registro que autentica NO es el del disco.
+	RecargaFallando  bool
+	RecargasFallidas uint64
+}
+
+// resumenDeVencimientos resume el snapshot contra un reloj dado.
+func (r *PrincipalRegistry) resumenDeVencimientos(ahora time.Time) ResumenVencimientos {
+	var res ResumenVencimientos
+	if r == nil {
+		return res
+	}
+	for i := range r.principals {
+		p := &r.principals[i]
+		switch {
+		case p.Expires.IsZero():
+			res.SinVencimiento++
+			continue
+		case p.Vencida(ahora):
+			// LA VENCIDA NO ENTRA AL MÍNIMO. Si entrara, la próxima en vencer sería una que ya
+			// venció: el número saldría negativo y la alerta de «por vencer» quedaría sonando
+			// para siempre por una fila muerta, tapando a la que de verdad se está por caer.
+			res.Vencidas++
+			continue
+		}
+		queda := p.Expires.Sub(ahora)
+		if !res.HayProximo || queda < res.Proximo {
+			res.Proximo, res.HayProximo = queda, true
+		}
+	}
+	res.Legacy = r.legacyHash != ""
+	if r.legacyAciertos != nil {
+		res.LegacyAciertos = r.legacyAciertos.Load()
+	}
+	return res
 }
 
 // recallScopeFor deriva el ALCANCE del recall del principal: read=all ⇒ FEDERADO (ve todos los

@@ -60,6 +60,7 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "El cerebro Musubi no responde al scrape (>5m)."
+          nota: "Si el proceso está vivo y `/readyz` da 200, puede no ser el cerebro sino la credencial del SCRAPE: si `prometheus` venció o se revocó, /metrics contesta 401 y Prometheus lo cuenta como caído. Con esa credencial muerta tampoco llegan las series de vencimiento, así que `CredencialRecienVencida` no puede avisarlo: avisa esta."
           runbook: "deploy/RUNBOOK.md#musubidown"
       # ── El empuje OTLP se vigila a sí mismo (S11 · A46) ───────────────────────────────────
       #
@@ -274,6 +275,64 @@ groups:
           summary: "El cerebro viene rechazando el certificado TLS que encuentra en disco."
           nota: "Sigue sirviendo el ANTERIOR, así que nada se cayó todavía — y por eso hace falta esta alerta: sin ella, el síntoma llegaría recién como CertificadoTLSPorVencer sin explicar por qué. Mirá el journal del cerebro: el error del par está logueado con la ruta."
           runbook: "deploy/README.md#pasar-el-cerebro-a-https"
+
+      # --- Las credenciales de principals.yaml avisan ANTES de vencer ---
+      #
+      # El vencimiento (`expires:`) existe desde el 2026-09-03 y hasta acá no avisaba: una
+      # credencial con fecha se caía el día que tocaba, y lo primero que se veía era el sync de una
+      # máquina muerto — con su outbox yéndose a dead-letter, porque un 401 es un error PERMANENTE
+      # para el sync y renovar la credencial no resucita esas filas.
+      #
+      # LAS SERIES NO LLEVAN EL NOMBRE DEL PRINCIPAL, a propósito: quién tiene acceso es un dato
+      # sólo para admin. Estas alertas dicen que hay una; cuál es, lo dice `musubi token list` en
+      # el servidor del cerebro. Y el bloque sólo lo recibe una identidad read=all, que es la del
+      # scrape.
+      #
+      # `musubi_principal_next_expiry_seconds` está AUSENTE mientras ninguna credencial tenga fecha
+      # futura, que hoy es el caso: no hay nada que vencer. Por eso no lleva `absent()`, igual que
+      # las del certificado.
+      - alert: CredencialPorVencer
+        # 14 DÍAS, Y ES EL MISMO NÚMERO QUE EL LISTADO: `musubi token list` marca «por vencer» desde
+        # `umbralPorVencer` (internal/mcp/principals_admin.go). Si no coincidieran, quien abre el
+        # listado por esta alerta vería todo «vigente» y no encontraría cuál es.
+        # `TestElUmbralDeLaAlertaEsElDelListado` custodia que sean iguales.
+        expr: musubi_principal_next_expiry_seconds < 14 * 24 * 3600
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "A una credencial del cerebro le quedan menos de 14 días."
+          nota: "Cuál es: `musubi token list --file <principals.yaml>` en el servidor del cerebro, la que dice «por vencer». Renovar es editar su `expires:` (el cerebro lo relee solo en ≤10 s); NO revoke + new, que borra sus concesiones de flota. Si es la credencial del sync de una máquina, dejala renovada ANTES de que venza: después, lo que esa máquina intente subir se va a dead-letter."
+          runbook: "deploy/RUNBOOK.md#credencialporvencer"
+
+      - alert: CredencialRecienVencida
+        # EL MOMENTO, NO EL ESTADO. `musubi_principals_expired > 0` quedaría sonando para siempre por
+        # una fila vencida que nadie borró —y una fecha en el pasado es también la forma reversible
+        # de desactivar una credencial antes de revocarla—. Lo que importa es el instante en que un
+        # servicio se queda afuera, y eso es el salto del gauge. Sin `for`: el salto ya pasó.
+        #
+        # Borde conocido: si en la misma ventana vence una y se borra otra del archivo, el neto da
+        # 0 y no dispara. Se acepta porque `CredencialPorVencer` ya sonó 14 días antes.
+        expr: delta(musubi_principals_expired[2h]) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "Una credencial del cerebro acaba de vencer: lo que la usaba ya no autentica."
+          nota: "Si la usaba el sync de una máquina, esa máquina está mandando su memoria compartida a dead-letter AHORA. Renovar el `expires:` no resucita esas filas: después hay que correr `musubi_sync_status` y `musubi_sync_requeue` EN ESA MÁQUINA. Si la fecha se puso en el pasado a propósito (desactivar antes de revocar), ignorala: se apaga sola en 2 h."
+          runbook: "deploy/RUNBOOK.md#credencialrecienvencida"
+
+      - alert: RegistroDePrincipalsSinPoderRecargarse
+        # EL CAMINO SILENCIOSO, IGUAL QUE EL DEL CERTIFICADO. El cerebro relee principals.yaml en
+        # caliente y, si el archivo nuevo no carga, conserva el que tenía — correcto para no dejar
+        # afuera al equipo por un archivo a medio escribir. Pero si NUNCA carga, una revocación
+        # escrita en ese archivo no se aplica jamás, y el próximo reinicio no arranca: el registro
+        # de arranque es fail-closed. 15 minutos son noventa relecturas rechazadas, no una edición
+        # a medias.
+        expr: musubi_principals_reload_failing == 1
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "El cerebro viene rechazando el principals.yaml que encuentra en disco."
+          nota: "Sigue autenticando con el registro ANTERIOR: lo último que se escribió en el archivo —una revocación, una fecha— NO se aplicó. Y el próximo reinicio del cerebro va a fallar con ese archivo. El error, con la línea, está en el journal del cerebro («recarga en caliente del registro de principals falló»)."
+          runbook: "deploy/RUNBOOK.md#registrodeprincipalssinpoderrecargarse"
 
       # --- Seguridad/capacidad: rechazos de cuota sostenidos (principal desbocado o límite bajo) ---
       - alert: MusubiQuotaRejections
