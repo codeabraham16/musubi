@@ -18,9 +18,10 @@ import (
 //
 // LA GUARDA VIEJA (TestUnComandoPendienteYViejoSeMuestraExpirado, internal/fleet) CLAVABA LA EDAD en
 // 10 h y 1 min: cualquier umbral entre los dos la dejaba verde. La auditoría A131 (C3-m6) le puso a
-// la vista el reloj de los ENTREGADOS (EsperaMaxDeEntregado, 102 min) y fleet, memory y mcp quedaron
-// verdes. Acá la edad recorre el borde de a un segundo, a los dos lados, y a una hora con fracción y
-// otra sin: la tabla guarda segundos enteros, así que el borde de la decisión es un segundo entero.
+// la vista el reloj de los ENTREGADOS (EsperaMaxDeEntregado, entonces de 102 min; desde T10, de tres
+// horas y media) y fleet, memory y mcp quedaron verdes. Acá la edad recorre el borde de a un
+// segundo, a los dos lados, y a una hora con fracción y otra sin: la tabla guarda segundos enteros,
+// así que el borde de la decisión es un segundo entero.
 //
 // Y ESO DESTAPÓ UN DEFECTO VIVO DEL ÁRBOL SANO: la vista restaba con nanosegundos y la toma compara
 // un texto truncado al segundo. A las hh:mm:ss.7, un pendiente creado justo `ComandoVidaMax` antes

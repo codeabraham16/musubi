@@ -44,12 +44,16 @@ const (
 
 	// ComandosPorEntregaMax es cuántos comandos se lleva un agente de una sola vez. Vive ACÁ y no
 	// en el transporte porque la derivación de `perdido` depende de él: si el transporte lo sube
-	// y esta constante no se entera, la cota se vuelve incorrecta en silencio.
+	// y esta constante no se entera, la cota se vuelve incorrecta en silencio. Lo que un latido
+	// entrega de verdad lo cuenta TestUnLatidoEntregaLaTandaEnteraYNiUnComandoMas (internal/mcp):
+	// hasta A131 (tema T10) no lo contaba nadie, y un transporte que entregara el doble pasaba en
+	// verde (C4-m8).
 	ComandosPorEntregaMax = 10
 
-	// MargenDeReporte cubre el viaje de vuelta del resultado. El agente reporta apenas termina
+	// MargenDeReporte cubre los viajes de vuelta de la tanda. El agente reporta apenas termina
 	// cada comando —no espera al próximo latido— así que es un round-trip HTTP, no un ciclo de
-	// sondeo. Dos minutos es holgado a propósito.
+	// sondeo; y cubre también la espera larga con la que el agente se entera de que el cerebro le
+	// cerró la shell. Dos minutos es holgado a propósito.
 	MargenDeReporte = 2 * time.Minute
 
 	// EsperaMaxDeEntregado es cuánto puede estar `entregado` un comando VIVO, en el peor caso.
@@ -57,20 +61,55 @@ const (
 	// LA REGLA OBVIA —`entregado + timeout + margen`— ES INCORRECTA, y descubrirlo es lo que
 	// costó de A60. El agente ejecuta la tanda EN ORDEN Y DE A UNO, reportando cada resultado
 	// antes de pasar al siguiente. Así que el último de una tanda de diez espera a los nueve de
-	// adelante ANTES de que su propio timeout empiece a correr: puede estar legítimamente
-	// `entregado` casi cien minutos sin que nada esté mal.
+	// adelante ANTES de que su propio timeout empiece a correr.
 	//
 	// Con la regla obvia, ese comando se dibujaría muerto mientras corre. Es el error CARO de los
 	// dos: un comando vivo marcado perdido manda a alguien a relanzarlo —dos veces el mismo
 	// `systemctl`, dos veces el mismo borrado— mientras que uno perdido marcado tarde sólo se ve
 	// tarde. Se prefiere tarde y cierto a temprano y falso.
 	//
-	// SE PODRÍA AJUSTAR y a propósito no se hace todavía: como el agente reporta de a uno, los
-	// comandos que siguen `entregado` en una máquina son exactamente los que faltan, y los creados
-	// antes que uno son los que tiene por delante. Esa cota decae sola y sería mucho más fina.
-	// Pide contexto de la máquina entera, y `EstadoActual` es un método de UN comando con tres
-	// llamadores, dos de los cuales no tienen la lista. Se deja anotado, no olvidado.
-	EsperaMaxDeEntregado = ComandosPorEntregaMax*ComandoTimeoutMax + MargenDeReporte
+	// ────────────────────────────────────────────────────────────────────────────────────────
+	// LA TANDA TAMBIÉN LLEVA SHELLS, Y LA CUENTA LAS OLVIDABA HASTA A131 (TEMA T10)
+	//
+	// La cuenta era diez veces ComandoTimeoutMax más el margen, 102 minutos: suponía que todo lo que
+	// se lleva el agente está acotado por el timeout de un comando. `musubi:shell` no lo está. El
+	// agente la atiende BLOQUEANDO la sesión entera y la reporta recién al cerrarla
+	// (cmd/musubi/shell_agente.go), así que su fila queda `entregado` lo que dure la sesión: hasta
+	// ShellVidaMax, dos horas. Entre los 102 y los 120 minutos de una shell viva, la cronología y la
+	// bitácora dibujaban `perdido` su fila al lado de la sesión `activa`, y lo que viajaba detrás de
+	// ella en la misma tanda —vivo, esperando su turno— también: el error caro de arriba. Lo midió
+	// la auditoría A131 como defecto VIVO (C4-LD1); en producción hubo una sola fila de shell, de un
+	// minuto, así que nadie llegó a verlo.
+	//
+	// EL PEOR CASO ES UNA SHELL Y NUEVE COMANDOS, NO DIEZ SHELLS. El cerebro cierra cada sesión a
+	// los ShellVidaMax de CREADA (AbrirSesionShell fija `vence`, y cada pedido del agente pregunta
+	// SesionShell.Viva), y la sesión se crea antes de encolar su comando, o sea antes de la entrega:
+	// todas las shells de una tanda terminan, juntas, a lo sumo ShellVidaMax después de entregadas.
+	// Una segunda no suma otras dos horas; arranca con su plazo ya corrido. Los otros nueve esperan
+	// cada uno su timeout y, si lo vencen, la espera de cierre del agente (tanda.go).
+	//
+	// ShellVidaMax Y NO EL TECHO LOCAL DEL AGENTE, que es de tres horas: ése existe por si el
+	// cerebro no cierra nunca la sesión, y con el cerebro caído la shell no dura — la espera larga
+	// del agente falla y la sesión termina ahí. Las demás operaciones internas no pasan del techo
+	// de un comando: avisar corta a los diez segundos, preguntar a los AvisoTimeout, y pantalla
+	// aplica una contraseña y vuelve. OJO con pantalla: el agente no le pone techo propio a
+	// `rustdesk --password`, y si se colgara, la máquina entera quedaría muda; ese comando SÍ está
+	// perdido. Cuánto ocupa al agente cada operación está decidido, y cerrado contra su bloque
+	// const, en TestCadaOperacionInternaTieneDecididoCuantoOcupaAlAgente.
+	//
+	// EL COSTO, DICHO: un comando que se perdió de verdad se ve `entregado` tres horas y media en
+	// vez de una hora cuarenta y dos. Es el lado barato de los dos errores, y la guarda
+	// (TestLaCotaDePerdidoEsLaPeorTandaRealNiMasNiMenos) no deja que la cota pase un segundo del
+	// peor caso: ése es el otro error, el que la auditoría midió con historia real (C4-m4).
+	//
+	// SE PODRÍA AJUSTAR y a propósito no se hace todavía: los comandos de una misma tanda comparten
+	// su `entregado` (tomarComandosEnTx estampa la misma hora), así que con la tanda a la vista se
+	// sabría si hubo una shell y qué tiene cada uno por delante; una tanda sin shell no necesita
+	// las dos horas. Pide contexto de la máquina entera, y `EstadoActual` es un método de UN
+	// comando. Se deja anotado, no olvidado.
+	EsperaMaxDeEntregado = ShellVidaMax +
+		(ComandosPorEntregaMax-1)*(ComandoTimeoutMax+EsperaDeCierreDelAgente) +
+		MargenDeReporte
 
 	// ColaMaxPorDevice es cuántos comandos TODAVÍA EJECUTABLES puede tener encolados una máquina.
 	//

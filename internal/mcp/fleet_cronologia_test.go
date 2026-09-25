@@ -639,6 +639,12 @@ func TestNoSePuedeEncolarUnAvisoSinDeclararSuPlano(t *testing.T) {
 // arnes: archivo="internal/memory/cronologia.go"
 // arnes: de="\t\tc.Estado = c.EstadoActual(ahora)\n\t\tout = append(out, fleet.HechoDeComando(c, nombre))"
 // arnes: a="\t\tout = append(out, fleet.HechoDeComando(c, nombre))"
+// arnes: colision_ok="TestCadaSuperficieMuestraElEstadoQueDerivaElDominioDeCadaFila"
+//
+// LO QUE ESTA PRUEBA NO VE, dicho: clava el estado en `expirado`. Una cronología que derivara
+// `expirado` y nunca `perdido` —el código de antes de A60— la deja en verde (A131, C4-m5). Las
+// ramas enteras de EstadoActual, en las dos superficies, las recorre
+// TestCadaSuperficieMuestraElEstadoQueDerivaElDominioDeCadaFila.
 func TestLasDosSuperficiesMuestranVencidoUnComandoQueNadieLevanto(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")

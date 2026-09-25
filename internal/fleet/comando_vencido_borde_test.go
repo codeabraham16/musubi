@@ -10,10 +10,11 @@ import (
 //
 // La guarda vieja (TestUnComandoPendienteYViejoSeMuestraExpirado) CLAVABA LA EDAD en 10 h y 1 min,
 // así que cualquier umbral entre los dos la dejaba verde. La auditoría A131 (C3-m6) le puso a la vista
-// el reloj de los ENTREGADOS —EsperaMaxDeEntregado, 102 min, la confusión contra la que advierte el
-// propio comentario de Vencido— y fleet, memory y mcp quedaron verdes: un pendiente de entre 15 y 102
-// minutos se mostraba `pendiente` aunque la toma ya no lo entregaría. Acá la edad recorre el borde de
-// a un segundo, derivado de ComandoVidaMax, y la hora recorre el segundo entero y uno con fracción.
+// el reloj de los ENTREGADOS —EsperaMaxDeEntregado, entonces de 102 min; desde T10, con la shell en la
+// cuenta, de tres horas y media—, la confusión contra la que advierte el propio comentario de
+// Vencido, y fleet, memory y mcp quedaron verdes: un pendiente de entre 15 y 102 minutos se mostraba
+// `pendiente` aunque la toma ya no lo entregaría. Acá la edad recorre el borde de a un segundo,
+// derivado de ComandoVidaMax, y la hora recorre el segundo entero y uno con fracción.
 //
 // LA FRACCIÓN ES EL OTRO EJE, Y ESTABA VIVO. La toma decide contra un texto RFC3339, o sea al segundo;
 // la vista restaba con nanosegundos. A las hh:mm:ss.7, un pendiente creado justo ComandoVidaMax antes
