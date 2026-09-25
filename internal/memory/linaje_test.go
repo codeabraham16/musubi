@@ -191,7 +191,8 @@ func TestLinajeTieneTope(t *testing.T) {
 // TestLaFusionDelAfiladorDejaElLinajeDurable: después de ArchiveAsDuplicate y de la PURGA, que borra
 // la fila archivada con sus aristas y sus punteros, el canónico sigue teniendo el linaje. Sin la
 // herencia, lo único que lo sostenía era superseded_by, y la purga se lo lleva: a los 90 días en el
-// central, sin ningún error.
+// central, sin ningún error. Y ANTES de la purga, con la arista original y la copiada conviviendo,
+// cada punta sale una sola vez.
 //
 // Sabotaje que la hace fallar: ArchiveAsDuplicate no hereda el linaje.
 // arnes: archivo="internal/memory/semdedup.go"
@@ -212,6 +213,12 @@ func TestLinajeTieneTope(t *testing.T) {
 // arnes: archivo="internal/memory/linaje.go"
 // arnes: de="const heredarSinPisar = ` ON CONFLICT(source_id, target_id) DO NOTHING`"
 // arnes: a="const heredarSinPisar = ` ON CONFLICT(source_id, target_id) DO UPDATE SET relation = excluded.relation`"
+//
+// Sabotaje que la hace fallar: sin el DISTINCT final, que es lo único que evita la punta repetida en
+// los 90 días entre la fusión y la purga.
+// arnes: archivo="internal/memory/linaje.go"
+// arnes: de="SELECT DISTINCT v.dir"
+// arnes: a="SELECT v.dir"
 func TestLaFusionDelAfiladorDejaElLinajeDurable(t *testing.T) {
 	e := newTestEngine(t)
 	sembrarLinaje(t, e, map[string]string{
@@ -234,6 +241,27 @@ func TestLaFusionDelAfiladorDejaElLinajeDurable(t *testing.T) {
 			t.Fatalf("fundir %s en %s: archived=%v err=%v", par[0], par[1], ok, err)
 		}
 	}
+
+	// ANTES DE LA PURGA, que es como pasa sus primeros 90 días toda fusión nueva: conviven la arista
+	// original del perdedor y la copiada en el canónico, así que la raíz llega al mismo vecino por dos
+	// caminos con distinto salto (b1 ← c2 → c3 y b1 ← c3; cX → bX → bY y cX → bY). Cada punta sale UNA
+	// vez. idsLinaje ordena pero no deduplica: una repetida se ve.
+	antes := linajeDe(t, e, "b1", "cX", "c3", "bY")
+	if got := idsLinaje(antes["b1"].DestiladoEn); strings.Join(got, ",") != "c3" {
+		t.Errorf("antes de la purga, del blob b1 se llega a c3 una sola vez, aunque haya dos caminos; destilado_en=%v", got)
+	}
+	if got := idsLinaje(antes["cX"].SalioDe); strings.Join(got, ",") != "bY" {
+		t.Errorf("antes de la purga, cX llega a bY una sola vez (por bX fundido y por la arista copiada); salio_de=%v", got)
+	}
+	if got := idsLinaje(antes["bY"].DestiladoEn); strings.Join(got, ",") != "cX" {
+		t.Errorf("antes de la purga, bY trae a cX una sola vez; destilado_en=%v", got)
+	}
+	// b9 todavía está: la copia no pisó el `related` que c3 ya tenía con b9, y a esa punta la sostiene
+	// sólo la arista de c2 por superseded_by. Es el costo de DO NOTHING, y se va con la purga (abajo).
+	if got := idsLinaje(antes["c3"].SalioDe); strings.Join(got, ",") != "b1,b2,b9" {
+		t.Errorf("antes de la purga, c3 trae sus fuentes y las de c2, cada una una vez; salio_de=%v", got)
+	}
+
 	// La purga cuenta desde archived_at: se lo corre al pasado para que venza ya, sin depender de
 	// que el reloj de la prueba avance.
 	if _, err := e.db.Exec(`UPDATE observations SET archived_at='2020-01-01 00:00:00' WHERE id IN ('c2','bX')`); err != nil {
