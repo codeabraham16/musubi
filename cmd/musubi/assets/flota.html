@@ -165,6 +165,23 @@ function edad(seg, conMetricas) {
 }
 function lista(xs) { return Array.isArray(xs) && xs.length ? xs.join(' ') : '—'; }
 
+// POR QUÉ UNA POLÍTICA ESTÁ INERTE, según la compuerta que la frena (`inerte_por`, A131).
+//
+// Hasta A131 el texto era fijo y nombraba dos causas —la concesión y la allowlist— cuando la
+// acción ya atravesaba tres: una máquina en `pide` o `prohibido` se dibujaba con el motivo
+// equivocado, y eso manda a arreglarla a principals.yaml, donde no está el problema. Las claves
+// son las constantes de `frenoDePolitica` (internal/mcp/politicas.go), y
+// TestElPanelTieneTextoParaCadaFrenoDePolitica exige que estén todas. Un motivo que este mapa no
+// conozca se muestra crudo, nunca como una causa inventada.
+const INERTE_POR = {
+  sin_registro: 'no hay registro de principals, así que no hay a quién nombrar',
+  sin_principal: 'su principal no está en principals.yaml, o su credencial venció',
+  sin_exec: 'su principal no tiene `exec` sobre esta máquina, o la máquina no lo admite',
+  allowlist: 'el comando no está en la allowlist de su principal',
+  consentimiento_prohibido: 'la máquina tiene el consentimiento en `prohibido` (o en `pide` sin forma de preguntar)',
+  consentimiento_pide: 'la máquina exige que su usuario acepte, y un barrido automático no puede esperar la respuesta',
+};
+
 // AUTOMÁTICO — qué actúa en esta máquina SIN una persona detrás.
 //
 // Es la columna que S10 volvió necesaria: el cerebro ejecuta comandos por su cuenta y hasta acá
@@ -193,7 +210,7 @@ function automatico(e) {
     const clase = p.puede_actuar ? 'auto' : 'auto inerte';
     const marca = p.puede_actuar ? '' : ' ⚠';
     const porque = p.puede_actuar ? '' :
-      ' — INERTE: su principal no tiene `exec` sobre esta máquina, o el comando no está en su allowlist. No va a actuar.';
+      ` — INERTE: ${INERTE_POR[p.inerte_por] || 'la frena la compuerta «' + (p.inerte_por || 'sin motivo informado') + '»'}. No va a actuar.`;
     return `<span class="${clase}" title="${esc(t + porque)}">⚙ ${esc(p.nombre)}${marca}</span>`;
   }).join(' ');
 }
