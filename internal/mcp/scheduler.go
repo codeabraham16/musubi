@@ -190,6 +190,27 @@ func (s *McpServer) RunOutboxScheduler(ctx context.Context, interval time.Durati
 // metaInboundCursor guarda el rowid del central hasta el que ya bajamos memoria shared (C5.3b).
 const metaInboundCursor = "sync:inbound_cursor"
 
+// metaInboundAlcance guarda con qué RECORTE del central se avanzó el cursor de arriba. Sin esto el
+// cursor es un número sin contexto: lo que alcanzó depende de la credencial, porque el filtro de
+// proyecto SALTA filas en vez de ocultarlas (ver memory.ReiniciarBajadaPorAlcance).
+const metaInboundAlcance = "sync:inbound_alcance"
+
+// alcanceCambio decide si hay que reiniciar el cursor. Es una función pura para poder probar los tres
+// casos sin central, y los tres importan:
+//
+//   - `nuevo` VACÍO ⇒ false. Es un central viejo que no manda el campo: «no sé», y tratarlo como
+//     «cambió» reiniciaría el corpus entero en CADA tick contra ese central.
+//   - `visto` VACÍO con `nuevo` presente ⇒ true, y es el caso que REPARA lo ya roto. Una base que
+//     venía sincronizando antes de que existiera esta clave tiene un cursor avanzado por un recorte
+//     desconocido, así que puede tener huecos: se vuelve a cero una vez y se recupera.
+//   - distintos ⇒ true, que es el caso que el arreglo vino a cubrir.
+func alcanceCambio(nuevo, visto string) bool {
+	if nuevo == "" {
+		return false
+	}
+	return nuevo != visto
+}
+
 // leaseBajadaSegundos es cuánto dura el candado de la bajada: cuatro ticks, con piso de dos minutos.
 //
 // Tiene que durar MÁS que el intervalo, porque el dueño lo renueva en cada tick en vez de soltarlo.
@@ -300,6 +321,10 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 	if raw, ok, _ := s.engine.GetMeta(metaInboundCursor); ok {
 		cur, _ = strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
 	}
+	var alcanceVisto string
+	if raw, ok, _ := s.engine.GetMeta(metaInboundAlcance); ok {
+		alcanceVisto = strings.TrimSpace(raw)
+	}
 	limit := s.syncCfg.BatchSize
 	if limit <= 0 {
 		limit = 200
@@ -318,7 +343,26 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 				return
 			}
 		}
-		items, next, err := s.syncClient.Pull(cur, limit)
+		items, next, alcance, err := s.syncClient.Pull(cur, limit)
+		if err == nil && alcanceCambio(alcance, alcanceVisto) {
+			// EL RECORTE DEL CENTRAL NO ES EL MISMO CON EL QUE SE AVANZÓ ESTE CURSOR, así que el
+			// cursor es inservible: el filtro de proyecto SALTA filas en vez de ocultarlas, y todo lo
+			// que salteó quedó debajo. Se vuelve a cero UNA vez y se registra el alcance nuevo, las
+			// dos cosas en la misma transacción (ver memory.ReiniciarBajadaPorAlcance).
+			//
+			// El alcance vacío NO entra acá: un central viejo no manda el campo, y tratar «no sé»
+			// como «cambió» reiniciaría el corpus entero en cada tick contra ese central.
+			if rerr := s.engine.ReiniciarBajadaPorAlcance(metaInboundCursor, metaInboundAlcance, alcance); rerr != nil {
+				logx.Error("inbound: no se pudo reiniciar el cursor tras cambiar el alcance; se sigue con el viejo", "alcance", alcance, "error", rerr)
+			} else {
+				logx.Info("inbound: el alcance del central cambió; el cursor vuelve a cero para traer lo que el filtro había salteado",
+					"alcance_anterior", alcanceVisto, "alcance_nuevo", alcance, "cursor_anterior", cur)
+				alcanceVisto = alcance
+				cur = 0
+				s.cursorBajadaVisto.Store(0)
+				continue // la página que vino puede no ser la primera: se pide de nuevo desde cero
+			}
+		}
 		if err != nil {
 			logx.Error("inbound: no se pudo bajar del central (reintenta en el próximo tick)", "error", err)
 			// El candado se SUELTA y este proceso CEDE: un dueño que falla siempre —un token vencido,

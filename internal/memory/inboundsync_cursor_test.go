@@ -7,10 +7,15 @@ import (
 
 // EL CURSOR DE BAJADA SALTA LO QUE EL FILTRO DE PROYECTO DESCARTA, Y NO VUELVE.
 //
-// Este archivo documenta un DEFECTO ABIERTO, no un invariante que se cumple. Los dos tests de abajo
-// afirman el comportamiento ACTUAL a propósito, para que la medición no se pierda y para que quien lo
-// arregle se entere de que hay tests que INVERTIR. Cada uno dice, en su cuerpo, qué tiene que afirmar
-// cuando el defecto se cierre.
+// ✅ EL DEFECTO ESTÁ CERRADO, PERO NO ACÁ, y por eso estos tests siguen afirmando el salto. La
+// consulta de abajo sigue salteando: eso es lo que se le pide y no cambió. Lo que se agregó es la
+// REPARACIÓN, y vive en el cliente — el central declara su recorte en cada pull (`alcance`) y el
+// cliente reinicia el cursor cuando cambia, con ReiniciarBajadaPorAlcance (bajada_lease.go). La prueba
+// de punta a punta está en internal/mcp/inbound_alcance_test.go.
+//
+// Estos dos se conservan porque son la mitad que explica POR QUÉ hace falta ese reinicio. Si algún día
+// se arregla el salto en el SQL —haciendo que el `next_cursor` salga de lo ESCANEADO en vez de lo
+// devuelto—, se van a poner rojos, y ahí la reparación del cliente pasa a ser redundante.
 //
 // EL MECANISMO. scopeSQL (el acotamiento por tenant) entra al MISMO WHERE que `sync_seq > ?`, y el
 // LIMIT se aplica DESPUÉS. El filtro no acorta la página: la corre hacia arriba por encima de las
@@ -98,18 +103,23 @@ func TestPullAcotadoSaltaLaFilaAjena(t *testing.T) {
 	// Ésta es la afirmación que documenta el defecto: el cursor que el cliente va a guardar
 	// (el máximo devuelto) queda POR ENCIMA de una fila que no se entregó.
 	if maxDevuelto <= seqAjena {
-		t.Errorf("el cursor devuelto (%d) NO pasó por encima de la fila ajena (%d): el defecto pudo haberse arreglado — invertí este test", maxDevuelto, seqAjena)
+		t.Errorf("el cursor devuelto (%d) NO pasó por encima de la fila ajena (%d): el next_cursor dejó de salir de las filas devueltas, así que la reparación del cliente pasó a ser redundante — revisala", maxDevuelto, seqAjena)
 	}
 }
 
-// TestElSaltoDelCursorEsIrreversible es la mitad que duele: con el cursor ya adelantado, ensanchar la
-// credencial a federada NO recupera la fila saltada. Es la razón por la que el defecto no se cura solo
-// ni se cura enrolando de nuevo.
+// TestElSaltoNoSeCuraSoloConElCursorArriba fija que el SALTO sigue estando en el SQL: con el cursor ya
+// adelantado, ensanchar el alcance no hace que `ListSharedForPull` devuelva la fila saltada. Eso no
+// cambió y no tiene por qué cambiar — la consulta hace lo que se le pide.
 //
-// CUANDO EL DEFECTO SE CIERRE, este test tiene que afirmar lo contrario: que tras ensanchar el
-// alcance, la fila saltada VUELVE a estar disponible — por reinicio del cursor al cambiar la huella
-// del alcance, o por un rebobinado explícito.
-func TestElSaltoDelCursorEsIrreversible(t *testing.T) {
+// ⚠️ ESTE TEST SE LLAMABA «EsIrreversible» Y ESO YA NO ES CIERTO A NIVEL SISTEMA. La reparación existe
+// y vive en el CLIENTE, no acá: el central declara su recorte en cada pull (`alcance`) y el cliente
+// reinicia el cursor cuando cambia, con memory.ReiniciarBajadaPorAlcance. La prueba de punta a punta
+// está en internal/mcp/inbound_alcance_test.go (TestEnsancharElAlcanceRecuperaLoSalteado).
+//
+// Se conserva porque es la mitad que explica POR QUÉ hace falta el reinicio: si alguien algún día
+// arregla el salto en el SQL —haciendo que el `next_cursor` salga de lo escaneado en vez de lo
+// devuelto—, este test se va a poner rojo, y ahí la reparación del cliente pasa a ser redundante.
+func TestElSaltoNoSeCuraSoloConElCursorArriba(t *testing.T) {
 	e := newTestEngine(t)
 	seqAjena, seqPosterior := sembrarAjenas(t, e)
 
@@ -122,7 +132,7 @@ func TestElSaltoDelCursorEsIrreversible(t *testing.T) {
 	}
 	for _, it := range items {
 		if it.ID == "ajena-1" {
-			t.Errorf("la fila ajena volvió con el cursor en %d: el defecto pudo haberse arreglado — invertí este test", seqPosterior)
+			t.Errorf("la fila ajena volvió con el cursor en %d: el salto se arregló en el SQL, así que la reparación del cliente (ReiniciarBajadaPorAlcance) pasó a ser redundante — revisala", seqPosterior)
 		}
 	}
 
