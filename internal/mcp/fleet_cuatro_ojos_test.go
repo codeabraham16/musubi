@@ -3,6 +3,7 @@ package mcp
 // Pruebas de la aprobación de cuatro ojos (Ola 2). El eje que dice CUÁNTAS PERSONAS hacen falta.
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -95,8 +96,8 @@ func TestNadieApruebaSuPropiaSolicitud(t *testing.T) {
 //
 // Sabotaje: mover la llamada a puertaDeCuatroOjos después de AbrirSesionPantalla.
 // arnes: archivo="internal/mcp/methods_pantalla.go"
-// arnes: de="\tif resp, rpcErr := s.puertaDeCuatroOjos(d, p, proyecto, fleet.CapScreen, args.Motivo, ahora); rpcErr != nil || resp != nil {\n\t\treturn resp, rpcErr\n\t}\n\n\t// `pide` SE REPARTE ANTES DEL AVISO: PREGUNTAR YA ES AVISAR.\n\t//\n\t// Estaba después, así que una máquina en `pide` recibía las DOS cosas: un «alguien está por\n\t// entrar» y, encima, el diálogo que pregunta. Es ruido sobre el mismo hecho, y el ruido es lo\n\t// que enseña a apretar «permitir» sin leer — que es justo lo que este eje viene a evitar.\n\t//\n\t// Lo encontró la matriz de caminos × grados al comparar con la shell: si acá quedaba el aviso\n\t// de más y allá no, se creaba una asimetría nueva del mismo tipo que la que se estaba\n\t// cerrando.\n\tif consent := d.ConsentimientoEfectivo(); consent == fleet.ConsentimientoPide {\n\t\treturn s.pedirPermisoParaPantalla(d, p, proyecto, ttl, ahora)\n\t}\n\n\t// LOS AVISOS, RECIÉN ACÁ: ya sabemos que esta sesión se va a abrir. Un `pide` no llega hasta\n\t// este punto — se repartió arriba, y su pregunta ya cumple la función de avisar.\n\tswitch consent := d.ConsentimientoEfectivo(); {\n\tcase consent.AvisaAlUsuario() && !d.PuedePreguntar:\n\t\t// SE ABRE, Y SE DICE QUE EL AVISO NO SE PUDO ENTREGAR. Prometer una notificación que el\n\t\t// agente de ESTA máquina no sabe dar sería exactamente lo que este eje viene a evitar:\n\t\t// una configuración que se ve puesta y no lo está. Bloquear tampoco: `avisa` no bloquea,\n\t\t// y hacerlo cerraría el acceso por una capacidad que esa máquina puede no tener nunca\n\t\t// —un servidor sin escritorio— por razones que no son de seguridad.\n\t\ts.avisarUnaVezPorDevice(d.ID, nombre, \"pantalla\", consent)\n\tcase consent.AvisaAlUsuario():\n\t\t// EL AGENTE SABE AVISAR: se le encola el aviso (A57). El aviso dice «alguien está por\n\t\t// entrar», así que entregarlo después de que la pantalla ya está abierta lo convertiría\n\t\t// en una notificación de algo que ya pasó. El agente lo recoge en su próximo latido\n\t\t// —hasta 30 s— y esa demora es el precio de no ponerlo a escuchar un puerto.\n\t\ts.encolarAvisoDeAcceso(d, p, avisoPantalla)\n\t}\n\n\t// G7 — la sesión se registra ANTES de acuñar nada. Que alguien haya INTENTADO mirar una\n\t// pantalla es información de auditoría tanto como que lo haya logrado.\n\tses, err := s.engine.AbrirSesionPantalla(fleet.SesionPantalla{\n\t\tDeviceID: d.ID, ProjectID: proyecto, Principal: nombrePrincipal(p),\n\t\tCreada: ahora, Vence: ahora.Add(ttl),\n\t})\n\tif err != nil {\n\t\treturn nil, rpcErrorf(codeInternalError, \"%v\", err)\n\t}"
-// arnes: a="\t// `pide` SE REPARTE ANTES DEL AVISO: PREGUNTAR YA ES AVISAR.\n\t//\n\t// Estaba después, así que una máquina en `pide` recibía las DOS cosas: un «alguien está por\n\t// entrar» y, encima, el diálogo que pregunta. Es ruido sobre el mismo hecho, y el ruido es lo\n\t// que enseña a apretar «permitir» sin leer — que es justo lo que este eje viene a evitar.\n\t//\n\t// Lo encontró la matriz de caminos × grados al comparar con la shell: si acá quedaba el aviso\n\t// de más y allá no, se creaba una asimetría nueva del mismo tipo que la que se estaba\n\t// cerrando.\n\tif consent := d.ConsentimientoEfectivo(); consent == fleet.ConsentimientoPide {\n\t\treturn s.pedirPermisoParaPantalla(d, p, proyecto, ttl, ahora)\n\t}\n\n\t// LOS AVISOS, RECIÉN ACÁ: ya sabemos que esta sesión se va a abrir. Un `pide` no llega hasta\n\t// este punto — se repartió arriba, y su pregunta ya cumple la función de avisar.\n\tswitch consent := d.ConsentimientoEfectivo(); {\n\tcase consent.AvisaAlUsuario() && !d.PuedePreguntar:\n\t\t// SE ABRE, Y SE DICE QUE EL AVISO NO SE PUDO ENTREGAR. Prometer una notificación que el\n\t\t// agente de ESTA máquina no sabe dar sería exactamente lo que este eje viene a evitar:\n\t\t// una configuración que se ve puesta y no lo está. Bloquear tampoco: `avisa` no bloquea,\n\t\t// y hacerlo cerraría el acceso por una capacidad que esa máquina puede no tener nunca\n\t\t// —un servidor sin escritorio— por razones que no son de seguridad.\n\t\ts.avisarUnaVezPorDevice(d.ID, nombre, \"pantalla\", consent)\n\tcase consent.AvisaAlUsuario():\n\t\t// EL AGENTE SABE AVISAR: se le encola el aviso (A57). El aviso dice «alguien está por\n\t\t// entrar», así que entregarlo después de que la pantalla ya está abierta lo convertiría\n\t\t// en una notificación de algo que ya pasó. El agente lo recoge en su próximo latido\n\t\t// —hasta 30 s— y esa demora es el precio de no ponerlo a escuchar un puerto.\n\t\ts.encolarAvisoDeAcceso(d, p, avisoPantalla)\n\t}\n\n\t// G7 — la sesión se registra ANTES de acuñar nada. Que alguien haya INTENTADO mirar una\n\t// pantalla es información de auditoría tanto como que lo haya logrado.\n\tses, err := s.engine.AbrirSesionPantalla(fleet.SesionPantalla{\n\t\tDeviceID: d.ID, ProjectID: proyecto, Principal: nombrePrincipal(p),\n\t\tCreada: ahora, Vence: ahora.Add(ttl),\n\t})\n\tif err != nil {\n\t\treturn nil, rpcErrorf(codeInternalError, \"%v\", err)\n\t}\n\n\tif resp, rpcErr := s.puertaDeCuatroOjos(d, p, proyecto, fleet.CapScreen, args.Motivo, ahora); rpcErr != nil || resp != nil {\n\t\treturn resp, rpcErr\n\t}"
+// arnes: de="\tif resp, rpcErr := s.puertaDeCuatroOjos(d, p, proyecto, fleet.CapScreen, args.Motivo, ahora); rpcErr != nil || resp != nil {\n\t\treturn resp, rpcErr\n\t}\n\n\t// `pide` SE REPARTE ANTES DEL AVISO: PREGUNTAR YA ES AVISAR.\n\t//\n\t// Estaba después, así que una máquina en `pide` recibía las DOS cosas: un «alguien está por\n\t// entrar» y, encima, el diálogo que pregunta. Es ruido sobre el mismo hecho, y el ruido es lo\n\t// que enseña a apretar «permitir» sin leer — que es justo lo que este eje viene a evitar.\n\t//\n\t// Lo encontró la matriz de caminos × grados al comparar con la shell: si acá quedaba el aviso\n\t// de más y allá no, se creaba una asimetría nueva del mismo tipo que la que se estaba\n\t// cerrando.\n\tif consent := d.ConsentimientoEfectivo(); consent == fleet.ConsentimientoPide {\n\t\treturn s.pedirPermisoParaPantalla(d, p, proyecto, ttl, ahora)\n\t}\n\n\t// LOS AVISOS, RECIÉN ACÁ: ya sabemos que esta sesión se va a abrir. Un `pide` no llega hasta\n\t// este punto — se repartió arriba, y su pregunta ya cumple la función de avisar.\n\t//\n\t// Si el agente de ESTA máquina no sabe mostrar el aviso, la pantalla se abre igual —`avisa` no\n\t// bloquea— y no se encola nada: eso lo decide encolarAvisoDeAcceso, que es el único sitio que\n\t// mira `PuedePreguntar`. Acá no se repite (ver el porqué en el embudo).\n\tif d.ConsentimientoEfectivo().AvisaAlUsuario() {\n\t\t// Se encola el aviso (A57). Dice «alguien está por entrar», así que entregarlo después de\n\t\t// que la pantalla ya está abierta lo convertiría en una notificación de algo que ya pasó.\n\t\t// El agente lo recoge en su próximo latido —hasta 30 s— y esa demora es el precio de no\n\t\t// ponerlo a escuchar un puerto.\n\t\ts.encolarAvisoDeAcceso(d, p, avisoPantalla)\n\t}\n\n\t// G7 — la sesión se registra ANTES de acuñar nada. Que alguien haya INTENTADO mirar una\n\t// pantalla es información de auditoría tanto como que lo haya logrado.\n\tses, err := s.engine.AbrirSesionPantalla(fleet.SesionPantalla{\n\t\tDeviceID: d.ID, ProjectID: proyecto, Principal: nombrePrincipal(p),\n\t\tCreada: ahora, Vence: ahora.Add(ttl),\n\t})\n\tif err != nil {\n\t\treturn nil, rpcErrorf(codeInternalError, \"%v\", err)\n\t}"
+// arnes: a="\t// `pide` SE REPARTE ANTES DEL AVISO: PREGUNTAR YA ES AVISAR.\n\t//\n\t// Estaba después, así que una máquina en `pide` recibía las DOS cosas: un «alguien está por\n\t// entrar» y, encima, el diálogo que pregunta. Es ruido sobre el mismo hecho, y el ruido es lo\n\t// que enseña a apretar «permitir» sin leer — que es justo lo que este eje viene a evitar.\n\t//\n\t// Lo encontró la matriz de caminos × grados al comparar con la shell: si acá quedaba el aviso\n\t// de más y allá no, se creaba una asimetría nueva del mismo tipo que la que se estaba\n\t// cerrando.\n\tif consent := d.ConsentimientoEfectivo(); consent == fleet.ConsentimientoPide {\n\t\treturn s.pedirPermisoParaPantalla(d, p, proyecto, ttl, ahora)\n\t}\n\n\t// LOS AVISOS, RECIÉN ACÁ: ya sabemos que esta sesión se va a abrir. Un `pide` no llega hasta\n\t// este punto — se repartió arriba, y su pregunta ya cumple la función de avisar.\n\t//\n\t// Si el agente de ESTA máquina no sabe mostrar el aviso, la pantalla se abre igual —`avisa` no\n\t// bloquea— y no se encola nada: eso lo decide encolarAvisoDeAcceso, que es el único sitio que\n\t// mira `PuedePreguntar`. Acá no se repite (ver el porqué en el embudo).\n\tif d.ConsentimientoEfectivo().AvisaAlUsuario() {\n\t\t// Se encola el aviso (A57). Dice «alguien está por entrar», así que entregarlo después de\n\t\t// que la pantalla ya está abierta lo convertiría en una notificación de algo que ya pasó.\n\t\t// El agente lo recoge en su próximo latido —hasta 30 s— y esa demora es el precio de no\n\t\t// ponerlo a escuchar un puerto.\n\t\ts.encolarAvisoDeAcceso(d, p, avisoPantalla)\n\t}\n\n\t// G7 — la sesión se registra ANTES de acuñar nada. Que alguien haya INTENTADO mirar una\n\t// pantalla es información de auditoría tanto como que lo haya logrado.\n\tses, err := s.engine.AbrirSesionPantalla(fleet.SesionPantalla{\n\t\tDeviceID: d.ID, ProjectID: proyecto, Principal: nombrePrincipal(p),\n\t\tCreada: ahora, Vence: ahora.Add(ttl),\n\t})\n\tif err != nil {\n\t\treturn nil, rpcErrorf(codeInternalError, \"%v\", err)\n\t}\n\n\tif resp, rpcErr := s.puertaDeCuatroOjos(d, p, proyecto, fleet.CapScreen, args.Motivo, ahora); rpcErr != nil || resp != nil {\n\t\treturn resp, rpcErr\n\t}"
 func TestConCuatroOjosElPrimerPedidoNoAcunaContrasena(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	pantallaConCuatroOjos(t, s)
@@ -1185,5 +1186,421 @@ func TestSinLaMarcaUnPideSiLePreguntaAlDueno(t *testing.T) {
 					"entonces la prueba de arriba pasaría por el motivo equivocado")
 			}
 		})
+	}
+}
+
+// ── QUIÉN PUEDE APROBAR (punto 36) ──────────────────────────────────────────────────────────
+//
+// Encender la marca sin saber quién puede aprobar es poner un control a ciegas: con un solo par
+// de ojos la máquina queda cerrada, y con dos credenciales del mismo dueño queda un control que se
+// ve puesto y no lo está. Estas pruebas miran el INFORME que devuelve require_approval al
+// encenderla, no la compuerta: la compuerta ya tiene las suyas arriba.
+
+// encenderYLeer enciende los cuatro ojos como admin local (`call`, stdio) y devuelve la respuesta.
+func encenderYLeer(t *testing.T, s *McpServer, device string) map[string]any {
+	t.Helper()
+	res, e := call(t, s, "musubi_fleet_require_approval", map[string]any{
+		"device": device, "project": "casa", "requerir": true,
+	})
+	if e != nil {
+		t.Fatalf("require_approval(%q): %+v", device, e)
+	}
+	return jsonOf(t, res)
+}
+
+// nombresEn lee una lista de nombres de la respuesta JSON, en el orden en que vino.
+func nombresEn(v any) []string {
+	crudos, _ := v.([]any)
+	out := make([]string, 0, len(crudos))
+	for _, c := range crudos {
+		s, _ := c.(string)
+		out = append(out, s)
+	}
+	return out
+}
+
+// aprobadoresDe devuelve la lista de `credenciales_que_pueden_aprobar` para una capacidad.
+func aprobadoresDe(t *testing.T, res map[string]any, c fleet.Cap) []string {
+	t.Helper()
+	porCap, ok := res["credenciales_que_pueden_aprobar"].(map[string]any)
+	if !ok {
+		t.Fatalf("la respuesta no trae `credenciales_que_pueden_aprobar` como mapa: %v", res)
+	}
+	return nombresEn(porCap[string(c)])
+}
+
+// soloExec tiene `exec` sobre toda la casa y nada de pantalla: puede ejecutar, no aprobar.
+func soloExec(nombre string) Principal {
+	p := *conExec("casa")
+	p.Name = nombre
+	return p
+}
+
+// AL ENCENDERLA, LA TOOL NOMBRA A QUIEN PUEDE APROBAR, Y SÓLO A ELLOS. Quien tiene `exec` y no
+// `screen` no puede aprobar una pantalla, y listarlo convertiría un candado en «dos aprobadores».
+//
+// Sabotaje: que accesoSobre no pregunte a PuedeSobreDevice y anote a todos.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="if !PuedeSobreDevice(p, d, c) {"
+// arnes: a="if false {"
+func TestEncenderCuatroOjosNombraAQuienPuedeAprobar(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarConPantalla(t, s, "casa", "pc-gio")
+	s.buscarPrincipal = registroDePrueba(*conPantalla("casa"), *otroConPantalla("casa"), soloExec("operador"))
+
+	res := encenderYLeer(t, s, "pc-gio")
+
+	if got := strings.Join(aprobadoresDe(t, res, fleet.CapScreen), ","); got != "mirador,revisora" {
+		t.Errorf("pueden aprobar `screen` = [%s], se esperaba [mirador,revisora]: la lista tiene que "+
+			"ser exactamente la de quienes toolFleetApprove dejaría pasar", got)
+	}
+	if _, hay := res["candado"]; hay {
+		t.Errorf("con dos credenciales con `screen` la respuesta dice candado: %v", res["candado"])
+	}
+	// La máquina es tier A sin `shell` concedida: no se puede aprobar lo que no se puede pedir.
+	if porCap, _ := res["credenciales_que_pueden_aprobar"].(map[string]any); porCap != nil {
+		if _, hay := porCap[string(fleet.CapShell)]; hay {
+			t.Errorf("informa aprobadores de `shell` sobre una máquina que no la admite: %v", porCap)
+		}
+	}
+	if nota, _ := res["nota"].(string); !strings.Contains(nota, "misma persona") {
+		t.Errorf("falta la nota de que dos credenciales pueden ser una sola persona; nota = %q", nota)
+	}
+	if req, _ := res["requiere_aprobacion"].(bool); !req {
+		t.Errorf("la marca no quedó encendida: %v", res)
+	}
+}
+
+// UN SOLO PAR DE OJOS ES UN CANDADO, Y SE DICE AL ENCENDERLO. Descubrirlo en la urgencia —que es
+// cuando se pide una pantalla— sería el peor momento.
+//
+// Sabotaje: bajar el umbral del candado a «menos de una» credencial.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="if len(nombres) < 2 {"
+// arnes: a="if len(nombres) < 1 {"
+func TestCuatroOjosConUnSoloParDiceCandado(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarConPantalla(t, s, "casa", "pc-gio")
+	s.buscarPrincipal = registroDePrueba(*conPantalla("casa"), soloExec("operador"))
+
+	res := encenderYLeer(t, s, "pc-gio")
+
+	candado := strings.Join(nombresEn(res["candado"]), ",")
+	if !strings.Contains(","+candado+",", ",screen,") {
+		t.Fatalf("una sola credencial con `screen` y la respuesta no dice candado (candado = [%s]).\n"+
+			"  Con un solo par de ojos nadie le puede aprobar a nadie: la marca no vuelve lento el\n"+
+			"  acceso, lo cierra.", candado)
+	}
+	if got := strings.Join(aprobadoresDe(t, res, fleet.CapScreen), ","); got != "mirador" {
+		t.Errorf("pueden aprobar `screen` = [%s], se esperaba [mirador]", got)
+	}
+}
+
+// EXEC ES LA PUERTA DE ATRÁS, Y EL INFORME LA NOMBRA. Cuatro ojos no cubre `exec`; quien lo tiene
+// sin allowlist, o con un intérprete en ella, corre lo que quiera sin segunda persona. Una
+// allowlist de verdad (journalctl) sí acota, y no se denuncia.
+//
+// LOS NOMBRES DE WINDOWS TAMBIÉN. La máquina que motivó el informe es Windows, y PermiteArgv
+// compara argv[0] exacto: `pwsh.exe` o la ruta completa de `powershell.exe` en la allowlist
+// dejan lanzar cualquier cosa. El informe los daba por acotados —lo encontró una revisión
+// adversaria—, y `ipconfig.exe` sigue sin ser un intérprete.
+//
+// Sabotaje: que un intérprete en la allowlist cuente como acotada.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="|| algunInterprete(lista)"
+// arnes: a="|| false && algunInterprete(lista)"
+func TestCuatroOjosDenunciaElExecSinAcotar(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarConPantalla(t, s, "casa", "pc-gio")
+	libre := soloExec("libre")
+	conPowershell := soloExec("con-powershell")
+	conPowershell.ExecAllow = map[string][]string{"*": {"powershell"}}
+	conPwsh := soloExec("con-pwsh-exe")
+	conPwsh.ExecAllow = map[string][]string{"*": {"pwsh.exe"}}
+	conRuta := soloExec("con-ruta-windows")
+	conRuta.ExecAllow = map[string][]string{"*": {`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`}}
+	acotado := soloExec("acotado")
+	acotado.ExecAllow = map[string][]string{"*": {"journalctl"}}
+	acotadoWin := soloExec("acotado-windows")
+	acotadoWin.ExecAllow = map[string][]string{"*": {"ipconfig.exe"}}
+	s.buscarPrincipal = registroDePrueba(*conPantalla("casa"), *otroConPantalla("casa"),
+		libre, conPowershell, conPwsh, conRuta, acotado, acotadoWin)
+
+	res := encenderYLeer(t, s, "pc-gio")
+
+	const esperado = "libre,con-powershell,con-pwsh-exe,con-ruta-windows"
+	if got := strings.Join(nombresEn(res["exec_sin_acotar"]), ","); got != esperado {
+		t.Errorf("exec_sin_acotar = [%s], se esperaba [%s].\n"+
+			"  `powershell` permitido no acota nada: es una shell con otro nombre, y `pwsh.exe` o la\n"+
+			"  ruta de Windows también. Y `journalctl` o `ipconfig.exe` sí acotan, así que\n"+
+			"  denunciarlos sería ruido que tapa a los de verdad.", got, esperado)
+	}
+}
+
+// SIN REGISTRO NO SE INVENTA UN CANDADO. Por stdio (o legacy sin principals.yaml) el servidor no
+// sabe quién existe; una lista vacía se leería «nadie puede aprobar», que es una afirmación, y la
+// verdad es «no sé».
+//
+// Sabotaje: tratar la falta de registro como un registro vacío.
+// arnes: archivo="internal/mcp/methods_aprobacion.go"
+// arnes: de="if s.buscarPrincipal == nil {"
+// arnes: a="if s.buscarPrincipal == nil {\n\t\t\ts.buscarPrincipal = &PrincipalRegistry{}\n\t\t}\n\t\tif false {"
+func TestSinRegistroNoInventaCandado(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarConPantalla(t, s, "casa", "pc-gio")
+	// SIN s.buscarPrincipal: es el caso.
+
+	res := encenderYLeer(t, s, "pc-gio")
+
+	for _, prohibida := range []string{"candado", "credenciales_que_pueden_aprobar", "sin_camino_aprobable", "exec_sin_acotar"} {
+		if v, hay := res[prohibida]; hay {
+			t.Errorf("sin registro de principals la respuesta trae `%s` = %v: eso afirma algo que el "+
+				"servidor no puede saber", prohibida, v)
+		}
+	}
+	if _, hay := res["aprobadores_desconocidos"]; !hay {
+		t.Errorf("sin registro la respuesta no dice que no sabe quién puede aprobar: %v", res)
+	}
+	if _, hay := res["nota"]; !hay {
+		t.Errorf("la nota de «misma persona» va siempre, también sin registro: %v", res)
+	}
+}
+
+// UNA CREDENCIAL VENCIDA NO ES EL SEGUNDO PAR DE OJOS. PuedeSobreDevice no mira el vencimiento
+// —lo mira resolve, al autenticar—, así que sin el filtro una credencial que ya no abre la puerta
+// taparía el candado real con un «dos aprobadores».
+//
+// Sabotaje: que accesoSobre cuente también a las vencidas.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="if p := &r.principals[i]; !p.Vencida(ahora) {"
+// arnes: a="if p := &r.principals[i]; !p.Vencida(ahora) || true {"
+func TestUnaCredencialVencidaNoCuentaComoAprobadora(t *testing.T) {
+	// EL RELOJ SE FIJA, no se usa el real: una prueba de vencimiento contra time.Now depende de
+	// que ninguna otra haya dejado el reloj del registro cambiado.
+	ahora := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	anterior := ahoraParaVencimiento
+	t.Cleanup(func() { ahoraParaVencimiento = anterior })
+	ahoraParaVencimiento = func() time.Time { return ahora }
+
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarConPantalla(t, s, "casa", "pc-gio")
+	vencida := *otroConPantalla("casa")
+	vencida.Expires = ahora.Add(-24 * time.Hour)
+	s.buscarPrincipal = registroDePrueba(*conPantalla("casa"), vencida)
+
+	res := encenderYLeer(t, s, "pc-gio")
+
+	if got := strings.Join(aprobadoresDe(t, res, fleet.CapScreen), ","); got != "mirador" {
+		t.Errorf("pueden aprobar `screen` = [%s], se esperaba [mirador]: `revisora` venció ayer", got)
+	}
+	if candado := strings.Join(nombresEn(res["candado"]), ","); !strings.Contains(","+candado+",", ",screen,") {
+		t.Errorf("con la segunda credencial vencida la respuesta no dice candado (candado = [%s])", candado)
+	}
+}
+
+// UNA MÁQUINA SIN NADA APROBABLE LO DICE. Sobre un tier B sólo con `metrics` la marca se guarda
+// igual, pero no hay ninguna sesión que pase por ella: callarlo la deja escrita como un control.
+//
+// Sabotaje: no avisar cuando la máquina no admite ninguna capacidad aprobable.
+// arnes: archivo="internal/mcp/methods_aprobacion.go"
+// arnes: de="if len(acceso.PorCap) == 0 {"
+// arnes: a="if len(acceso.PorCap) == 0 && false {"
+func TestUnaMaquinaSinCapacidadAprobableLoDice(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
+		"name": "altura-db", "tier": "B", "caps": []string{"metrics"}, "project": "casa",
+	}); e != nil {
+		t.Fatalf("enroll: %+v", e)
+	}
+	s.buscarPrincipal = registroDePrueba(*conPantalla("casa"), *otroConPantalla("casa"))
+
+	res := encenderYLeer(t, s, "altura-db")
+
+	if _, hay := res["sin_camino_aprobable"]; !hay {
+		t.Errorf("una máquina que no admite ninguna capacidad aprobable no lo dice: la marca queda "+
+			"escrita como si controlara algo. Respuesta: %v", res)
+	}
+	if v, hay := res["candado"]; hay {
+		t.Errorf("sin capacidades aprobables no hay nada que trabar, y la respuesta dice candado = %v", v)
+	}
+}
+
+// EL CAMINO QUE CORRE DE VERDAD: en producción s.buscarPrincipal es el envoltorio con recarga en
+// caliente, no un *PrincipalRegistry pelado. Todas las de arriba ejercitan el registro directo,
+// así que una delegación rota en principals_reload.go dejaba el informe vacío —o sea, un candado
+// inventado sobre cada máquina— sin que ninguna se pusiera roja.
+//
+// Sabotaje: que el envoltorio no delegue en el snapshot vigente.
+// arnes: archivo="internal/mcp/principals_reload.go"
+// arnes: de="\t\treturn reg.accesoSobre(d)"
+// arnes: a="\t\treturn (*PrincipalRegistry)(nil).accesoSobre(d)"
+func TestElInformeDeAprobadoresPasaPorElEnvoltorioDeProduccion(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarConPantalla(t, s, "casa", "pc-gio")
+	// LO MISMO que http.go le pone al campo en producción.
+	s.buscarPrincipal = newReloadableRegistry(
+		filepath.Join(t.TempDir(), "principals.yaml"), "",
+		registroDePrueba(*conPantalla("casa"), *otroConPantalla("casa")), time.Now(),
+	)
+
+	res := encenderYLeer(t, s, "pc-gio")
+
+	if got := strings.Join(aprobadoresDe(t, res, fleet.CapScreen), ","); got != "mirador,revisora" {
+		t.Errorf("por el envoltorio de producción, pueden aprobar `screen` = [%s], se esperaba "+
+			"[mirador,revisora]", got)
+	}
+	if v, hay := res["candado"]; hay {
+		t.Errorf("con dos credenciales vigentes el envoltorio informa candado = %v", v)
+	}
+}
+
+// soloMira tiene `screen:view` sobre toda la casa y nada más: puede leer la bitácora de pantallas,
+// no abrir una sesión ni aprobársela a nadie.
+func soloMira(nombre string) Principal {
+	return Principal{
+		Name: nombre, Role: RoleWriter, Read: ReadOwn, Write: WriteOwn, ProjectID: "casa",
+		Fleet: map[fleet.Cap][]string{fleet.CapScreenView: {"*"}, fleet.CapMetrics: {"*"}},
+	}
+}
+
+// MIRAR NO ES UNA PUERTA DE CUATRO OJOS, Y EL INFORME NO LA CUENTA COMO UNA. Ningún camino abre
+// una sesión de sólo mirar: la tool de pantalla exige `screen` y pide la aprobación como `screen`.
+// Informar `screen:view` nombraba aprobadores para una puerta que no existe, y lo encontró una
+// revisión adversaria con dos casos. Una máquina cuya única capacidad interactiva es
+// `screen:view` salía con aprobadores y sin `sin_camino_aprobable`, así que la marca se leía como
+// un control puesto y no frenaba nada. Y una credencial con sólo `screen:view` figuraba como
+// aprobadora sin poder resolver ninguna solicitud real.
+//
+// Sabotaje: volver a informar `screen:view` entre las capacidades que se aprueban.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="var capsQueSeAprueban = []fleet.Cap{fleet.CapShell, fleet.CapScreen}"
+// arnes: a="var capsQueSeAprueban = []fleet.Cap{fleet.CapShell, fleet.CapScreen, fleet.CapScreenView}"
+func TestMirarNoEsUnaPuertaDeCuatroOjos(t *testing.T) {
+	t.Run("una máquina que sólo deja mirar no tiene camino aprobable", func(t *testing.T) {
+		s := newTestServer(t, embedding.NoopProvider{})
+		if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
+			"name": "kiosko", "tier": "A", "caps": []string{"metrics", "screen:view"},
+			"project": "casa", "os": "linux",
+		}); e != nil {
+			t.Fatalf("enroll: %+v", e)
+		}
+		s.buscarPrincipal = registroDePrueba(*conPantalla("casa"), *otroConPantalla("casa"))
+		// LA PREMISA, comprobada y no supuesta: sobre esta máquina nadie puede pedir una pantalla.
+		d, _, _ := s.engine.DevicePorNombre("casa", "kiosko")
+		if PuedeSobreDevice(conPantalla("casa"), d, fleet.CapScreen) {
+			t.Fatal("premisa rota: `mirador` puede abrir la pantalla de una máquina con sólo `screen:view`")
+		}
+
+		res := encenderYLeer(t, s, "kiosko")
+
+		if porCap, _ := res["credenciales_que_pueden_aprobar"].(map[string]any); len(porCap) != 0 {
+			t.Errorf("credenciales_que_pueden_aprobar = %v sobre una máquina donde ninguna sesión pasa "+
+				"por cuatro ojos: nombra aprobadores para una puerta que no existe", porCap)
+		}
+		if _, hay := res["sin_camino_aprobable"]; !hay {
+			t.Errorf("una máquina que sólo deja mirar no dice `sin_camino_aprobable`: la marca queda "+
+				"escrita como un control y no frena nada. Respuesta: %v", res)
+		}
+	})
+	t.Run("una credencial que sólo mira no figura como aprobadora", func(t *testing.T) {
+		s := newTestServer(t, embedding.NoopProvider{})
+		enrolarConPantalla(t, s, "casa", "pc-gio")
+		s.buscarPrincipal = registroDePrueba(*conPantalla("casa"), soloMira("solo-mira"))
+
+		res := encenderYLeer(t, s, "pc-gio")
+
+		porCap, _ := res["credenciales_que_pueden_aprobar"].(map[string]any)
+		if v, hay := porCap[string(fleet.CapScreenView)]; hay {
+			t.Errorf("el informe lista `screen:view` = %v: ninguna solicitud se abre con esa capacidad, "+
+				"así que nadie de esa lista puede aprobar nada por tenerla", v)
+		}
+		if got := strings.Join(aprobadoresDe(t, res, fleet.CapScreen), ","); got != "mirador" {
+			t.Errorf("pueden aprobar `screen` = [%s], se esperaba [mirador]: `solo-mira` no puede "+
+				"resolver una solicitud de `screen`", got)
+		}
+		if candado := strings.Join(nombresEn(res["candado"]), ","); candado != "screen" {
+			t.Errorf("candado = [%s], se esperaba [screen]: una sola credencial puede pedir o aprobar "+
+				"una pantalla, y la que sólo mira no es el segundo par de ojos", candado)
+		}
+	})
+}
+
+// resolverQueRevienta es un registro de verdad que falla SÓLO al armar el informe de aprobadores.
+// principalResolver es una interfaz, así que simular la falla no exige tocar producción.
+type resolverQueRevienta struct{ *PrincipalRegistry }
+
+func (resolverQueRevienta) accesoSobre(fleet.Device) AccesoDeDevice {
+	panic("el informe de aprobadores reventó")
+}
+
+// SI EL INFORME FALLA, LA MARCA NO QUEDA PUESTA. require_approval arma el informe ANTES de
+// escribir la marca, y ese orden es el control: al revés, un informe que falla deja la máquina
+// marcada con la respuesta en error, y el admin cree que no la encendió. accesoSobre no devuelve
+// error, así que la única forma de que falle es un pánico. En producción Dispatch lo ataja y
+// contesta error; acá `call` va directo a handleToolsCall, sin ese recover, y lo ataja la prueba.
+//
+// La primera versión lo dejó sin custodiar, «porque exige inyectar una falla en accesoSobre». La
+// revisión adversaria mostró que alcanzaba con este registro falso.
+//
+// Sabotaje: escribir la marca antes de armar el informe.
+// arnes: archivo="internal/mcp/methods_aprobacion.go"
+// arnes: de="\tvar quienes map[string]interface{}"
+// arnes: a="\tif _, err := s.engine.FijarAprobacion(d.ID, *args.Requerir); err != nil {\n\t\treturn nil, rpcErrorf(codeInternalError, \"%v\", err)\n\t}\n\tvar quienes map[string]interface{}"
+func TestSiElInformeFallaLaMarcaNoQuedaPuesta(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarConPantalla(t, s, "casa", "pc-gio")
+	s.buscarPrincipal = resolverQueRevienta{registroDePrueba(*conPantalla("casa"), *otroConPantalla("casa"))}
+
+	revento := func() (hubo bool) {
+		defer func() { hubo = recover() != nil }()
+		_, _ = call(t, s, "musubi_fleet_require_approval", map[string]any{
+			"device": "pc-gio", "project": "casa", "requerir": true,
+		})
+		return false
+	}()
+	if !revento {
+		t.Fatal("el informe no falló: el escenario no es el que la prueba dice")
+	}
+
+	d, hay, err := s.engine.DevicePorNombre("casa", "pc-gio")
+	if err != nil || !hay {
+		t.Fatalf("no se pudo releer la máquina: hay=%v err=%v", hay, err)
+	}
+	if d.RequiereAprobacion {
+		t.Error("el informe falló y la marca quedó puesta igual: la respuesta dice error y la máquina " +
+			"exige cuatro ojos, así que el admin cree que no la encendió")
+	}
+}
+
+// «NADIE» SE LEE `[]`, NO `null`. Una capacidad que la máquina admite y ninguna credencial tiene
+// es el candado más cerrado que hay: nadie puede ni pedir la sesión. Un `null` en esa lista se lee
+// «no aplica», que es lo contrario, y un consumidor que la recorra la saltearía.
+//
+// Sabotaje: declarar la lista como nil en vez de vacía.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="nombres := []string{}"
+// arnes: a="var nombres []string"
+func TestNadiePuedeAprobarSeLeeListaVaciaYNoNull(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarTierAConShell(t, s, "casa", "pc-shell")
+	// Dos con pantalla y NADIE con `shell`: la máquina la admite y no hay quién la tenga.
+	s.buscarPrincipal = registroDePrueba(*conPantalla("casa"), *otroConPantalla("casa"))
+
+	res := encenderYLeer(t, s, "pc-shell")
+
+	porCap, ok := res["credenciales_que_pueden_aprobar"].(map[string]any)
+	if !ok {
+		t.Fatalf("la respuesta no trae `credenciales_que_pueden_aprobar` como mapa: %v", res)
+	}
+	v, hay := porCap[string(fleet.CapShell)]
+	if !hay {
+		t.Fatalf("`shell` no figura en el informe de una máquina que la admite: %v", porCap)
+	}
+	if lista, esLista := v.([]any); !esLista || len(lista) != 0 {
+		t.Errorf("`shell` = %#v, se esperaba `[]`: «nadie» tiene que leerse como una lista vacía y "+
+			"no como `null`", v)
+	}
+	if candado := strings.Join(nombresEn(res["candado"]), ","); candado != "shell" {
+		t.Errorf("candado = [%s], se esperaba [shell]: sin nadie con `shell`, nadie puede ni pedirla", candado)
 	}
 }

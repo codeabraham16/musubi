@@ -74,13 +74,19 @@ func TestIngestSharedNoLoop(t *testing.T) {
 		t.Errorf("obs ingerida: scope=%q author=%q project=%q, esperaba shared/ana/acme", scope, author, project)
 	}
 
-	// ANTI-LOOP: NO hay fila de outbox para esta obs (no se re-sube al central).
-	var outboxN int
-	if err := e.db.QueryRow(`SELECT COUNT(*) FROM outbox WHERE obs_id='central-1'`).Scan(&outboxN); err != nil {
-		t.Fatal(err)
+	// ANTI-LOOP: la obs ingerida no se re-sube al central.
+	//
+	// Antes esto se verificaba contando filas de outbox y exigiendo CERO, pero «cero filas» era un
+	// proxy, no la propiedad: la ausencia de fila es exactamente lo que BackfillOutbox trata como
+	// «shared que falta encolar», así que el anti-loop duraba hasta la apertura siguiente de la base
+	// (ver TestBackfillNoResucitaElEspejo). La propiedad real es que quede SELLADA como 'espejo', que
+	// es un estado terminal: ni el backfill la ve ni el claim la reclama.
+	var status string
+	if err := e.db.QueryRow(`SELECT status FROM outbox WHERE obs_id='central-1'`).Scan(&status); err != nil {
+		t.Fatalf("la obs ingerida debía quedar sellada como espejo: %v", err)
 	}
-	if outboxN != 0 {
-		t.Errorf("ANTI-LOOP roto: la obs ingerida tiene %d fila(s) de outbox, esperaba 0", outboxN)
+	if status != outboxEspejo {
+		t.Errorf("ANTI-LOOP roto: la obs ingerida quedó en outbox con status %q, esperaba %q", status, outboxEspejo)
 	}
 
 	// Idempotente: re-ingerir la misma no duplica ni inserta.
