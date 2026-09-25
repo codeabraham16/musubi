@@ -104,30 +104,86 @@ type dedupReport struct {
 	Pairs   []dedupPairResult `json:"pairs"`
 }
 
+// dedupUndoResult reporta qué pasó con UNA tarjeta de un pedido de deshacer (`undo`).
+type dedupUndoResult struct {
+	Card      string `json:"card"`
+	Canonical string `json:"canonical,omitempty"` // a quién apuntaba la fusión deshecha
+	Action    string `json:"action"`              // restored | skipped: ... | error: ...
+}
+
+// dedupUndoReport es la respuesta de musubi_sharpen cuando se le pide deshacer fusiones.
+type dedupUndoReport struct {
+	Restored int               `json:"restored"`
+	Note     string            `json:"note"`
+	Cards    []dedupUndoResult `json:"cards"`
+}
+
 func (s *McpServer) toolSharpen(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	// Escribe en el acervo COMPARTIDO (archiva tarjetas): sólo admin, igual que maintain y distill.
 	if !principalFrom(ctx).isAdmin() {
 		return nil, rpcErrorf(codeUnauthorized, "musubi_sharpen es una operación de mantenimiento del acervo: requiere un principal admin")
 	}
-	// Opt-in: el veredicto lo da un juez LLM. Sin motor, falla explícito (no degrada en silencio).
-	if !cognition.Enabled(s.cognition) {
-		return nil, rpcErrorf(codeInvalidParams, "cognición no disponible: musubi_sharpen usa un juez LLM offline y necesita un motor (cognition.provider en .musubi/config.yaml)")
-	}
 	var args struct {
-		Pairs  int     `json:"pairs"`
-		Floor  float64 `json:"floor"`
-		DryRun bool    `json:"dry_run"`
+		Pairs  int      `json:"pairs"`
+		Floor  float64  `json:"floor"`
+		DryRun bool     `json:"dry_run"`
+		Undo   []string `json:"undo"`
 	}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &args); err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "argumentos inválidos: %v", err)
 		}
 	}
+	// DESHACER NO PASA POR EL MOTOR, y va antes de exigirlo a propósito: devolver una tarjeta no se
+	// juzga, se ejecuta. Si dependiera del motor, el día que el endpoint cae —que es cuando más
+	// probable es que alguien esté revisando fusiones malas— no se podría deshacer ninguna.
+	if len(args.Undo) > 0 {
+		if args.DryRun || args.Pairs > 0 || args.Floor > 0 {
+			return nil, rpcErrorf(codeInvalidParams, "`undo` no se combina con pairs, floor ni dry_run: deshacer fusiones y afilar son dos pedidos distintos")
+		}
+		if len(args.Undo) > dedupMaxPairs {
+			return nil, rpcErrorf(codeInvalidParams, "`undo` acepta hasta %d tarjetas por llamada; recibí %d", dedupMaxPairs, len(args.Undo))
+		}
+		return jsonResult(s.runDedupUndo(args.Undo))
+	}
+	// Opt-in: el veredicto lo da un juez LLM. Sin motor, falla explícito (no degrada en silencio).
+	if !cognition.Enabled(s.cognition) {
+		return nil, rpcErrorf(codeInvalidParams, "cognición no disponible: musubi_sharpen usa un juez LLM offline y necesita un motor (cognition.provider en .musubi/config.yaml)")
+	}
 	rep, err := s.runDedupBatch(ctx, args.Floor, args.Pairs, args.DryRun)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}
 	return jsonResult(rep)
+}
+
+// runDedupUndo DESHACE fusiones del afilador: cada id es una tarjeta que una fusión archivó, y vuelve
+// al acervo con el par marcado `not_duplicate` para que el afilado de fondo no la vuelva a fusionar
+// (ver memory.RestoreDuplicate, que es donde vive el porqué). Cada tarjeta va en su propio candado de
+// escritura: una que falla no deja a medias a las demás, y su error va en el reporte.
+func (s *McpServer) runDedupUndo(ids []string) dedupUndoReport {
+	rep := dedupUndoReport{Cards: []dedupUndoResult{}}
+	for _, id := range ids {
+		var restored bool
+		var canonical string
+		var err error
+		s.withWriteLock(func() {
+			restored, canonical, err = s.engine.RestoreDuplicate(dedupScope, id, dedupAuthor)
+		})
+		res := dedupUndoResult{Card: id, Canonical: canonical}
+		switch {
+		case err != nil:
+			res.Action = "error: " + err.Error()
+		case restored:
+			rep.Restored++
+			res.Action = "restored"
+		default:
+			res.Action = "skipped: ya estaba visible, no había fusión que deshacer"
+		}
+		rep.Cards = append(rep.Cards, res)
+	}
+	rep.Note = fmt.Sprintf("devolví %d de %d tarjetas al acervo; cada par deshecho quedó marcado not_duplicate.", rep.Restored, len(ids))
+	return rep
 }
 
 // runDedupBatch es el NÚCLEO del afilador, compartido por la tool musubi_sharpen y el scheduler
@@ -300,13 +356,14 @@ func (s *McpServer) sharpenToolEntry() toolEntry {
 	return toolEntry{
 		Tool: Tool{
 			Name:        "musubi_sharpen",
-			Description: "AFILADOR del acervo de diseño (pilar 'Musubi Renaissance'), el gemelo del destilador: pase OFFLINE que junta las tarjetas `design-corpus/*` que dicen la MISMA lección con otras palabras (gemelas por COSENO de embeddings, que el Consolidate por trigramas no ve). Halla pares sobre un piso de coseno y un JUEZ LLM decide, par por par, si son redundantes (MERGE: archiva la más débil, conservando accesos e importancia en la más fuerte — soft-delete REVERSIBLE) o facetas distintas (KEEP: las marca `not_duplicate` para no volver a juzgarlas). CONSERVADOR: ante la duda, conserva. Requiere admin y un motor de cognición (opt-in: sin motor, falla explícito). Procesa de a tandas (default 6 pares, máx 25); corré en bucle. Pasá `dry_run:true` para ver los pares candidatos sin juzgar ni escribir, `pairs` para el tamaño de la tanda, o `floor` para el piso de coseno (default " + pisoPorDefaultEnTexto + ").",
+			Description: "AFILADOR del acervo de diseño (pilar 'Musubi Renaissance'), el gemelo del destilador: pase OFFLINE que junta las tarjetas `design-corpus/*` que dicen la MISMA lección con otras palabras (gemelas por COSENO de embeddings, que el Consolidate por trigramas no ve). Halla pares sobre un piso de coseno y un JUEZ LLM decide, par por par, si son redundantes (MERGE: archiva la más débil, conservando accesos e importancia en la más fuerte — soft-delete REVERSIBLE) o facetas distintas (KEEP: las marca `not_duplicate` para no volver a juzgarlas). CONSERVADOR: ante la duda, conserva. Requiere admin y un motor de cognición (opt-in: sin motor, falla explícito). Procesa de a tandas (default 6 pares, máx 25); corré en bucle. Pasá `dry_run:true` para ver los pares candidatos sin juzgar ni escribir, `pairs` para el tamaño de la tanda, o `floor` para el piso de coseno (default " + pisoPorDefaultEnTexto + "). Para DESHACER una fusión pasá `undo` con los ids de las tarjetas archivadas: vuelven al acervo, el par queda `not_duplicate` para que no se fusione de nuevo, y no hace falta motor.",
 			InputSchema: InputSchema{
 				Type: "object",
 				Properties: map[string]Property{
 					"pairs":   {Type: "number", Description: "Cuántos pares juzgar en esta tanda (default 6, máximo 25). Cada par es una llamada al juez LLM."},
 					"floor":   {Type: "number", Description: "Piso de coseno para proponer un par al juez (default " + pisoPorDefaultEnTexto + "). Más bajo = más pares candidatos."},
 					"dry_run": {Type: "boolean", Description: "Si es true, lista los pares candidatos por coseno SIN llamar al juez ni archivar nada."},
+					"undo":    {Type: "array", Description: "Ids de tarjetas que una fusión archivó (hasta 25): se devuelven al acervo y el par queda marcado not_duplicate. No se combina con los otros argumentos ni necesita motor.", Items: &Property{Type: "string", Description: "id de la tarjeta archivada"}},
 				},
 			},
 		},

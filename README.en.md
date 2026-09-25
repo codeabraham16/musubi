@@ -351,7 +351,7 @@ The domain table below lists every tool, dormant ones included:
 | Domain | Tools |
 |---------|--------------|
 | **Memory** | `musubi_save_observation` · `musubi_recall` · `musubi_memory_expand` · `musubi_search_keyword` · `musubi_search_semantic` |
-| **Design** | `musubi_design` (the design engine as a capability: builds a brief anchored in the `musubi-design` corpus for the caller to compose from; callable from any project, model-free) · `musubi_distill` (OFFLINE distiller: turns `ingested/*` blobs into curated `design-corpus/*` cards; admin, opt-in, idempotent and resumable) · `musubi_sharpen` (OFFLINE sharpener: pairs twin cards by cosine with an LLM judge — MERGE archives the weaker one, KEEP keeps both; admin, opt-in, conservative and reversible) |
+| **Design** | `musubi_design` (the design engine as a capability: builds a brief anchored in the `musubi-design` corpus for the caller to compose from; callable from any project, model-free) · `musubi_distill` (OFFLINE distiller: turns `ingested/*` blobs into curated `design-corpus/*` cards; admin, opt-in, idempotent and resumable) · `musubi_sharpen` (OFFLINE sharpener: pairs twin cards by cosine with an LLM judge — MERGE archives the weaker one, KEEP keeps both; admin, opt-in, conservative and reversible: `undo` brings a merged card back) |
 | **Knowledge graph** | `musubi_save_fact` · `musubi_recall_facts` · `musubi_entity_context` |
 | **Cognition** (3rd pillar) | `musubi_propose_facts` (the LLM PROPOSES into quarantine; the core stays model-free) · `musubi_ask` (reasoned answer over memory, RAG; opt-in) |
 | **Write quarantine** | `musubi_propose_observation` (everything an LLM generated lands here, invisible to recall) · `musubi_corroborate` (the only way out; keeps the provenance seal) |
