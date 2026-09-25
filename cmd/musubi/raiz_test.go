@@ -245,8 +245,8 @@ func TestSinProyectoNadaCreaMemoria(t *testing.T) {
 
 	res := respuestasJSONRPC(t, correrMusubi(t, suelta, home, handshakeYLista, "daemon"))
 	init, _ := res[1]["result"].(map[string]interface{})
-	if texto, _ := init["instructions"].(string); !strings.Contains(texto, "no está activo") {
-		t.Errorf("el daemon inerte no le dijo al agente que Musubi no está activo acá: instructions=%q", texto)
+	if texto, _ := init["instructions"].(string); !strings.Contains(texto, "no tiene un proyecto en esta carpeta") {
+		t.Errorf("el daemon inerte no le dijo al agente que no tiene proyecto acá: instructions=%q", texto)
 	}
 	lista, _ := res[2]["result"].(map[string]interface{})
 	if tools, _ := lista["tools"].([]interface{}); len(tools) != 0 {

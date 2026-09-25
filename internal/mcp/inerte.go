@@ -27,18 +27,25 @@ func NewServidorInerte(projectPath, version, motivo string) *McpServer {
 // NewServidorCallado es un servidor inerte que además no le dice NADA al agente: sin instrucciones.
 //
 // Es el del plugin en un proyecto que ya conecta Musubi por su propio .mcp.json. Ahí Musubi SÍ está
-// activo —por el servidor del proyecto—, así que el aviso de inerte («Musubi no está activo en esta
-// carpeta») sería falso y contradiría las instrucciones del otro. Se hace a un lado en silencio.
+// activo —por el servidor del proyecto—, con su memoria y sus instrucciones: cualquier aviso de éste
+// sería ruido al lado del otro. Se hace a un lado en silencio.
 func NewServidorCallado(projectPath, version, motivo string) *McpServer {
 	s := NewServidorInerte(projectPath, version, motivo)
 	s.inerteCallado = true
 	return s
 }
 
-// instruccionesInerte es lo que el agente lee en su system prompt cuando Musubi está inerte.
+// instruccionesInerte es lo que el agente lee en su system prompt cuando este servidor está inerte.
+//
+// HABLA DE ESTE SERVIDOR, NO DE «MUSUBI» EN GENERAL, porque una sesión puede tener otra conexión a
+// Musubi que sí funciona: el adjudicador B1 corre `claude -p` en una carpeta que no es un repo, con
+// su propio Musubi por `--mcp-config`, y con el plugin instalado recibe además este servidor inerte.
+// Un «no hay memoria ni tools de Musubi» absoluto contradecía a las tools que el agente tenía a la
+// vista.
 func (s *McpServer) instruccionesInerte() string {
-	return "Musubi no está activo en esta carpeta (" + s.inerte + "): en esta sesión no hay memoria ni tools de Musubi. " +
-		"Musubi se activa solo al abrir la sesión dentro de un repo git; si la persona lo quiere acá, que corra `musubi init`."
+	return "Este servidor de Musubi no tiene un proyecto en esta carpeta (" + s.inerte + "), así que no ofrece memoria ni tools. " +
+		"Si la sesión tiene otra conexión a Musubi con tools, usá ésa. Musubi se activa solo al abrir la sesión dentro de un repo git; " +
+		"si la persona lo quiere acá, que corra `musubi init`."
 }
 
 // conAvisoDeInerte agrega las instrucciones de inerte al resultado de initialize.
