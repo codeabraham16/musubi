@@ -136,7 +136,7 @@ func (s *McpServer) handleInitialize() interface{} {
 	if ro := s.metaSoloLectura(); ro != nil {
 		meta["musubi/readonly"] = ro
 	}
-	return map[string]interface{}{
+	res := map[string]interface{}{
 		"protocolVersion": "2024-11-05",
 		"capabilities": map[string]interface{}{
 			"tools": map[string]interface{}{},
@@ -147,19 +147,36 @@ func (s *McpServer) handleInitialize() interface{} {
 		},
 		"_meta": meta,
 	}
+	// Lo que el agente lee en su system prompt (ver agente.go). La clave NO va vacía: un servidor que
+	// no le habla al agente —el central, el relé, los tests— no la manda, y así su handshake queda
+	// byte a byte como antes.
+	if texto := s.instruccionesParaElAgente(); texto != "" {
+		res["instructions"] = texto
+	}
+	return res
 }
 
 // handleToolsList construye la respuesta de tools/list iterando el registro en orden, SALTEANDO
 // las tools dormidas (ver toolEntry.dormant). Es el único lugar donde `dormant` tiene efecto: el
 // índice de despacho las conserva, así que una dormida sigue respondiendo si alguien la nombra.
+//
+// Las tools que las instrucciones nombran salen además con `_meta["anthropic/alwaysLoad"]`, para
+// que el agente las reciba cargadas (ver nucleoDelAgente). La marca se pone sobre una COPIA y no en
+// s.tools: Dispatch se llama concurrentemente (transporte HTTP) porque no escribe estado
+// compartido, y escribir el registro desde acá lo convertiría en una carrera.
 func (s *McpServer) handleToolsList() interface{} {
 	todas := toolsAllEnabled()
+	nucleo := s.nucleoDelAgente()
 	tools := make([]Tool, 0, len(s.tools))
 	for i := range s.tools {
 		if s.tools[i].dormant && !todas {
 			continue
 		}
-		tools = append(tools, s.tools[i].Tool)
+		t := s.tools[i].Tool
+		if nucleo[t.Name] {
+			t.Meta = map[string]interface{}{metaAlwaysLoad: true}
+		}
+		tools = append(tools, t)
 	}
 	return map[string]interface{}{"tools": tools}
 }

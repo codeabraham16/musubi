@@ -33,6 +33,11 @@ type Tool struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
 	InputSchema InputSchema `json:"inputSchema"`
+	// Meta es el sobre `_meta` que el spec de MCP reserva para extensiones. El registro NO lo llena:
+	// lo pone handleToolsList sólo en el servidor que le habla al agente (ver agente.go), así el
+	// catálogo del central y el del relé salen sin marcas. omitempty: un cliente que no lo conoce
+	// no ve un campo nuevo.
+	Meta map[string]interface{} `json:"_meta,omitempty"`
 }
 
 type InputSchema struct {
