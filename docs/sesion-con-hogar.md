@@ -334,15 +334,33 @@ bien—, pero el cursor de bajada **salta** lo que el filtro de proyecto descart
 (ver «El riel de bajada, medido de punta a punta»). Para este plan la consecuencia es directa: una
 sesión que nazca mientras el token de la otra máquina esté acotado **no se va a poder traer después**.
 
-Lo que hay que decidir antes de construirlo, y es una decisión de diseño, no un bug a tapar:
+✅ **CONSTRUIDO el 2026-09-25, por el camino 1.** De las tres opciones que estaban escritas acá se
+eligió **el cursor por alcance**, y las otras dos quedan descartadas con su motivo:
 
-1. **Cursor por alcance, no por base.** Hoy hay un solo `sync:inbound_cursor` y lo que se ve depende del
-   token, así que el cursor pierde sentido al cambiar de credencial. Guardarlo junto a una huella del
-   alcance, y reiniciarlo cuando la huella cambia, hace que ensanchar el token traiga la historia.
-2. **O `next_cursor` desde lo ESCANEADO en vez de lo devuelto** — arregla el paginado pero no el
-   ensanchamiento, así que sola no alcanza.
-3. **O un rebobinado explícito** (`musubi_sync_rewind`), que hoy no existe: lo único que se le parece es
-   `musubi_sync_requeue`, y ése toca el dead-letter del outbox, no la bajada.
+1. ✅ **Cursor por alcance, no por base.** El central **declara** en cada pull el recorte con el que
+   sirvió (campo `alcance`), el cliente lo guarda en `sync:inbound_alcance`, y cuando cambia reinicia
+   el cursor a cero en la misma transacción. Se eligió porque es el único que **repara lo ya roto**: una
+   base con un cursor viejo y sin la clave registrada cuenta como «alcance desconocido» y rebobina una
+   vez, así que las 64 filas de esta PC y las 980 de la laptop vuelven solas al actualizar el binario.
+2. ⛔ **`next_cursor` desde lo ESCANEADO en vez de lo devuelto** — descartado: arregla el paginado pero
+   **no** el ensanchamiento, que es el caso que duele, y no repara nada de lo ya perdido.
+3. ⛔ **Un rebobinado explícito** (`musubi_sync_rewind`) — descartado: deja la reparación a que alguien
+   se acuerde de correrla, que es precisamente cómo se llegó hasta acá.
+
+Tres decisiones del diseño que conviene no revisitar sin leer el porqué:
+
+- **El alcance lo declara el CENTRAL, no lo deduce el cliente.** El recorte lo decide la credencial del
+  lado del central; una llamada aparte (`whoami`) podría contestar por otra credencial. Viaja en la
+  misma respuesta.
+- **Un central viejo no manda el campo, y el vacío se lee como «no sé», no como «cambió».** Tratarlo al
+  revés reiniciaría el corpus entero en cada tick contra ese central.
+- **Federado y proyecto vacío son la MISMA huella**, porque `scopeClause` no filtra en ninguno de los
+  dos casos. La huella tiene que cambiar cuando cambia el **filtro**, no cuando cambia la etiqueta de
+  la credencial.
+
+**El costo, que se asume:** el primer tick tras actualizar re-baja el corpus una vez. La ingesta es
+idempotente y con el sello `espejo` no rebota, pero sí bumpea el `sync_seq` local de cada fila — en un
+nodo que a su vez sirve pulls, sus clientes las van a ver como recién editadas.
 
 ### Paso 3 — El hogar y el empuje
 

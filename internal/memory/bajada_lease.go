@@ -106,6 +106,50 @@ func (e *DbEngine) AvanzarCursorBajada(key string, v int64) error {
 	return nil
 }
 
+// ReiniciarBajadaPorAlcance pone el cursor de la bajada en CERO y registra el alcance nuevo, las dos
+// cosas en UNA transacción. Es la ÚNICA vía del repo que hace RETROCEDER el cursor, y su nombre dice
+// la única razón por la que se permite.
+//
+// POR QUÉ EXISTE. El filtro de proyecto del central no oculta filas: las SALTA. Entra al mismo WHERE
+// que `sync_seq > ?` y el LIMIT se aplica después, así que la página se corre hacia arriba por encima
+// de lo ajeno; y el `next_cursor` sale de las filas DEVUELTAS, o sea ya filtradas. Mientras la
+// credencial es la misma eso no molesta —lo saltado no le corresponde—, pero cuando se ENSANCHA, el
+// filtro desaparece y el cursor ya está arriba: esa historia no volvía JAMÁS, porque
+// AvanzarCursorBajada es monótona a propósito y nada más escribía esta clave.
+//
+// Medido el 2026-09-24 en davantis-1: 64 filas que el central servía eran inalcanzables, las 64 por
+// debajo del cursor y ninguna por encima, con el corte exacto en el borde de proyecto (`altura` 61 de
+// 61 bajo sync_seq 855, 0 de 643 por encima). En la laptop eran 980 de 3.071.
+//
+// LAS DOS ESCRITURAS VAN JUNTAS O NINGUNA. Si el cursor quedara en 0 sin registrar el alcance, el
+// próximo tick volvería a detectar un cambio de alcance y reiniciaría otra vez: un bucle que re-baja
+// el corpus entero en cada tick. Si se registrara el alcance sin bajar el cursor, la reparación se
+// perdería en silencio y el hueco quedaría igual pero ya sin forma de detectarlo.
+//
+// EL COSTO, que es real y se asume: reiniciar re-baja todo el corpus una vez. La ingesta es
+// idempotente, así que no duplica ni pisa con contenido distinto, y con el sello 'espejo' tampoco
+// vuelve a subir. Lo que sí hace es bumpear el `sync_seq` LOCAL de cada fila re-ingerida: en un nodo
+// que a su vez sirve pulls (relay), sus clientes las van a ver como recién editadas.
+func (e *DbEngine) ReiniciarBajadaPorAlcance(claveCursor, claveAlcance, alcance string) error {
+	tx, err := e.db.Begin()
+	if err != nil {
+		return fmt.Errorf("error al abrir la transacción del reinicio de la bajada: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	const upsert = `INSERT INTO meta (key, value, updated_at) VALUES (?, ?, datetime('now'))
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+	if _, err := tx.Exec(upsert, claveCursor, "0"); err != nil {
+		return fmt.Errorf("error al poner en cero el cursor de la bajada: %w", err)
+	}
+	if _, err := tx.Exec(upsert, claveAlcance, alcance); err != nil {
+		return fmt.Errorf("error al registrar el alcance de la bajada: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("error al commitear el reinicio de la bajada: %w", err)
+	}
+	return nil
+}
+
 // validarDuenoBajada rechaza el dueño vacío y el que contiene '|'. El valor guardado es
 // «dueño|vence» y se parte por el PRIMER '|': con un dueño «a|b» se leería el dueño «a» —que no puede
 // renovar ni soltar— y el vencimiento «b|…», que como texto nunca queda atrás de una fecha. El

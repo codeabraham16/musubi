@@ -103,7 +103,16 @@ func (s *McpServer) toolSyncPull(ctx context.Context, raw json.RawMessage) (inte
 	if items == nil {
 		items = []memory.SharedObs{}
 	}
-	return jsonResult(map[string]interface{}{"items": items, "next_cursor": next})
+	// `alcance` DECLARA con qué recorte se sirvió este lote, y es lo que le permite al cliente saber
+	// que su cursor quedó inservible. Hace falta porque el filtro de proyecto no oculta filas: las
+	// SALTA —comparte el WHERE con `sync_seq > ?` y el LIMIT va después—, y el next_cursor sale de
+	// las filas ya filtradas. Mientras el recorte no cambia eso no molesta; cuando la credencial se
+	// ensancha, lo saltado quedó debajo del cursor y no vuelve nunca (ver ReiniciarBajadaPorAlcance).
+	//
+	// El cliente NO puede calcularlo solo: el recorte lo decide el central a partir de la credencial.
+	// Por eso viaja en la MISMA respuesta y no en una llamada aparte, que podría contestar por otra
+	// credencial. Un central viejo no manda el campo, el cliente lo lee vacío y se comporta como antes.
+	return jsonResult(map[string]interface{}{"items": items, "next_cursor": next, "alcance": s.alcanceDelPull(ctx)})
 }
 
 // clampLimit normaliza el límite recibido a un rango razonable.
@@ -2157,6 +2166,22 @@ func (s *McpServer) scopedCtx(ctx context.Context) context.Context {
 func (s *McpServer) expandCtx(ctx context.Context) context.Context {
 	ps, fed := recallScopeFor(principalFrom(ctx))
 	return memory.WithProjectScope(ctx, memory.ProjectScope{ProjectID: ps, Federate: fed, Acervo: designCorpusScope})
+}
+
+// alcanceDelPull devuelve la huella del recorte con el que este pull se sirvió, para que el cliente
+// detecte que el suyo cambió y reinicie el cursor (ver memory.ReiniciarBajadaPorAlcance).
+//
+// ⚠️ LA CONDICIÓN DE ACÁ ES LA DE memory.ProjectScope.scopeClause, Y ESO NO ES CASUAL. Lo que el
+// cliente necesita saber no es qué dice la credencial: es si el FILTRO cambió. `scopeClause` no filtra
+// ni cuando el principal es federado ni cuando su proyecto es vacío, así que los dos casos son el
+// MISMO alcance y tienen que dar la misma huella. Distinguirlos acá haría reiniciar el cursor —y
+// re-bajar el corpus entero— cada vez que se alterne entre dos credenciales que filtran igual.
+func (s *McpServer) alcanceDelPull(ctx context.Context) string {
+	ps, fed := recallScopeFor(principalFrom(ctx))
+	if fed || ps == "" {
+		return "federado"
+	}
+	return "proyecto=" + ps
 }
 
 // redactIfForced redacta text cuando el server FUERZA redacción (infra compartida: un bind
