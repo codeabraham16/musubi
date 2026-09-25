@@ -777,7 +777,7 @@ func (s *McpServer) empujarFotoDelGrafo(ctx context.Context) bool {
 	// Si CUALQUIER parte de la foto falla se ABORTA el push entero, y es a propósito: mandar la
 	// lista vacía no significa "no pude leerlos" sino "borrá todos los míos". Ante una lectura
 	// fallida, no federar nada es lo único seguro — el grafo local ya quedó bien y el próximo index
-	// reintenta.
+	// reintenta. (Una foto SIN gists ya no manda la lista vacía: ver SyncClient.PushGraphDe.)
 	//
 	// Lo custodia TestUnaFotoQueFallaNoMandaNadaAlCentral, que saca el `return false` de acá abajo.
 	s.motivoDelPush = ""
@@ -795,6 +795,18 @@ func (s *McpServer) empujarFotoDelGrafo(ctx context.Context) bool {
 		return false
 	}
 	if err := s.syncClient.PushGraphDe(pub, foto.Nodes, foto.Edges, foto.Gists); err != nil {
+		if errors.Is(err, errReciboNoCuadra) {
+			// El central SÍ reemplazó, pero su recibo dice que guardó menos (o más) de lo mandado:
+			// claves repetidas que colapsó, gists vacíos que salteó, o un push simultáneo. Reenviar
+			// ESTA foto da el mismo resultado, así que se marca como empujada —el mismo criterio que
+			// viejo e ignorado— y se dice: federated:false con los números, no un «ok» mudo.
+			s.motivoDelPush = err.Error()
+			if rerr := s.engine.MarcarGrafoEmpujado(foto.Generacion, time.Now()); rerr != nil {
+				logx.Error("federación del grafo: el recibo no cuadra, y no se pudo registrar para no reintentarlo", "error", rerr)
+			}
+			logx.Warn("federación del grafo: el central no guardó todo lo que se le mandó", "detalle", err.Error())
+			return false
+		}
 		if errors.Is(err, errGrafoViejo) || errors.Is(err, errGrafoIgnorado) {
 			// El central tiene uno más nuevo, o no aplicó el push porque no decía de qué commit era:
 			// reintentar ESTA foto no lo cambia, y cada reintento es el grafo entero por la red. Se
@@ -842,12 +854,18 @@ func (s *McpServer) toolCodegraphPush(ctx context.Context, raw json.RawMessage) 
 		// llevara) ⇒ no se toca lo que ya haya en el central. Lista vacía ⇒ el emisor SÍ habla
 		// y dice que no tiene ninguno ⇒ se reemplaza por vacío. Sin esta distinción, un cliente
 		// viejo empujando el mismo proyecto desde otra máquina le borraría los gists a uno nuevo.
+		// El daemon de hoy ya NO manda la lista vacía (ver SyncClient.PushGraphDe): una máquina sin
+		// gists borraba los del central en cada push. El vacío explícito sigue valiendo para quien
+		// lo mande a propósito.
 		Gists *[]memory.CodeMemory `json:"gists"`
 		// Head y HeadAt dicen DE QUÉ ÁRBOL es el grafo: el commit indexado y su fecha de commit
 		// (RFC3339). Los usa la guarda de antigüedad (memory.decidirPublicacion). Un cliente viejo
 		// no los manda.
 		Head   string `json:"head"`
 		HeadAt string `json:"head_at"`
+		// Huella es el sha256 del contenido que calcula el emisor (memory.HuellaDelGrafo). Con el
+		// mismo head y otra huella el push se acepta con un `aviso`. Un cliente viejo no la manda.
+		Huella string `json:"huella"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -871,6 +889,9 @@ func (s *McpServer) toolCodegraphPush(ctx context.Context, raw json.RawMessage) 
 	if !ok {
 		return nil, rpcErrorf(codeUnauthorized, "no se pudo atribuir el grafo a un proyecto (declará project_id o usá una credencial con proyecto)")
 	}
+	// Quién publica sale de la CREDENCIAL, igual que el proyecto: el payload no tiene cómo decirlo.
+	pub.Por = authorFrom(principalFrom(ctx))
+	pub.Huella = strings.TrimSpace(args.Huella)
 	// Redacción forzada ANTES de persistir (Tramo 0 · M01, misma clase de agujero que cerró T17.2):
 	// el central redacta todo lo que entra de a uno (save_fact, save_code, ingest, distill) y esta
 	// puerta a granel entraba cruda. Un gist es el resumen de un archivo —ahí viven connection
@@ -882,6 +903,7 @@ func (s *McpServer) toolCodegraphPush(ctx context.Context, raw json.RawMessage) 
 	for i := range args.Nodes {
 		args.Nodes[i].Name = s.redactIfForced(args.Nodes[i].Name)
 	}
+	aviso := s.avisoDeLaPublicacion(origin, pub, len(args.Nodes), len(args.Edges))
 	// El reemplazo pasa por la guarda de antigüedad: un grafo de un árbol más viejo que el publicado
 	// no lo pisa. Si se rechaza, TAMPOCO se tocan los gists: son del mismo árbol viejo.
 	if err := s.engine.ReplaceProjectGraphPublicado(origin, pub, args.Nodes, args.Edges); err != nil {
@@ -908,7 +930,57 @@ func (s *McpServer) toolCodegraphPush(ctx context.Context, raw json.RawMessage) 
 		}
 		res["gists"] = len(*args.Gists)
 	}
+	// EL RECIBO. `nodes`, `edges` y `gists` son el largo de lo RECIBIDO —un eco, que se queda por
+	// compatibilidad—; `guardados` es lo que quedó en la base. No son lo mismo: el reemplazo colapsa
+	// claves repetidas (ON CONFLICT) y saltea gists sin path o sin contenido, en silencio. El emisor
+	// compara `guardados` con lo que mandó (reciboQueNoCuadra). Se cuenta DESPUÉS del commit y fuera
+	// de la transacción: un push simultáneo del mismo proyecto puede dar un «no cuadra» falso, que el
+	// próximo push o la higiene de 24 h corrigen.
+	if c, err := s.engine.ConteoDelGrafoDe(origin); err == nil {
+		guardados := map[string]interface{}{"nodes": c.Nodes, "edges": c.Edges}
+		if args.Gists != nil {
+			guardados["gists"] = c.Gists
+		}
+		res["guardados"] = guardados
+	} else {
+		logx.Warn("federación del grafo: no se pudo contar lo guardado (el recibo sale sin «guardados»)", "error", err)
+	}
+	if !pub.Vacia() {
+		publicado := map[string]interface{}{"head": pub.Head, "head_at": pub.En.UTC().Format(time.RFC3339)}
+		if pub.Por != "" {
+			publicado["por"] = pub.Por
+		}
+		if pub.Huella != "" {
+			publicado["huella"] = pub.Huella
+		}
+		res["publicado"] = publicado
+	}
+	if aviso != "" {
+		res["aviso"] = aviso
+		logx.Warn("federación del grafo: dos índices del mismo commit no coinciden", "proyecto", origin, "por", pub.Por, "aviso", aviso)
+	}
 	return jsonResult(res)
+}
+
+// avisoDeLaPublicacion mira lo publicado ANTES del reemplazo y dice si este push merece un aviso
+// (memory.AvisoDePublicacion: el mismo commit con otra huella), con los números de los dos lados.
+// Se lee afuera de la transacción del reemplazo porque la firma de ReplaceProjectGraphPublicado no
+// devuelve avisos: un push simultáneo puede dejarlo desactualizado, y por eso es un aviso y no una
+// decisión —la decisión sí va adentro de la transacción—. "" si no hay nada que avisar o si no se
+// pudo leer.
+func (s *McpServer) avisoDeLaPublicacion(origin string, pub memory.PublicacionDelGrafo, nodos, aristas int) string {
+	vigente, err := s.engine.PublicacionDelGrafoDe(origin)
+	if err != nil {
+		return ""
+	}
+	aviso := memory.AvisoDePublicacion(vigente, pub)
+	if aviso == "" {
+		return ""
+	}
+	if c, err := s.engine.ConteoDelGrafoDe(origin); err == nil {
+		aviso += fmt.Sprintf(". El publicado tenía %d nodos y %d aristas; este push trae %d y %d", c.Nodes, c.Edges, nodos, aristas)
+	}
+	return aviso
 }
 
 // commitDeHEAD devuelve el commit corto del árbol indexado, o "" si no hay git, no es un repo o el

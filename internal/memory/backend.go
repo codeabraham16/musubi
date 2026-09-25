@@ -206,6 +206,9 @@ type CodeGraphStore interface {
 	ReplaceProjectGraphPublicado(originProjectID string, pub PublicacionDelGrafo, nodes []GraphNode, edges []GraphEdge) error
 	// PublicacionDelGrafoDe dice de qué commit es el grafo publicado de un proyecto (vacía si nada).
 	PublicacionDelGrafoDe(projectID string) (PublicacionDelGrafo, error)
+	// ConteoDelGrafoDe cuenta lo GUARDADO de un proyecto (nodos, aristas y gists): el recibo que el
+	// central contesta a un push, en vez del largo de lo que recibió.
+	ConteoDelGrafoDe(projectID string) (ConteoDelGrafo, error)
 	// AllGraphNodesCtx / AllGraphEdgesCtx vuelcan el grafo completo del proyecto (scopeado por la
 	// credencial) para serializarlo en el push-on-index de la federación (F6).
 	AllGraphNodesCtx(ctx context.Context) ([]GraphNode, error)
