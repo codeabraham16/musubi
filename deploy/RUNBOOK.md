@@ -12,6 +12,13 @@ Diagnóstico rápido (siempre): `musubi doctor` (en el host del cerebro) da un p
 1. `systemctl status musubi-brain` → si está `failed`, `journalctl -u musubi-brain -n 200` para la causa.
 2. Verificá el tailnet (`tailscale status`) y que el puerto responda: `curl -sS localhost:7717/readyz`.
 3. `systemctl restart musubi-brain` si el proceso murió; confirmá `readyz` en 200.
+4. **Si el proceso está vivo y `readyz` da 200, sospechá de la credencial del scrape**, no del
+   cerebro. Prometheus scrapea `/metrics` con su propio principal (`prometheus`); si esa
+   credencial venció o se revocó, el scrape cobra **401** y Prometheus lo cuenta igual que un
+   cerebro caído. Se distingue en la página de targets de Prometheus (`lastError` dice
+   `401 Unauthorized`) o en `musubi token list --file <principals.yaml>` (la fila dice `VENCIDA`).
+   Con esa credencial muerta tampoco llegan las series de vencimiento, así que
+   `CredencialRecienVencida` **no puede** avisarlo: el único síntoma es éste.
 
 > ℹ️ **`/readyz` ahora prueba la ESCRITURA, no sólo la lectura.** Un 200 significa que el cerebro
 > acepta memoria; un 503 trae `"sonda"` (`lectura` / `escritura` / `motor`) y el detalle. Antes
@@ -115,6 +122,109 @@ son sesenta drenajes perdidos: no es lentitud, es que algo dejó de andar.
 **Acción:**
 1. `musubi doctor` → integridad/esquema. Si hay corrupción, restaurá del último backup off-host.
 2. Mirá `musubi_tool_invocations_total{result="error"}` por tool para aislar cuál falla y correlacioná con los logs.
+
+## CredencialPorVencer
+
+A una credencial de `principals.yaml` le quedan **menos de 14 días**. Todavía autentica: esto es el
+margen, no la emergencia. La alerta no dice cuál —las series de `/metrics` no llevan nombres, a
+propósito— y el listado sí:
+
+```bash
+# en el servidor del cerebro, con el archivo que el cerebro sirve
+musubi token list --file ~/musubi-brain/.musubi/principals.yaml
+```
+
+La que buscás dice `por vencer, faltan N días (<fecha>)`. Los 14 días de la alerta y los del listado
+son el mismo número (`umbralPorVencer`, custodiado por `TestElUmbralDeLaAlertaEsElDelListado`), así
+que si la alerta suena, alguna fila lo dice.
+
+**Renovar es editar su `expires:`**, no revocar y volver a crear:
+
+```bash
+cd ~/musubi-brain/.musubi
+install -m 600 principals.yaml principals.yaml.bak-$(date +%Y%m%d-%H%M%S)   # respaldo SIN abrirlo a otros
+$EDITOR principals.yaml        # expires: "2026-12-23T12:00:00-03:00" — RFC3339, con zona
+musubi token list --file principals.yaml   # ninguna fila puede decir «ilegible»
+```
+
+- El cerebro relee el archivo solo, en **≤10 s**. No hace falta reiniciar, y conviene no hacerlo: un
+  reinicio corta el sync de todas las máquinas.
+- **`revoke` + `new` NO es renovar**: `token new` escribe sólo nombre, proyecto, rol y ejes, así que
+  la credencial nueva pierde `fleet:`, `fleet_exec_allow:` y `expires:`. Además cambia el token, y
+  la máquina que lo usa queda afuera hasta que le llegue el nuevo.
+- Un `expires:` ilegible **no** deja la credencial eterna: el cerebro rechaza la relectura, sigue con
+  el registro anterior y salta `RegistroDePrincipalsSinPoderRecargarse`. Pero el próximo reinicio no
+  arranca. Por eso el `token list` de después no es opcional.
+- **Una hora a mediodía y no `00:00Z`**: vencer a medianoche UTC es vencer a las 21 h de acá, cuando
+  no hay nadie mirando.
+
+**Si la credencial es la del scrape (`prometheus`)**, el día que venza no va a sonar
+`CredencialRecienVencida` sino `MusubiDown`: el scrape cobra 401 y deja de traer estas series. Ver
+[MusubiDown](#musubidown).
+
+## CredencialRecienVencida
+
+Una credencial de `principals.yaml` **acaba de vencer**: desde ese instante, lo que la usaba cobra
+401. La alerta mira el salto (`delta(musubi_principals_expired[2h]) > 0`) y no el estado, así que se
+apaga sola a las 2 horas; una fila vencida que queda en el archivo no la mantiene sonando.
+
+Primero, cuál fue: `musubi token list --file <principals.yaml>` en el servidor, la fila `VENCIDA`
+con la fecha más reciente.
+
+**Si la fecha se puso en el pasado a propósito** —es la forma reversible de desactivar una
+credencial antes de revocarla—, no hay nada que hacer: se apaga sola.
+
+**Si no, lo que dependía de ella está caído.** Renová el `expires:` como en
+[CredencialPorVencer](#credencialporvencer), y después, **si era la credencial del sync de una
+máquina** (la de esta PC, la de la laptop), falta el paso que no se ve:
+
+> **Un 401 es un error PERMANENTE para el sync.** Mientras la credencial estuvo vencida, cada
+> observación compartida que esa máquina intentó subir se fue a **dead-letter**, y renovar la
+> credencial **no las resucita**: el sync sigue andando para lo nuevo y lo de esa ventana se queda
+> muerto, sin que nada lo reintente.
+
+En **esa máquina** (no en el central), desde una sesión con el MCP local `musubi` —no
+`musubi-cerebro`, que es el central—:
+
+1. `musubi_sync_status` → mirá cuántas hay en `dead-letter` y el `Último error`. Un `401`/`unauthorized` confirma que son de
+   la ventana del vencimiento.
+2. `musubi_sync_requeue` → devuelve las de dead-letter a la cola.
+3. `musubi_sync_status` otra vez, un minuto después (el drenaje corre cada 30 s): `dead-letter` tiene
+   que haber bajado y `enviadas` subido. Si vuelven a dead-letter, la credencial todavía no autentica: mirá
+   que el token del env y el del keychain de esa máquina sean el vigente.
+
+Si la máquina estaba apagada (la laptop), el requeue va cuando vuelva. Hasta entonces, lo que guardó
+como compartido existe sólo en su base local.
+
+**Si la que venció es `prometheus`**, esta alerta no suena: el scrape cobra 401 y las series dejan de
+llegar. Lo que suena es [MusubiDown](#musubidown).
+
+## RegistroDePrincipalsSinPoderRecargarse
+
+El cerebro vio que `principals.yaml` cambió, intentó releerlo, y lo rechazó — hace más de 15
+minutos, o sea unas noventa relecturas seguidas: no es una edición a medias. Sigue autenticando con
+el registro **anterior**, que es lo correcto para no dejar afuera al equipo, pero tiene dos
+consecuencias que no se ven:
+
+- **Lo último que se escribió en el archivo no se aplicó.** Si era una revocación, el token revocado
+  **sigue entrando**. Si era una fecha renovada, la credencial va a vencer igual.
+- **El próximo reinicio no arranca.** El registro de arranque es fail-closed: con ese archivo, el
+  cerebro se niega a servir.
+
+El error exacto, con el principal y la línea, está en el journal:
+
+```bash
+journalctl -u musubi-brain --since "1 hour ago" | grep "recarga en caliente del registro de principals"
+```
+
+Lo típico es un `expires:` que no es RFC3339 (`2026-12-23` sin hora, o `23/12/2026`), un nombre
+duplicado, o un `read:`/`write:` mal escrito. Corregilo y confirmá con
+`musubi token list --file <principals.yaml>` que ninguna fila diga `ilegible`. La serie
+`musubi_principals_reload_failing` vuelve a 0 en la próxima relectura buena (≤10 s), y la alerta se
+apaga sola.
+
+Si no sabés qué cambió, el respaldo previo a la edición está al lado (`principals.yaml.bak-*`):
+`diff principals.yaml.bak-<fecha> principals.yaml`.
 
 ---
 

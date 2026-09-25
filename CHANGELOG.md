@@ -7,6 +7,49 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **Las credenciales del cerebro avisan ANTES de vencer.** El vencimiento (`expires:` en
+  `principals.yaml`) existe desde el 2026-09-03 y no avisaba: una credencial con fecha se caía el
+  día que tocaba, y lo primero que se veía era el sync de una máquina muerto — con su memoria
+  compartida yéndose a dead-letter, porque un 401 es permanente para el sync.
+
+  - **`musubi token list` tiene un quinto estado, «por vencer»**, cuando le quedan menos de 14 días,
+    y la fila dice cuántos (`por vencer, faltan 3 días (…)`, redondeando hacia arriba: a la de doce
+    horas no le «faltan 0 días»). La tool `musubi_token_list` lo devuelve en `vencimiento` sin
+    cambios de esquema.
+  - **`/metrics` publica el resumen del registro, sin nombres**: `musubi_principal_next_expiry_seconds`
+    (ausente si ninguna credencial tiene fecha futura, que hoy es el caso del central),
+    `musubi_principals_expired`, `musubi_principals_without_expiry`, `musubi_legacy_token_enabled`,
+    `musubi_legacy_token_auth_total` y `musubi_principals_reload_failing` / `_reload_failures_total`.
+    Sólo las ve una identidad read=all (el scrape) o la confianza local: un tercero con read=own no
+    tiene por qué saber que hay un bearer admin que no vence.
+  - **El bearer legacy (`MUSUBI_TOKEN`) cuenta sus usos** en `resolve()`, por donde pasan todas las
+    puertas —también `/metrics` y `/api/*`, que el ledger de tools no ve—, y la cuenta sobrevive a
+    las recargas del registro. Es lo que tiene que llegar a siete días en cero para poder retirarlo.
+  - **Una relectura rechazada de `principals.yaml` deja de ser silenciosa.** Conservar el registro
+    anterior es correcto, pero la revocación escrita en el archivo no se aplicaba y el próximo
+    reinicio no arrancaba, y lo único que quedaba era un Warn en el journal.
+  - **Tres alertas** en `deploy/musubi-alerts.yml` —`CredencialPorVencer` (`< 14 * 24 * 3600`, el
+    mismo número que el listado), `CredencialRecienVencida` (el salto del gauge, no el estado: una
+    fila vencida no la deja sonando) y `RegistroDePrincipalsSinPoderRecargarse`—, con sus tres
+    secciones en `deploy/RUNBOOK.md`. La de `CredencialRecienVencida` dice el paso que no se ve:
+    renovar la credencial no resucita lo que se fue a dead-letter, y hay que correr
+    `musubi_sync_status` + `musubi_sync_requeue` en la máquina afectada. La custodia cruzada de
+    `musubi-alerts-flota.yml` pasa de 32 a 35: **los dos archivos de reglas se despliegan juntos.**
+  - `musubi token revoke` ya no pide reiniciar `musubi-brain`: el cerebro relee el archivo solo en
+    ≤10 s, y el mensaje dice los dos casos en que eso no alcanza. `MusubiDown` y su runbook dicen
+    que un `up == 0` con el proceso vivo puede ser la credencial del scrape vencida.
+
+  *Dieciséis sabotajes nuevos, uno por directiva `arnes:`, los dieciséis corridos en rojo: la rama
+  «por vencer», el redondeo, el umbral del listado contra el de la alerta (en las dos direcciones),
+  la llamada al render desde `/metrics`, la vencida fuera del mínimo, la delegación del registro
+  recargable, la serie ausente sin fecha futura, la visibilidad read=own (agregando lo prohibido),
+  el flag de recarga al encenderse y al apagarse, el contador de recargas, el contador del legacy y
+  su traspaso en la recarga, los nombres de las series contra las `expr` de las alertas, y los días
+  en la fila del CLI. Más los tres naturales del cambio sobre guardas que ya existían —la custodia
+  en 32 y dos anclas del runbook renombradas—, también en rojo. No se le puso fecha a ninguna
+  credencial: eso es producción y va aparte, con el aviso ya desplegado.*
+
 ### Fixed
 - **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
   El ledger era UNA casilla de `meta` que guardaba UNA sesión, y `LedgerAdd` la reiniciaba entera

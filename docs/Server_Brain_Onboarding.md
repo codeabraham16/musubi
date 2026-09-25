@@ -147,8 +147,8 @@ Gestionalo con **`musubi token`** (genera el token, guarda solo su SHA-256 y man
 ```bash
 # Alta: imprime el token UNA vez — entregáselo al miembro por un canal seguro.
 musubi token new --name alice --project crm-musubi --role writer
-musubi token list                 # nombre / rol / proyecto (nunca el token ni el hash)
-musubi token revoke --name alice  # baja; reiniciá musubi-brain.service para aplicar
+musubi token list                 # nombre / rol / proyecto / vencimiento (nunca el token ni el hash)
+musubi token revoke --name alice  # baja; el cerebro relee el archivo solo, en ≤10 s, sin reiniciar
 ```
 
 El archivo resultante (600, fuera de control de versiones):
