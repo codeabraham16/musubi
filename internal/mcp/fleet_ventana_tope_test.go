@@ -72,6 +72,11 @@ func ventanaDeRespuesta(t *testing.T, res interface{}) fleet.Ventana {
 // arnes: archivo="internal/fleet/cronologia.go"
 // arnes: de="\t\tdesde = hasta.Add(-VentanaMax)\n"
 // arnes: a="\t\tdesde = hasta.Add(-VentanaMax - time.Second)\n"
+// Sabotaje: que musubi_fleet_contexto deje de declarar `horas` → sale de la derivación, el recorrido
+// deja de pedirle nada y sin el piso la prueba seguiría verde midiendo una sola tool.
+// arnes: archivo="internal/mcp/registry.go"
+// arnes: de="\"horas\":   {Type: \"number\", Description: \"Atajo para «las últimas N horas». Excluyente con `desde`/`hasta`\"},"
+// arnes: a="\"horitas\": {Type: \"number\", Description: \"Atajo para «las últimas N horas». Excluyente con `desde`/`hasta`\"},"
 func TestLasToolsDeVentanaDanElMaximoCuandoSePideDeMas(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	sembrarLosTresPlanos(t, s, "infra", "pc-gio")
@@ -79,9 +84,13 @@ func TestLasToolsDeVentanaDanElMaximoCuandoSePideDeMas(t *testing.T) {
 
 	tools := toolsDeVentana(s)
 	// EL PISO: si la derivación no encontrara nada, esta prueba pasaría sin llamar a ninguna tool.
-	if !strings.Contains(strings.Join(tools, " "), "musubi_fleet_cronologia") {
-		t.Fatalf("la derivación de tools con ventana no encontró musubi_fleet_cronologia (encontró %v): "+
-			"la prueba no estaría midiendo nada", tools)
+	// Son las dos en las que C2-vivo1 estaba vivo —un hecho, no un derivado—: si cualquiera dejara de
+	// declarar `horas`, `desde` o `hasta`, saldría de la derivación y del recorrido sin avisar.
+	for _, debe := range []string{"musubi_fleet_contexto", "musubi_fleet_cronologia"} {
+		if !strings.Contains(" "+strings.Join(tools, " ")+" ", " "+debe+" ") {
+			t.Fatalf("la derivación de tools con ventana no encontró %s (encontró %v): "+
+				"la prueba dejaría de medir una de las dos tools donde vivía el defecto", debe, tools)
+		}
 	}
 
 	maxHs := fleet.VentanaMax.Hours()

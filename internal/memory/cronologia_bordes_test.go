@@ -184,7 +184,8 @@ func lectoresDeVentana() map[string]lectorDeVentana {
 //
 // LOS DOS CONJUNTOS SE CIERRAN CONTRA SU FUENTE, no contra una lista: los lectores son los métodos
 // del motor que reciben una fleet.Ventana (por reflexión), y los tipos de hecho son
-// fleet.TiposDeHecho. Un lector o un tipo nuevo sin fila en estas tablas pone la prueba en rojo.
+// fleet.TiposDeHecho, que TestTiposDeHechoEsElEnumEntero (fleet) ata al bloque const. Un lector o
+// un tipo nuevo sin fila en estas tablas pone la prueba en rojo.
 //
 // EXPOSICIÓN medida por la auditoría: el estado roto no existe hoy en producción —4 sesiones de
 // pantalla en total, ninguna en minuto, hora ni medianoche redondos— y la ventana default no puede
