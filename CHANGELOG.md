@@ -7,6 +7,34 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El arnés corre sus sabotajes todas las noches.** Hasta hoy el CI sólo los CONTABA: la guarda
+  del censo comprueba que cada directiva `// arnes:` apunte a un literal único, pero nadie corría
+  `arnes -correr`, que es lo único que dice si la guarda se pone roja con su sabotaje. El workflow
+  nuevo `.github/workflows/arnes-nocturno.yml` corre las 963 mecanizadas a las 06:30 UTC en 8
+  fragmentos paralelos (job `sabotajes`, no obligatorio: es un canario, y una noche roja llega por
+  mail de GitHub). También corre en el PR que toque ese archivo y a mano con `workflow_dispatch`.
+  - **`-fragmento k/n`**: reparte POR TURNO sobre la posición que la corrida imprime, así los 532 de
+    `internal/mcp` se intercalan entre los fragmentos en vez de caer todos en uno, y el número
+    impreso sigue sirviendo para `-desde`. Un valor mal escrito (`9/8`, `3/0`, `a/8`) sale con exit
+    2 sin correr nada. La selección vive en una función pura (`seleccionar`) que es lo único que
+    recorren `-correr` y `-overlay`.
+  - **Cero corridas ya no es verde.** `-correr -paquete ./internal/noexiste` salía 0 con
+    «corridas : 0»: en el nocturno, un fragmento vacío habría dejado la noche en verde sin medir
+    nada. Ahora sale 1.
+  - **Clave nueva `sistema="windows"`** en las directivas, de la familia de `tags` y `env`: la
+    prueba sólo existe en esos GOOS, y en los demás el corredor la aparta como «no aplica» en vez de
+    contarla «sin veredicto». La usa `TestEscribirArchivoAtomicoConElDestinoAbiertoEnWindows`, que
+    hace `t.Skip` fuera de Windows y habría dejado rojo su fragmento todas las noches. Un GOOS mal
+    escrito es una queja del censo, porque si no la directiva no aplicaría en ninguna máquina.
+
+  *Seis guardas nuevas con 14 sabotajes declarados, todos corridos en rojo. Además de las
+  funciones puras, una lee `main.go` y exige el cableado —`main` pasa el fragmento parseado, los
+  corredores se lo pasan a `seleccionar` y recorren lo que devuelve, y `correrTodos` termina en
+  `codigoDeSalida`—, porque con sólo las puras en verde se podía desconectar el fragmento sin que
+  nada se pusiera rojo. Lo que la primera corrida completa en Linux encuentre (guardas huecas,
+  controles inestables, sin veredicto) se arregla aparte: los ~960 nunca corrieron juntos.*
+
 ### Fixed
 - **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
   El ledger era UNA casilla de `meta` que guardaba UNA sesión, y `LedgerAdd` la reiniciaba entera

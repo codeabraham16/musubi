@@ -206,8 +206,16 @@ type Directiva struct {
 	// entorno de quien corre —una ruta a un asset es distinta en cada máquina y clavarla acá
 	// sería una copia—. Lo que compra es el DIAGNÓSTICO: sin esto, una prueba salteada se ve como
 	// «el control salió en verde sin ejecutar UNA SOLA prueba», que suena a ancla rota.
-	Tags string
-	Env  []string
+	//
+	// Sistemas es la tercera de la misma familia: los GOOS donde la prueba EXISTE. Una prueba que
+	// hace `if runtime.GOOS != "windows" { t.Skip(…) }` no contesta en Linux, y el corredor la
+	// contaría «sin veredicto» —un rojo del nocturno todas las noches, que enseña a ignorarlo—.
+	// Con `sistema="windows"` el corredor la aparta como «no aplica en linux», que es lo que es.
+	// Vacío es «en todos». Se separan por espacios, como `env`, y cada nombre se valida contra la
+	// lista de GOOS: un typo dejaría la directiva sin sistema donde correr, o sea muerta en todos.
+	Tags     string
+	Env      []string
+	Sistemas []string
 
 	// ColisionOk ES LA RESPUESTA A UN AVISO DE `Colisiones`, PUESTA DONDE LA HERRAMIENTA LA VE.
 	//
@@ -837,7 +845,7 @@ func directivaDe(lineas []lineaCom, rel, pruebaDerivada string) (*Directiva, str
 		// Se DENUNCIA y no se elige una de las dos: adivinar cuál quiso el autor es exactamente
 		// cómo una directiva muerta pasa por viva.
 		var sobran []string
-		for _, k := range []string{"archivo", "de", "a", "arreglo_de", "arreglo_a", "colision_ok", "paquete", "tags", "env"} {
+		for _, k := range []string{"archivo", "de", "a", "arreglo_de", "arreglo_a", "colision_ok", "paquete", "tags", "env", "sistema"} {
 			if _, hay := campos[k]; hay {
 				sobran = append(sobran, k)
 			}
@@ -862,6 +870,7 @@ func directivaDe(lineas []lineaCom, rel, pruebaDerivada string) (*Directiva, str
 		ArregloA:  campos["arreglo_a"],
 		Tags:      strings.Join(strings.Fields(campos["tags"]), ","),
 		Env:       strings.Fields(campos["env"]),
+		Sistemas:  strings.Fields(campos["sistema"]),
 
 		ColisionOk: strings.TrimSpace(campos["colision_ok"]),
 	}
@@ -908,6 +917,17 @@ func directivaDe(lineas []lineaCom, rel, pruebaDerivada string) (*Directiva, str
 			quejas = append(quejas, fmt.Sprintf("`env` trae %q, que no es un nombre de variable: "+
 				"`env` declara NOMBRES separados por espacios, no `NOMBRE=valor` — el valor es del "+
 				"entorno de quien corre", e))
+		}
+	}
+	// UN `sistema` MAL ESCRITO ES LA MISMA FAMILIA, CON UN DESENLACE PEOR: no queda «sin
+	// veredicto», queda FUERA. `sistema="windoes"` no coincide con ningún GOOS, así que el corredor
+	// la apartaría como «no aplica» en todas las máquinas y el sabotaje no correría nunca, con el
+	// informe explicando por qué con toda tranquilidad.
+	for _, s := range d.Sistemas {
+		if !esSistemaConocido(s) {
+			quejas = append(quejas, fmt.Sprintf("`sistema` trae %q, que no es un GOOS: una directiva "+
+				"con un sistema que no existe no aplica en ninguna máquina y su sabotaje no corre "+
+				"nunca. Van separados por espacios, de entre: %s", s, strings.Join(sistemasConocidos, " ")))
 		}
 	}
 	// `colision_ok` NOMBRA UNA PRUEBA, Y EXIGIRLO ES LO QUE HACE QUE LA RESPUESTA NO SE PUDRA.
@@ -996,7 +1016,24 @@ func camposDe(payload string) (map[string]string, []string) {
 	return campos, quejas
 }
 
-var clavesValidas = []string{"archivo", "de", "a", "paquete", "prueba", "arreglo_de", "arreglo_a", "no_mecanizable", "tags", "env", "colision_ok"}
+var clavesValidas = []string{"archivo", "de", "a", "paquete", "prueba", "arreglo_de", "arreglo_a", "no_mecanizable", "tags", "env", "colision_ok", "sistema"}
+
+// sistemasConocidos son los GOOS que acepta `sistema=`, copiados de `go tool dist list` (Go
+// 1.26.6). Es una lista FIJA a propósito: preguntarle al toolchain en cada censo costaría un
+// proceso por corrida, y un GOOS nuevo entra acá el día que una prueba lo necesite.
+var sistemasConocidos = []string{"aix", "android", "darwin", "dragonfly", "freebsd", "illumos", "ios", "js",
+	"linux", "netbsd", "openbsd", "plan9", "solaris", "wasip1", "windows"}
+
+// esSistemaConocido dice si `s` es uno de `sistemasConocidos`. Un bucle, como `claveConocida`:
+// este paquete no importa `slices` y no vale un import para una sola pregunta.
+func esSistemaConocido(s string) bool {
+	for _, g := range sistemasConocidos {
+		if g == s {
+			return true
+		}
+	}
+	return false
+}
 
 // esIdentificadorDeBuild dice si `t` puede ser un tag de build de Go.
 func esIdentificadorDeBuild(t string) bool {
