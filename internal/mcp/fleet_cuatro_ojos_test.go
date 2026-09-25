@@ -1571,3 +1571,36 @@ func TestSiElInformeFallaLaMarcaNoQuedaPuesta(t *testing.T) {
 			"exige cuatro ojos, así que el admin cree que no la encendió")
 	}
 }
+
+// «NADIE» SE LEE `[]`, NO `null`. Una capacidad que la máquina admite y ninguna credencial tiene
+// es el candado más cerrado que hay: nadie puede ni pedir la sesión. Un `null` en esa lista se lee
+// «no aplica», que es lo contrario, y un consumidor que la recorra la saltearía.
+//
+// Sabotaje: declarar la lista como nil en vez de vacía.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="nombres := []string{}"
+// arnes: a="var nombres []string"
+func TestNadiePuedeAprobarSeLeeListaVaciaYNoNull(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarTierAConShell(t, s, "casa", "pc-shell")
+	// Dos con pantalla y NADIE con `shell`: la máquina la admite y no hay quién la tenga.
+	s.buscarPrincipal = registroDePrueba(*conPantalla("casa"), *otroConPantalla("casa"))
+
+	res := encenderYLeer(t, s, "pc-shell")
+
+	porCap, ok := res["credenciales_que_pueden_aprobar"].(map[string]any)
+	if !ok {
+		t.Fatalf("la respuesta no trae `credenciales_que_pueden_aprobar` como mapa: %v", res)
+	}
+	v, hay := porCap[string(fleet.CapShell)]
+	if !hay {
+		t.Fatalf("`shell` no figura en el informe de una máquina que la admite: %v", porCap)
+	}
+	if lista, esLista := v.([]any); !esLista || len(lista) != 0 {
+		t.Errorf("`shell` = %#v, se esperaba `[]`: «nadie» tiene que leerse como una lista vacía y "+
+			"no como `null`", v)
+	}
+	if candado := strings.Join(nombresEn(res["candado"]), ","); candado != "shell" {
+		t.Errorf("candado = [%s], se esperaba [shell]: sin nadie con `shell`, nadie puede ni pedirla", candado)
+	}
+}
