@@ -384,8 +384,9 @@ func (s *McpServer) toolFleetRequireApproval(ctx context.Context, raw json.RawMe
 				// La marca se guarda igual —apagarla o rechazarla sería decidir por el admin—,
 				// pero no puede quedar dicho como si controlara algo.
 				quienes["sin_camino_aprobable"] = "esta máquina no admite ninguna capacidad que " +
-					"pase por cuatro ojos (`shell`, `screen`, `screen:view`): la marca queda puesta " +
-					"y no frena nada. `exec` y `metrics` no se aprueban."
+					"pase por cuatro ojos (`shell` o `screen`): la marca queda puesta y no frena nada. " +
+					"`exec` y `metrics` no se aprueban, y `screen:view` no abre ninguna sesión que " +
+					"esta puerta pueda frenar."
 			}
 		}
 	}

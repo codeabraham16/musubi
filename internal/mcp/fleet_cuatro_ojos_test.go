@@ -1254,9 +1254,6 @@ func TestEncenderCuatroOjosNombraAQuienPuedeAprobar(t *testing.T) {
 		t.Errorf("pueden aprobar `screen` = [%s], se esperaba [mirador,revisora]: la lista tiene que "+
 			"ser exactamente la de quienes toolFleetApprove dejaría pasar", got)
 	}
-	if got := strings.Join(aprobadoresDe(t, res, fleet.CapScreenView), ","); got != "mirador,revisora" {
-		t.Errorf("pueden aprobar `screen:view` = [%s], se esperaba [mirador,revisora]: `screen` implica mirar", got)
-	}
 	if _, hay := res["candado"]; hay {
 		t.Errorf("con dos credenciales con `screen` la respuesta dice candado: %v", res["candado"])
 	}
@@ -1441,4 +1438,75 @@ func TestElInformeDeAprobadoresPasaPorElEnvoltorioDeProduccion(t *testing.T) {
 	if v, hay := res["candado"]; hay {
 		t.Errorf("con dos credenciales vigentes el envoltorio informa candado = %v", v)
 	}
+}
+
+// soloMira tiene `screen:view` sobre toda la casa y nada más: puede leer la bitácora de pantallas,
+// no abrir una sesión ni aprobársela a nadie.
+func soloMira(nombre string) Principal {
+	return Principal{
+		Name: nombre, Role: RoleWriter, Read: ReadOwn, Write: WriteOwn, ProjectID: "casa",
+		Fleet: map[fleet.Cap][]string{fleet.CapScreenView: {"*"}, fleet.CapMetrics: {"*"}},
+	}
+}
+
+// MIRAR NO ES UNA PUERTA DE CUATRO OJOS, Y EL INFORME NO LA CUENTA COMO UNA. Ningún camino abre
+// una sesión de sólo mirar: la tool de pantalla exige `screen` y pide la aprobación como `screen`.
+// Informar `screen:view` nombraba aprobadores para una puerta que no existe, y lo encontró una
+// revisión adversaria con dos casos. Una máquina cuya única capacidad interactiva es
+// `screen:view` salía con aprobadores y sin `sin_camino_aprobable`, así que la marca se leía como
+// un control puesto y no frenaba nada. Y una credencial con sólo `screen:view` figuraba como
+// aprobadora sin poder resolver ninguna solicitud real.
+//
+// Sabotaje: volver a informar `screen:view` entre las capacidades que se aprueban.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="var capsQueSeAprueban = []fleet.Cap{fleet.CapShell, fleet.CapScreen}"
+// arnes: a="var capsQueSeAprueban = []fleet.Cap{fleet.CapShell, fleet.CapScreen, fleet.CapScreenView}"
+func TestMirarNoEsUnaPuertaDeCuatroOjos(t *testing.T) {
+	t.Run("una máquina que sólo deja mirar no tiene camino aprobable", func(t *testing.T) {
+		s := newTestServer(t, embedding.NoopProvider{})
+		if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
+			"name": "kiosko", "tier": "A", "caps": []string{"metrics", "screen:view"},
+			"project": "casa", "os": "linux",
+		}); e != nil {
+			t.Fatalf("enroll: %+v", e)
+		}
+		s.buscarPrincipal = registroDePrueba(*conPantalla("casa"), *otroConPantalla("casa"))
+		// LA PREMISA, comprobada y no supuesta: sobre esta máquina nadie puede pedir una pantalla.
+		d, _, _ := s.engine.DevicePorNombre("casa", "kiosko")
+		if PuedeSobreDevice(conPantalla("casa"), d, fleet.CapScreen) {
+			t.Fatal("premisa rota: `mirador` puede abrir la pantalla de una máquina con sólo `screen:view`")
+		}
+
+		res := encenderYLeer(t, s, "kiosko")
+
+		if porCap, _ := res["credenciales_que_pueden_aprobar"].(map[string]any); len(porCap) != 0 {
+			t.Errorf("credenciales_que_pueden_aprobar = %v sobre una máquina donde ninguna sesión pasa "+
+				"por cuatro ojos: nombra aprobadores para una puerta que no existe", porCap)
+		}
+		if _, hay := res["sin_camino_aprobable"]; !hay {
+			t.Errorf("una máquina que sólo deja mirar no dice `sin_camino_aprobable`: la marca queda "+
+				"escrita como un control y no frena nada. Respuesta: %v", res)
+		}
+	})
+	t.Run("una credencial que sólo mira no figura como aprobadora", func(t *testing.T) {
+		s := newTestServer(t, embedding.NoopProvider{})
+		enrolarConPantalla(t, s, "casa", "pc-gio")
+		s.buscarPrincipal = registroDePrueba(*conPantalla("casa"), soloMira("solo-mira"))
+
+		res := encenderYLeer(t, s, "pc-gio")
+
+		porCap, _ := res["credenciales_que_pueden_aprobar"].(map[string]any)
+		if v, hay := porCap[string(fleet.CapScreenView)]; hay {
+			t.Errorf("el informe lista `screen:view` = %v: ninguna solicitud se abre con esa capacidad, "+
+				"así que nadie de esa lista puede aprobar nada por tenerla", v)
+		}
+		if got := strings.Join(aprobadoresDe(t, res, fleet.CapScreen), ","); got != "mirador" {
+			t.Errorf("pueden aprobar `screen` = [%s], se esperaba [mirador]: `solo-mira` no puede "+
+				"resolver una solicitud de `screen`", got)
+		}
+		if candado := strings.Join(nombresEn(res["candado"]), ","); candado != "screen" {
+			t.Errorf("candado = [%s], se esperaba [screen]: una sola credencial puede pedir o aprobar "+
+				"una pantalla, y la que sólo mira no es el segundo par de ojos", candado)
+		}
+	})
 }

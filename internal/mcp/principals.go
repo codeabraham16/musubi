@@ -433,10 +433,10 @@ func (r *PrincipalRegistry) impactoDeNombre(device string) ImpactoDeNombre {
 // token, así que dos nombres acá pueden ser la misma persona con dos tokens. Por eso que no haya
 // candado NO es un verde, y la tool lo dice siempre al lado de esta lista.
 type AccesoDeDevice struct {
-	// PorCap son, para cada capacidad APROBABLE que la máquina admite, las credenciales VIGENTES
-	// que la tienen sobre ella: las únicas que pueden pedir esa sesión y las únicas que pueden
-	// aprobársela a otro. Una capacidad que la máquina no admite no figura; una que admite y
-	// nadie tiene figura con la lista vacía.
+	// PorCap son, para cada capacidad que una puerta de cuatro ojos consume (capsQueSeAprueban) y
+	// la máquina admite, las credenciales VIGENTES que la tienen sobre ella: las únicas que pueden
+	// pedir esa sesión y las únicas que pueden aprobársela a otro. Una capacidad que la máquina no
+	// admite no figura; una que admite y nadie tiene figura con la lista vacía.
 	PorCap map[fleet.Cap][]string
 	// Candado son las capacidades de PorCap con MENOS DE DOS credenciales: ahí la marca no vuelve
 	// lento el acceso, lo cierra. Se calcula acá y no en la tool para que el umbral viva en un
@@ -448,13 +448,24 @@ type AccesoDeDevice struct {
 	ExecSinAcotar []string
 }
 
-// capsQueSeAprueban es el orden en que se informan, de la más cara a la más barata. Se filtra
-// igual con fleet.CapAprobable: si una de éstas deja de ser aprobable, sale del informe sola en
-// vez de prometer un control que el código ya no aplica.
-var capsQueSeAprueban = []fleet.Cap{fleet.CapShell, fleet.CapScreen, fleet.CapScreenView}
+// capsQueSeAprueban son las capacidades que UNA PUERTA CONSUME DE VERDAD —las que recibe
+// puertaDeCuatroOjos: `shell` en methods_shell.go y `screen` en methods_pantalla.go—, en el
+// orden en que se informan, de la más cara a la más barata.
+//
+// `screen:view` NO VA, aunque fleet.CapAprobable la acepte. Ningún camino abre una sesión de sólo
+// mirar: la tool de pantalla exige `screen` y pide la aprobación como `screen`. Listarla nombraba
+// aprobadores para una puerta que no existe —una credencial con sólo `screen:view` figuraba como
+// aprobadora y no puede resolver ninguna solicitud real— y, en una máquina cuya única capacidad
+// interactiva es `screen:view`, tapaba `sin_camino_aprobable`: la marca se leía como un control
+// puesto sin frenar nada. Si algún día hay sesión de sólo mirar con su puerta, entra acá junto
+// con esa llamada.
+//
+// Se filtra igual con fleet.CapAprobable: si una de éstas deja de ser aprobable, sale del informe
+// sola en vez de prometer un control que el código ya no aplica.
+var capsQueSeAprueban = []fleet.Cap{fleet.CapShell, fleet.CapScreen}
 
-// accesoSobre invierte principals.yaml para UNA máquina: quién tiene cada capacidad aprobable
-// sobre ella y a quién le queda `exec` sin acotar. Sólo lee; no escribe ni toma candado.
+// accesoSobre invierte principals.yaml para UNA máquina: quién tiene cada capacidad que pasa por
+// cuatro ojos sobre ella y a quién le queda `exec` sin acotar. Sólo lee; no escribe ni toma candado.
 //
 // USA LA MISMA COMPUERTA QUE LA APROBACIÓN, PuedeSobreDevice, y no una copia de sus reglas: la
 // lista tiene que ser exactamente la de quienes toolFleetApprove dejaría pasar. Una regla

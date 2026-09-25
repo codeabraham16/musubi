@@ -19,7 +19,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   con la misma compuerta que usa `musubi_fleet_approve` y sin las credenciales vencidas),
   `candado` cuando una capacidad tiene menos de dos, `exec_sin_acotar` con quienes tienen `exec`
   sin allowlist o con un intérprete en ella, y `sin_camino_aprobable` cuando la máquina no admite
-  ninguna capacidad que pase por cuatro ojos. Sin registro de principals (stdio, o un servidor
+  ninguna capacidad que pase por cuatro ojos. Se informan sólo `shell` y `screen`, que son las
+  que una puerta consume: `screen:view` no abre ninguna sesión, así que listarla nombraba
+  aprobadores que no pueden aprobar nada y tapaba `sin_camino_aprobable` en una máquina que sólo
+  deja mirar. Sin registro de principals (stdio, o un servidor
   sin `principals.yaml` ni token) no inventa listas vacías: dice `aprobadores_desconocidos`. Y
   siempre agrega una nota fija: Musubi no sabe si dos credenciales son la misma persona, así que
   la falta de `candado` no es un verde. El informe se calcula antes de escribir la marca, y no
