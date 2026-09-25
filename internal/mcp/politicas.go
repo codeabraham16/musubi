@@ -176,7 +176,9 @@ func (s *McpServer) evaluarPolitica(pol fleet.Politica, d fleet.Device, ahora ti
 // inútil justo donde más sirve — una máquina cuyo colector murió sigue mandando su inventario, y
 // ahí es donde uno quiere que algo actúe.
 //
-// La frescura del inventario SÍ se exige, y la decide el dominio: ver DisparaSobreServicio.
+// La frescura del inventario SÍ se exige: la calcula servicioFresco —la MISMA función que la
+// columna `fresco` de musubi_fleet_services, con el umbral del inventario— y la aplica el dominio,
+// en DisparaSobreServicio.
 func (s *McpServer) evaluarPoliticaDeServicio(pol fleet.Politica, d fleet.Device, ahora time.Time) bool {
 	servicios, err := s.engine.ServiciosDeDevice(d.ID)
 	if err != nil {
@@ -184,12 +186,13 @@ func (s *McpServer) evaluarPoliticaDeServicio(pol fleet.Politica, d fleet.Device
 		// no saber no es una razón para tocar una máquina.
 		return false
 	}
-	umbral := fleet.UmbralInventario
 	for _, sv := range servicios {
 		if sv.Nombre != pol.Servicio {
 			continue
 		}
-		fresco := !sv.UltimoReporte.IsZero() && ahora.Sub(sv.UltimoReporte) <= umbral
+		// Hasta A131 esto era una copia a mano de Fresco con el umbral en una variable local, y
+		// cambiarla por el umbral del host no ponía nada en rojo (P4-m3). Ver servicioFresco.
+		fresco := servicioFresco(sv, ahora)
 		valor, dispara := pol.DisparaSobreServicio(sv, fresco)
 		if !dispara {
 			return false

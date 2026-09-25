@@ -243,6 +243,23 @@ func (s *McpServer) toolFleetServiceDeclare(ctx context.Context, raw json.RawMes
 	})
 }
 
+// servicioFresco es LA frescura de un servicio en este cerebro: la que publica la columna `fresco`
+// de musubi_fleet_services y la que una política de servicio exige para actuar
+// (evaluarPoliticaDeServicio). El umbral es el del INVENTARIO y no el del dispositivo, por lo que
+// dice fleet.InventarioCada: el agente reenvía el inventario cada 5 min, y medirlo con el latido
+// deja todo servicio viejo para siempre.
+//
+// ES UNA SOLA FUNCIÓN PARA QUE LAS DOS NO PUEDAN HABLAR DE DOS FRESCURAS (A131 · T2). La política
+// la calculaba por su cuenta —una copia de Fresco escrita a mano, con el umbral en una variable
+// local—, y cambiar esa variable por el umbral de «en línea» del host (90 s en un Tier A) dejaba el
+// paquete entero en verde: las políticas de servicio quedaban inertes salvo en los 90 s que siguen
+// a cada reenvío, mientras esta columna seguía diciendo `fresco: true`. Lo custodia
+// TestUnaPoliticaDeServicioDecidePorSuInventarioYNoPorLaMuestraDelHost, que compara la decisión del
+// barrido contra un hecho escrito y contra esta columna.
+func servicioFresco(sv fleet.Servicio, ahora time.Time) bool {
+	return sv.Fresco(ahora, fleet.UmbralInventario)
+}
+
 // filaDeServicio arma lo que ve una persona. `estado` y `fresco` se DERIVAN al servir, igual que
 // `online` en el inventario de máquinas: no hay columna que se pueda quedar vieja.
 //
@@ -266,8 +283,9 @@ func filaDeServicio(sv fleet.Servicio, d fleet.Device, ahora time.Time) map[stri
 		// La frescura de un SERVICIO no se mide con el umbral del DISPOSITIVO. El latido va cada
 		// pocos segundos; el inventario, cada `fleet.InventarioCada`. Medirlo con el del
 		// dispositivo dejaba todo servicio en `fresco: false` para siempre — y un false
-		// permanente no es una alarma, es ruido que enseña a ignorar la columna.
-		"fresco":   sv.Fresco(ahora, fleet.UmbralInventario),
+		// permanente no es una alarma, es ruido que enseña a ignorar la columna. Es servicioFresco,
+		// la MISMA función con la que decide una política de servicio.
+		"fresco":   servicioFresco(sv, ahora),
 		"revocado": sv.Revocado,
 		// `declarado` se muestra porque cambia QUÉ le va a pasar a esta fila: lo que puso una
 		// persona no lo poda el latido de la máquina, y lo que enumeró la máquina desaparece solo
