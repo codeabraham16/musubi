@@ -18,7 +18,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   Ahora, al encenderla, la respuesta trae `credenciales_que_pueden_aprobar` (capacidad → nombres,
   con la misma compuerta que usa `musubi_fleet_approve` y sin las credenciales vencidas),
   `candado` cuando una capacidad tiene menos de dos, `exec_sin_acotar` con quienes tienen `exec`
-  sin allowlist o con un intérprete en ella, y `sin_camino_aprobable` cuando la máquina no admite
+  sin allowlist o con un intérprete en ella (también con nombre o ruta de Windows: `pwsh.exe`,
+  `C:\...\powershell.exe`), y `sin_camino_aprobable` cuando la máquina no admite
   ninguna capacidad que pase por cuatro ojos. Se informan sólo `shell` y `screen`, que son las
   que una puerta consume: `screen:view` no abre ninguna sesión, así que listarla nombraba
   aprobadores que no pueden aprobar nada y tapaba `sin_camino_aprobable` en una máquina que sólo
@@ -30,6 +31,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   máquina ni se tocaron credenciales.
 
 ### Fixed
+- **El aviso de intérpretes en la allowlist de `exec` ve los de Windows.** `fleet.EsInterprete`
+  comparaba el basename contra un mapa que sólo tenía `powershell.exe` y `cmd.exe`, y con
+  `filepath.Base`, que en el central (Linux) no parte una ruta con barras invertidas. Como
+  `PermiteArgv` compara `argv[0]` exacto, `pwsh.exe`, `python.exe`, `wsl.exe`, `bash.exe` o
+  `node.exe` en la allowlist de una máquina Windows dejaban lanzar cualquier cosa sin que el
+  arranque lo avisara. Ahora el nombre se corta en la última barra de cualquiera de los dos
+  sistemas, se pasa a minúsculas y se le saca `.exe`, y el mapa suma `wsl`, `py`, `busybox` y
+  `systemd-run`. Lo mismo alimenta `exec_sin_acotar` del informe de cuatro ojos.
+
 - **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
   El ledger era UNA casilla de `meta` que guardaba UNA sesión, y `LedgerAdd` la reiniciaba entera
   con `if sessionID != l.SessionID`. Con varias terminales sobre el mismo cuaderno —10 procesos

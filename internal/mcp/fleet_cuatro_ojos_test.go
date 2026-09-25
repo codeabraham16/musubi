@@ -1300,6 +1300,11 @@ func TestCuatroOjosConUnSoloParDiceCandado(t *testing.T) {
 // sin allowlist, o con un intérprete en ella, corre lo que quiera sin segunda persona. Una
 // allowlist de verdad (journalctl) sí acota, y no se denuncia.
 //
+// LOS NOMBRES DE WINDOWS TAMBIÉN. La máquina que motivó el informe es Windows, y PermiteArgv
+// compara argv[0] exacto: `pwsh.exe` o la ruta completa de `powershell.exe` en la allowlist
+// dejan lanzar cualquier cosa. El informe los daba por acotados —lo encontró una revisión
+// adversaria—, y `ipconfig.exe` sigue sin ser un intérprete.
+//
 // Sabotaje: que un intérprete en la allowlist cuente como acotada.
 // arnes: archivo="internal/mcp/principals.go"
 // arnes: de="|| algunInterprete(lista)"
@@ -1310,16 +1315,25 @@ func TestCuatroOjosDenunciaElExecSinAcotar(t *testing.T) {
 	libre := soloExec("libre")
 	conPowershell := soloExec("con-powershell")
 	conPowershell.ExecAllow = map[string][]string{"*": {"powershell"}}
+	conPwsh := soloExec("con-pwsh-exe")
+	conPwsh.ExecAllow = map[string][]string{"*": {"pwsh.exe"}}
+	conRuta := soloExec("con-ruta-windows")
+	conRuta.ExecAllow = map[string][]string{"*": {`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`}}
 	acotado := soloExec("acotado")
 	acotado.ExecAllow = map[string][]string{"*": {"journalctl"}}
-	s.buscarPrincipal = registroDePrueba(*conPantalla("casa"), *otroConPantalla("casa"), libre, conPowershell, acotado)
+	acotadoWin := soloExec("acotado-windows")
+	acotadoWin.ExecAllow = map[string][]string{"*": {"ipconfig.exe"}}
+	s.buscarPrincipal = registroDePrueba(*conPantalla("casa"), *otroConPantalla("casa"),
+		libre, conPowershell, conPwsh, conRuta, acotado, acotadoWin)
 
 	res := encenderYLeer(t, s, "pc-gio")
 
-	if got := strings.Join(nombresEn(res["exec_sin_acotar"]), ","); got != "libre,con-powershell" {
-		t.Errorf("exec_sin_acotar = [%s], se esperaba [libre,con-powershell].\n"+
-			"  `powershell` permitido no acota nada: es una shell con otro nombre. Y `journalctl` sí\n"+
-			"  acota, así que denunciarlo sería ruido que tapa a los de verdad.", got)
+	const esperado = "libre,con-powershell,con-pwsh-exe,con-ruta-windows"
+	if got := strings.Join(nombresEn(res["exec_sin_acotar"]), ","); got != esperado {
+		t.Errorf("exec_sin_acotar = [%s], se esperaba [%s].\n"+
+			"  `powershell` permitido no acota nada: es una shell con otro nombre, y `pwsh.exe` o la\n"+
+			"  ruta de Windows también. Y `journalctl` o `ipconfig.exe` sí acotan, así que\n"+
+			"  denunciarlos sería ruido que tapa a los de verdad.", got, esperado)
 	}
 }
 
