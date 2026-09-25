@@ -755,6 +755,137 @@ func TestLosFragmentosCubrenLaListaEnteraUnaSolaVez(t *testing.T) {
 	}
 }
 
+// EL ORDEN DE `seleccionar` ES PAQUETE → TRAMO → FRAGMENTO → SISTEMA, Y LA POSICIÓN ES ABSOLUTA.
+//
+// La prueba de arriba llama a `seleccionar` sin `-paquete`, sin `-desde` y sin `-limite`, y así
+// dejaba sin custodia tres de los cuatro pasos. Lo midió la revisión del PR: apagar el filtro de
+// paquete, ignorar el tramo o numerar relativo al tramo dejaban el paquete entero en verde. Y las
+// tres cosas se usan: el nocturno imprime `══ 517` y quien reanuda escribe `-desde 517 -fragmento
+// 7/8`. Eso tiene que correr el RESTO DE ESE fragmento, con los mismos números, y nada de otro
+// paquete.
+//
+// El censo tiene dos paquetes intercalados y dos directivas de Windows en el pedido —una antes del
+// tramo y otra adentro—, y se pide `-paquete ./internal/x -desde 5 -limite 3` en cada fragmento de
+// 1 a 4. Se exige, en este orden: que no se cuele nada de `./internal/y`; que cada posición traiga
+// el ancla de esa posición; que no se salga del tramo 5..7; que cada posición caiga en el mismo
+// fragmento que en la corrida sin tramo; que Linux y Windows repartan igual; y que la unión de los
+// fragmentos sea el tramo, una vez cada posición. El orden importa: cada sabotaje de abajo cae en
+// SU aserción, y el arnés no los cuenta como un motivo repetido.
+//
+// Lo que NO fija: QUÉ fragmento le toca a cada posición (eso es de la prueba de arriba, que a
+// propósito tampoco lo fija), ni el orden de salida dentro de un fragmento.
+//
+// Sabotaje que la hace fallar: apagar el filtro de paquete → se cuelan las de `./internal/y`, y
+// `-correr -paquete ./internal/arnes` correría el árbol entero.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\t\tif paquete != \"\" && a.Directiva.Paquete != paquete {"
+// arnes: a="\t\tif false && paquete != \"\" && a.Directiva.Paquete != paquete {"
+//
+// Sabotaje que la hace fallar: ignorar `-desde` y `-limite` → reanudar vuelve a empezar desde la 1
+// y el límite deja de limitar.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\tinicio, fin := tramoACorrer(len(delPaquete), desde, limite)"
+// arnes: a="\tinicio, fin := tramoACorrer(len(delPaquete), 0, 0)"
+//
+// Sabotaje que la hace fallar: numerar relativo al tramo → `-desde 517 -fragmento 7/8` corre otro
+// fragmento e imprime números que no sirven para volver a reanudar.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\t\tp := puesto{pos: i + 1, ancla: delPaquete[i]}"
+// arnes: a="\t\tp := puesto{pos: i + 1 - inicio, ancla: delPaquete[i]}"
+//
+// Sabotaje que la hace fallar: filtrar por sistema ANTES de numerar → en Linux se corre la
+// numeración, el fragmento 3 deja de ser el mismo que en Windows y lo apartado no se nombra.
+// arnes: archivo="deploy/cmd/arnes/main.go"
+// arnes: de="\t\tdelPaquete = append(delPaquete, a)\n"
+// arnes: a="\t\tif aplicaEn(a.Directiva, goos) {\n\t\t\tdelPaquete = append(delPaquete, a)\n\t\t}\n"
+func TestPaqueteTramoFragmentoYSistemaEnEseOrden(t *testing.T) {
+	const pedido = "./internal/x"
+	// Diez de `./internal/x` con la línea igual a su posición EN EL PAQUETE, y cinco de
+	// `./internal/y` intercaladas con líneas que no se confunden. La 2 y la 6 de x son de Windows.
+	var mec []arnes.Ancla
+	var x, y int
+	for _, c := range "yxxyxxyxxxyxxxy" {
+		if c == 'x' {
+			x++
+			nombre := fmt.Sprintf("TestX%d", x)
+			d := &arnes.Directiva{Paquete: pedido, Prueba: nombre}
+			if x == 2 || x == 6 {
+				d.Sistemas = []string{"windows"}
+			}
+			mec = append(mec, arnes.Ancla{Archivo: "internal/x/x_test.go", Linea: x, Prueba: nombre, Directiva: d})
+			continue
+		}
+		y++
+		nombre := fmt.Sprintf("TestY%d", y)
+		mec = append(mec, arnes.Ancla{Archivo: "internal/y/y_test.go", Linea: 100 + y, Prueba: nombre,
+			Directiva: &arnes.Directiva{Paquete: "./internal/y", Prueba: nombre}})
+	}
+
+	// elegidas junta lo corrido y lo apartado: el reparto es de los dos, el sistema sólo decide
+	// cuál de las dos listas. El mapa es «posición → línea del ancla».
+	elegidas := func(goos string, desde, limite, k, n int) (map[int]int, []puesto) {
+		aCorrer, noAplican := seleccionar(mec, pedido, desde, limite, k, n, goos)
+		todo := append(append([]puesto{}, aCorrer...), noAplican...)
+		m := map[int]int{}
+		for _, p := range todo {
+			m[p.pos] = p.ancla.Linea
+		}
+		return m, todo
+	}
+
+	for n := 1; n <= 4; n++ {
+		veces := map[int]int{}
+		for k := 1; k <= n; k++ {
+			win, todo := elegidas("windows", 5, 3, k, n)
+			for _, p := range todo {
+				if p.ancla.Directiva.Paquete != pedido {
+					t.Fatalf("`-paquete %s -fragmento %d/%d` trajo %s, que es de %s: el filtro de paquete no "+
+						"filtra y `-correr -paquete` correría el árbol entero", pedido, k, n,
+						p.ancla.Prueba, p.ancla.Directiva.Paquete)
+				}
+			}
+			for _, p := range todo {
+				if p.ancla.Linea != p.pos {
+					t.Fatalf("`-desde 5 -limite 3 -fragmento %d/%d` imprime la posición %d para el ancla que es "+
+						"la %d del paquete: ese número no sirve para reanudar con `-desde`", k, n, p.pos, p.ancla.Linea)
+				}
+			}
+			for _, p := range todo {
+				if p.pos < 5 || p.pos > 7 {
+					t.Fatalf("`-desde 5 -limite 3 -fragmento %d/%d` trajo la posición %d y se pidieron la 5, la 6 "+
+						"y la 7: reanudar volvería a empezar, o el límite no limita", k, n, p.pos)
+				}
+			}
+			completo, _ := elegidas("windows", 0, 0, k, n)
+			for pos := range win {
+				if _, ok := completo[pos]; !ok {
+					t.Fatalf("con `-desde 5 -limite 3` la posición %d cayó en el fragmento %d/%d, y en la corrida "+
+						"sin tramo no es de ése: reanudar un fragmento correría sabotajes de otro", pos, k, n)
+				}
+			}
+			if lin, _ := elegidas("linux", 5, 3, k, n); fmt.Sprint(lin) != fmt.Sprint(win) {
+				t.Fatalf("el fragmento %d/%d reparte distinto según la máquina (posición → línea): linux %v, "+
+					"windows %v. El sistema tiene que decidirse DESPUÉS de numerar", k, n, lin, win)
+			}
+			for pos := range win {
+				veces[pos]++
+			}
+		}
+		for pos := 5; pos <= 7; pos++ {
+			if veces[pos] != 1 {
+				t.Errorf("con %d fragmentos, la posición %d del tramo salió %d veces (se esperaba 1)", n, pos, veces[pos])
+			}
+		}
+	}
+
+	// Y en Linux la de Windows que cae en el tramo (la 6) sale apartada con su número, no corrida.
+	aCorrer, noAplican := seleccionar(mec, pedido, 5, 3, 0, 0, "linux")
+	if len(aCorrer) != 2 || len(noAplican) != 1 || noAplican[0].pos != 6 || noAplican[0].ancla.Linea != 6 {
+		t.Errorf("en linux, `-paquete %s -desde 5 -limite 3` dejó %d a correr y %d apartadas (%v): esperaba "+
+			"la 5 y la 7 a correr y la 6 apartada", pedido, len(aCorrer), len(noAplican), noAplican)
+	}
+}
+
 // UN FRAGMENTO MAL ESCRITO ES UN ERROR, NO UN VALOR POR DEFECTO.
 //
 // El `-fragmento` lo arma el workflow con la aritmética de la matriz. Si un error ahí se leyera

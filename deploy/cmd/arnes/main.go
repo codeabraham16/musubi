@@ -687,8 +687,10 @@ type puesto struct {
 // se corre.
 //
 // EL ORDEN ES PARTE DEL CONTRATO: paquete → tramo (`-desde`/`-limite`) → fragmento → sistema.
-//   - El fragmento va sobre la posición del tramo, así que el número impreso sigue siendo el de
-//     `-desde`.
+// Lo custodia `TestPaqueteTramoFragmentoYSistemaEnEseOrden`.
+//   - La posición es la ABSOLUTA en la lista del paquete, no la relativa al tramo, y el fragmento
+//     se decide sobre ella: el número impreso es el de `-desde`, y `-desde 517 -fragmento 7/8`
+//     corre el resto de ESE fragmento y no otro.
 //   - El sistema va AL FINAL, así que el reparto no depende de la máquina: el fragmento 3 es el
 //     mismo en Linux y en Windows, y lo que cambia es sólo qué parte de él aplica.
 //   - Lo que no aplica sale en `noAplican` y NO en `aCorrer`: si contara como corrida, un
