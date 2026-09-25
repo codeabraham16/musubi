@@ -8,6 +8,47 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Los resúmenes de archivo se mantienen solos.** `code_memory` dependía de que un agente se
+  acordara de llamar a `musubi_save_code`, y medido el 2026-09-24 eso pasó **6 veces en 244.480
+  invocaciones**: de 120 gists de Musubi, 104 estaban rancios y el más nuevo era del 3 de
+  septiembre. Ahora el **índice incremental del grafo** —que ya corre solo al arrancar, cada hora y
+  en cada `save_code`— saca un gist AUTOMÁTICO del **comentario de cabecera** de cada `.go` de
+  producción (el doc del paquete o el primer comentario libre antes de la primera declaración,
+  nunca el doc de una función) y lo re-escribe cuando el archivo cambia. Llevan la marca
+  `[auto · cabecera] ` en el texto, sin migración de esquema. La primera corrida barre el árbol
+  entero una vez (sello `code_memory_auto_version`, aparte del del derivador para no re-derivar el
+  grafo), leyendo y parseando **sin** el candado del despacho.
+
+  **Un gist de agente nunca se pisa** —en ningún `project_id`— ni se le refresca la huella: se
+  conserva tal cual, marcado rancio cuando lo está, y `musubi_recall_code` y `musubi_code_context`
+  (que ahora trae `file_gist`) muestran **al lado la cabecera al día** del archivo (`cabecera`),
+  con `origen: agente|cabecera`. Es la decisión del dueño (opción c): no se pierde el texto del
+  agente. La cabecera al lado sólo aparece donde el servidor tiene el archivo; en el central no.
+
+  **En el central, la frescura se juzga contra el grafo publicado.** No tiene el árbol y contestaba
+  `unknown` para todo; ahora compara con el `src_fingerprint` del nodo `file` y lo dice en
+  `freshness_ref` (`llamador|disco|grafo`). Medido contra el central: 66 de los 117 gists de musubi
+  salían `unknown` estando rancios. En el daemon local no se consulta el grafo: un archivo borrado
+  conserva sus nodos hasta la poda y saldría `fresh`.
+
+  Lo que NO hace, y se declara: los `_test.go` no reciben gist automático (serían ~280 más en
+  `code_memory` y en el push); `CountSavedItems` no cuenta los automáticos, para no silenciar el
+  recordatorio de captura, y `CodigoTocadoEnVentana` (`musubi_fleet_contexto`) tampoco, porque su
+  semántica es «alguien re-leyó este archivo»; el PreToolUse del `Read` **no** inyecta un gist
+  automático (es la cabecera que el propio `Read` trae), así que para esos archivos desaparece el
+  aviso «No hay gist… guardá uno»; y `save_code` le saca la marca a lo que mande un agente. Un
+  automático se retira cuando el archivo pierde la cabecera o se borra. Al desplegar, el
+  `code_memory` de musubi en el central pasa de 117 filas a unas 360: medido sobre este árbol, 290
+  de los 363 `.go` de producción tienen cabecera, y 49 de ellos ya tienen gist de agente.
+
+  *Dieciocho invariantes, cada uno con su sabotaje corrido y rojo: tomar el doc de la primera
+  función como cabecera, darle gist a los tests, sacar el tope, buscar el gist de agente sólo en el
+  proyecto de origen, reescribir la fila idéntica (un push por tick), comparar sólo la huella (la
+  regla nueva no alcanza), retirar sin mirar la marca, contar los automáticos como guardado del
+  agente o como código tocado, el refresh que no escribe, `sinCambios` sin la siembra pendiente,
+  no mostrar la cabecera al lado, no retirar por cabecera borrada ni por archivo fantasma,
+  `save_code` sin sacar la marca, el central sin la huella del grafo, el local consultando el
+  grafo, y el precheck inyectando el automático.*
 - **Desde una ficha del acervo se llega a su fuente, y al revés.** `musubi_memory_expand` trae ahora
   el linaje de lo que expande: una ficha destilada viene con `salio_de` (los artículos crudos de los
   que salió) y un artículo ingerido con `destilado_en` (las fichas que salieron de él), cada punta con

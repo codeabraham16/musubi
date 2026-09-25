@@ -199,6 +199,11 @@ func (e *DbEngine) ObservacionesEnVentana(ctx context.Context, v fleet.Ventana, 
 // Mismo aislamiento por proyecto y mismo formato de fecha. `code_memory` no tiene predicado de
 // visibilidad —no hay archivado ni cuarentena de gists—, así que acá no hay ninguno que aplicar y
 // eso se dice en vez de dejar la duda.
+//
+// LOS GISTS AUTOMÁTICOS QUEDAN AFUERA. La semántica de esta lista es «alguien re-leyó y
+// re-resumió este archivo», y un gist automático lo reescribe el índice del grafo en cada tick
+// en que el archivo cambia —y la siembra inicial estampa ~240 juntos—. Contarlos inundaría la
+// ventana con archivos que nadie leyó. Ver PrefijoGistAutomatico.
 func (e *DbEngine) CodigoTocadoEnVentana(ctx context.Context, v fleet.Ventana, tope int) ([]ArchivoTocado, error) {
 	if tope <= 0 {
 		return nil, nil
@@ -212,7 +217,8 @@ func (e *DbEngine) CodigoTocadoEnVentana(ctx context.Context, v fleet.Ventana, t
 	// atribuir (project_id ''), que son las legacy del espacio federado.
 	sc := projectScopeFrom(ctx)
 	scopeSQL := ""
-	args := []interface{}{v.Desde.UTC().Format(formatoDeMemoria), v.Hasta.UTC().Format(formatoDeMemoria)}
+	args := []interface{}{v.Desde.UTC().Format(formatoDeMemoria), v.Hasta.UTC().Format(formatoDeMemoria),
+		PrefijoGistAutomatico, PrefijoGistAutomatico}
 	if !sc.Federate && sc.ProjectID != "" {
 		scopeSQL = ` AND (project_id = ? OR project_id = '')`
 		args = append(args, sc.ProjectID)
@@ -221,7 +227,7 @@ func (e *DbEngine) CodigoTocadoEnVentana(ctx context.Context, v fleet.Ventana, t
 
 	rows, err := e.db.QueryContext(ctx, `
 		SELECT path, updated_at FROM code_memory
-		WHERE updated_at >= ? AND updated_at < ?`+scopeSQL+`
+		WHERE updated_at >= ? AND updated_at < ? AND substr(gist, 1, length(?)) != ?`+scopeSQL+`
 		ORDER BY updated_at DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("error al leer el código tocado en la ventana: %w", err)

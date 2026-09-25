@@ -36,6 +36,14 @@ const MetaCodegraphHead = "codegraph_head"
 // no lo puede notar porque el archivo no cambió. Ver codeintel.GraphDeriverVersion.
 const MetaCodegraphDeriver = "codegraph_deriver"
 
+// MetaGistsAutomaticos guarda la versión de la regla (codeintel.VersionResumenDeCabecera) con la que
+// se sembraron los gists automáticos de code_memory. Mientras no coincida con la del binario, el
+// índice incremental barre el árbol entero UNA vez: un archivo que no cambió nunca queda sucio, así
+// que sin el barrido los ~240 archivos con cabecera y sin gist no se sembrarían nunca. Es un sello
+// aparte del de MetaCodegraphDeriver a propósito: subir la versión del derivador re-derivaría el
+// grafo entero sólo para escribir resúmenes.
+const MetaGistsAutomaticos = "code_memory_auto_version"
+
 // GetMeta devuelve el valor de una clave de metadatos (ok=false si no existe).
 func (e *DbEngine) GetMeta(key string) (string, bool, error) {
 	var v string

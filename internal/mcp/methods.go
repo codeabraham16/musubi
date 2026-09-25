@@ -1918,6 +1918,10 @@ func (s *McpServer) toolSaveCode(ctx context.Context, raw json.RawMessage) (inte
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
 	}
+	// UN GIST DE AGENTE NUNCA LLEVA LA MARCA DE AUTOMÁTICO. El índice del grafo pisa y borra sólo
+	// las filas con la marca: si un agente la copiara —de lo que le devolvió recall_code, por
+	// ejemplo—, su texto quedaría expuesto a que el próximo tick lo reemplace por la cabecera.
+	args.Gist = memory.SinPrefijoAutomatico(args.Gist)
 	if strings.TrimSpace(args.Path) == "" || strings.TrimSpace(args.Gist) == "" {
 		return nil, rpcErrorf(codeInvalidParams, "path y gist son obligatorios")
 	}
@@ -2030,17 +2034,68 @@ func (s *McpServer) toolRecallCode(ctx context.Context, raw json.RawMessage) (in
 		return jsonResult(map[string]interface{}{"found": false, "path": key})
 	}
 
-	fresh, estado := s.frescuraDelGist(args.Path, args.Fingerprint, cm.Fingerprint)
-	_, _ = s.engine.LedgerAdd("", "code_recall", cm.Tokens)
-	return jsonResult(map[string]interface{}{
-		"found":     true,
+	vista := s.vistaDelGist(ctx, key, args.Path, args.Fingerprint, cm)
+	tokens := cm.Tokens
+	if c, ok := vista["cabecera"].(string); ok {
+		tokens += memory.EstimateTokens(c) // la cabecera también se paga: el ledger mide lo que sale
+	}
+	_, _ = s.engine.LedgerAdd("", "code_recall", tokens)
+	vista["found"] = true
+	return jsonResult(vista)
+}
+
+// De dónde salió el texto de un gist. Es un hecho distinto de la frescura: un gist de agente puede
+// estar rancio y seguir siendo lo mejor que hay, y uno de cabecera se regenera solo.
+const (
+	origenAgente   = "agente"   // lo escribió un agente con musubi_save_code
+	origenCabecera = "cabecera" // lo sacó el índice del grafo del comentario de cabecera
+)
+
+// Contra qué huella se juzgó la frescura (`freshness_ref`). Sin esto, un 'fresh' del central y uno
+// del daemon local se leen igual, y no pesan igual: uno miró el archivo y el otro miró el grafo que
+// alguien publicó.
+const (
+	refLlamador = "llamador" // la huella que mandó quien pregunta
+	refDisco    = "disco"    // el archivo en el disco del servidor
+	refGrafo    = "grafo"    // el src_fingerprint del nodo 'file' del grafo publicado
+)
+
+// vistaDelGist es lo que recall_code y code_context muestran de un gist: el texto, su frescura con
+// la referencia contra la que se juzgó, su origen y —si lo escribió un agente— la cabecera AL DÍA
+// del archivo al lado.
+//
+// LA CABECERA AL LADO ES LA DECISIÓN DEL DUEÑO (2026-09-24, opción c). De los 120 gists de agente
+// de Musubi, 104 están rancios, y 53 de esos archivos tienen comentario de cabecera. Reemplazar el
+// texto del agente por la cabecera perdería lo que el agente entendió leyendo; dejarlo solo deja al
+// lector con un texto viejo y nada más. Se conserva tal cual —marcado rancio cuando lo está— y al
+// lado va lo que el archivo dice HOY de sí mismo. Sólo donde el servidor tiene el archivo: el
+// central no lo tiene, y ahí la cabecera no aparece.
+func (s *McpServer) vistaDelGist(ctx context.Context, key, path, delLlamador string, cm memory.CodeMemory) map[string]interface{} {
+	fresh, estado, ref := s.frescuraDelGist(ctx, key, path, delLlamador, cm.Fingerprint)
+	v := map[string]interface{}{
 		"path":      cm.Path,
 		"gist":      cm.Gist,
 		"symbols":   cm.Symbols,
 		"tokens":    cm.Tokens,
 		"fresh":     fresh,
 		"freshness": estado,
-	})
+	}
+	if ref != "" {
+		v["freshness_ref"] = ref
+	}
+	if memory.EsGistAutomatico(cm.Gist) {
+		v["origen"] = origenCabecera
+		return v
+	}
+	v["origen"] = origenAgente
+	if !s.arbolFueraDeAlcance() && s.dentroDelProyecto(path) {
+		if content, err := s.readProjectFile(path); err == nil {
+			if c := codeintel.CabeceraDe(key, content); c != "" {
+				v["cabecera"] = c
+			}
+		}
+	}
+	return v
 }
 
 // Estados de frescura de un gist. Son TRES y no dos porque «no se sabe» no es «rancio».
@@ -2067,26 +2122,50 @@ const (
 //
 // `fresh` se mantiene true SÓLO con identidad verificada, exactamente como antes: un cliente
 // viejo que sólo lea ese bool no cambia de comportamiento. Lo nuevo se pide mirando `freshness`.
-func (s *McpServer) frescuraDelGist(path, delLlamador, guardado string) (bool, string) {
+//
+// EN EL CENTRAL, LA REFERENCIA ES EL GRAFO PUBLICADO. El central no tiene el árbol, pero sí el
+// grafo que el proyecto empujó, y el nodo 'file' de cada archivo lleva la huella del contenido que
+// se derivó (src_fingerprint, el mismo sha256). Medido el 2026-09-24 contra el central: de los 117
+// gists de musubi, 66 están rancios según el grafo y la tool los contestaba todos 'unknown'. Sólo
+// se consulta cuando el servidor NO tiene el árbol (arbolFueraDeAlcance): en el daemon local un
+// archivo borrado conserva sus nodos hasta la poda del próximo tick, y su huella coincidiría con
+// la del gist — un archivo que ya no existe saldría 'fresh'. Sin nodo, o con un nodo sin huella,
+// sigue 'unknown': nadie midió nada.
+//
+// El tercer valor es la referencia (refLlamador, refDisco, refGrafo); "" cuando no hubo ninguna.
+func (s *McpServer) frescuraDelGist(ctx context.Context, key, path, delLlamador, guardado string) (bool, string, string) {
 	if strings.TrimSpace(guardado) == "" {
 		// Gist guardado sin huella (FileFingerprint es best-effort al guardar): no hay contra
 		// qué comparar. Afirmar «rancio» sería inventar un hecho que nadie midió.
-		return false, frescuraDesconocida
+		return false, frescuraDesconocida, ""
 	}
-	huella := strings.TrimSpace(delLlamador)
+	huella, ref := strings.TrimSpace(delLlamador), refLlamador
 	if huella == "" {
-		// Nadie la mandó: última chance, el disco propio. Es el camino del daemon local.
-		if actual, ferr := memory.FileFingerprint(s.projectPath, path); ferr == nil {
-			huella = actual
+		if s.arbolFueraDeAlcance() {
+			huella, ref = s.huellaDelGrafo(ctx, key), refGrafo
+		} else if actual, ferr := memory.FileFingerprint(s.projectPath, path); ferr == nil {
+			// Nadie la mandó: el disco propio. Es el camino del daemon local.
+			huella, ref = actual, refDisco
 		}
 	}
 	if huella == "" {
-		return false, frescuraDesconocida
+		return false, frescuraDesconocida, ""
 	}
 	if huella == guardado {
-		return true, frescuraFresca
+		return true, frescuraFresca, ref
 	}
-	return false, frescuraRancia
+	return false, frescuraRancia, ref
+}
+
+// huellaDelGrafo devuelve la huella con la que el grafo publicado derivó un archivo: el
+// src_fingerprint de su nodo 'file', acotado al proyecto de la credencial. "" si no hay nodo o si
+// el nodo no guardó huella.
+func (s *McpServer) huellaDelGrafo(ctx context.Context, key string) string {
+	n, ok, err := s.engine.GetGraphNodeCtx(s.scopedCtx(ctx), codeintel.FileKey(key))
+	if err != nil || !ok || n.Kind != codeintel.KindFile {
+		return ""
+	}
+	return strings.TrimSpace(n.SrcFingerprint)
 }
 
 // searchHit es un resultado de búsqueda en forma gist-first: el titular extractivo en

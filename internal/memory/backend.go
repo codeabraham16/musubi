@@ -169,6 +169,9 @@ type CodeMemoryStore interface {
 	// y cero titulares.
 	AllCodeMemoryCtx(ctx context.Context) ([]CodeMemory, error)
 	ReplaceProjectCodeMemoryFrom(originProjectID string, gists []CodeMemory) error
+	// GuardarGistsAutomaticosFrom es el escritor del índice del grafo: resúmenes sacados del
+	// comentario de cabecera, que nunca pisan un gist de agente. Ver PrefijoGistAutomatico.
+	GuardarGistsAutomaticosFrom(originProjectID string, gists []CodeMemory, retirar []string) (int, error)
 }
 
 // CodeGraphStore — grafo de código derivado del AST (Track 20 · F1): nodos + aristas tipadas,
