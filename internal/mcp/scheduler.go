@@ -630,8 +630,15 @@ func (s *McpServer) reindexCodeGraphOnce(ctx context.Context) {
 	}
 	cambio, fallidos := false, 0
 	if !plan.sinCambios() {
+		// La siembra de los resúmenes de cabecera lee y parsea cada .go del árbol: se arma acá, SIN
+		// el candado, y adentro sólo se escribe.
+		var barrido *barridoDeGists
+		if plan.gistsAutoPendientes {
+			b := s.armarBarridoDeGists(plan.diskFiles)
+			barrido = &b
+		}
 		var res map[string]interface{}
-		s.withWriteLock(func() { res, err = s.indexIncremental(ctx) })
+		s.withWriteLock(func() { res, err = s.indexIncrementalCon(ctx, barrido) })
 		if err != nil {
 			logx.Error("scheduler: el índice incremental del grafo falló", "error", err)
 			return

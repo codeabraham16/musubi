@@ -279,3 +279,34 @@ func TestPrecheckCodeGraphSeApagaExplicitamente(t *testing.T) {
 		t.Errorf("con MUSUBI_CODEGRAPH_HOOK=0 el grafo NO debe inyectarse, obtuve %q", out)
 	}
 }
+
+// Sabotaje: borrar la rama del gist automático en codeMemoryMessage. El Read vuelve a inyectar la
+// cabecera que el propio Read trae, y con el automático rancio le pide al agente un musubi_save_code
+// para un gist que se regenera solo.
+// arnes: archivo="cmd/musubi/precheck.go"
+// arnes: de="if ok && memory.EsGistAutomatico(cm.Gist) {"
+// arnes: a="if ok && memory.EsGistAutomatico(cm.Gist) && false {"
+func TestPrecheckNoInyectaElGistAutomatico(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root, "foo.go", "// foo.go hace Bar.\npackage foo\nfunc Bar(){}\n")
+	fp, _ := memory.FileFingerprint(root, "foo.go")
+	in := `{"tool_name":"Read","tool_input":{"file_path":"foo.go"},"session_id":"s"}`
+	for _, c := range []struct{ nombre, huella string }{{"fresco", fp}, {"rancio", "huella-vieja"}} {
+		t.Run(c.nombre, func(t *testing.T) {
+			store := &fakeCodeStore{mem: map[string]memory.CodeMemory{
+				"foo.go": {Path: "foo.go", Gist: memory.PrefijoGistAutomatico + "foo.go hace Bar.", Symbols: "Bar L3", Fingerprint: c.huella},
+			}}
+			if out := precheckOutput(store, root, strings.NewReader(in)); out != "" {
+				t.Errorf("un gist automático %s no se inyecta en el Read, obtuve %q", c.nombre, out)
+			}
+		})
+	}
+	// CONTROL: el mismo caso con un gist de agente SÍ habla. Sin esto, un precheck que no dijera
+	// nada nunca pasaría la prueba de arriba.
+	store := &fakeCodeStore{mem: map[string]memory.CodeMemory{
+		"foo.go": {Path: "foo.go", Gist: "foo.go hace Bar.", Fingerprint: fp},
+	}}
+	if out := precheckOutput(store, root, strings.NewReader(in)); out == "" {
+		t.Error("control: el gist fresco de un agente dejó de inyectarse")
+	}
+}

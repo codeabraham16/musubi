@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // codemem.go implementa la MEMORIA DE CÓDIGO: un gist (titular) + símbolos de un
@@ -206,4 +207,128 @@ func (e *DbEngine) ReplaceProjectCodeMemoryFrom(originProjectID string, gists []
 		return fmt.Errorf("error al commitear el reemplazo de gists: %w", err)
 	}
 	return nil
+}
+
+// PrefijoGistAutomatico marca un gist que NO escribió un agente: lo sacó el índice del grafo del
+// comentario de cabecera del archivo (codeintel.ResumenDeCabecera). Va en el texto y no en una
+// columna aparte para no pedir una migración de esquema, y porque así viaja solo al central en la
+// foto del push, donde también hace falta distinguirlo.
+//
+// La marca es lo que deja convivir a los dos escritores: el índice sólo pisa o borra filas CON la
+// marca, y nunca una sin ella. Por eso musubi_save_code se la saca a lo que le manda un agente —ver
+// SinPrefijoAutomatico—: un gist de agente que la llevara quedaría expuesto a que el índice lo pise.
+const PrefijoGistAutomatico = "[auto · cabecera] "
+
+// EsGistAutomatico dice si un gist lo escribió el índice (lleva PrefijoGistAutomatico).
+func EsGistAutomatico(gist string) bool { return strings.HasPrefix(gist, PrefijoGistAutomatico) }
+
+// SinPrefijoAutomatico le saca la marca de automático a un texto, las veces que la tenga.
+func SinPrefijoAutomatico(gist string) string {
+	for EsGistAutomatico(gist) {
+		gist = strings.TrimPrefix(gist, PrefijoGistAutomatico)
+	}
+	return strings.TrimSpace(gist)
+}
+
+// GuardarGistsAutomaticosFrom escribe los gists AUTOMÁTICOS de un proyecto y retira los que dejaron
+// de tener de dónde salir, todo en UNA transacción. Devuelve cuántas filas escribió o borró.
+// origin == "" ⇒ project_id del engine. Cada gist tiene que traer ya PrefijoGistAutomatico.
+//
+// LAS TRES REGLAS, en orden, por cada gist:
+//
+//  1. SI HAY UN GIST DE AGENTE DEL MISMO PATH, EN CUALQUIER project_id, NO SE ESCRIBE NADA. El de
+//     agente manda aunque esté rancio: es texto que un agente escribió leyendo el archivo, y el
+//     índice nunca lo pisa ni le refresca la huella —refrescarla haría pasar por fresco un texto
+//     viejo—. Se mira en cualquier proyecto porque en una base real el mismo archivo tiene filas
+//     con project_id vacío y 'Musubi' además de 'musubi' (medido el 2026-09-24: 57, 8 y 55), y un
+//     automático al lado de un gist de agente sería una segunda versión del mismo archivo que el
+//     LIMIT 1 de GetCodeMemoryCtx elegiría al azar.
+//  2. SI LA FILA AUTOMÁTICA YA TIENE LA MISMA HUELLA, EL MISMO TEXTO Y LOS MISMOS SÍMBOLOS, NO SE
+//     REESCRIBE. Es lo que hace idempotente al índice: sin esto cada tick avanzaría la generación
+//     del grafo y saldría un push del grafo entero al central cada hora. La comparación NO es sólo
+//     por huella: si sube codeintel.VersionResumenDeCabecera, el archivo no cambió pero el texto
+//     sí, y la fila se tiene que reescribir.
+//  3. Si no, UPSERT por (path, project_id).
+//
+// `retirar` son paths cuyo gist automático hay que BORRAR: el archivo perdió su cabecera o dejó de
+// existir. Sólo se borran filas CON la marca y del proyecto de origen; un gist de agente del mismo
+// path queda intacto. Sin esto, un automático sin fuente quedaría rancio para siempre y viajaría
+// al central en cada push.
+//
+// La generación del grafo avanza UNA vez y sólo si algo cambió.
+func (e *DbEngine) GuardarGistsAutomaticosFrom(originProjectID string, gists []CodeMemory, retirar []string) (int, error) {
+	if len(gists) == 0 && len(retirar) == 0 {
+		return 0, nil
+	}
+	projectID := originProjectID
+	if projectID == "" {
+		projectID = e.projectID
+	}
+	tx, err := e.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("error al iniciar el guardado de gists automáticos: %w", err)
+	}
+	defer tx.Rollback()
+
+	cambios := 0
+	for _, cm := range gists {
+		if cm.Path == "" || !EsGistAutomatico(cm.Gist) {
+			continue
+		}
+		var deAgente int
+		if err := tx.QueryRow(
+			`SELECT COUNT(*) FROM code_memory WHERE path = ? AND substr(gist, 1, length(?)) != ?`,
+			cm.Path, PrefijoGistAutomatico, PrefijoGistAutomatico,
+		).Scan(&deAgente); err != nil {
+			return 0, fmt.Errorf("error al buscar el gist de agente de %s: %w", cm.Path, err)
+		}
+		if deAgente > 0 {
+			continue
+		}
+		var gist, symbols, fp string
+		err := tx.QueryRow(
+			`SELECT gist, COALESCE(symbols,''), COALESCE(fingerprint,'') FROM code_memory
+			 WHERE path = ? AND project_id = ?`, cm.Path, projectID,
+		).Scan(&gist, &symbols, &fp)
+		if err != nil && err != sql.ErrNoRows {
+			return 0, fmt.Errorf("error al leer el gist automático de %s: %w", cm.Path, err)
+		}
+		if err == nil && fp == cm.Fingerprint && gist == cm.Gist && symbols == cm.Symbols {
+			continue
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO code_memory (path, gist, symbols, fingerprint, tokens, project_id, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+			 ON CONFLICT(path, project_id) DO UPDATE SET
+			   gist=excluded.gist, symbols=excluded.symbols,
+			   fingerprint=excluded.fingerprint, tokens=excluded.tokens,
+			   updated_at=CURRENT_TIMESTAMP`,
+			cm.Path, cm.Gist, cm.Symbols, cm.Fingerprint, cm.Tokens, projectID,
+		); err != nil {
+			return 0, fmt.Errorf("error al guardar el gist automático de %s: %w", cm.Path, err)
+		}
+		cambios++
+	}
+	for _, path := range retirar {
+		res, err := tx.Exec(
+			`DELETE FROM code_memory WHERE path = ? AND project_id = ? AND substr(gist, 1, length(?)) = ?`,
+			path, projectID, PrefijoGistAutomatico, PrefijoGistAutomatico,
+		)
+		if err != nil {
+			return 0, fmt.Errorf("error al retirar el gist automático de %s: %w", path, err)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			cambios += int(n)
+		}
+	}
+	if cambios == 0 {
+		return 0, nil
+	}
+	if err := avanzarGeneracionDelGrafo(tx); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("error al commitear los gists automáticos: %w", err)
+	}
+	return cambios, nil
 }

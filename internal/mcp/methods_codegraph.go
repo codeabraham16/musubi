@@ -172,7 +172,103 @@ func (s *McpServer) refreshCodeGraphPkg(ctx context.Context, dir string) (unreso
 	if !ok {
 		return 0, nil
 	}
-	return unresolved, s.engine.UpsertPackageGraphFrom(origin, fileKeys, nodes, edges)
+	if err := s.engine.UpsertPackageGraphFrom(origin, fileKeys, nodes, edges); err != nil {
+		return unresolved, err
+	}
+	// LOS RESÚMENES DEL PAQUETE, CON EL MISMO SNAPSHOT QUE EL GRAFO. Cada archivo que se acaba de
+	// re-derivar trae su contenido y su huella en la mano, así que su gist automático sale de acá
+	// sin volver a leer nada: el que tiene cabecera la escribe, y el que la perdió retira el gist
+	// automático que tenía. Un gist de agente del mismo archivo no se toca (ver
+	// memory.GuardarGistsAutomaticosFrom). Best-effort: un fallo acá no deshace el grafo, que ya
+	// quedó bien, y el próximo cambio del archivo lo reintenta.
+	gists, retirar := s.gistsAutomaticosDe(fileKeys, files, fps)
+	if _, gerr := s.engine.GuardarGistsAutomaticosFrom(origin, gists, retirar); gerr != nil {
+		logx.Warn("codegraph: no se pudieron guardar los resúmenes de cabecera del paquete", "dir", dir, "error", gerr)
+	}
+	return unresolved, nil
+}
+
+// gistsAutomaticosDe arma los gists automáticos de un conjunto de archivos ya leídos: el resumen
+// del comentario de cabecera (codeintel.ResumenDeCabecera) con la marca de automático, los
+// símbolos derivados del mismo contenido y la huella de ese mismo snapshot. Devuelve también los
+// archivos que NO dan resumen, para retirar el automático que pudieran tener.
+//
+// Un archivo sin huella no se escribe ni se retira: un gist sin huella sale 'unknown' para
+// siempre, y no poder leer la huella no dice nada sobre la cabecera.
+func (s *McpServer) gistsAutomaticosDe(keys []string, files, fps map[string]string) ([]memory.CodeMemory, []string) {
+	var gists []memory.CodeMemory
+	var retirar []string
+	for _, key := range keys {
+		content, ok := files[key]
+		if !ok {
+			continue
+		}
+		resumen := codeintel.ResumenDeCabecera(key, content)
+		if resumen == "" {
+			retirar = append(retirar, key)
+			continue
+		}
+		fp := fps[key]
+		if fp == "" {
+			continue
+		}
+		gist := memory.PrefijoGistAutomatico + s.redactIfForced(resumen)
+		gists = append(gists, memory.CodeMemory{
+			Path:        key,
+			Gist:        gist,
+			Symbols:     s.redactIfForced(codeintel.FormatSymbols(codeintel.ExtractSymbols(key, content))),
+			Fingerprint: fp,
+			Tokens:      memory.EstimateTokens(gist),
+		})
+	}
+	return gists, retirar
+}
+
+// barridoDeGists es la siembra de los gists automáticos sobre el árbol ENTERO, armada sin escribir.
+// Hace falta además del refresh por paquete porque el refresh sólo alcanza a los archivos que
+// cambian, y un archivo que no cambió nunca queda sucio: sin el barrido, los ~240 archivos con
+// cabecera y sin gist no se sembrarían nunca, ni se re-sembrarían al subir la regla.
+type barridoDeGists struct {
+	gists     []memory.CodeMemory
+	retirar   []string
+	ilegibles int // archivos que no se pudieron leer: con alguno, el sello no avanza
+}
+
+// armarBarridoDeGists lee y resume cada .go del árbol. SÓLO LEE, así que el scheduler lo corre sin
+// el candado del despacho: es el tramo caro de la siembra (leer y parsear ~1.000 archivos), y el
+// candado se toma después, para la transacción y nada más.
+func (s *McpServer) armarBarridoDeGists(diskFiles map[string]bool) barridoDeGists {
+	var b barridoDeGists
+	files := map[string]string{}
+	fps := map[string]string{}
+	var keys []string
+	for path := range diskFiles {
+		if !strings.HasSuffix(path, ".go") {
+			continue // ResumenDeCabecera sólo resume Go: leer el resto sería gastar I/O en nada
+		}
+		content, err := s.readProjectFile(path)
+		if err != nil {
+			b.ilegibles++
+			continue
+		}
+		fp, err := memory.FileFingerprint(s.projectPath, path)
+		if err != nil {
+			b.ilegibles++
+			continue
+		}
+		files[path], fps[path] = content, fp
+		keys = append(keys, path)
+	}
+	b.gists, b.retirar = s.gistsAutomaticosDe(keys, files, fps)
+	return b
+}
+
+// debeSellarGistsAutomaticos es la misma regla que debeSellarDerivador, aplicada a la siembra de
+// los resúmenes: el sello avanza sólo si el barrido estaba pendiente, se escribió, y no dejó
+// archivos sin leer. Sellar con ilegibles los condenaría a no sembrarse nunca: la próxima corrida
+// vería la regla al día y sólo el refresh —que exige que el archivo cambie— los alcanzaría.
+func debeSellarGistsAutomaticos(pendientes bool, escrito bool, ilegibles int) bool {
+	return pendientes && escrito && ilegibles == 0
 }
 
 // resolveCrossPkgCalls convierte los pendientes de un paquete en aristas CALLS, buscando los
@@ -459,9 +555,25 @@ func reportarIgnorados(res map[string]interface{}, ignorados map[string]int) {
 // y salta los sin cambio. El dir de un fantasma que aún existe se re-deriva para limpiar aristas
 // colgantes que lo referenciaban. Devuelve {packages, pruned, skipped, nodes, edges}.
 func (s *McpServer) indexIncremental(ctx context.Context) (map[string]interface{}, error) {
+	return s.indexIncrementalCon(ctx, nil)
+}
+
+// indexIncrementalCon es indexIncremental con el barrido de gists ya armado afuera del candado (el
+// scheduler lo arma antes de tomarlo). nil ⇒ si hace falta, se arma acá. El plan se re-calcula
+// igual: el de afuera pudo quedar viejo mientras se esperaba el candado. El barrido no se tira por
+// eso: se escribe ANTES del refresh de los paquetes sucios, así que si un archivo cambió en el medio,
+// el refresh —con el contenido más nuevo— es el que queda.
+func (s *McpServer) indexIncrementalCon(ctx context.Context, barrido *barridoDeGists) (map[string]interface{}, error) {
 	plan, err := s.planearIncremental(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if plan.gistsAutoPendientes {
+		if barrido == nil {
+			b := s.armarBarridoDeGists(plan.diskFiles)
+			barrido = &b
+		}
+		plan.barrido = barrido
 	}
 	return s.aplicarIncremental(ctx, plan), nil
 }
@@ -480,11 +592,20 @@ type planIncremental struct {
 	derivadorViejo  string
 	derivadorCambio bool
 	ignorados       map[string]int
+
+	// diskFiles son los archivos indexables del árbol, para el barrido de los gists automáticos.
+	diskFiles map[string]bool
+	// gistsAutoPendientes: la regla de los resúmenes de cabecera del binario no es la que sembró
+	// la base (memory.MetaGistsAutomaticos), así que toca barrer el árbol una vez.
+	gistsAutoPendientes bool
+	gistsAutoViejo      string
+	// barrido es la siembra ya armada; sólo existe si gistsAutoPendientes.
+	barrido *barridoDeGists
 }
 
-// sinCambios: nada que re-derivar, nada que podar y el derivador al día.
+// sinCambios: nada que re-derivar, nada que podar, el derivador al día y los resúmenes sembrados.
 func (p planIncremental) sinCambios() bool {
-	return len(p.dirtyDirs) == 0 && len(p.ghostPaths) == 0 && !p.derivadorCambio
+	return len(p.dirtyDirs) == 0 && len(p.ghostPaths) == 0 && !p.derivadorCambio && !p.gistsAutoPendientes
 }
 
 // planearIncremental compara el grafo guardado contra el disco y devuelve el plan. Sólo LEE (la
@@ -499,7 +620,9 @@ func (s *McpServer) planearIncremental(ctx context.Context) (planIncremental, er
 	// afuera por lenguaje); main usa `dirsDisco` para el barrido del derivador. Los dos hacen falta.
 	dirsDisco, diskFiles, ignorados := s.walkSourceTree()
 
-	plan := planIncremental{dirtyDirs: map[string]bool{}, ignorados: ignorados}
+	plan := planIncremental{dirtyDirs: map[string]bool{}, ignorados: ignorados, diskFiles: diskFiles}
+	plan.gistsAutoViejo, _, _ = s.engine.GetMeta(memory.MetaGistsAutomaticos)
+	plan.gistsAutoPendientes = plan.gistsAutoViejo != codeintel.VersionResumenDeCabecera
 
 	// EL DERIVADOR CAMBIÓ ⇒ TODO ES SUCIO, UNA VEZ. El fingerprint es el sha256 del contenido, así
 	// que sigue al input y no a quien lo deriva: sin esta puerta, una mejora del derivador jamás
@@ -551,6 +674,7 @@ func (s *McpServer) aplicarIncremental(ctx context.Context, plan planIncremental
 			}
 		}
 	}
+	gistsAuto := s.escribirGistsDelBarrido(ctx, plan)
 	refreshed := 0
 	var fallidos []string
 	for dir := range plan.dirtyDirs {
@@ -574,6 +698,9 @@ func (s *McpServer) aplicarIncremental(ctx context.Context, plan planIncremental
 		"mode": "incremental", "packages": refreshed, "pruned": pruned,
 		"skipped": plan.skipped, "nodes": nodes, "edges": edges,
 	}
+	if gistsAuto > 0 {
+		res["gists_automaticos"] = gistsAuto
+	}
 	if plan.derivadorCambio {
 		// Se declara, porque cambia el costo de la corrida de golpe y sin aviso se lee como un
 		// cuelgue: una barrida entera donde se esperaba un incremental barato.
@@ -590,6 +717,34 @@ func (s *McpServer) aplicarIncremental(ctx context.Context, plan planIncremental
 	// «no entiendo ese lenguaje». Son dos hechos distintos y se informan por separado.
 	reportarIgnorados(res, plan.ignorados)
 	return res
+}
+
+// escribirGistsDelBarrido escribe la siembra de los gists automáticos y retira los de los archivos
+// FANTASMA (borrados del disco): la poda del grafo no toca code_memory, y un automático huérfano
+// viajaría al central en cada push. Sella la regla sólo con debeSellarGistsAutomaticos. Va antes
+// del refresh de los paquetes sucios, que escribe con contenido más nuevo. Devuelve cuántas filas
+// cambiaron.
+func (s *McpServer) escribirGistsDelBarrido(ctx context.Context, plan planIncremental) int {
+	origin, ok := writeOriginFor(principalFrom(ctx), "")
+	if !ok || (plan.barrido == nil && len(plan.ghostPaths) == 0) {
+		return 0
+	}
+	retirar := append([]string{}, plan.ghostPaths...)
+	var gists []memory.CodeMemory
+	ilegibles := 0
+	if plan.barrido != nil {
+		gists = plan.barrido.gists
+		retirar = append(retirar, plan.barrido.retirar...)
+		ilegibles = plan.barrido.ilegibles
+	}
+	n, gerr := s.engine.GuardarGistsAutomaticosFrom(origin, gists, retirar)
+	if gerr != nil {
+		logx.Warn("codegraph: no se pudieron sembrar los resúmenes de cabecera", "error", gerr)
+	}
+	if debeSellarGistsAutomaticos(plan.gistsAutoPendientes && plan.barrido != nil, gerr == nil, ilegibles) {
+		_ = s.engine.SetMeta(memory.MetaGistsAutomaticos, codeintel.VersionResumenDeCabecera)
+	}
+	return n
 }
 
 // fallidosDelIndice cuenta los directorios que el índice NO pudo derivar. Las dos corridas lo dicen
@@ -1543,6 +1698,14 @@ func (s *McpServer) toolCodeContext(ctx context.Context, raw json.RawMessage) (i
 		resp["callers"] = callers
 		// El weld: decisiones/gotchas que explican este símbolo (derivado, scopeado).
 		resp["explained_by"] = s.explainedBy(scoped, path, name, 5)
+		// El gist del ARCHIVO del símbolo, con la misma vista que recall_code: su frescura, su origen
+		// y, si es de agente, la cabecera al día al lado. Sin gist no se agrega nada.
+		if path != "" {
+			key := memory.NormalizeCodePath(s.projectPath, path)
+			if cm, ok, cerr := s.engine.GetCodeMemoryCtx(scoped, key); cerr == nil && ok {
+				resp["file_gist"] = s.vistaDelGist(ctx, key, key, "", cm)
+			}
+		}
 		return jsonResult(resp)
 	}
 

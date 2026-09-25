@@ -678,7 +678,7 @@
     },
     {
       "name": "musubi_save_code",
-      "description": "Memoria de CÓDIGO: guardá un gist (titular) + símbolos clave de un archivo que acabás de leer, para no tener que re-leerlo entero después (el mayor costo en tokens de una sesión es re-leer archivos). Musubi calcula un fingerprint del contenido para saber si el gist sigue fresco. Llamala tras leer un archivo grande. Requiere path y gist; symbols opcional.",
+      "description": "Memoria de CÓDIGO: guardá un gist (titular) + símbolos clave de un archivo que acabás de leer, para no tener que re-leerlo entero después (el mayor costo en tokens de una sesión es re-leer archivos). Musubi calcula un fingerprint del contenido para saber si el gist sigue fresco. Llamala tras leer un archivo grande. Requiere path y gist; symbols opcional. Aparte, el índice del grafo mantiene SOLO un gist automático de cada .go de producción con comentario de cabecera (lleva la marca '[auto · cabecera] '): el tuyo nunca lo pisa, y la marca se le saca a lo que mandes.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -703,7 +703,7 @@
     },
     {
       "name": "musubi_recall_code",
-      "description": "Recuerda el gist + símbolos de un archivo ya leído (memoria de código), para evitar re-leerlo. Llamala ANTES de leer un archivo grande. Mirá `freshness`, que tiene TRES estados y no dos: 'fresh' = el archivo no cambió, usá el gist; 'stale' = cambió, conviene re-leerlo; 'unknown' = nadie pudo mirarlo (el caso típico es preguntarle al cerebro CENTRAL por un archivo que vive en otra máquina) — el gist puede seguir sirviendo, pero nadie lo verificó. El booleano `fresh` se conserva por compatibilidad y sólo es true con identidad verificada, así que por sí solo no distingue 'stale' de 'unknown'.",
+      "description": "Recuerda el gist + símbolos de un archivo ya leído (memoria de código), para evitar re-leerlo. Llamala ANTES de leer un archivo grande. Mirá `freshness`, que tiene TRES estados y no dos: 'fresh' = el archivo no cambió, usá el gist; 'stale' = cambió, conviene re-leerlo; 'unknown' = nadie pudo mirarlo — el gist puede seguir sirviendo, pero nadie lo verificó. El cerebro CENTRAL, que no tiene el archivo, lo juzga contra el grafo que el proyecto publicó; da 'unknown' si el archivo no tiene nodo ahí. `freshness_ref` dice contra qué se juzgó: 'llamador', 'disco' o 'grafo'. El booleano `fresh` se conserva por compatibilidad y sólo es true con identidad verificada, así que por sí solo no distingue 'stale' de 'unknown'. `origen` dice quién lo escribió: 'agente' (musubi_save_code) o 'cabecera' (el índice lo sacó del comentario de cabecera y lo mantiene solo). Un gist de agente se conserva aunque esté rancio, y si el servidor tiene el archivo, `cabecera` trae al lado lo que la cabecera dice HOY.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1016,7 +1016,7 @@
     },
     {
       "name": "musubi_code_context",
-      "description": "El puente código↔memoria (Track 20): dado un símbolo (node_key 'path#kind:name') devuelve su ESTRUCTURA (nodo + callees/callers) Y su PORQUÉ — las decisiones/gotchas guardadas en la memoria que mencionan ese símbolo o su archivo ('explained_by', topic_keys). Es el análogo de musubi_entity_context para el código: 'qué es, a qué llama, quién lo llama, y por qué es así / qué cuidado tiene'. El weld se deriva al consultar (no hay aristas escritas a mano). Expandí el detalle con musubi_recall/memory_expand.",
+      "description": "El puente código↔memoria (Track 20): dado un símbolo (node_key 'path#kind:name') devuelve su ESTRUCTURA (nodo + callees/callers) Y su PORQUÉ — las decisiones/gotchas guardadas en la memoria que mencionan ese símbolo o su archivo ('explained_by', topic_keys). Es el análogo de musubi_entity_context para el código: 'qué es, a qué llama, quién lo llama, y por qué es así / qué cuidado tiene'. El weld se deriva al consultar (no hay aristas escritas a mano). Expandí el detalle con musubi_recall/memory_expand. Si el archivo del símbolo tiene gist en la memoria de código, 'file_gist' lo trae con la misma forma que musubi_recall_code (frescura, origen y cabecera al día).",
       "inputSchema": {
         "type": "object",
         "properties": {
