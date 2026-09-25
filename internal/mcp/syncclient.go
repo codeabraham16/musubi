@@ -44,6 +44,9 @@ var (
 	// sí. Llega como resultado (no como error JSON-RPC) para que un binario viejo no reintente; el
 	// cliente nuevo lo lee del resultado para no loguear «empujado» cuando no se tocó nada.
 	errGrafoIgnorado = errors.New("el central ignoró el push del grafo")
+	// errReciboNoCuadra: el central aplicó el push, pero lo que dice haber GUARDADO no es lo que se le
+	// mandó. Viaja con errPermanent: reenviar la misma foto da el mismo recibo.
+	errReciboNoCuadra = errors.New("el central no guardó todo lo que se le mandó")
 )
 
 // SyncClient empuja filas del outbox al cerebro central. Se construye una vez desde SyncConfig
@@ -250,8 +253,13 @@ func (c *SyncClient) Push(item memory.OutboxItem) error {
 // Lleva nodos, aristas y GISTS. Los gists se sumaron el 2026-08-12: hasta entonces el push
 // federaba sólo la estructura y el central quedaba con `code_memory` en CERO (medido: 4.862 nodos
 // contra 0 gists), así que `musubi_recall_code` contra el cerebro compartido no tenía nada que
-// devolver. El campo va SIEMPRE, aunque esté vacío — es lo que le dice al receptor "reemplazá los
-// míos"; un central viejo ignora la clave desconocida y se comporta como antes.
+// devolver. Un central viejo ignora la clave desconocida y se comporta como antes.
+//
+// ⚠️ SIN GISTS, LA CLAVE NO VIAJA. Hasta el 2026-09-24 iba siempre, vacía incluso, y para el
+// receptor la lista vacía es «reemplazá los míos por nada»: una máquina sin gists (la laptop, con
+// `code_memory` vacía) le borraba al central los 117 de esta PC en cada push, y el mapa quedaba en
+// cero gists hasta que otra máquina volviera a empujar. Omitida, el central no toca los que tiene.
+// El costo, decidido por el dueño: el daemon ya no puede vaciar los gists del central por push.
 func (c *SyncClient) PushGraph(nodes []memory.GraphNode, edges []memory.GraphEdge, gists []memory.CodeMemory) error {
 	return c.PushGraphDe(memory.PublicacionDelGrafo{}, nodes, edges, gists)
 }
@@ -260,10 +268,11 @@ func (c *SyncClient) PushGraph(nodes []memory.GraphNode, edges []memory.GraphEdg
 // commit, que el central usa para no dejar que un árbol viejo pise uno nuevo. Con la publicación
 // vacía los campos no viajan y el push es idéntico al de antes. Un central anterior a la guarda
 // ignora las dos claves.
+//
+// También manda la HUELLA del contenido (memory.HuellaDelGrafo) y LEE EL RECIBO: si el central dice
+// haber guardado otra cantidad que la mandada, devuelve errReciboNoCuadra con los números. Un central
+// anterior al recibo no manda `guardados` y no se compara nada.
 func (c *SyncClient) PushGraphDe(pub memory.PublicacionDelGrafo, nodes []memory.GraphNode, edges []memory.GraphEdge, gists []memory.CodeMemory) error {
-	if gists == nil {
-		gists = []memory.CodeMemory{}
-	}
 	reqBody := struct {
 		JsonRpc string `json:"jsonrpc"`
 		ID      string `json:"id"`
@@ -273,9 +282,10 @@ func (c *SyncClient) PushGraphDe(pub memory.PublicacionDelGrafo, nodes []memory.
 			Arguments struct {
 				Nodes  []memory.GraphNode  `json:"nodes"`
 				Edges  []memory.GraphEdge  `json:"edges"`
-				Gists  []memory.CodeMemory `json:"gists"`
+				Gists  []memory.CodeMemory `json:"gists,omitempty"`
 				Head   string              `json:"head,omitempty"`
 				HeadAt string              `json:"head_at,omitempty"`
+				Huella string              `json:"huella,omitempty"`
 			} `json:"arguments"`
 		} `json:"params"`
 	}{JsonRpc: "2.0", ID: "codegraph-push", Method: "tools/call"}
@@ -283,6 +293,7 @@ func (c *SyncClient) PushGraphDe(pub memory.PublicacionDelGrafo, nodes []memory.
 	reqBody.Params.Arguments.Nodes = nodes
 	reqBody.Params.Arguments.Edges = edges
 	reqBody.Params.Arguments.Gists = gists
+	reqBody.Params.Arguments.Huella = memory.HuellaDelGrafo(nodes, edges)
 	if !pub.Vacia() {
 		reqBody.Params.Arguments.Head = pub.Head
 		reqBody.Params.Arguments.HeadAt = pub.En.UTC().Format(time.RFC3339)
@@ -350,7 +361,69 @@ func (c *SyncClient) PushGraphDe(pub memory.PublicacionDelGrafo, nodes []memory.
 	if motivo, ignorado := pushIgnorado(result); ignorado {
 		return fmt.Errorf("%w: %w: %s", errPermanent, errGrafoIgnorado, motivo)
 	}
+	if motivo, falta := reciboQueNoCuadra(result, len(nodes), len(edges), len(gists)); falta {
+		return fmt.Errorf("%w: %w: %s", errPermanent, errReciboNoCuadra, motivo)
+	}
+	if recibo, ok := leerReciboDelPush(result); ok && recibo.Aviso != "" {
+		logx.Warn("federación del grafo: el central aceptó el push con un aviso", "aviso", recibo.Aviso)
+	}
 	return nil
+}
+
+// reciboDelPush es lo que musubi_codegraph_push contesta, adentro de content[0].text, además del eco
+// de lo recibido: lo GUARDADO y, si lo hay, un aviso. Gists es puntero porque el central sólo lo
+// cuenta cuando el push habló de gists.
+type reciboDelPush struct {
+	Guardados *struct {
+		Nodes int  `json:"nodes"`
+		Edges int  `json:"edges"`
+		Gists *int `json:"gists"`
+	} `json:"guardados"`
+	Aviso string `json:"aviso"`
+}
+
+// leerReciboDelPush desenvuelve el resultado de la tool igual que pushIgnorado. false si no se
+// entiende: un resultado ilegible no es un recibo.
+func leerReciboDelPush(result json.RawMessage) (reciboDelPush, bool) {
+	var envoltura struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	var recibo reciboDelPush
+	if json.Unmarshal(result, &envoltura) != nil || len(envoltura.Content) == 0 {
+		return recibo, false
+	}
+	if json.Unmarshal([]byte(envoltura.Content[0].Text), &recibo) != nil {
+		return reciboDelPush{}, false
+	}
+	return recibo, true
+}
+
+// reciboQueNoCuadra compara lo que el central dice haber GUARDADO con lo que se le mandó, y arma el
+// motivo con los números («el central guardó 2 de 3 nodos»). Sin `guardados` —un central anterior al
+// recibo, o un stub que contesta `result:{}`— no compara: la ausencia de recibo no es un recibo malo.
+func reciboQueNoCuadra(result json.RawMessage, nodes, edges, gists int) (string, bool) {
+	recibo, ok := leerReciboDelPush(result)
+	if !ok || recibo.Guardados == nil {
+		return "", false
+	}
+	g := recibo.Guardados
+	var faltas []string
+	if g.Nodes != nodes {
+		faltas = append(faltas, fmt.Sprintf("%d de %d nodos", g.Nodes, nodes))
+	}
+	if g.Edges != edges {
+		faltas = append(faltas, fmt.Sprintf("%d de %d aristas", g.Edges, edges))
+	}
+	if g.Gists != nil && *g.Gists != gists {
+		faltas = append(faltas, fmt.Sprintf("%d de %d gists", *g.Gists, gists))
+	}
+	if len(faltas) == 0 {
+		return "", false
+	}
+	return "el central guardó " + strings.Join(faltas, ", ") +
+		" (claves repetidas que colapsa, gists sin path o sin contenido que saltea, o un push simultáneo)", true
 }
 
 // pushIgnorado mira si el resultado de musubi_codegraph_push dice `ignored`. El resultado de una tool

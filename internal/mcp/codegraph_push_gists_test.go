@@ -148,22 +148,17 @@ func TestPushGraphMandaLaClaveGistsEnElPayload(t *testing.T) {
 		t.Errorf("llegaron %d gists, esperaba 2", len(g))
 	}
 
-	// Y con nil manda una lista VACÍA, no `null`. La diferencia no es cosmética: el receptor lee
-	// el campo como puntero, así que `null` le llega como "no hablé de gists" y no reemplaza nada
-	// — un emisor nuevo sin gists nunca podría vaciar los del central. Chequear sólo que la clave
-	// esté presente no alcanza, porque un slice nil también serializa a `null`.
-	recibido = nil
-	if err := client.PushGraph(nil, nil, nil); err != nil {
-		t.Fatalf("PushGraph(nil): %v", err)
-	}
-	v, presente := recibido["gists"]
-	if !presente {
-		t.Fatalf("con nil el emisor omitió la clave: %v", recibido)
-	}
-	if v == nil {
-		t.Errorf("con nil el emisor mandó `null` en vez de una lista vacía: el central lo leería como «no toques nada»")
-	}
-	if arr, ok := v.([]interface{}); !ok || len(arr) != 0 {
-		t.Errorf("esperaba una lista vacía, llegó %#v", v)
+	// Y SIN gists —nil o una lista vacía, que es lo que da una foto de una base sin gists— la clave
+	// NO viaja. Hasta el 2026-09-24 esta prueba exigía lo contrario (mandar `[]` para poder vaciar
+	// los del central), y eso era justo lo que hacía que una máquina sin gists le borrara al central
+	// los de las otras en cada push. El dueño eligió que el daemon ya no pueda vaciarlos por push.
+	for _, sinGists := range [][]memory.CodeMemory{nil, {}} {
+		recibido = nil
+		if err := client.PushGraph(nil, nil, sinGists); err != nil {
+			t.Fatalf("PushGraph(%#v): %v", sinGists, err)
+		}
+		if v, presente := recibido["gists"]; presente {
+			t.Errorf("sin gists el emisor mandó la clave (%#v): el central la leería como «borrá los míos»", v)
+		}
 	}
 }
