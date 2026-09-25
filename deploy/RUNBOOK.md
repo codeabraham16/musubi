@@ -1472,16 +1472,29 @@ cuando la ventana venza. Si te olvidás, vence sola a los `minutos` que pediste 
 **La credencial necesita `metrics` sobre ESA máquina**, no `admin` ni `exec`: declarar una ventana
 no ejecuta nada. El rol no concede capacidades de flota (C1), así que un admin sin sección `fleet:`
 en `principals.yaml` recibe «no podés declarar mantenimiento». Medido el 2026-09-24, tampoco pueden
-la credencial de las políticas de auto-heal (sólo `exec`) ni la de meir (sólo `screen` sobre `gio`).
+la credencial de las políticas de auto-heal (sólo `exec`) ni la de meir (principal `gio`, sólo
+`screen` sobre `gio`).
 
-**En `gio` rige cuatro ojos desde el 2026-09-24, y el segundo par de ojos es meir.** Si la
-intervención entra por `musubi_fleet_screen`, la sesión espera a que él la apruebe con
-`musubi_fleet_approve`. La aprobación no viaja: avisale antes de pedirla, o la solicitud vence a los
-30 minutos sin que se entere (ver `AprobacionDeCuatroOjosSinAtender`). Y que la apruebe él, no otra
-credencial tuya: el control compara NOMBRES de principal, así que `davantis-2` puede aprobar una
-solicitud de `davantis-consola` y la bitácora diría «aprobado por otro» siendo la misma persona.
-Dos cosas no pasan por esa puerta: declarar la ventana, que no es una sesión, y
-`musubi_fleet_exec`, que cuatro ojos no cubre —es el hueco que la propia
+**En `gio` rige cuatro ojos desde el 2026-09-24, y el segundo par de ojos es meir**, cuyo principal
+se llama `gio`, igual que la máquina: en `principals.yaml` y en `musubi_token_list` no hay ningún
+«meir». Cuatro ojos frena las dos sesiones, `musubi_fleet_screen` y `musubi_fleet_shell`, y quien
+aprueba necesita sobre esa máquina LA MISMA capacidad que la sesión pide. Por eso hoy no son
+equivalentes (medido el 2026-09-25 en el `principals.yaml` del central):
+
+- **Pantalla, sí.** Si la intervención entra por `musubi_fleet_screen`, la sesión espera a que meir
+  la apruebe con `musubi_fleet_approve`: su principal tiene `screen` sobre `gio`.
+- **Una shell en `gio` hoy no la puede aprobar nadie.** meir no tiene `shell`, y la única credencial
+  vigente con `shell` sobre `gio` es `davantis-2`, la misma que la pediría (`davantis-consola`
+  también la tenía y venció el 2026-09-24). La solicitud queda pendiente hasta vencer a los 30
+  minutos mientras la ventana ya declarada se consume. Hasta que un segundo principal tenga `shell`
+  sobre `gio`, la intervención entra por pantalla: es el «candado» que describe
+  `musubi_fleet_require_approval`.
+
+La aprobación no viaja: avisale a meir antes de pedirla, o la solicitud vence sin que se entere (ver
+`AprobacionDeCuatroOjosSinAtender`). Y que la apruebe él, no otra credencial tuya: el control
+compara NOMBRES de principal, así que dos credenciales de la misma persona se aprueban entre sí y la
+bitácora diría «aprobado por otro». Dos cosas no pasan por esa puerta: declarar la ventana, que no
+es una sesión, y `musubi_fleet_exec`, que cuatro ojos no cubre —es el hueco que la propia
 `musubi_fleet_require_approval` advierte, no una vía alternativa—.
 
 ## MantenimientoEterno

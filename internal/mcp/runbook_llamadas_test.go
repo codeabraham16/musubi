@@ -18,10 +18,13 @@ import (
 	"math"
 	"net"
 	"net/url"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
+
+	"musubi/internal/fleet"
 )
 
 // reLlamadaATool reconoce una llamada CON ARGUMENTOS en una sola línea, en las dos formas que usa
@@ -365,3 +368,111 @@ func TestLaRecetaDeLaVentanaDiceDondeSeCorre(t *testing.T) {
 		"  Quien opera desde la sala de mando copia el paso 1 y la ventana no se declara: se repite el 2026-09-20",
 		strings.Join(noAnda, "; "))
 }
+
+// reSesionConCuatroOjos reconoce, en el código del paquete, cada sesión que pasa por la puerta de
+// cuatro ojos: la llamada que gasta la aprobación, con la capacidad que esa sesión pide.
+var reSesionConCuatroOjos = regexp.MustCompile(`s\.gastarAprobacion\([^,]+,[^,]+,\s*fleet\.(Cap[A-Za-z]+)`)
+
+// TestLaRecetaNombraCadaSesionQueFrenaCuatroOjos custodia que la receta no deje afuera una sesión
+// que cuatro ojos frena.
+//
+// La primera versión hablaba sólo de `musubi_fleet_screen`, y cuatro ojos frena también
+// `musubi_fleet_shell`. No es un detalle de redacción: quien aprueba necesita LA MISMA capacidad
+// que la sesión pide, y medido el 2026-09-25 en `gio` el principal de meir tiene `screen` y no
+// `shell`, así que una shell ahí no la puede aprobar nadie. El operador que la pide siguiendo la
+// receta le avisa a meir, meir no puede aprobar, la solicitud vence a los 30 minutos y la ventana
+// ya declarada se consume sin trabajo.
+//
+// LA LISTA SALE DEL CÓDIGO, no se escribe a mano: cada `gastarAprobacion` del paquete es una sesión
+// que pasa por la puerta. Si mañana otra pasa, esta guarda pide que la receta la nombre. Lo que NO
+// puede mirar es quién tiene cada capacidad en producción: eso vive en el `principals.yaml` del
+// central, no en el repo, y la receta lo da con fecha de medición. Tampoco custodia la redacción
+// del encabezado («En `gio` rige cuatro ojos…»): lo que tiene dientes es la enumeración.
+//
+// Sabotaje que la hace fallar: que la receta deje de nombrar la shell entre las sesiones frenadas.
+// arnes: archivo="deploy/RUNBOOK.md"
+// arnes: de="Cuatro ojos frena las dos sesiones, `musubi_fleet_screen` y `musubi_fleet_shell`, y quien"
+// arnes: a="Cuatro ojos frena las sesiones de pantalla, `musubi_fleet_screen`, y quien"
+func TestLaRecetaNombraCadaSesionQueFrenaCuatroOjos(t *testing.T) {
+	receta := textoDeLaReceta(t, leerDeploy(t, "RUNBOOK.md"))
+
+	s := NewMcpServer(nil, "", nil)
+	registradas := map[string]bool{}
+	for i := range s.tools {
+		registradas[s.tools[i].Name] = true
+	}
+	capacidades := map[string]fleet.Cap{
+		"CapMetrics": fleet.CapMetrics, "CapExec": fleet.CapExec,
+		"CapScreen": fleet.CapScreen, "CapShell": fleet.CapShell,
+	}
+
+	entradas, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("no pude listar el paquete: %v", err)
+	}
+	frenadas := map[string]bool{}
+	for _, e := range entradas {
+		nombre := e.Name()
+		if e.IsDir() || !strings.HasSuffix(nombre, ".go") || strings.HasSuffix(nombre, "_test.go") {
+			continue
+		}
+		fuente, err := os.ReadFile(nombre)
+		if err != nil {
+			t.Fatalf("no pude leer %s: %v", nombre, err)
+		}
+		for _, l := range strings.Split(string(fuente), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(l), "//") {
+				continue // un comentario que cita la llamada no es una sesión
+			}
+			for _, m := range reSesionConCuatroOjos.FindAllStringSubmatch(l, -1) {
+				c, conocida := capacidades[m[1]]
+				if !conocida {
+					t.Errorf("%s pasa fleet.%s por cuatro ojos y esta guarda no sabe qué capacidad es: agregala al mapa", nombre, m[1])
+					continue
+				}
+				tool := "musubi_fleet_" + string(c)
+				if !registradas[tool] {
+					t.Errorf("%s pasa `%s` por cuatro ojos y no hay una tool %s: la guarda no sabe qué sesión nombrar", nombre, c, tool)
+					continue
+				}
+				frenadas[tool] = true
+			}
+		}
+	}
+	// CONTROL DE QUE MIRÓ ALGO: hoy son dos (pantalla y shell). Menos es un patrón que dejó de
+	// reconocer la llamada, no una puerta que dejó de existir.
+	if len(frenadas) < 2 {
+		t.Fatalf("encontré %d sesiones que pasan por cuatro ojos y hay al menos dos (%v): el patrón dejó de reconocer gastarAprobacion", len(frenadas), frenadas)
+	}
+
+	// SE MIRA LA ORACIÓN QUE LAS ENUMERA, no la sección entera: la receta nombra también
+	// `musubi_fleet_exec`, justamente para decir que cuatro ojos NO la cubre. Buscando el nombre en
+	// cualquier lado, una `exec` que pasara a ir por la puerta seguiría en verde. Y se mira en los
+	// dos sentidos: una sesión que la oración diera por frenada y el código no, también miente.
+	oracion := reOracionDeCuatroOjos.FindString(receta)
+	if oracion == "" {
+		t.Fatalf("la receta de la ventana no tiene la oración que enumera las sesiones que frena cuatro ojos " +
+			"(«Cuatro ojos frena …»), y en gio rige desde el 2026-09-24")
+	}
+	enLaOracion := map[string]bool{}
+	for _, m := range reToolEntreComillas.FindAllStringSubmatch(oracion, -1) {
+		enLaOracion[m[1]] = true
+	}
+	for tool := range frenadas {
+		if !enLaOracion[tool] {
+			t.Errorf("la receta no nombra `%s` entre las sesiones que frena cuatro ojos, y el código la frena: quien "+
+				"aprueba necesita LA MISMA capacidad, así que la receta tiene que decir si esa sesión hoy tiene quién la apruebe", tool)
+		}
+	}
+	for tool := range enLaOracion {
+		if !frenadas[tool] {
+			t.Errorf("la receta da `%s` como frenada por cuatro ojos y el código no la pasa por la puerta", tool)
+		}
+	}
+}
+
+// reOracionDeCuatroOjos es la oración de la receta que enumera las sesiones frenadas, hasta el punto.
+var reOracionDeCuatroOjos = regexp.MustCompile(`(?i)cuatro ojos frena[^.]*`)
+
+// reToolEntreComillas es una tool de flota citada como código en el texto del runbook.
+var reToolEntreComillas = regexp.MustCompile("`(musubi_fleet_[a-z_]+)`")
