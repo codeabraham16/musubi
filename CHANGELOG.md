@@ -37,9 +37,25 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   `correrTodos` termina en `codigoDeSalida`—, porque con sólo las puras en verde se podía
   desconectar el fragmento sin que nada se pusiera rojo. Otra fija el orden paquete → tramo →
   fragmento → sistema con `-paquete`, `-desde` y `-limite` puestos: reanudar un fragmento corre
-  el resto de ESE fragmento, con la posición absoluta. Lo que la primera corrida completa en Linux
-  encuentre (guardas huecas, controles inestables, sin veredicto) se arregla aparte: los ~970
-  nunca corrieron juntos.*
+  el resto de ESE fragmento, con la posición absoluta.*
+
+  **La primera noche completa (en este mismo PR, Linux) encontró 9 y quedan arregladas acá.** 4 de 8
+  fragmentos en rojo: 7 sabotajes que no ponían su prueba en rojo, 1 que no compilaba y 1 rojo
+  sospechoso. Ninguno dependía del sistema; los diagnósticos, uno por uno:
+  - **`TestTokenDeDispositivoNoAbreElMCP` estaba ciega, y es de seguridad.** Su ayudante armaba el
+    servidor con sólo `token`, así que la puerta pasaba por la rama legacy; `serve` siempre pasa
+    `registry` (`loadPrincipals` devuelve uno aunque no haya `principals.yaml`), y ésa —la de
+    producción— no la custodiaba nadie. Producción estaba bien; la guarda no lo sabía. Ahora
+    `servidorConFlota` arma las opciones como `serve` y la prueba cubre las dos ramas.
+  - **Avisar a una máquina que no sabe avisar se decidía en dos lugares** (el `case` de shell, exec y
+    pantalla, y el embudo `encolarAvisoDeAcceso`), y cada copia tapaba el sabotaje de la otra. Queda
+    en el embudo solo; `encolarAvisoDeAcceso` devuelve si encoló, y la ventana de 1 h de exec se marca
+    sólo si de verdad salió un aviso.
+  - Cinco sabotajes eran los equivocados: el latido de persona forzaba un `ok` sin máquina (hay una
+    segunda cerca que lo ataja; el sabotaje ahora rompe el filtro por hash), el cuerpo del latido
+    usaba `bytes` sin importarlo, mantenimiento y diseño le apuntaban a la prueba HERMANA (y la
+    hermana de diseño, que no tenía sabotaje, ahora tiene uno), y la compuerta de procesos daba un
+    rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
 - **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
