@@ -321,6 +321,14 @@ func TestUnaOperacionInternaSeClasificaIgualConCualquierLargo(t *testing.T) {
 // caracteres, o uno fuera de ASCII— no lo puede cerrar ningún conjunto de nombres, y lo cierra la
 // guarda de la forma: TestLaClasificacionPorNombreSoloComparaElNombreEntero.
 //
+// Y CADA PARECIDO PASA TAMBIÉN POR LA PUERTA DE LA CRONOLOGÍA. Hasta la segunda revisión de T7 se
+// le preguntaban sólo a TipoDeArgv, y la cronología no arma el hecho con TipoDeArgv sino con
+// HechoDeComando (vía TipoDeComando). La revisión puso una regla en esa puerta —`tipo =
+// HechoCanalPantalla` para lo que empiece con `musubi:pantalla::`— y el paquete entero quedó en
+// verde: ninguna guarda del nombre cruzaba la puerta. Ahora cada parecido nace también como hecho.
+// La regla con `::` la caza la guarda de la forma (que mira el paquete entero); ésta caza la de un
+// carácter, que es la directiva de abajo.
+//
 // EXPOSICIÓN medida por la auditoría: cero. Ninguna fila empieza con el nombre de otra operación
 // sin serlo, y ninguna de las cuatro declaradas es prefijo de otra. Latente.
 //
@@ -335,6 +343,11 @@ func TestUnaOperacionInternaSeClasificaIgualConCualquierLargo(t *testing.T) {
 // arnes: archivo="internal/fleet/cronologia.go"
 // arnes: de="\tswitch ejecutableDe(argv) {"
 // arnes: a="\tif strings.HasPrefix(ejecutableDe(argv), OpPantalla+\".\") {\n\t\treturn HechoCanalPantalla\n\t}\n\tswitch ejecutableDe(argv) {"
+// Sabotaje: la misma regla del `.`, pero en HechoDeComando —la puerta de la cronología— y no en
+// TipoDeArgv → el hecho nace como pantalla aunque TipoDeArgv lo esconda.
+// arnes: archivo="internal/fleet/cronologia.go"
+// arnes: de="\treturn Hecho{\n\t\tCuando:     c.Creado,"
+// arnes: a="\tif strings.HasPrefix(ejecutableDe(c.Argv), OpPantalla+\".\") {\n\t\ttipo = HechoCanalPantalla\n\t}\n\treturn Hecho{\n\t\tCuando:     c.Creado,"
 func TestUnNombreParecidoAUnaOperacionConocidaEsDesconocido(t *testing.T) {
 	declaradas := opsInternasDeclaradas(t)
 	medidos := 0
@@ -351,6 +364,12 @@ func TestUnNombreParecidoAUnaOperacionConocidaEsDesconocido(t *testing.T) {
 			}
 			if _, mostrable := CapDeHecho(tipo); mostrable {
 				t.Errorf("%q, desconocido, resultó mostrable: el default tiene que ser NO mostrar", parecido)
+			}
+			// La puerta de la cronología: una fila sin clasificación propia, como las anteriores a la
+			// migración 46, cae al argv por TipoDeComando.
+			if h := HechoDeComando(Comando{Argv: []string{parecido, "x"}}, "pc"); h.Tipo != HechoSinClasificar {
+				t.Errorf("%q se parece a %s y HechoDeComando —la puerta por la que nace el hecho de la "+
+					"cronología— lo hizo nacer %q: la regla vive en la puerta y no en TipoDeArgv", parecido, op, h.Tipo)
 			}
 		}
 	}
@@ -372,19 +391,26 @@ func TestUnNombreParecidoAUnaOperacionConocidaEsDesconocido(t *testing.T) {
 	}
 }
 
-// cabezasDe es `cabeza` tal cual y con los blancos alrededor que LimpiarArgv le recorta al
-// ejecutable: los de strings.TrimSpace, incluido el espacio duro.
+// cabezasDe es `cabeza` tal cual y con cada blanco que LimpiarArgv le recorta al ejecutable
+// adelante, detrás y a los dos lados: los de strings.TrimSpace, TODOS, que salen de
+// blancosDeTrimSpace y no de una lista. Hasta la segunda revisión de T7 eran cinco de los 25.
 func cabezasDe(cabeza string) []string {
-	duro := string(rune(0xA0))
-	return []string{cabeza, " " + cabeza, cabeza + " ", "\t" + cabeza + "\n", "\r\n" + cabeza + "\r\n", duro + cabeza + duro}
+	out := []string{cabeza}
+	for _, b := range blancosDeTrimSpace() {
+		out = append(out, b+cabeza, cabeza+b, b+cabeza+b)
+	}
+	return out
 }
 
-// formasDeLaCabeza arma un argv con cada una de cabezasDe(cabeza) adelante, y con partes vacías
-// antes —una, que LimpiarArgv saca, y dos, que dejan el argv sin ejecutable—. Son las
-// transformaciones de LimpiarArgv y ninguna otra: lo que sale de acá es lo que un llamador puede
-// mandar y el canal guardar distinto.
+// formasDeLaCabeza arma un argv con cada una de cabezasDe(cabeza) adelante, y con partes antes: una
+// vacía o hecha de un solo blanco —cada uno de blancosDeTrimSpace—, que LimpiarArgv saca, y dos
+// vacías, que dejan el argv sin ejecutable. Son las transformaciones de LimpiarArgv y ninguna otra:
+// lo que sale de acá es lo que un llamador puede mandar y el canal guardar distinto.
 func formasDeLaCabeza(cabeza string, cola ...string) [][]string {
-	adelante := [][]string{nil, {""}, {" "}, {"\t\n"}, {"", ""}}
+	adelante := [][]string{nil, {""}, {"", ""}}
+	for _, b := range blancosDeTrimSpace() {
+		adelante = append(adelante, []string{b})
+	}
 	var out [][]string
 	for _, pre := range adelante {
 		for _, c := range cabezasDe(cabeza) {
@@ -425,8 +451,22 @@ func formasDeLaCabeza(cabeza string, cola ...string) [][]string {
 // arnes: archivo="internal/fleet/comando.go"
 // arnes: de="\tif len(out) > 0 {\n\t\tout[0] = strings.TrimSpace(out[0])\n\t}\n"
 // arnes: a=""
+// Sabotaje: una SEGUNDA normalización en ArgvDeBitacora, con un juego de blancos propio —el que
+// midió la segunda revisión de T7: espacio, tab, CR, LF y el espacio duro, los cinco que esta prueba
+// recorría— → con `\v`, `\f`, U+0085, U+2028… alrededor el agente despacha pantalla y la contraseña
+// pasa. Con los cinco blancos de antes el paquete entero quedaba en verde.
+// arnes: archivo="internal/fleet/cronologia.go"
+// arnes: de="func ArgvDeBitacora(argv []string) []string {\n"
+// arnes: a="func ArgvDeBitacora(argv []string) []string {\n\tfor _, a := range argv {\n\t\tif c := strings.Trim(a, \" \\t\\r\\n\\u00a0\"); c != \"\" {\n\t\t\tif c != OpPantalla {\n\t\t\t\treturn argv\n\t\t\t}\n\t\t\tbreak\n\t\t}\n\t}\n"
 func TestLaCabezaDelArgvSeLeeComoLaDespachaElAgente(t *testing.T) {
 	const secreto = "ContraseñaDeSesión123"
+	// EL PISO DE LOS BLANCOS: los 25 de unicode.IsSpace, que es lo que recorta TrimSpace. Es un hecho
+	// de Unicode y se clava: si blancosDeTrimSpace perdiera la mitad, las formas de abajo mirarían
+	// menos y la cuenta de pantallas —que se deriva de ellas— bajaría con ellas sin decir nada.
+	if n := len(blancosDeTrimSpace()); n < 25 {
+		t.Fatalf("blancosDeTrimSpace encontró %d blancos y unicode.IsSpace tiene 25: las formas de la cabeza "+
+			"no recorren todo lo que LimpiarArgv recorta", n)
+	}
 	cabezas := []string{"systemctl", "musubi:todavia-no-existe"}
 	for op := range opsInternasDeclaradas(t) {
 		cabezas = append(cabezas, op)
