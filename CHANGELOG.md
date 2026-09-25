@@ -7,6 +7,43 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **Desde una ficha del acervo se llega a su fuente, y al revés.** `musubi_memory_expand` trae ahora
+  el linaje de lo que expande: una ficha destilada viene con `salio_de` (los artículos crudos de los
+  que salió) y un artículo ingerido con `destilado_en` (las fichas que salieron de él), cada punta con
+  su `id` y su `topic_key`, nunca el contenido. Expandir esos ids baja o sube un nivel. Las aristas
+  `derived_from` existían desde el 2026-08-20 —1.372 en el central— y nadie las leía para navegar.
+  El corpus de `musubi_design` suma `fuentes` en cada patrón, porque es ahí donde el agente ve la
+  ficha.
+
+  **Sigue las fusiones del afilador.** Cada punta se resuelve a su versión viva por `superseded_by`
+  (hasta 8 saltos) y la raíz junta lo que se fundió en ella, así que del artículo se llega a la ficha
+  que sobrevivió y no a la archivada, y la sobreviviente hereda las fuentes de la que absorbió. Y
+  **la herencia es durable**: `ArchiveAsDuplicate` y `Consolidate` copian las aristas del perdedor al
+  canónico en la misma transacción, con `ON CONFLICT DO NOTHING` para no pisar un veredicto que el
+  canónico ya tuviera con esa punta. Sin eso, lo que `superseded_by` reconstruye duraba lo que tarda
+  la purga de archivadas (90 días en el central), que borra la fila con sus aristas sin un solo error.
+
+  El linaje respeta el alcance de la credencial en las dos direcciones, es best-effort (si falla, la
+  expansión sale como antes) y va con `omitempty`: una observación sin aristas se serializa byte a
+  byte igual que antes y la respuesta sigue siendo un array. Tope de 12 referencias por dirección.
+  `superseded_by` no tiene índice y este PR no agrega una migración: la consulta lee una vez las
+  fundidas y fija el orden de los JOIN, y con 30.000 observaciones y 8 raíces cuesta 8-10 ms (30-40 ms
+  dejándole el orden al planificador).
+
+  **Queda latente hasta el despliegue y hasta que alguien lo use.** Medido el 2026-09-24:
+  `expand_count` sobre las fichas y los artículos de `musubi-design` es cero. Se da por encendido
+  cuando haya `expand_count > 0` sobre `topic_key LIKE 'ingested/%'` en ese tenant. Las 58 aristas que
+  ya cuelgan hoy de fichas y artículos fundidos las sostiene la lectura por `superseded_by`; copiarlas
+  al canónico antes de que la purga las alcance (~2026-11-19) es un backfill aparte en el central.
+
+  *19 sabotajes corridos, 19 rojos: la ida y la vuelta invertidas, los saltos en cero, cada mitad de
+  la resolución por separado, sin filtro de visibilidad, sin tope o con el tope subido justo a lo
+  sembrado, sin alcance (el writer de `crm` ve un id de `web`, con el admin federado como control),
+  las dos llamadas a la herencia, cada dirección de la copia, la copia que pisa un par existente, el
+  expand sin linaje, cada `omitempty`, el linaje que rompe la expansión al fallar, y el brief sin
+  fuentes.*
+
 ### Fixed
 - **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
   El ledger era UNA casilla de `meta` que guardaba UNA sesión, y `LedgerAdd` la reiniciaba entera

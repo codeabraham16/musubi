@@ -330,6 +330,11 @@ func (e *DbEngine) ArchiveAsDuplicate(projectID, loserID, canonicalID string) (a
 		`UPDATE observations SET superseded_by=? WHERE superseded_by=?`, canonicalID, loserID); err != nil {
 		return false, fmt.Errorf("re-apuntar punteros superseded_by: %w", err)
 	}
+	// El linaje del perdedor pasa al canónico antes de que la purga borre la fila y sus aristas:
+	// superseded_by lo reconstruye al leer, pero sólo hasta la purga. Ver memory/linaje.go.
+	if err := heredarLinaje(tx, loserID, canonicalID); err != nil {
+		return false, err
+	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commitear dedup: %w", err)
 	}

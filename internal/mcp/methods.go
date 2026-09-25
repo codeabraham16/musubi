@@ -1815,14 +1815,17 @@ func (s *McpServer) toolMemoryExpand(ctx context.Context, raw json.RawMessage) (
 	}
 
 	// Aislamiento por proyecto (Track 17): la hidratación por id era una fuga total (leer el
-	// contenido crudo de CUALQUIER proyecto enumerando ids). Se acota a la credencial.
-	res, used, err := s.engine.GetObservationsBudgetCtx(s.scopedCtx(ctx), args.IDs, args.MaxTokens)
+	// contenido crudo de CUALQUIER proyecto enumerando ids). Se acota a la credencial. El mismo
+	// contexto acotado sirve al linaje, así que no hay forma de que las dos fronteras difieran.
+	sctx := s.scopedCtx(ctx)
+	res, used, err := s.engine.GetObservationsBudgetCtx(sctx, args.IDs, args.MaxTokens)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al expandir memorias: %v", err)
 	}
 	// Contabilizar la hidratación en el ledger de la sesión activa (best-effort).
 	_, _ = s.engine.LedgerAdd("", "hydration", used)
-	return jsonResult(res)
+	// El linaje del acervo (ficha ↔ fuente), best-effort. Ver methods_linaje.go.
+	return jsonResult(s.conLinaje(sctx, res))
 }
 
 func (s *McpServer) toolTokens(raw json.RawMessage) (interface{}, *RpcError) {

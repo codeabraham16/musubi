@@ -54,6 +54,10 @@ type ObservationStore interface {
 	// `derived_from` (o sea, que aún no produjeron tarjetas). FIFO, model-free. Ver memory/distill.go.
 	ObservationsMissingRelation(projectID, topicPrefix, relation string, limit int) ([]ObsLite, error)
 	CountObservationsMissingRelation(projectID, topicPrefix, relation string) (int, error)
+	// LinajeCtx es la VUELTA de esas mismas aristas: de una ficha a los blobs de los que salió y de
+	// un blob a las fichas que salieron de él, con cada punta resuelta a su versión viva y acotada
+	// al ProjectScope del ctx. Sólo ids y topics. Ver memory/linaje.go.
+	LinajeCtx(ctx context.Context, ids []string) (map[string]Linaje, error)
 	// SemanticDuplicateCandidates / NearestVisibleByVector / ArchiveAsDuplicate alimentan el AFILADOR del
 	// acervo (Musubi Renaissance): hallar tarjetas gemelas por COSENO (no por trigramas), evitar escribir
 	// una gemela nueva en la destilación, y archivar la más débil cuando un juez confirma la redundancia.
