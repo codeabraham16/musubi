@@ -75,7 +75,7 @@ flowchart LR
     end
     subgraph M["Musubi · daemon Go"]
         direction TB
-        RPC["JSON-RPC 2.0 / stdio<br/>75 herramientas MCP"]
+        RPC["JSON-RPC 2.0 / stdio<br/>79 herramientas MCP"]
         COG["resolver de skills · grafo<br/>gobernador de tokens<br/>conflictos · workflows"]
     end
     DB[("SQLite<br/>local-first")]
@@ -347,7 +347,7 @@ Coordina un **DAG de pasos sin ejecutarlos**: vos definís el grafo, Musubi te d
 esto: una cadena lineal que Musubi genera por vos.
 
 > ⚠️ **Esta capa está cerrada por defecto.** El motor corre —es el que ejecuta SDD—, pero la tool que
-> acepta *tu* grafo está entre las nueve dormidas: para el yaml de acá abajo hace falta
+> acepta *tu* grafo está entre las cinco dormidas: para el yaml de acá abajo hace falta
 > `MUSUBI_TOOLS_ALL=1`. Sin esa variable, lo único que corre es la cadena fija de SDD.
 
 ```yaml
@@ -382,16 +382,22 @@ explorar → planear → codear → verificar recordándole la fase al agente ca
 
 ## Herramientas MCP
 
-El servidor expone **75 herramientas**, agrupadas por dominio. Hay 84 registradas: nueve están
+El servidor expone **79 herramientas**, agrupadas por dominio. Hay 84 registradas: cinco están
 **dormidas** y `tools/list` no las devuelve, porque su costo en contexto no se pagaba con su uso
 medido. Se despiertan sin recompilar con `MUSUBI_TOOLS_ALL=1`, y la lista vive con su motivo al lado
 en `internal/mcp/tools_dormidas_test.go`:
 
-> `musubi_save_fact` · `musubi_log_error` · `musubi_resolve_telemetry` · `musubi_debate` ·
 > `musubi_promote` · `musubi_workflow` · `musubi_resolve_skills` · `musubi_detect_stack` ·
 > `musubi_discover_skills`
 
-Abajo se nombran igual donde hacen falta para explicar un flujo: **si una de esas nueve aparece en la
+Hasta el 2026-09-25 eran nueve. `musubi_save_fact`, `musubi_log_error`, `musubi_resolve_telemetry` y
+`musubi_debate` se despertaron porque cada una era la **única** forma de hacer algo que un texto de
+Musubi le pide al agente —corroborar un hecho propuesto, registrar un fallo en VERIFY, resolver un
+error conocido, cerrar una revisión adversaria—: dormidas, esos textos lo mandaban a un callejón.
+Desde entonces ningún texto de Musubi puede nombrar una dormida; lo fija
+`TestNingunTextoNombraUnaToolDormida`.
+
+Abajo se nombran igual donde hacen falta para explicar un flujo: **si una de esas cinco aparece en la
 tabla, hoy no se puede invocar sin esa variable.**
 
 Tres de ellas son la puerta de secciones enteras de este README, y **no son el mismo caso**. Lo que
@@ -787,7 +793,7 @@ internal/
   detector/        # DetectStack + ExtractDeps (manifests, mtime cache)
   embedding/       # Provider: Ollama + OpenAI-compatible + Noop
   logx/            # logging estructurado a stderr
-  mcp/             # servidor JSON-RPC 2.0 + las 75 herramientas MCP (84 registradas − 9 dormidas)
+  mcp/             # servidor JSON-RPC 2.0 + las 79 herramientas MCP (84 registradas − 5 dormidas)
   memory/          # SQLite: observaciones, FTS5, embeddings, grafo, índice IVF,
                    #   telemetría, code memory, ledger de tokens, workflows
   selfupdate/      # `musubi update`: descarga + checksum + auto-reemplazo

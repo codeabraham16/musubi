@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -40,17 +41,35 @@ func TestElAvisoDurableDisparaAlCruzarElUmbral(t *testing.T) {
 	}
 }
 
-// Una vez por sesión. Repetirlo cada turno lo convierte en ruido, y el ruido se aprende a saltear.
-func TestElAvisoDurableDisparaUnaSolaVezPorSesion(t *testing.T) {
+// Una vez por TRAMO: en el turno 5, el 10, el 15 y el 20 con umbral 5. Repetirlo en cada turno lo
+// convierte en ruido, y el ruido se aprende a saltear; darlo una sola vez por sesión perdía lo que
+// más se usaba de él (ver buildDurableNudge).
+//
+// Los dos sabotajes tocan la MISMA línea a propósito, y el arnés lo marca como colisión: son los
+// dos errores opuestos de esa regla, y sus motivos se leyeron y son distintos (con el primero sale
+// en [5]; con el segundo, en todos los turnos desde el 5).
+//
+// Sabotaje que la hace fallar: volver a «una sola vez por sesión».
+// arnes: archivo="cmd/musubi/turn.go"
+// arnes: de="\tif (turns-afterTurns)%afterTurns != 0 {"
+// arnes: a="\tif turns != afterTurns {"
+// arnes: colision_ok="TestElAvisoDurableSaleUnaVezPorTramo"
+//
+// Sabotaje que la hace fallar: avisar en cada turno pasado el umbral.
+// arnes: archivo="cmd/musubi/turn.go"
+// arnes: de="\tif (turns-afterTurns)%afterTurns != 0 {"
+// arnes: a="\tif false {"
+// arnes: colision_ok="TestElAvisoDurableSaleUnaVezPorTramo"
+func TestElAvisoDurableSaleUnaVezPorTramo(t *testing.T) {
 	store := newFakeTurnStore()
-	disparos := 0
-	for i := 0; i < 20; i++ {
+	var turnos []int
+	for i := 1; i <= 20; i++ {
 		if buildDurableNudge(store, "s1", 5) != "" {
-			disparos++
+			turnos = append(turnos, i)
 		}
 	}
-	if disparos != 1 {
-		t.Errorf("esperaba exactamente 1 aviso en 20 turnos, hubo %d", disparos)
+	if fmt.Sprint(turnos) != "[5 10 15 20]" {
+		t.Errorf("con umbral 5, en 20 turnos el aviso tiene que salir en [5 10 15 20]; salió en %v", turnos)
 	}
 }
 

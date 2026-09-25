@@ -136,7 +136,7 @@ func (s *McpServer) handleInitialize() interface{} {
 	if ro := s.metaSoloLectura(); ro != nil {
 		meta["musubi/readonly"] = ro
 	}
-	return map[string]interface{}{
+	res := map[string]interface{}{
 		"protocolVersion": "2024-11-05",
 		"capabilities": map[string]interface{}{
 			"tools": map[string]interface{}{},
@@ -147,19 +147,36 @@ func (s *McpServer) handleInitialize() interface{} {
 		},
 		"_meta": meta,
 	}
+	// Lo que el agente lee en su system prompt (ver agente.go). La clave NO va vacía: un servidor que
+	// no le habla al agente —el central, el relé, los tests— no la manda, y así su handshake queda
+	// byte a byte como antes.
+	if texto := s.instruccionesParaElAgente(); texto != "" {
+		res["instructions"] = texto
+	}
+	return res
 }
 
 // handleToolsList construye la respuesta de tools/list iterando el registro en orden, SALTEANDO
 // las tools dormidas (ver toolEntry.dormant). Es el único lugar donde `dormant` tiene efecto: el
 // índice de despacho las conserva, así que una dormida sigue respondiendo si alguien la nombra.
+//
+// Las tools que las instrucciones nombran salen además con `_meta["anthropic/alwaysLoad"]`, para
+// que el agente las reciba cargadas (ver nucleoDelAgente). La marca se pone sobre una COPIA y no en
+// s.tools: Dispatch se llama concurrentemente (transporte HTTP) porque no escribe estado
+// compartido, y escribir el registro desde acá lo convertiría en una carrera.
 func (s *McpServer) handleToolsList() interface{} {
 	todas := toolsAllEnabled()
+	nucleo := s.nucleoDelAgente()
 	tools := make([]Tool, 0, len(s.tools))
 	for i := range s.tools {
 		if s.tools[i].dormant && !todas {
 			continue
 		}
-		tools = append(tools, s.tools[i].Tool)
+		t := s.tools[i].Tool
+		if nucleo[t.Name] {
+			t.Meta = map[string]interface{}{metaAlwaysLoad: true}
+		}
+		tools = append(tools, t)
 	}
 	return map[string]interface{}{"tools": tools}
 }
@@ -304,10 +321,11 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: s.countingSaveCtx(s.toolSaveFact),
-			// DORMIDA. Cero invocaciones en los 400 días del ledger central. El grafo de hechos se
-			// llena por musubi_propose_facts (12 llamadas, 15 entidades en altura-erp): esta era la
-			// escritura DIRECTA, sin proponer, y nadie la eligió nunca.
-			dormant: true,
+			// DESPERTADA (2026-09-25). Estuvo dormida por cero invocaciones, pero es la ÚNICA salida
+			// de la cuarentena de hechos: musubi_propose_facts le dice al agente que corrobore con
+			// ésta. Dormida, lo propuesto no tenía salida (en el central, los 1.377 hechos del
+			// extractor nocturno tenían 0 corroborados, medido 2026-09-25). Lo que el agente DEDUCE
+			// va a propose_facts; ésta es para corroborar.
 		},
 		{
 			Tool: Tool{
@@ -394,7 +412,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_corroborate",
-				Description: "Saca de CUARENTENA una observación propuesta con musubi_propose_observation, y la vuelve visible al recall. Es la única salida: nada sale de cuarentena solo, ni por antigüedad ni por accesos. CONSERVA el sello de procedencia — corroborar no convierte una inferencia de un LLM en una nota humana, sólo la hace visible. OJO: no es lo mismo que musubi_promote, que es otro eje (local → shared, o sea si viaja al cerebro central).",
+				Description: "Saca de CUARENTENA una observación propuesta con musubi_propose_observation, y la vuelve visible al recall. Es la única salida: nada sale de cuarentena solo, ni por antigüedad ni por accesos. CONSERVA el sello de procedencia — corroborar no convierte una inferencia de un LLM en una nota humana, sólo la hace visible. OJO: no es lo mismo que promover a 'shared', que es otro eje (local → shared, o sea si viaja al cerebro central).",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
@@ -492,9 +510,9 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: s.toolLogError,
-			// DORMIDA. Cero invocaciones, y la tabla lo confirma: telemetry_logs tiene 1 fila en el
-			// repo más usado. El bucle de telemetría nunca arrancó.
-			dormant: true,
+			// DESPERTADA (2026-09-25). Estuvo dormida por cero invocaciones, pero la fase VERIFY de
+			// SDD le pide al agente registrar los fallos con esta tool: dormida, esa instrucción era
+			// un callejón que el agente no podía recorrer.
 		},
 		{
 			Tool: Tool{
@@ -514,9 +532,8 @@ func (s *McpServer) buildRegistry() []toolEntry {
 			// deja el embed afuera. Ver el comentario del handler: partir el candado es seguro acá
 			// porque las dos escrituras tocan filas independientes.
 			lock: lockSelf,
-			// DORMIDA por ARRASTRE: resolver un log de telemetría sólo tiene sentido si antes alguien
-			// llamó a musubi_log_error, que está dormida. Despertar una sin la otra no sirve.
-			dormant: true,
+			// DESPERTADA junto con musubi_log_error (2026-09-25): dormía por arrastre, y el aviso de
+			// «errores conocidos» del precheck le dice al agente que resuelva con ésta.
 		},
 		{
 			Tool: Tool{
@@ -837,11 +854,10 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: noCtx(s.toolDebate),
-			// DORMIDA, y es la más cara de las que nadie usa después de workflow: ~575 tokens de
-			// catálogo. Las tres tablas que la respaldan —debates, debate_postures, debate_votes—
-			// están en CERO en los 9 repos. El andamiaje está entero; lo que falta es que alguien
-			// lo estrene.
-			dormant: true,
+			// DESPERTADA (2026-09-25). Estuvo dormida con sus tres tablas en cero, pero la skill
+			// adversarial-review que Musubi instala la llama cinco veces y el gate de revisión la
+			// nombra: dormida, la revisión se cortaba justo en el paso que la cierra. Con Claude Code
+			// las tools llegan diferidas, así que despertarla cuesta el nombre, no los ~575 tokens.
 		},
 		{
 			Tool: Tool{
@@ -887,7 +903,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_save_code",
-				Description: "Memoria de CÓDIGO: guardá un gist (titular) + símbolos clave de un archivo que acabás de leer, para no tener que re-leerlo entero después (el mayor costo en tokens de una sesión es re-leer archivos). Musubi calcula un fingerprint del contenido para saber si el gist sigue fresco. Llamala tras leer un archivo grande. Requiere path y gist; symbols opcional.",
+				Description: "Memoria de CÓDIGO: guardá un gist (titular) + símbolos clave de un archivo que acabás de leer, para no tener que re-leerlo entero después (el mayor costo en tokens de una sesión es re-leer archivos). Musubi calcula un fingerprint del contenido para saber si el gist sigue fresco. Llamala tras leer un archivo grande. Requiere path y gist; symbols opcional. Aparte, el índice del grafo mantiene SOLO un gist automático de cada .go de producción con comentario de cabecera (lleva la marca '[auto · cabecera] '): el tuyo nunca lo pisa, y la marca se le saca a lo que mandes.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
@@ -903,7 +919,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_recall_code",
-				Description: "Recuerda el gist + símbolos de un archivo ya leído (memoria de código), para evitar re-leerlo. Llamala ANTES de leer un archivo grande. Mirá `freshness`, que tiene TRES estados y no dos: 'fresh' = el archivo no cambió, usá el gist; 'stale' = cambió, conviene re-leerlo; 'unknown' = nadie pudo mirarlo (el caso típico es preguntarle al cerebro CENTRAL por un archivo que vive en otra máquina) — el gist puede seguir sirviendo, pero nadie lo verificó. El booleano `fresh` se conserva por compatibilidad y sólo es true con identidad verificada, así que por sí solo no distingue 'stale' de 'unknown'.",
+				Description: "Recuerda el gist + símbolos de un archivo ya leído (memoria de código), para evitar re-leerlo. Llamala ANTES de leer un archivo grande. Mirá `freshness`, que tiene TRES estados y no dos: 'fresh' = el archivo no cambió, usá el gist; 'stale' = cambió, conviene re-leerlo; 'unknown' = nadie pudo mirarlo — el gist puede seguir sirviendo, pero nadie lo verificó. El cerebro CENTRAL, que no tiene el archivo, lo juzga contra el grafo que el proyecto publicó; da 'unknown' si el archivo no tiene nodo ahí. `freshness_ref` dice contra qué se juzgó: 'llamador', 'disco' o 'grafo'. El booleano `fresh` se conserva por compatibilidad y sólo es true con identidad verificada, así que por sí solo no distingue 'stale' de 'unknown'. `origen` dice quién lo escribió: 'agente' (musubi_save_code) o 'cabecera' (el índice lo sacó del comentario de cabecera y lo mantiene solo). Un gist de agente se conserva aunque esté rancio, y si el servidor tiene el archivo, `cabecera` trae al lado lo que la cabecera dice HOY.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
@@ -1073,16 +1089,17 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_codegraph_push",
-				Description: "Federación del grafo de código (Track 20 · F6): RECIBE el grafo (nodos + aristas + gists) que un proyecto empuja tras indexar y REEMPLAZA lo de ESE proyecto en el cerebro central, scopeado por el project_id de la credencial (aislamiento por tenant: un write=own no puede plantar el grafo en otro proyecto; sólo write=any puede declarar destino). Lo llama el daemon local automáticamente tras codegraph_index; no es para uso manual. Parámetros: nodes, edges (arrays del grafo), gists (opcional; OMITIRLO deja intactos los guardados, mandarlo vacío los borra), project_id (opcional, sólo lo respeta write=any), head y head_at (el commit indexado y su fecha de commit: el central NO acepta un grafo de un árbol más viejo que el publicado, ni uno sin commit si el publicado lo tiene, y contesta -32006).",
+				Description: "Federación del grafo de código (Track 20 · F6): RECIBE el grafo (nodos + aristas + gists) que un proyecto empuja tras indexar y REEMPLAZA lo de ESE proyecto en el cerebro central, scopeado por el project_id de la credencial (aislamiento por tenant: un write=own no puede plantar el grafo en otro proyecto; sólo write=any puede declarar destino). Lo llama el daemon local automáticamente tras codegraph_index; no es para uso manual. Parámetros: nodes, edges (arrays del grafo), gists (opcional; OMITIRLO deja intactos los guardados, mandarlo vacío los borra; el daemon lo omite cuando no tiene gists, así una máquina sin gists no borra los del central), project_id (opcional, sólo lo respeta write=any), head y head_at (el commit indexado y su fecha de commit: el central NO acepta un grafo de un árbol más viejo que el publicado, ni uno sin commit si el publicado lo tiene, y contesta -32006), huella (opcional: sha256 del contenido; el mismo head con otra huella se acepta con un `aviso`). Contesta lo recibido (nodes, edges, gists), lo GUARDADO (guardados) y la publicación (publicado: head, head_at, por, huella).",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
 						"nodes":      {Type: "array", Description: "nodos del grafo de código a federar", Items: &Property{Type: "object"}},
 						"edges":      {Type: "array", Description: "aristas del grafo de código a federar", Items: &Property{Type: "object"}},
-						"gists":      {Type: "array", Description: "gists de archivo (memoria de código) a federar. OMITIRLO deja intactos los que ya haya en el central; mandarlo vacío los reemplaza por nada", Items: &Property{Type: "object"}},
+						"gists":      {Type: "array", Description: "gists de archivo (memoria de código) a federar. OMITIRLO deja intactos los que ya haya en el central; mandarlo vacío los reemplaza por nada. El daemon lo omite cuando no tiene gists", Items: &Property{Type: "object"}},
 						"project_id": {Type: "string", Description: "proyecto destino (opcional; sólo lo respeta una credencial write=any; un write=own usa siempre el suyo)"},
 						"head":       {Type: "string", Description: "commit del árbol indexado (opcional; sin él, el push no puede pisar un grafo publicado con commit)"},
 						"head_at":    {Type: "string", Description: "fecha de COMMIT de head en RFC3339 (obligatoria si va head): es lo que se compara contra lo publicado"},
+						"huella":     {Type: "string", Description: "sha256 del contenido del grafo (node_key y aristas), calculado por el emisor (opcional): con el mismo head y otra huella el push se acepta con un aviso"},
 					},
 					Required: []string{"nodes", "edges"},
 				},
@@ -1163,7 +1180,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_code_context",
-				Description: "El puente código↔memoria (Track 20): dado un símbolo (node_key 'path#kind:name') devuelve su ESTRUCTURA (nodo + callees/callers) Y su PORQUÉ — las decisiones/gotchas guardadas en la memoria que mencionan ese símbolo o su archivo ('explained_by', topic_keys). Es el análogo de musubi_entity_context para el código: 'qué es, a qué llama, quién lo llama, y por qué es así / qué cuidado tiene'. El weld se deriva al consultar (no hay aristas escritas a mano). Expandí el detalle con musubi_recall/memory_expand.",
+				Description: "El puente código↔memoria (Track 20): dado un símbolo (node_key 'path#kind:name') devuelve su ESTRUCTURA (nodo + callees/callers) Y su PORQUÉ — las decisiones/gotchas guardadas en la memoria que mencionan ese símbolo o su archivo ('explained_by', topic_keys). Es el análogo de musubi_entity_context para el código: 'qué es, a qué llama, quién lo llama, y por qué es así / qué cuidado tiene'. El weld se deriva al consultar (no hay aristas escritas a mano). Expandí el detalle con musubi_recall/memory_expand. Si el archivo del símbolo tiene gist en la memoria de código, 'file_gist' lo trae con la misma forma que musubi_recall_code (frescura, origen y cabecera al día).",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{

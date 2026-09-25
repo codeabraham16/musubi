@@ -336,14 +336,19 @@ explore → plan → code → verify, reminding the agent of the phase each turn
 
 ## MCP tools
 
-The server exposes **75 tools**, grouped by domain. There are 84 registered: nine are **dormant**
+The server exposes **79 tools**, grouped by domain. There are 84 registered: five are **dormant**
 and `tools/list` does not return them, because their context cost was not paid back by their measured
 use. They wake up without recompiling via `MUSUBI_TOOLS_ALL=1`, and the list lives next to its reason
 in `internal/mcp/tools_dormidas_test.go`:
 
-> `musubi_save_fact` · `musubi_log_error` · `musubi_resolve_telemetry` · `musubi_debate` ·
 > `musubi_promote` · `musubi_workflow` · `musubi_resolve_skills` · `musubi_detect_stack` ·
 > `musubi_discover_skills`
+
+Until 2026-09-25 there were nine. `musubi_save_fact`, `musubi_log_error`, `musubi_resolve_telemetry`
+and `musubi_debate` were woken up because each was the **only** way to do something a Musubi text asks
+the agent to do —corroborate a proposed fact, log a failure in VERIFY, resolve a known error, close an
+adversarial review—: while dormant, those texts sent the agent down a dead end. Since then no Musubi
+text may name a dormant tool; `TestNingunTextoNombraUnaToolDormida` pins it.
 
 Dormant is not retired: a dormant tool is still implemented, tested and **dispatchable by name** — the
 only thing it loses is its slot in the catalog, so an agent that never sees it listed will never reach

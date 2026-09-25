@@ -127,6 +127,36 @@
       }
     },
     {
+      "name": "musubi_save_fact",
+      "description": "Guarda un HECHO estructurado como tripleta (subject, predicate, object) en el grafo de conocimiento. Las entidades se deduplican por nombre. Recuperar hechos cuesta muchísimos menos tokens que recuperar prosa: registrá hechos atómicos (ej. 'auth' 'usa' 'JWT'). El grafo es BI-TEMPORAL: para un predicado FUNCIONAL (single-valued: trabaja_en, estado_actual, vive_en…) guardar un nuevo objeto INVALIDA automáticamente el anterior (model-free, por cardinalidad) en vez de acumular contradicciones; el hecho viejo no se borra, se cierra su ventana (consultable con recall_facts as_of). Re-afirmar un hecho invalidado lo revive.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "Entidad objeto (ej. 'JWT')"
+          },
+          "predicate": {
+            "type": "string",
+            "description": "Relación (ej. 'usa', 'depende_de')"
+          },
+          "subject": {
+            "type": "string",
+            "description": "Entidad sujeto (ej. 'auth')"
+          },
+          "valid_from": {
+            "type": "string",
+            "description": "Opcional: marca ISO desde la cual el hecho es verdad (ej. '2026-01-15'). Ausente/ inválido → ahora. No se infieren fechas de texto libre."
+          }
+        },
+        "required": [
+          "subject",
+          "predicate",
+          "object"
+        ]
+      }
+    },
+    {
       "name": "musubi_propose_facts",
       "description": "PROPONE hechos (tripletas) que VOS (el agente-LLM) extrajiste, al grafo, en CUARENTENA: entran con procedencia 'llm-extract:*', NO son autoritativos, NO aparecen en recall_facts por default y NO invalidan nada. Es cognición 'caller-borrowed': Musubi no llama a ningún LLM, vos aportás las tripletas. Para volver autoritativa una propuesta, corroborála con musubi_save_fact (el mismo triple); para revisarlas, usá recall_facts con include_proposed=true.",
       "inputSchema": {
@@ -227,7 +257,7 @@
     },
     {
       "name": "musubi_corroborate",
-      "description": "Saca de CUARENTENA una observación propuesta con musubi_propose_observation, y la vuelve visible al recall. Es la única salida: nada sale de cuarentena solo, ni por antigüedad ni por accesos. CONSERVA el sello de procedencia — corroborar no convierte una inferencia de un LLM en una nota humana, sólo la hace visible. OJO: no es lo mismo que musubi_promote, que es otro eje (local → shared, o sea si viaja al cerebro central).",
+      "description": "Saca de CUARENTENA una observación propuesta con musubi_propose_observation, y la vuelve visible al recall. Es la única salida: nada sale de cuarentena solo, ni por antigüedad ni por accesos. CONSERVA el sello de procedencia — corroborar no convierte una inferencia de un LLM en una nota humana, sólo la hace visible. OJO: no es lo mismo que promover a 'shared', que es otro eje (local → shared, o sea si viaja al cerebro central).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -334,6 +364,47 @@
         },
         "required": [
           "query_text"
+        ]
+      }
+    },
+    {
+      "name": "musubi_log_error",
+      "description": "Registra un error de compilación o testeo capturado para el bucle de telemetría.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "error_message": {
+            "type": "string",
+            "description": "Detalle completo del compilador o linter"
+          },
+          "file_path": {
+            "type": "string",
+            "description": "Ruta del archivo que causó el error"
+          },
+          "suggested_patch": {
+            "type": "string",
+            "description": "Parche correctivo sugerido (opcional)"
+          }
+        },
+        "required": [
+          "file_path",
+          "error_message"
+        ]
+      }
+    },
+    {
+      "name": "musubi_resolve_telemetry",
+      "description": "Marca un log de telemetría como resuelto una vez corregido el error.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "number",
+            "description": "ID del log de telemetría a marcar como resuelto"
+          }
+        },
+        "required": [
+          "id"
         ]
       }
     },
@@ -660,6 +731,59 @@
       }
     },
     {
+      "name": "musubi_debate",
+      "description": "Debate multi-agente (Society of Minds), andamiaje EJECUTABLE y DETERMINISTA model-free: Musubi NO razona — estructura las rondas, PERSISTE las posturas atribuidas y CUENTA los votos; los sub-agentes (LLM) producen posturas, críticas y votos. Protocolo: 1) action=open (topic, rounds, quorum opcional) → debate_id; 2) lanzás N sub-agentes (Task tool + mcpServers:[musubi]); cada uno postea con action=post (id, agent, stance); 3) action=advance (id) cierra la ronda y devuelve las posturas previas ('previous_postures') que pasás como material de CRÍTICA a la ronda siguiente; repetís post→advance hasta agotar rondas; 4) cada agente action=vote (id, agent, choice); 5) action=tally (id) recuenta DETERMINISTA: gana el choice con máximo ESTRICTO que alcance el quórum → cierra con ese winner; empate/bajo quórum/sin votos ⇒ no_consensus (sigue open: advance+re-votar, o deferí a musubi_judge). action=status (id) da el estado completo. El juicio SEMÁNTICO se queda en el LLM. MODEL Y EVIDENCE SON OBLIGATORIOS en post y vote. `model`: qué modelo produjo la postura o el voto —dos jueces del MISMO modelo no son dos opiniones, y sin esta columna la frase «esto lo revisaron tres modelos distintos» es inverificable a posteriori—. ⚠️ NO lo codifiques dentro de `agent` (seguridad@sonnet): `agent` es la clave ÚNICA de las dos tablas, así que un lente que cambia de modelo entre rondas deja de ser el mismo votante y su voto se SUMA en vez de reemplazar, inflando el total en silencio. `evidence` ∈ {deterministica (corrió las comprobaciones y tiene la salida), inferida (leyó y razonó, sin ejecutar), ninguna (no pudo comprobar nada — es una respuesta válida)}. En open, `gated_choice` opcional: el choice que NO puede ganar sin al menos un voto con evidencia deterministica. Con gated_choice=\u003ctu veredicto aprobatorio\u003e, un panel que opinó sin correr nada no cierra y el tally devuelve gated=true. Rechazar NUNCA lleva compuerta —un panel que no pudo verificar nada tiene que poder rechazar igual— y UN solo voto deterministico la desarma, sin reemplazar al quórum. Sin gated_choice, el comportamiento es el de siempre. Límite honesto: la clase de evidencia es una DECLARACION, no una prueba; detecta al panel que no verificó, no al que miente. action ∈ {open, post, advance, vote, tally, status}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "open | post | advance | vote | tally | status"
+          },
+          "agent": {
+            "type": "string",
+            "description": "Para post/vote: etiqueta del sub-agente participante"
+          },
+          "choice": {
+            "type": "string",
+            "description": "Para vote: la opción por la que vota el agente (una etiqueta consensuada, ej. el nombre de una postura ganadora)"
+          },
+          "evidence": {
+            "type": "string",
+            "description": "Para post/vote (OBLIGATORIO): deterministica | inferida | ninguna"
+          },
+          "gated_choice": {
+            "type": "string",
+            "description": "Para open (opcional): el choice que no puede ganar sin al menos un voto con evidencia deterministica"
+          },
+          "id": {
+            "type": "string",
+            "description": "Para post/advance/vote/tally/status: ID del debate (lo devuelve open)"
+          },
+          "model": {
+            "type": "string",
+            "description": "Para post/vote (OBLIGATORIO): el modelo que produjo la postura o el voto. No lo metas dentro de 'agent'"
+          },
+          "quorum": {
+            "type": "number",
+            "description": "Para open (opcional): mínimo de votos que el ganador debe alcanzar (0 = sin piso, gana la mayoría estricta)"
+          },
+          "rounds": {
+            "type": "number",
+            "description": "Para open: tope de rondas de debate (\u003e=1)"
+          },
+          "stance": {
+            "type": "string",
+            "description": "Para post: la postura/argumento del agente en la ronda actual (puede criticar las posturas previas)"
+          },
+          "topic": {
+            "type": "string",
+            "description": "Para open: la pregunta/tema del debate"
+          }
+        }
+      }
+    },
+    {
       "name": "musubi_tokens",
       "description": "Ledger de tokens (model-free): cuántos tokens inyectó Musubi en el contexto, por superficie (arranque, por turno, PreToolUse, hidratación). Devuelve total, desglose ordenado por gasto, y —si hay presupuesto— restante, % usado y estado (ok | watch | over). action ∈ {status, reset}. ⚠️ MIRÁ `session_id` ANTES DE INTERPRETAR EL TOTAL: quien marca el corte de sesión son los hooks, y el camino MCP llama con session_id VACÍO. Con `session_id` vacío el total es un ACUMULADO DE POR VIDA del proceso —en un servidor always-on como el cerebro central el ledger no rota nunca— y NO se compara contra el techo: ahí un `pct_used` de miles por ciento y un `status: over` permanente son lo esperado, no una alarma. El techo además es BLANDO: no recorta nada, así que `over` NUNCA es una orden de achicar el contexto. El ledger lleva UNA CUENTA POR SESIÓN: el reporte es de la sesión escrita más recientemente, que con varias terminales abiertas puede no ser la tuya — `sesiones` lista todas con su `session_id`, su total, su orden y la hora de su última escritura (la que escribió recién es la tuya). `reset` pone en cero UNA sola sesión: la de `session_id`; sin él, sólo si hay una única sesión — con más de una SE NIEGA y lista las sesiones, porque «la última que escribió» suele ser otra terminal.",
       "inputSchema": {
@@ -678,7 +802,7 @@
     },
     {
       "name": "musubi_save_code",
-      "description": "Memoria de CÓDIGO: guardá un gist (titular) + símbolos clave de un archivo que acabás de leer, para no tener que re-leerlo entero después (el mayor costo en tokens de una sesión es re-leer archivos). Musubi calcula un fingerprint del contenido para saber si el gist sigue fresco. Llamala tras leer un archivo grande. Requiere path y gist; symbols opcional.",
+      "description": "Memoria de CÓDIGO: guardá un gist (titular) + símbolos clave de un archivo que acabás de leer, para no tener que re-leerlo entero después (el mayor costo en tokens de una sesión es re-leer archivos). Musubi calcula un fingerprint del contenido para saber si el gist sigue fresco. Llamala tras leer un archivo grande. Requiere path y gist; symbols opcional. Aparte, el índice del grafo mantiene SOLO un gist automático de cada .go de producción con comentario de cabecera (lleva la marca '[auto · cabecera] '): el tuyo nunca lo pisa, y la marca se le saca a lo que mandes.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -703,7 +827,7 @@
     },
     {
       "name": "musubi_recall_code",
-      "description": "Recuerda el gist + símbolos de un archivo ya leído (memoria de código), para evitar re-leerlo. Llamala ANTES de leer un archivo grande. Mirá `freshness`, que tiene TRES estados y no dos: 'fresh' = el archivo no cambió, usá el gist; 'stale' = cambió, conviene re-leerlo; 'unknown' = nadie pudo mirarlo (el caso típico es preguntarle al cerebro CENTRAL por un archivo que vive en otra máquina) — el gist puede seguir sirviendo, pero nadie lo verificó. El booleano `fresh` se conserva por compatibilidad y sólo es true con identidad verificada, así que por sí solo no distingue 'stale' de 'unknown'.",
+      "description": "Recuerda el gist + símbolos de un archivo ya leído (memoria de código), para evitar re-leerlo. Llamala ANTES de leer un archivo grande. Mirá `freshness`, que tiene TRES estados y no dos: 'fresh' = el archivo no cambió, usá el gist; 'stale' = cambió, conviene re-leerlo; 'unknown' = nadie pudo mirarlo — el gist puede seguir sirviendo, pero nadie lo verificó. El cerebro CENTRAL, que no tiene el archivo, lo juzga contra el grafo que el proyecto publicó; da 'unknown' si el archivo no tiene nodo ahí. `freshness_ref` dice contra qué se juzgó: 'llamador', 'disco' o 'grafo'. El booleano `fresh` se conserva por compatibilidad y sólo es true con identidad verificada, así que por sí solo no distingue 'stale' de 'unknown'. `origen` dice quién lo escribió: 'agente' (musubi_save_code) o 'cabecera' (el índice lo sacó del comentario de cabecera y lo mantiene solo). Un gist de agente se conserva aunque esté rancio, y si el servidor tiene el archivo, `cabecera` trae al lado lo que la cabecera dice HOY.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -896,7 +1020,7 @@
     },
     {
       "name": "musubi_codegraph_push",
-      "description": "Federación del grafo de código (Track 20 · F6): RECIBE el grafo (nodos + aristas + gists) que un proyecto empuja tras indexar y REEMPLAZA lo de ESE proyecto en el cerebro central, scopeado por el project_id de la credencial (aislamiento por tenant: un write=own no puede plantar el grafo en otro proyecto; sólo write=any puede declarar destino). Lo llama el daemon local automáticamente tras codegraph_index; no es para uso manual. Parámetros: nodes, edges (arrays del grafo), gists (opcional; OMITIRLO deja intactos los guardados, mandarlo vacío los borra), project_id (opcional, sólo lo respeta write=any), head y head_at (el commit indexado y su fecha de commit: el central NO acepta un grafo de un árbol más viejo que el publicado, ni uno sin commit si el publicado lo tiene, y contesta -32006).",
+      "description": "Federación del grafo de código (Track 20 · F6): RECIBE el grafo (nodos + aristas + gists) que un proyecto empuja tras indexar y REEMPLAZA lo de ESE proyecto en el cerebro central, scopeado por el project_id de la credencial (aislamiento por tenant: un write=own no puede plantar el grafo en otro proyecto; sólo write=any puede declarar destino). Lo llama el daemon local automáticamente tras codegraph_index; no es para uso manual. Parámetros: nodes, edges (arrays del grafo), gists (opcional; OMITIRLO deja intactos los guardados, mandarlo vacío los borra; el daemon lo omite cuando no tiene gists, así una máquina sin gists no borra los del central), project_id (opcional, sólo lo respeta write=any), head y head_at (el commit indexado y su fecha de commit: el central NO acepta un grafo de un árbol más viejo que el publicado, ni uno sin commit si el publicado lo tiene, y contesta -32006), huella (opcional: sha256 del contenido; el mismo head con otra huella se acepta con un `aviso`). Contesta lo recibido (nodes, edges, gists), lo GUARDADO (guardados) y la publicación (publicado: head, head_at, por, huella).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -910,7 +1034,7 @@
           },
           "gists": {
             "type": "array",
-            "description": "gists de archivo (memoria de código) a federar. OMITIRLO deja intactos los que ya haya en el central; mandarlo vacío los reemplaza por nada",
+            "description": "gists de archivo (memoria de código) a federar. OMITIRLO deja intactos los que ya haya en el central; mandarlo vacío los reemplaza por nada. El daemon lo omite cuando no tiene gists",
             "items": {
               "type": "object",
               "description": ""
@@ -923,6 +1047,10 @@
           "head_at": {
             "type": "string",
             "description": "fecha de COMMIT de head en RFC3339 (obligatoria si va head): es lo que se compara contra lo publicado"
+          },
+          "huella": {
+            "type": "string",
+            "description": "sha256 del contenido del grafo (node_key y aristas), calculado por el emisor (opcional): con el mismo head y otra huella el push se acepta con un aviso"
           },
           "nodes": {
             "type": "array",
@@ -1016,7 +1144,7 @@
     },
     {
       "name": "musubi_code_context",
-      "description": "El puente código↔memoria (Track 20): dado un símbolo (node_key 'path#kind:name') devuelve su ESTRUCTURA (nodo + callees/callers) Y su PORQUÉ — las decisiones/gotchas guardadas en la memoria que mencionan ese símbolo o su archivo ('explained_by', topic_keys). Es el análogo de musubi_entity_context para el código: 'qué es, a qué llama, quién lo llama, y por qué es así / qué cuidado tiene'. El weld se deriva al consultar (no hay aristas escritas a mano). Expandí el detalle con musubi_recall/memory_expand.",
+      "description": "El puente código↔memoria (Track 20): dado un símbolo (node_key 'path#kind:name') devuelve su ESTRUCTURA (nodo + callees/callers) Y su PORQUÉ — las decisiones/gotchas guardadas en la memoria que mencionan ese símbolo o su archivo ('explained_by', topic_keys). Es el análogo de musubi_entity_context para el código: 'qué es, a qué llama, quién lo llama, y por qué es así / qué cuidado tiene'. El weld se deriva al consultar (no hay aristas escritas a mano). Expandí el detalle con musubi_recall/memory_expand. Si el archivo del símbolo tiene gist en la memoria de código, 'file_gist' lo trae con la misma forma que musubi_recall_code (frescura, origen y cabecera al día).",
       "inputSchema": {
         "type": "object",
         "properties": {

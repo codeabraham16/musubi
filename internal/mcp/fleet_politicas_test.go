@@ -345,10 +345,15 @@ func TestLaAccionDeUnaPoliticaQuedaEnLaMismaBitacoraQueLasPersonas(t *testing.T)
 	//
 	// `prueba=` VA DECLARADO PORQUE ESTA ANCLA FLOTA: vive adentro del cuerpo y no pegada al
 	// `func Test…`, así que el lector no la puede derivar del AST y la devuelve vacía.
+	//
+	// Esta prueba mira UNA política de host (A131 · T5): que el origen no dependa de la condición
+	// —P2-m3, `persona` para las de servicio— lo mide la tabla de condiciones, que sabotea esta
+	// misma línea con un origen condicional en vez de quitarlo. Los dos `de` se pisan a propósito.
 	// arnes: prueba="TestLaAccionDeUnaPoliticaQuedaEnLaMismaBitacoraQueLasPersonas"
 	// arnes: archivo="internal/mcp/politicas.go"
 	// arnes: de="\t\t\tOrigen: fleet.OrigenPolitica,\n"
 	// arnes: a=""
+	// arnes: colision_ok="TestLaAccionYElAvisoDeUnaPoliticaSeLeenComoAutomaticosEnCadaCondicion"
 	for _, quiero := range []string{`"origen":"politica"`, `"automatico":true`} {
 		if !strings.Contains(crudo, quiero) {
 			t.Errorf("la acción automática no se distingue de una manual: falta %q en\n%s", quiero, crudo)
@@ -426,21 +431,67 @@ func TestDosPoliticasConElMismoNombreNoArrancan(t *testing.T) {
 }
 
 // I15 — LAS POLÍTICAS NACEN APAGADAS. Sin sección, el motor no existe.
+//
+// LA PRIMERA VERSIÓN NO MONTABA REGISTRO DE PRINCIPALS, Y ASÍ NO PODÍA FALLAR (A131 · T5). Sin
+// registro, cualquier política corta en `frenoSinRegistro` antes de actuar y antes de contar nada,
+// así que un barrido que evaluara una política por defecto cuando no hay ninguna configurada
+// (P2-m16) la dejaba en verde: la política inventada existía, se evaluaba y la frenaba el andamiaje
+// de la prueba, no el invariante. Ahora el registro puede TODO —exec sobre la casa, sin allowlist—
+// y la muestra está al límite en cada métrica de host (memoria, disco, CPU, carga y temperatura),
+// así que una política de host inventada con un umbral razonable llega hasta la compuerta.
+//
+// Y NO SE PREGUNTA SÓLO POR LA COLA: se exige que el barrido no haya contado NINGÚN resultado. Una
+// política inventada que nombre a un principal que no está no encola nada, pero su evaluación deja
+// un `sin_principal` en la métrica: el contador vacío es lo que prueba que no se evaluó ninguna,
+// invente el nombre que invente. El control positivo es el mismo mundo con UNA política escrita.
+//
+// Exposición medida (auditoría A131): 0. Producción tiene una política configurada, así que la rama
+// de «sin políticas» no corre; es latente, y sacar la sección `policies:` es justamente la forma
+// documentada de apagar el auto-heal.
+//
+// Sabotaje: que el barrido, sin políticas, invente una a nombre de alguien que no está.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="\tif len(s.politicas) == 0 {\n\t\treturn 0 // I15: sin sección, no existe\n\t}\n"
+// arnes: a="\tif len(s.politicas) == 0 {\n\t\ts.politicas = []fleet.Politica{{Nombre: \"de-fabrica\", Principal: \"sistema\", Cuando: fleet.CondMemPct, Supera: 90, Sobre: []string{\"*\"}, Hacer: []string{\"journalctl\", \"--vacuum-size=200M\"}}}\n\t}\n"
 func TestSinPoliticasElBarridoNoActuaSobreNadie(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConExec(t, s, "casa", "pc-gio")
 	if err := s.ConfigurarFlota(config.FleetConfig{}); err != nil {
 		t.Fatal(err)
 	}
+	// Un principal que puede TODO sobre la casa: exec en todas y sin allowlist que recorte.
+	todoPoder := autoHeal()
+	todoPoder.ExecAllow = nil
+	s.buscarPrincipal = registroDePrueba(todoPoder)
 	d, _, _ := s.engine.DevicePorNombre("casa", "pc-gio")
 	ahora := time.Now()
-	latir(t, s, d.ID, muestraSana(99, ahora), ahora)
+	// La muestra está al límite en cada métrica de host: memoria, disco, CPU, carga y temperatura.
+	alarma := muestraSana(99, ahora)
+	alarma.DiscoUsado, alarma.DiscoDisponible = 990<<30, 1<<30
+	cpu, carga, temp := 99.0, 64.0, 99.0
+	alarma.CPUPct, alarma.Load5, alarma.TempC = &cpu, &carga, &temp
+	latir(t, s, d.ID, alarma, ahora)
 
 	if n := s.aplicarPoliticas("casa", ahora); n != 0 {
 		t.Fatal("actuó sin políticas configuradas")
 	}
 	if len(comandosEncolados(t, s)) != 0 {
 		t.Fatal("encoló algo sin políticas configuradas")
+	}
+	s.metrics.politicaStats.Range(func(k, _ any) bool {
+		t.Errorf("sin políticas configuradas, el barrido contó el resultado %q: evaluó una política que nadie "+
+			"escribió. Sacar la sección `policies:` es cómo se apaga el auto-heal, y apagado tiene que ser apagado",
+			strings.ReplaceAll(k.(string), "\x00", "/"))
+		return true
+	})
+
+	// CONTROL POSITIVO: el MISMO mundo —registro, máquina, muestra— con UNA política escrita actúa.
+	// Sin esto, los «no actuó» de arriba pasarían también con un mundo en el que nada puede actuar.
+	if err := s.ConfigurarFlota(config.FleetConfig{Policies: []config.PolicyConfig{politicaDeMemoria()}}); err != nil {
+		t.Fatal(err)
+	}
+	if n := s.aplicarPoliticas("casa", ahora); n != 1 {
+		t.Fatalf("control: con una política configurada, este mismo mundo tendría que actuar una vez y actuó %d", n)
 	}
 }
 

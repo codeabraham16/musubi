@@ -333,7 +333,7 @@ func parsearFleet(nombrePrincipal string, raw map[string][]string) (map[fleet.Ca
 	for clave, maquinas := range raw {
 		caps, err := fleet.NormalizarCaps([]string{clave})
 		if err != nil || len(caps) != 1 {
-			return nil, fmt.Errorf("principal %q: capacidad de flota inválida %q (usá metrics, exec o screen)", nombrePrincipal, clave)
+			return nil, fmt.Errorf("principal %q: capacidad de flota inválida %q (usá metrics, exec, screen, screen:view o shell)", nombrePrincipal, clave)
 		}
 		limpias := make([]string, 0, len(maquinas))
 		for _, m := range maquinas {

@@ -172,7 +172,103 @@ func (s *McpServer) refreshCodeGraphPkg(ctx context.Context, dir string) (unreso
 	if !ok {
 		return 0, nil
 	}
-	return unresolved, s.engine.UpsertPackageGraphFrom(origin, fileKeys, nodes, edges)
+	if err := s.engine.UpsertPackageGraphFrom(origin, fileKeys, nodes, edges); err != nil {
+		return unresolved, err
+	}
+	// LOS RESÚMENES DEL PAQUETE, CON EL MISMO SNAPSHOT QUE EL GRAFO. Cada archivo que se acaba de
+	// re-derivar trae su contenido y su huella en la mano, así que su gist automático sale de acá
+	// sin volver a leer nada: el que tiene cabecera la escribe, y el que la perdió retira el gist
+	// automático que tenía. Un gist de agente del mismo archivo no se toca (ver
+	// memory.GuardarGistsAutomaticosFrom). Best-effort: un fallo acá no deshace el grafo, que ya
+	// quedó bien, y el próximo cambio del archivo lo reintenta.
+	gists, retirar := s.gistsAutomaticosDe(fileKeys, files, fps)
+	if _, gerr := s.engine.GuardarGistsAutomaticosFrom(origin, gists, retirar); gerr != nil {
+		logx.Warn("codegraph: no se pudieron guardar los resúmenes de cabecera del paquete", "dir", dir, "error", gerr)
+	}
+	return unresolved, nil
+}
+
+// gistsAutomaticosDe arma los gists automáticos de un conjunto de archivos ya leídos: el resumen
+// del comentario de cabecera (codeintel.ResumenDeCabecera) con la marca de automático, los
+// símbolos derivados del mismo contenido y la huella de ese mismo snapshot. Devuelve también los
+// archivos que NO dan resumen, para retirar el automático que pudieran tener.
+//
+// Un archivo sin huella no se escribe ni se retira: un gist sin huella sale 'unknown' para
+// siempre, y no poder leer la huella no dice nada sobre la cabecera.
+func (s *McpServer) gistsAutomaticosDe(keys []string, files, fps map[string]string) ([]memory.CodeMemory, []string) {
+	var gists []memory.CodeMemory
+	var retirar []string
+	for _, key := range keys {
+		content, ok := files[key]
+		if !ok {
+			continue
+		}
+		resumen := codeintel.ResumenDeCabecera(key, content)
+		if resumen == "" {
+			retirar = append(retirar, key)
+			continue
+		}
+		fp := fps[key]
+		if fp == "" {
+			continue
+		}
+		gist := memory.PrefijoGistAutomatico + s.redactIfForced(resumen)
+		gists = append(gists, memory.CodeMemory{
+			Path:        key,
+			Gist:        gist,
+			Symbols:     s.redactIfForced(codeintel.FormatSymbols(codeintel.ExtractSymbols(key, content))),
+			Fingerprint: fp,
+			Tokens:      memory.EstimateTokens(gist),
+		})
+	}
+	return gists, retirar
+}
+
+// barridoDeGists es la siembra de los gists automáticos sobre el árbol ENTERO, armada sin escribir.
+// Hace falta además del refresh por paquete porque el refresh sólo alcanza a los archivos que
+// cambian, y un archivo que no cambió nunca queda sucio: sin el barrido, los ~240 archivos con
+// cabecera y sin gist no se sembrarían nunca, ni se re-sembrarían al subir la regla.
+type barridoDeGists struct {
+	gists     []memory.CodeMemory
+	retirar   []string
+	ilegibles int // archivos que no se pudieron leer: con alguno, el sello no avanza
+}
+
+// armarBarridoDeGists lee y resume cada .go del árbol. SÓLO LEE, así que el scheduler lo corre sin
+// el candado del despacho: es el tramo caro de la siembra (leer y parsear ~1.000 archivos), y el
+// candado se toma después, para la transacción y nada más.
+func (s *McpServer) armarBarridoDeGists(diskFiles map[string]bool) barridoDeGists {
+	var b barridoDeGists
+	files := map[string]string{}
+	fps := map[string]string{}
+	var keys []string
+	for path := range diskFiles {
+		if !strings.HasSuffix(path, ".go") {
+			continue // ResumenDeCabecera sólo resume Go: leer el resto sería gastar I/O en nada
+		}
+		content, err := s.readProjectFile(path)
+		if err != nil {
+			b.ilegibles++
+			continue
+		}
+		fp, err := memory.FileFingerprint(s.projectPath, path)
+		if err != nil {
+			b.ilegibles++
+			continue
+		}
+		files[path], fps[path] = content, fp
+		keys = append(keys, path)
+	}
+	b.gists, b.retirar = s.gistsAutomaticosDe(keys, files, fps)
+	return b
+}
+
+// debeSellarGistsAutomaticos es la misma regla que debeSellarDerivador, aplicada a la siembra de
+// los resúmenes: el sello avanza sólo si el barrido estaba pendiente, se escribió, y no dejó
+// archivos sin leer. Sellar con ilegibles los condenaría a no sembrarse nunca: la próxima corrida
+// vería la regla al día y sólo el refresh —que exige que el archivo cambie— los alcanzaría.
+func debeSellarGistsAutomaticos(pendientes bool, escrito bool, ilegibles int) bool {
+	return pendientes && escrito && ilegibles == 0
 }
 
 // resolveCrossPkgCalls convierte los pendientes de un paquete en aristas CALLS, buscando los
@@ -459,9 +555,25 @@ func reportarIgnorados(res map[string]interface{}, ignorados map[string]int) {
 // y salta los sin cambio. El dir de un fantasma que aún existe se re-deriva para limpiar aristas
 // colgantes que lo referenciaban. Devuelve {packages, pruned, skipped, nodes, edges}.
 func (s *McpServer) indexIncremental(ctx context.Context) (map[string]interface{}, error) {
+	return s.indexIncrementalCon(ctx, nil)
+}
+
+// indexIncrementalCon es indexIncremental con el barrido de gists ya armado afuera del candado (el
+// scheduler lo arma antes de tomarlo). nil ⇒ si hace falta, se arma acá. El plan se re-calcula
+// igual: el de afuera pudo quedar viejo mientras se esperaba el candado. El barrido no se tira por
+// eso: se escribe ANTES del refresh de los paquetes sucios, así que si un archivo cambió en el medio,
+// el refresh —con el contenido más nuevo— es el que queda.
+func (s *McpServer) indexIncrementalCon(ctx context.Context, barrido *barridoDeGists) (map[string]interface{}, error) {
 	plan, err := s.planearIncremental(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if plan.gistsAutoPendientes {
+		if barrido == nil {
+			b := s.armarBarridoDeGists(plan.diskFiles)
+			barrido = &b
+		}
+		plan.barrido = barrido
 	}
 	return s.aplicarIncremental(ctx, plan), nil
 }
@@ -480,11 +592,20 @@ type planIncremental struct {
 	derivadorViejo  string
 	derivadorCambio bool
 	ignorados       map[string]int
+
+	// diskFiles son los archivos indexables del árbol, para el barrido de los gists automáticos.
+	diskFiles map[string]bool
+	// gistsAutoPendientes: la regla de los resúmenes de cabecera del binario no es la que sembró
+	// la base (memory.MetaGistsAutomaticos), así que toca barrer el árbol una vez.
+	gistsAutoPendientes bool
+	gistsAutoViejo      string
+	// barrido es la siembra ya armada; sólo existe si gistsAutoPendientes.
+	barrido *barridoDeGists
 }
 
-// sinCambios: nada que re-derivar, nada que podar y el derivador al día.
+// sinCambios: nada que re-derivar, nada que podar, el derivador al día y los resúmenes sembrados.
 func (p planIncremental) sinCambios() bool {
-	return len(p.dirtyDirs) == 0 && len(p.ghostPaths) == 0 && !p.derivadorCambio
+	return len(p.dirtyDirs) == 0 && len(p.ghostPaths) == 0 && !p.derivadorCambio && !p.gistsAutoPendientes
 }
 
 // planearIncremental compara el grafo guardado contra el disco y devuelve el plan. Sólo LEE (la
@@ -499,7 +620,9 @@ func (s *McpServer) planearIncremental(ctx context.Context) (planIncremental, er
 	// afuera por lenguaje); main usa `dirsDisco` para el barrido del derivador. Los dos hacen falta.
 	dirsDisco, diskFiles, ignorados := s.walkSourceTree()
 
-	plan := planIncremental{dirtyDirs: map[string]bool{}, ignorados: ignorados}
+	plan := planIncremental{dirtyDirs: map[string]bool{}, ignorados: ignorados, diskFiles: diskFiles}
+	plan.gistsAutoViejo, _, _ = s.engine.GetMeta(memory.MetaGistsAutomaticos)
+	plan.gistsAutoPendientes = plan.gistsAutoViejo != codeintel.VersionResumenDeCabecera
 
 	// EL DERIVADOR CAMBIÓ ⇒ TODO ES SUCIO, UNA VEZ. El fingerprint es el sha256 del contenido, así
 	// que sigue al input y no a quien lo deriva: sin esta puerta, una mejora del derivador jamás
@@ -551,6 +674,7 @@ func (s *McpServer) aplicarIncremental(ctx context.Context, plan planIncremental
 			}
 		}
 	}
+	gistsAuto := s.escribirGistsDelBarrido(ctx, plan)
 	refreshed := 0
 	var fallidos []string
 	for dir := range plan.dirtyDirs {
@@ -574,6 +698,9 @@ func (s *McpServer) aplicarIncremental(ctx context.Context, plan planIncremental
 		"mode": "incremental", "packages": refreshed, "pruned": pruned,
 		"skipped": plan.skipped, "nodes": nodes, "edges": edges,
 	}
+	if gistsAuto > 0 {
+		res["gists_automaticos"] = gistsAuto
+	}
 	if plan.derivadorCambio {
 		// Se declara, porque cambia el costo de la corrida de golpe y sin aviso se lee como un
 		// cuelgue: una barrida entera donde se esperaba un incremental barato.
@@ -590,6 +717,34 @@ func (s *McpServer) aplicarIncremental(ctx context.Context, plan planIncremental
 	// «no entiendo ese lenguaje». Son dos hechos distintos y se informan por separado.
 	reportarIgnorados(res, plan.ignorados)
 	return res
+}
+
+// escribirGistsDelBarrido escribe la siembra de los gists automáticos y retira los de los archivos
+// FANTASMA (borrados del disco): la poda del grafo no toca code_memory, y un automático huérfano
+// viajaría al central en cada push. Sella la regla sólo con debeSellarGistsAutomaticos. Va antes
+// del refresh de los paquetes sucios, que escribe con contenido más nuevo. Devuelve cuántas filas
+// cambiaron.
+func (s *McpServer) escribirGistsDelBarrido(ctx context.Context, plan planIncremental) int {
+	origin, ok := writeOriginFor(principalFrom(ctx), "")
+	if !ok || (plan.barrido == nil && len(plan.ghostPaths) == 0) {
+		return 0
+	}
+	retirar := append([]string{}, plan.ghostPaths...)
+	var gists []memory.CodeMemory
+	ilegibles := 0
+	if plan.barrido != nil {
+		gists = plan.barrido.gists
+		retirar = append(retirar, plan.barrido.retirar...)
+		ilegibles = plan.barrido.ilegibles
+	}
+	n, gerr := s.engine.GuardarGistsAutomaticosFrom(origin, gists, retirar)
+	if gerr != nil {
+		logx.Warn("codegraph: no se pudieron sembrar los resúmenes de cabecera", "error", gerr)
+	}
+	if debeSellarGistsAutomaticos(plan.gistsAutoPendientes && plan.barrido != nil, gerr == nil, ilegibles) {
+		_ = s.engine.SetMeta(memory.MetaGistsAutomaticos, codeintel.VersionResumenDeCabecera)
+	}
+	return n
 }
 
 // fallidosDelIndice cuenta los directorios que el índice NO pudo derivar. Las dos corridas lo dicen
@@ -777,7 +932,7 @@ func (s *McpServer) empujarFotoDelGrafo(ctx context.Context) bool {
 	// Si CUALQUIER parte de la foto falla se ABORTA el push entero, y es a propósito: mandar la
 	// lista vacía no significa "no pude leerlos" sino "borrá todos los míos". Ante una lectura
 	// fallida, no federar nada es lo único seguro — el grafo local ya quedó bien y el próximo index
-	// reintenta.
+	// reintenta. (Una foto SIN gists ya no manda la lista vacía: ver SyncClient.PushGraphDe.)
 	//
 	// Lo custodia TestUnaFotoQueFallaNoMandaNadaAlCentral, que saca el `return false` de acá abajo.
 	s.motivoDelPush = ""
@@ -790,11 +945,28 @@ func (s *McpServer) empujarFotoDelGrafo(ctx context.Context) bool {
 		return false
 	}
 	foto, err := s.engine.FotoDelGrafoCtx(s.scopedCtx(ctx))
+	if err == nil {
+		// Al central viaja el COMMIT, no el disco: sin lo que git ignora (ver filtrarFotoAlCommit).
+		foto, err = s.filtrarFotoAlCommit(foto, pub)
+	}
 	if err != nil {
-		logx.Error("federación del grafo: no se pudo leer la foto local (se aborta el push para no borrar lo del central)", "error", err)
+		s.motivoDelPush = err.Error()
+		logx.Error("federación del grafo: no se pudo armar la foto a publicar (se aborta el push: ni se borra lo del central ni se publica el disco)", "error", err)
 		return false
 	}
 	if err := s.syncClient.PushGraphDe(pub, foto.Nodes, foto.Edges, foto.Gists); err != nil {
+		if errors.Is(err, errReciboNoCuadra) {
+			// El central SÍ reemplazó, pero su recibo dice que guardó menos (o más) de lo mandado:
+			// claves repetidas que colapsó, gists vacíos que salteó, o un push simultáneo. Reenviar
+			// ESTA foto da el mismo resultado, así que se marca como empujada —el mismo criterio que
+			// viejo e ignorado— y se dice: federated:false con los números, no un «ok» mudo.
+			s.motivoDelPush = err.Error()
+			if rerr := s.engine.MarcarGrafoEmpujado(foto.Generacion, time.Now()); rerr != nil {
+				logx.Error("federación del grafo: el recibo no cuadra, y no se pudo registrar para no reintentarlo", "error", rerr)
+			}
+			logx.Warn("federación del grafo: el central no guardó todo lo que se le mandó", "detalle", err.Error())
+			return false
+		}
 		if errors.Is(err, errGrafoViejo) || errors.Is(err, errGrafoIgnorado) {
 			// El central tiene uno más nuevo, o no aplicó el push porque no decía de qué commit era:
 			// reintentar ESTA foto no lo cambia, y cada reintento es el grafo entero por la red. Se
@@ -842,12 +1014,18 @@ func (s *McpServer) toolCodegraphPush(ctx context.Context, raw json.RawMessage) 
 		// llevara) ⇒ no se toca lo que ya haya en el central. Lista vacía ⇒ el emisor SÍ habla
 		// y dice que no tiene ninguno ⇒ se reemplaza por vacío. Sin esta distinción, un cliente
 		// viejo empujando el mismo proyecto desde otra máquina le borraría los gists a uno nuevo.
+		// El daemon de hoy ya NO manda la lista vacía (ver SyncClient.PushGraphDe): una máquina sin
+		// gists borraba los del central en cada push. El vacío explícito sigue valiendo para quien
+		// lo mande a propósito.
 		Gists *[]memory.CodeMemory `json:"gists"`
 		// Head y HeadAt dicen DE QUÉ ÁRBOL es el grafo: el commit indexado y su fecha de commit
 		// (RFC3339). Los usa la guarda de antigüedad (memory.decidirPublicacion). Un cliente viejo
 		// no los manda.
 		Head   string `json:"head"`
 		HeadAt string `json:"head_at"`
+		// Huella es el sha256 del contenido que calcula el emisor (memory.HuellaDelGrafo). Con el
+		// mismo head y otra huella el push se acepta con un `aviso`. Un cliente viejo no la manda.
+		Huella string `json:"huella"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -871,6 +1049,9 @@ func (s *McpServer) toolCodegraphPush(ctx context.Context, raw json.RawMessage) 
 	if !ok {
 		return nil, rpcErrorf(codeUnauthorized, "no se pudo atribuir el grafo a un proyecto (declará project_id o usá una credencial con proyecto)")
 	}
+	// Quién publica sale de la CREDENCIAL, igual que el proyecto: el payload no tiene cómo decirlo.
+	pub.Por = authorFrom(principalFrom(ctx))
+	pub.Huella = strings.TrimSpace(args.Huella)
 	// Redacción forzada ANTES de persistir (Tramo 0 · M01, misma clase de agujero que cerró T17.2):
 	// el central redacta todo lo que entra de a uno (save_fact, save_code, ingest, distill) y esta
 	// puerta a granel entraba cruda. Un gist es el resumen de un archivo —ahí viven connection
@@ -882,6 +1063,7 @@ func (s *McpServer) toolCodegraphPush(ctx context.Context, raw json.RawMessage) 
 	for i := range args.Nodes {
 		args.Nodes[i].Name = s.redactIfForced(args.Nodes[i].Name)
 	}
+	aviso := s.avisoDeLaPublicacion(origin, pub, len(args.Nodes), len(args.Edges))
 	// El reemplazo pasa por la guarda de antigüedad: un grafo de un árbol más viejo que el publicado
 	// no lo pisa. Si se rechaza, TAMPOCO se tocan los gists: son del mismo árbol viejo.
 	if err := s.engine.ReplaceProjectGraphPublicado(origin, pub, args.Nodes, args.Edges); err != nil {
@@ -908,7 +1090,57 @@ func (s *McpServer) toolCodegraphPush(ctx context.Context, raw json.RawMessage) 
 		}
 		res["gists"] = len(*args.Gists)
 	}
+	// EL RECIBO. `nodes`, `edges` y `gists` son el largo de lo RECIBIDO —un eco, que se queda por
+	// compatibilidad—; `guardados` es lo que quedó en la base. No son lo mismo: el reemplazo colapsa
+	// claves repetidas (ON CONFLICT) y saltea gists sin path o sin contenido, en silencio. El emisor
+	// compara `guardados` con lo que mandó (reciboQueNoCuadra). Se cuenta DESPUÉS del commit y fuera
+	// de la transacción: un push simultáneo del mismo proyecto puede dar un «no cuadra» falso, que el
+	// próximo push o la higiene de 24 h corrigen.
+	if c, err := s.engine.ConteoDelGrafoDe(origin); err == nil {
+		guardados := map[string]interface{}{"nodes": c.Nodes, "edges": c.Edges}
+		if args.Gists != nil {
+			guardados["gists"] = c.Gists
+		}
+		res["guardados"] = guardados
+	} else {
+		logx.Warn("federación del grafo: no se pudo contar lo guardado (el recibo sale sin «guardados»)", "error", err)
+	}
+	if !pub.Vacia() {
+		publicado := map[string]interface{}{"head": pub.Head, "head_at": pub.En.UTC().Format(time.RFC3339)}
+		if pub.Por != "" {
+			publicado["por"] = pub.Por
+		}
+		if pub.Huella != "" {
+			publicado["huella"] = pub.Huella
+		}
+		res["publicado"] = publicado
+	}
+	if aviso != "" {
+		res["aviso"] = aviso
+		logx.Warn("federación del grafo: dos índices del mismo commit no coinciden", "proyecto", origin, "por", pub.Por, "aviso", aviso)
+	}
 	return jsonResult(res)
+}
+
+// avisoDeLaPublicacion mira lo publicado ANTES del reemplazo y dice si este push merece un aviso
+// (memory.AvisoDePublicacion: el mismo commit con otra huella), con los números de los dos lados.
+// Se lee afuera de la transacción del reemplazo porque la firma de ReplaceProjectGraphPublicado no
+// devuelve avisos: un push simultáneo puede dejarlo desactualizado, y por eso es un aviso y no una
+// decisión —la decisión sí va adentro de la transacción—. "" si no hay nada que avisar o si no se
+// pudo leer.
+func (s *McpServer) avisoDeLaPublicacion(origin string, pub memory.PublicacionDelGrafo, nodos, aristas int) string {
+	vigente, err := s.engine.PublicacionDelGrafoDe(origin)
+	if err != nil {
+		return ""
+	}
+	aviso := memory.AvisoDePublicacion(vigente, pub)
+	if aviso == "" {
+		return ""
+	}
+	if c, err := s.engine.ConteoDelGrafoDe(origin); err == nil {
+		aviso += fmt.Sprintf(". El publicado tenía %d nodos y %d aristas; este push trae %d y %d", c.Nodes, c.Edges, nodos, aristas)
+	}
+	return aviso
 }
 
 // commitDeHEAD devuelve el commit corto del árbol indexado, o "" si no hay git, no es un repo o el
@@ -1026,6 +1258,8 @@ func (s *McpServer) origenDelGrafo() (pub memory.PublicacionDelGrafo, publicable
 // indexaría, o "" si no hay (o si git no pudo contestar: ante la duda decide el central). Mira lo
 // MISMO que walkSourceTree —misma función de extensiones, mismos directorios salteados—: un .yaml
 // suelto o un respaldo sin trackear no cambian el grafo y no tienen por qué frenar la publicación.
+// No ve los IGNORADOS (status no los lista): ésos no frenan la publicación, los saca de la foto
+// filtrarFotoAlCommit.
 func (s *McpServer) primerArchivoIndexableSinCommitear() string {
 	salida, rc := s.gitDelArbol("status", "--porcelain=v1", "-z", "--untracked-files=all")
 	if rc != 0 {
@@ -1543,6 +1777,14 @@ func (s *McpServer) toolCodeContext(ctx context.Context, raw json.RawMessage) (i
 		resp["callers"] = callers
 		// El weld: decisiones/gotchas que explican este símbolo (derivado, scopeado).
 		resp["explained_by"] = s.explainedBy(scoped, path, name, 5)
+		// El gist del ARCHIVO del símbolo, con la misma vista que recall_code: su frescura, su origen
+		// y, si es de agente, la cabecera al día al lado. Sin gist no se agrega nada.
+		if path != "" {
+			key := memory.NormalizeCodePath(s.projectPath, path)
+			if cm, ok, cerr := s.engine.GetCodeMemoryCtx(scoped, key); cerr == nil && ok {
+				resp["file_gist"] = s.vistaDelGist(ctx, key, key, "", cm)
+			}
+		}
 		return jsonResult(resp)
 	}
 

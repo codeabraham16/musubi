@@ -689,6 +689,11 @@ avisaría `MaquinaCaida` y esta alerta se inhibe sola).
    es la mitad del diagnóstico.
 2. En la máquina: `musubi_fleet_exec device=<máquina> argv=["systemctl","status","<servicio>"]`
    (o `podman ps -a --filter name=<servicio>` si la clase es `podman`).
+   **Si el nombre empieza con `usuario:`** es una unit `--user` del dueño (en `musubi-server`, del
+   usuario `musubi`), y el `systemctl` del sistema no la encuentra. Sacale el prefijo y preguntale
+   a SU manager; con el agente como root hay que bajar antes:
+   `setpriv --reuid=musubi --regid=musubi --init-groups env HOME=/home/musubi XDG_RUNTIME_DIR=/run/user/1000 systemctl --user show -p ActiveState,Result <unit>`.
+   Su log: `journalctl _SYSTEMD_USER_UNIT=<unit>.service`. El porqué, en `deploy/agente-como-root.md`.
 3. Si el servicio se declaró A MANO y la máquina nunca lo enumeró, el estado va a decir
    `desconocido`: nadie lo está midiendo. Eso no es una caída, es una fila sin dueño.
 
@@ -960,6 +965,10 @@ rara:
    lote entero a propósito, porque el cerebro poda por ausencia y media lista da de baja la otra
    mitad. Buscá el aviso en el log del agente de esa máquina:
    `journalctl -u musubi-agente | grep "no se pudieron enumerar"`. Dice cuál fuente y por qué.
+   Si dice **«el manager de usuario de musubi no contesta»**, es la fuente `--user`: existe
+   `/run/user/1000` y todavía no hay bus, o sea que el agente arrancó antes que `user@1000.service`.
+   Aborta a propósito (tomarlo como «sin units» haría que el cerebro pode las `usuario:*`) y se
+   resuelve solo en cuanto el manager levanta; si no se resuelve, mirá `systemctl is-active user@1000`.
 3. **El blindaje de la unidad prohíbe la fuente.** Pasó en `musubi-server`: `ProtectHome=read-only`
    impedía que `podman ps` abriera sus locks, y el síntoma era `exit status 1` sin más. Ver A54
    y `deploy/systemd/musubi-agente-contenedores.conf`.
@@ -1535,6 +1544,81 @@ Tres desenlaces, y sólo uno es un backup roto:
 `MusubiBackupOffhostStale`, y hoy vale `-1` para siempre porque el destino off-host es local por
 decisión (A37). Un snapshot fresco al lado de la base no sobrevive a que se pierda el disco.
 
+## Antes de tocar un agente a mano: declarar la ventana
+
+Parar, reinstalar o reconfigurar el agente de una máquina —o su tarea programada— produce
+exactamente lo que `AgenteCaidoConMaquinaViva` existe para detectar: el agente deja de latir y la
+máquina sigue en la red. Si lo hacés a propósito, **declará primero una ventana de mantenimiento**.
+Sin ella la alerta suena a los 5 minutos por algo que estás haciendo vos, y una política de
+auto-heal puede actuar sobre la máquina en mitad del trabajo.
+
+**El caso que la trajo.** El 2026-09-20, en la migración a TLS, se tocó a mano la tarea del agente
+de `gio` a las 14:27 UTC (salió con `3221225786`) y `AgenteCaidoConMaquinaViva` sonó desde las 14:39
+durante 50 minutos. Fue la única ventana de trabajo leída como caída en 14 días de alertas, y nadie
+la había declarado: medido el 2026-09-24, `device_maintenance` no tenía una sola fila. La plomería
+estaba entera —las reglas miran `musubi_fleet_device_maintenance` y el auto-heal la respeta—; lo
+que faltaba era este paso en la receta.
+
+```bash
+# 1. ANTES de tocar nada. La respuesta trae el `id` de la ventana: guardalo.
+#    Desde un clon del repo en la laptop. En davantis-1 este guion no arranca: mirá abajo.
+./deploy/musubi-tool.sh musubi_fleet_maintenance '{"device":"gio","minutos":30,"motivo":"<qué vas a tocar>","project":"musubi"}'
+
+# 2. Al terminar, con el agente latiendo otra vez. Y también si salió MAL (abajo).
+./deploy/musubi-tool.sh musubi_fleet_maintenance '{"device":"gio","cancelar":"<id>","project":"musubi"}'
+```
+
+**Dónde se corre, porque el guion no anda en todos lados** (medido el 2026-09-25):
+
+- **En `davantis-1`, por el MCP del cerebro**: la misma tool con los mismos argumentos. Esa sesión
+  entra como `davantis-mando-admin`, que tiene `metrics` sobre todas las máquinas. El guion ahí NO
+  arranca: `python3` es el acceso directo de la Microsoft Store y sale con 49 antes de mandar nada,
+  y aunque arrancara, el `curl` de MinGW no ve la malla.
+- **En la laptop**, el guion desde el repo, con
+  `MUSUBI_CENTRAL_URL=https://musubi-server.tail89e295.ts.net:10000`: con el NOMBRE, no con la IP.
+  El certificado del tailnet lleva el nombre del nodo como único SAN y el guion no tiene
+  `--resolve`, así que contra `https://100.79.126.62:10000` el handshake falla (`curl: (35)`) y un
+  cerebro vivo contesta 000.
+- **En el server**, el guion está en `/home/musubi/musubi-tool.sh`, no en `./deploy/`, y sin
+  `MUSUBI_CENTRAL_URL` le habla a `127.0.0.1:7717`, que ahí sí contesta.
+
+Treinta minutos alcanzan para reinstalar una tarea; si va a llevar más, pedí más desde el principio
+en vez de encadenar ventanas.
+
+**Cerrala aunque la intervención haya fallado, y sobre todo entonces.** Mientras la ventana está
+activa se callan las reglas de esa máquina —`MaquinaCaida` y `ServicioCaido` incluidas, no sólo
+ésta— y su auto-heal no actúa. Si el agente quedó muerto, querés que la alerta vuelva a sonar ya, no
+cuando la ventana venza. Si te olvidás, vence sola a los `minutos` que pediste (techo duro de 24 h;
+`MantenimientoEterno` avisa a las 25).
+
+**La credencial necesita `metrics` sobre ESA máquina**, no `admin` ni `exec`: declarar una ventana
+no ejecuta nada. El rol no concede capacidades de flota (C1), así que un admin sin sección `fleet:`
+en `principals.yaml` recibe «no podés declarar mantenimiento». Medido el 2026-09-24, tampoco pueden
+la credencial de las políticas de auto-heal (sólo `exec`) ni la de meir (principal `gio`, sólo
+`screen` sobre `gio`).
+
+**En `gio` rige cuatro ojos desde el 2026-09-24, y el segundo par de ojos es meir**, cuyo principal
+se llama `gio`, igual que la máquina: en `principals.yaml` y en `musubi_token_list` no hay ningún
+«meir». Cuatro ojos frena las dos sesiones, `musubi_fleet_screen` y `musubi_fleet_shell`, y quien
+aprueba necesita sobre esa máquina LA MISMA capacidad que la sesión pide. Por eso hoy no son
+equivalentes (medido el 2026-09-25 en el `principals.yaml` del central):
+
+- **Pantalla, sí.** Si la intervención entra por `musubi_fleet_screen`, la sesión espera a que meir
+  la apruebe con `musubi_fleet_approve`: su principal tiene `screen` sobre `gio`.
+- **Una shell en `gio` hoy no la puede aprobar nadie.** meir no tiene `shell`, y la única credencial
+  vigente con `shell` sobre `gio` es `davantis-2`, la misma que la pediría (`davantis-consola`
+  también la tenía y venció el 2026-09-24). La solicitud queda pendiente hasta vencer a los 30
+  minutos mientras la ventana ya declarada se consume. Hasta que un segundo principal tenga `shell`
+  sobre `gio`, la intervención entra por pantalla: es el «candado» que describe
+  `musubi_fleet_require_approval`.
+
+La aprobación no viaja: avisale a meir antes de pedirla, o la solicitud vence sin que se entere (ver
+`AprobacionDeCuatroOjosSinAtender`). Y que la apruebe él, no otra credencial tuya: el control
+compara NOMBRES de principal, así que dos credenciales de la misma persona se aprueban entre sí y la
+bitácora diría «aprobado por otro». Dos cosas no pasan por esa puerta: declarar la ventana, que no
+es una sesión, y `musubi_fleet_exec`, que cuatro ojos no cubre —es el hueco que la propia
+`musubi_fleet_require_approval` advierte, no una vía alternativa—.
+
 ## MantenimientoEterno
 
 Una máquina lleva más de 25 horas con una ventana de mantenimiento activa.
@@ -1625,6 +1709,9 @@ supone.
 
 El agente de esa máquina no late, **pero el cerebro sí la alcanza por la red**. La máquina está
 encendida. Lo caído es el agente.
+
+**Si lo estás tocando vos**, esta alerta es la que una ventana de mantenimiento calla, y en `gio`
+además rige cuatro ojos: [declarala antes](#antes-de-tocar-un-agente-a-mano-declarar-la-ventana).
 
 **No mires el hardware.** Esta alerta existe para que no lo hagas: hasta que existió, `MaquinaCaida`
 disparaba igual en los dos casos y mandaba a revisar una fuente de alimentación perfectamente sana.

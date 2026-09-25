@@ -62,6 +62,8 @@ func main() {
 		runTurn()
 	case "arnes":
 		runArnes(os.Args[2:])
+	case "uso-agente":
+		runUsoAgente(os.Args[2:])
 	case "receipt":
 		runReceipt(os.Args[2:])
 	case "precheck":
@@ -192,6 +194,9 @@ func printUsage() {
 	cmd("calibrate", "(opt-in) Mide el estimador de tokens vs count_tokens (requiere ANTHROPIC_API_KEY)")
 	cmd("conflicts backfill [--dry-run]", "Reconstruye el desglose lex/coseno de las relaciones que se guardaron sin él")
 	cmd("conflicts shadow [--json]", "Lee el modo sombra: dónde el motor coincidió con el detector (y nunca lo corrigió)")
+
+	section("Medición")
+	cmd("uso-agente [--desde F] [--hasta F]", "Lee los transcripts de Claude Code: ¿el agente USA las tools y skills de Musubi? (sólo lectura; --dir, --json)")
 
 	section("Ingesta")
 	cmd("ingest [--as ...] [--lang ...] [--json] <url>", "Convierte un link (video/red social/artículo) en texto; --save lo guarda en memoria")
@@ -548,8 +553,11 @@ func runDaemon() {
 		}
 	}
 
-	// Arrancar servidor MCP sobre Stdin/Stdout, con sourcing y memoria configurados.
-	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithMotorQuota(cfg.Cognition.EffectiveMotorQuotaPerHour()), mcp.WithCognition(resolveCognition(cfg)), mcp.WithCognitionConfig(cfg.Cognition), mcp.WithUsageLedger(engine, cfg.UsageLedger), mcp.WithSpoolLocal(filepath.Join(root, ".musubi", "live")), mcp.WithVersion(version))
+	// Arrancar servidor MCP sobre Stdin/Stdout, con sourcing y memoria configurados. Es el ÚNICO
+	// servidor que le habla al agente (WithInstruccionesParaElAgente): el central no, porque el relé
+	// le reenvía su handshake al agente; y el degradado y el de sólo lectura tampoco, porque
+	// nombrarle tools que van a fallar es peor que callarse. Ver internal/mcp/agente.go.
+	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithMotorQuota(cfg.Cognition.EffectiveMotorQuotaPerHour()), mcp.WithCognition(resolveCognition(cfg)), mcp.WithCognitionConfig(cfg.Cognition), mcp.WithUsageLedger(engine, cfg.UsageLedger), mcp.WithSpoolLocal(filepath.Join(root, ".musubi", "live")), mcp.WithInstruccionesParaElAgente(), mcp.WithVersion(version))
 	defer server.CloseLedger() // baja lo que quede en el buffer del ledger de uso (F0)
 	// El VERTEDERO del feed en vivo: sólo acá, no en runServe. El central ya reparte por HTTP;
 	// un daemon stdio no tiene por dónde sacar sus eventos y por eso el trabajo local no se veía.

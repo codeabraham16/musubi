@@ -181,10 +181,11 @@ func TestSinArchivoLaRotacionNoSeAdoptaEnSilencio(t *testing.T) {
 // estaba. Se afirma sólo donde los bits existen; en Windows el permiso lo da la ACL del directorio
 // y es del instalador, no de esto.
 //
-// Sabotaje que la hace fallar: quitar el os.Chmod de escribirTokens.
+// Sabotaje que la hace fallar: quitar el Chmod de escribirTokens.
 // arnes: archivo="cmd/musubi/agent_token.go"
-// arnes: de="\tif err := os.Chmod(nombre, modo); err != nil {\n\t\treturn fmt.Errorf(\"no se pudo fijar el modo del token: %w\", err)\n\t}"
+// arnes: de="\tif err := tmp.Chmod(modo); err != nil {\n\t\t_ = tmp.Close()\n\t\treturn fmt.Errorf(\"no se pudo fijar el modo del token: %w\", err)\n\t}"
 // arnes: a="\t_ = modo"
+// arnes: colision_ok="TestElModoDelTokenNoSigueUnSymlinkPuestoEnLaRuta"
 func TestColapsarElLlaveroNoAflojaElModoDelArchivo(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("NTFS no mapea los bits de modo POSIX; acá el permiso lo da la ACL del directorio")

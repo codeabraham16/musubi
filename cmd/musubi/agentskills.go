@@ -19,8 +19,9 @@ import (
 // `.claude/` está gitignored: lo que se escribe acá es estado LOCAL derivado, no algo a versionar.
 
 // dirSkillsAgente es donde el agente busca sus skills. La ruta se verificó contra una skill que YA
-// funciona en esta máquina, no contra la documentación.
-const dirSkillsAgente = ".claude/skills"
+// funciona en esta máquina, no contra la documentación. Vive en internal/skills porque el servidor
+// también la lee (para nombrarle al agente sólo las skills que puede cargar).
+const dirSkillsAgente = skills.DirSkillsAgente
 
 // ReporteExport dice qué pasó, y en particular qué NO se tocó. Un export que sólo cuenta éxitos
 // esconde justamente el caso que importa: el archivo que alguien editó y Musubi preservó.

@@ -274,8 +274,8 @@ type LoopConfig struct {
 	// ReminderAfterTurns es la cantidad de turnos sin guardar tras la cual se inyecta
 	// el recordatorio de captura (default 5).
 	ReminderAfterTurns int `yaml:"reminder_after_turns"`
-	// DurableNudgeAfterTurns es la cantidad de turnos de una sesion tras la cual se
-	// inyecta, UNA sola vez, el aviso de bajar lo durable a CUARENTENA (default 20).
+	// DurableNudgeAfterTurns es cada cuántos turnos de una sesion se inyecta el aviso de
+	// bajar lo durable a CUARENTENA: en el turno N, en el 2N, y así (default 20).
 	// Un valor negativo lo apaga; 0 significa "usar el default", como el resto de los
 	// numericos de esta seccion.
 	//

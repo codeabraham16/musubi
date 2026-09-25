@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -33,10 +32,6 @@ import (
 //
 // Hace AUTOMÁTICO el uso de la memoria de código y del grafo, sin que el agente tenga que
 // acordarse. 100% model-free.
-
-// umbralArchivoGrande es el tamaño (bytes) a partir del cual, si no hay gist,
-// vale la pena recordar guardarlo. Por debajo, no molesta.
-const umbralArchivoGrande = 1500
 
 // codeStore es lo que el hook necesita del motor: leer la memoria de código, los errores
 // conocidos (telemetría) y el GRAFO DE CÓDIGO (Track 20 · F2-B) del archivo que se va a leer,
@@ -635,17 +630,30 @@ func noneIfEmpty(s string) string {
 	return s
 }
 
-// codeMemoryMessage arma el aviso de memoria de código para el archivo (gist fresco,
-// desactualizado, o nudge de guardar si es grande y no hay). "" si no aplica.
+// codeMemoryMessage arma el aviso de memoria de código para el archivo (gist fresco o
+// desactualizado). "" si no aplica.
+//
+// SIN GIST NO SE DICE NADA. Acá había un aviso para los archivos grandes sin gist —«tras leerlo,
+// guardá uno con musubi_save_code»— y medido sobre los transcripts se inyectó 396 veces y se
+// siguió CERO: pedía, en medio de una lectura, una tarea cuyo beneficio es para otra sesión. Salía
+// además sobre cualquier archivo, también fuera del repo. El gist se sigue ofreciendo cuando ya
+// existe, que es cuando le ahorra algo al agente que está leyendo.
 func codeMemoryMessage(store codeStore, root, path, key string) string {
 	cm, ok, err := store.GetCodeMemory(key)
 	if err != nil {
 		return ""
 	}
+	// UN GIST AUTOMÁTICO NO SE INYECTA EN EL Read. Es el comentario de cabecera del archivo, que
+	// está en las primeras líneas de lo que el agente está por leer: inyectarlo sería pagar dos
+	// veces el mismo texto, en ~240 archivos más. Rancio tampoco: se regenera solo en el próximo
+	// tick del índice, así que pedirle al agente que lo reescriba con musubi_save_code sería
+	// mandarlo a hacer un trabajo que ya está hecho. Su valor está en recall_code, code_context y
+	// el central, donde el archivo no está a la vista. Consecuencia declarada: para esos archivos
+	// desaparece también el aviso «No hay gist… guardá uno».
+	if ok && memory.EsGistAutomatico(cm.Gist) {
+		return ""
+	}
 	if !ok {
-		if fileIsLarge(root, path) {
-			return fmt.Sprintf("[Musubi — código] No hay gist de «%s». Tras leerlo, guardá uno con musubi_save_code (path, gist, symbols) para no re-leerlo entero en futuros turnos/sesiones.", key)
-		}
 		return ""
 	}
 	current, _ := memory.FileFingerprint(root, path)
@@ -693,20 +701,6 @@ func telemetryMessage(store codeStore, key, path string) string {
 	}
 	b.WriteString("\nSi lo resolviste, marcalo con musubi_resolve_telemetry {id}.")
 	return b.String()
-}
-
-// fileIsLarge indica si el archivo supera el umbral (best-effort; false si no se
-// puede stat-ear, para no molestar).
-func fileIsLarge(root, path string) bool {
-	full := path
-	if !filepath.IsAbs(full) {
-		full = filepath.Join(root, path)
-	}
-	fi, err := os.Stat(full)
-	if err != nil {
-		return false
-	}
-	return fi.Size() >= umbralArchivoGrande
 }
 
 // preEnvelope serializa el envelope de PreToolUse con additionalContext y

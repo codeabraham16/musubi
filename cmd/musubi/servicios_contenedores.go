@@ -77,9 +77,19 @@ func enumerarContenedores(ahora time.Time) ([]fleet.ReporteServicio, error) {
 }
 
 // contenedoresDe consulta un runtime, degradando el formato si hace falta.
+//
+// PODMAN SE CONSULTA CON LA IDENTIDAD DEL DUEÑO, DOCKER NO. Los contenedores de musubi-server son
+// podman ROOTLESS: su store vive en el home del dueño y sólo lo ve su uid. Un agente que corre como
+// root y pregunta como root lee el store ROOTFUL, lo encuentra vacío, y el cerebro —que poda por
+// ausencia— da de baja los 18 contenedores en el primer latido. Docker es otra cosa: un demonio de
+// root al que se le habla por su socket, y ahí root es justamente quien tiene que preguntar.
 func contenedoresDe(cli string) (salida string, hayFuente bool, err error) {
 	for _, formato := range formatoContenedores {
-		s, hay, e := enumerarFuente(cli, "ps", "--all", "--format", formato)
+		id := identidadDeServicios{}
+		if cli == "podman" {
+			id = identidadParaEnumerar
+		}
+		s, hay, e := enumerarFuenteComo(id, cli, "ps", "--all", "--format", formato)
 		if !hay {
 			// La herramienta no está: no tiene sentido probar el otro formato.
 			return "", false, nil

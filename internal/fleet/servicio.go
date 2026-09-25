@@ -65,9 +65,21 @@ const (
 const (
 	// SaludMaxBytes es el tope del JSON de UNA salud.
 	SaludMaxBytes = 2 << 10
-	// ServiciosPorLatido es cuántos servicios acepta un latido. 64 alcanza para cualquier host
-	// real (un servidor cargado tiene ~40 units interesantes) y acota el cuerpo.
-	ServiciosPorLatido = 64
+	// ServiciosPorLatido es cuántos servicios acepta un latido, y acota el cuerpo.
+	//
+	// ERA 64 Y DEJÓ DE ALCANZAR CUANDO EL AGENTE EMPEZÓ A VER LAS UNITS `--user`. Medido el
+	// 2026-09-24 en musubi-server: 37 de sistema + 18 contenedores = 55; con las 6 units que el
+	// dueño escribió y el quadlet de Vaultwarden, 62; y en ~/.config/systemd/user hay 11 oneshots
+	// de timer más que ENTRAN en cuanto fallan (un fallado se reporta aunque sea `static`). Techo
+	// real: 73 > 64. Recortar ahí no es cosmético: se van primero los que corren bien por orden
+	// alfabético —`vaultwarden` antes que las `usuario:*`— y con `omitidos > 0` el cerebro suspende
+	// la poda. Además la alerta de uso del techo avisa al 80 %: con 62/64 habría quedado sonando.
+	//
+	// 96 deja ~76 % de uso en el peor caso medido (73/96). Lo usan el agente Y el cerebro (que
+	// descarta el inventario entero si llega más largo), así que se despliega el cerebro PRIMERO.
+	// El techo de bytes del latido (`latidoMaxBytes`, internal/mcp) se deriva de esta constante:
+	// sube solo, a ~204 KiB, lejos de los 4 MiB del transporte.
+	ServiciosPorLatido = 96
 	// InventarioCada es cada cuánto el agente REENVÍA el inventario aunque no haya cambiado.
 	//
 	// ────────────────────────────────────────────────────────────────────────────────────────

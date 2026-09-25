@@ -291,7 +291,15 @@ func serviciosDelLatido() (lista []fleet.ReporteServicio, omitidos int, mandar b
 // hablar con una API: systemd, el SCM y launchd tienen todos una herramienta de línea de comandos
 // estable, y usarla evita una dependencia por sistema operativo.
 func salidaDeComando(nombre string, args ...string) (string, error) {
-	b, err := ejecutarParaEnumerar(nombre, args...)
+	return salidaDeComandoComo(identidadDeServicios{}, nombre, args...)
+}
+
+// salidaDeComandoComo es salidaDeComando corrida con la identidad del dueño (identidad_servicios.go).
+// Es UN solo cuerpo para los dos caminos a propósito: la propiedad de no arrastrar el stderr al
+// mensaje (servicios_error_fuga_test.go) vale igual para el hijo que baja a otro uid, y dos copias
+// de estas cuatro líneas son dos lugares donde alguien puede «mejorar» el mensaje con el stderr.
+func salidaDeComandoComo(id identidadDeServicios, nombre string, args ...string) (string, error) {
+	b, err := ejecutarComoParaEnumerar(id, nombre, args...)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", nombre, err)
 	}
@@ -325,7 +333,14 @@ func salidaDeComando(nombre string, args ...string) (string, error) {
 // La distinción es `exec.ErrNotFound` y no un `LookPath` previo: entre mirar si está y correrlo
 // hay una carrera, y una fuente que desaparece justo en el medio caería del lado equivocado.
 func enumerarFuente(cli string, args ...string) (salida string, hayFuente bool, err error) {
-	salida, err = salidaDeComando(cli, args...)
+	return enumerarFuenteComo(identidadDeServicios{}, cli, args...)
+}
+
+// enumerarFuenteComo es enumerarFuente con la identidad de quien tiene que correr el comando: la
+// del dueño para podman y `systemctl --user` cuando el agente corre como root, el valor cero para
+// todo lo demás. Los tres desenlaces son los de arriba y están escritos una sola vez, acá.
+func enumerarFuenteComo(id identidadDeServicios, cli string, args ...string) (salida string, hayFuente bool, err error) {
+	salida, err = salidaDeComandoComo(id, cli, args...)
 	switch {
 	case err == nil:
 		return salida, true, nil

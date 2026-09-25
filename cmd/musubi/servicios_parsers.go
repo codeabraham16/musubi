@@ -50,10 +50,23 @@ import (
 // («vet.exe: servicios_test.go:96: undefined: estadoDeSystemd»), y este archivo existe justamente
 // para que no vuelva a pasar. Volvió a pasar igual, con otro símbolo, en el mismo archivo de
 // pruebas — así que la regla queda escrita ACÁ, al lado del dato, y no sólo en un encabezado.
+//
+// FragmentPath y SourcePath los usa SÓLO la fuente `--user`, para quedarse con lo que escribió el
+// dueño (parsearSystemctlShowDeUsuario). Se piden en las dos porque la lista es una: el parser del
+// sistema arma un mapa por bloque y lo que no lee no le cambia nada.
 var propiedadesPedidas = []string{
 	"Id", "ActiveState", "SubState", "MainPID", "NRestarts",
 	"ActiveEnterTimestamp", "InactiveEnterTimestamp", "Result", "UnitFileState",
+	"FragmentPath", "SourcePath",
 }
+
+// prefijoUnitDeUsuario marca las units del manager `--user` en el inventario.
+//
+// ES OBLIGATORIO Y NO DECORATIVO: serviciosParaElLatido deduplica por nombre sin distinguir
+// mayúsculas, y el mismo nombre existe de verdad en los dos managers (`podman-restart` es unit de
+// sistema Y de usuario en musubi-server). Sin el prefijo, una de las dos se descarta en silencio y
+// la poda del cerebro la da de baja.
+const prefijoUnitDeUsuario = "usuario:"
 
 func parsearServiciosWindows(salida string, ahora time.Time) []fleet.ReporteServicio {
 	r := csv.NewReader(strings.NewReader(strings.ReplaceAll(salida, "\r\n", "\n")))
@@ -228,6 +241,42 @@ func parsearLaunchctl(salida string, ahora time.Time) []fleet.ReporteServicio {
 // SE QUEDA CON LO QUE ALGUIEN DECIDIÓ QUE CORRA, MÁS LO ROTO. Una unit deshabilitada e inactiva
 // es ruido —hay cientos—; una habilitada y detenida es exactamente la fila que uno quiere ver.
 func parsearSystemctlShow(salida string, ahora time.Time) []fleet.ReporteServicio {
+	return parsearBloquesDeSystemd(salida, ahora, false, "")
+}
+
+// parsearSystemctlShowDeUsuario es lo mismo para `systemctl --user show`, con dos reglas más.
+//
+// UNO: ENTRA SÓLO LO QUE ESCRIBIÓ EL DUEÑO. El manager de usuario también carga units de /usr/lib
+// (dbus-broker, podman-restart, systemd-tmpfiles-setup) que no son de nadie en particular y que
+// llenarían el techo del latido. Se reconoce por DÓNDE vive el archivo, con el home de la
+// IDENTIDAD —nunca con el HOME del proceso, que en un agente root es /root—:
+//
+//	FragmentPath bajo <home>/.config/systemd/user/          las que escribió a mano
+//	SourcePath   bajo <home>/.config/containers/systemd/    los quadlets de podman
+//
+// Los quadlets son la trampa: su FragmentPath es el que genera systemd en /run/user/<uid>/systemd/
+// generator/, y su UnitFileState es `generated`, no `enabled`. Medido el 2026-09-24: así está
+// `vaultwarden.service`, el único que supervisa el contenedor de Vaultwarden. Filtrando sólo por
+// FragmentPath quedaba afuera justo el que avisa si alguien hace `podman rm`.
+//
+// DOS: EL NOMBRE LLEVA prefijoUnitDeUsuario, por el choque de nombres que explica la constante.
+func parsearSystemctlShowDeUsuario(salida string, ahora time.Time, home string) []fleet.ReporteServicio {
+	return parsearBloquesDeSystemd(salida, ahora, true, home)
+}
+
+// escritaPorElUsuario dice si la unit es un archivo del dueño o un quadlet suyo. Sin home no se
+// sabe qué es suyo, y entonces no entra nada: mejor una fuente vacía que una llena de /usr/lib.
+func escritaPorElUsuario(p map[string]string, home string) bool {
+	home = strings.TrimSuffix(strings.TrimSpace(home), "/")
+	if home == "" {
+		return false
+	}
+	return strings.HasPrefix(p["FragmentPath"], home+"/.config/systemd/user/") ||
+		strings.HasPrefix(p["SourcePath"], home+"/.config/containers/systemd/")
+}
+
+// parsearBloquesDeSystemd es el cuerpo común de las dos fuentes de systemd.
+func parsearBloquesDeSystemd(salida string, ahora time.Time, deUsuario bool, home string) []fleet.ReporteServicio {
 	var rs []fleet.ReporteServicio
 	for _, bloque := range strings.Split(strings.ReplaceAll(salida, "\r\n", "\n"), "\n\n") {
 		p := map[string]string{}
@@ -240,7 +289,14 @@ func parsearSystemctlShow(salida string, ahora time.Time) []fleet.ReporteServici
 		if id == "" {
 			continue
 		}
-		habilitada := strings.HasPrefix(p["UnitFileState"], "enabled")
+		if deUsuario && !escritaPorElUsuario(p, home) {
+			continue
+		}
+		// `generated` cuenta como habilitada SÓLO del lado del usuario, donde lo único generado es
+		// un quadlet que alguien escribió para que corra. Del lado del sistema también generan
+		// units los montajes y los scripts SysV, y sumarlas cambiaría un inventario que ya se usa.
+		habilitada := strings.HasPrefix(p["UnitFileState"], "enabled") ||
+			(deUsuario && p["UnitFileState"] == "generated")
 		fallada := p["ActiveState"] == "failed"
 		if !habilitada && !fallada {
 			continue
@@ -257,8 +313,12 @@ func parsearSystemctlShow(salida string, ahora time.Time) []fleet.ReporteServici
 			salud.Reinicios = &n
 		}
 		salud.Desde = desdeDeSystemd(salud.Estado, p)
+		nombre := strings.TrimSuffix(id, ".service")
+		if deUsuario {
+			nombre = prefijoUnitDeUsuario + nombre
+		}
 		rs = append(rs, fleet.ReporteServicio{
-			Nombre: strings.TrimSuffix(id, ".service"),
+			Nombre: nombre,
 			Clase:  "systemd",
 			Salud:  salud,
 		})

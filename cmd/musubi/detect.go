@@ -153,7 +153,7 @@ func buildHookOutputCon(root string, store startupStore, cfg config.StartupConfi
 func buildCapturePriming() string {
 	return `[Musubi — captura proactiva] Mientras trabajás, guardá VOS SOLO (sin que te lo pidan) lo que valga la pena recordar, con las tools de Musubi:
 - Decisiones (el porqué de lo elegido) y gotchas/aprendizajes no obvios → musubi_save_observation
-- Hechos estables (convenciones, versiones, rutas, comandos) → musubi_save_fact ; gists de archivos que leíste → musubi_save_code
+- Hechos estables (convenciones, versiones, rutas, comandos) → musubi_propose_facts ; gists de archivos que leíste → musubi_save_code
 - Estado del trabajo (qué se hizo, qué falta) al cerrar un avance → musubi_save_observation
 Guardá solo lo REUSABLE / NO OBVIO; nada de trivialidades (saludos, "ok", estado transitorio). No dupliques: recuperá antes con musubi_recall.
 Aclaración: "shared" en Musubi = scope shared de la MEMORIA (que la vean otras máquinas/el equipo), NO un tag ni un commit de git.`
@@ -274,8 +274,16 @@ func decideGeneration(root string, store startupStore, cfg config.StartupConfig,
 
 	storedFP, hasFP, _ := store.GetMeta(memory.MetaStackFingerprint)
 
-	// Primera vez: nunca se generó (ni sentinel ni huella) → generación completa.
+	// Primera vez: nunca se generó (ni sentinel ni huella) → generación completa, y UNA SOLA VEZ.
+	//
+	// ANTES SE REPETÍA EN CADA ARRANQUE, PARA SIEMPRE. La huella y el sentinel sólo los escribe
+	// musubi_save_skill, o sea que si el agente no recorría el flujo entero —y medido sobre los
+	// transcripts, en 9 de 9 arranques no lo recorrió— el proyecto seguía siendo «primera vez» y el
+	// bloque volvía en la sesión siguiente: ~700 tokens por arranque sin un solo resultado. Ahora la
+	// huella se guarda al OFRECER, así que la próxima sesión cae en la rama del delta: si el stack
+	// crece, se vuelve a ofrecer sólo lo nuevo.
 	if !sentinelExists && !hasFP {
+		_ = store.SetMeta(memory.MetaStackFingerprint, currentFP)
 		return buildAdditionalContext(stackResumen)
 	}
 
@@ -405,8 +413,8 @@ func buildPrimingContext(store startupStore, budget int, sessionID string) strin
 func buildCognitiveContext() string {
 	return fmt.Sprintf(`[Musubi — autoconocimiento] Este proyecto todavía no tiene perfil. ANTES de avanzar con lo que pida el usuario, dedicá un momento a conocerlo usando las skills cognitivas de .musubi/skills/:
 
-- analyze-project: mapeá estructura, manifests y entrypoints (usá musubi_detect_stack) y capturá hallazgos no obvios con musubi_save_observation.
-- deduce-conventions: deducí convenciones (naming, tests, manejo de errores) del código existente y guardalas como hechos con musubi_save_fact.
+- analyze-project: mapeá estructura, manifests y entrypoints, y capturá hallazgos no obvios con musubi_save_observation.
+- deduce-conventions: deducí convenciones (naming, tests, manejo de errores) del código existente y proponelas como hechos con musubi_propose_facts.
 - plan-ahead: recuperá contexto con musubi_recall / musubi_recall_facts antes de actuar.
 - project-profile: consolidá un perfil conciso del proyecto con musubi_save_observation usando el topic_key exacto '%s' (propósito, stack, arquitectura, convenciones, decisiones).
 
@@ -420,9 +428,7 @@ func buildAdditionalContext(stackResumen string) string {
 
 Por favor realizá los siguientes pasos ANTES de responder al usuario:
 
-1. Llamar a la herramienta musubi_detect_stack para obtener el análisis completo del stack del proyecto (ecosistemas, frameworks, manifests).
-
-1.5. Llamar a musubi_search_skills (sin parámetros) para obtener candidatos del catálogo ya filtrados por relevancia técnica (triggers, deps y capabilities del proyecto). Tu trabajo es evaluar VALOR, no relevancia. Ordená los candidatos por valor para este proyecto, descartá los que sean redundantes con skills existentes. Podés complementar con búsqueda web solo para llenar gaps. Fetchá rules_url únicamente de las skills que vayas a guardar. Opcionalmente registrá decisiones con musubi_log_skill_decision.
+1. Llamar a musubi_search_skills (sin parámetros) para obtener candidatos del catálogo ya filtrados por relevancia técnica (triggers, deps y capabilities del proyecto). Tu trabajo es evaluar VALOR, no relevancia. Ordená los candidatos por valor para este proyecto, descartá los que sean redundantes con skills existentes. Podés complementar con búsqueda web solo para llenar gaps. Fetchá rules_url únicamente de las skills que vayas a guardar. Opcionalmente registrá decisiones con musubi_log_skill_decision.
 
 2. Investigar la documentación OFICIAL del stack detectado:
    - Go → pkg.go.dev
