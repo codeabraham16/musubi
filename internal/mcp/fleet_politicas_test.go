@@ -277,6 +277,12 @@ func TestUnaMaquinaQueLateSinMedirNoDisparaPoliticas(t *testing.T) {
 // que el comando termine. No es «más reactivo»: es una tormenta de comandos idénticos, y empieza
 // justo cuando algo ya va mal.
 //
+// (A131·T4) Esta prueba ve UN desenlace: la acción siempre sale bien (Tier A, cola vacía). Soltar el
+// cooldown cuando la acción falla (P1-m10) la dejaba en verde, y con la cola llena la política decidía
+// doce veces por hora. Que el cooldown espacie la DECISIÓN salga como salga la acción —en cada
+// condición, cada tier y cada desenlace, leídos del código— lo mide
+// TestElCooldownSeCuentaDesdeElDisparoYLoLeenTodosSusLectores.
+//
 // Sabotaje que la hace fallar: quitar la consulta a ultimoDisparo.
 // arnes: archivo="internal/mcp/politicas.go"
 // arnes: de="\tif previo, hay := s.ultimoDisparo.Load(clave); hay {\n\t\tif t, ok := previo.(time.Time); ok && ahora.Sub(t) < pol.CooldownEfectivo() {\n\t\t\treturn false\n\t\t}\n\t}\n"
@@ -441,6 +447,10 @@ func TestUnaPoliticaSinPrincipalUsableNoDejaArrancar(t *testing.T) {
 
 // Dos políticas con el mismo nombre comparten cooldown y contador de métricas: una taparía a la
 // otra sin que nada fallara. Es el error que sólo se descubre cuando ya importa.
+//
+// (A131·T4) Las dos de esta prueba son de host y difieren sólo en `run`: deduplicar por (nombre,
+// servicio) la dejaba en verde (P2-m10). Cada campo en que dos homónimas pueden diferir, leído del
+// struct, lo recorre TestDosPoliticasHomonimasNoArrancanDifieranEnLoQueDifieran.
 func TestDosPoliticasConElMismoNombreNoArrancan(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	a, b := politicaDeMemoria(), politicaDeMemoria()
@@ -604,6 +614,12 @@ func servidorSobre(t *testing.T, dir string, pol config.PolicyConfig, reg *Princ
 // segundos después para tocar otra cosa, y la política vuelve a vaciarlo porque la muestra vieja
 // todavía cruza el umbral. Dos acciones donde tenía que haber una.
 //
+// (A131·T4) Esta prueba clava tres ejes: una política, de HOST, sobre una tabla LIMPIA, cuya acción
+// sale bien. Persistir con el alcance vacío (P3-m1), persistir sólo después de una acción exitosa
+// (P3-m3) y cortar la carga en la primera fila vieja (P3-m2) la dejaban en verde. El reinicio en cada
+// condición, tier y desenlace lo recorre TestElCooldownSeCuentaDesdeElDisparoYLoLeenTodosSusLectores;
+// la carga sobre una tabla mixta, TestAlArrancarSeSiembranLosCooldownsDeLasPoliticasComoEstanHoy.
+//
 // Sabotaje que la hace fallar: quitar la llamada a cargarCooldowns, o la persistencia del disparo.
 //
 // LA LLAMADA VIVE EN `scheduler_flota.go`, no en `politicas.go` —ahí sólo está la función—, y el
@@ -656,9 +672,16 @@ func TestElCooldownSobreviveUnReinicioDelCerebro(t *testing.T) {
 // La guarda vive en el ALMACÉN (`internal/memory/comandos.go`), no en `politicas.go`: la prosa
 // nombra la condición y no el archivo, y buscarla donde uno espera devuelve cero — que no es
 // «no existe» sino «miré el archivo equivocado».
+//
+// (A131·T4) Esta prueba pasa la lista vacía como `nil` y su control trae UNA viva: preguntar por nil
+// en vez de por el largo (P3-m4) y ligar sólo la primera viva (P3-m5) la dejaban en verde. Las tres
+// formas de la lista vacía y las cantidades de vivas las recorre
+// TestLaPodaDelEstadoDePoliticasConservaExactamenteLasVivas (internal/memory), que sabotea esta misma
+// línea con el `nil`: los dos `de` se pisan a propósito.
 // arnes: archivo="internal/memory/comandos.go"
 // arnes: de="if len(vivas) == 0 {"
 // arnes: a="if false {"
+// arnes: colision_ok="TestLaPodaDelEstadoDePoliticasConservaExactamenteLasVivas"
 func TestPodarElEstadoDePoliticasConListaVaciaNoBorraNada(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	if err := s.engine.MarcarDisparoDePolitica("vaciar-journal", "dev-1", "", time.Now()); err != nil {
@@ -694,6 +717,11 @@ func TestPodarElEstadoDePoliticasConListaVaciaNoBorraNada(t *testing.T) {
 // de alcance (P3-m6) la dejaba en verde, y una política que sólo nombra `otra-pc` aparecía con su
 // detalle entero en la fila de pc-gio. Que la política figure exactamente donde el barrido la
 // evalúa lo mide TestUnaPoliticaActuaYFiguraSoloSobreLasMaquinasQueNombra.
+//
+// (A131·T4) Y `ultimo_disparo` lo mira sólo en una política que NUNCA actuó: el null que afirma lo
+// cumple también un null fijo, así que buscar el disparo con el nombre de la máquina en vez de su ID
+// (P3-m7) la dejaba en verde. Que el inventario publique la hora del disparo apenas la política actúa,
+// y la misma después de un reinicio, lo mide TestElCooldownSeCuentaDesdeElDisparoYLoLeenTodosSusLectores.
 //
 // Sabotaje que la hace fallar: no agregar `politicas`/`politicas_activas` al inventario.
 // arnes: archivo="internal/mcp/methods_fleet.go"
