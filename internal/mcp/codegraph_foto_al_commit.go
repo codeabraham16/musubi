@@ -37,6 +37,12 @@ import (
 // SI GIT NO PUEDE CONTESTAR, NO SE PUBLICA. Devolver la foto entera sería publicar el disco con la
 // etiqueta del commit, que es justo lo que esto cierra. La única foto que viaja sin recortar es la
 // de un proyecto que no es un repo git: sin commit no hay etiqueta, y no hay contra qué recortar.
+//
+// UN RECORTE QUE SACA TODO TAMPOCO SE PUBLICA. Si la foto traía archivos y el commit no tiene
+// ninguno, el grafo no es de ese commit: el caso real es un proyecto sin `.git` propio adentro de un
+// repo padre que lo ignora entero (git le presta el sello y el status del padre, y ninguno ve lo
+// ignorado). El push es de REEMPLAZO, así que publicar la foto vacía borraría el mapa del central.
+// Una foto que ya venía vacía (todo podado) sí viaja: ésa es un grafo vacío de verdad.
 func (s *McpServer) filtrarFotoAlCommit(foto memory.FotoDelGrafo, pub memory.PublicacionDelGrafo) (memory.FotoDelGrafo, error) {
 	commit := pub.Head
 	if commit == "" {
@@ -56,7 +62,23 @@ func (s *McpServer) filtrarFotoAlCommit(foto memory.FotoDelGrafo, pub memory.Pub
 		}
 	}
 	enElCommit := func(ruta string) bool { return rastreados[memory.NormalizeCodePath(s.projectPath, ruta)] }
-	return recortarFotoA(foto, enElCommit), nil
+	recortada := recortarFotoA(foto, enElCommit)
+	if antes, despues := archivosDeLosNodos(foto.Nodes), archivosDeLosNodos(recortada.Nodes); antes > 0 && despues == 0 {
+		return memory.FotoDelGrafo{}, fmt.Errorf("el commit %s no contiene ninguno de los %d archivos del grafo (¿el repo ignora el proyecto entero?): publicar el recorte vaciaría el mapa del central, y no se publica", abreviar(commit), antes)
+	}
+	return recortada, nil
+}
+
+// archivosDeLosNodos cuenta los archivos distintos de los que salen los nodos (los paquetes
+// importados, sin archivo, no cuentan).
+func archivosDeLosNodos(nodos []memory.GraphNode) int {
+	archivos := map[string]bool{}
+	for _, n := range nodos {
+		if n.Path != "" {
+			archivos[n.Path] = true
+		}
+	}
+	return len(archivos)
 }
 
 // recortarFotoA deja en la foto sólo lo de los archivos para los que enElCommit dice que sí. La

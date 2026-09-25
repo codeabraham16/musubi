@@ -21,7 +21,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   si la foto viaja sin etiqueta). Una arista con una punta recortada también sale, y los nodos sin
   archivo (paquetes importados) se quedan. **El grafo local no se toca**, porque sirve para el
   trabajo en curso. **Si git no puede listar el commit, no se publica**: la foto entera sería el
-  disco con la etiqueta del commit, y una vacía borraría el mapa del central. La tool lo dice en
+  disco con la etiqueta del commit, y una vacía borraría el mapa del central. **Tampoco se publica
+  un recorte que no deja ni un archivo**: un proyecto sin `.git` propio, adentro de un repo padre
+  que lo ignora entero, se publicaba con el sello del padre y el reemplazo vacío le borraba el mapa
+  al central, con `federated:true` (lo encontró la revisión). La tool lo dice en
   `federated_motivo`. Un proyecto que no es un repo git (sin `.git` en su directorio ni en sus
   padres) publica como antes: no tiene etiqueta de commit ni lista contra la cual recortar.
 
@@ -31,10 +34,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   (`musubi-body`, temporales, el CRM del escritorio) y 3 son rutas relativas que el commit no
   tiene.*
 
-  *Ocho sabotajes corridos, ocho rojos: no recortar nodos, dejar las aristas con una sola punta
+  *Nueve sabotajes corridos, nueve rojos: no recortar nodos, dejar las aristas con una sola punta
   recortada (AND→OR), no recortar gists, desconectar el recorte del push, seguir de largo cuando git
-  falla, tratar todo directorio como repo git, callar el motivo y listar el commit con rutas desde
-  la raíz del repo. Este último vaciaría el mapa de un proyecto que es un subdirectorio del repo.*
+  falla, tratar todo directorio como repo git, callar el motivo, listar el commit con rutas desde
+  la raíz del repo (vaciaría el mapa de un proyecto que es un subdirectorio del repo) y publicar un
+  recorte que no dejó ni un archivo.*
 
 - **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
   El ledger era UNA casilla de `meta` que guardaba UNA sesión, y `LedgerAdd` la reiniciaba entera

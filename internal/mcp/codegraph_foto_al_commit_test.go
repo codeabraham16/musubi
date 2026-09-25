@@ -188,6 +188,52 @@ func TestUnProyectoEnUnSubdirectorioDelRepoSeRecortaConSusRutas(t *testing.T) {
 	}
 }
 
+// UN RECORTE QUE SACA TODO NO SE PUBLICA. Un proyecto sin `.git` propio, adentro de un repo padre que
+// lo ignora entero: git le contesta con el sello, la rama y el status del PADRE —ninguno ve lo
+// ignorado—, así que se publica con la etiqueta de un commit que no tiene ni un archivo del proyecto.
+// El recorte deja la foto en cero, y el push es de REEMPLAZO: con el mapa vacío, el central borraba
+// el de ese proyecto y la tool contestaba federated:true. Lo encontró la revisión, con una sonda.
+//
+// Sabotaje que la pone roja: publicar el recorte aunque no haya dejado ni un archivo.
+// arnes: archivo="internal/mcp/codegraph_foto_al_commit.go"
+// arnes: de="antes > 0 && despues == 0 {"
+// arnes: a="antes > 0 && despues == 0 && false {"
+func TestUnRecorteQueSacaTodoNoVaciaElMapaDelCentral(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("sin git en el PATH")
+	}
+	sinVariablesDeGit(t)
+	repo := t.TempDir()
+	dir := filepath.Join(repo, "servicio")
+	gitDePrueba(t, repo, "2026-09-24T22:22:54Z", "init", "-q", "-b", "main")
+	writeFile(t, filepath.Join(repo, ".gitignore"), "servicio/\n")
+	writeFile(t, filepath.Join(repo, "raiz.go"), "package raiz\n\nfunc EnLaRaiz() {}\n")
+	gitDePrueba(t, repo, "2026-09-24T22:22:54Z", "add", ".")
+	gitDePrueba(t, repo, "2026-09-24T22:22:54Z", "commit", "-q", "-m", "base")
+	gitDePrueba(t, repo, "", "update-ref", "refs/remotes/origin/main", gitDePrueba(t, repo, "", "rev-parse", "HEAD"))
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/servicio\n")
+	writeFile(t, filepath.Join(dir, "a.go"), "package a\n\nfunc Servicio() {}\n")
+
+	central := nuevoCentralQueCuentaPushes(t)
+	s := servidorFederado(t, dir, central)
+	res := mustCall(t, s, "musubi_codegraph_index", map[string]interface{}{"mode": "incremental"})
+
+	if archivosEnElGrafo(t, s) == 0 {
+		t.Fatalf("andamio: el índice local tenía que traer a.go: %s", textOf(t, res))
+	}
+	if sello, _, _ := s.engine.GetMeta(memory.MetaCodegraphHead); sello == "" {
+		t.Fatalf("andamio: el índice tenía que quedar sellado con el commit del repo padre: %s", textOf(t, res))
+	}
+	if n := central.pushes.Load(); n != 0 {
+		t.Fatalf("el recorte dejó la foto sin un solo archivo y salió igual al central (%d pushes): el reemplazo le borra el mapa\nrespuesta: %s", n, textOf(t, res))
+	}
+	var cuerpo map[string]interface{}
+	_ = json.Unmarshal([]byte(textOf(t, res)), &cuerpo)
+	if cuerpo["federated"] != false || !strings.Contains(fmt.Sprint(cuerpo["federated_motivo"]), "no contiene ninguno") {
+		t.Errorf("la tool tiene que decir federated=false CON el motivo: %v", cuerpo)
+	}
+}
+
 // SI GIT NO PUEDE LISTAR EL COMMIT, NO SE PUBLICA. Mandar la foto entera sería publicar el disco con
 // la etiqueta del commit; mandarla vacía, borrar el mapa del central. Un repo sin commits es la forma
 // determinista de que `git ls-tree HEAD` falle en un árbol que SÍ es un repo. Y la tool lo dice.
