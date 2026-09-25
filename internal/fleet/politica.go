@@ -72,6 +72,11 @@ const separadoresDeRuta = `/\`
 // Windows, y el aviso callaba. Lo encontró una revisión adversaria: `pwsh.exe`, `python.exe`,
 // `wsl.exe`, `bash.exe` y `node.exe` pasaban por acotadas. Así que se corta en la última barra de
 // cualquiera de los dos tipos, se pasa a minúsculas y se saca `.exe`.
+//
+// EL COSTO, DICHO: `find.exe` y `timeout.exe` de System32 no lanzan nada y ahora se avisan igual,
+// como ya pasaba con `find` a secas en una máquina Windows. No se exceptúan porque el mismo nombre
+// en `Git\usr\bin` es el de GNU, que sí lanza (`-exec`, `timeout cmd`), y el informe de cuatro ojos
+// usa este criterio como afirmación de seguridad: ahí avisar de más es el lado barato del error.
 func EsInterprete(comando string) bool {
 	c := strings.ToLower(strings.TrimSpace(comando))
 	if i := strings.LastIndexAny(c, separadoresDeRuta); i >= 0 {
