@@ -68,7 +68,12 @@ type principalResolver interface {
 
 // principalsReloadInterval es cada cuánto se chequea el mtime del registro. 10s da una revocación
 // casi-inmediata sin costo perceptible (un os.Stat por intervalo).
-const principalsReloadInterval = 10 * time.Second
+//
+// Es var y no const SÓLO para que una prueba pueda arrancar el servidor entero y ver una revocación
+// sin esperar 10 s (TestRevocarSurteEfectoSinReiniciarElServidor). Se lee UNA vez, al armar el
+// registro recargable, y queda en su campo: cambiarla con un servidor corriendo no le hace nada, y
+// por eso tampoco hay carrera con el watch que ya está andando.
+var principalsReloadInterval = 10 * time.Second
 
 // reloadableRegistry envuelve el registro con recarga en caliente por mtime. El snapshot vigente
 // vive en un atomic.Pointer (lectura lock-free desde cada request); solo el goroutine de watch lo
@@ -78,7 +83,8 @@ type reloadableRegistry struct {
 	path        string
 	legacyToken string
 	cur         atomic.Pointer[PrincipalRegistry]
-	lastModNano int64 // mtime del último cargado; solo lo toca el goroutine de watch (sin carrera)
+	lastModNano int64         // mtime del último cargado; solo lo toca el goroutine de watch (sin carrera)
+	intervalo   time.Duration // cada cuánto mira el mtime; se fija al construirlo
 	// recargaFallando y recargasFallidas hacen VISIBLE el fail-safe de arriba.
 	//
 	// Conservar el snapshot ante un archivo roto es lo correcto, pero es silencioso por diseño:
@@ -93,7 +99,8 @@ type reloadableRegistry struct {
 
 // newReloadableRegistry crea el envoltorio sembrado con el registro ya cargado y su mtime.
 func newReloadableRegistry(path, legacyToken string, initial *PrincipalRegistry, initialMod time.Time) *reloadableRegistry {
-	rr := &reloadableRegistry{path: path, legacyToken: legacyToken, lastModNano: initialMod.UnixNano()}
+	rr := &reloadableRegistry{path: path, legacyToken: legacyToken, lastModNano: initialMod.UnixNano(),
+		intervalo: principalsReloadInterval}
 	rr.cur.Store(initial)
 	return rr
 }
@@ -152,7 +159,7 @@ func (rr *reloadableRegistry) resumenDeVencimientos(ahora time.Time) ResumenVenc
 
 // watch re-lee el registro cuando cambia el mtime, hasta que ctx se cancela (shutdown del server).
 func (rr *reloadableRegistry) watch(ctx context.Context) {
-	t := time.NewTicker(principalsReloadInterval)
+	t := time.NewTicker(rr.intervalo)
 	defer t.Stop()
 	for {
 		select {
