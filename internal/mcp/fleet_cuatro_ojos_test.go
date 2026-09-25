@@ -1524,3 +1524,50 @@ func TestMirarNoEsUnaPuertaDeCuatroOjos(t *testing.T) {
 		}
 	})
 }
+
+// resolverQueRevienta es un registro de verdad que falla SÓLO al armar el informe de aprobadores.
+// principalResolver es una interfaz, así que simular la falla no exige tocar producción.
+type resolverQueRevienta struct{ *PrincipalRegistry }
+
+func (resolverQueRevienta) accesoSobre(fleet.Device) AccesoDeDevice {
+	panic("el informe de aprobadores reventó")
+}
+
+// SI EL INFORME FALLA, LA MARCA NO QUEDA PUESTA. require_approval arma el informe ANTES de
+// escribir la marca, y ese orden es el control: al revés, un informe que falla deja la máquina
+// marcada con la respuesta en error, y el admin cree que no la encendió. accesoSobre no devuelve
+// error, así que la única forma de que falle es un pánico. En producción Dispatch lo ataja y
+// contesta error; acá `call` va directo a handleToolsCall, sin ese recover, y lo ataja la prueba.
+//
+// La primera versión lo dejó sin custodiar, «porque exige inyectar una falla en accesoSobre». La
+// revisión adversaria mostró que alcanzaba con este registro falso.
+//
+// Sabotaje: escribir la marca antes de armar el informe.
+// arnes: archivo="internal/mcp/methods_aprobacion.go"
+// arnes: de="\tvar quienes map[string]interface{}"
+// arnes: a="\tif _, err := s.engine.FijarAprobacion(d.ID, *args.Requerir); err != nil {\n\t\treturn nil, rpcErrorf(codeInternalError, \"%v\", err)\n\t}\n\tvar quienes map[string]interface{}"
+func TestSiElInformeFallaLaMarcaNoQuedaPuesta(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarConPantalla(t, s, "casa", "pc-gio")
+	s.buscarPrincipal = resolverQueRevienta{registroDePrueba(*conPantalla("casa"), *otroConPantalla("casa"))}
+
+	revento := func() (hubo bool) {
+		defer func() { hubo = recover() != nil }()
+		_, _ = call(t, s, "musubi_fleet_require_approval", map[string]any{
+			"device": "pc-gio", "project": "casa", "requerir": true,
+		})
+		return false
+	}()
+	if !revento {
+		t.Fatal("el informe no falló: el escenario no es el que la prueba dice")
+	}
+
+	d, hay, err := s.engine.DevicePorNombre("casa", "pc-gio")
+	if err != nil || !hay {
+		t.Fatalf("no se pudo releer la máquina: hay=%v err=%v", hay, err)
+	}
+	if d.RequiereAprobacion {
+		t.Error("el informe falló y la marca quedó puesta igual: la respuesta dice error y la máquina " +
+			"exige cuatro ojos, así que el admin cree que no la encendió")
+	}
+}
