@@ -755,7 +755,13 @@ func runTurn() {
 		return
 	}
 
-	root := workspaceDir()
+	// Sólo sobre un proyecto que YA tiene memoria (ver raiz.go): el hook nunca la crea, y sin
+	// proyecto se calla. Antes NewDbEngine la creaba en la carpeta donde lo arrancaran.
+	r := raizDelProceso()
+	if r.Dir == "" || r.Activar {
+		return
+	}
+	root := r.Dir
 	cfg, _ := config.Load(root)
 
 	engine, err := memory.NewDbEngine(root)

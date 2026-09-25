@@ -462,13 +462,22 @@ Por favor, ANTES de responder al usuario, generá skills SOLO para lo nuevo:
 // En hook-mode, la salida va al canal de hooks de Claude Code (stdout del proceso).
 // Los errores no fatales se loguean a stderr para no contaminar el canal de hooks.
 func runDetect() {
-	root := workspaceDir()
-
 	hookMode := false
 	for _, arg := range os.Args[2:] {
 		if arg == "--hook-mode" {
 			hookMode = true
 		}
+	}
+
+	root := workspaceDir()
+	if hookMode {
+		// Como hook, sólo sobre un proyecto que YA tiene memoria (ver raiz.go): un hook nunca la
+		// crea, y sin proyecto se calla.
+		r := raizDelProceso()
+		if r.Dir == "" || r.Activar {
+			return
+		}
+		root = r.Dir
 	}
 
 	// En hook-mode, Claude Code envía el JSON del evento por stdin; extraemos el

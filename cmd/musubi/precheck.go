@@ -790,7 +790,12 @@ func runPrecheck() {
 	if !hookMode {
 		return
 	}
-	if out := precheckHook(workspaceDir(), os.Stdin, abrirMemoriaDelHook, os.Stderr); out != "" {
+	// Sólo sobre un proyecto que YA tiene memoria (ver raiz.go).
+	r := raizDelProceso()
+	if r.Dir == "" || r.Activar {
+		return
+	}
+	if out := precheckHook(r.Dir, os.Stdin, abrirMemoriaDelHook, os.Stderr); out != "" {
 		fmt.Println(out)
 	}
 }
