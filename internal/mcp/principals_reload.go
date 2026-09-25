@@ -60,11 +60,20 @@ type principalResolver interface {
 	// DIAGNÓSTICO (explicar por qué algo no actúa, listar, validar al arrancar sin tumbar el
 	// arranque). Nada que decida si alguien puede actuar debe llamarla: para eso está porNombre.
 	porNombreAunqueVencida(nombre string) (*Principal, bool)
+	// resumenDeVencimientos es lo que /metrics publica del registro (cuántas vencieron, cuánto le
+	// falta a la próxima), sin nombres. Va acá por el mismo motivo que las otras: tiene que salir
+	// del MISMO snapshot que autentica, o la alerta describiría un registro que ya no es el vigente.
+	resumenDeVencimientos(ahora time.Time) ResumenVencimientos
 }
 
 // principalsReloadInterval es cada cuánto se chequea el mtime del registro. 10s da una revocación
 // casi-inmediata sin costo perceptible (un os.Stat por intervalo).
-const principalsReloadInterval = 10 * time.Second
+//
+// Es var y no const SÓLO para que una prueba pueda arrancar el servidor entero y ver una revocación
+// sin esperar 10 s (TestRevocarSurteEfectoSinReiniciarElServidor). Se lee UNA vez, al armar el
+// registro recargable, y queda en su campo: cambiarla con un servidor corriendo no le hace nada, y
+// por eso tampoco hay carrera con el watch que ya está andando.
+var principalsReloadInterval = 10 * time.Second
 
 // reloadableRegistry envuelve el registro con recarga en caliente por mtime. El snapshot vigente
 // vive en un atomic.Pointer (lectura lock-free desde cada request); solo el goroutine de watch lo
@@ -74,12 +83,24 @@ type reloadableRegistry struct {
 	path        string
 	legacyToken string
 	cur         atomic.Pointer[PrincipalRegistry]
-	lastModNano int64 // mtime del último cargado; solo lo toca el goroutine de watch (sin carrera)
+	lastModNano int64         // mtime del último cargado; solo lo toca el goroutine de watch (sin carrera)
+	intervalo   time.Duration // cada cuánto mira el mtime; se fija al construirlo
+	// recargaFallando y recargasFallidas hacen VISIBLE el fail-safe de arriba.
+	//
+	// Conservar el snapshot ante un archivo roto es lo correcto, pero es silencioso por diseño:
+	// una revocación escrita con un typo en OTRA línea no se aplica nunca, el token sigue
+	// autenticando, y lo único que queda es un Warn en el journal. Peor, el registro de arranque
+	// es fail-closed: el archivo que hoy se rechaza en caliente es el que mañana, en el próximo
+	// reinicio, no deja arrancar al cerebro. El flag dice «ahora mismo el disco y lo que autentica
+	// no coinciden»; el contador, cuántas relecturas se rechazaron desde que arrancó el proceso.
+	recargaFallando  atomic.Bool
+	recargasFallidas atomic.Uint64
 }
 
 // newReloadableRegistry crea el envoltorio sembrado con el registro ya cargado y su mtime.
 func newReloadableRegistry(path, legacyToken string, initial *PrincipalRegistry, initialMod time.Time) *reloadableRegistry {
-	rr := &reloadableRegistry{path: path, legacyToken: legacyToken, lastModNano: initialMod.UnixNano()}
+	rr := &reloadableRegistry{path: path, legacyToken: legacyToken, lastModNano: initialMod.UnixNano(),
+		intervalo: principalsReloadInterval}
 	rr.cur.Store(initial)
 	return rr
 }
@@ -124,9 +145,21 @@ func (rr *reloadableRegistry) porNombreAunqueVencida(nombre string) (*Principal,
 	return reg.porNombreAunqueVencida(nombre)
 }
 
+// resumenDeVencimientos resume el snapshot vigente y le suma el estado de la recarga, que es
+// lo único que el registro pelado no puede saber.
+func (rr *reloadableRegistry) resumenDeVencimientos(ahora time.Time) ResumenVencimientos {
+	var res ResumenVencimientos
+	if reg := rr.cur.Load(); reg != nil {
+		res = reg.resumenDeVencimientos(ahora)
+	}
+	res.RecargaFallando = rr.recargaFallando.Load()
+	res.RecargasFallidas = rr.recargasFallidas.Load()
+	return res
+}
+
 // watch re-lee el registro cuando cambia el mtime, hasta que ctx se cancela (shutdown del server).
 func (rr *reloadableRegistry) watch(ctx context.Context) {
-	t := time.NewTicker(principalsReloadInterval)
+	t := time.NewTicker(rr.intervalo)
 	defer t.Stop()
 	for {
 		select {
@@ -147,14 +180,29 @@ func (rr *reloadableRegistry) reloadIfChanged() {
 		return
 	}
 	if fi.ModTime().UnixNano() == rr.lastModNano {
+		// EL DISCO VOLVIÓ A SER, POR MTIME, EL ARCHIVO QUE AUTENTICA, y eso también apaga el aviso.
+		// Pasa al restaurar el respaldo con `cp -p`, `cp -a` o `rsync -a`: el archivo roto se va y
+		// vuelve el que estaba cargado, con su mtime original. No hay nada que releer, así que la
+		// relectura buena —el otro lugar donde el flag se apaga— no llega nunca, y sin esta línea
+		// la alerta quedaba sonando hasta el próximo reinicio por algo que ya estaba arreglado.
+		rr.recargaFallando.Store(false)
 		return
 	}
 	reg, err := loadPrincipals(rr.path, rr.legacyToken)
 	if err != nil {
+		rr.recargasFallidas.Add(1)
+		rr.recargaFallando.Store(true)
 		logx.Warn("recarga en caliente del registro de principals falló; se conserva el vigente", "path", rr.path, "error", err)
 		return
 	}
+	// EL CONTADOR DEL LEGACY PASA AL SNAPSHOT NUEVO. loadPrincipals arma uno en cero, y sin esto
+	// cada edición de principals.yaml borraría la cuenta de usos del bearer legacy — que es la
+	// que tiene que llegar a «siete días en cero» para poder retirarlo.
+	if prev := rr.cur.Load(); prev != nil && prev.legacyAciertos != nil {
+		reg.legacyAciertos = prev.legacyAciertos
+	}
 	rr.lastModNano = fi.ModTime().UnixNano()
 	rr.cur.Store(reg)
+	rr.recargaFallando.Store(false)
 	logx.Info("registro de principals recargado en caliente", "path", rr.path, "principals", len(reg.principals))
 }
