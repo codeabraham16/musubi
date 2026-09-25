@@ -293,16 +293,26 @@ func escribirTokens(ruta string, tokens []string) error {
 		_ = tmp.Close()
 		return fmt.Errorf("no se pudo sincronizar el token a disco: %w", err)
 	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("no se pudo cerrar el temporal del token: %w", err)
-	}
-	if err := os.Chmod(nombre, modo); err != nil {
-		return fmt.Errorf("no se pudo fijar el modo del token: %w", err)
-	}
+	// EL DUEÑO Y EL MODO SE FIJAN SOBRE EL DESCRIPTOR, NO SOBRE LA RUTA. Con el token bajo el home de
+	// otro usuario, entre CreateTemp y acá ese usuario puede cambiar el temporal por un symlink —el
+	// directorio es suyo—, y os.Chown y os.Chmod SIGUEN symlinks: un agente root le entregaba un
+	// archivo cualquiera del sistema (/etc/shadow, por ejemplo) con el modo del token. Sobre el
+	// descriptor cambia el archivo que se abrió y se escribió, haya lo que haya en la ruta.
+	//
+	// El dueño va primero porque un chown puede limpiar bits de modo, y el que queda tiene que ser
+	// el del token de antes.
 	if ok && esRootElAgente() && uid != 0 {
-		if err := cambiarDueno(nombre, uid, gid); err != nil {
+		if err := cambiarDueno(tmp, uid, gid); err != nil {
+			_ = tmp.Close()
 			return fmt.Errorf("no se pudo devolverle el token a su dueño (uid %d): %w", uid, err)
 		}
+	}
+	if err := tmp.Chmod(modo); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("no se pudo fijar el modo del token: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("no se pudo cerrar el temporal del token: %w", err)
 	}
 	if err := os.Rename(nombre, ruta); err != nil {
 		return fmt.Errorf("no se pudo reemplazar %q: %w", ruta, err)
@@ -313,8 +323,11 @@ func escribirTokens(ruta string, tokens []string) error {
 // Los seams del dueño del token. Son `var` para que la prueba de la rotación como root corra sin
 // ser root: en una máquina de desarrollo un Chown a otro uid falla, y la propiedad que se custodia
 // es QUÉ se le pide al sistema y CUÁNDO, no que el kernel lo cumpla.
+//
+// cambiarDueno recibe el ARCHIVO ABIERTO y no una ruta, para que ni un doble ni un refactor puedan
+// volver al chown por ruta sin que se note en la firma (el porqué está en escribirTokens).
 var (
 	esRootElAgente = func() bool { return os.Getuid() == 0 }
 	duenoDeArchivo = duenoRealDeArchivo
-	cambiarDueno   = os.Chown
+	cambiarDueno   = func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }
 )

@@ -18,18 +18,19 @@ import (
 // musubi— ya no puede leer. Se le devuelve el dueño AL TEMPORAL, antes del rename: si falla, el
 // archivo queda como estaba, con los dos tokens, que es el desenlace ya declarado no fatal.
 //
-// LOS DOS SABOTAJES PISAN LA MISMA LÍNEA Y MIDEN COSAS DISTINTAS: el primero deja el token de root
-// (no se pide nada) y el segundo lo pide tarde, sobre el destino ya reemplazado. Corridos los dos.
+// LOS DOS SABOTAJES MIDEN COSAS DISTINTAS: el primero deja el token de root (no se pide nada) y el
+// segundo lo pide tarde, con el temporal ya cerrado y el destino ya reemplazado. Corridos los dos.
+// Desde que el dueño se devuelve sobre el descriptor (2026-09-25) ya no pisan la misma línea.
 //
 // Sabotaje que la hace fallar: no devolver nunca el dueño.
 // arnes: archivo="cmd/musubi/agent_token.go"
 // arnes: de="ok && esRootElAgente()"
 // arnes: a="ok && false"
-// arnes: colision_ok="TestRotarComoRootConservaElDuenoDelToken"
-// Sabotaje que la hace fallar: devolverlo DESPUÉS del rename, sobre el archivo ya reemplazado.
+// Sabotaje que la hace fallar: devolverlo DESPUÉS del rename (diferido al final, con el temporal ya
+// cerrado y el destino ya reemplazado).
 // arnes: archivo="cmd/musubi/agent_token.go"
-// arnes: de="\tif ok && esRootElAgente() && uid != 0 {\n\t\tif err := cambiarDueno(nombre, uid, gid); err != nil {\n\t\t\treturn fmt.Errorf(\"no se pudo devolverle el token a su dueño (uid %d): %w\", uid, err)\n\t\t}\n\t}\n\tif err := os.Rename(nombre, ruta); err != nil {\n\t\treturn fmt.Errorf(\"no se pudo reemplazar %q: %w\", ruta, err)\n\t}"
-// arnes: a="\tif err := os.Rename(nombre, ruta); err != nil {\n\t\treturn fmt.Errorf(\"no se pudo reemplazar %q: %w\", ruta, err)\n\t}\n\tif ok && esRootElAgente() && uid != 0 {\n\t\tif err := cambiarDueno(ruta, uid, gid); err != nil {\n\t\t\treturn fmt.Errorf(\"no se pudo devolverle el token a su dueño (uid %d): %w\", uid, err)\n\t\t}\n\t}"
+// arnes: de="\t\tif err := cambiarDueno(tmp, uid, gid); err != nil {"
+// arnes: a="\t\tdefer cambiarDueno(tmp, uid, gid)\n\t\tif err := error(nil); err != nil {"
 func TestRotarComoRootConservaElDuenoDelToken(t *testing.T) {
 	origRoot, origDueno, origCambiar := esRootElAgente, duenoDeArchivo, cambiarDueno
 	t.Cleanup(func() { esRootElAgente, duenoDeArchivo, cambiarDueno = origRoot, origDueno, origCambiar })
@@ -58,11 +59,13 @@ func TestRotarComoRootConservaElDuenoDelToken(t *testing.T) {
 			uid, gid     int
 			destinoAntes string
 			contenido    string
+			abierto      bool
 		}
 		var pedidos []pedido
-		cambiarDueno = func(nombre string, uid, gid int) error {
-			tmp, _ := os.ReadFile(nombre)
-			pedidos = append(pedidos, pedido{nombre, uid, gid, leer(t, ruta), strings.TrimSpace(string(tmp))})
+		cambiarDueno = func(f *os.File, uid, gid int) error {
+			tmp, _ := os.ReadFile(f.Name())
+			_, errAbierto := f.Stat()
+			pedidos = append(pedidos, pedido{f.Name(), uid, gid, leer(t, ruta), strings.TrimSpace(string(tmp)), errAbierto == nil})
 			return nil
 		}
 		if err := c.Funciono(); err != nil {
@@ -82,6 +85,10 @@ func TestRotarComoRootConservaElDuenoDelToken(t *testing.T) {
 			t.Errorf("al cambiar el dueño el destino tenía %q y el temporal %q: el cambio tiene que ir "+
 				"ANTES del rename, sobre el temporal ya escrito", p.destinoAntes, p.contenido)
 		}
+		if !p.abierto {
+			t.Errorf("el dueño se pidió sobre un descriptor cerrado: tiene que ir sobre el temporal ABIERTO, " +
+				"que es el archivo que se escribió y no lo que haya en su ruta")
+		}
 		if got := leer(t, ruta); got != "nuevo" {
 			t.Errorf("después de colapsar el archivo tiene %q", got)
 		}
@@ -91,7 +98,7 @@ func TestRotarComoRootConservaElDuenoDelToken(t *testing.T) {
 		ruta, c := preparar(t)
 		esRootElAgente = func() bool { return true }
 		duenoDeArchivo = func(string) (int, int, bool) { return 1000, 1000, true }
-		cambiarDueno = func(string, int, int) error { return errors.New("operation not permitted") }
+		cambiarDueno = func(*os.File, int, int) error { return errors.New("operation not permitted") }
 		err := c.Funciono()
 		if err == nil || !strings.Contains(err.Error(), "dueño") {
 			t.Fatalf("Funciono = %v; tenía que decir que no pudo devolverle el token a su dueño", err)
@@ -120,7 +127,7 @@ func TestRotarComoRootConservaElDuenoDelToken(t *testing.T) {
 			esRootElAgente = func() bool { return c.root }
 			duenoDeArchivo = func(string) (int, int, bool) { return c.uid, c.uid, c.conoces }
 			llamado := false
-			cambiarDueno = func(string, int, int) error { llamado = true; return nil }
+			cambiarDueno = func(*os.File, int, int) error { llamado = true; return nil }
 			if err := cred.Funciono(); err != nil {
 				t.Fatalf("%s: %v", c.nombre, err)
 			}
