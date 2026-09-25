@@ -376,6 +376,10 @@ type OutboxStore interface {
 	ReclamarBajada(dueno string, leaseSeconds int) (bool, error)
 	SoltarBajada(dueno string) error
 	AvanzarCursorBajada(key string, v int64) error
+	// ReiniciarBajadaPorAlcance es la ÚNICA excepción a esa monotonía, y existe porque el filtro de
+	// proyecto del central SALTA filas en vez de ocultarlas: al ensanchar la credencial, lo saltado
+	// queda debajo del cursor para siempre. Ver bajada_lease.go.
+	ReiniciarBajadaPorAlcance(claveCursor, claveAlcance, alcance string) error
 	// ListSharedForPull sirve el sync ENTRANTE (C5.3): lista la memoria 'shared' del proyecto del
 	// ctx (aislamiento T17-19) con rowid > afterRowID, paginada. La corre el central en un pull.
 	ListSharedForPull(ctx context.Context, afterRowID int64, limit int) ([]SharedObs, error)
