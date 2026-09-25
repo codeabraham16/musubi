@@ -210,6 +210,79 @@ func TestUnaSolaFotoNoAlcanzaParaAvisar(t *testing.T) {
 	}
 }
 
+// TestUnaFotoPerdidaNoResuelveLaAlerta — el `keep_firing_for` de las alertas que leen un estado.
+//
+// Exigir dos fotos en la ventana tiene un revés: si se pierde UNA corrida, el conteo baja a 1 y la
+// alerta se resuelve y vuelve a disparar sin que nada haya cambiado —un RESOLVED y un FIRING al
+// canal—. No es teórico: en publicar.log, del 09-12 al 09-24, hubo intervalos de 21 y 30 min entre
+// fotos. Lo midió la revisión con promtool; ninguna guarda de la CI lo veía.
+//
+// LA CUENTA QUE FIJA EL PISO. Con la última foto en p, la penúltima en p−C y la siguiente en p+g, la
+// expresión es falsa desde p−C+W (sale la penúltima) hasta p+g (vuelven a ser dos), si g < W: un
+// hueco de g+C−W, que con g < W queda SIEMPRE por debajo de una cadencia. Así que un
+// `keep_firing_for` de al menos una cadencia cubre cualquier intervalo entre fotos más corto que la
+// ventana, sea cual sea la ventana; uno más largo que eso ya es un tablero que no publica, y de eso
+// avisa `FlotaSinFoto`. La prueba de promtool lo ejecuta (grupo 6) con la corrida de los 45 perdida.
+//
+// Sabotaje que la hace fallar: el rincón sin `keep_firing_for`.
+// arnes: archivo="deploy/musubi-alerts-tablero.yml"
+// arnes: de="keep_firing_for: 20m  # una foto perdida no lo resuelve"
+// arnes: a="keep_firing_for: 0m  # una foto perdida no lo resuelve"
+// Sabotaje que la hace fallar: la pieza con un `keep_firing_for` más corto que el hueco posible.
+// arnes: archivo="deploy/musubi-alerts-tablero.yml"
+// arnes: de="keep_firing_for: 20m  # ídem"
+// arnes: a="keep_firing_for: 5m  # ídem"
+func TestUnaFotoPerdidaNoResuelveLaAlerta(t *testing.T) {
+	alertas := alertasDelTablero(t)
+
+	// `keep_firing_for` no viaja en alertaCruda, que es de todas las guardas de alertas: se lee acá,
+	// del mismo archivo, en vez de ensanchar el tipo compartido.
+	ruta := filepath.Join("..", "..", "deploy", archivoDeAlertasDelTablero)
+	crudo, err := os.ReadFile(ruta)
+	if err != nil {
+		t.Fatalf("falta %s: %v", ruta, err)
+	}
+	var doc struct {
+		Groups []struct {
+			Rules []struct {
+				Alert string    `yaml:"alert"`
+				Keep  yaml.Node `yaml:"keep_firing_for"`
+			} `yaml:"rules"`
+		} `yaml:"groups"`
+	}
+	if err := yaml.Unmarshal(crudo, &doc); err != nil {
+		t.Fatalf("%s no es YAML válido: %v", ruta, err)
+	}
+	mantener := map[string]yaml.Node{}
+	for _, g := range doc.Groups {
+		for _, r := range g.Rules {
+			mantener[r.Alert] = r.Keep
+		}
+	}
+
+	reEstado := regexp.MustCompile(`\b(?:max|min|last|avg)_over_time\(\s*flota_[a-z0-9_]+`)
+	vistas := 0
+	for nombre, a := range alertas {
+		if !reEstado.MatchString(a.Expr) {
+			continue // el hombre muerto pregunta por la ausencia: no cuenta fotos, no tiene este revés
+		}
+		vistas++
+		k := mantener[nombre]
+		plazo, err := duracionProm(k.Value)
+		if k.Kind == 0 || err != nil || plazo < cadenciaDelTablero {
+			t.Errorf("%s lee un estado del tablero exigiendo dos fotos y tiene `keep_firing_for: %s`: "+
+				"tiene que ser de al menos una cadencia (%s).\n"+
+				"  Si se pierde una corrida, el conteo baja a 1 durante hasta una cadencia y la alerta "+
+				"se resuelve y vuelve a disparar sin que nada cambie. Pasa: hubo intervalos de 21 y "+
+				"30 min entre fotos en doce días.", nombre, k.Value, cadenciaDelTablero)
+		}
+	}
+	if vistas < 2 {
+		t.Fatalf("sólo encontré %d alerta(s) del tablero que leen un estado y son dos (rincón y pieza): "+
+			"el detector dejó de mirar y un verde acá no diría nada", vistas)
+	}
+}
+
 // TestElTableroSeCallaCuandoLaPcQueLoPublicaEstaApagada — la decisión del dueño (2026-09-24).
 //
 // El tablero corre en davantis-1, y esa PC se apaga: sin ella no hay foto, y eso ya lo avisa

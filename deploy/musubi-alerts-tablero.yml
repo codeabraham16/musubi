@@ -83,21 +83,40 @@ groups:
       # `max_over_time(...) == 0` dice que en 35 min NINGUNA foto lo alcanzó; `count_over_time >= 2`,
       # que hubo por lo menos dos fotos para decirlo. Sin `for`: la persistencia ya está en el rango,
       # y un `for` encima sólo atrasaría el aviso otros N minutos.
+      #
+      # EL `keep_firing_for` ES PARA LA FOTO QUE NO LLEGA, no para el rincón. Dos fotos en 35 min
+      # dejan 5 de margen: si se pierde UNA corrida, el conteo baja a 1 durante ~10 min y la alerta
+      # se resolvía y volvía a disparar sin que nada cambiara —un RESOLVED y un FIRING al canal—.
+      # Pasa: en publicar.log, del 09-12 al 09-24, hubo dos intervalos de 21 y 30 min entre fotos.
+      # Con al menos una cadencia se cubre cualquier intervalo entre fotos más corto que la ventana
+      # (la cuenta está en TestUnaFotoPerdidaNoResuelveLaAlerta), sin atrasar el disparo: sólo la
+      # resolución de verdad llega 20 min más tarde.
+      #
+      # LO QUE NO ABSORBE, y queda dicho: con davantis-1 APAGADA no llegan fotos, así que un aviso
+      # que ya estaba activo se «resuelve» a los ≤40 min de la última foto (20 hasta que la
+      # penúltima sale de la ventana, y los 20 del `keep_firing_for`) aunque el rincón siga ciego.
+      # Es el mismo silencio que se eligió para la PC apagada, visto desde una alerta que ya sonó.
       - alert: FlotaRinconCiego
         expr: >-
           max_over_time(flota_rincon_alcanzado[35m]) == 0
           and count_over_time(flota_rincon_alcanzado[35m]) >= 2
           unless on(device) (last_over_time(musubi_fleet_device_up{instance="musubi-otlp-push"}[10m]) == 0)
+        keep_firing_for: 20m  # una foto perdida no lo resuelve
         labels: { severity: warning }
         annotations:
           summary: "El tablero de flota no alcanza el rincón {{ $labels.device }} en dos barridos seguidos: sus piezas quedan sin medir."
           nota: "Es el ssh del tablero el que no llega. Si {{ $labels.device }} es una máquina de Musubi y está caída, esta alerta se calla sola (lo dice MaquinaCaida). El raspberrypi NO es máquina de Musubi: si es él, el fichaje F18 puede estar sin puente."
 
       # --- UNA PIEZA MEDIDA Y CAÍDA ---
+      #
+      # `min_over_time(...) == 1`: caída en TODAS las fotos de la ventana, no en alguna. Y el mismo
+      # `keep_firing_for` que el rincón, por la misma foto perdida y con el mismo límite: con la PC
+      # apagada, una pieza que sigue caída se «resuelve» a los ≤40 min de la última foto.
       - alert: FlotaPiezaCaida
         expr: >-
           min_over_time(flota_pieza_caida[35m]) == 1
           and count_over_time(flota_pieza_caida[35m]) >= 2
+        keep_firing_for: 20m  # ídem
         labels: { severity: warning }
         annotations:
           summary: "La pieza {{ $labels.pieza }} de {{ $labels.device }} está caída en dos barridos seguidos del tablero de flota."

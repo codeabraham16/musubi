@@ -15,7 +15,9 @@
 # Medido el 2026-09-24 con promtool 3.1.0 (revisión 7086161a, la del server): verde; y rojo con cada
 # uno de estos seis sabotajes a las reglas — la métrica pelada con `for: 30m` (el defecto alto de la
 # crítica), `FlotaSinFoto` sin `for`, sin el `unless` de davantis-1, `>= 1` foto, sin el `unless` de
-# las caídas en Musubi, y `absent()` pelado.
+# las caídas en Musubi, y `absent()` pelado. Y el 2026-09-25, tras la revisión, con cinco más: `max`
+# en la pieza y `min` en el rincón («en alguna foto» en vez de «en todas»), sin `keep_firing_for`,
+# y con uno de 5 min y otro de 1 h en la pieza.
 #
 # Donde hace falta `musubi_fleet_device_up` (que el cerebro empuja cada 30 s) el paso es de 5 min y
 # la foto se escribe cada TRES pasos con `_` en el medio: promtool admite un solo `interval` por
@@ -127,4 +129,69 @@ tests:
         exp_alerts: []
       - eval_time: 170m
         alertname: FlotaSinFoto
+        exp_alerts: []
+
+  # ── 6 · Una foto perdida NO resuelve lo que ya sonó (el `keep_firing_for`) ───────────────────
+  #
+  # La corrida de los 45 min no llega. Sin `keep_firing_for`, entre los 50 y los 60 el conteo baja a
+  # 1 y las dos alertas se resolvían y volvían a disparar: un RESOLVED y un FIRING sin que cambie
+  # nada. La pieza `crm` se ARREGLA a los 45: su resolución sí tiene que llegar, 20 min más tarde.
+  - name: una foto perdida no resuelve la alerta; un arreglo de verdad, sí
+    interval: 15m
+    input_series:
+      - series: 'flota_pieza_caida{device="musubi-server",pieza="vaultwarden",project="flota"}'
+        values: '1 1 1 _ 1 1 1'        # caída siempre; la foto de los 45 se perdió
+      - series: 'flota_pieza_caida{device="musubi-server",pieza="crm",project="flota"}'
+        values: '1 1 1 0 0 0 0'        # caída hasta los 30, arreglada a los 45
+      - series: 'flota_rincon_alcanzado{device="raspberrypi",project="flota"}'
+        values: '0 0 0 _ 0 0 0'        # ciego siempre; la foto de los 45 se perdió
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: FlotaPiezaCaida
+        exp_alerts:
+          - exp_labels: { severity: warning, device: musubi-server, pieza: crm, project: flota }
+            exp_annotations:
+              summary: "La pieza crm de musubi-server está caída en dos barridos seguidos del tablero de flota."
+              nota: "Dos fotos seguidas descartan el pico: 113 de 146 caídas medidas duraron una sola foto. El detalle de la sonda está en el tablero (página /flota del CRM)."
+          - exp_labels: { severity: warning, device: musubi-server, pieza: vaultwarden, project: flota }
+            exp_annotations:
+              summary: "La pieza vaultwarden de musubi-server está caída en dos barridos seguidos del tablero de flota."
+              nota: "Dos fotos seguidas descartan el pico: 113 de 146 caídas medidas duraron una sola foto. El detalle de la sonda está en el tablero (página /flota del CRM)."
+      - eval_time: 55m
+        alertname: FlotaRinconCiego
+        exp_alerts:
+          - exp_labels: { severity: warning, device: raspberrypi, project: flota }
+            exp_annotations:
+              summary: "El tablero de flota no alcanza el rincón raspberrypi en dos barridos seguidos: sus piezas quedan sin medir."
+              nota: "Es el ssh del tablero el que no llega. Si raspberrypi es una máquina de Musubi y está caída, esta alerta se calla sola (lo dice MaquinaCaida). El raspberrypi NO es máquina de Musubi: si es él, el fichaje F18 puede estar sin puente."
+      - eval_time: 70m                 # crm: falsa desde los 45, + 20 de keep_firing_for
+        alertname: FlotaPiezaCaida
+        exp_alerts:
+          - exp_labels: { severity: warning, device: musubi-server, pieza: vaultwarden, project: flota }
+            exp_annotations:
+              summary: "La pieza vaultwarden de musubi-server está caída en dos barridos seguidos del tablero de flota."
+              nota: "Dos fotos seguidas descartan el pico: 113 de 146 caídas medidas duraron una sola foto. El detalle de la sonda está en el tablero (página /flota del CRM)."
+
+  # ── 7 · El límite que se aceptó: con la PC apagada, lo que ya sonó se «resuelve» ─────────────
+  #
+  # No es un deseo sino una medición de lo que hace la regla, para que quien la cambie lo vea: sin
+  # fotos, la penúltima sale de la ventana a los 20 min de la última, y el `keep_firing_for` suma
+  # otros 20. Última foto a los 45: disparada a los 80, «resuelta» a los 90 con la pieza caída.
+  - name: con la PC apagada, una pieza que ya sonó se resuelve a los 40 min de la última foto
+    interval: 5m
+    input_series:
+      - series: 'flota_pieza_caida{device="musubi-server",pieza="vaultwarden",project="flota"}'
+        values: '1 _ _ 1 _ _ 1 _ _ 1'  # fotos a los 0, 15, 30 y 45; la PC se apaga a los 50
+      - series: 'musubi_fleet_device_up{device="davantis-1",instance="musubi-otlp-push",job="musubi",project="musubi"}'
+        values: '1x9 0x20'
+    alert_rule_test:
+      - eval_time: 80m
+        alertname: FlotaPiezaCaida
+        exp_alerts:
+          - exp_labels: { severity: warning, device: musubi-server, pieza: vaultwarden, project: flota }
+            exp_annotations:
+              summary: "La pieza vaultwarden de musubi-server está caída en dos barridos seguidos del tablero de flota."
+              nota: "Dos fotos seguidas descartan el pico: 113 de 146 caídas medidas duraron una sola foto. El detalle de la sonda está en el tablero (página /flota del CRM)."
+      - eval_time: 90m
+        alertname: FlotaPiezaCaida
         exp_alerts: []
