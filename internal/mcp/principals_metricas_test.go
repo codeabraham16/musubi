@@ -416,6 +416,35 @@ func TestLosUsosDelLegacySeCuentanYSobrevivenALaRecarga(t *testing.T) {
 	}
 }
 
+// SIN principals.yaml LOS USOS DEL LEGACY TAMBIÉN SE CUENTAN.
+//
+// Es el modo legacy-only: el cerebro arranca sin archivo de registro y sirve con el registro
+// ESTÁTICO, no con el recargable, y el contador nace en otra rama de loadPrincipals. Si ahí quedara
+// nil, resolve() no cuenta —el nil-check lo deja pasar callado— y /metrics diría
+// `musubi_legacy_token_enabled 1` con `musubi_legacy_token_auth_total 0` mientras cada request
+// entra por el legacy: un cero que es justo la señal con la que se decide retirarlo.
+//
+// Sabotaje que la pone roja: no armar el contador en la rama sin archivo.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="legacyAciertos: new(atomic.Uint64)}, nil"
+// arnes: a="legacyAciertos: nil}, nil"
+func TestSinArchivoDeRegistroLosUsosDelLegacyTambienSeCuentan(t *testing.T) {
+	reg, err := loadPrincipals(filepath.Join(t.TempDir(), "no-existe.yaml"), "token-legacy")
+	if err != nil || reg == nil {
+		t.Fatalf("sin archivo y con bearer legacy, loadPrincipals = %v, %v: no hay registro legacy-only que medir", reg, err)
+	}
+
+	// El scrape entra con el legacy, igual que lo haría cualquier otra puerta: un uso.
+	cuerpo := scrapear(t, newTestServer(t, embedding.NoopProvider{}), reg, "token-legacy")
+	if v, _ := muestra(cuerpo, nombreLegacyHabilitado); v != "1" {
+		t.Fatalf("%s = %q sin archivo y con bearer legacy: la prueba no estaría en modo legacy-only", nombreLegacyHabilitado, v)
+	}
+	if v, _ := muestra(cuerpo, nombreLegacyAciertos); v != "1" {
+		t.Errorf("%s = %q después de un uso del legacy sin principals.yaml; tendría que ser 1. Un cero acá "+
+			"es la señal de «nadie lo usa» con la que se decide retirarlo", nombreLegacyAciertos, v)
+	}
+}
+
 // LAS ALERTAS DE CREDENCIALES LEEN SERIES QUE EL CEREBRO EMITE.
 //
 // Los nombres viven en dos lugares —las constantes de principals_metricas.go y las `expr` de
