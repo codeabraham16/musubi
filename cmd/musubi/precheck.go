@@ -642,6 +642,16 @@ func codeMemoryMessage(store codeStore, root, path, key string) string {
 	if err != nil {
 		return ""
 	}
+	// UN GIST AUTOMÁTICO NO SE INYECTA EN EL Read. Es el comentario de cabecera del archivo, que
+	// está en las primeras líneas de lo que el agente está por leer: inyectarlo sería pagar dos
+	// veces el mismo texto, en ~240 archivos más. Rancio tampoco: se regenera solo en el próximo
+	// tick del índice, así que pedirle al agente que lo reescriba con musubi_save_code sería
+	// mandarlo a hacer un trabajo que ya está hecho. Su valor está en recall_code, code_context y
+	// el central, donde el archivo no está a la vista. Consecuencia declarada: para esos archivos
+	// desaparece también el aviso «No hay gist… guardá uno».
+	if ok && memory.EsGistAutomatico(cm.Gist) {
+		return ""
+	}
 	if !ok {
 		if fileIsLarge(root, path) {
 			return fmt.Sprintf("[Musubi — código] No hay gist de «%s». Tras leerlo, guardá uno con musubi_save_code (path, gist, symbols) para no re-leerlo entero en futuros turnos/sesiones.", key)
