@@ -808,8 +808,8 @@ func TestElOrigenAutomaticoSeDistingueYLoDesconocidoNoSeInventa(t *testing.T) {
 // Sabotaje que lo hace fallar: ponerle `fleet.HechoCanalPantalla` a avisoExec o a avisoShell, o
 // hacer que encolarAvisoDeAcceso ignore `a.clase`.
 // arnes: archivo="internal/mcp/methods_pantalla.go"
-// arnes: de="\tavisoExec     = avisoDeAcceso{\"está ejecutando comandos en esta máquina.\", fleet.HechoCanalExec, \"exec\"}"
-// arnes: a="\tavisoExec     = avisoDeAcceso{\"está ejecutando comandos en esta máquina.\", fleet.HechoCanalPantalla, \"exec\"}"
+// arnes: de="\tavisoExec     = avisoDeAcceso{\"está ejecutando comandos en esta máquina.\", fleet.HechoCanalExec, \"exec\", fleet.OrigenPersona}"
+// arnes: a="\tavisoExec     = avisoDeAcceso{\"está ejecutando comandos en esta máquina.\", fleet.HechoCanalPantalla, \"exec\", fleet.OrigenPersona}"
 func TestElAvisoDeUnExecNoLoVeQuienSoloMiraLaPantalla(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	d := sembrarLosTresPlanos(t, s, "infra", "pc-gio")

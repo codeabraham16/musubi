@@ -538,11 +538,12 @@ func TestLaPoliticaEncolaElArgvEnteroQueAutorizoSuAllowlist(t *testing.T) {
 		t.Fatalf("control: la política tendría que actuar una vez y actuó %d", n)
 	}
 
-	// LA COLA: lo que el agente va a correr. Se filtra por origen porque un disparo deja también
-	// el `musubi:avisar` al dueño de la máquina, y ése no es el comando de la política.
+	// LA COLA: lo que el agente va a correr. Un disparo deja también el `musubi:avisar` al dueño de
+	// la máquina, y ése no es el comando de la política; desde A131 (T5) el aviso también sale con
+	// Origen=politica —lo escribe el mismo barrido—, así que se separa por el argv y no por el origen.
 	var dePolitica []fleet.Comando
 	for _, c := range comandosEncolados(t, s) {
-		if c.Origen == fleet.OrigenPolitica {
+		if c.Origen == fleet.OrigenPolitica && (len(c.Argv) == 0 || c.Argv[0] != comandoAviso) {
 			dePolitica = append(dePolitica, c)
 		}
 	}
@@ -563,16 +564,17 @@ func TestLaPoliticaEncolaElArgvEnteroQueAutorizoSuAllowlist(t *testing.T) {
 	vistos := 0
 	for _, x := range comandos {
 		fila, _ := x.(map[string]any)
-		if fila["origen"] != "politica" {
-			continue
-		}
-		vistos++
 		crudo, _ := fila["argv"].([]any)
 		var argv []string
 		for _, a := range crudo {
 			v, _ := a.(string)
 			argv = append(argv, v)
 		}
+		// El aviso al dueño también es `politica` (A131 · T5): se lo saltea por el argv, como en la cola.
+		if fila["origen"] != "politica" || (len(argv) > 0 && argv[0] == comandoAviso) {
+			continue
+		}
+		vistos++
 		if !reflect.DeepEqual(argv, cfg.Run) {
 			t.Errorf("la bitácora muestra %q para la acción automática y la política está escrita como %q: quien "+
 				"audita lee un comando que no es el que se configuró", argv, cfg.Run)
