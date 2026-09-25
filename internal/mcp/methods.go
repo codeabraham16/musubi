@@ -437,6 +437,9 @@ func (s *McpServer) toolSyncStatus(_ json.RawMessage) (interface{}, *RpcError) {
 	if h.Dead > 0 {
 		summary += fmt.Sprintf("; %d en dead-letter — reintentá con musubi_sync_requeue", h.Dead)
 	}
+	if h.Espejo > 0 {
+		summary += fmt.Sprintf("; %d bajadas del central y NO re-subidas (espejo)", h.Espejo)
+	}
 	if h.LastError != "" {
 		summary += "\nÚltimo error: " + h.LastError
 	}

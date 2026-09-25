@@ -159,14 +159,10 @@ func (s *McpServer) toolFleetShell(ctx context.Context, raw json.RawMessage) (in
 	// `pantalla` sí encolan su aviso desde A57, o sea que el camino MÁS invasivo de los tres era
 	// el único mudo: una shell interactiva se saltea cualquier allowlist, que es exactamente el
 	// argumento con el que este archivo justifica la puerta de cuatro ojos veinte líneas arriba.
-	switch consent := d.ConsentimientoEfectivo(); {
-	case consent.AvisaAlUsuario() && !d.PuedePreguntar:
-		// SE ABRE, Y SE DICE QUE EL AVISO NO SE PUDO ENTREGAR. Mismo criterio que pantalla:
-		// prometer una notificación que el agente de ESTA máquina no sabe dar sería justo lo que
-		// el eje viene a evitar. Bloquear tampoco: `avisa` no bloquea, y hacerlo cerraría el
-		// acceso por una capacidad que esa máquina puede no tener nunca.
-		s.avisarUnaVezPorDevice(d.ID, nombre, "shell", consent)
-	case consent.AvisaAlUsuario():
+	//
+	// Si el agente de esta máquina no sabe notificar, la shell se abre igual —`avisa` no bloquea— y
+	// no se encola nada: lo decide encolarAvisoDeAcceso, el único sitio que mira `PuedePreguntar`.
+	if d.ConsentimientoEfectivo().AvisaAlUsuario() {
 		s.encolarAvisoDeAcceso(d, p, avisoShell)
 	}
 

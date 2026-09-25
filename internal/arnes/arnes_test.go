@@ -997,6 +997,94 @@ func TestTagsYEnvSeLeenYUnErrorDeEscrituraNoSeVuelveSilencio(t *testing.T) {
 	})
 }
 
+// ── 11b · `sistema`: DÓNDE EXISTE LA PRUEBA ───────────────────────────────────────────────────
+//
+// La tercera clave de la familia de `tags` y `env`, y nace por el nocturno: el corredor va a
+// correr los sabotajes en ubuntu, y `TestEscribirArchivoAtomicoConElDestinoAbiertoEnWindows` hace
+// `t.Skip` fuera de Windows. Sin declararlo, ese fragmento saldría «sin veredicto» —rojo— todas
+// las noches, y un canario que nace rojo enseña a ignorarlo.
+//
+// LO QUE SE EXIGE ES LO MISMO QUE CON SUS HERMANAS: que un error de escritura no se vuelva
+// silencio. Y acá el silencio es peor: `sistema="windoes"` no coincide con ningún GOOS, así que la
+// directiva quedaría apartada como «no aplica» en todas las máquinas y su sabotaje no correría
+// nunca, con un informe que lo explica con toda calma.
+//
+// Sabotaje que la hace fallar: en `directivaDe`, no validar los nombres de `sistema`.
+// arnes: archivo="internal/arnes/arnes.go"
+// arnes: de="\t\tif !esSistemaConocido(s) {"
+// arnes: a="\t\tif false {"
+//
+// Sabotaje que la hace fallar: sacar `sistema` de las claves que no conviven con `no_mecanizable`
+// → la exención se lleva puesto el `sistema` en silencio.
+// arnes: archivo="internal/arnes/arnes.go"
+// arnes: de="\"tags\", \"env\", \"sistema\"} {"
+// arnes: a="\"tags\", \"env\"} {"
+//
+// Sabotaje que la hace fallar: no leer la clave → `Sistemas` queda vacío y la directiva de Windows
+// vuelve a correr en Linux.
+// arnes: archivo="internal/arnes/arnes.go"
+// arnes: de="strings.Fields(campos[\"sistema\"])"
+// arnes: a="strings.Fields(\"\")"
+//
+// Sabotaje que la hace fallar: olvidar `sistema` en `clavesValidas` → la directiva que la declara
+// sale rota del censo, en vez de aplicar.
+// arnes: archivo="internal/arnes/arnes.go"
+// arnes: de="\"colision_ok\", \"sistema\"}"
+// arnes: a="\"colision_ok\"}"
+func TestSistemaSeLeeYUnSistemaMalEscritoSeDenuncia(t *testing.T) {
+	leer := func(pares ...string) (*Directiva, []string) {
+		lineas := []lineaCom{{linea: 1, texto: "Sabotaje: X", cruda: " Sabotaje: X"}}
+		for i, p := range pares {
+			lineas = append(lineas, lineaCom{linea: i + 2, texto: "arnes: " + p, cruda: " arnes: " + p})
+		}
+		d, _, quejas := directivaDe(lineas, "internal/x/x_test.go", "TestX")
+		return d, quejas
+	}
+	base := []string{`archivo="x.go"`, `de="viejo"`, `a="nuevo"`}
+	con := func(extra ...string) (*Directiva, []string) {
+		return leer(append(append([]string{}, base...), extra...)...)
+	}
+
+	t.Run("los sistemas se separan por espacios", func(t *testing.T) {
+		d, quejas := con(`sistema="windows linux"`)
+		if len(quejas) > 0 {
+			t.Fatalf("un `sistema` bien escrito se quejó: %v", quejas)
+		}
+		if len(d.Sistemas) != 2 || d.Sistemas[0] != "windows" || d.Sistemas[1] != "linux" {
+			t.Errorf("Sistemas = %v, esperaba [windows linux]", d.Sistemas)
+		}
+	})
+
+	t.Run("un GOOS mal escrito se denuncia acá, y no se vuelve una directiva que nunca corre", func(t *testing.T) {
+		_, quejas := con(`sistema="windoes"`)
+		if len(quejas) == 0 {
+			t.Fatal("`sistema=\"windoes\"` pasó sin queja: esa directiva no aplicaría en NINGUNA " +
+				"máquina y su sabotaje no correría nunca")
+		}
+		if !strings.Contains(strings.Join(quejas, " "), "windoes") {
+			t.Errorf("la queja no nombra lo que está mal escrito: %v", quejas)
+		}
+	})
+
+	t.Run("una exención no se lleva puesto un `sistema`", func(t *testing.T) {
+		_, quejas := leer(`no_mecanizable="borrar la guarda deja el import huérfano"`, `sistema="windows"`)
+		if !strings.Contains(strings.Join(quejas, " "), "sistema") {
+			t.Errorf("`no_mecanizable` junto a `sistema` no se denunció: la exención descarta la clave "+
+				"en silencio. Quejas: %v", quejas)
+		}
+	})
+
+	t.Run("CONTROL: sin `sistema`, la directiva aplica en todos", func(t *testing.T) {
+		d, quejas := con()
+		if len(quejas) > 0 {
+			t.Fatalf("una directiva sin `sistema` se quejó: %v", quejas)
+		}
+		if len(d.Sistemas) != 0 {
+			t.Errorf("sin declarar nada quedó Sistemas=%v", d.Sistemas)
+		}
+	})
+}
+
 // ── 12 · `colision_ok`: CONTESTAR UN AVISO SIN APAGAR EL DETECTOR ─────────────────────────────
 //
 // El aviso de `Colisiones` es una pregunta legítima —con el mismo `de`, o son dos guardas o es una

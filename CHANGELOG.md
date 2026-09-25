@@ -57,6 +57,54 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   código. Más los tres naturales del cambio sobre guardas que ya existían —la custodia en 32 y dos
   anclas del runbook renombradas—, también en rojo. No se le puso fecha a ninguna credencial: eso es
   producción y va aparte, con el aviso ya desplegado.*
+- **El arnés corre sus sabotajes todas las noches.** Hasta hoy el CI sólo los CONTABA: la guarda
+  del censo comprueba que cada directiva `// arnes:` apunte a un literal único, pero nadie corría
+  `arnes -correr`, que es lo único que dice si la guarda se pone roja con su sabotaje. El workflow
+  nuevo `.github/workflows/arnes-nocturno.yml` corre las ~970 mecanizadas a las 06:30 UTC en 8
+  fragmentos paralelos (job `sabotajes`, no obligatorio: es un canario, y una noche roja llega por
+  mail de GitHub). También corre en el PR que toque ese archivo y a mano con `workflow_dispatch`.
+  - **`-fragmento k/n`**: reparte POR TURNO sobre la posición que la corrida imprime, así los 532 de
+    `internal/mcp` se intercalan entre los fragmentos en vez de caer todos en uno, y el número
+    impreso sigue sirviendo para `-desde`. Un valor mal escrito (`9/8`, `3/0`, `a/8`) sale con exit
+    2 sin correr nada. La selección vive en una función pura (`seleccionar`) que es lo único que
+    recorren `-correr` y `-overlay`.
+  - **Cero corridas ya no es verde.** `-correr -paquete ./internal/noexiste` salía 0 con
+    «corridas : 0»: en el nocturno, un fragmento vacío habría dejado la noche en verde sin medir
+    nada. Ahora sale 1.
+  - **Clave nueva `sistema="windows"`** en las directivas, de la familia de `tags` y `env`: la
+    prueba sólo existe en esos GOOS, y en los demás el corredor la aparta como «no aplica» en vez de
+    contarla «sin veredicto». La usa `TestEscribirArchivoAtomicoConElDestinoAbiertoEnWindows`, que
+    hace `t.Skip` fuera de Windows y habría dejado rojo su fragmento todas las noches. Un GOOS mal
+    escrito es una queja del censo, porque si no la directiva no aplicaría en ninguna máquina.
+    **Esa directiva de Windows hoy no la mide nadie**: el nocturno es sólo Linux, y en Windows
+    `arnes -correr` no puede lanzar `sabotaje.sh` y lo cuenta «sin veredicto» sin decir por qué.
+    Arreglarlo va aparte.
+
+  *Siete guardas nuevas con 19 sabotajes declarados, todos corridos en rojo. Además de las
+  funciones puras, una lee `main.go` y exige el cableado —`main` pasa el fragmento parseado, los
+  corredores se lo pasan a `seleccionar`, recorren lo que devuelve sin reasignarlo, y
+  `correrTodos` termina en `codigoDeSalida`—, porque con sólo las puras en verde se podía
+  desconectar el fragmento sin que nada se pusiera rojo. Otra fija el orden paquete → tramo →
+  fragmento → sistema con `-paquete`, `-desde` y `-limite` puestos: reanudar un fragmento corre
+  el resto de ESE fragmento, con la posición absoluta.*
+
+  **La primera noche completa (en este mismo PR, Linux) encontró 9 y quedan arregladas acá.** 4 de 8
+  fragmentos en rojo: 7 sabotajes que no ponían su prueba en rojo, 1 que no compilaba y 1 rojo
+  sospechoso. Ninguno dependía del sistema; los diagnósticos, uno por uno:
+  - **`TestTokenDeDispositivoNoAbreElMCP` estaba ciega, y es de seguridad.** Su ayudante armaba el
+    servidor con sólo `token`, así que la puerta pasaba por la rama legacy; `serve` siempre pasa
+    `registry` (`loadPrincipals` devuelve uno aunque no haya `principals.yaml`), y ésa —la de
+    producción— no la custodiaba nadie. Producción estaba bien; la guarda no lo sabía. Ahora
+    `servidorConFlota` arma las opciones como `serve` y la prueba cubre las dos ramas.
+  - **Avisar a una máquina que no sabe avisar se decidía en dos lugares** (el `case` de shell, exec y
+    pantalla, y el embudo `encolarAvisoDeAcceso`), y cada copia tapaba el sabotaje de la otra. Queda
+    en el embudo solo; `encolarAvisoDeAcceso` devuelve si encoló, y la ventana de 1 h de exec se marca
+    sólo si de verdad salió un aviso.
+  - Cinco sabotajes eran los equivocados: el latido de persona forzaba un `ok` sin máquina (hay una
+    segunda cerca que lo ataja; el sabotaje ahora rompe el filtro por hash), el cuerpo del latido
+    usaba `bytes` sin importarlo, mantenimiento y diseño le apuntaban a la prueba HERMANA (y la
+    hermana de diseño, que no tenía sabotaje, ahora tiene uno), y la compuerta de procesos daba un
+    rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
 - **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
