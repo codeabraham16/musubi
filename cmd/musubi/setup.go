@@ -186,6 +186,9 @@ func setupProjectWith(exeOverride, agent string) {
 		if len(rep.Retiradas) > 0 {
 			printOK(fmt.Sprintf("Retiradas por no existir ya en el origen: %s", strings.Join(rep.Retiradas, ", ")))
 		}
+		if len(rep.Omitidas) > 0 {
+			printWarn(fmt.Sprintf("No se exportaron por tener un nombre que no es un slug (a-z, 0-9, guiones): %q", rep.Omitidas))
+		}
 	}
 
 	// 2b. Templates de artefactos SDD (proposal/spec/design/tasks) — scaffold versionado.

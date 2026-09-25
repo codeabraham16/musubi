@@ -873,11 +873,12 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_tokens",
-				Description: "Ledger de tokens (model-free): cuántos tokens inyectó Musubi en el contexto, por superficie (arranque, por turno, PreToolUse, hidratación). Devuelve total, desglose ordenado por gasto, y —si hay presupuesto— restante, % usado y estado (ok | watch | over). action ∈ {status, reset}. ⚠️ MIRÁ `session_id` ANTES DE INTERPRETAR EL TOTAL: quien marca el corte de sesión son los hooks, y el camino MCP llama con session_id VACÍO. Con `session_id` vacío el total es un ACUMULADO DE POR VIDA del proceso —en un servidor always-on como el cerebro central el ledger no rota nunca— y NO se compara contra el techo: ahí un `pct_used` de miles por ciento y un `status: over` permanente son lo esperado, no una alarma. El techo además es BLANDO: no recorta nada, así que `over` NUNCA es una orden de achicar el contexto.",
+				Description: "Ledger de tokens (model-free): cuántos tokens inyectó Musubi en el contexto, por superficie (arranque, por turno, PreToolUse, hidratación). Devuelve total, desglose ordenado por gasto, y —si hay presupuesto— restante, % usado y estado (ok | watch | over). action ∈ {status, reset}. ⚠️ MIRÁ `session_id` ANTES DE INTERPRETAR EL TOTAL: quien marca el corte de sesión son los hooks, y el camino MCP llama con session_id VACÍO. Con `session_id` vacío el total es un ACUMULADO DE POR VIDA del proceso —en un servidor always-on como el cerebro central el ledger no rota nunca— y NO se compara contra el techo: ahí un `pct_used` de miles por ciento y un `status: over` permanente son lo esperado, no una alarma. El techo además es BLANDO: no recorta nada, así que `over` NUNCA es una orden de achicar el contexto. El ledger lleva UNA CUENTA POR SESIÓN: el reporte es de la sesión escrita más recientemente, que con varias terminales abiertas puede no ser la tuya — `sesiones` lista todas con su `session_id`, su total, su orden y la hora de su última escritura (la que escribió recién es la tuya). `reset` pone en cero UNA sola sesión: la de `session_id`; sin él, sólo si hay una única sesión — con más de una SE NIEGA y lista las sesiones, porque «la última que escribió» suele ser otra terminal.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"action": {Type: "string", Description: "status | reset (default status)"},
+						"action":     {Type: "string", Description: "status | reset (default status)"},
+						"session_id": {Type: "string", Description: "Sesión a reportar o a poner en cero. Opcional para status (sin ella, la escrita más recientemente); obligatoria para reset cuando hay más de una sesión. Los ids están en `sesiones`."},
 					},
 				},
 			},
@@ -1072,7 +1073,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_codegraph_push",
-				Description: "Federación del grafo de código (Track 20 · F6): RECIBE el grafo (nodos + aristas + gists) que un proyecto empuja tras indexar y REEMPLAZA lo de ESE proyecto en el cerebro central, scopeado por el project_id de la credencial (aislamiento por tenant: un write=own no puede plantar el grafo en otro proyecto; sólo write=any puede declarar destino). Lo llama el daemon local automáticamente tras codegraph_index; no es para uso manual. Parámetros: nodes, edges (arrays del grafo), gists (opcional; OMITIRLO deja intactos los guardados, mandarlo vacío los borra), project_id (opcional, sólo lo respeta write=any).",
+				Description: "Federación del grafo de código (Track 20 · F6): RECIBE el grafo (nodos + aristas + gists) que un proyecto empuja tras indexar y REEMPLAZA lo de ESE proyecto en el cerebro central, scopeado por el project_id de la credencial (aislamiento por tenant: un write=own no puede plantar el grafo en otro proyecto; sólo write=any puede declarar destino). Lo llama el daemon local automáticamente tras codegraph_index; no es para uso manual. Parámetros: nodes, edges (arrays del grafo), gists (opcional; OMITIRLO deja intactos los guardados, mandarlo vacío los borra), project_id (opcional, sólo lo respeta write=any), head y head_at (el commit indexado y su fecha de commit: el central NO acepta un grafo de un árbol más viejo que el publicado, ni uno sin commit si el publicado lo tiene, y contesta -32006).",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
@@ -1080,6 +1081,8 @@ func (s *McpServer) buildRegistry() []toolEntry {
 						"edges":      {Type: "array", Description: "aristas del grafo de código a federar", Items: &Property{Type: "object"}},
 						"gists":      {Type: "array", Description: "gists de archivo (memoria de código) a federar. OMITIRLO deja intactos los que ya haya en el central; mandarlo vacío los reemplaza por nada", Items: &Property{Type: "object"}},
 						"project_id": {Type: "string", Description: "proyecto destino (opcional; sólo lo respeta una credencial write=any; un write=own usa siempre el suyo)"},
+						"head":       {Type: "string", Description: "commit del árbol indexado (opcional; sin él, el push no puede pisar un grafo publicado con commit)"},
+						"head_at":    {Type: "string", Description: "fecha de COMMIT de head en RFC3339 (obligatoria si va head): es lo que se compara contra lo publicado"},
 					},
 					Required: []string{"nodes", "edges"},
 				},

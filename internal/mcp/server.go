@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"musubi/internal/codeintel"
 	"musubi/internal/cognition"
 	"musubi/internal/config"
@@ -55,6 +57,11 @@ const (
 	// Separado de codeDegraded porque describe un servidor que SÍ sirve —las tools de lectura
 	// funcionan— y quien lo recibe puede seguir trabajando en vez de darse por muerto.
 	codeReadOnly = -32005
+	// codeGrafoViejo (rango server-error) = el central rechazó un push del grafo de código porque
+	// describe un árbol más viejo que el publicado (o no dice de cuál es y el publicado sí). Código
+	// propio porque quien lo recibe NO debe reintentar el mismo grafo —es viejo y va a seguir
+	// siéndolo—, pero tampoco es un pedido mal formado: el remedio es indexar un árbol al día.
+	codeGrafoViejo = -32006
 )
 
 type JsonRpcRequest struct {
@@ -159,6 +166,17 @@ type McpServer struct {
 	// por tick es exactamente lo que la Ola 0 sacó del camino caliente.
 	vidaDeRed sync.Map
 	engine    memory.StorageBackend
+	// duenoBajada identifica a ESTE proceso ante el candado de la bajada (ver
+	// memory.ReclamarBajada). Es uno por servidor y no el PID: dos servidores en el mismo proceso
+	// —las pruebas— tienen que poder competir por el candado como dos terminales de verdad.
+	duenoBajada string
+	// bajadaCedidaHasta (unix nanos) es hasta cuándo ESTE proceso no reclama la bajada después de un
+	// Pull fallido; intervaloBajada es el tick real del scheduler (0 hasta que arranca); y
+	// cursorBajadaVisto es el último cursor de bajada que este proceso vio, para vectorizar lo que bajó
+	// OTRO. Ver drainInboundOnce.
+	bajadaCedidaHasta atomic.Int64
+	intervaloBajada   atomic.Int64
+	cursorBajadaVisto atomic.Int64
 	// sondaEscritura es el estado del sondeo de ESCRITURA de /readyz (ver observability.go). Vive
 	// acá y no en el handler porque tiene que sobrevivir entre pedidos: es lo que evita lanzar una
 	// goroutine nueva por cada sondeo mientras una escritura está colgada. El cero vale como
@@ -374,6 +392,10 @@ type McpServer struct {
 	// memory/codegraph_generacion.go), porque una marca en memoria no la ve el otro daemon que
 	// comparte la base ni sobrevive a la sesión que muere entre el índice y el push.
 	pushMu sync.Mutex
+	// motivoDelPush dice por qué el último push del grafo NO salió o no se aceptó («el árbol no está
+	// en origin/main», «el central tiene uno más nuevo»). Vive bajo pushMu. Existe para que la tool
+	// no conteste un `federated:false` mudo: sin motivo, «no se publicó» se lee como «se cayó la red».
+	motivoDelPush string
 	// syncClient empuja las filas del outbox al cerebro central (F2); nil ⇒ sync desactivado
 	// (el drain no arranca). syncCfg trae los parámetros del drain (batch/lease/backoff/tope).
 	// Ambos los fija el entrypoint (SetSyncClient) cuando sync.enabled && central_url != "".
@@ -520,6 +542,7 @@ func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder emb
 	estamparProcedenciaDelVector(engine, embedder)
 	s := &McpServer{
 		engine:      engine,
+		duenoBajada: uuid.NewString(),
 		resolver:    skills.NewResolver(projectPath),
 		embedder:    embedder,
 		cognition:   cognition.NoopProvider{},

@@ -201,6 +201,11 @@ type CodeGraphStore interface {
 	// ReplaceProjectGraphFrom reemplaza el grafo COMPLETO de un proyecto (recepción de la
 	// federación push-on-index, F6): borra todo lo del origin_project_id y reinserta el set empujado.
 	ReplaceProjectGraphFrom(originProjectID string, nodes []GraphNode, edges []GraphEdge) error
+	// ReplaceProjectGraphPublicado es el reemplazo del receptor con la guarda de antigüedad: no
+	// deja que un grafo de un árbol más viejo pise el publicado (error que envuelve ErrGrafoMasViejo).
+	ReplaceProjectGraphPublicado(originProjectID string, pub PublicacionDelGrafo, nodes []GraphNode, edges []GraphEdge) error
+	// PublicacionDelGrafoDe dice de qué commit es el grafo publicado de un proyecto (vacía si nada).
+	PublicacionDelGrafoDe(projectID string) (PublicacionDelGrafo, error)
 	// AllGraphNodesCtx / AllGraphEdgesCtx vuelcan el grafo completo del proyecto (scopeado por la
 	// credencial) para serializarlo en el push-on-index de la federación (F6).
 	AllGraphNodesCtx(ctx context.Context) ([]GraphNode, error)
@@ -308,7 +313,12 @@ type WorkflowStore interface {
 type LedgerStore interface {
 	LedgerStatus() (TokenLedger, error)
 	LedgerAdd(sessionID, surface string, tokens int) (TokenLedger, error)
-	LedgerReset() error
+	LedgerStatusDe(sessionID string) (TokenLedger, error)
+	// LedgerReset pone en cero UNA sesión: la indicada, o la última que escribió si sessionID es vacío.
+	LedgerReset(sessionID string) error
+	// LedgerSesiones lista todas las sesiones con su total: musubi_tokens corre por MCP, no sabe cuál
+	// es la suya, y sin la lista mostraba el número de otra terminal sin decir de quién era.
+	LedgerSesiones() ([]SesionLedger, error)
 }
 
 // PhaseStore — pipeline por fases del loop dirigido (explore→plan→code→verify).
@@ -359,6 +369,11 @@ type OutboxStore interface {
 	MarkOutboxRetry(obsID string, backoffSeconds int, errMsg string) error
 	MarkOutboxDead(obsID, errMsg string) error
 	OutboxStats() (pending, sent, dead int, err error)
+	// ReclamarBajada y AvanzarCursorBajada son el lease y el cursor monótono de la BAJADA: el mismo
+	// resguardo que ClaimOutboxBatch le da a la subida, que la bajada no tenía (ver bajada_lease.go).
+	ReclamarBajada(dueno string, leaseSeconds int) (bool, error)
+	SoltarBajada(dueno string) error
+	AvanzarCursorBajada(key string, v int64) error
 	// ListSharedForPull sirve el sync ENTRANTE (C5.3): lista la memoria 'shared' del proyecto del
 	// ctx (aislamiento T17-19) con rowid > afterRowID, paginada. La corre el central en un pull.
 	ListSharedForPull(ctx context.Context, afterRowID int64, limit int) ([]SharedObs, error)

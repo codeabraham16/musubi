@@ -63,14 +63,23 @@ func detectOutput(root string, hookMode bool, sessionID string) (string, error) 
 		cfg = config.Default()
 	}
 	var store startupStore
+	current, _ := detector.DetectStack(root)
 	engine, err := memory.NewDbEngine(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "musubi detect: memoria no disponible para el arranque: %v\n", err)
 	} else {
 		defer engine.Close()
 		store = engine
+		// Los manuales se ponen al día SOLOS al arrancar cada sesión, en vez de sólo con `musubi
+		// setup` (ver skills_frescas.go). Va ANTES del contexto de arranque para que esta misma sesión
+		// ya los encuentre frescos, y con el stack que el arranque ya detectó: detectarlo dos veces
+		// costaba ~95 ms más por sesión. Best-effort como todo el hook: un fallo se avisa por stderr y
+		// la sesión arranca igual. Y en silencio si sale bien: stdout es contexto del agente.
+		if _, rerr := refrescarSkillsSiHaceFalta(root, engine, current); rerr != nil {
+			fmt.Fprintf(os.Stderr, "musubi detect: no se pudieron refrescar los manuales (la sesión sigue): %v\n", rerr)
+		}
 	}
-	return buildHookOutput(root, store, cfg.Startup, sessionID)
+	return buildHookOutputCon(root, store, cfg.Startup, sessionID, current)
 }
 
 // buildHookOutput arma el additionalContext del SessionStart combinando dos
@@ -81,12 +90,16 @@ func detectOutput(root string, hookMode bool, sessionID string) (string, error) 
 //
 // Si ambas partes quedan vacías, devuelve "" (hook silencioso e idempotente).
 func buildHookOutput(root string, store startupStore, cfg config.StartupConfig, sessionID string) (string, error) {
+	current, _ := detector.DetectStack(root)
+	return buildHookOutputCon(root, store, cfg, sessionID, current)
+}
+
+// buildHookOutputCon es buildHookOutput con el stack ya detectado.
+func buildHookOutputCon(root string, store startupStore, cfg config.StartupConfig, sessionID string, current []detector.StackResult) (string, error) {
 	skillsDir := filepath.Join(root, config.DirName, config.SkillsDir)
 	sentinelPath := filepath.Join(skillsDir, config.SentinelFile)
 	_, sentinelErr := os.Stat(sentinelPath)
 	sentinelExists := sentinelErr == nil
-
-	current, _ := detector.DetectStack(root)
 
 	// SessionStart (arranque o compactación) = contexto fresco: limpiar el estado
 	// de inyección diferencial DE ESTA SESIÓN para que su memoria relevante se

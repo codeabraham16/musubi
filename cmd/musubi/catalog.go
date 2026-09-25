@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"musubi/internal/config"
@@ -218,11 +221,34 @@ func splitSeeds(s string) []string {
 	return out
 }
 
-// writeJSONAtomic serializa v como JSON indentado y lo escribe atómicamente en path
-// (temp en el mismo dir + rename, evita fallos cross-device en Windows; limpia si falla).
+// writeJSONAtomic serializa v como JSON indentado y lo escribe atómicamente en path.
 func writeJSONAtomic(path string, v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Errorf("serializar JSON: %w", err)
+	}
+	return escribirArchivoAtomico(path, data, 0o644)
+}
+
+// escribirArchivoAtomico escribe data en path sin que nadie pueda leer el archivo a medio escribir:
+// temporal en el MISMO directorio + rename (en otro directorio el rename puede cruzar de volumen y
+// fallar en Windows), y limpieza del temporal si algo falla. El temporal empieza con punto y termina
+// en .tmp: ningún lector de skills (que sólo abre .yaml/.yml y SKILL.md) lo toma por un archivo real.
+//
+// Existe como pieza aparte desde que los manuales se refrescan solos al arrancar cada sesión: con
+// varias terminales abriéndose a la vez, dos refrescos pueden escribir el mismo manual al mismo
+// tiempo, y con os.WriteFile una sesión que lo leyera en ese instante podía cargar la mitad.
+func escribirArchivoAtomico(path string, data []byte, perm os.FileMode) error {
+	// Un symlink se respeta: se escribe junto a su OBJETIVO. Renombrar sobre el enlace lo reemplazaba
+	// por un archivo común —el objetivo quedaba viejo y el repo con una copia suelta—, cuando
+	// os.WriteFile, lo que había antes, escribía a través del enlace.
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		if objetivo, err := filepath.EvalSymlinks(path); err == nil {
+			path = objetivo
+		}
+	}
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "*.tmp")
+	tmp, err := os.CreateTemp(dir, ".musubi-*.tmp")
 	if err != nil {
 		return fmt.Errorf("crear archivo temporal en %s: %w", dir, err)
 	}
@@ -233,11 +259,6 @@ func writeJSONAtomic(path string, v any) error {
 			os.Remove(tmpName)
 		}
 	}()
-
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return fmt.Errorf("serializar JSON: %w", err)
-	}
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return fmt.Errorf("escribir datos en temporal: %w", err)
@@ -245,11 +266,48 @@ func writeJSONAtomic(path string, v any) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("cerrar archivo temporal: %w", err)
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	// CreateTemp crea con 0600; sin esto el archivo final perdería los permisos que tenía.
+	if err := os.Chmod(tmpName, perm); err != nil {
+		return fmt.Errorf("permisos del temporal: %w", err)
+	}
+	if err := renombrarConReintentos(tmpName, path); err != nil {
+		// En Windows, renombrar sobre un archivo que otro proceso tiene abierto sin FILE_SHARE_DELETE
+		// (os.Open de Go, otra terminal leyendo el manual) falla aunque se reintente, cosa que
+		// os.WriteFile —lo que había antes— no sufría. Último recurso: escribir en el lugar. Pierde la
+		// atomicidad sólo en ese caso, que es exactamente como se escribía antes.
+		if bloqueoDeWindows(err) {
+			if werr := os.WriteFile(path, data, perm); werr == nil {
+				return nil
+			}
+		}
 		return fmt.Errorf("renombrar %s → %s: %w", tmpName, path, err)
 	}
 	success = true
 	return nil
+}
+
+// renombrarConReintentos es os.Rename con unos pocos reintentos cortos ante un bloqueo de Windows
+// (un antivirus o un indexador que tiene el archivo un instante): es el patrón de robustio del
+// toolchain de Go. En los demás sistemas, o ante otro error, un solo intento.
+func renombrarConReintentos(desde, hacia string) error {
+	var err error
+	for intento := 0; intento < 5; intento++ {
+		if err = os.Rename(desde, hacia); err == nil || !bloqueoDeWindows(err) {
+			return err
+		}
+		time.Sleep(time.Duration(10<<intento) * time.Millisecond)
+	}
+	return err
+}
+
+// bloqueoDeWindows dice si un error es un «otro proceso tiene el archivo»: ERROR_ACCESS_DENIED (5) o
+// ERROR_SHARING_VIOLATION (32). Fuera de Windows es siempre false.
+func bloqueoDeWindows(err error) bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	var errno syscall.Errno
+	return errors.As(err, &errno) && (errno == 5 || errno == 32)
 }
 
 // runValidate implementa `musubi catalog validate [ruta]`: envoltorio fino sobre
