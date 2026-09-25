@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
-	"strings"
 	"time"
 
 	"musubi/internal/fleet"
@@ -69,7 +68,10 @@ func ejecutar(c comandoRecibido, base, token string) resultadoDeComando {
 	// binario. `musubi:pantalla` no es un ejecutable del host y nunca debe llegar a exec.Command:
 	// si llegara, el error diría «no such file» y —peor— el mensaje podría arrastrar la
 	// contraseña que va en el argv.
-	if strings.HasPrefix(argv[0], "musubi:") {
+	//
+	// Con fleet.EsOperacionInterna y no con un literal propio: es la MISMA pregunta que le hace el
+	// cerebro a un exec antes de encolarlo, y dos copias del prefijo son dos respuestas posibles.
+	if fleet.EsOperacionInterna(argv) {
 		if argv[0] == fleet.OpPantalla {
 			return aplicarSesionPantalla(comandoRecibido{ID: c.ID, Argv: argv, TimeoutSeg: c.TimeoutSeg})
 		}

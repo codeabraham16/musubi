@@ -276,7 +276,7 @@ func filaDeHecho(h fleet.Hecho) map[string]interface{} {
 	fila := map[string]interface{}{
 		"cuando":     h.Cuando.UTC().Format(time.RFC3339),
 		"tipo":       string(h.Tipo),
-		"plano":      string(h.Plano),
+		"plano":      string(h.Plano()),
 		"principal":  h.Principal,
 		"referencia": h.Referencia,
 		"estado":     h.Estado,

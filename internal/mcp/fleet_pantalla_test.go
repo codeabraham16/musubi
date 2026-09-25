@@ -168,8 +168,9 @@ func TestLaBitacoraDeComandosNoFiltraLaContrasenaDePantalla(t *testing.T) {
 //
 // Sabotaje: quitar la guarda de prefijo `musubi:` de toolFleetExec.
 // arnes: archivo="internal/mcp/methods_exec.go"
-// arnes: de="\tif len(args.Argv) > 0 && strings.HasPrefix(strings.TrimSpace(args.Argv[0]), \"musubi:\") {"
-// arnes: a="\tif false && len(args.Argv) > 0 && strings.HasPrefix(strings.TrimSpace(args.Argv[0]), \"musubi:\") {"
+// arnes: de="\tif fleet.EsOperacionInterna(args.Argv) {"
+// arnes: a="\tif false && fleet.EsOperacionInterna(args.Argv) {"
+// arnes: colision_ok="TestConExecNoSeEncolaUnaOperacionInternaDisfrazada"
 func TestConExecNoSePuedeFabricarUnaSesionDePantalla(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	tok := enrolarConPantalla(t, s, "casa", "pc-gio")

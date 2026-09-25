@@ -182,8 +182,9 @@ func TestUnaOperacionMalFormadaNoRompeAlAgente(t *testing.T) {
 // Sabotaje: quitar la guarda de prefijo `musubi:` de `ejecutar` → el error diría «no such file»
 // y —peor— podría arrastrar la contraseña que va en el argv.
 // arnes: archivo="cmd/musubi/ejecutor.go"
-// arnes: de="\tif strings.HasPrefix(argv[0], \"musubi:\") {"
-// arnes: a="\tif strings.HasPrefix(argv[0], \"musubi:\") && false {"
+// arnes: de="\tif fleet.EsOperacionInterna(argv) {"
+// arnes: a="\tif fleet.EsOperacionInterna(argv) && false {"
+// arnes: colision_ok="TestNingunValorDeCableSeRedeclaraFueraDelDominio"
 func TestLaOperacionInternaSeInterceptaYNoSeLanzaComoBinario(t *testing.T) {
 	rustdeskFalso(t, "exit 0")
 	const clave = "NoDebeAparecer42"

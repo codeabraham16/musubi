@@ -235,7 +235,13 @@ func (s *McpServer) toolFleetExec(ctx context.Context, raw json.RawMessage) (int
 	// `musubi:pantalla` y acuñarse una sesión de pantalla SIN tener `screen` — o sea, saltarse la
 	// compuerta usando la otra mitad de ella. Que `exec` y `screen` sean permisos distintos deja
 	// de ser cierto si uno puede fabricar los mensajes del otro.
-	if len(args.Argv) > 0 && strings.HasPrefix(strings.TrimSpace(args.Argv[0]), "musubi:") {
+	//
+	// LA PREGUNTA SE HACE SOBRE EL ARGV QUE SE VA A GUARDAR, no sobre el que llegó, y por eso es
+	// fleet.EsOperacionInterna y no una comparación acá. Mirando `args.Argv[0]` crudo, una parte
+	// vacía adelante —`["", "musubi:pantalla", <sesión>, <contraseña>, <ttl>]`— pasaba: EncolarComando
+	// la limpiaba a un `musubi:pantalla` perfecto y el agente la despachaba como sesión de pantalla.
+	// Lo midió A131 (T7) en un servidor de prueba, con una credencial de sólo `exec`.
+	if fleet.EsOperacionInterna(args.Argv) {
 		return nil, rpcErrorf(codeUnauthorized,
 			"`musubi:*` son operaciones internas del canal, no comandos del host: no se pueden encolar con exec. Para una sesión de pantalla usá musubi_fleet_screen, que exige la capacidad `screen`.")
 	}

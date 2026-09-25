@@ -221,6 +221,22 @@ func ValidarComando(argv []string, timeout time.Duration) error {
 // NO toca el contenido de cada parte: un argumento con espacios, comillas o saltos de línea es
 // legítimo y el shell no interviene (F7). Alterarlo silenciosamente haría que el comando ejecutado
 // difiera del comando registrado en la bitácora, que es exactamente lo que no puede pasar.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// ES IDEMPOTENTE, Y ESO ES UN CONTRATO: LO QUE SE GUARDA ES LO QUE SE EJECUTA
+//
+// La limpian los DOS lados del canal: EncolarComando antes del único INSERT, y el agente otra vez
+// antes de despachar. Si limpiar dos veces diera algo distinto que limpiar una, el cerebro
+// decidiría y registraría un argv y la máquina ejecutaría otro.
+//
+// Y daba algo distinto. El recorte del ejecutable miraba la parte que VENÍA primera, y con una
+// parte vacía adelante el ejecutable pasa a ser la segunda, que salía sin recortar: `["",
+// " musubi:pantalla", …]` se guardaba con el espacio y el agente, al limpiar de su lado, despachaba
+// `musubi:pantalla`. Lo midió la auditoría A131 (tema T7) por el camino de musubi_fleet_exec, y es
+// la mitad de una puerta lateral: la otra mitad —que la guarda del exec miraba el argv CRUDO— se
+// cerró en EsOperacionInterna, que decide sobre esta forma. Sin este recorte, esa guarda seguiría
+// ciega a la forma con espacio: la cabeza limpia no EMPEZARÍA con el prefijo. Por eso se recorta
+// el que QUEDA primero.
 func LimpiarArgv(argv []string) []string {
 	out := make([]string, 0, len(argv))
 	for i, a := range argv {
@@ -235,6 +251,9 @@ func LimpiarArgv(argv []string) []string {
 	// Un argv que quedó sin ejecutable no es un comando.
 	if len(out) > 0 && strings.TrimSpace(out[0]) == "" {
 		return nil
+	}
+	if len(out) > 0 {
+		out[0] = strings.TrimSpace(out[0])
 	}
 	return out
 }

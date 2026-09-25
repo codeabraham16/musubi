@@ -249,7 +249,9 @@ func (p Politica) Validar() error {
 	}
 	// El escalamiento que S6 cerró para exec vale igual acá: el canal de comandos lo comparten la
 	// ejecución y la pantalla, y `musubi:*` son mensajes internos del canal, no comandos del host.
-	if strings.HasPrefix(strings.TrimSpace(p.Hacer[0]), "musubi:") {
+	// Se pregunta con EsOperacionInterna, que mira el argv LIMPIO: mirando `Hacer[0]` crudo, un
+	// `hacer: ["", "musubi:pantalla", …]` pasaba y encolaba una pantalla con cada disparo (A131·T7).
+	if EsOperacionInterna(p.Hacer) {
 		return fmt.Errorf("política %q: `musubi:*` son operaciones internas del canal, no comandos del host", p.Nombre)
 	}
 	if p.Cooldown != 0 && p.Cooldown < CooldownMin {

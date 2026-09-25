@@ -64,9 +64,32 @@ const (
 	OpShell     = "musubi:shell"     // abrir una shell interactiva en Tier A
 )
 
+// ejecutableDe es argv[0] TAL COMO EL CANAL LO GUARDA Y EL AGENTE LO DESPACHA: el de LimpiarArgv,
+// o vacío si no queda ninguno.
+//
+// TODA DECISIÓN SOBRE argv[0] DE ESTE ARCHIVO PASA POR ACÁ, y no por el argv crudo. El cerebro
+// decide sobre lo que recibe, pero guarda y ejecuta lo que LimpiarArgv deja; si las dos formas
+// difieren, la decisión se toma sobre un argv que nunca va a correr. La auditoría A131 (tema T7)
+// lo midió en un servidor de prueba: con una credencial de SÓLO `exec`, musubi_fleet_exec aceptó
+// `["", "musubi:pantalla", <sesión>, <contraseña>, <ttl>]`. La guarda miraba argv[0] crudo —vacío,
+// o sea «no es interna»—, el cerebro guardaba `musubi:pantalla` limpio y el agente lo despachaba
+// como sesión de pantalla: la puerta lateral que S6 cerró para exec, abierta otra vez con una
+// parte vacía adelante.
+func ejecutableDe(argv []string) string {
+	limpio := LimpiarArgv(argv)
+	if len(limpio) == 0 {
+		return ""
+	}
+	return limpio[0]
+}
+
 // EsOperacionInterna dice si este argv es un mensaje del canal y no un comando del host.
+//
+// Es LA comprobación del prefijo: la usan la guarda de musubi_fleet_exec, la validación de las
+// políticas y el despacho del agente. Hasta A131 cada uno la tenía copiada con su propio literal
+// `"musubi:"`, y la del exec y la de las políticas miraban el argv crudo (ver ejecutableDe).
 func EsOperacionInterna(argv []string) bool {
-	return len(argv) > 0 && strings.HasPrefix(strings.TrimSpace(argv[0]), PrefijoOperacionInterna)
+	return strings.HasPrefix(ejecutableDe(argv), PrefijoOperacionInterna)
 }
 
 // ArgvDeBitacora devuelve el argv SIN secreto, listo para mostrarse en cualquier superficie.
@@ -81,8 +104,15 @@ func EsOperacionInterna(argv []string) bool {
 // Se escribió DOS VECES en este repo antes de vivir acá —una en la bitácora de exec, otra al
 // armar la cronología— y ésa es exactamente la duplicación que envejece mal: la copia que se
 // queda vieja es siempre la del camino que se usa menos.
+//
+// TAPA TODO ARGV QUE EL AGENTE DESPACHARÍA COMO PANTALLA, con la forma que venga: decide sobre el
+// argv limpio, igual que el despacho. Comparar el argv[0] crudo dejaba pasar la contraseña con
+// una parte vacía adelante (`["", "musubi:pantalla", <sesión>, <contraseña>]`), que el agente sí
+// ejecuta como pantalla. Por el mismo motivo el id sale del argv limpio: del crudo, en esa forma,
+// saldría el nombre de la operación.
 func ArgvDeBitacora(argv []string) []string {
-	if len(argv) == 0 || strings.TrimSpace(argv[0]) != OpPantalla {
+	limpio := LimpiarArgv(argv)
+	if len(limpio) == 0 || limpio[0] != OpPantalla {
 		return argv
 	}
 	// Se conserva el id de sesión (sirve para cruzar con la bitácora de pantalla) y se tapa el
@@ -92,8 +122,8 @@ func ArgvDeBitacora(argv []string) []string {
 	// `<oculto>` sale como `\u003coculto\u003e` y una bitácora leída en crudo se vuelve ilegible
 	// justo en la línea que más se mira.
 	id := ""
-	if len(argv) > 1 {
-		id = argv[1]
+	if len(limpio) > 1 {
+		id = limpio[1]
 	}
 	return []string{OpPantalla, id, "[oculto]"}
 }
@@ -321,11 +351,15 @@ var OpsClasificadasPorFila = map[string]bool{OpAvisar: true, OpPreguntar: true}
 // plano genuinamente no se sabe. No hay valor seguro que no sea esconder: mostrarla como pantalla
 // filtra el exec y la shell, y mostrarla como exec filtra la pantalla. Ver TipoDeComando, que es
 // la puerta que usa la cronología.
+//
+// La operación se compara ENTERA contra el nombre, sobre el argv limpio (ejecutableDe): lo que el
+// agente despacha es la igualdad exacta, así que un `musubi:pantalla-algo` que nadie clasificó es
+// desconocido acá también, y se esconde.
 func TipoDeArgv(argv []string) TipoDeHecho {
 	if !EsOperacionInterna(argv) {
 		return HechoComando
 	}
-	switch strings.TrimSpace(argv[0]) {
+	switch ejecutableDe(argv) {
 	case OpPantalla:
 		return HechoCanalPantalla
 	case OpShell:
@@ -361,8 +395,9 @@ type Hecho struct {
 	// ventana pertenece a esa ventana aunque termine después, que es como se lee una línea de
 	// tiempo.
 	Cuando time.Time
-	Tipo   TipoDeHecho
-	Plano  PlanoDeFlota
+	// Tipo decide TODO lo demás de la clasificación: la capacidad (CapDeHecho) y el plano
+	// (Hecho.Plano, que se deriva de acá y por eso no es un campo).
+	Tipo TipoDeHecho
 
 	DeviceID string
 	Device   string
@@ -406,6 +441,21 @@ func (h Hecho) Duracion() (time.Duration, bool) {
 	return h.Termino.Sub(h.Cuando), true
 }
 
+// Plano es a qué plano de capacidad pertenece el hecho, y SE DERIVA DE SU TIPO: por eso es un
+// método y no un campo.
+//
+// FUE UN CAMPO HASTA A131, que cada una de las tres puertas llenaba por su cuenta, y un campo que
+// se llena aparte del tipo puede contradecirlo. La auditoría (tema T7) lo midió: con el plano de
+// HechoDeComando calculado desde el argv —la puerta vieja, la que no distingue quién encoló un
+// aviso—, los 22 `musubi:avisar` de producción, todos del exec, habrían llegado a la cronología
+// con `plano: ""` en vez de `actuar`, con el tipo y la capacidad bien. Ninguna prueba miraba el
+// plano de un aviso. Derivado del tipo, el desacuerdo no se puede escribir: lo que decide quién
+// lo ve (CapDeHecho) y lo que dice cómo se lee salen de la misma clasificación.
+func (h Hecho) Plano() PlanoDeFlota {
+	plano, _ := PlanoDeHecho(h.Tipo)
+	return plano
+}
+
 // ── Las puertas desde cada fuente ────────────────────────────────────────────────────────────
 //
 // Son las ÚNICAS tres formas de fabricar un Hecho, por el mismo motivo que DesdeSesionPantalla y
@@ -414,11 +464,9 @@ func (h Hecho) Duracion() (time.Duration, bool) {
 
 func HechoDeComando(c Comando, device string) Hecho {
 	tipo := TipoDeComando(c)
-	plano, _ := PlanoDeHecho(tipo)
 	return Hecho{
 		Cuando:     c.Creado,
 		Tipo:       tipo,
-		Plano:      plano,
 		DeviceID:   c.DeviceID,
 		Device:     device,
 		Principal:  c.Principal,
@@ -434,7 +482,6 @@ func HechoDeSesionPantalla(s SesionPantalla, device string) Hecho {
 	return Hecho{
 		Cuando:     s.Creada,
 		Tipo:       HechoPantalla,
-		Plano:      PlanoEntrar,
 		DeviceID:   s.DeviceID,
 		Device:     device,
 		Principal:  s.Principal,
@@ -448,7 +495,6 @@ func HechoDeSesionShell(s SesionShell, device string) Hecho {
 	return Hecho{
 		Cuando:     s.Creada,
 		Tipo:       HechoShell,
-		Plano:      PlanoEntrar,
 		DeviceID:   s.DeviceID,
 		Device:     device,
 		Principal:  s.Principal,

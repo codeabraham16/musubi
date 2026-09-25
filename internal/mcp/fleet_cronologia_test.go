@@ -571,6 +571,13 @@ func TestTodaOperacionInternaDelCodigoEstaClasificada(t *testing.T) {
 		if tipo == fleet.HechoSinClasificar {
 			t.Errorf("la operación interna %q (en %s) NO está clasificada en fleet.TipoDeArgv: la cronología la escondería de todos sin decir por qué", op, donde)
 		}
+		// Y CLASIFICADA NO QUIERE DECIR «CUALQUIER COSA MENOS sin_clasificar». `comando` también es
+		// distinto, y es el peor valor posible: una operación interna leída como comando del host
+		// la ve cualquiera con `exec`. Hasta A131 (T7) esta prueba lo aceptaba, y como usa UNA sola
+		// parte era justo la que tenía que ver un EsOperacionInterna que exigiera dos.
+		if tipo == fleet.HechoComando {
+			t.Errorf("la operación interna %q (en %s) se clasificó como un comando del host: se le mostraría a todo el que pueda ejecutar, con el plano que revela", op, donde)
+		}
 	}
 }
 
