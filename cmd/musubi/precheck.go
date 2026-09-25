@@ -786,7 +786,7 @@ func runPrecheck() {
 	}
 	// Sólo sobre un proyecto que YA tiene memoria (ver raiz.go).
 	r := raizDelProceso()
-	if r.Dir == "" || r.Activar {
+	if r.Dir == "" || r.Activar || elPluginCedeElGancho("precheck") {
 		return
 	}
 	if out := precheckHook(r.Dir, os.Stdin, abrirMemoriaDelHook, os.Stderr); out != "" {

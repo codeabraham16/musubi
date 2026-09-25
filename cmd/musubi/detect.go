@@ -480,7 +480,7 @@ func runDetect() {
 		// Como hook, sólo sobre un proyecto que YA tiene memoria (ver raiz.go): un hook nunca la
 		// crea, y sin proyecto se calla.
 		r := raizDelProceso()
-		if r.Dir == "" || r.Activar {
+		if r.Dir == "" || r.Activar || elPluginCedeElGancho("detect") {
 			return
 		}
 		root = r.Dir

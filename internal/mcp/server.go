@@ -223,6 +223,8 @@ type McpServer struct {
 	// inerte, cuando NO es "", es por qué este servidor arrancó donde no hay un proyecto de Musubi
 	// (ver inerte.go): habla el protocolo, no ofrece tools y no toca ninguna base.
 	inerte string
+	// inerteCallado: inerte y sin instrucciones (ver NewServidorCallado).
+	inerteCallado bool
 
 	// motivoSoloLectura es TEXTO explicativo del escalón de sólo lectura, no su interruptor: el
 	// modo lo decide el engine (ver solo_lectura.go). Lo pasa main, que es quien tiene el error

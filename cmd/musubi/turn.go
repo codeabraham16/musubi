@@ -769,7 +769,7 @@ func runTurn() {
 	// Sólo sobre un proyecto que YA tiene memoria (ver raiz.go): el hook nunca la crea, y sin
 	// proyecto se calla. Antes NewDbEngine la creaba en la carpeta donde lo arrancaran.
 	r := raizDelProceso()
-	if r.Dir == "" || r.Activar {
+	if r.Dir == "" || r.Activar || elPluginCedeElGancho("turn") {
 		return
 	}
 	root := r.Dir

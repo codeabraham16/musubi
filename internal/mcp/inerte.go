@@ -24,6 +24,17 @@ func NewServidorInerte(projectPath, version, motivo string) *McpServer {
 	return s
 }
 
+// NewServidorCallado es un servidor inerte que además no le dice NADA al agente: sin instrucciones.
+//
+// Es el del plugin en un proyecto que ya conecta Musubi por su propio .mcp.json. Ahí Musubi SÍ está
+// activo —por el servidor del proyecto—, con su memoria y sus instrucciones: cualquier aviso de éste
+// sería ruido al lado del otro. Se hace a un lado en silencio.
+func NewServidorCallado(projectPath, version, motivo string) *McpServer {
+	s := NewServidorInerte(projectPath, version, motivo)
+	s.inerteCallado = true
+	return s
+}
+
 // instruccionesInerte es lo que el agente lee en su system prompt cuando este servidor está inerte.
 //
 // HABLA DE ESTE SERVIDOR, NO DE «MUSUBI» EN GENERAL, porque una sesión puede tener otra conexión a
@@ -39,7 +50,7 @@ func (s *McpServer) instruccionesInerte() string {
 
 // conAvisoDeInerte agrega las instrucciones de inerte al resultado de initialize.
 func (s *McpServer) conAvisoDeInerte(res interface{}) interface{} {
-	if s.inerte == "" {
+	if s.inerte == "" || s.inerteCallado {
 		return res
 	}
 	if m, ok := res.(map[string]interface{}); ok {
