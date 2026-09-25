@@ -138,9 +138,9 @@ de escribir una línea de sync.
   bajar a segundos es cambiar el disparo, no rediseñar.
 - ✅ **El eco está cerrado en el código** (2026-09-24, `fix/el-eco-del-sync`). Falta encenderlo:
   instalar el binario y reiniciar el daemon. Ver «El eco, medido y cerrado» más abajo.
-- ⛔ **El central es hoy un nodo TERMINAL**: recibe y sirve, pero no sincroniza hacia afuera — tiene
-  1.674 observaciones que ninguna máquina puede bajar. «Escribir en el cerebro y que aparezca en las
-  máquinas» requiere trabajo en el central, no sólo en las puntas.
+- ✅ **CORREGIDO — el riel de bajada está sano y al día.** Lo que decía esta línea («el central no
+  sincroniza hacia afuera, tiene 1.674 observaciones que ninguna máquina puede bajar») era falso en
+  la causa y engañoso en el efecto. Ver «El riel de bajada, medido de punta a punta» más abajo.
 
 ### El eco, medido y cerrado
 
@@ -177,6 +177,54 @@ hacer algo es invisible.
 **Lo que NO se tocó, y es decisión:** el UPSERT del ingest sigue pisando el contenido local con el
 del central (último que escribe gana) — ése es el diseño declarado del enlace. Y las 943 filas ya
 ecoadas quedan en `sent`: es terminal, no vuelven a subir.
+
+### El riel de bajada, medido de punta a punta
+
+Este plan apoya los escalones 2 y 3 en una suposición que nunca se había verificado: que si la sesión
+vive en el cerebro, otra máquina la puede traer. Medido el 2026-09-24 sobre la base **real** del
+central (`/home/musubi/musubi-brain/.musubi/memory.db`, 238 MB — ⚠️ hay una **base señuelo** de 466 KB
+congelada en `/home/musubi/.musubi/`, medirla es concluir cualquier cosa):
+
+| | |
+|---|---|
+| observaciones en el central | 5.068 |
+| `scope = 'shared'` | 3.392 |
+| `scope = 'local'` | 1.676 |
+| shared que un pull **sí** entrega (cursor 0) | **3.069** |
+| shared que ningún pull entrega jamás | 323 — y las 323 son `archived` o `superseded`, o sea **correctamente** excluidas |
+| shared con `sync_seq <= 0` | **0** |
+| cursor de bajada de esta PC | **10.969**, contra un `max(sync_seq)` de 10.967 en el central |
+
+**El riel funciona y está al día.** No hay atraso, no hay agujeros de cursor, y el cursor de esta PC ya
+pasó el techo del central. La hipótesis que valía la pena descartar era el `sync_seq = 0` — el propio
+código advierte que una fila así «nunca es > cursor ⇒ INVISIBLE para siempre» —: **cero filas**. El
+escalón 2 NO está bloqueado por un central roto.
+
+⚠️ **Y de paso, el cabezal de `internal/memory/inboundsync.go` está viejo**: documenta una «limitación
+conocida» de paginar por `rowid`, y el código de `ListSharedForPull` (línea ~62) pagina por `sync_seq`.
+La limitación ya se cerró; el comentario que la anuncia sigue ahí y manda a buscar un bug que no existe.
+
+**Qué eran entonces las «1.674».** Son las 1.676 filas con `scope = 'local'`, un tercio de la memoria
+del central. No es que el central no sincronice: es que `local` **por diseño no se espeja nunca**. Se
+reparten en dos grupos muy distintos:
+
+- **1.648 humanas, `quarantined = 0`** — se **pueden leer** consultando el central (verificado: una
+  `design-corpus/...` volvió en una búsqueda contra el central), pero no bajan a ninguna base local.
+  El grueso es el corpus del motor de diseño (1.371 de autor `destilador`, proyecto `musubi-design`,
+  de agosto) y 275 `ingested/*`. Contraprueba desde la otra punta: en la base de esta PC hay **0**
+  filas de autor `destilador` y **0** `ingested/*`. Y ninguna de las 1.676 tiene gemela compartida por
+  `content_hash`: es memoria **única**, no copias.
+- **28 propuestas de LLM en cuarentena** (`provenance = llm:*`, `quarantined = 1`) — y esto **no es un
+  defecto, es la regla funcionando**: `musubi_propose_observation` las deja invisibles al recall hasta
+  que alguien las corrobore, y a propósito no viajan. Dos de ellas son de hoy y son notas de este
+  mismo trabajo.
+
+**La decisión que esto destapa, y es del usuario, no del código:** que las 1.648 sean online-only es
+consistente con `local`, pero significa que *no existen* sin el central y nunca entran al recall
+rápido de una máquina. Promoverlas a `shared` las haría bajar a **todas** las máquinas — disco y
+tráfico en cada una. Para las sesiones del plan no cambia nada (van a nacer `shared`, porque el
+central tiene `team_mode: true`); para el corpus de diseño y los documentos ingeridos es una
+elección de arquitectura que conviene tomar a propósito y no por omisión.
 
 ### Los canales en vivo que existen
 
@@ -242,6 +290,11 @@ nuevo corriendo, el sello no se está poniendo.
 
 Con el frame y el `session_id` en el central, abrir el cuerpo en la laptop y seguir. `--resume` ya
 existe; lo que se agrega es que el id y el frame se puedan traer.
+
+**El riel que esto necesita quedó verificado el 2026-09-24** (ver «El riel de bajada, medido de punta a
+punta»): el pull entrega 3.069 de 3.392 shared, las 323 que no entrega son `archived`/`superseded` y
+está bien que no viajen, no hay una sola fila con `sync_seq <= 0`, y el cursor de esta PC ya pasó el
+techo del central. Este escalón **no** tiene que arreglar el transporte: tiene que usarlo.
 
 ### Paso 3 — El hogar y el empuje
 

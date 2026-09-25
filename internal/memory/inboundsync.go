@@ -43,13 +43,16 @@ type SharedObs struct {
 // del proyecto de la credencial que pide el pull; Federate/vacío ⇒ sin filtro, histórico). afterRowID=0
 // trae desde el principio. La corre el central al servir un pull entrante de un cliente.
 //
-// LIMITACIÓN CONOCIDA (auditoría 2026-07-26 #4 — diferida a un slice de diseño): el cursor es por
-// `rowid`, que NO cambia en un UPDATE (el UPSERT reescribe la fila in-place). Por eso una máquina cuyo
-// cursor ya pasó el rowid de una obs shared NO vuelve a bajar sus EDICIONES posteriores: el mirror
-// queda stale (el central igual tiene la verdad — es staleness, no pérdida). Cerrarlo bien requiere un
-// contador MONÓTONO que suba también al actualizar (p. ej. una columna sync_seq bumpeada en cada
-// insert/update de shared) y paginar por él en vez de por rowid — cambio de esquema + write-path +
-// cliente, fuera del alcance de esta pasada de hardening.
+// ✅ LIMITACIÓN YA CERRADA (auditoría 2026-07-26 #4). Este comentario decía que el cursor era por
+// `rowid`, que NO cambia en un UPDATE, y que por eso una máquina cuyo cursor ya pasó una obs shared no
+// volvía a bajar sus EDICIONES. Eso se arregló: la consulta de abajo pagina por `sync_seq`, que sube
+// también al actualizar, y el nombre `afterRowID` quedó sólo por compat del wire (ver SharedObs).
+//
+// SE DEJA ESCRITO PORQUE EL COMENTARIO VIEJO SOBREVIVIÓ AL ARREGLO y mandaba a buscar un defecto que
+// no existe. Verificado el 2026-09-24 sobre la base real del central: 0 filas 'shared' con
+// `sync_seq <= 0` —el modo de falla que haría invisible una fila para siempre—, 3.069 de 3.392
+// entregables, y las 323 que no entrega son `archived`/`superseded`, que es correcto. El cursor de
+// bajada de davantis-1 estaba en 10.969 contra un max(sync_seq) de 10.967: al día, sin atraso.
 func (e *DbEngine) ListSharedForPull(ctx context.Context, afterRowID int64, limit int) ([]SharedObs, error) {
 	if limit <= 0 {
 		limit = 200
