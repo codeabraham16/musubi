@@ -168,6 +168,36 @@ func (e *DbEngine) IngestShared(o SharedObs) (inserted bool, err error) {
 	//
 	// Se compara el contenido y no content_hash porque el vector se calcula del contenido: es la
 	// entrada exacta, sin depender de que el hash previo de la fila esté cargado.
+	// EL SELLO DE ORIGEN, Y ES LA MITAD QUE FALTABA DEL ANTI-LOOP. No encolar no alcanzaba: la
+	// ausencia de fila es indistinguible de «una shared vieja que nunca se encoló», que es
+	// justamente lo que BackfillOutbox viene a rescatar, y una apertura después la ponía a la cola.
+	// Dejar una fila terminal 'espejo' es lo que convierte el silencio en una afirmación: el central
+	// ya tiene esto. Va en la MISMA transacción que el UPSERT, porque un crash entre las dos dejaría
+	// la observación sin sello y el próximo backfill la volvería a subir.
+	//
+	// enqueued_hash lleva el hash del contenido YA redactado, o sea lo que esta base tiene ahora.
+	// Así, si mañana se edita acá, enqueueOutboxTx compara contra esto, ve el cambio y la encola. Y
+	// se REFRESCA en cada re-entrega (DO UPDATE), porque si no una edición que baja del central
+	// dejaría el sello apuntando a un contenido que ya no existe y el próximo enqueue subiría de más.
+	//
+	// Y el DO UPDATE NO pisa una fila 'pending'/'claimed': ésa es una intención de envío LOCAL que
+	// todavía no salió, y sellarla como espejo la mataría en silencio. Sobre 'sent'/'dead'/'espejo'
+	// sí escribe, que son estados terminales donde el sello sólo agrega información.
+	//
+	// ⚠️ Lo que este arreglo NO toca: el UPSERT de arriba igual pisa el CONTENIDO local con el del
+	// central (último que escribe gana). Eso es el diseño declarado del enlace, no un descuido de
+	// acá, y cambiarlo es otra discusión.
+	if _, err := tx.Exec(`
+		INSERT INTO outbox (obs_id, enqueued_hash, status, attempts, next_attempt_at, created_at, updated_at)
+		VALUES (?, ?, 'espejo', 0, datetime('now'), datetime('now'), datetime('now'))
+		ON CONFLICT(obs_id) DO UPDATE SET
+			status = 'espejo', attempts = 0, last_error = NULL,
+			enqueued_hash = excluded.enqueued_hash, updated_at = datetime('now')
+		WHERE outbox.status NOT IN ('pending','claimed')`,
+		o.ID, hash); err != nil {
+		return false, fmt.Errorf("error al sellar como espejo la obs bajada %s: %w", o.ID, err)
+	}
+
 	cambio := existia && previo != clean
 	if cambio {
 		if _, err := tx.Exec(`DELETE FROM embeddings WHERE observation_id = ?`, o.ID); err != nil {

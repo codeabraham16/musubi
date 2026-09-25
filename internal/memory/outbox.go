@@ -21,11 +21,24 @@ import (
 //	claimed -> reclamada por un ciclo de drain, con lease en next_attempt_at (futuro)
 //	sent    -> entregada al central con éxito (no se re-entrega)
 //	dead    -> dead-letter: fallo permanente o tope de reintentos (no se reintenta)
+//	espejo  -> BAJÓ del central: ya está allá, no hay nada que enviar (ver abajo)
+//
+// 'espejo' NO es un estado de envío: es el sello de que esta fila entró por el sync ENTRANTE. Existe
+// porque el anti-loop de IngestShared —no encolar lo bajado— se verificaba en un solo instante y
+// BackfillOutbox lo deshacía en la apertura siguiente: siembra una 'pending' por cada 'shared' SIN
+// fila, y lo bajado del central es exactamente eso. Dejando el sello, el `NOT EXISTS` del backfill ya
+// no la ve y el `status IN ('pending','claimed')` del claim tampoco.
+//
+// Es un estado terminal como 'sent', y por el mismo motivo: el central tiene el contenido. La
+// diferencia es de dirección, y se guarda aparte para poder MEDIR el eco en vez de confiar en que no
+// volvió. No es una mordaza: si después se edita la observación acá, el content_hash cambia y el
+// ON CONFLICT de enqueueOutboxTx la devuelve a 'pending' como a cualquier otra.
 const (
 	outboxPending = "pending"
 	outboxClaimed = "claimed"
 	outboxSent    = "sent"
 	outboxDead    = "dead"
+	outboxEspejo  = "espejo"
 )
 
 // OutboxItem es una unidad de entrega ya lista para empujar al central: el obs_id (que
@@ -259,9 +272,13 @@ func (e *DbEngine) OutboxStats() (pending, sent, dead int, err error) {
 // OutboxHealthReport es el estado del sync saliente para observabilidad (musubi_sync_status):
 // counts por estado, antigüedad de la observación pendiente más vieja, y el último error visto.
 type OutboxHealthReport struct {
-	Pending             int    `json:"pending"`
-	Sent                int    `json:"sent"`
-	Dead                int    `json:"dead"`
+	Pending int `json:"pending"`
+	Sent    int `json:"sent"`
+	Dead    int `json:"dead"`
+	// Espejo son las que BAJARON del central y por eso no se envían. Se reporta porque un arreglo
+	// que sólo deja de hacer algo es invisible: sin este número no hay manera de distinguir «el eco
+	// se frenó» de «el sello no se está poniendo». Es la cuenta de lo que NO se re-subió.
+	Espejo              int    `json:"espejo"`
 	OldestPendingAgeSec int64  `json:"oldest_pending_age_seconds"`
 	LastError           string `json:"last_error"`
 }
@@ -277,6 +294,15 @@ func (e *DbEngine) OutboxHealth() (OutboxHealthReport, error) {
 		return h, err
 	}
 	h.Pending, h.Sent, h.Dead = p, s, d
+
+	// El espejo va aparte y no por OutboxStats: ese devuelve los tres contadores de ENVÍO y los
+	// firma su nombre. Meterle un cuarto valor cambiaría la firma de todos sus callers para que
+	// ninguno lo use más que éste.
+	if err := e.db.QueryRow(
+		`SELECT COUNT(*) FROM outbox WHERE status = ?`, outboxEspejo,
+	).Scan(&h.Espejo); err != nil && err != sql.ErrNoRows {
+		return h, fmt.Errorf("error al contar las filas espejo del outbox: %w", err)
+	}
 
 	var age sql.NullInt64
 	if err := e.db.QueryRow(
