@@ -53,8 +53,8 @@ import (
 //     motivo equivocado.
 //
 // arnes: archivo="cmd/musubi/servicios.go"
-// arnes: de="\tb, err := ejecutarParaEnumerar(nombre, args...)\n\tif err != nil {\n\t\treturn \"\", fmt.Errorf(\"%s: %w\", nombre, err)\n\t}"
-// arnes: a="\tb, err := ejecutarParaEnumerar(nombre, args...)\n\tif err != nil {\n\t\tvar ee *exec.ExitError\n\t\tif errors.As(err, &ee) {\n\t\t\treturn \"\", fmt.Errorf(\"%s: %w: %s\", nombre, err, ee.Stderr)\n\t\t}\n\t\treturn \"\", fmt.Errorf(\"%s: %w\", nombre, err)\n\t}"
+// arnes: de="\tb, err := ejecutarComoParaEnumerar(id, nombre, args...)\n\tif err != nil {\n\t\treturn \"\", fmt.Errorf(\"%s: %w\", nombre, err)\n\t}"
+// arnes: a="\tb, err := ejecutarComoParaEnumerar(id, nombre, args...)\n\tif err != nil {\n\t\tvar ee *exec.ExitError\n\t\tif errors.As(err, &ee) {\n\t\t\treturn \"\", fmt.Errorf(\"%s: %w: %s\", nombre, err, ee.Stderr)\n\t\t}\n\t\treturn \"\", fmt.Errorf(\"%s: %w\", nombre, err)\n\t}"
 func TestElMotivoDeEnumeracionNoArrastraElStderrDelComando(t *testing.T) {
 	// El centinela imita lo que de verdad preocupa: una ruta con el nombre de un usuario.
 	const centinela = `C:\Users\usuario-privado\perfil`

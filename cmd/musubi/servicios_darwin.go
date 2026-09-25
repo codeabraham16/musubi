@@ -9,7 +9,7 @@ package main
 // murió mal. No hay contador de reinicios ni marca de tiempo: quedan en nil.
 //
 // SE FILTRA POR PREFIJO. launchd carga cientos de agentes del sistema (`com.apple.*`); reportar
-// todos llenaría el techo de 64 con cosas de Apple y dejaría afuera lo que el operador instaló.
+// todos llenaría el techo del latido con cosas de Apple y dejaría afuera lo que el operador instaló.
 
 import (
 	"time"

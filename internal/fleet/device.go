@@ -274,7 +274,7 @@ func NormalizarCaps(in []string) ([]Cap, error) {
 		case CapMetrics, CapExec, CapScreen, CapScreenView, CapShell:
 			vistas[c] = true
 		default:
-			return nil, fmt.Errorf("%w: %q (esperaba metrics, exec o screen)", ErrCapDesconocida, s)
+			return nil, fmt.Errorf("%w: %q (esperaba metrics, exec, screen, screen:view o shell)", ErrCapDesconocida, s)
 		}
 	}
 	return ordenar(vistas), nil

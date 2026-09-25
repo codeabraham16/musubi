@@ -57,12 +57,19 @@ type SearchResult struct {
 // captura): contar solo observaciones daba falsos positivos porque save_fact y save_code
 // no las incrementan. Cuenta filas totales (relations incluye invalidadas) para que la
 // señal sea MONÓTONA ante cada save nuevo, incluso cuando un hecho supersede a otro.
+//
+// LOS GISTS AUTOMÁTICOS NO CUENTAN. Los escribe el índice del grafo, no el agente, y el que
+// lee este número es el recordatorio de captura (cmd/musubi/turn.go): si contaran, cada .go
+// nuevo que indexa un tick —y la siembra inicial de ~240— se leería como «el agente guardó
+// algo» y pondría en cero el contador de turnos sin guardar. Silenciaría el recordatorio justo
+// cuando el agente no guardó nada.
 func (e *DbEngine) CountSavedItems() (int, error) {
 	var n int
 	if err := e.db.QueryRow(`SELECT
 		(SELECT COUNT(*) FROM observations) +
 		(SELECT COUNT(*) FROM relations) +
-		(SELECT COUNT(*) FROM code_memory)`).Scan(&n); err != nil {
+		(SELECT COUNT(*) FROM code_memory WHERE substr(gist, 1, length(?)) != ?)`,
+		PrefijoGistAutomatico, PrefijoGistAutomatico).Scan(&n); err != nil {
 		return 0, fmt.Errorf("error al contar items guardados: %w", err)
 	}
 	return n, nil

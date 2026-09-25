@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"musubi/internal/codeintel"
 	"musubi/internal/memory"
 )
 
@@ -214,5 +215,80 @@ func TestFreshMantieneSuSemanticaParaClientesViejos(t *testing.T) {
 	}
 	if got := recordar(t, s, map[string]interface{}{"path": "remoto/ajeno.jsx"}); got.Fresh {
 		t.Error("fresh = true sobre un archivo que el servidor no puede ver: se aflojó la garantía del booleano")
+	}
+}
+
+// grafoPublicado siembra el nodo 'file' de cada path con la huella dada ("" = un nodo sin huella),
+// como lo dejaría el push de un proyecto en el central.
+func grafoPublicado(t *testing.T, s *McpServer, huellas map[string]string) {
+	t.Helper()
+	var paths []string
+	var nodes []memory.GraphNode
+	for p, fp := range huellas {
+		paths = append(paths, p)
+		nodes = append(nodes, memory.GraphNode{Key: codeintel.FileKey(p), Kind: codeintel.KindFile, Name: filepath.Base(p), Path: p, SrcFingerprint: fp})
+	}
+	if err := s.engine.UpsertPackageGraphFrom("", paths, nodes, nil); err != nil {
+		t.Fatalf("UpsertPackageGraphFrom: %v", err)
+	}
+}
+
+// ★ F6 — EL CENTRAL JUZGA LA FRESCURA CONTRA EL GRAFO PUBLICADO.
+//
+// El central no tiene el árbol, pero tiene el grafo que el proyecto empujó, y el nodo 'file' lleva
+// la huella del contenido que se derivó. Medido el 2026-09-24: 66 de los 117 gists de musubi están
+// rancios según ese grafo, y la tool los contestaba todos 'unknown'. Sin nodo, o con un nodo sin
+// huella, sigue 'unknown' — así F2 queda en verde.
+//
+// Sabotaje: que huellaDelGrafo no devuelva la huella del nodo. Los dos casos con nodo caen a 'unknown'.
+// arnes: archivo="internal/mcp/methods.go"
+// arnes: de="return strings.TrimSpace(n.SrcFingerprint)"
+// arnes: a="return strings.TrimSpace(n.SrcFingerprint[:0])"
+func TestElCentralJuzgaLaFrescuraContraElGrafoPublicado(t *testing.T) {
+	s := newTestServerWithPath(t, t.TempDir())
+	s.forceRedact = true // el central: el árbol no está en este disco
+	grafoPublicado(t, s, map[string]string{"pkg/a.go": "huella-publicada", "pkg/sin-huella.go": ""})
+
+	casos := []struct {
+		nombre, path, guardada, esperado, ref string
+	}{
+		{"el gist es de otra versión del archivo", "pkg/a.go", "huella-vieja", frescuraRancia, refGrafo},
+		{"el gist es de la versión publicada", "pkg/a.go", "huella-publicada", frescuraFresca, refGrafo},
+		{"el nodo no guardó huella", "pkg/sin-huella.go", "huella-publicada", frescuraDesconocida, ""},
+		{"el archivo no tiene nodo", "pkg/sin-nodo.go", "huella-publicada", frescuraDesconocida, ""},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			gistGuardado(t, s, c.path, c.guardada)
+			v := vistaDe(t, s, c.path)
+			if v["freshness"] != c.esperado {
+				t.Errorf("freshness = %v, esperaba %q", v["freshness"], c.esperado)
+			}
+			if ref, _ := v["freshness_ref"].(string); ref != c.ref {
+				t.Errorf("freshness_ref = %q, esperaba %q", ref, c.ref)
+			}
+		})
+	}
+}
+
+// ★ F7 — EN LOCAL, UN ARCHIVO BORRADO NO SE JUZGA CONTRA EL GRAFO.
+//
+// Los nodos de un archivo borrado viven hasta la poda del próximo tick, y su huella es la misma del
+// gist. Si el daemon local consultara el grafo cuando el disco no responde, un archivo que ya no
+// existe saldría 'fresh'.
+//
+// Sabotaje: consultar el grafo también en el daemon local. El archivo borrado sale 'fresh'.
+// arnes: archivo="internal/mcp/methods.go"
+// arnes: de="if s.arbolFueraDeAlcance() {\n\t\t\thuella, ref = s.huellaDelGrafo"
+// arnes: a="if true {\n\t\t\thuella, ref = s.huellaDelGrafo"
+func TestEnLocalUnArchivoBorradoNoSeJuzgaContraElGrafo(t *testing.T) {
+	s := newTestServerWithPath(t, t.TempDir())
+	grafoPublicado(t, s, map[string]string{"pkg/borrado.go": "huella"})
+	gistGuardado(t, s, "pkg/borrado.go", "huella")
+
+	v := vistaDe(t, s, "pkg/borrado.go")
+	if v["freshness"] != frescuraDesconocida {
+		t.Errorf("freshness = %v sobre un archivo que no está en el disco del daemon local: esperaba %q",
+			v["freshness"], frescuraDesconocida)
 	}
 }

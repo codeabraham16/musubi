@@ -26,7 +26,7 @@ func conPodman(c string) bool { return c == "podman" }
 // arnes: de="\tif hayCLI(\"podman\") {"
 // arnes: a="\tif true {"
 func TestSinPodmanNiDockerElAgenteNoPideRutasDeContenedores(t *testing.T) {
-	ns := necesidadesDelAgente("/home/musubi", "/run/user/1000", sinCLI)
+	ns := necesidadesDelAgente("/home/musubi/.config/musubi-agente", "/home/musubi", "/run/user/1000", sinCLI)
 	for _, n := range ns {
 		if strings.Contains(n.Trabajo, "contenedores") {
 			t.Errorf("declaró %q para %q en una máquina sin podman ni docker", n.Ruta, n.Trabajo)
@@ -38,7 +38,7 @@ func TestSinPodmanNiDockerElAgenteNoPideRutasDeContenedores(t *testing.T) {
 	}
 
 	// Con podman aparecen, y son las mismas TRES que el drop-in de producción ya concede.
-	conPod := necesidadesDelAgente("/home/musubi", "/run/user/1000", conPodman)
+	conPod := necesidadesDelAgente("/home/musubi/.config/musubi-agente", "/home/musubi", "/run/user/1000", conPodman)
 	quiero := map[string]bool{
 		"/home/musubi/.local/share/containers": false,
 		"/run/user/1000/containers":            false,
@@ -73,7 +73,7 @@ func TestSinPodmanNiDockerElAgenteNoPideRutasDeContenedores(t *testing.T) {
 // arnes: de="\"ReadWritePaths=-\" + path.Join(runtimeDir, sub),"
 // arnes: a="\"ReadWritePaths=\" + path.Join(runtimeDir, sub),"
 func TestLasRutasDeRuntimeSonOpcionalesYSuDirectivaLlevaGuion(t *testing.T) {
-	for _, n := range necesidadesDelAgente("/home/musubi", "/run/user/1000", conPodman) {
+	for _, n := range necesidadesDelAgente("/home/musubi/.config/musubi-agente", "/home/musubi", "/run/user/1000", conPodman) {
 		enRuntime := strings.HasPrefix(n.Ruta, "/run/")
 		if enRuntime && !n.Opcional {
 			t.Errorf("%q no está declarada opcional: si logind no llegó, la unidad NO ARRANCA", n.Ruta)
@@ -102,7 +102,7 @@ func TestLasRutasDeRuntimeSonOpcionalesYSuDirectivaLlevaGuion(t *testing.T) {
 // arnes: de="\t\t\tSintoma:   \"el agente arranca y sale en el acto diciendo que falta la credencial\","
 // arnes: a="\t\t\tSintoma:   \"\","
 func TestCadaNecesidadDiceComoSeVeSuFalloYComoSeArregla(t *testing.T) {
-	ns := necesidadesDelAgente("/home/musubi", "/run/user/1000", conPodman)
+	ns := necesidadesDelAgente("/home/musubi/.config/musubi-agente", "/home/musubi", "/run/user/1000", conPodman)
 	if len(ns) < 4 {
 		t.Fatalf("la declaración quedó en %d necesidades: la prueba no está mirando lo que cree", len(ns))
 	}
@@ -297,7 +297,7 @@ func TestElBlindajeDeLaUnidadConcedeLoQueElAgenteDECLARA(t *testing.T) {
 	const homeProd, runtimeProd = "/home/musubi", "/run/user/1000"
 	unidad := unidadYDropIns(t)
 
-	ns := necesidadesDelAgente(homeProd, runtimeProd, conPodman)
+	ns := necesidadesDelAgente(dirDelToken(homeProd+"/.config/musubi-agente/token", homeProd), homeProd, runtimeProd, conPodman)
 	if len(ns) < 4 {
 		t.Fatalf("la declaración quedó en %d necesidades: la guarda no está mirando lo que cree", len(ns))
 	}
@@ -329,7 +329,7 @@ func TestElBlindajeDeLaUnidadConcedeLoQueElAgenteDECLARA(t *testing.T) {
 func TestLaUnidadNoConcedeRutasQueElAgenteNoPide(t *testing.T) {
 	const homeProd, runtimeProd = "/home/musubi", "/run/user/1000"
 	declaradas := map[string]bool{}
-	for _, n := range necesidadesDelAgente(homeProd, runtimeProd, conPodman) {
+	for _, n := range necesidadesDelAgente(dirDelToken(homeProd+"/.config/musubi-agente/token", homeProd), homeProd, runtimeProd, conPodman) {
 		declaradas[n.Ruta] = true
 	}
 
