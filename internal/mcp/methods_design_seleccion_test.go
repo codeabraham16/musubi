@@ -195,7 +195,12 @@ func TestDesignElTopKNoColapsaEnLoMismo(t *testing.T) {
 	// SABOTAJE: con la diversidad apagada (λ=0) los clones ganan por similitud pura y el distinto
 	// queda afuera. Se comprueba sobre la función directamente para que el invariante no dependa de
 	// que alguien recuerde tocar la constante.
-	// arnes: prueba="TestDesignLosArticulosCompletosTienenLugar"
+	//
+	// La directiva nombra la prueba a mano porque vive ADENTRO de la función y el censo no la puede
+	// derivar. Desde #617 nombraba a la de ABAJO (I-SEL4, la reserva), a la que λ no le toca un
+	// solo camino: la corrida nocturna de #652 la dio VERDE en Linux y en Windows. El sabotaje era
+	// el correcto; la prueba declarada, la hermana.
+	// arnes: prueba="TestDesignElTopKNoColapsaEnLoMismo"
 	// arnes: archivo="internal/mcp/methods_design.go"
 	// arnes: de="const designLambdaMMR = 0.45"
 	// arnes: a="const designLambdaMMR = 0.0"
@@ -236,6 +241,12 @@ func porSimilitudPura(src []searchSource, n int) []searchSource {
 // I-SEL4 · los artículos completos tienen lugar reservado. Sin reserva, 1.438 micro-tarjetas los
 // desplazan SIEMPRE por pura aritmética — medido: en un pool de 58 salieron 58 tarjetas y 0 artículos,
 // y ahí está toda la profundidad del acervo (~3.057 tokens por artículo contra ~61 por tarjeta).
+//
+// Sabotaje verificado que la pone roja: dejar la reserva en cero. Las diez tarjetas, mejor
+// rankeadas, llenan todos los lugares y «ningún artículo completo entró al corpus».
+// arnes: archivo="internal/mcp/methods_design.go"
+// arnes: de="const designReservaCrudos = 2"
+// arnes: a="const designReservaCrudos = 0"
 func TestDesignLosArticulosCompletosTienenLugar(t *testing.T) {
 	entradas := []entradaDirigida{}
 	for i := 0; i < 10; i++ { // muchas tarjetas cortas, todas mejor rankeadas
