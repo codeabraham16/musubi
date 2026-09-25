@@ -644,12 +644,26 @@ type avisoDeAcceso struct {
 	// —la política encola un exec— así que derivarlo de ahí juntaría en una sola clave de log dos
 	// caminos que hay que poder distinguir. Es un dato del camino, no de la bitácora.
 	operacion string
+	// origen es QUIÉN dispara lo que el aviso anuncia, y viaja con el texto y el plano por la misma
+	// razón que ellos: el aviso es una fila más de la bitácora, y su origen lo tiene que declarar
+	// quien encola (A131 · T5).
+	//
+	// Estaba escrito a fuego en encolarAvisoDeAcceso —`Origen: persona` para los cuatro planos—, así
+	// que el aviso de una POLÍTICA salía en la bitácora y en la cronología como pedido por alguien
+	// (`automatico: false`), con la fila del comando al lado diciendo lo contrario: una acción que
+	// disparó una regla contada como de una persona, que es lo que A59 cerró para el comando y no
+	// para su aviso. Un literal POSICIONAL no compila sin este campo, pero uno con claves sí, y queda
+	// con origen vacío: el compilador no alcanza. Lo que cierra un quinto aviso es
+	// TestNingunPlanoLePrometeUnAvisoAQuienNoSabeMostrarlo, que recorre los planos con aviso leídos
+	// del código (planosConAviso lee también los literales con claves): sin su fila la pone roja, y
+	// con la fila, su comparación ve un aviso cuyo origen contradiga al de su acción.
+	origen fleet.OrigenComando
 }
 
 var (
-	avisoPantalla = avisoDeAcceso{"está abriendo una sesión de pantalla en esta máquina.", fleet.HechoCanalPantalla, "pantalla"}
-	avisoShell    = avisoDeAcceso{"está abriendo una terminal en esta máquina.", fleet.HechoCanalShell, "shell"}
-	avisoExec     = avisoDeAcceso{"está ejecutando comandos en esta máquina.", fleet.HechoCanalExec, "exec"}
+	avisoPantalla = avisoDeAcceso{"está abriendo una sesión de pantalla en esta máquina.", fleet.HechoCanalPantalla, "pantalla", fleet.OrigenPersona}
+	avisoShell    = avisoDeAcceso{"está abriendo una terminal en esta máquina.", fleet.HechoCanalShell, "shell", fleet.OrigenPersona}
+	avisoExec     = avisoDeAcceso{"está ejecutando comandos en esta máquina.", fleet.HechoCanalExec, "exec", fleet.OrigenPersona}
 	// EL CUARTO CAMINO, y el que no tenía aviso hasta A91. Va con HechoCanalExec porque lo que la
 	// política encola ES un exec: darle una clase propia partiría la bitácora del plano de actuar
 	// en dos, y la mitad automática es justo la que nadie miró ejecutarse (I16).
@@ -659,7 +673,10 @@ var (
 	// aviso que dijera «auto-heal está ejecutando comandos» se lee como si hubiera un humano
 	// llamado así; decir que es automático es la única forma de que la persona sepa que no hay a
 	// quién preguntarle.
-	avisoPolitica = avisoDeAcceso{"corrió una acción automática de mantenimiento en esta máquina.", fleet.HechoCanalExec, "politica"}
+	//
+	// Y EL ORIGEN ES EL DE LA POLÍTICA: el aviso lo escribe el mismo barrido que encola el comando,
+	// y leído en la bitácora tiene que decir lo mismo que él —`automatico: true`—.
+	avisoPolitica = avisoDeAcceso{"corrió una acción automática de mantenimiento en esta máquina.", fleet.HechoCanalExec, "politica", fleet.OrigenPolitica}
 )
 
 // encolarAvisoDeAcceso le manda al agente el aviso que `avisa` promete (A57).
@@ -732,7 +749,9 @@ func (s *McpServer) encolarAvisoDeAcceso(d fleet.Device, p *Principal, a avisoDe
 	texto := fmt.Sprintf("Musubi: %s %s", fleet.RecortarRunas(quien, 64), a.haciendo)
 	if _, err := s.engine.EncolarComando(fleet.Comando{
 		DeviceID: d.ID, ProjectID: d.ProjectID, Principal: quien,
-		Origen: fleet.OrigenPersona,
+		// EL ORIGEN LO DECLARA EL AVISO, no este embudo: acá estaba `persona` para los cuatro
+		// planos, y el de la política se leía como pedido por alguien (ver avisoDeAcceso).
+		Origen: a.origen,
 		Argv:   []string{comandoAviso, texto},
 		// EL PLANO, sin el cual esta fila la vería quien tiene `screen:view` sobre la máquina —
 		// incluyendo los avisos de exec y de shell, que son de otros dos planos. EncolarComando
