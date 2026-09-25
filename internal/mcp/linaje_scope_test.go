@@ -91,3 +91,85 @@ func TestElLinajeNoCruzaTenants(t *testing.T) {
 		t.Errorf("control: el admin federado tiene que ver la ficha de web: %s", got)
 	}
 }
+
+// TestLasFuentesDelBriefSeExpandenConLaMismaCredencial: los ids que musubi_design le anuncia a una
+// credencial —las `fuentes` de una ficha— se pueden expandir con ESA credencial, aunque sea un
+// writer de otro proyecto. musubi_design lee el acervo con un scope fijo; memory_expand leía con el
+// de la credencial, y a un writer de crm le devolvía `[]` sin error ni aviso: la nota del brief le
+// prometía «expandir uno trae el artículo entero» y no se cumplía justo para él.
+//
+// La otra mitad es la que cuida la frontera: abrir el acervo no abre otros tenants. El mismo writer
+// sigue sin poder expandir una nota de web, y el linaje del artículo no le nombra la ficha de web que
+// también salió de él.
+//
+// Sabotaje que la hace fallar: memory_expand se queda con el alcance pelado de la credencial.
+// arnes: archivo="internal/mcp/methods.go"
+// arnes: de="Federate: fed, Acervo: designCorpusScope})"
+// arnes: a="Federate: fed})"
+//
+// Sabotaje que la hace fallar: la cláusula del acervo abre todos los tenants.
+// arnes: archivo="internal/memory/scope.go"
+// arnes: de="\" AND (%s IN (?, ?) OR %s IS NULL"
+// arnes: a="\" AND (%s IN (?, ?) OR 1 OR %s IS NULL"
+func TestLasFuentesDelBriefSeExpandenConLaMismaCredencial(t *testing.T) {
+	s := acervoDePatrones(t, map[string]string{
+		"design-corpus/tabla-densa": "Para una tabla densa, la primera columna ancla la lectura y las numéricas van a la derecha.",
+	})
+	seed := func(origin, id, topic, texto string) {
+		if err := s.engine.SaveObservationTypedFrom(origin, "", id, topic, texto, 1.0, "semantic", "shared", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	derivar := func(ficha, blob string) {
+		if _, err := s.engine.UpsertObsRelation(memory.ObsRelation{SourceID: ficha, TargetID: blob,
+			Relation: memory.RelDerivedFrom, Status: memory.RelStatusResolved}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// acervoDePatrones numera los ids desde «pata»; con una sola entrada, la ficha es «pata».
+	seed(designCorpusScope, "fuente-de-pata", "ingested/web/manual", "Un manual de otra cosa: kerning y ligaduras.")
+	seed("crm", "nota-de-crm", "notas/propia", "una nota propia del writer")
+	seed("web", "nota-de-web", "notas/ajena", "una nota de otro tenant")
+	seed("web", "ficha-de-web", "design-corpus/ajena", "una ficha de otro tenant")
+	derivar("pata", "fuente-de-pata")
+	derivar("ficha-de-web", "fuente-de-pata")
+
+	writer := &Principal{Name: "alice", Role: RoleWriter, ProjectID: "crm"}
+	expandir := func(ids ...string) string {
+		raw, _ := json.Marshal(map[string]any{"ids": ids})
+		params, _ := json.Marshal(CallToolRequest{Name: "musubi_memory_expand", Arguments: raw})
+		out, rpcErr := s.handleToolsCall(withPrincipal(context.Background(), writer), params)
+		if rpcErr != nil {
+			t.Fatalf("expandir %v: %+v", ids, rpcErr)
+		}
+		return out.(CallToolResponse).Content[0].Text
+	}
+
+	b := callDesign(t, s, writer, "tabla densa", "web")
+	var fuentes []string
+	for _, p := range b.Corpus {
+		if p.ID == "pata" {
+			fuentes = p.Fuentes
+		}
+	}
+	if strings.Join(fuentes, ",") != "fuente-de-pata" {
+		t.Fatalf("control: el brief tiene que anunciarle al writer de crm la fuente de la ficha, o no hay nada que expandir; fuentes=%v corpus=%+v", fuentes, b.Corpus)
+	}
+
+	articulo := expandir(fuentes...)
+	if !strings.Contains(articulo, "kerning y ligaduras") {
+		t.Errorf("el writer de crm tiene que poder expandir la fuente que el brief le anunció: %s", articulo)
+	}
+	if !strings.Contains(articulo, `"destilado_en"`) || !strings.Contains(articulo, `"pata"`) {
+		t.Errorf("el artículo expandido tiene que traer la ficha del acervo que salió de él: %s", articulo)
+	}
+	if strings.Contains(articulo, "ficha-de-web") {
+		t.Errorf("FUGA: por el linaje del acervo, el writer de crm ve el id de una ficha de web: %s", articulo)
+	}
+	if got := expandir("nota-de-crm"); !strings.Contains(got, "una nota propia del writer") {
+		t.Errorf("control: lo propio se sigue expandiendo: %s", got)
+	}
+	if got := expandir("nota-de-web"); strings.Contains(got, "nota-de-web") {
+		t.Errorf("FUGA: abrir el acervo abrió otro tenant; el writer de crm expandió una nota de web: %s", got)
+	}
+}

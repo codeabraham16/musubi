@@ -31,6 +31,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   fundidas y fija el orden de los JOIN, y con 30.000 observaciones y 8 raíces cuesta 8-10 ms (30-40 ms
   dejándole el orden al planificador).
 
+  **Lo que el brief anuncia se puede expandir con la credencial que lo recibió.** `musubi_design` lee
+  el acervo con un scope fijo y le sirve a cualquiera; `musubi_memory_expand` leía sólo con el de la
+  credencial, así que un writer de otro proyecto recibía las `fuentes` (y el id de un patrón
+  `recortado`, que ya venía con el mismo hueco) y al expandirlas le volvía `[]`, sin error ni aviso.
+  Ahora la expansión lee, además de lo propio, el tenant `musubi-design` —el mismo que `musubi_design`
+  ya le sirve entero— y ningún otro: una nota de otro proyecto sigue fuera, y el linaje usa ese mismo
+  alcance, así que tampoco la nombra.
+
   **Queda latente hasta el despliegue y hasta que alguien lo use.** Medido el 2026-09-24:
   `expand_count` sobre las fichas y los artículos de `musubi-design` es cero. Se da por encendido
   cuando haya `expand_count > 0` sobre `topic_key LIKE 'ingested/%'` en ese tenant. Las 58 aristas que
