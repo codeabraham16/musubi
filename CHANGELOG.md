@@ -61,6 +61,76 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   en la cola del destilador, el expand sin linaje, cada `omitempty`, el linaje que rompe la expansión
   al fallar, el brief sin fuentes, el expand sin el acervo de diseño, y la cláusula del acervo que
   abre todos los tenants.*
+- **Pedir cuatro ojos dice quién puede aprobar de verdad.** `musubi_fleet_require_approval`
+  encendía la marca y avisaba en prosa que «con un solo par de ojos la máquina queda cerrada»,
+  pero dejaba que el admin lo averiguara leyendo `principals.yaml` a mano. Medido el 2026-09-24 en
+  el central: sobre la máquina de un tercero, las únicas dos credenciales con `screen` eran del
+  dueño, y 71 de las 79 órdenes de esa semana fueron `exec` (las otras 8, avisos), que esta puerta
+  no cubre. Encenderla ahí dejaba en la bitácora un control que se ve puesto y no lo está.
+
+  Ahora, al encenderla, la respuesta trae `credenciales_que_pueden_aprobar` (capacidad → nombres,
+  con la misma compuerta que usa `musubi_fleet_approve` y sin las credenciales vencidas),
+  `candado` cuando una capacidad tiene menos de dos, `exec_sin_acotar` con quienes tienen `exec`
+  sin allowlist o con un intérprete en ella (también con nombre o ruta de Windows: `pwsh.exe`,
+  `C:\...\powershell.exe`), y `sin_camino_aprobable` cuando la máquina no admite
+  ninguna capacidad que pase por cuatro ojos. Se informan sólo `shell` y `screen`, que son las
+  que una puerta consume: `screen:view` no abre ninguna sesión, así que listarla nombraba
+  aprobadores que no pueden aprobar nada y tapaba `sin_camino_aprobable` en una máquina que sólo
+  deja mirar. Sin registro de principals (stdio, o un servidor
+  sin `principals.yaml` ni token) no inventa listas vacías: dice `aprobadores_desconocidos`. Y
+  siempre agrega una nota fija: Musubi no sabe si dos credenciales son la misma persona, así que
+  la falta de `candado` no es un verde. El informe se calcula antes de escribir la marca, y no
+  cambian ni los parámetros ni la descripción de la tool. No se encendió la aprobación en ninguna
+  máquina ni se tocaron credenciales.
+- **Las credenciales del cerebro avisan ANTES de vencer.** El vencimiento (`expires:` en
+  `principals.yaml`) existe desde el 2026-09-03 y no avisaba: una credencial con fecha se caía el
+  día que tocaba, y lo primero que se veía era el sync de una máquina muerto — con su memoria
+  compartida yéndose a dead-letter, porque un 401 es permanente para el sync.
+
+  - **`musubi token list` tiene un quinto estado, «por vencer»**, cuando le quedan menos de 14 días,
+    y la fila dice cuántos (`por vencer, faltan 3 días (…)`, redondeando hacia arriba: a la de doce
+    horas no le «faltan 0 días»). La tool `musubi_token_list` lo devuelve en `vencimiento` sin
+    cambios de esquema.
+  - **`/metrics` publica el resumen del registro, sin nombres**: `musubi_principal_next_expiry_seconds`
+    (ausente si ninguna credencial tiene fecha futura, que hoy es el caso del central),
+    `musubi_principals_expired`, `musubi_principals_without_expiry`, `musubi_legacy_token_enabled`,
+    `musubi_legacy_token_auth_total` y `musubi_principals_reload_failing` / `_reload_failures_total`.
+    Sólo las ve una identidad read=all (el scrape) o la confianza local: un tercero con read=own no
+    tiene por qué saber que hay un bearer admin que no vence.
+  - **El bearer legacy (`MUSUBI_TOKEN`) cuenta sus usos** en `resolve()`, por donde pasan todas las
+    puertas —también `/metrics` y `/api/*`, que el ledger de tools no ve—, y la cuenta sobrevive a
+    las recargas del registro. Es lo que tiene que llegar a siete días en cero para poder retirarlo.
+  - **Una relectura rechazada de `principals.yaml` deja de ser silenciosa.** Conservar el registro
+    anterior es correcto, pero la revocación escrita en el archivo no se aplicaba y el próximo
+    reinicio no arrancaba, y lo único que quedaba era un Warn en el journal. El aviso se apaga
+    cuando el archivo vuelve a cargar, y también cuando se restaura el respaldo con su mtime
+    (`cp -p`, `rsync -a`), que la recarga reconoce como el archivo que ya tenía y no relee.
+  - **Tres alertas** en `deploy/musubi-alerts.yml` —`CredencialPorVencer` (`< 14 * 24 * 3600`, el
+    mismo número que el listado), `CredencialRecienVencida` (el salto del gauge, no el estado: una
+    fila vencida no la deja sonando) y `RegistroDePrincipalsSinPoderRecargarse`—, con sus tres
+    secciones en `deploy/RUNBOOK.md`. La de `CredencialRecienVencida` dice el paso que no se ve:
+    renovar la credencial no resucita lo que se fue a dead-letter, y hay que correr
+    `musubi_sync_status` + `musubi_sync_requeue` en la máquina afectada. La custodia cruzada de
+    `musubi-alerts-flota.yml` pasa de 32 a 35: **los dos archivos de reglas se despliegan juntos.**
+  - `musubi token revoke` ya no pide reiniciar `musubi-brain`: el cerebro relee el archivo solo en
+    ≤10 s, y el mensaje dice los dos casos en que eso no alcanza. `MusubiDown` y su runbook dicen
+    que un `up == 0` con el proceso vivo puede ser la credencial del scrape vencida.
+    `docs/Server_Brain_Onboarding.md` pasa de cuatro estados a cinco.
+
+  *Veinticinco sabotajes nuevos, uno por directiva `arnes:`, los veinticinco corridos en rojo: la
+  rama «por vencer», el redondeo, el umbral del listado contra el de la alerta (en las dos
+  direcciones), la llamada al render desde `/metrics`, la vencida fuera del mínimo, la delegación
+  del registro recargable, la serie ausente sin fecha futura, la visibilidad read=own (agregando lo
+  prohibido), el flag de recarga al encenderse, al apagarse y al restaurar el respaldo con su mtime,
+  el contador de recargas, el contador del legacy (con archivo y sin él) y su traspaso en la
+  recarga, los nombres de las series contra las `expr` de las alertas, lo que cada `expr` hace con
+  el valor (un solo vencimiento tiene que disparar, el flag 0/1 tiene que poder cumplirse, el `for:`
+  tiene que caber en la ventana del `delta`), los días en la fila del CLI, el `go reload.watch(ctx)`
+  del arranque (se arranca el servidor entero, se revoca y se espera el 401), la orden de reiniciar
+  que `token revoke` ya no da y la enumeración de estados del onboarding contra las constantes del
+  código. Más los tres naturales del cambio sobre guardas que ya existían —la custodia en 32 y dos
+  anclas del runbook renombradas—, también en rojo. No se le puso fecha a ninguna credencial: eso es
+  producción y va aparte, con el aviso ya desplegado.*
 - **El arnés corre sus sabotajes todas las noches.** Hasta hoy el CI sólo los CONTABA: la guarda
   del censo comprueba que cada directiva `// arnes:` apunte a un literal único, pero nadie corría
   `arnes -correr`, que es lo único que dice si la guarda se pone roja con su sabotaje. El workflow
@@ -111,6 +181,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **El aviso de intérpretes en la allowlist de `exec` ve los de Windows.** `fleet.EsInterprete`
+  comparaba el basename contra un mapa que sólo tenía `powershell.exe` y `cmd.exe`, y con
+  `filepath.Base`, que en el central (Linux) no parte una ruta con barras invertidas. Como
+  `PermiteArgv` compara `argv[0]` exacto, `pwsh.exe`, `python.exe`, `wsl.exe`, `bash.exe` o
+  `node.exe` en la allowlist de una máquina Windows dejaban lanzar cualquier cosa sin que el
+  arranque lo avisara. Ahora el nombre se corta en la última barra de cualquiera de los dos
+  sistemas, se pasa a minúsculas y se le saca `.exe`, y el mapa suma `wsl`, `py`, `busybox` y
+  `systemd-run`. Lo mismo alimenta `exec_sin_acotar` del informe de cuatro ojos.
+
 - **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
   El ledger era UNA casilla de `meta` que guardaba UNA sesión, y `LedgerAdd` la reiniciaba entera
   con `if sessionID != l.SessionID`. Con varias terminales sobre el mismo cuaderno —10 procesos

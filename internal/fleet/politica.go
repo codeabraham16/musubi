@@ -10,7 +10,6 @@ package fleet
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -46,23 +45,45 @@ func PermiteArgv(permitidos []string, argv []string) bool {
 // No se bloquean: `bash` en una allowlist puede ser exactamente lo que alguien quiere, y decidir
 // por esa persona sería incorrecto. Pero callarlo sería peor — la allowlist se escribe una vez y
 // se lee dentro de dos años—, así que el arranque lo dice con nombre y máquina (I10b).
+//
+// Van SIN `.exe` y en minúsculas: EsInterprete normaliza antes de buscar, así que `pwsh` cubre
+// también `pwsh.exe` y `C:\...\PWSH.EXE`. Una entrada con `.exe` acá no se encontraría nunca.
 var interpretes = map[string]bool{
-	"sh": true, "bash": true, "zsh": true, "ksh": true, "dash": true, "fish": true,
-	"cmd": true, "cmd.exe": true, "powershell": true, "powershell.exe": true, "pwsh": true,
-	"python": true, "python3": true, "perl": true, "ruby": true, "node": true, "php": true,
+	"sh": true, "bash": true, "zsh": true, "ksh": true, "dash": true, "fish": true, "busybox": true,
+	"cmd": true, "powershell": true, "pwsh": true, "wsl": true,
+	"python": true, "python3": true, "py": true, "perl": true, "ruby": true, "node": true, "php": true,
 	"awk": true, "gawk": true, "env": true, "xargs": true, "find": true, "ssh": true,
 	"sudo": true, "doas": true, "su": true, "nohup": true, "setsid": true, "timeout": true,
+	"systemd-run": true,
 }
 
+// separadoresDeRuta son las barras de LOS DOS sistemas. filepath sólo conoce las del sistema donde
+// corre el binario, y eso no alcanza: ver EsInterprete.
+const separadoresDeRuta = `/\`
+
 // EsInterprete dice si permitir este comando equivale a permitir cualquier otro. Compara por
-// basename A PROPÓSITO, al revés que PermiteArgv: acá no se está autorizando nada, se está
-// buscando a quién avisarle, y `/usr/bin/bash` merece el mismo aviso que `bash`.
+// NOMBRE DE PROGRAMA A PROPÓSITO, al revés que PermiteArgv: acá no se está autorizando nada, se
+// está buscando a quién avisarle, y `/usr/bin/bash` merece el mismo aviso que `bash`.
+//
+// EL NOMBRE SE NORMALIZA PARA LOS DOS SISTEMAS, y no con filepath.Base. La allowlist se escribe
+// para la máquina donde va a correr, y la juzga el central, que es Linux: ahí filepath.Base no
+// parte `C:\Windows\...\powershell.exe`, y `pwsh.exe` no es `pwsh` para el mapa. Como PermiteArgv
+// compara argv[0] exacto, `pwsh.exe` en la lista deja lanzar cualquier cosa sobre una máquina
+// Windows, y el aviso callaba. Lo encontró una revisión adversaria: `pwsh.exe`, `python.exe`,
+// `wsl.exe`, `bash.exe` y `node.exe` pasaban por acotadas. Así que se corta en la última barra de
+// cualquiera de los dos tipos, se pasa a minúsculas y se saca `.exe`.
+//
+// EL COSTO, DICHO: `find.exe` y `timeout.exe` de System32 no lanzan nada y ahora se avisan igual,
+// como ya pasaba con `find` a secas en una máquina Windows. No se exceptúan porque el mismo nombre
+// en `Git\usr\bin` es el de GNU, que sí lanza (`-exec`, `timeout cmd`), y el informe de cuatro ojos
+// usa este criterio como afirmación de seguridad: ahí avisar de más es el lado barato del error.
 func EsInterprete(comando string) bool {
-	c := strings.TrimSpace(comando)
-	if c == "" {
-		return false
+	c := strings.ToLower(strings.TrimSpace(comando))
+	if i := strings.LastIndexAny(c, separadoresDeRuta); i >= 0 {
+		c = c[i+1:]
 	}
-	return interpretes[strings.ToLower(filepath.Base(c))]
+	c = strings.TrimSuffix(c, ".exe")
+	return c != "" && interpretes[c]
 }
 
 // ── Las políticas ───────────────────────────────────────────────────────────────────────────
