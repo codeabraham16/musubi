@@ -197,8 +197,8 @@ func TestUnGistAutomaticoNoCuentaComoGuardadoDelAgente(t *testing.T) {
 // Sabotaje: sacar el filtro de la marca en CodigoTocadoEnVentana. El gist automático aparece como
 // un archivo que alguien re-leyó y re-resumió.
 // arnes: archivo="internal/memory/contexto.go"
-// arnes: de="WHERE updated_at >= ? AND updated_at < ? AND substr(gist, 1, length(?)) != ?`"
-// arnes: a="WHERE updated_at >= ? AND updated_at < ? AND length(?) != length(?) OR 1`"
+// arnes: de="AND substr(gist, 1, length(?)) != ?`"
+// arnes: a="AND length(?) != length(?) OR 1`"
 func TestElCodigoTocadoNoCuentaLosGistsAutomaticos(t *testing.T) {
 	e := newTestEngine(t)
 	if _, err := e.GuardarGistsAutomaticosFrom("", []CodeMemory{autoGist("pkg/auto.go", "a", "h")}, nil); err != nil {

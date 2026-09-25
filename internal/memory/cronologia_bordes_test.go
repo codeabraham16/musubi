@@ -201,8 +201,8 @@ func lectoresDeVentana() map[string]lectorDeVentana {
 // Sabotaje: cerrar el borde superior del código tocado (`updated_at <= ?`) → el archivo del borde
 // entra en la ventana que TERMINA ahí.
 // arnes: archivo="internal/memory/contexto.go"
-// arnes: de="\t\tWHERE updated_at >= ? AND updated_at < ?`+scopeSQL+`"
-// arnes: a="\t\tWHERE updated_at >= ? AND updated_at <= ?`+scopeSQL+`"
+// arnes: de="\t\tWHERE updated_at >= ? AND updated_at < ? AND "
+// arnes: a="\t\tWHERE updated_at >= ? AND updated_at <= ? AND "
 func TestLosLectoresDeVentanaCortanComoContiene(t *testing.T) {
 	// El conjunto de lectores, DERIVADO del motor.
 	ventanaT := reflect.TypeOf(fleet.Ventana{})
