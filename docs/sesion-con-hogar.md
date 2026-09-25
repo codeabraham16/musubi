@@ -138,9 +138,12 @@ de escribir una línea de sync.
   bajar a segundos es cambiar el disparo, no rediseñar.
 - ✅ **El eco está cerrado en el código** (2026-09-24, `fix/el-eco-del-sync`). Falta encenderlo:
   instalar el binario y reiniciar el daemon. Ver «El eco, medido y cerrado» más abajo.
-- ✅ **CORREGIDO — el riel de bajada está sano y al día.** Lo que decía esta línea («el central no
-  sincroniza hacia afuera, tiene 1.674 observaciones que ninguna máquina puede bajar») era falso en
-  la causa y engañoso en el efecto. Ver «El riel de bajada, medido de punta a punta» más abajo.
+- 🔴 **El riel de bajada tiene un agujero irreversible, y NO es el que decía esta línea.** Lo que había
+  escrito acá («el central es un nodo terminal, no sincroniza hacia afuera, 1.674 observaciones que
+  nadie puede bajar») era falso en la causa. El defecto real es que **el filtro de proyecto salta
+  filas y el cursor no retrocede**: 64 filas que el central sirve hoy son inalcanzables para siempre en
+  esta PC, 980 en la laptop, 2.558 en la base del CRM. Ver «El riel de bajada, medido de punta a
+  punta» más abajo.
 
 ### El eco, medido y cerrado
 
@@ -195,14 +198,48 @@ congelada en `/home/musubi/.musubi/`, medirla es concluir cualquier cosa):
 | shared con `sync_seq <= 0` | **0** |
 | cursor de bajada de esta PC | **10.969**, contra un `max(sync_seq)` de 10.967 en el central |
 
-**El riel funciona y está al día.** No hay atraso, no hay agujeros de cursor, y el cursor de esta PC ya
-pasó el techo del central. La hipótesis que valía la pena descartar era el `sync_seq = 0` — el propio
-código advierte que una fila así «nunca es > cursor ⇒ INVISIBLE para siempre» —: **cero filas**. El
-escalón 2 NO está bloqueado por un central roto.
+La hipótesis que valía la pena descartar era el `sync_seq = 0` — el propio código advierte que una fila
+así «nunca es > cursor ⇒ INVISIBLE para siempre» —: **cero filas**. Ésa está cerrada.
 
-⚠️ **Y de paso, el cabezal de `internal/memory/inboundsync.go` está viejo**: documenta una «limitación
-conocida» de paginar por `rowid`, y el código de `ListSharedForPull` (línea ~62) pagina por `sync_seq`.
-La limitación ya se cerró; el comentario que la anuncia sigue ahí y manda a buscar un bug que no existe.
+🔴 **Pero el riel NO está sano, y la primera versión de esta sección decía que sí. La prueba era
+circular.** Comparar el cursor contra `max(sync_seq)` del central y verlo al día no demuestra que bajó
+lo que había en el camino: demuestra que el cursor llegó arriba, que es exactamente el síntoma.
+
+**El filtro de proyecto no oculta filas: las SALTA, y el salto es irreversible.**
+
+El acotamiento por tenant entra al mismo `WHERE` que `sync_seq > ?` y el `LIMIT` se aplica después, así
+que el filtro no acorta la página: la corre hacia arriba por encima de las filas ajenas. El
+`next_cursor` se calcula con el máximo de las filas **que se devolvieron** —ya filtradas—, así que lo
+descartado queda debajo del cursor sin haberse entregado. El cliente lo adopta, y `AvanzarCursorBajada`
+no retrocede nunca (`WHERE ... < ...`). Nada lo rebobina: `musubi_sync_requeue` toca el dead-letter del
+*outbox*, no la bajada. La única salida es editar `meta` a mano.
+
+**El daño se cobra cuando la credencial se ensancha.** Con un token `read:own` la fila ajena no
+corresponde y no falta. Al pasar a `read:all` el filtro desaparece, pero el cursor ya está arriba: esa
+historia no vuelve nunca.
+
+Medido cruzando los ids del universo pullable del central contra la base de esta PC:
+
+| | |
+|---|---|
+| pullable en el central | 3.073 |
+| presentes acá | 3.009 |
+| **ausentes** | **64**, todas con `sync_seq` ≤ cursor (10.990); **0** por encima |
+| `altura` bajo seq 855 | **61 de 61 ausentes** — y **0 de 643** por encima |
+| `last-chaos` | 1 de 1 ausente |
+
+La prueba de que es el cursor y no un borrado es el **entrelazado**: seq 709 presente, 711–717
+ausentes, **718 presente**, 719 y 721 ausentes, 722 presente. `sync_seq` se asigna `MAX+1` al insertar,
+así que ese orden es el de llegada: cuando el pull entregó la 718, las 711–717 ya existían y no
+vinieron. (Las 2 de `musubi` se cuentan aparte: pueden ser un borrado en duro local.)
+
+**Y esto pega justo en el escalón 4.** «Una máquina por persona» significa que cada uno se enrola con
+su token acotado. Bajo este defecto, el espejo de cada máquina nueva queda permanentemente incompleto
+para todo lo que ya existía cuando su token era angosto. Medido en otras bases por la misma pasada: la
+laptop no puede bajar **980 de 3.071** (32 %), y la base del CRM tiene **2.558** fuera de alcance.
+
+⚠️ **De paso, el cabezal de `internal/memory/inboundsync.go` estaba viejo**: documentaba la limitación
+del `rowid`, ya cerrada. Se reescribió con esta limitación, que es la que está abierta.
 
 **Qué eran entonces las «1.674».** Son las 1.676 filas con `scope = 'local'`, un tercio de la memoria
 del central. No es que el central no sincronice: es que `local` **por diseño no se espeja nunca**. Se
@@ -291,10 +328,21 @@ nuevo corriendo, el sello no se está poniendo.
 Con el frame y el `session_id` en el central, abrir el cuerpo en la laptop y seguir. `--resume` ya
 existe; lo que se agrega es que el id y el frame se puedan traer.
 
-**El riel que esto necesita quedó verificado el 2026-09-24** (ver «El riel de bajada, medido de punta a
-punta»): el pull entrega 3.069 de 3.392 shared, las 323 que no entrega son `archived`/`superseded` y
-está bien que no viajen, no hay una sola fila con `sync_seq <= 0`, y el cursor de esta PC ya pasó el
-techo del central. Este escalón **no** tiene que arreglar el transporte: tiene que usarlo.
+🔴 **Y este escalón SÍ tiene que arreglar transporte, al revés de lo que decía la primera versión de
+esta línea.** El pull entrega 3.069 de 3.392 shared y no hay ninguna fila con `sync_seq <= 0` —eso está
+bien—, pero el cursor de bajada **salta** lo que el filtro de proyecto descarta y no retrocede nunca
+(ver «El riel de bajada, medido de punta a punta»). Para este plan la consecuencia es directa: una
+sesión que nazca mientras el token de la otra máquina esté acotado **no se va a poder traer después**.
+
+Lo que hay que decidir antes de construirlo, y es una decisión de diseño, no un bug a tapar:
+
+1. **Cursor por alcance, no por base.** Hoy hay un solo `sync:inbound_cursor` y lo que se ve depende del
+   token, así que el cursor pierde sentido al cambiar de credencial. Guardarlo junto a una huella del
+   alcance, y reiniciarlo cuando la huella cambia, hace que ensanchar el token traiga la historia.
+2. **O `next_cursor` desde lo ESCANEADO en vez de lo devuelto** — arregla el paginado pero no el
+   ensanchamiento, así que sola no alcanza.
+3. **O un rebobinado explícito** (`musubi_sync_rewind`), que hoy no existe: lo único que se le parece es
+   `musubi_sync_requeue`, y ése toca el dead-letter del outbox, no la bajada.
 
 ### Paso 3 — El hogar y el empuje
 

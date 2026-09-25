@@ -43,16 +43,39 @@ type SharedObs struct {
 // del proyecto de la credencial que pide el pull; Federate/vacío ⇒ sin filtro, histórico). afterRowID=0
 // trae desde el principio. La corre el central al servir un pull entrante de un cliente.
 //
-// ✅ LIMITACIÓN YA CERRADA (auditoría 2026-07-26 #4). Este comentario decía que el cursor era por
-// `rowid`, que NO cambia en un UPDATE, y que por eso una máquina cuyo cursor ya pasó una obs shared no
-// volvía a bajar sus EDICIONES. Eso se arregló: la consulta de abajo pagina por `sync_seq`, que sube
-// también al actualizar, y el nombre `afterRowID` quedó sólo por compat del wire (ver SharedObs).
+// LIMITACIÓN VIEJA, CERRADA: este comentario decía que el cursor era por `rowid`, que no cambia en un
+// UPDATE. Ya no: la consulta de abajo pagina por `sync_seq`, que sube también al actualizar, y el
+// nombre `afterRowID` quedó sólo por compat del wire (ver SharedObs).
 //
-// SE DEJA ESCRITO PORQUE EL COMENTARIO VIEJO SOBREVIVIÓ AL ARREGLO y mandaba a buscar un defecto que
-// no existe. Verificado el 2026-09-24 sobre la base real del central: 0 filas 'shared' con
-// `sync_seq <= 0` —el modo de falla que haría invisible una fila para siempre—, 3.069 de 3.392
-// entregables, y las 323 que no entrega son `archived`/`superseded`, que es correcto. El cursor de
-// bajada de davantis-1 estaba en 10.969 contra un max(sync_seq) de 10.967: al día, sin atraso.
+// 🔴 LIMITACIÓN NUEVA, ABIERTA, Y ES PEOR: EL FILTRO DE PROYECTO NO OCULTA FILAS, LAS SALTA.
+//
+// El acotamiento por tenant (scopeSQL) entra al MISMO WHERE que `sync_seq > ?`, y el LIMIT se aplica
+// DESPUÉS. O sea que el filtro no acorta la página: la corre hacia arriba por encima de las filas
+// ajenas. Y `toolSyncPull` (internal/mcp/methods.go) calcula el `next_cursor` con el máximo de las
+// filas que DEVOLVIÓ —ya filtradas—, así que todo lo que el filtro descartó queda DEBAJO de ese
+// cursor sin haberse entregado. El cliente lo adopta y `AvanzarCursorBajada` (bajada_lease.go) no
+// retrocede nunca: su UPSERT lleva `WHERE ... < ...`. Nada lo rebobina —`musubi_sync_requeue` toca
+// el dead-letter del OUTBOX, no la bajada—, así que la única salida es editar `meta` a mano.
+//
+// EL DAÑO SE COBRA CUANDO LA CREDENCIAL SE ENSANCHA. Mientras el token es read:own la fila ajena no
+// le corresponde y no falta. Cuando pasa a read:all el filtro desaparece, pero el cursor ya está
+// arriba: esa historia no vuelve JAMÁS.
+//
+// MEDIDO EL 2026-09-24 sobre la base real del central cruzada contra la de davantis-1:
+//
+//	3.073 filas pullable en el central · 3.009 presentes acá · 64 AUSENTES
+//	las 64 con sync_seq <= cursor (10.990) · 0 por encima · mayor seq ausente: 855
+//	`altura` 61 de 61 ausentes bajo seq 855, y 0 de 643 por encima. `last-chaos` 1 de 1.
+//	(2 de `musubi` se cuentan aparte: pueden ser un borrado en duro local)
+//
+// La prueba de que es el cursor y no otra cosa es el ENTRELAZADO: seq 709 presente, 711-717 ausentes,
+// 718 PRESENTE, 719 y 721 ausentes, 722 presente. `sync_seq` se asigna MAX+1 al insertar, así que ese
+// orden es el de llegada: cuando el pull entregó la 718, las 711-717 ya existían y no vinieron.
+//
+// ⚠️ Y OJO CON CÓMO SE VERIFICA, porque acá me equivoqué antes: comparar el cursor contra
+// `max(sync_seq)` del central y verlo al día NO prueba nada. El cursor llegando arriba es
+// exactamente el síntoma — avanzó por encima de lo que no entregó. La prueba honesta es cruzar los
+// ids del universo pullable del central contra los de la base local.
 func (e *DbEngine) ListSharedForPull(ctx context.Context, afterRowID int64, limit int) ([]SharedObs, error) {
 	if limit <= 0 {
 		limit = 200
