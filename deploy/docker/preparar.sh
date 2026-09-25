@@ -145,9 +145,12 @@ fi
 # `FlotaSinFoto` es un `absent_over_time`, así que en un servidor al que el tablero nunca le empujó
 # dispararía a los 40 minutos y para siempre. Treinta días de ventana: la retención es de 90.
 #
-# Y UNA VEZ INSTALADAS SE QUEDAN. Con la pregunta sola, re-correr este guion con el tablero muerto
-# más de 30 días DESINSTALARÍA la alerta que avisa justo eso: la guarda miraría lo que la falla
-# borró. Si el tablero se retira a propósito, el archivo se saca a mano de rules/.
+# Y UNA VEZ INSTALADAS SE QUEDAN, Y SE ACTUALIZAN. Con la pregunta sola, re-correr este guion con
+# el tablero muerto más de 30 días caería en la rama de abajo, que NO borra rules/ —y no debe: ahí
+# está la alerta que avisa justo eso—, así que las reglas quedarían cargadas con su versión VIEJA
+# mientras el guion imprime «NO instaladas». El `[ -f … ]` hace que un re-despliegue las reinstale y
+# diga la verdad (TestUnaReglaCondicionalNoQuedaViejaEnRules). Si el tablero se retira a propósito,
+# el archivo se saca a mano de rules/.
 if [ -f "$DEST/rules/musubi-alerts-tablero.yml" ] ||
    curl -fsS -m 5 -G "${PROM_URL:-http://127.0.0.1:9099}/api/v1/query" \
      --data-urlencode 'query=count(last_over_time(flota_foto_cuando_segundos[30d]))' 2>/dev/null | grep -q '"result":\[{'; then

@@ -24,8 +24,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   PC que publica apagada** —decisión del dueño— porque eso ya lo dice
   `MaquinaCaida{device="davantis-1"}`, y el `for: 20m` del hombre muerto sale de medir cuánto tarda
   la primera foto al volver la PC (0,8 a 7,1 min con el publicador sano). `preparar.sh` las instala
-  si Prometheus ya recibió alguna foto, y una vez instaladas no las saca: si no, re-correrlo con el
-  tablero muerto desinstalaría la alerta que avisa justo eso.
+  si Prometheus ya recibió alguna foto, y una vez instaladas las reinstala en cada re-despliegue
+  aunque el tablero lleve más de 30 días mudo: si no, quedaban cargadas con la versión vieja
+  mientras el guion decía «NO instaladas». Una guarda nueva lo exige a toda regla condicional de
+  `preparar.sh`: o su rama «NO instaladas» la borra de `rules/`, o su condición mira si ya está.
 
   Y el panel de máquinas de Musubi dice arriba de todo cuáles **no laten** y desde cuándo: el dato
   (`silencio_segundos`) viajaba en cada fila y no se dibujaba. `/api/flota` gana `sin_latir`, y el
