@@ -37,6 +37,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -77,22 +78,27 @@ type necesidad struct {
 //
 // `hayCLI` se inyecta para poder probar las dos ramas sin instalar ni desinstalar nada.
 //
+// `dirToken` es el directorio del archivo del token (dirDelToken) y `home`/`runtimeDir` son los del
+// mundo que se enumera (rutasDelBlindaje). SON TRES DATOS Y NO UNO desde que el agente puede correr
+// como root: el token vive en /etc/musubi-agente y el store de podman en /home/musubi, y deducir
+// los dos del HOME del proceso declaraba /root/.config/musubi-agente, que no toca nadie.
+//
 // LAS RUTAS SE ARMAN CON `path` Y NO CON `path/filepath`, Y NO ES UN DETALLE. Lo que sale de acá
 // no es una ruta del sistema donde corre este binario: es el TEXTO que va adentro de un
 // `ReadWritePaths=` de una unidad de systemd, o sea una ruta de Linux, siempre con `/`.
 // filepath.Join usa el separador del sistema, así que en Windows devolvía `\home\musubi\...` —
 // una directiva que no significa nada. Que nunca se notara es porque la unidad sólo se escribe en
 // Linux; lo destapó `test-cross`, que corre esta función pura en las tres plataformas.
-func necesidadesDelAgente(home, runtimeDir string, hayCLI func(string) bool) []necesidad {
+func necesidadesDelAgente(dirToken, home, runtimeDir string, hayCLI func(string) bool) []necesidad {
 	var ns []necesidad
 
 	// El token del dispositivo. Se escribe, no sólo se lee: la rotación lo reemplaza en su lugar.
-	if home != "" {
+	if dirToken != "" {
 		ns = append(ns, necesidad{
 			Trabajo: "latido", Acceso: accesoEscritura,
-			Ruta:      path.Join(home, ".config", "musubi-agente"),
+			Ruta:      dirToken,
 			Sintoma:   "el agente arranca y sale en el acto diciendo que falta la credencial",
-			Directiva: "ReadWritePaths=" + path.Join(home, ".config", "musubi-agente"),
+			Directiva: "ReadWritePaths=" + dirToken,
 		})
 	}
 
@@ -314,6 +320,49 @@ func dirDeRuntime() string {
 	return ""
 }
 
+// dirDelToken es el directorio donde la rotación reescribe el token: el de MUSUBI_DEVICE_TOKEN_FILE.
+//
+// Sin la variable —el token viene por MUSUBI_DEVICE_TOKEN, o se corre el verificador sin el
+// entorno de la unidad— cae al lugar de siempre bajo el home de la identidad. Nunca al HOME del
+// proceso: como root sería /root, y en producción el token vive en /etc/musubi-agente.
+func dirDelToken(rutaDelToken, home string) string {
+	if r := strings.TrimSpace(rutaDelToken); r != "" {
+		return path.Dir(filepath.ToSlash(r))
+	}
+	if home == "" {
+		return ""
+	}
+	return path.Join(home, ".config", "musubi-agente")
+}
+
+// rutasDelBlindaje dice qué home y qué runtime declara el verificador. Si el agente BAJA, son los
+// de la identidad: es el store del dueño el que podman abre. Si no baja, el runtime es el que
+// resuelve podman para este mismo proceso (dirDeRuntime, con su fallback a /run/user/<uid>).
+func rutasDelBlindaje(id identidadDeServicios, runtimePropio func() string) (home, runtimeDir string) {
+	if id.Bajar {
+		return id.Home, id.Runtime
+	}
+	return id.Home, runtimePropio()
+}
+
+// runtimeParaHeredar decide si el agente exporta XDG_RUNTIME_DIR para que lo hereden sus hijos.
+//
+// systemd NO la exporta en una unidad de SISTEMA con `User=` (medido en musubi-server), y sin ella
+// `systemctl --user` —la fuente de las units del dueño, y el `musubi_fleet_exec` de una persona—
+// falla con «Failed to connect to user scope bus». Se pone SÓLO si falta, si el agente no es root
+// (con root el mundo del dueño lo resuelve la identidad, no esto) y si el directorio existe y es
+// suyo: apuntarla a uno inexistente rompe a podman rootless, que abortaría el inventario entero.
+func runtimeParaHeredar(getenv func(string) string, uid int, esMio func(string) bool) (string, bool) {
+	if strings.TrimSpace(getenv("XDG_RUNTIME_DIR")) != "" || uid <= 0 {
+		return "", false
+	}
+	d := path.Join("/run", "user", strconv.Itoa(uid))
+	if !esMio(d) {
+		return "", false
+	}
+	return d, true
+}
+
 // sistemaDelAgente es el seam del sistema operativo, y no es ceremonia: es la ÚNICA manera de
 // probar que este verificador se calla fuera de Linux.
 //
@@ -350,8 +399,15 @@ func revisarBlindajeDelAgente() int {
 		fmt.Println("  herramientas del sistema, no con ésta.")
 		return 0
 	}
-	home, _ := os.UserHomeDir()
-	ns := necesidadesDelAgente(home, dirDeRuntime(), hayEnPath)
+	// LA IDENTIDAD, NO os.UserHomeDir(): un agente root que baja a `musubi` enumera el store de
+	// /home/musubi, y el verificador tiene que mirar ESE, no el de /root.
+	id, err := resolverIdentidadDeServicios(os.Getuid(), os.Getenv, buscarCuenta)
+	if err != nil {
+		fmt.Printf("%s %v\n", cYellow("✗"), err)
+		return 1
+	}
+	home, runtimeDir := rutasDelBlindaje(id, dirDeRuntime)
+	ns := necesidadesDelAgente(dirDelToken(rutaDelArchivoDeToken(), home), home, runtimeDir, hayEnPath)
 	texto, fallas := informeDeBlindaje(revisarBlindaje(ns))
 	fmt.Print(texto)
 	if fallas > 0 {

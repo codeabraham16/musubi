@@ -605,6 +605,13 @@ func clavesDeAvisoDelArchivo(t *testing.T, archivo string) []claveDeAviso {
 	vistas := map[string]bool{}
 	var out []claveDeAviso
 	ast.Inspect(f, func(n ast.Node) bool {
+		// LA DELEGACIÓN INTERNA NO ES UN AVISO. avisoMientras llama a avisarUnaVez con la `clave`
+		// que recibió, que es una variable: esa llamada no emite nada por su cuenta, y exigirle un
+		// literal pondría en rojo a politicas.go —el archivo que define las dos— por la
+		// implementación y no por un aviso. Se saltean sólo sus propias declaraciones (A131 · T5).
+		if fd, ok := n.(*ast.FuncDecl); ok && (fd.Name.Name == "avisarUnaVez" || fd.Name.Name == "avisoMientras") {
+			return false
+		}
 		llamada, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true

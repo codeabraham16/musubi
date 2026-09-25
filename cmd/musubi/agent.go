@@ -186,6 +186,24 @@ func runAgent(args []string) {
 		os.Exit(1)
 	}
 
+	// CON QUIÉN SE ENUMERA, antes del primer latido y también con --once: el primer inventario de
+	// un agente root que enumera como root da de baja los contenedores del dueño (el porqué está
+	// en identidad_servicios.go). TestElAgenteEnumeraConLaIdentidadQueResolvio custodia que la
+	// asignación de abajo exista y vaya antes de cualquier latido, y que la llamada reciba las
+	// funciones de verdad del proceso: las pruebas de comportamiento le pasan sus propios dobles y
+	// fijan identidadParaEnumerar a mano, así que sin eso todo quedaba verde con el cable cortado.
+	id, errId := prepararIdentidadDeServicios(os.Getuid(), os.Getenv, os.Setenv, buscarCuenta, esDeUid)
+	if errId != nil {
+		// Un usuario que no existe NO se degrada a «enumerar como root»: ese inventario diría que
+		// los 18 contenedores del dueño dejaron de existir, y el cerebro los daría de baja.
+		fmt.Fprintf(os.Stderr, "%s %v\n", cYellow("✗"), errId)
+		os.Exit(1)
+	}
+	identidadParaEnumerar = id
+	if linea := id.describir(os.Getuid()); linea != "" {
+		fmt.Println(linea)
+	}
+
 	// LA BASE, no una ruta concreta. El agente habla por DOS rutas —el latido y el reporte de
 	// resultados— y pasar la del latido como base construía `/fleet/heartbeat/fleet/result`.
 	// Lo encontró la prueba end-to-end: los unitarios apuntaban a un httptest que responde a
@@ -661,6 +679,8 @@ func ayudaAgent() {
 	fmt.Printf("  %s          dirección del cerebro, ej http://100.x.y.z:7717\n", cBold("MUSUBI_BRAIN_URL"))
 	fmt.Printf("  %s     nombre contra el que verificar el certificado, si la URL trae una\n", cBold("MUSUBI_BRAIN_TLS_NAME"))
 	fmt.Printf("                            IP (ej: musubi-server.tail89e295.ts.net). Vacío: sale de la URL.\n")
+	fmt.Printf("  %s     con el agente como root, el usuario cuyo podman y units --user se\n", cBold(envUsuarioDeServicios))
+	fmt.Printf("                            enumeran (ej: musubi). Sin ella, root enumera su propio mundo.\n")
 	fmt.Println()
 	fmt.Println(cCyan("Notas:"))
 	fmt.Println("  · El token del dispositivo NO sirve para /mcp: no da acceso a la memoria.")

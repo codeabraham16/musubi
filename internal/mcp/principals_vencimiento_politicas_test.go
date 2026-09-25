@@ -58,9 +58,10 @@ func TestUnaCredencialVencidaNoActuaPorUnaPolitica(t *testing.T) {
 	ahora := time.Now()
 	latir(t, s, d.ID, muestraSana(95, ahora), ahora) // 95 % de RAM: la condición se cumple
 
-	// Se cuentan sólo las filas con Origen=politica, y ésa es la aserción que importa: un disparo
-	// deja DOS filas —el aviso al dueño de la máquina, que sale como `persona`, y el comando de
-	// verdad—, así que contar la bitácora entera mediría el aviso y no la EJECUCIÓN.
+	// Se cuentan sólo los comandos de la política, y ésa es la aserción que importa: un disparo
+	// sobre una máquina que sabe avisar deja DOS filas —el aviso al dueño de la máquina y el comando
+	// de verdad, las dos con Origen=politica desde A131—, así que contar la bitácora entera mediría
+	// el aviso y no la EJECUCIÓN. Ver comandosDePolitica.
 	base := comandosDePolitica(t, s)
 
 	// ── VIGENTE: el control positivo. Todo lo demás de esta prueba no dice nada sin él.
@@ -259,11 +260,17 @@ func TestElListadoDePrincipalsDiceQueLaCredencialVencio(t *testing.T) {
 
 // comandosDePolitica cuenta las filas de la bitácora que disparó el motor de políticas —lo que
 // EJECUTA—, y no las que abrió una persona ni el aviso que acompaña a cada disparo.
+//
+// EL AVISO SE SEPARA POR SU ARGV Y NO POR SU ORIGEN. Hasta A131 el aviso salía con Origen=persona
+// y filtrar por origen alcanzaba; era justamente el defecto (P2-live1): una acción que disparó una
+// regla, leída como pedida por alguien. Ahora el aviso dice `politica` —lo escribe el mismo
+// barrido— y lo que lo distingue de una ejecución es que es un mensaje del canal al usuario de la
+// máquina, no un comando del host.
 func comandosDePolitica(t *testing.T, s *McpServer) int {
 	t.Helper()
 	n := 0
 	for _, c := range comandosEncolados(t, s) {
-		if c.Origen == fleet.OrigenPolitica {
+		if c.Origen == fleet.OrigenPolitica && (len(c.Argv) == 0 || c.Argv[0] != comandoAviso) {
 			n++
 		}
 	}

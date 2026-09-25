@@ -453,7 +453,7 @@ func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, 
 // Es la muestra (~300 B) más el inventario: fleet.ServiciosPorLatido entradas de a lo sumo
 // fleet.SaludMaxBytes cada una, más el sobre. Sigue siendo ridículamente chico comparado con el
 // techo general del transporte (4 MiB), que es justamente el punto: esta puerta la abre la
-// superficie más expuesta de la flota.
+// superficie más expuesta de la flota. Con 96 servicios por latido son 208.896 B (~204 KiB).
 const latidoMaxBytes = fleet.MuestraMaxBytes + fleet.ServiciosPorLatido*fleet.SaludMaxBytes + (8 << 10)
 
 // guardarServiciosDelLatido registra QUÉ CORRE adentro de la máquina (S12). Devuelve la NOTA que
