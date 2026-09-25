@@ -199,7 +199,12 @@ func gitSinHook(t *testing.T, dir string, args ...string) string {
 // En Windows, os.Rename sobre un destino que otro proceso Go tiene abierto (os.Open no pide
 // FILE_SHARE_DELETE) falla con «Access is denied»; os.WriteFile, lo que había antes, no fallaba.
 //
-// Sabotaje que la pone roja: sin el último recurso de escribir en el lugar.
+// Sabotaje que la pone roja: sin el último recurso de escribir en el lugar. Sólo existe en
+// Windows (el `t.Skip` de abajo), y se declara: en el nocturno de Linux sale «no aplica» y no
+// «sin veredicto», que dejaba rojo su fragmento todas las noches. Y HOY NINGUNA CORRIDA LO MIDE:
+// el nocturno es sólo Linux, y en Windows `arnes -correr` no puede lanzar `sabotaje.sh` (sale
+// «sin veredicto» sin causa). Hasta que eso se arregle, este sabotaje se corre a mano.
+// arnes: sistema="windows"
 // arnes: archivo="cmd/musubi/catalog.go"
 // arnes: de="\t\tif bloqueoDeWindows(err) {\n\t\t\tif werr := os.WriteFile(path, data, perm); werr == nil {"
 // arnes: a="\t\tif bloqueoDeWindows(err) && false {\n\t\t\tif werr := os.WriteFile(path, data, perm); werr == nil {"

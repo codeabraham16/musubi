@@ -131,14 +131,18 @@ func (e *DbEngine) coldestEvictable(project string, excess int, opts QuotaOption
 	if excess <= 0 {
 		return nil, nil
 	}
-	// Candidatas: activas del proyecto y SINCRONIZADAS (sin fila de outbox pendiente/no-'sent').
+	// Candidatas: activas del proyecto y SINCRONIZADAS, o sea sin nada por enviar. Los dos estados
+	// TERMINALES cuentan como sincronizado: 'sent' (se entregó) y 'espejo' (bajó del central, o sea
+	// que allá está y se puede volver a bajar). Dejar 'espejo' afuera de esta lista volvía
+	// INDESALOJABLE todo lo bajado —la mayoría del corpus en un nodo de equipo— y la cuota no
+	// hubiera podido liberar nada.
 	// La saliencia y la edad se computan en Go con la MISMA fórmula del olvido, para que "frío"
 	// signifique exactamente lo mismo en ambos y no haya divergencia float Go/SQLite.
 	rows, err := e.db.Query(`
 		SELECT o.id, o.access_count, o.importance, COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), COALESCE(o.mem_type,'')
 		FROM observations o
 		WHERE o.archived = 0 AND COALESCE(o.project_id,'') = ?
-		  AND NOT EXISTS (SELECT 1 FROM outbox b WHERE b.obs_id = o.id AND b.status != 'sent')`,
+		  AND NOT EXISTS (SELECT 1 FROM outbox b WHERE b.obs_id = o.id AND b.status NOT IN ('sent','espejo'))`,
 		project)
 	if err != nil {
 		return nil, fmt.Errorf("error al listar candidatas a evicción de %q: %w", project, err)

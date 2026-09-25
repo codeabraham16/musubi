@@ -32,12 +32,18 @@ func servidorConMaquina(t *testing.T) (*McpServer, fleet.Device) {
 // EN MITAD DEL MANTENIMIENTO, y el silence sólo garantiza que nadie se entere — la automatización
 // actuando con el canal que lo contaría apagado.
 //
-// Sabotaje que la hace fallar: sacar el `if enMantenimiento[d.ID] { continue }` de
-// aplicarPoliticas.
-// arnes: archivo="internal/mcp/politicas.go"
-// arnes: de="\t\t\tif enMantenimiento[d.ID] {"
-// arnes: a="\t\t\tif false && enMantenimiento[d.ID] {"
-// arnes: colision_ok="TestElSchedulerNoAplicaPoliticasSobreUnaMaquinaEnVentana"
+// LO QUE ESTA PRUEBA MIDE ES EL ALMACÉN, NO EL SCHEDULER, y la directiva decía lo contrario. Su
+// sabotaje era el de la hermana —sacar el `if enMantenimiento[d.ID]` de aplicarPoliticas— y la
+// primera corrida nocturna del arnés (PR #652) la dejó en VERDE en Linux y acá: esta prueba no
+// llama a aplicarPoliticas nunca. Lo que custodia es el conjunto que el scheduler consulta
+// (DevicesEnMantenimiento) y que CANCELAR lo retire sin borrar la fila; que el scheduler lo
+// respete es de `TestElSchedulerNoAplicaPoliticasSobreUnaMaquinaEnVentana`, más abajo.
+//
+// Sabotaje que la hace fallar: que cancelar no marque la fila como cancelada —la ventana sigue
+// frenando el auto-heal después de que alguien la dio por terminada—.
+// arnes: archivo="internal/memory/mantenimiento.go"
+// arnes: de="\t\t`UPDATE device_maintenance SET cancelada = 1"
+// arnes: a="\t\t`UPDATE device_maintenance SET cancelada = 0"
 func TestLasPoliticasNoActuanSobreUnaMaquinaEnMantenimiento(t *testing.T) {
 	s, d := servidorConMaquina(t)
 	ahora := time.Now().UTC()
@@ -271,7 +277,6 @@ func TestLaToolDeMantenimientoExigeMetricsSobreEsaMaquina(t *testing.T) {
 // arnes: archivo="internal/mcp/politicas.go"
 // arnes: de="\t\t\tif enMantenimiento[d.ID] {"
 // arnes: a="\t\t\tif enMantenimiento[d.ID] && false {"
-// arnes: colision_ok="TestLasPoliticasNoActuanSobreUnaMaquinaEnMantenimiento"
 func TestElSchedulerNoAplicaPoliticasSobreUnaMaquinaEnVentana(t *testing.T) {
 	ahora := time.Now()
 

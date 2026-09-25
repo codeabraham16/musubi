@@ -170,11 +170,32 @@ func (v Ventana) Duracion() time.Duration { return v.Hasta.Sub(v.Desde) }
 // declaradas en segundos enteros —«00 a 12» y «12 a 24»— siguen sin solaparse ni contar dos veces
 // el hecho de las 12. A resolución sub-segundo el mosaico ya no es posible, y disimularlo sería
 // prometer una precisión que la tabla no tiene.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// Y UNA VENTANA VÁLIDA SIGUE SIENDO VÁLIDA DESPUÉS DE NORMALIZARSE, aunque eso cueste la regla de
+// arriba en UNA punta y en UN caso
+//
+// Redondear hacia afuera agranda hasta un segundo por punta, y eso empujaba por encima de
+// VentanaMax a la ventana que está justo en el tope — que es exactamente la que VentanaHasta
+// devuelve cuando alguien pide de más. Las dos tools lo hacen en este orden (normalizar y después
+// consultar, y la consulta valida), así que `horas: 720` y `horas: 1000` contestaban -32603 «la
+// ventana pedida es de 720h0m1s y el máximo es 720h0m0s» en `musubi_fleet_cronologia` y en
+// `musubi_fleet_contexto`: pedir TODO lo que se puede era un error. Lo midió la auditoría A131 en
+// el árbol sano; no se sabe si alguno de los 4 errores de producción de la cronología fue éste,
+// porque la bitácora de tools no guarda argumentos.
+//
+// En ese caso —y SÓLO en ése— la punta que se mueve hacia ADENTRO es la de abajo: el segundo que se
+// pierde está treinta días atrás, en el borde que nadie eligió mirar, y la de arriba sigue
+// incluyendo lo que acaba de pasar. Una ventana que YA venía de más no se toca: acá no se
+// convierte un pedido inválido en uno válido, eso lo decide Valida.
 func (v Ventana) Normalizada() Ventana {
 	desde := v.Desde.Truncate(time.Second)
 	hasta := v.Hasta.Truncate(time.Second)
 	if hasta.Before(v.Hasta) {
 		hasta = hasta.Add(time.Second)
+	}
+	if hasta.Sub(desde) > VentanaMax && v.Duracion() <= VentanaMax {
+		desde = hasta.Add(-VentanaMax)
 	}
 	return Ventana{Desde: desde, Hasta: hasta}
 }

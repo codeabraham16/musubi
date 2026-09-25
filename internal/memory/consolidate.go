@@ -247,6 +247,11 @@ func (e *DbEngine) Consolidate(threshold float64) (ConsolidateResult, error) {
 			if _, err := tx.Exec(`UPDATE observations SET superseded_by=? WHERE superseded_by=?`, f.canonID, f.dupID); err != nil {
 				return ConsolidateResult{}, fmt.Errorf("error al re-apuntar punteros superseded_by: %w", err)
 			}
+			// Y el linaje del duplicado pasa al canónico, o la purga se lo lleva junto con la
+			// fila archivada. Ver memory/linaje.go.
+			if err := heredarLinaje(tx, f.dupID, f.canonID); err != nil {
+				return ConsolidateResult{}, err
+			}
 		}
 
 		if err := tx.Commit(); err != nil {

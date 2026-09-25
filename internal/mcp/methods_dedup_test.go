@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"musubi/internal/embedding"
@@ -73,6 +74,106 @@ func TestSharpenMergeArchivaLaGemela(t *testing.T) {
 	rep2, _ := callSharpen(t, s, admin, map[string]any{"floor": 0.9, "dry_run": true})
 	if rep2.Scanned != 0 {
 		t.Errorf("tras la fusión no debía quedar par candidato; scanned=%d", rep2.Scanned)
+	}
+}
+
+// TestElJuezSabeCualSeArchivaYEsLaQueSeArchiva — el prompt promete una cosa sobre el código.
+//
+// El juez de antes preguntaba «¿son la misma lección?», que es simétrica, y el código archivaba
+// SIEMPRE la B. Cuando la A cabía entera en la B, el juez decía MERGE con razón y se perdía la más
+// completa: medido el 2026-09-24, 7 de las 8 fusiones con pérdida eran eso. El arreglo es decirle al
+// juez cuál se archiva (ver sharpenSystemPrompt), y con eso bajó de ~15,7 archivos con pérdida
+// esperados a ~0,7 sobre los mismos 84 pares.
+//
+// PERO ESE ARREGLO VIVE EN DOS LUGARES QUE NADIE ATA. El prompt dice «la TARJETA B se ARCHIVA»;
+// dedupJudge decide qué tarjeta va rotulada B; runDedupBatch decide cuál archiva. Si cualquiera de los
+// tres se mueve solo, el prompt le miente al juez y la pérdida vuelve sin que nada falle. Por eso esta
+// prueba no mira el texto del prompt contra una constante: DERIVA del estado de la base qué tarjeta
+// quedó archivada, busca con qué rótulo se la mostró al juez, y exige que el prompt que efectivamente
+// se envió diga que ésa es la que se archiva.
+//
+// Sabotaje que la hace fallar: archivar la A en vez de la B.
+// arnes: archivo="internal/mcp/methods_dedup.go"
+// arnes: de="ArchiveAsDuplicate(dedupScope, c.B, c.A)"
+// arnes: a="ArchiveAsDuplicate(dedupScope, c.A, c.B)"
+//
+// Sabotaje que la hace fallar: mostrarle al juez las tarjetas en el otro orden.
+// arnes: archivo="internal/mcp/methods_dedup.go"
+// arnes: de="c.TopicA, c.ContentA, c.TopicB, c.ContentB)"
+// arnes: a="c.TopicB, c.ContentB, c.TopicA, c.ContentA)"
+//
+// Sabotaje que la hace fallar: volver al prompt que no dice cuál se archiva.
+// arnes: archivo="internal/mcp/methods_dedup.go"
+// arnes: de="Si decidís MERGE, la TARJETA B se ARCHIVA y la TARJETA A queda como la única versión de esa lección. "
+// arnes: a=""
+func TestElJuezSabeCualSeArchivaYEsLaQueSeArchiva(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	fake := &fakeCognition{answer: `{"verdict":"MERGE"}`}
+	s.cognition = fake
+	vec := map[string][]float32{"c1": {1, 0, 0, 0}, "c2": {0.98, 0.2, 0, 0}}
+	contenido := map[string]string{
+		"c1": "los controles miden al menos 24×24px",
+		"c2": "si un botón mide menos de 24px, compensalo con espacio alrededor",
+	}
+	seedCard(t, s, "c1", "target-minimo", contenido["c1"], vec["c1"])
+	seedCard(t, s, "c2", "espaciado-compensa", contenido["c2"], vec["c2"])
+
+	admin := &Principal{Name: "root", Role: RoleAdmin}
+	rep, rpcErr := callSharpen(t, s, admin, map[string]any{"floor": 0.9, "pairs": 5})
+	if rpcErr != nil || rep.Merged != 1 {
+		t.Fatalf("el juez dijo MERGE y no hubo una fusión: merged=%d err=%+v", rep.Merged, rpcErr)
+	}
+
+	// Qué tarjeta quedó archivada, leído de la BASE y no del reporte: la visible más cercana al vector
+	// de cada una es ella misma si sigue viva, y la otra si se archivó.
+	visible := func(id string) bool {
+		got, _, _, err := s.engine.NearestVisibleByVector(dedupScope, dedupCardPrefix, vec[id], "")
+		if err != nil {
+			t.Fatalf("NearestVisibleByVector(%s): %v", id, err)
+		}
+		return got == id
+	}
+	var archivada string
+	for _, id := range []string{"c1", "c2"} {
+		if !visible(id) {
+			if archivada != "" {
+				t.Fatalf("quedaron archivadas las dos tarjetas; una fusión archiva UNA")
+			}
+			archivada = id
+		}
+	}
+	if archivada == "" {
+		t.Fatalf("el reporte dice merged=1 pero las dos tarjetas siguen visibles")
+	}
+
+	// Con qué rótulo se la mostró al juez.
+	posB := strings.Index(fake.gotUser, "TARJETA B")
+	posArch := strings.Index(fake.gotUser, contenido[archivada])
+	if posB < 0 || posArch < 0 {
+		t.Fatalf("no encuentro el rótulo o la tarjeta en lo que vio el juez: %q", fake.gotUser)
+	}
+	rotulo := "A"
+	if posArch > posB {
+		rotulo = "B"
+	}
+
+	if promesa := "la TARJETA " + rotulo + " se ARCHIVA"; !strings.Contains(fake.gotSystem, promesa) {
+		// Cuál de las tres puntas se movió, para que el rojo lo diga: el lado del PAR (A = la más
+		// fuerte, la que runDedupBatch conserva) contra el rótulo con que el juez la vio.
+		ladoEnElPar := "B"
+		if len(rep.Pairs) == 1 && rep.Pairs[0].A == archivada {
+			ladoEnElPar = "A"
+		}
+		donde := "el prompt no promete cuál se archiva"
+		switch {
+		case ladoEnElPar != rotulo:
+			donde = "dedupJudge le mostró el par en otro orden: la " + ladoEnElPar + " del par llegó rotulada TARJETA " + rotulo
+		case rotulo != "B":
+			donde = "runDedupBatch archivó la " + ladoEnElPar + " del par, y el prompt promete la B"
+		}
+		t.Errorf("%s. Se archivó la tarjeta que el juez vio como TARJETA %s y el prompt que se le envió no dice %q: "+
+			"el juez decidió creyendo que se archivaba la otra, que es justo la fusión con pérdida que este "+
+			"prompt vino a evitar", donde, rotulo, promesa)
 	}
 }
 

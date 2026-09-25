@@ -43,8 +43,188 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   `deploy/musubi-alerts-tablero.promtool`, con series cada 15 min: verde con promtool 3.1.0 —la
   revisión del server— y rojo con cada uno de once sabotajes, empezando por el defecto del plan. Esa
   prueba se corre en el despliegue, al lado de las reglas.*
+- **Desde una ficha del acervo se llega a su fuente, y al revés.** `musubi_memory_expand` trae ahora
+  el linaje de lo que expande: una ficha destilada viene con `salio_de` (los artículos crudos de los
+  que salió) y un artículo ingerido con `destilado_en` (las fichas que salieron de él), cada punta con
+  su `id` y su `topic_key`, nunca el contenido. Expandir esos ids baja o sube un nivel. Las aristas
+  `derived_from` existían desde el 2026-08-20 —1.372 en el central— y nadie las leía para navegar.
+  El corpus de `musubi_design` suma `fuentes` en cada patrón, porque es ahí donde el agente ve la
+  ficha.
+
+  **Sigue las fusiones del afilador.** Cada punta se resuelve a su versión viva por `superseded_by`
+  (hasta 8 saltos) y la raíz junta lo que se fundió en ella, así que del artículo se llega a la ficha
+  que sobrevivió y no a la archivada, y la sobreviviente hereda las fuentes de la que absorbió. Y
+  **la herencia es durable**: `ArchiveAsDuplicate` y `Consolidate` copian las aristas del perdedor al
+  canónico en la misma transacción, con `ON CONFLICT DO NOTHING` para no pisar un veredicto que el
+  canónico ya tuviera con esa punta. Sin eso, lo que `superseded_by` reconstruye duraba lo que tarda
+  la purga de archivadas (90 días en el central), que borra la fila con sus aristas sin un solo error.
+  Se hereda sólo `derived_from` —un `related` del perdedor no pasa al canónico— y nunca una arista de
+  una observación hacia sí misma, que es lo que escribiría una ficha fundida con su propio artículo.
+  Un efecto buscado: si un artículo que nunca se destiló absorbe a uno que sí, hereda sus fichas y
+  sale de la cola del destilador. `Consolidate` los fundió porque sus textos son casi iguales, y
+  destilarlo daría fichas gemelas de las que ya existen.
+
+  El linaje respeta el alcance de la credencial en las dos direcciones, es best-effort (si falla, la
+  expansión sale como antes) y va con `omitempty`: una observación sin aristas se serializa byte a
+  byte igual que antes y la respuesta sigue siendo un array. Tope de 12 referencias por dirección.
+  `superseded_by` no tiene índice y este PR no agrega una migración: la consulta lee una vez las
+  fundidas y fija el orden de los JOIN, y con 30.000 observaciones y 8 raíces cuesta 8-10 ms (30-40 ms
+  dejándole el orden al planificador).
+
+  **Lo que el brief anuncia se puede expandir con la credencial que lo recibió.** `musubi_design` lee
+  el acervo con un scope fijo y le sirve a cualquiera; `musubi_memory_expand` leía sólo con el de la
+  credencial, así que un writer de otro proyecto recibía las `fuentes` (y el id de un patrón
+  `recortado`, que ya venía con el mismo hueco) y al expandirlas le volvía `[]`, sin error ni aviso.
+  Ahora la expansión lee, además de lo propio, el tenant `musubi-design` —el mismo que `musubi_design`
+  ya le sirve entero— y ningún otro: una nota de otro proyecto sigue fuera, y el linaje usa ese mismo
+  alcance, así que tampoco la nombra. Y del acervo ajeno entra **sólo lo visible**: la hidratación por
+  id no filtra visibilidad, así que sin esa cláusula un writer de otro proyecto que conociera un id
+  podía leer una propuesta en cuarentena o una ficha ya fundida. Lo propio no cambia.
+
+  **Queda latente hasta el despliegue y hasta que alguien lo use.** Medido el 2026-09-24:
+  `expand_count` sobre las fichas y los artículos de `musubi-design` es cero. Se da por encendido
+  cuando haya `expand_count > 0` sobre `topic_key LIKE 'ingested/%'` en ese tenant. Las 58 aristas que
+  ya cuelgan hoy de fichas y artículos fundidos las sostiene la lectura por `superseded_by`; copiarlas
+  al canónico antes de que la purga las alcance (~2026-11-19) es un backfill aparte en el central.
+
+  *28 sabotajes corridos, 28 rojos: el acervo ajeno sin exigir visibilidad, la ida y la vuelta invertidas, los saltos en cero, cada mitad de
+  la resolución por separado, sin filtro de visibilidad, sin tope o con el tope subido justo a lo
+  sembrado, sin alcance (el writer de `crm` ve un id de `web`, con el admin federado como control),
+  sin el `DISTINCT` (una punta repetida antes de la purga), la raíz como su propia punta, las dos
+  llamadas a la herencia, cada dirección de la copia, la copia que pisa un par existente, la que
+  copia relaciones que no son linaje, cada arista hacia sí misma, el artículo canónico que se queda
+  en la cola del destilador, el expand sin linaje, cada `omitempty`, el linaje que rompe la expansión
+  al fallar, el brief sin fuentes, el expand sin el acervo de diseño, y la cláusula del acervo que
+  abre todos los tenants.*
+- **Pedir cuatro ojos dice quién puede aprobar de verdad.** `musubi_fleet_require_approval`
+  encendía la marca y avisaba en prosa que «con un solo par de ojos la máquina queda cerrada»,
+  pero dejaba que el admin lo averiguara leyendo `principals.yaml` a mano. Medido el 2026-09-24 en
+  el central: sobre la máquina de un tercero, las únicas dos credenciales con `screen` eran del
+  dueño, y 71 de las 79 órdenes de esa semana fueron `exec` (las otras 8, avisos), que esta puerta
+  no cubre. Encenderla ahí dejaba en la bitácora un control que se ve puesto y no lo está.
+
+  Ahora, al encenderla, la respuesta trae `credenciales_que_pueden_aprobar` (capacidad → nombres,
+  con la misma compuerta que usa `musubi_fleet_approve` y sin las credenciales vencidas),
+  `candado` cuando una capacidad tiene menos de dos, `exec_sin_acotar` con quienes tienen `exec`
+  sin allowlist o con un intérprete en ella (también con nombre o ruta de Windows: `pwsh.exe`,
+  `C:\...\powershell.exe`), y `sin_camino_aprobable` cuando la máquina no admite
+  ninguna capacidad que pase por cuatro ojos. Se informan sólo `shell` y `screen`, que son las
+  que una puerta consume: `screen:view` no abre ninguna sesión, así que listarla nombraba
+  aprobadores que no pueden aprobar nada y tapaba `sin_camino_aprobable` en una máquina que sólo
+  deja mirar. Sin registro de principals (stdio, o un servidor
+  sin `principals.yaml` ni token) no inventa listas vacías: dice `aprobadores_desconocidos`. Y
+  siempre agrega una nota fija: Musubi no sabe si dos credenciales son la misma persona, así que
+  la falta de `candado` no es un verde. El informe se calcula antes de escribir la marca, y no
+  cambian ni los parámetros ni la descripción de la tool. No se encendió la aprobación en ninguna
+  máquina ni se tocaron credenciales.
+- **Las credenciales del cerebro avisan ANTES de vencer.** El vencimiento (`expires:` en
+  `principals.yaml`) existe desde el 2026-09-03 y no avisaba: una credencial con fecha se caía el
+  día que tocaba, y lo primero que se veía era el sync de una máquina muerto — con su memoria
+  compartida yéndose a dead-letter, porque un 401 es permanente para el sync.
+
+  - **`musubi token list` tiene un quinto estado, «por vencer»**, cuando le quedan menos de 14 días,
+    y la fila dice cuántos (`por vencer, faltan 3 días (…)`, redondeando hacia arriba: a la de doce
+    horas no le «faltan 0 días»). La tool `musubi_token_list` lo devuelve en `vencimiento` sin
+    cambios de esquema.
+  - **`/metrics` publica el resumen del registro, sin nombres**: `musubi_principal_next_expiry_seconds`
+    (ausente si ninguna credencial tiene fecha futura, que hoy es el caso del central),
+    `musubi_principals_expired`, `musubi_principals_without_expiry`, `musubi_legacy_token_enabled`,
+    `musubi_legacy_token_auth_total` y `musubi_principals_reload_failing` / `_reload_failures_total`.
+    Sólo las ve una identidad read=all (el scrape) o la confianza local: un tercero con read=own no
+    tiene por qué saber que hay un bearer admin que no vence.
+  - **El bearer legacy (`MUSUBI_TOKEN`) cuenta sus usos** en `resolve()`, por donde pasan todas las
+    puertas —también `/metrics` y `/api/*`, que el ledger de tools no ve—, y la cuenta sobrevive a
+    las recargas del registro. Es lo que tiene que llegar a siete días en cero para poder retirarlo.
+  - **Una relectura rechazada de `principals.yaml` deja de ser silenciosa.** Conservar el registro
+    anterior es correcto, pero la revocación escrita en el archivo no se aplicaba y el próximo
+    reinicio no arrancaba, y lo único que quedaba era un Warn en el journal. El aviso se apaga
+    cuando el archivo vuelve a cargar, y también cuando se restaura el respaldo con su mtime
+    (`cp -p`, `rsync -a`), que la recarga reconoce como el archivo que ya tenía y no relee.
+  - **Tres alertas** en `deploy/musubi-alerts.yml` —`CredencialPorVencer` (`< 14 * 24 * 3600`, el
+    mismo número que el listado), `CredencialRecienVencida` (el salto del gauge, no el estado: una
+    fila vencida no la deja sonando) y `RegistroDePrincipalsSinPoderRecargarse`—, con sus tres
+    secciones en `deploy/RUNBOOK.md`. La de `CredencialRecienVencida` dice el paso que no se ve:
+    renovar la credencial no resucita lo que se fue a dead-letter, y hay que correr
+    `musubi_sync_status` + `musubi_sync_requeue` en la máquina afectada. La custodia cruzada de
+    `musubi-alerts-flota.yml` pasa de 32 a 35: **los dos archivos de reglas se despliegan juntos.**
+  - `musubi token revoke` ya no pide reiniciar `musubi-brain`: el cerebro relee el archivo solo en
+    ≤10 s, y el mensaje dice los dos casos en que eso no alcanza. `MusubiDown` y su runbook dicen
+    que un `up == 0` con el proceso vivo puede ser la credencial del scrape vencida.
+    `docs/Server_Brain_Onboarding.md` pasa de cuatro estados a cinco.
+
+  *Veinticinco sabotajes nuevos, uno por directiva `arnes:`, los veinticinco corridos en rojo: la
+  rama «por vencer», el redondeo, el umbral del listado contra el de la alerta (en las dos
+  direcciones), la llamada al render desde `/metrics`, la vencida fuera del mínimo, la delegación
+  del registro recargable, la serie ausente sin fecha futura, la visibilidad read=own (agregando lo
+  prohibido), el flag de recarga al encenderse, al apagarse y al restaurar el respaldo con su mtime,
+  el contador de recargas, el contador del legacy (con archivo y sin él) y su traspaso en la
+  recarga, los nombres de las series contra las `expr` de las alertas, lo que cada `expr` hace con
+  el valor (un solo vencimiento tiene que disparar, el flag 0/1 tiene que poder cumplirse, el `for:`
+  tiene que caber en la ventana del `delta`), los días en la fila del CLI, el `go reload.watch(ctx)`
+  del arranque (se arranca el servidor entero, se revoca y se espera el 401), la orden de reiniciar
+  que `token revoke` ya no da y la enumeración de estados del onboarding contra las constantes del
+  código. Más los tres naturales del cambio sobre guardas que ya existían —la custodia en 32 y dos
+  anclas del runbook renombradas—, también en rojo. No se le puso fecha a ninguna credencial: eso es
+  producción y va aparte, con el aviso ya desplegado.*
+- **El arnés corre sus sabotajes todas las noches.** Hasta hoy el CI sólo los CONTABA: la guarda
+  del censo comprueba que cada directiva `// arnes:` apunte a un literal único, pero nadie corría
+  `arnes -correr`, que es lo único que dice si la guarda se pone roja con su sabotaje. El workflow
+  nuevo `.github/workflows/arnes-nocturno.yml` corre las ~970 mecanizadas a las 06:30 UTC en 8
+  fragmentos paralelos (job `sabotajes`, no obligatorio: es un canario, y una noche roja llega por
+  mail de GitHub). También corre en el PR que toque ese archivo y a mano con `workflow_dispatch`.
+  - **`-fragmento k/n`**: reparte POR TURNO sobre la posición que la corrida imprime, así los 532 de
+    `internal/mcp` se intercalan entre los fragmentos en vez de caer todos en uno, y el número
+    impreso sigue sirviendo para `-desde`. Un valor mal escrito (`9/8`, `3/0`, `a/8`) sale con exit
+    2 sin correr nada. La selección vive en una función pura (`seleccionar`) que es lo único que
+    recorren `-correr` y `-overlay`.
+  - **Cero corridas ya no es verde.** `-correr -paquete ./internal/noexiste` salía 0 con
+    «corridas : 0»: en el nocturno, un fragmento vacío habría dejado la noche en verde sin medir
+    nada. Ahora sale 1.
+  - **Clave nueva `sistema="windows"`** en las directivas, de la familia de `tags` y `env`: la
+    prueba sólo existe en esos GOOS, y en los demás el corredor la aparta como «no aplica» en vez de
+    contarla «sin veredicto». La usa `TestEscribirArchivoAtomicoConElDestinoAbiertoEnWindows`, que
+    hace `t.Skip` fuera de Windows y habría dejado rojo su fragmento todas las noches. Un GOOS mal
+    escrito es una queja del censo, porque si no la directiva no aplicaría en ninguna máquina.
+    **Esa directiva de Windows hoy no la mide nadie**: el nocturno es sólo Linux, y en Windows
+    `arnes -correr` no puede lanzar `sabotaje.sh` y lo cuenta «sin veredicto» sin decir por qué.
+    Arreglarlo va aparte.
+
+  *Siete guardas nuevas con 19 sabotajes declarados, todos corridos en rojo. Además de las
+  funciones puras, una lee `main.go` y exige el cableado —`main` pasa el fragmento parseado, los
+  corredores se lo pasan a `seleccionar`, recorren lo que devuelve sin reasignarlo, y
+  `correrTodos` termina en `codigoDeSalida`—, porque con sólo las puras en verde se podía
+  desconectar el fragmento sin que nada se pusiera rojo. Otra fija el orden paquete → tramo →
+  fragmento → sistema con `-paquete`, `-desde` y `-limite` puestos: reanudar un fragmento corre
+  el resto de ESE fragmento, con la posición absoluta.*
+
+  **La primera noche completa (en este mismo PR, Linux) encontró 9 y quedan arregladas acá.** 4 de 8
+  fragmentos en rojo: 7 sabotajes que no ponían su prueba en rojo, 1 que no compilaba y 1 rojo
+  sospechoso. Ninguno dependía del sistema; los diagnósticos, uno por uno:
+  - **`TestTokenDeDispositivoNoAbreElMCP` estaba ciega, y es de seguridad.** Su ayudante armaba el
+    servidor con sólo `token`, así que la puerta pasaba por la rama legacy; `serve` siempre pasa
+    `registry` (`loadPrincipals` devuelve uno aunque no haya `principals.yaml`), y ésa —la de
+    producción— no la custodiaba nadie. Producción estaba bien; la guarda no lo sabía. Ahora
+    `servidorConFlota` arma las opciones como `serve` y la prueba cubre las dos ramas.
+  - **Avisar a una máquina que no sabe avisar se decidía en dos lugares** (el `case` de shell, exec y
+    pantalla, y el embudo `encolarAvisoDeAcceso`), y cada copia tapaba el sabotaje de la otra. Queda
+    en el embudo solo; `encolarAvisoDeAcceso` devuelve si encoló, y la ventana de 1 h de exec se marca
+    sólo si de verdad salió un aviso.
+  - Cinco sabotajes eran los equivocados: el latido de persona forzaba un `ok` sin máquina (hay una
+    segunda cerca que lo ataja; el sabotaje ahora rompe el filtro por hash), el cuerpo del latido
+    usaba `bytes` sin importarlo, mantenimiento y diseño le apuntaban a la prueba HERMANA (y la
+    hermana de diseño, que no tenía sabotaje, ahora tiene uno), y la compuerta de procesos daba un
+    rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **El aviso de intérpretes en la allowlist de `exec` ve los de Windows.** `fleet.EsInterprete`
+  comparaba el basename contra un mapa que sólo tenía `powershell.exe` y `cmd.exe`, y con
+  `filepath.Base`, que en el central (Linux) no parte una ruta con barras invertidas. Como
+  `PermiteArgv` compara `argv[0]` exacto, `pwsh.exe`, `python.exe`, `wsl.exe`, `bash.exe` o
+  `node.exe` en la allowlist de una máquina Windows dejaban lanzar cualquier cosa sin que el
+  arranque lo avisara. Ahora el nombre se corta en la última barra de cualquiera de los dos
+  sistemas, se pasa a minúsculas y se le saca `.exe`, y el mapa suma `wsl`, `py`, `busybox` y
+  `systemd-run`. Lo mismo alimenta `exec_sin_acotar` del informe de cuatro ojos.
+
 - **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
   El ledger era UNA casilla de `meta` que guardaba UNA sesión, y `LedgerAdd` la reiniciaba entera
   con `if sessionID != l.SessionID`. Con varias terminales sobre el mismo cuaderno —10 procesos
