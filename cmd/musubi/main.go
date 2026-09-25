@@ -52,6 +52,8 @@ func main() {
 		initProject()
 	case "setup":
 		runSetup(os.Args[2:])
+	case "agente":
+		runAgente(os.Args[2:])
 	case "provision":
 		runProvision(os.Args[2:])
 	case "detect":
@@ -167,6 +169,7 @@ func printUsage() {
 
 	section("Instalación")
 	cmd("setup [--agent <claude|cursor>]", "Inyecta Musubi en el proyecto actual (workspace + MCP + hooks)")
+	cmd("agente <instalar|estado|quitar>", "Musubi como plugin de Claude Code: activo en TODOS los proyectos, sin setup por repo")
 	cmd("init", "Inicializa solo el workspace .musubi/ (config + base de datos)")
 	cmd("provision [--brain ...] [--dry-run]", "Une esta máquina al cerebro central (red + .mcp.json + verificación)")
 
@@ -450,6 +453,13 @@ func runDaemon() {
 	// creaba `.musubi/` en la carpeta donde lo arrancaran, fuera o no un proyecto. Ahora activa la
 	// memoria sólo en la raíz de un repo git que no la tenía, y donde no hay proyecto —el home, una
 	// carpeta suelta— atiende INERTE: habla el protocolo, no ofrece tools y no crea nada.
+	// EL PLUGIN SE HACE A UN LADO donde el proyecto ya conecta Musubi por su .mcp.json (ver
+	// agente_plugin.go): serían dos servidores contra la misma memoria.
+	if corriendoComoPlugin() && elProyectoYaConectaMusubi(carpetaDeLaSesion()) {
+		fmt.Fprintln(os.Stderr, "musubi: este proyecto ya conecta Musubi por su .mcp.json; el servidor del plugin se hace a un lado")
+		mcp.NewServidorCallado(".", version, "el proyecto ya conecta Musubi por su .mcp.json").Start()
+		return
+	}
 	r := raizDelProceso()
 	if r.Dir == "" {
 		fmt.Fprintf(os.Stderr, "musubi: sin proyecto en esta carpeta (%s): sirviendo INERTE, sin memoria\n", r.Motivo)

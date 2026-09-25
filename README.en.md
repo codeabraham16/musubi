@@ -59,7 +59,7 @@ token optimization, ranking and skill resolution are deterministic and offline.
 | 🛠️ **Automatic skills** | Detects the stack and generates project skills; discovers community Agent Skills filtered by your stack. |
 | 🔗 **Model-free orchestration** | Resumable DAG workflow engine (conditions, loops) and a multi-agent blackboard — Musubi sequences, the agent executes. |
 | 🔒 **Local-first & private** | No mandatory external services. Optional embeddings (local Ollama or OpenAI-compatible). The secret never touches the YAML. |
-| ⚙️ **Zero friction** | One command (`musubi setup`) makes any project ready: workspace, MCP and hooks. Idempotent. |
+| ⚙️ **Zero friction** | One command (`musubi agente instalar`) makes Musubi active in all your projects; `musubi setup` wires a single one. Idempotent. |
 
 ---
 
@@ -102,11 +102,23 @@ what's new relative to the previous turn.
 ## Quick start
 
 ```bash
-cd my-project
+musubi agente instalar   # once per machine: Musubi active in ALL your projects
+```
+
+Installs Musubi as a Claude Code plugin (`~/.claude/skills/musubi/`). From the next session on, in
+any git repo the agent has Musubi's memory, tools and skills with no per-project setup: the memory
+is created on its own at the repo root, with its own `.gitignore` so `git status` stays clean.
+Outside a repo —your home, a loose folder— Musubi stays inert and creates nothing. Where a repo
+already has its own wiring (`musubi setup`), the plugin steps aside and that repo keeps working as
+before. `musubi agente estado` tells you whether the plugin matches the binary; `musubi agente
+quitar` removes it.
+
+Prefer to wire a single project? Inside the repo:
+
+```bash
 musubi setup        # inject Musubi into the project (workspace + MCP + hooks)
 ```
 
-Reopen the project in your agent (Claude Code) and the `musubi_*` tools become available.
 `setup` is idempotent: it respects existing `.mcp.json`, skills, `.gitignore` and
 `.claude/settings.json`. Don't have the binary yet? See [Installation](#installation).
 

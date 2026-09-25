@@ -476,7 +476,7 @@ func runCapture(args []string) {
 		// Como hook (Stop), sólo sobre un proyecto que YA tiene memoria (ver raiz.go). Antes
 		// ensureWorkspace la creaba en la carpeta donde lo arrancaran.
 		r := raizDelProceso()
-		if r.Dir == "" || r.Activar {
+		if r.Dir == "" || r.Activar || elPluginCedeElGancho("capture") {
 			return
 		}
 		root = r.Dir

@@ -59,7 +59,7 @@ optimización de tokens, el ranking y la resolución de skills son deterministas
 | 🛠️ **Skills automáticas** | Detecta el stack y genera skills del proyecto; descubre Agent Skills de la comunidad filtradas por tu stack. |
 | 🔗 **Orquestación model-free** | Motor de workflows DAG resumible (condiciones, loops) y pizarra multi-agente — Musubi secuencia, el agente ejecuta. |
 | 🔒 **Local-first & privado** | Sin servicios externos obligatorios. Embeddings opcionales (Ollama local u OpenAI-compatible). El secreto nunca toca el YAML. |
-| ⚙️ **Cero fricción** | Un comando (`musubi setup`) deja cualquier proyecto listo: workspace, MCP y hooks. Idempotente. |
+| ⚙️ **Cero fricción** | Un comando (`musubi agente instalar`) deja a Musubi activo en todos tus proyectos; `musubi setup` cablea uno solo. Idempotentes. |
 
 ---
 
@@ -102,11 +102,23 @@ respecto del turno anterior.
 ## Inicio rápido
 
 ```bash
-cd mi-proyecto
+musubi agente instalar   # una vez por máquina: Musubi activo en TODOS los proyectos
+```
+
+Instala Musubi como plugin de Claude Code (`~/.claude/skills/musubi/`). Desde la próxima sesión,
+en cualquier repo git el agente tiene la memoria, sus herramientas y las skills de Musubi, sin
+configurar nada por proyecto: la memoria se crea sola en la raíz del repo, con su propio
+`.gitignore` para no ensuciar el `git status`. Fuera de un repo —el home, una carpeta suelta—
+Musubi queda inerte y no crea nada. Donde un repo ya tiene su propio cableado (`musubi setup`), el
+plugin se hace a un lado y ese repo sigue como estaba. `musubi agente estado` dice si el plugin
+está al día con el binario; `musubi agente quitar` lo saca.
+
+¿Preferís cablear un solo proyecto? Adentro del repo:
+
+```bash
 musubi setup        # inyecta Musubi en el proyecto (workspace + MCP + hooks)
 ```
 
-Reabrí el proyecto en tu agente (Claude Code) y las herramientas `musubi_*` quedan disponibles.
 `setup` es idempotente: respeta `.mcp.json`, skills, `.gitignore` y `.claude/settings.json`
 existentes. ¿Todavía no tenés el binario? Ver [Instalación](#instalación).
 

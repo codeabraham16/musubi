@@ -148,6 +148,13 @@ func TestHelperMusubi(t *testing.T) {
 // daemon), falla en el acto y en local.
 func correrMusubi(t *testing.T, dir, home, stdin string, args ...string) string {
 	t.Helper()
+	return correrMusubiCon(t, dir, home, stdin, nil, args...)
+}
+
+// correrMusubiCon es correrMusubi con variables de entorno extra (p. ej. CLAUDE_PLUGIN_ROOT para
+// correr como lo lanza el plugin). Las que decide la prueba se sacan del entorno heredado.
+func correrMusubiCon(t *testing.T, dir, home, stdin string, extra []string, args ...string) string {
+	t.Helper()
 	// EL HIJO ARRANCA PARADO EN EL PAQUETE Y SE MUDA DESPUÉS (GO_MUSUBI_CWD). Es este mismo binario
 	// de prueba, y su TestMain corre la guarda del presupuesto, que bajo -race lee la política desde
 	// el go.mod del cwd: arrancado en la carpeta de descarte, la guarda lo mataba antes de correr
@@ -156,11 +163,13 @@ func correrMusubi(t *testing.T, dir, home, stdin string, args ...string) string 
 	cmd := guiones.Herramienta(t, os.Args[0], "-test.run=^TestHelperMusubi$", "-test.timeout=0")
 	var env []string
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "MUSUBI_HOME=") || strings.HasPrefix(kv, "CLAUDE_PROJECT_DIR=") || strings.HasPrefix(kv, "HOME=") {
+		if strings.HasPrefix(kv, "MUSUBI_HOME=") || strings.HasPrefix(kv, "CLAUDE_PROJECT_DIR=") || strings.HasPrefix(kv, "HOME=") ||
+			strings.HasPrefix(kv, "CLAUDE_PLUGIN_ROOT=") {
 			continue
 		}
 		env = append(env, kv)
 	}
+	env = append(env, extra...)
 	argsJSON, _ := json.Marshal(args)
 	cmd.Env = append(env, "GO_MUSUBI_ARGS="+string(argsJSON), "HOME="+home, "USERPROFILE="+home,
 		"CLAUDE_PROJECT_DIR="+dir, "HTTPS_PROXY=http://127.0.0.1:9", "HTTP_PROXY=http://127.0.0.1:9")
@@ -214,8 +223,9 @@ const handshakeYLista = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":
 //
 // Sabotaje que la hace fallar: que el hook del turno vuelva a abrir (y crear) la memoria donde esté.
 // arnes: archivo="cmd/musubi/turn.go"
-// arnes: de="\tr := raizDelProceso()\n\tif r.Dir == \"\" || r.Activar {\n\t\treturn\n\t}\n\troot := r.Dir\n\tcfg, _ := config.Load(root)"
+// arnes: de="\tr := raizDelProceso()\n\tif r.Dir == \"\" || r.Activar || elPluginCedeElGancho(\"turn\") {\n\t\treturn\n\t}\n\troot := r.Dir\n\tcfg, _ := config.Load(root)"
 // arnes: a="\troot := workspaceDir()\n\tcfg, _ := config.Load(root)"
+// arnes: colision_ok="TestElPluginSeHaceAUnLadoDondeElProyectoYaConectaMusubi"
 //
 // Sabotaje que la hace fallar: que el hook de arranque vuelva a trabajar donde lo arranquen.
 // arnes: archivo="cmd/musubi/detect.go"
