@@ -19,6 +19,8 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -34,8 +36,40 @@ import (
 // (`musubi_fleet_net_up{device="…"}`) va pegada, y no es una llamada.
 var reLlamadaATool = regexp.MustCompile("\\b(musubi_[a-z_]+)[ \\t]+'?(\\{[^'\\n`]*\\})")
 
-// reToolDelGuion reconoce la tool que se le pasa a musubi-tool.sh, lleve argumentos o no.
-var reToolDelGuion = regexp.MustCompile(`musubi-tool\.sh[ \t]+(musubi_[a-z_]+)`)
+// reGuionConTool reconoce un guion que el runbook manda a correr con una tool —`<ruta>.sh <tool>`—,
+// lleve argumentos o no. Captura la RUTA tal como está escrita, no el nombre que se espera: un
+// `musubi-tools.sh` mal tipeado tiene que verse, no pasar de largo por no coincidir.
+var reGuionConTool = regexp.MustCompile("([^\\s`'\"(]+\\.sh)[ \\t]+(musubi_[a-z_]+)")
+
+// guionDelRunbookExiste dice si la ruta de un guion que el runbook manda a correr existe en el repo.
+//
+// El runbook vive en deploy/ y usa dos formas: `./deploy/x.sh`, desde la raíz de un clon, y
+// `./x.sh`, desde deploy/ o desde el home del server, adonde se copia el guion de deploy/. Una ruta
+// absoluta es del server: se busca el archivo del mismo nombre en deploy/, que es de donde sale.
+func guionDelRunbookExiste(ruta string) bool {
+	raiz := filepath.Join("..", "..")
+	var candidatos []string
+	if strings.HasPrefix(ruta, "/") || strings.HasPrefix(ruta, "~") {
+		candidatos = []string{filepath.Join(raiz, "deploy", path.Base(ruta))}
+	} else {
+		r := filepath.FromSlash(strings.TrimPrefix(ruta, "./"))
+		candidatos = []string{filepath.Join(raiz, r), filepath.Join(raiz, "deploy", r)}
+	}
+	for _, c := range candidatos {
+		if fi, err := os.Stat(c); err == nil && !fi.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+// rangosQueElHandlerExige son los límites que el InputSchema no declara y el handler aplica igual:
+// un valor fuera de rango parsea, tiene el tipo correcto y vuelve con error en mitad de la
+// intervención. `minutos` ≤ 0 contesta «falta `minutos`» y por encima del techo lo rechaza
+// AbrirMantenimiento (fleet.MantenimientoMax).
+var rangosQueElHandlerExige = map[string]map[string][2]float64{
+	"musubi_fleet_maintenance": {"minutos": {1, fleet.MantenimientoMax.Minutes()}},
+}
 
 // llamadaDelRunbook es una llamada a una tool encontrada en el runbook, con su línea.
 type llamadaDelRunbook struct {
@@ -84,16 +118,29 @@ func tipoCoincide(tipo string, v interface{}) bool {
 // TestLasLlamadasDelRunbookUsanLasToolsComoSon cruza cada llamada del runbook con el registro.
 //
 // Una llamada que nombra una tool registrada tiene que traer JSON válido, usar SÓLO parámetros que
-// la tool declara, con el tipo que declara, y traer los obligatorios. Y todo lo que se le pasa a
-// `musubi-tool.sh` tiene que ser una tool registrada: ahí no hay ambigüedad posible con una serie.
+// la tool declara, con el tipo que declara, dentro del rango que el handler acepta cuando hay uno
+// conocido (rangosQueElHandlerExige), y traer los obligatorios. Y cada guion que el runbook manda a
+// correr con una tool tiene que existir EN LA RUTA ESCRITA, y lo que se le pasa tiene que ser una
+// tool registrada: ahí no hay ambigüedad posible con una serie.
 //
 // Lo que NO mira: la forma `tool clave=valor` (la de `musubi_fleet_approve` en
-// `AprobacionDeCuatroOjosSinAtender`), que no es JSON y no hay cómo parsearla sin adivinar.
+// `AprobacionDeCuatroOjosSinAtender`), que no es JSON y no hay cómo parsearla sin adivinar; ni los
+// rangos que no están en el mapa.
 //
 // Sabotaje que la hace fallar: que la receta cierre la ventana con un parámetro que la tool no tiene.
 // arnes: archivo="deploy/RUNBOOK.md"
 // arnes: de="\"cancelar\":\"<id>\",\"project\":\"musubi\"}'"
 // arnes: a="\"cancel\":\"<id>\",\"project\":\"musubi\"}'"
+//
+// Sabotaje que la hace fallar: que la receta mande a correr el guion con la ruta mal escrita.
+// arnes: archivo="deploy/RUNBOOK.md"
+// arnes: de="./deploy/musubi-tool.sh musubi_fleet_maintenance '{\"device\":\"gio\",\"minutos\""
+// arnes: a="./deploy/musubi-tools.sh musubi_fleet_maintenance '{\"device\":\"gio\",\"minutos\""
+//
+// Sabotaje que la hace fallar: que la receta pida una ventana de cero minutos, que el handler rechaza.
+// arnes: archivo="deploy/RUNBOOK.md"
+// arnes: de="\"minutos\":30,"
+// arnes: a="\"minutos\":0,"
 func TestLasLlamadasDelRunbookUsanLasToolsComoSon(t *testing.T) {
 	runbook := leerDeploy(t, "RUNBOOK.md")
 	s := NewMcpServer(nil, "", nil)
@@ -105,16 +152,23 @@ func TestLasLlamadasDelRunbookUsanLasToolsComoSon(t *testing.T) {
 		t.Fatalf("el registro trae %d tools: el servidor de prueba no se armó y esta guarda no compararía contra nada", len(esquemas))
 	}
 
-	// EL GUION TIENE QUE EXISTIR si el runbook lo manda a correr. leerDeploy corta la prueba si no está.
-	if strings.Contains(runbook, "musubi-tool.sh") {
-		_ = leerDeploy(t, "musubi-tool.sh")
-	}
+	// EL GUION TIENE QUE EXISTIR EN LA RUTA QUE EL RUNBOOK ESCRIBE, no en alguna parte: la primera
+	// versión miraba que `musubi-tool.sh` existiera si el nombre aparecía en cualquier lado, y una
+	// receta con `./deploy/musubi-tools.sh` pasaba en verde y contestaba «No such file or directory».
+	guiones := 0
 	for n, l := range strings.Split(runbook, "\n") {
-		for _, m := range reToolDelGuion.FindAllStringSubmatch(l, -1) {
-			if _, ok := esquemas[m[1]]; !ok {
-				t.Errorf("RUNBOOK.md:%d le pasa %q a musubi-tool.sh y esa tool no está registrada: la receta contesta «tool desconocida» en el peor momento", n+1, m[1])
+		for _, m := range reGuionConTool.FindAllStringSubmatch(l, -1) {
+			guiones++
+			if !guionDelRunbookExiste(m[1]) {
+				t.Errorf("RUNBOOK.md:%d manda a correr %s y ese archivo no existe en el repo: quien copie la receta recibe «No such file or directory»", n+1, m[1])
+			}
+			if _, ok := esquemas[m[2]]; !ok {
+				t.Errorf("RUNBOOK.md:%d le pasa %q a %s y esa tool no está registrada: la receta contesta «tool desconocida» en el peor momento", n+1, m[2], m[1])
 			}
 		}
+	}
+	if guiones < 3 {
+		t.Fatalf("se reconocieron %d guiones llamados con una tool en el runbook y hay al menos tres: el patrón se rompió", guiones)
 	}
 
 	revisadas := 0
@@ -138,6 +192,13 @@ func TestLasLlamadasDelRunbookUsanLasToolsComoSon(t *testing.T) {
 			}
 			if !tipoCoincide(prop.Type, valor) {
 				t.Errorf("RUNBOOK.md:%d le pasa `%s` a %s como %T y la tool lo declara %q", ll.linea, clave, ll.tool, valor, prop.Type)
+				continue
+			}
+			if r, hay := rangosQueElHandlerExige[ll.tool][clave]; hay {
+				if f, esNumero := valor.(float64); esNumero && (f < r[0] || f > r[1]) {
+					t.Errorf("RUNBOOK.md:%d le pasa `%s`=%v a %s y el handler sólo acepta de %v a %v: la receta vuelve con error en mitad de la intervención",
+						ll.linea, clave, valor, ll.tool, r[0], r[1])
+				}
 			}
 		}
 		for _, req := range esquema.Required {
