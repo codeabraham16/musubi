@@ -86,7 +86,7 @@
 //	go run ./deploy/cmd/arnes -correr -fragmento 3/8   # uno de cada 8, por turno: el nocturno
 //
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// EL NOCTURNO: LOS 949 EN OCHO FRAGMENTOS, Y POR TURNO
+// EL NOCTURNO: TODAS LAS MECANIZADAS EN OCHO FRAGMENTOS, Y POR TURNO
 //
 // Hasta el 2026-09-24 el CI CONTABA los sabotajes (`-validar` en la guarda del censo) y nadie los
 // corría: una directiva puede apuntar a un literal único y aun así su guarda estar hueca. En serie
@@ -94,8 +94,9 @@
 // job de GitHub se corta a las seis. `.github/workflows/arnes-nocturno.yml` los parte con
 // `-fragmento k/n`.
 //
-// EL REPARTO ES POR TURNO SOBRE LA POSICIÓN, NO POR TRAMOS. `internal/mcp` tiene 532 de los 949 y
-// en el orden del censo están todos juntos: cortar por tramos contiguos dejaría un fragmento de
+// EL REPARTO ES POR TURNO SOBRE LA POSICIÓN, NO POR TRAMOS. `internal/mcp` tiene más de la mitad
+// de las mecanizadas (532 de ~970 el 2026-09-24; la cuenta de hoy la da `-validar`) y en el orden
+// del censo están todas juntas: cortar por tramos contiguos dejaría un fragmento de
 // mcp puro, el más lento, y otro de paquetes que compilan en un segundo. Por turno se intercalan.
 // Y la posición es la que la corrida ya imprime, así que un `══ 517` de un fragmento sigue
 // sirviendo para `-desde 517`.
@@ -632,9 +633,9 @@ func tramoACorrer(total, desde, limite int) (inicio, fin int) {
 // parsearFragmento lee `-fragmento k/n`. Vacío es «sin fragmento» y devuelve 0, 0.
 //
 // TODO LO QUE NO SEA entero/entero CON 1 ≤ k ≤ n ES UN ERROR, y no un valor por defecto. Un typo en
-// el workflow que se leyera como «sin fragmento» correría los 949 en un job que se corta a las seis
-// horas; uno que se leyera como un fragmento imposible (`9/8`) no correría ninguno. Las dos cosas
-// tienen que ser un rojo con la causa, no una noche rara.
+// el workflow que se leyera como «sin fragmento» correría la lista entera en un job que se corta a
+// las seis horas; uno que se leyera como un fragmento imposible (`9/8`) no correría ninguno. Las
+// dos cosas tienen que ser un rojo con la causa, no una noche rara.
 //
 // `k ≥ 1 ∧ k ≤ n` ya implica `n ≥ 1`, así que un `3/0` o un `3/-1` caen por la misma condición.
 func parsearFragmento(s string) (k, n int, err error) {
@@ -683,8 +684,8 @@ type puesto struct {
 //
 // Existe como función aparte porque las guardas de un filtro metido en el bucle del corredor
 // prueban la aritmética y no el uso: borrar el `if !enFragmento(…) { continue }` del bucle dejaría
-// cada fragmento corriendo los 949 con todas las pruebas en verde. Así, lo que se prueba es lo que
-// se corre.
+// cada fragmento corriendo la lista entera con todas las pruebas en verde. Así, lo que se prueba es
+// lo que se corre.
 //
 // EL ORDEN ES PARTE DEL CONTRATO: paquete → tramo (`-desde`/`-limite`) → fragmento → sistema.
 // Lo custodia `TestPaqueteTramoFragmentoYSistemaEnEseOrden`.

@@ -704,7 +704,7 @@ func mecanizadasDePrueba(total int, sistemas ...string) []arnes.Ancla {
 // lo que el corredor recorre: una aritmética perfecta que nadie llama también deja pasar las dos.
 //
 // Los totales incluyen los bordes del reparto por turno —menos mecanizadas que fragmentos, justo
-// n, n+1— y el tamaño real del árbol el día que entró el nocturno.
+// n, n+1— y el tamaño que tenía el árbol cuando entró el nocturno (968 el 2026-09-24).
 //
 // Sabotaje que la hace fallar: que `seleccionar` deje de preguntarle a `enFragmento` → cada
 // fragmento corre la lista entera.
@@ -721,7 +721,7 @@ func mecanizadasDePrueba(total int, sistemas ...string) []arnes.Ancla {
 // arnes: arreglo_de="\treturn (pos-1)%n == k-1"
 // arnes: arreglo_a="\treturn (pos-1)%n+1 == k"
 func TestLosFragmentosCubrenLaListaEnteraUnaSolaVez(t *testing.T) {
-	for _, total := range []int{1, 7, 8, 9, 949} {
+	for _, total := range []int{1, 7, 8, 9, 968} {
 		mec := mecanizadasDePrueba(total)
 		for n := 1; n <= 12; n++ {
 			visto := make([]int, total+1)
@@ -750,8 +750,8 @@ func TestLosFragmentosCubrenLaListaEnteraUnaSolaVez(t *testing.T) {
 	}
 
 	// CONTROL: sin `-fragmento` corre todo, que es lo que `-correr` hacía antes de que existiera.
-	if aCorrer, _ := seleccionar(mecanizadasDePrueba(949), "", 0, 0, 0, 0, "linux"); len(aCorrer) != 949 {
-		t.Errorf("sin fragmento se seleccionaron %d de 949", len(aCorrer))
+	if aCorrer, _ := seleccionar(mecanizadasDePrueba(968), "", 0, 0, 0, 0, "linux"); len(aCorrer) != 968 {
+		t.Errorf("sin fragmento se seleccionaron %d de 968", len(aCorrer))
 	}
 }
 
@@ -889,7 +889,7 @@ func TestPaqueteTramoFragmentoYSistemaEnEseOrden(t *testing.T) {
 // UN FRAGMENTO MAL ESCRITO ES UN ERROR, NO UN VALOR POR DEFECTO.
 //
 // El `-fragmento` lo arma el workflow con la aritmética de la matriz. Si un error ahí se leyera
-// como «sin fragmento», un job correría los 949 y se cortaría a las seis horas; si se leyera como
+// como «sin fragmento», un job correría la lista entera y se cortaría a las seis horas; si se leyera como
 // un fragmento imposible (`9/8`), no correría ninguno. Las dos tienen que ser un exit 2 con la
 // causa, antes de censar nada.
 //
@@ -1008,7 +1008,7 @@ func TestUnaDirectivaDeOtroSistemaNoApareceComoSinVeredicto(t *testing.T) {
 // una función que nadie llama. `correrTodos` y `main` no tienen prueba —corren `sabotaje.sh` y
 // `os.Exit`—, así que si alguien le saca el fragmento a la llamada, o el corredor vuelve a recorrer
 // la lista entera, o el cierre vuelve a `if verdes > 0 || errores > 0`, las cuatro de arriba siguen
-// en verde y cada fragmento correría los 949, o cero corridas volvería a salir 0.
+// en verde y cada fragmento correría la lista entera, o cero corridas volvería a salir 0.
 //
 // Así que se lee `main.go` y se exige el cableado: `main` le pasa a `correrTodos` y a
 // `contraOverlay` lo que devolvió `parsearFragmento`; las dos le pasan a `seleccionar` sus propios

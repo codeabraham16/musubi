@@ -11,7 +11,7 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 - **El arnés corre sus sabotajes todas las noches.** Hasta hoy el CI sólo los CONTABA: la guarda
   del censo comprueba que cada directiva `// arnes:` apunte a un literal único, pero nadie corría
   `arnes -correr`, que es lo único que dice si la guarda se pone roja con su sabotaje. El workflow
-  nuevo `.github/workflows/arnes-nocturno.yml` corre las 963 mecanizadas a las 06:30 UTC en 8
+  nuevo `.github/workflows/arnes-nocturno.yml` corre las ~970 mecanizadas a las 06:30 UTC en 8
   fragmentos paralelos (job `sabotajes`, no obligatorio: es un canario, y una noche roja llega por
   mail de GitHub). También corre en el PR que toque ese archivo y a mano con `workflow_dispatch`.
   - **`-fragmento k/n`**: reparte POR TURNO sobre la posición que la corrida imprime, así los 532 de
@@ -27,13 +27,19 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     contarla «sin veredicto». La usa `TestEscribirArchivoAtomicoConElDestinoAbiertoEnWindows`, que
     hace `t.Skip` fuera de Windows y habría dejado rojo su fragmento todas las noches. Un GOOS mal
     escrito es una queja del censo, porque si no la directiva no aplicaría en ninguna máquina.
+    **Esa directiva de Windows hoy no la mide nadie**: el nocturno es sólo Linux, y en Windows
+    `arnes -correr` no puede lanzar `sabotaje.sh` y lo cuenta «sin veredicto» sin decir por qué.
+    Arreglarlo va aparte.
 
-  *Seis guardas nuevas con 14 sabotajes declarados, todos corridos en rojo. Además de las
+  *Siete guardas nuevas con 19 sabotajes declarados, todos corridos en rojo. Además de las
   funciones puras, una lee `main.go` y exige el cableado —`main` pasa el fragmento parseado, los
-  corredores se lo pasan a `seleccionar` y recorren lo que devuelve, y `correrTodos` termina en
-  `codigoDeSalida`—, porque con sólo las puras en verde se podía desconectar el fragmento sin que
-  nada se pusiera rojo. Lo que la primera corrida completa en Linux encuentre (guardas huecas,
-  controles inestables, sin veredicto) se arregla aparte: los ~960 nunca corrieron juntos.*
+  corredores se lo pasan a `seleccionar`, recorren lo que devuelve sin reasignarlo, y
+  `correrTodos` termina en `codigoDeSalida`—, porque con sólo las puras en verde se podía
+  desconectar el fragmento sin que nada se pusiera rojo. Otra fija el orden paquete → tramo →
+  fragmento → sistema con `-paquete`, `-desde` y `-limite` puestos: reanudar un fragmento corre
+  el resto de ESE fragmento, con la posición absoluta. Lo que la primera corrida completa en Linux
+  encuentre (guardas huecas, controles inestables, sin veredicto) se arregla aparte: los ~970
+  nunca corrieron juntos.*
 
 ### Fixed
 - **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
