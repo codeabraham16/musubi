@@ -1,0 +1,123 @@
+# musubi-alerts-tablero.yml — las alertas del TABLERO DE FLOTA: las 31 piezas del repo `flota`.
+#
+# despliegue: condicional — sólo si el tablero de flota empuja `flota_*` a este Prometheus.
+#
+# Sin ese empuje, `FlotaSinFoto` es un `absent_over_time` sobre una serie que nunca llegó y
+# dispara a los 40 minutos, para siempre.
+#
+# ────────────────────────────────────────────────────────────────────────────────────────────
+# QUÉ VIGILAN, Y POR QUÉ NO LO VIGILABA NADIE
+#
+# El tablero (repo `flota`, corre en `davantis-1` cada 15 min) barre cinco rincones, mide pieza por
+# pieza y publica una foto en el server. Tenía los datos y ninguna alarma: una caída se veía como
+# una fila más, y sólo si alguien abría la página. Medido en su publicar.log, del 2026-08-17 al
+# 2026-09-24: 51 huecos de más de 40 min sin foto nueva, el mayor de TRES DÍAS (del 09-09 al
+# 09-12), y nadie se enteró. Y el `raspberrypi` —el puente del fichaje F18— no es una máquina de
+# Musubi: `MaquinaCaida` no lo ve. Hoy lo vigila sólo este tablero.
+#
+# Las series las empuja el propio tablero por OTLP (el mismo receptor que usa el cerebro), una
+# vez por barrido. Los nombres los fija el repo `flota` (`ComoOTLP`, internal/agregado/otlp.go).
+#
+# ────────────────────────────────────────────────────────────────────────────────────────────
+# SIEMPRE SOBRE UN RANGO, NUNCA LA MÉTRICA PELADA
+#
+# Una serie empujada cada 15 min vive en el vector instantáneo sólo 5 min: el lookback de este
+# Prometheus es `query.lookback-delta: 5m` (medido con /api/v1/status/flags). Los otros 10 la
+# expresión da VACÍO. Escritas con la métrica pelada y un `for: 30m` —que era el plan original—
+# `flota_rincon_alcanzado == 0` y `flota_pieza_caida == 1` NO PODÍAN DISPARARSE NUNCA: el `for` se
+# reinicia cada 15 min y no llega a los 30. Es el mismo defecto que ya se midió en este server con
+# las alertas del latido (ver TestLasAlertasDelLatidoLeenLaSerieConLastOverTime), y se custodia
+# igual: TestLasAlertasDelTableroLeenSobreUnRango.
+#
+# EL RANGO CUBRE DOS FOTOS CON MARGEN (35 min contra una cadencia de 15), y `count_over_time >= 2`
+# exige que las dos lo confirmen. No es prolijidad: de 146 caídas en 38 días, 113 duraron UNA sola
+# foto; de 18 rincones ciegos, 9. Una alarma por barrido serían 146 avisos, 113 pasajeros.
+#
+# ────────────────────────────────────────────────────────────────────────────────────────────
+# SE CALLAN CUANDO LA PC QUE PUBLICA ESTÁ APAGADA (decisión del dueño, 2026-09-24)
+#
+# El tablero corre en `davantis-1`, y esa PC se apaga: sin ella no hay foto, y eso ya lo dice
+# `MaquinaCaida{device="davantis-1"}`. Avisarlo dos veces por noche enseña a ignorar el canal.
+# Por eso `FlotaSinFoto` lleva `unless on() (… device="davantis-1" … == 0)`.
+#
+# Y `FlotaRinconCiego` se calla sobre las máquinas que Musubi ya da por caídas: `gio` lleva días
+# con `MaquinaCaida` activa, y el tablero la vería ciega en cada barrido. El `unless` va en PromQL
+# y no en una inhibición de Alertmanager porque los `project` no coinciden por construcción
+# (`musubi` contra `flota`): un `equal: ['project', 'device']` no los emparejaría nunca. Por eso el
+# emparejamiento es `on(device)` y no `on(project, device)`: acá es el único que puede matchear, y
+# en un `unless` —que es de conjuntos— dos máquinas con el mismo nombre no rompen la regla. El
+# raspberrypi no es máquina de Musubi, no está a la derecha, y sigue avisando.
+#
+# ACOPLE DECLARADO: `FlotaSinTelemetria` inhibe toda alerta `warning` con `device`
+# (alertmanager.yml). Si se muere el empuje del cerebro, las dos de abajo con `device` callan con él.
+# Se acepta: esa alerta es `critical` y dice que la telemetría entera está ciega.
+# ────────────────────────────────────────────────────────────────────────────────────────────
+
+groups:
+  - name: musubi-tablero
+    rules:
+      # --- EL HOMBRE MUERTO: el tablero dejó de publicar ---
+      #
+      # Cubre las dos formas en que ya se murió: la foto congelada tres días y las 206 corridas
+      # seguidas fallidas por el 502 del ProxyCommand. Se vigila desde el server porque en ese
+      # caso el tablero es justo lo que no puede avisar.
+      #
+      # EL `for: 20m` ES EL ARRANQUE DE LA PC, medido. Al prender `davantis-1` el `unless` deja de
+      # callar y la última foto tiene horas: sin `for`, esta alerta sonaría y se resolvería en
+      # CADA arranque. Cruzando las subidas 0→1 de `musubi_fleet_device_up{device="davantis-1"}`
+      # con publicar.log (2026-09-12 a 09-24), con el publicador sano la primera foto llegó entre
+      # 0,8 y 7,1 min después de volver; en teoría puede tardar una cadencia entera (15 min).
+      # 20 min lo cubre, y el publicador muerto con la PC prendida avisa a la hora (40 + 20).
+      - alert: FlotaSinFoto
+        expr: >-
+          absent_over_time(flota_foto_cuando_segundos[40m])
+          unless on() (last_over_time(musubi_fleet_device_up{device="davantis-1",instance="musubi-otlp-push"}[10m]) == 0)
+        for: 20m
+        labels: { severity: critical }
+        annotations:
+          summary: "El tablero de flota no publica una foto hace más de 40 minutos, con davantis-1 prendida."
+          nota: "Mirá %LOCALAPPDATA%\\flota\\publicar.log en davantis-1: cada corrida deja una línea, y la última dice por qué no publicó (ssh, permisos, el tablero colgado). Si la PC está apagada esta alerta se calla sola: eso ya lo dice MaquinaCaida."
+
+      # --- UN RINCÓN QUE NO CONTESTA ---
+      #
+      # `max_over_time(...) == 0` dice que en 35 min NINGUNA foto lo alcanzó; `count_over_time >= 2`,
+      # que hubo por lo menos dos fotos para decirlo. Sin `for`: la persistencia ya está en el rango,
+      # y un `for` encima sólo atrasaría el aviso otros N minutos.
+      #
+      # EL `keep_firing_for` ES PARA LA FOTO QUE NO LLEGA, no para el rincón. Dos fotos en 35 min
+      # dejan 5 de margen: si se pierde UNA corrida, el conteo baja a 1 durante ~10 min y la alerta
+      # se resolvía y volvía a disparar sin que nada cambiara —un RESOLVED y un FIRING al canal—.
+      # Pasa: en publicar.log, del 09-12 al 09-24, hubo dos intervalos de 21 y 30 min entre fotos.
+      # Con al menos una cadencia se cubre cualquier intervalo entre fotos más corto que la ventana
+      # (la cuenta está en TestUnaFotoPerdidaNoResuelveLaAlerta), sin atrasar el disparo: sólo la
+      # resolución de verdad llega 20 min más tarde.
+      #
+      # LO QUE NO ABSORBE, y queda dicho: con davantis-1 APAGADA no llegan fotos, así que un aviso
+      # que ya estaba activo se «resuelve» a los ≤40 min de la última foto (20 hasta que la
+      # penúltima sale de la ventana, y los 20 del `keep_firing_for`) aunque el rincón siga ciego.
+      # Es el mismo silencio que se eligió para la PC apagada, visto desde una alerta que ya sonó.
+      - alert: FlotaRinconCiego
+        expr: >-
+          max_over_time(flota_rincon_alcanzado[35m]) == 0
+          and count_over_time(flota_rincon_alcanzado[35m]) >= 2
+          unless on(device) (last_over_time(musubi_fleet_device_up{instance="musubi-otlp-push"}[10m]) == 0)
+        keep_firing_for: 20m  # una foto perdida no lo resuelve
+        labels: { severity: warning }
+        annotations:
+          summary: "El tablero de flota no alcanza el rincón {{ $labels.device }} en dos barridos seguidos: sus piezas quedan sin medir."
+          nota: "Es el ssh del tablero el que no llega. Si {{ $labels.device }} es una máquina de Musubi y está caída, esta alerta se calla sola (lo dice MaquinaCaida). El raspberrypi NO es máquina de Musubi: si es él, el fichaje F18 puede estar sin puente."
+
+      # --- UNA PIEZA MEDIDA Y CAÍDA ---
+      #
+      # `min_over_time(...) == 1`: caída en TODAS las fotos de la ventana, no en alguna. Y el mismo
+      # `keep_firing_for` que el rincón, por la misma foto perdida y con el mismo límite: con la PC
+      # apagada, una pieza que sigue caída se «resuelve» a los ≤40 min de la última foto.
+      - alert: FlotaPiezaCaida
+        expr: >-
+          min_over_time(flota_pieza_caida[35m]) == 1
+          and count_over_time(flota_pieza_caida[35m]) >= 2
+        keep_firing_for: 20m  # ídem
+        labels: { severity: warning }
+        annotations:
+          summary: "La pieza {{ $labels.pieza }} de {{ $labels.device }} está caída en dos barridos seguidos del tablero de flota."
+          nota: "Dos fotos seguidas descartan el pico: 113 de 146 caídas medidas duraron una sola foto. El detalle de la sonda está en el tablero (página /flota del CRM)."

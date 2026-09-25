@@ -810,6 +810,9 @@ var origenDeclaradoDeLosCampos = map[string]string{
 	"rustdesk_id": "fleet_list", "rustdesk_id_previo": "fleet_list",
 	"rustdesk_id_cambio": "fleet_list", "rustdesk_id_ambiguo": "fleet_list",
 	"rustdesk_id_tambien_en": "fleet_list", "rustdesk_id_fuera_de_alcance": "fleet_list",
+	// El silencio de una máquina que no late (punto 32): fleet_list los manda desde siempre
+	// (methods_fleet.go, junto a `last_seen`) y la página no los dibujaba.
+	"silencio_segundos": "fleet_list", "nunca_latio": "fleet_list",
 	// Los pone el proxy para distinguir «no hay» de «no se pudo preguntar».
 	"con_metricas": "proxy", "con_servicios": "proxy", "con_sesiones": "proxy",
 	"servicios": "proxy", "sesiones": "proxy",
@@ -1061,5 +1064,128 @@ func TestElPanelDiceCuandoLaListaVieneRecortada(t *testing.T) {
 	}
 	if !strings.Contains(pagina, "recortada") {
 		t.Error("la página no dice que la lista está recortada con ninguna palabra que se entienda")
+	}
+}
+
+// LA MÁQUINA QUE NO LATE VIAJA CON NOMBRE, Y SÓLO ELLA (punto 32).
+//
+// El dato estaba en cada fila —`online`, `silencio_segundos`— y ningún lado lo decía en voz alta:
+// una máquina que no late hace dos días era una fila más con el punto rojo. Las dos exclusiones
+// son la mitad de la prueba: una revocada no late porque se la dio de baja, y una fila SIN `online`
+// es «no se sabe», no «no late». Avisar de cualquiera de las dos sería ruido, y con ruido el aviso
+// de la de verdad deja de leerse.
+//
+// Sabotaje que la hace fallar: no juntar ninguna.
+// arnes: archivo="cmd/musubi/flota.go"
+// arnes: de="sinLatir = append(sinLatir, n)"
+// arnes: a="sinLatir = append(sinLatir[:0], n)[:0]"
+// Sabotaje que la hace fallar: contar también la revocada.
+// arnes: archivo="cmd/musubi/flota.go"
+// arnes: de="&& e[\"revoked\"] != true {"
+// arnes: a="&& e[\"revoked\"] != \"nunca\" {"
+// Sabotaje que la hace fallar: leer un `online` ausente como «no late».
+// arnes: archivo="cmd/musubi/flota.go"
+// arnes: de="if e[\"online\"] == false && "
+// arnes: a="if e[\"online\"] != true && "
+func TestUnaMaquinaQueNoLateSeAvisaArriba(t *testing.T) {
+	// EL CONTROL NEGATIVO PRIMERO: con todas en línea la clave no viaja. Sin esto, una lista fija
+	// pasaría la comprobación de abajo.
+	ts := cerebroDeFlotaFalso(t, map[string]string{
+		"musubi_fleet_list": `{"devices":[{"name":"pc","online":true}]}`})
+	rec := httptest.NewRecorder()
+	handlerFlota(&relayVivo{base: ts.URL, token: "tok"})(rec, httptest.NewRequest(http.MethodGet, "/api/flota", nil))
+	if strings.Contains(rec.Body.String(), "sin_latir") {
+		t.Fatalf("avisó máquinas sin latir con todas en línea: el aviso sería ruido permanente\n%s", rec.Body.String())
+	}
+
+	ts = cerebroDeFlotaFalso(t, map[string]string{
+		"musubi_fleet_list": `{"devices":[` +
+			`{"name":"pc","online":true},` +
+			`{"name":"gio","online":false,"silencio_segundos":167000,"last_seen":"2026-09-23T01:52:32Z"},` +
+			`{"name":"baja","online":false,"revoked":true},` +
+			`{"name":"sin-dato"}]}`})
+	got := pedirFlota(t, &relayVivo{base: ts.URL, token: "tok"})
+	if strings.Join(got.SinLatir, ",") != "gio" {
+		t.Errorf("sin_latir = %q, esperaba sólo [gio]: la revocada no late a propósito y la fila sin "+
+			"`online` es un no-sé", got.SinLatir)
+	}
+	// Y LA FILA SIGUE TRAYENDO EL SILENCIO, que es lo que la página dibuja al lado del nombre.
+	for _, e := range got.Equipos {
+		if e["name"] == "gio" && e["silencio_segundos"] != float64(167000) {
+			t.Errorf("la fila de gio perdió `silencio_segundos` en el proxy: %v", e["silencio_segundos"])
+		}
+	}
+}
+
+// Y LO QUE VIAJA SE DIBUJA, PRIMERO Y EN LA FILA.
+//
+// Es la mitad que `truncado` ya enseñó (TestElPanelDiceCuandoLaListaVieneRecortada): un dato que
+// llega y no se pinta es el mismo silencio un paso más adelante. El orden importa: los otros dos
+// avisos hablan de lo que NO se ve; éste, de algo que se está cayendo ahora. Y el título de la edad
+// del dato decía «la máquina late pero…» también de la que no late.
+//
+// Sabotaje que la hace fallar: no pintar el aviso.
+// arnes: archivo="cmd/musubi/assets/flota.html"
+// arnes: de="  if (d.sin_latir && d.sin_latir.length) {\n"
+// arnes: a="  if (false) {\n"
+// Sabotaje que la hace fallar: pintarlo detrás de los otros avisos.
+// arnes: archivo="cmd/musubi/assets/flota.html"
+// arnes: de="avisos.unshift("
+// arnes: a="avisos.push("
+// Sabotaje que la hace fallar: sacar el «sin latir hace …» de la fila.
+// arnes: archivo="cmd/musubi/assets/flota.html"
+// arnes: de="<span class=\"viejo\">${sinLatirHace(e)}</span>"
+// arnes: a="<span class=\"viejo\"></span>"
+// Sabotaje que la hace fallar: decir «late pero…» también de la que no late.
+// arnes: archivo="cmd/musubi/assets/flota.html"
+// arnes: de="const porque = online ? "
+// arnes: a="const porque = true ? "
+// Sabotaje que la hace fallar: que el aviso de arriba nombre las máquinas y no diga desde cuándo.
+// arnes: archivo="cmd/musubi/assets/flota.html"
+// arnes: de="${esc(n)}: ${sinLatirHace(porNombre.get(n))}"
+// arnes: a="${esc(n)}"
+func TestLaPaginaDeFlotaPoneLasMaquinasSinLatirPrimero(t *testing.T) {
+	pagina := sinComentariosDeHTMLyJS(string(assetsFS(t, "assets/flota.html")))
+
+	i := strings.Index(pagina, "if (d.sin_latir && d.sin_latir.length) {")
+	if i < 0 {
+		t.Fatal("la página no lee d.sin_latir: el proxy manda las máquinas que no laten y el aviso " +
+			"muere en el navegador")
+	}
+	bloque := pagina[i:]
+	if j := strings.Index(bloque, "\n  }\n"); j > 0 {
+		bloque = bloque[:j]
+	}
+	if !strings.Contains(bloque, "avisos.unshift(") {
+		t.Errorf("el aviso de máquinas sin latir no va PRIMERO (unshift): queda detrás de los de "+
+			"máquinas ocultas y lista recortada, que hablan de lo que no se ve.\n%s", bloque)
+	}
+	// Y DICE DESDE CUÁNDO, no sólo cuáles: «gio» a secas no distingue un minuto de dos días, que
+	// es justo lo que la fila ya dice. Sin esto la revisión le sacó el `sinLatirHace` al aviso y
+	// esta prueba siguió en verde.
+	if !strings.Contains(bloque, "sinLatirHace(") {
+		t.Errorf("el aviso de máquinas sin latir nombra cuáles y no dice desde cuándo (sinLatirHace):\n%s", bloque)
+	}
+
+	k := strings.Index(pagina, "cuerpo.innerHTML = equipos.map(e =>")
+	if k < 0 {
+		t.Fatal("no encontré dónde se arma la fila: esta prueba no está mirando nada")
+	}
+	fila := pagina[k:]
+	if j := strings.Index(fila, "</tr>"); j > 0 {
+		fila = fila[:j]
+	}
+	if !strings.Contains(fila, "sinLatirHace(e)") {
+		t.Error("la fila de una máquina que no late no dice desde cuándo: el punto rojo solo no " +
+			"distingue un minuto de dos días")
+	}
+
+	if !strings.Contains(pagina, "const porque = online ? 'la máquina late pero") {
+		t.Error("el título «la máquina late pero su última medición es vieja» ya no depende de " +
+			"`online`: fleet_metrics incluye las que no laten, y a ésas les dice lo contrario de lo que pasa")
+	}
+	if n := strings.Count(pagina, "edad(e.antiguedad_s, e.con_metricas, e.online)"); n != 2 {
+		t.Errorf("edad() se llama %d vez/veces con `e.online` y son dos (la fila y el cajón): el que "+
+			"no lo pasa vuelve a decir «late pero…» de una máquina que no late", n)
 	}
 }
