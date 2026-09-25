@@ -22,7 +22,7 @@ import (
 //     gemelas y archiva la perdedora con superseded_by → canónica; el 2026-09-24 había 38 aristas
 //     colgando de fichas así y 20 apuntando a blobs fundidos. Una vuelta ingenua devolvería fichas
 //     muertas desde el blob, y la sobreviviente perdería las fuentes de la que absorbió.
-//   - la ESCRITURA (heredarLinaje) copia las aristas del perdedor al canónico EN LA MISMA
+//   - la ESCRITURA (heredarLinaje) copia las aristas derived_from del perdedor al canónico EN LA MISMA
 //     TRANSACCIÓN de la fusión. Sin ella, lo que la lectura reconstruye por superseded_by dura lo
 //     que tarda la purga: PurgeArchived borra la fila archivada, sus aristas en los dos extremos y
 //     los superseded_by que apuntan a ella, a los 90 días. Después no queda nada que seguir, y el
@@ -183,6 +183,12 @@ func (e *DbEngine) linajeDeTanda(ctx context.Context, tanda []string, sc string,
 // el canónico no hereda esa punta, y a esa punta la sostiene sólo superseded_by hasta la purga.
 const heredarSinPisar = ` ON CONFLICT(source_id, target_id) DO NOTHING`
 
+// heredarSoloDerivedFrom es el filtro de relación de las dos copias, también escrito una sola vez.
+// Se hereda el LINAJE y nada más: un `related`, un `contradicts` o un veredicto pendiente del
+// perdedor hablan de él, no del canónico, y copiarlos le inventaría al canónico relaciones que nadie
+// juzgó. Va al final del WHERE, como fragmento propio, para que se pueda sabotear sin tocar el resto.
+const heredarSoloDerivedFrom = ` AND r.relation = ?`
+
 // heredarLinaje copia al canónico las aristas derived_from del perdedor, adentro de la transacción
 // de la fusión. Es lo que hace durable el linaje: ver el encabezado de este archivo.
 //
@@ -192,7 +198,16 @@ const heredarSinPisar = ` ON CONFLICT(source_id, target_id) DO NOTHING`
 // las dos sentencias no escriben nada.
 //
 // Las puntas iguales al canónico se saltean para no escribir una arista de una observación hacia sí
-// misma.
+// misma. No es teórico: Consolidate funde por trigramas, y una ficha cuyo texto quedó casi igual al de
+// su blob se funde con él, en cualquiera de los dos sentidos.
+//
+// EFECTO SOBRE EL DESTILADOR, Y ES A PROPÓSITO. El destilador da por destilado a todo blob al que le
+// entra una arista derived_from (ObservationsMissingRelation, en distill.go). Cuando un blob que nunca
+// se destiló absorbe a uno que sí, la vuelta le re-apunta las fichas del perdedor y el canónico sale
+// de la cola: su propio texto no se destila. Es lo que se quiere. Los blobs los funde sólo
+// Consolidate —el afilador filtra por prefijo de tarjeta— y los funde por trigramas, con textos casi
+// iguales, así que destilar el canónico daría fichas gemelas de las que ya salieron del perdedor, y el
+// afilador tendría que volver a fundirlas. Lo custodia TestElBlobQueAbsorbeAUnoDestiladoSaleDeLaCola.
 func heredarLinaje(tx *sql.Tx, perdedor, canonico string) error {
 	if perdedor == canonico {
 		return nil
@@ -201,16 +216,16 @@ func heredarLinaje(tx *sql.Tx, perdedor, canonico string) error {
 		SELECT lower(hex(randomblob(16))), ?, r.target_id, r.relation, r.confidence, r.status, r.resolved_by,
 		       'heredada de ' || ? || ' al fundirla'
 		FROM observation_relations r
-		WHERE r.source_id = ? AND r.relation = ? AND r.target_id <> ?`+heredarSinPisar,
-		canonico, perdedor, perdedor, RelDerivedFrom, canonico); err != nil {
+		WHERE r.source_id = ? AND r.target_id <> ?`+heredarSoloDerivedFrom+heredarSinPisar,
+		canonico, perdedor, perdedor, canonico, RelDerivedFrom); err != nil {
 		return fmt.Errorf("heredar las fuentes de %q en %q: %w", perdedor, canonico, err)
 	}
 	if _, err := tx.Exec(`INSERT INTO observation_relations (id, source_id, target_id, relation, confidence, status, resolved_by, reason)
 		SELECT lower(hex(randomblob(16))), r.source_id, ?, r.relation, r.confidence, r.status, r.resolved_by,
 		       'heredada de ' || ? || ' al fundirla'
 		FROM observation_relations r
-		WHERE r.target_id = ? AND r.relation = ? AND r.source_id <> ?`+heredarSinPisar,
-		canonico, perdedor, perdedor, RelDerivedFrom, canonico); err != nil {
+		WHERE r.target_id = ? AND r.source_id <> ?`+heredarSoloDerivedFrom+heredarSinPisar,
+		canonico, perdedor, perdedor, canonico, RelDerivedFrom); err != nil {
 		return fmt.Errorf("heredar las fichas de %q en %q: %w", perdedor, canonico, err)
 	}
 	return nil

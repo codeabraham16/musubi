@@ -23,6 +23,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   canónico en la misma transacción, con `ON CONFLICT DO NOTHING` para no pisar un veredicto que el
   canónico ya tuviera con esa punta. Sin eso, lo que `superseded_by` reconstruye duraba lo que tarda
   la purga de archivadas (90 días en el central), que borra la fila con sus aristas sin un solo error.
+  Se hereda sólo `derived_from` —un `related` del perdedor no pasa al canónico— y nunca una arista de
+  una observación hacia sí misma, que es lo que escribiría una ficha fundida con su propio artículo.
+  Un efecto buscado: si un artículo que nunca se destiló absorbe a uno que sí, hereda sus fichas y
+  sale de la cola del destilador. `Consolidate` los fundió porque sus textos son casi iguales, y
+  destilarlo daría fichas gemelas de las que ya existen.
 
   El linaje respeta el alcance de la credencial en las dos direcciones, es best-effort (si falla, la
   expansión sale como antes) y va con `omitempty`: una observación sin aristas se serializa byte a

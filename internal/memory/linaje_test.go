@@ -201,13 +201,13 @@ func TestLinajeTieneTope(t *testing.T) {
 //
 // Sabotaje que la hace fallar: no se copian las fuentes de una ficha fundida.
 // arnes: archivo="internal/memory/linaje.go"
-// arnes: de="WHERE r.source_id = ? AND r.relation = ? AND r.target_id <> ?"
-// arnes: a="WHERE r.source_id = ? AND r.relation = ? AND r.target_id <> ? AND 0"
+// arnes: de="WHERE r.source_id = ? AND r.target_id <> ?"
+// arnes: a="WHERE r.source_id = ? AND r.target_id <> ? AND 0"
 //
 // Sabotaje que la hace fallar: no se re-apuntan las fichas de un blob fundido.
 // arnes: archivo="internal/memory/linaje.go"
-// arnes: de="WHERE r.target_id = ? AND r.relation = ? AND r.source_id <> ?"
-// arnes: a="WHERE r.target_id = ? AND r.relation = ? AND r.source_id <> ? AND 0"
+// arnes: de="WHERE r.target_id = ? AND r.source_id <> ?"
+// arnes: a="WHERE r.target_id = ? AND r.source_id <> ? AND 0"
 //
 // Sabotaje que la hace fallar: heredar pisa la relación que el canónico ya tenía con esa punta.
 // arnes: archivo="internal/memory/linaje.go"
@@ -219,6 +219,11 @@ func TestLinajeTieneTope(t *testing.T) {
 // arnes: archivo="internal/memory/linaje.go"
 // arnes: de="SELECT DISTINCT v.dir"
 // arnes: a="SELECT v.dir"
+//
+// Sabotaje que la hace fallar: la herencia copia todas las relaciones del perdedor, no sólo el linaje.
+// arnes: archivo="internal/memory/linaje.go"
+// arnes: de="const heredarSoloDerivedFrom = ` AND r.relation = ?`"
+// arnes: a="const heredarSoloDerivedFrom = ` AND (r.relation = ? OR 1)`"
 func TestLaFusionDelAfiladorDejaElLinajeDurable(t *testing.T) {
 	e := newTestEngine(t)
 	sembrarLinaje(t, e, map[string]string{
@@ -226,9 +231,16 @@ func TestLaFusionDelAfiladorDejaElLinajeDurable(t *testing.T) {
 		"c2": "design-corpus/gemela-debil", "c3": "design-corpus/gemela-fuerte",
 		"bX": "ingested/web/repetido", "bY": "ingested/web/original",
 		"cX": "design-corpus/del-repetido",
+		"nR": "notas/relacionada-con-c2", "nZ": "notas/que-cita-a-bX",
 	})
 	derivar(t, e, "c2", "b1")
 	derivar(t, e, "c3", "b2")
+	// Dos relaciones que NO son linaje, una en cada dirección: c2 → nR y nZ → bX.
+	for _, par := range [][2]string{{"c2", "nR"}, {"nZ", "bX"}} {
+		if _, err := e.UpsertObsRelation(ObsRelation{SourceID: par[0], TargetID: par[1], Relation: RelRelated, Status: RelStatusResolved}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	// c2 también salió de b9, pero c3 ya tenía con b9 un veredicto propio. Ese par no se pisa.
 	derivar(t, e, "c2", "b9")
 	if _, err := e.UpsertObsRelation(ObsRelation{SourceID: "c3", TargetID: "b9", Relation: RelRelated, Status: RelStatusResolved}); err != nil {
@@ -240,6 +252,13 @@ func TestLaFusionDelAfiladorDejaElLinajeDurable(t *testing.T) {
 		if ok, err := e.ArchiveAsDuplicate(linajeProj, par[0], par[1]); err != nil || !ok {
 			t.Fatalf("fundir %s en %s: archived=%v err=%v", par[0], par[1], ok, err)
 		}
+	}
+	// Se hereda el linaje y nada más: el `related` de c2 y el que le entraba a bX hablan de ellos, no
+	// de c3 ni de bY, y nadie los juzgó para el canónico.
+	var ajenas int
+	if err := e.db.QueryRow(`SELECT COUNT(*) FROM observation_relations
+		WHERE (source_id = 'c3' AND target_id = 'nR') OR (source_id = 'nZ' AND target_id = 'bY')`).Scan(&ajenas); err != nil || ajenas != 0 {
+		t.Errorf("la fusión sólo hereda derived_from; el canónico heredó %d relaciones que no son linaje (err %v)", ajenas, err)
 	}
 
 	// ANTES DE LA PURGA, que es como pasa sus primeros 90 días toda fusión nueva: conviven la arista
@@ -324,5 +343,131 @@ func TestLaConsolidacionDejaElLinajeDurable(t *testing.T) {
 
 	if got := idsLinaje(linajeDe(t, e, "a")["a"].SalioDe); strings.Join(got, ",") != "z" {
 		t.Errorf("tras la purga de b, a tiene que conservar la fuente z que heredó; salio_de=%v", got)
+	}
+}
+
+// sembrarTextos guarda observaciones del acervo con un texto elegido: id → {topic, texto}. Las pruebas
+// de Consolidate lo necesitan porque la fusión la decide el texto.
+func sembrarTextos(t *testing.T, e *DbEngine, obs map[string][2]string) {
+	t.Helper()
+	for id, tt := range obs {
+		if err := e.SaveObservationTypedFrom(linajeProj, "seed", id, tt[0], tt[1], 1.0, "semantic", "shared", nil); err != nil {
+			t.Fatalf("sembrar %s: %v", id, err)
+		}
+	}
+}
+
+// fundidaEn exige que Consolidate haya fundido perdedor en canonico: sin esa fusión, lo que sigue en
+// la prueba no mide nada.
+func fundidaEn(t *testing.T, e *DbEngine, perdedor, canonico string) {
+	t.Helper()
+	var sup string
+	if err := e.db.QueryRow(`SELECT COALESCE(superseded_by,'') FROM observations WHERE id=?`, perdedor).Scan(&sup); err != nil || sup != canonico {
+		t.Fatalf("control: Consolidate tenía que fundir %s en %s; superseded_by=%q (err %v)", perdedor, canonico, sup, err)
+	}
+}
+
+// TestLaFichaFundidaConSuPropioBlob: Consolidate funde por trigramas, y una ficha cuyo texto quedó
+// casi igual al de su blob se funde con él, en cualquiera de los dos sentidos. La herencia no escribe
+// una arista de una observación hacia sí misma, y el linaje del sobreviviente no lo nombra a él como
+// su propia fuente ni como su propia ficha.
+//
+// Sabotaje que la hace fallar: la copia de ida no saltea la punta igual al canónico.
+// arnes: archivo="internal/memory/linaje.go"
+// arnes: de="AND r.target_id <> ?"
+// arnes: a="AND r.target_id <> ? || 'x'"
+//
+// Sabotaje que la hace fallar: la copia de vuelta no saltea la punta igual al canónico.
+// arnes: archivo="internal/memory/linaje.go"
+// arnes: de="AND r.source_id <> ?"
+// arnes: a="AND r.source_id <> ? || 'x'"
+//
+// Sabotaje que la hace fallar: la raíz se lista como su propia punta.
+// arnes: archivo="internal/memory/linaje.go"
+// arnes: de="AND t.id <> v.raiz"
+// arnes: a="AND t.id <> v.raiz || 'x'"
+func TestLaFichaFundidaConSuPropioBlob(t *testing.T) {
+	e := newTestEngine(t)
+	sembrarTextos(t, e, map[string][2]string{
+		// A: la ficha se funde en su blob.
+		"zA": {"ingested/web/grilla", "La grilla de ocho puntos ordena el espaciado de toda la interfaz, sin excepciones."},
+		"fA": {"design-corpus/grilla", "La grilla de ocho puntos ordena el espaciado de toda la interfaz, sin excepciones."},
+		// B: el blob se funde en su ficha.
+		"zB": {"ingested/web/acento", "Un solo acento de color dominante guía la mirada hacia la acción principal."},
+		"fB": {"design-corpus/acento", "Un solo acento de color dominante guía la mirada hacia la acción principal."},
+	})
+	derivar(t, e, "fA", "zA")
+	derivar(t, e, "fB", "zB")
+	// Consolidate deja vivo al más fuerte: los accesos deciden el sentido de cada fusión.
+	if _, err := e.db.Exec(`UPDATE observations SET access_count=10 WHERE id IN ('zA','fB')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Consolidate(0); err != nil {
+		t.Fatalf("Consolidate: %v", err)
+	}
+	fundidaEn(t, e, "fA", "zA")
+	fundidaEn(t, e, "zB", "fB")
+
+	var auto int
+	if err := e.db.QueryRow(`SELECT COUNT(*) FROM observation_relations WHERE source_id = target_id`).Scan(&auto); err != nil || auto != 0 {
+		t.Errorf("la herencia escribió %d aristas de una observación hacia sí misma (err %v)", auto, err)
+	}
+	lin := linajeDe(t, e, "zA", "fB")
+	for _, id := range []string{"zA", "fB"} {
+		if l := lin[id]; !l.Vacio() {
+			t.Errorf("%s absorbió a su par del linaje: no le queda fuente ni ficha que no sea él mismo; trajo salio_de=%v destilado_en=%v",
+				id, idsLinaje(l.SalioDe), idsLinaje(l.DestiladoEn))
+		}
+	}
+}
+
+// TestElBlobQueAbsorbeAUnoDestiladoSaleDeLaCola: cuando un blob que nunca se destiló absorbe a uno
+// que sí, hereda sus fichas y sale de la cola del destilador. Es una decisión, no un accidente (ver
+// heredarLinaje): Consolidate fundió los dos porque sus textos son casi iguales, y destilar el
+// canónico daría fichas gemelas de las que ya salieron del perdedor.
+//
+// Sabotaje que la hace fallar: la herencia no re-apunta las fichas del blob fundido.
+// arnes: archivo="internal/memory/linaje.go"
+// arnes: de="WHERE r.target_id = ? AND r.source_id <> ?"
+// arnes: a="WHERE r.target_id = ? AND r.source_id <> ? AND 0"
+func TestElBlobQueAbsorbeAUnoDestiladoSaleDeLaCola(t *testing.T) {
+	e := newTestEngine(t)
+	const texto = "El contraste mínimo del texto normal es de 4,5 a 1 contra su fondo, y de 3 a 1 para el texto grande."
+	sembrarTextos(t, e, map[string][2]string{
+		"bA": {"ingested/web/original", texto},
+		"bB": {"ingested/web/repetido", texto},
+		"cB": {"design-corpus/contraste", "Tarjeta: cuatro coma cinco para el cuerpo; tres para los titulares."},
+	})
+	derivar(t, e, "cB", "bB")
+	// bA es el canónico (más accesos) y nunca se destiló.
+	if _, err := e.db.Exec(`UPDATE observations SET access_count=10 WHERE id='bA'`); err != nil {
+		t.Fatal(err)
+	}
+	cola := func() string {
+		pend, err := e.ObservationsMissingRelation(linajeProj, "ingested/", RelDerivedFrom, 10)
+		if err != nil {
+			t.Fatalf("cola del destilador: %v", err)
+		}
+		ids := make([]string, 0, len(pend))
+		for _, o := range pend {
+			ids = append(ids, o.ID)
+		}
+		sort.Strings(ids)
+		return strings.Join(ids, ",")
+	}
+	if got := cola(); got != "bA" {
+		t.Fatalf("control: antes de fundir, bA es el único blob sin destilar; cola=%q", got)
+	}
+
+	if _, err := e.Consolidate(0); err != nil {
+		t.Fatalf("Consolidate: %v", err)
+	}
+	fundidaEn(t, e, "bB", "bA")
+
+	if got := cola(); got != "" {
+		t.Errorf("bA absorbió a bB, que ya estaba destilado: hereda su ficha y sale de la cola; cola=%q", got)
+	}
+	if got := idsLinaje(linajeDe(t, e, "bA")["bA"].DestiladoEn); strings.Join(got, ",") != "cB" {
+		t.Errorf("bA tiene que traer la ficha que salió de bB; destilado_en=%v", got)
 	}
 }
