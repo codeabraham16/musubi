@@ -8,6 +8,59 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Desde una ficha del acervo se llega a su fuente, y al revés.** `musubi_memory_expand` trae ahora
+  el linaje de lo que expande: una ficha destilada viene con `salio_de` (los artículos crudos de los
+  que salió) y un artículo ingerido con `destilado_en` (las fichas que salieron de él), cada punta con
+  su `id` y su `topic_key`, nunca el contenido. Expandir esos ids baja o sube un nivel. Las aristas
+  `derived_from` existían desde el 2026-08-20 —1.372 en el central— y nadie las leía para navegar.
+  El corpus de `musubi_design` suma `fuentes` en cada patrón, porque es ahí donde el agente ve la
+  ficha.
+
+  **Sigue las fusiones del afilador.** Cada punta se resuelve a su versión viva por `superseded_by`
+  (hasta 8 saltos) y la raíz junta lo que se fundió en ella, así que del artículo se llega a la ficha
+  que sobrevivió y no a la archivada, y la sobreviviente hereda las fuentes de la que absorbió. Y
+  **la herencia es durable**: `ArchiveAsDuplicate` y `Consolidate` copian las aristas del perdedor al
+  canónico en la misma transacción, con `ON CONFLICT DO NOTHING` para no pisar un veredicto que el
+  canónico ya tuviera con esa punta. Sin eso, lo que `superseded_by` reconstruye duraba lo que tarda
+  la purga de archivadas (90 días en el central), que borra la fila con sus aristas sin un solo error.
+  Se hereda sólo `derived_from` —un `related` del perdedor no pasa al canónico— y nunca una arista de
+  una observación hacia sí misma, que es lo que escribiría una ficha fundida con su propio artículo.
+  Un efecto buscado: si un artículo que nunca se destiló absorbe a uno que sí, hereda sus fichas y
+  sale de la cola del destilador. `Consolidate` los fundió porque sus textos son casi iguales, y
+  destilarlo daría fichas gemelas de las que ya existen.
+
+  El linaje respeta el alcance de la credencial en las dos direcciones, es best-effort (si falla, la
+  expansión sale como antes) y va con `omitempty`: una observación sin aristas se serializa byte a
+  byte igual que antes y la respuesta sigue siendo un array. Tope de 12 referencias por dirección.
+  `superseded_by` no tiene índice y este PR no agrega una migración: la consulta lee una vez las
+  fundidas y fija el orden de los JOIN, y con 30.000 observaciones y 8 raíces cuesta 8-10 ms (30-40 ms
+  dejándole el orden al planificador).
+
+  **Lo que el brief anuncia se puede expandir con la credencial que lo recibió.** `musubi_design` lee
+  el acervo con un scope fijo y le sirve a cualquiera; `musubi_memory_expand` leía sólo con el de la
+  credencial, así que un writer de otro proyecto recibía las `fuentes` (y el id de un patrón
+  `recortado`, que ya venía con el mismo hueco) y al expandirlas le volvía `[]`, sin error ni aviso.
+  Ahora la expansión lee, además de lo propio, el tenant `musubi-design` —el mismo que `musubi_design`
+  ya le sirve entero— y ningún otro: una nota de otro proyecto sigue fuera, y el linaje usa ese mismo
+  alcance, así que tampoco la nombra. Y del acervo ajeno entra **sólo lo visible**: la hidratación por
+  id no filtra visibilidad, así que sin esa cláusula un writer de otro proyecto que conociera un id
+  podía leer una propuesta en cuarentena o una ficha ya fundida. Lo propio no cambia.
+
+  **Queda latente hasta el despliegue y hasta que alguien lo use.** Medido el 2026-09-24:
+  `expand_count` sobre las fichas y los artículos de `musubi-design` es cero. Se da por encendido
+  cuando haya `expand_count > 0` sobre `topic_key LIKE 'ingested/%'` en ese tenant. Las 58 aristas que
+  ya cuelgan hoy de fichas y artículos fundidos las sostiene la lectura por `superseded_by`; copiarlas
+  al canónico antes de que la purga las alcance (~2026-11-19) es un backfill aparte en el central.
+
+  *28 sabotajes corridos, 28 rojos: el acervo ajeno sin exigir visibilidad, la ida y la vuelta invertidas, los saltos en cero, cada mitad de
+  la resolución por separado, sin filtro de visibilidad, sin tope o con el tope subido justo a lo
+  sembrado, sin alcance (el writer de `crm` ve un id de `web`, con el admin federado como control),
+  sin el `DISTINCT` (una punta repetida antes de la purga), la raíz como su propia punta, las dos
+  llamadas a la herencia, cada dirección de la copia, la copia que pisa un par existente, la que
+  copia relaciones que no son linaje, cada arista hacia sí misma, el artículo canónico que se queda
+  en la cola del destilador, el expand sin linaje, cada `omitempty`, el linaje que rompe la expansión
+  al fallar, el brief sin fuentes, el expand sin el acervo de diseño, y la cláusula del acervo que
+  abre todos los tenants.*
 - **Pedir cuatro ojos dice quién puede aprobar de verdad.** `musubi_fleet_require_approval`
   encendía la marca y avisaba en prosa que «con un solo par de ojos la máquina queda cerrada»,
   pero dejaba que el admin lo averiguara leyendo `principals.yaml` a mano. Medido el 2026-09-24 en

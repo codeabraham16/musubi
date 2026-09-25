@@ -1827,14 +1827,18 @@ func (s *McpServer) toolMemoryExpand(ctx context.Context, raw json.RawMessage) (
 	}
 
 	// Aislamiento por proyecto (Track 17): la hidratación por id era una fuga total (leer el
-	// contenido crudo de CUALQUIER proyecto enumerando ids). Se acota a la credencial.
-	res, used, err := s.engine.GetObservationsBudgetCtx(s.scopedCtx(ctx), args.IDs, args.MaxTokens)
+	// contenido crudo de CUALQUIER proyecto enumerando ids). Se acota a la credencial, más el acervo
+	// de diseño (ver expandCtx). El mismo contexto acotado sirve al linaje, así que no hay forma de
+	// que las dos fronteras difieran.
+	sctx := s.expandCtx(ctx)
+	res, used, err := s.engine.GetObservationsBudgetCtx(sctx, args.IDs, args.MaxTokens)
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al expandir memorias: %v", err)
 	}
 	// Contabilizar la hidratación en el ledger de la sesión activa (best-effort).
 	_, _ = s.engine.LedgerAdd("", "hydration", used)
-	return jsonResult(res)
+	// El linaje del acervo (ficha ↔ fuente), best-effort. Ver methods_linaje.go.
+	return jsonResult(s.conLinaje(sctx, res))
 }
 
 func (s *McpServer) toolTokens(raw json.RawMessage) (interface{}, *RpcError) {
@@ -2147,6 +2151,21 @@ func toSearchHits(sources []searchSource, gistMax, budget int) []searchHit {
 func (s *McpServer) scopedCtx(ctx context.Context) context.Context {
 	ps, fed := recallScopeFor(principalFrom(ctx))
 	return memory.WithProjectScope(ctx, memory.ProjectScope{ProjectID: ps, Federate: fed})
+}
+
+// expandCtx es el alcance de musubi_memory_expand: el de la credencial (scopedCtx) MÁS el acervo de
+// diseño, y nada más.
+//
+// POR QUÉ EL ACERVO. musubi_design lee `musubi-design` con un scope fijo, para cualquier credencial,
+// y le anuncia ids para expandir: el de un patrón `recortado` y las `fuentes` de cada ficha. Con el
+// alcance pelado de la credencial, un writer de otro proyecto (read=own) recibía esos ids y al
+// expandirlos le volvía `[]`, sin error ni aviso: la promesa del brief no se cumplía justo para
+// los que no son la sala de mando. No abre nada que no estuviera abierto: ese tenant ya se le
+// sirve entero a quien llame a musubi_design. Otro tenant sigue fuera, y el linaje usa este mismo
+// contexto, así que tampoco puede nombrar un id ajeno.
+func (s *McpServer) expandCtx(ctx context.Context) context.Context {
+	ps, fed := recallScopeFor(principalFrom(ctx))
+	return memory.WithProjectScope(ctx, memory.ProjectScope{ProjectID: ps, Federate: fed, Acervo: designCorpusScope})
 }
 
 // alcanceDelPull devuelve la huella del recorte con el que este pull se sirvió, para que el cliente
