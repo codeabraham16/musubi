@@ -49,22 +49,22 @@ const (
 	metaPhaseInjected     = "loop_phase_injected"     // fingerprint de la fase ya inyectada (delta)
 	metaConflictsInjected = "loop_conflicts_injected" // cantidad de conflictos ya avisada (delta)
 	metaBatchInjected     = "loop_batch_injected"     // fingerprint del batch ya inyectado (delta)
-	metaDurableNudged     = "loop_durable_nudged"     // sesion ya avisada de bajar lo durable a cuarentena
 	metaLoopTurnsSession  = "loop_turns_session"      // turnos totales de la sesion (proxy de "va a compactar")
 )
 
-// turnSurfaceChanged indica si el payload de una superficie por turno difiere de lo
-// último inyectado en la sesión, y persiste el nuevo estado. La primera vez en una
-// sesión —o si cambió el session_id— cuenta como cambio (el valor guardado lleva el
-// session_id como prefijo, igual que el delta del recall). Es el mismo principio:
-// inyectar solo lo que cambió para no repetir el mismo bloque turno a turno.
+// turnSurfaceChanged indica si el payload de una superficie por turno difiere de lo último
+// inyectado EN ESTA SESIÓN, y persiste el nuevo estado. La primera vez en una sesión cuenta como
+// cambio. Es el mismo principio que el delta del recall: inyectar sólo lo que cambió para no repetir
+// el mismo bloque turno a turno.
+//
+// ⚠️ ERA UNA CASILLA ÚNICA, Y CON DOS SESIONES ABIERTAS NO DEDUPLICABA NADA. Guardaba «id\x00payload»
+// de la ÚLTIMA sesión que pasó: si A y B se turnaban, cada turno de una encontraba la casilla con el
+// id de la otra y volvía a inyectar. Medido sobre los transcripts el 2026-09-25: de 372 inyecciones
+// del aviso de conflictos, 336 llegaron justo después de un turno de OTRA sesión del mismo repo,
+// cuando eso pasa en el 58 % de los turnos. Es el defecto que marcarUnaVezPorSesion ya había arreglado
+// para el aviso de presupuesto, y éste era el hermano que no aprendió: ahora lo usa.
 func turnSurfaceChanged(store turnStore, key, sessionID, payload string) bool {
-	want := sessionID + "\x00" + payload
-	if prev, ok, _ := store.GetMeta(key); ok && prev == want {
-		return false
-	}
-	_ = store.SetMeta(key, want)
-	return true
+	return marcarUnaVezPorSesion(store, key, sessionID, payload)
 }
 
 // turnInput es el subconjunto del JSON de stdin de UserPromptSubmit que usamos.
@@ -353,8 +353,8 @@ func buildCaptureReminder(store turnStore, sessionID string, cfg config.LoopConf
 // que jamas entraban al contexto. El nombre cambia junto con el lugar donde de verdad llega.
 const surfaceDurableNudge = "durable_nudge"
 
-// buildDurableNudge inyecta UNA sola vez por sesion el aviso de bajar lo durable del tramo a
-// CUARENTENA, cuando la sesion ya lleva afterTurns turnos.
+// buildDurableNudge inyecta el aviso de bajar lo durable del tramo a CUARENTENA una vez por TRAMO de
+// afterTurns turnos de la sesión: en el turno afterTurns, en el 2·afterTurns, y así.
 //
 // ES EL AVISO QUE VIVIA EN EL HOOK PreCompact Y QUE NUNCA LLEGO. Ese evento disparaba en el
 // instante exacto —justo antes de que el modelo escriba el resumen— pero no admite
@@ -381,10 +381,21 @@ func buildDurableNudge(store turnStore, sessionID string, afterTurns int) string
 	if turns < afterTurns {
 		return ""
 	}
-	if prev, ok, _ := store.GetMeta(metaDurableNudged); ok && prev == sessionID {
-		return "" // ya avisado en esta sesion: repetirlo seria ruido, no insistencia
+	// UNA VEZ POR TRAMO, Y LA CUENTA ES DE ESTA SESIÓN.
+	//
+	// Antes era «una sola vez por sesión» con una casilla que guardaba el id de la ÚLTIMA sesión
+	// avisada: con dos terminales abiertas, cada turno de una encontraba la casilla ajena y volvía a
+	// avisar. Medido el 2026-09-25: hasta 173 avisos en una sesión, 375 de 375 inyecciones justo
+	// después de un turno de otra. Ese defecto era, a la vez, de donde salía casi todo el uso del
+	// aviso: por inyección se siguió un 25 %, pero 391 de 410 terminaron seguidas en algún momento de
+	// la sesión. La repetición servía; lo que sobraba era repetir en CADA turno.
+	//
+	// Así que se repite a propósito y acotado: una vez cada afterTurns turnos. Una sesión larga junta
+	// algo nuevo que bajar en cada tramo, y el texto ya le dice al agente que no guarde nada si el
+	// tramo no lo tuvo. Sin casilla: lo decide el contador de la sesión, que ya era por sesión.
+	if (turns-afterTurns)%afterTurns != 0 {
+		return ""
 	}
-	_ = store.SetMeta(metaDurableNudged, sessionID)
 	return durableNudgeText()
 }
 
