@@ -151,15 +151,21 @@ func frenosDeclarados(t *testing.T) map[frenoDePolitica]string {
 //
 // Una fila por cada forma de pasar o no pasar la cadena: los tres lados de PuedeSobreDevice
 // (tenencia, concesión, aparato), los cuatro pasos de la precedencia de argvPermitido, los cuatro
-// grados de consentimiento más la degradación de `pide`, y la resolución del principal. En cada
-// fila se afirman TRES cosas, y ninguna alcanza sola:
+// grados de consentimiento más la degradación de `pide`, la resolución del principal, y la
+// ventana de mantenimiento. Ésa no es autoridad —la mira aplicarPoliticas antes de llegar a
+// autoridadDePolitica— y era el hermano que había quedado afuera del indicador: medido en la
+// revisión de A131, con una ventana abierta el inventario decía `puede_actuar: true` sin
+// `inerte_por` y el barrido contaba `mantenimiento` sin actuar. En cada fila se afirman TRES
+// cosas, y ninguna alcanza sola:
 //
 //  1. la ACCIÓN contra un HECHO escrito en la fila (¿encoló o no?). Con la decisión en una sola
 //     función, un defecto adentro de ella engaña al indicador y a la acción por igual; sólo un
 //     hecho independiente lo ve.
-//  2. el INDICADOR del inventario contra la acción: `puede_actuar == actuó`, e `inerte_por` igual
-//     a la compuerta que la fila dice que frena. Es lo que cualquier compuerta agregada de un
-//     solo lado pone en rojo, sea cual sea.
+//  2. el INDICADOR contra la acción: `puede_actuar == actuó`, e `inerte_por` igual a la compuerta
+//     que la fila dice que frena. Es lo que cualquier compuerta agregada de un solo lado pone en
+//     rojo, sea cual sea. Se mira dos veces, y en este orden: porQueNoActuaria directo, y
+//     después lo que publica musubi_fleet_list. Así un indicador mal calculado y un inventario
+//     que no le pasa la ventana caen en líneas distintas, y el arnés no los cuenta como uno.
 //  3. la MÉTRICA: el resultado contado es el de la fila y ningún otro, recorriendo
 //     `resultadosDePolitica` entero.
 //
@@ -175,21 +181,45 @@ func frenosDeclarados(t *testing.T) map[frenoDePolitica]string {
 // arnes: colision_ok="TestUnaPoliticaNoPuedeMasQueSuPrincipal"
 //
 // Sabotaje: que el indicador vuelva a tener su propia cadena, sin la compuerta de `exec`.
+//
+// Es la cadena de autoridadDePolitica ENTERA menos `exec` —registro, principal, allowlist y
+// consentimiento, en orden—, para que el rojo mida SÓLO la compuerta que falta. La versión anterior
+// de este sabotaje además convertía `sin_principal` en `allowlist` y borraba el consentimiento, y
+// su primer rojo era `inerte_por "allowlist"` en la fila del principal, que no tiene nada que ver
+// con exec: la guarda cubría el caso, pero la directiva no lo demostraba. Medido con ésta: rojo
+// exactamente en las cuatro filas de exec —el indicador directo en las cuatro, y el inventario en
+// las tres donde el detalle viaja (en la del aparato no viaja)—. Las compuertas copiadas van escritas con
+// otras palabras (`permitido :=`, `grado :=`) a propósito: con el texto literal de las originales,
+// el sabotaje duplicaba el `de` de TestUnaPoliticaRespetaLaAllowlistDeSuPrincipal y el de la
+// guarda del eje de consentimiento, y el censo lo denunciaba como un pisotón.
 // arnes: archivo="internal/mcp/politicas.go"
 // arnes: de="\t_, freno, _ := s.autoridadDePolitica(pol, d)\n\treturn freno\n"
-// arnes: a="\tif d.Revoked || s.buscarPrincipal == nil {\n\t\treturn frenoSinRegistro\n\t}\n\tpr, ok := s.buscarPrincipal.porNombre(pol.Principal)\n\tif ok && argvPermitido(pr, d, pol.Hacer) {\n\t\treturn sinFreno\n\t}\n\treturn frenoAllowlist\n"
+// arnes: a="\tif s.buscarPrincipal == nil {\n\t\treturn frenoSinRegistro\n\t}\n\tpr, ok := s.buscarPrincipal.porNombre(pol.Principal)\n\tif !ok {\n\t\treturn frenoSinPrincipal\n\t}\n\tif permitido := argvPermitido(pr, d, pol.Hacer); !permitido {\n\t\treturn frenoAllowlist\n\t}\n\tswitch grado := d.ConsentimientoEfectivo(); {\n\tcase grado.Bloquea():\n\t\treturn frenoConsentimientoProhibido\n\tcase grado == fleet.ConsentimientoPide:\n\t\treturn frenoConsentimientoPide\n\t}\n\treturn sinFreno\n"
+//
+// Sabotaje: que el indicador deje de anteponer la ventana de mantenimiento.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="\tif enMantenimiento {\n\t\treturn frenoMantenimiento\n\t}\n"
+// arnes: a=""
+//
+// Sabotaje: que el inventario busque la ventana por el NOMBRE de la máquina y no por su id (el
+// conjunto viene por id): el indicador la sabría anteponer, y nunca le llegaría. Un `false` fijo
+// sería el sabotaje obvio y no compila —deja la variable sin usar—, así que su rojo no probaría nada.
+// arnes: archivo="internal/mcp/methods_fleet.go"
+// arnes: de="s.politicasSobre(p, d, enMantenimiento[d.ID])"
+// arnes: a="s.politicasSobre(p, d, enMantenimiento[d.Name])"
 func TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice(t *testing.T) {
 	type fila struct {
-		caso        string
-		retoque     func(*Principal)     // sobre autoHeal(); nil = tal cual
-		sinRegistro bool                 // s.buscarPrincipal = nil
-		caps        []string             // de la máquina; nil = metrics + exec
-		grado       fleet.Consentimiento // "" = no se declara
-		preguntar   bool
-		actua       bool
-		freno       frenoDePolitica
-		resultado   string // de resultadosDePolitica; "" = no se cuenta nada
-		porque      string
+		caso          string
+		retoque       func(*Principal)     // sobre autoHeal(); nil = tal cual
+		sinRegistro   bool                 // s.buscarPrincipal = nil
+		caps          []string             // de la máquina; nil = metrics + exec
+		grado         fleet.Consentimiento // "" = no se declara
+		preguntar     bool
+		mantenimiento bool // una ventana abierta sobre la máquina mientras se mide
+		actua         bool
+		freno         frenoDePolitica
+		resultado     string // de resultadosDePolitica; "" = no se cuenta nada
+		porque        string
 	}
 	execSobre := func(sel ...string) func(*Principal) {
 		return func(p *Principal) { p.Fleet = map[fleet.Cap][]string{fleet.CapExec: sel, fleet.CapMetrics: {"*"}} }
@@ -257,6 +287,11 @@ func TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice(t *testing.T) 
 		{caso: "grado pide en una máquina que no sabe preguntar", grado: fleet.ConsentimientoPide, preguntar: false,
 			actua: false, freno: frenoConsentimientoProhibido, resultado: "consentimiento_prohibido",
 			porque: "`pide` sin forma de preguntar se endurece a `prohibido` (ConsentimientoEfectivo)"},
+
+		// ── La pausa que no es autoridad: la ventana de mantenimiento ──
+		{caso: "ventana de mantenimiento abierta, todo lo demás concedido", mantenimiento: true,
+			actua: false, freno: frenoMantenimiento, resultado: "mantenimiento",
+			porque: "la ventana frena el auto-heal (Ola 1), y un inventario que no lo dice convierte una ventana olvidada en una alarma apagada con el panel en verde"},
 	}
 
 	// LA TABLA RECORRE EL CONJUNTO ENTERO, derivado de su fuente.
@@ -300,6 +335,14 @@ func TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice(t *testing.T) 
 				}
 			}
 			ahora := time.Now()
+			if f.mantenimiento {
+				if _, err := s.engine.AbrirMantenimiento(fleet.Mantenimiento{
+					DeviceID: d.ID, ProjectID: d.ProjectID, Principal: "gio",
+					Desde: ahora.Add(-time.Minute), Hasta: ahora.Add(time.Hour), Motivo: "migración de postgres",
+				}); err != nil {
+					t.Fatalf("AbrirMantenimiento: %v", err)
+				}
+			}
 			latir(t, s, d.ID, muestraSana(95, ahora), ahora) // 95 % de RAM: la condición se cumple
 			d, _, _ = s.engine.DevicePorNombre("casa", "pc-gio")
 
@@ -313,6 +356,16 @@ func TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice(t *testing.T) 
 			if actuo != f.actua {
 				t.Errorf("la política actuó=%v y la fila dice actuó=%v: %s", actuo, f.actua, f.porque)
 			}
+			// EL INDICADOR, PRIMERO DIRECTO Y DESPUÉS POR EL INVENTARIO. Son dos fallas distintas y el
+			// rojo tiene que decir cuál es: si miente porQueNoActuaria, cae acá; si acierta y el
+			// inventario igual dice otra cosa, la falla es de quien se lo pasa (musubi_fleet_list, que
+			// le da la ventana), y cae más abajo. Las ventanas se leen como las lee musubi_fleet_list:
+			// no se le pasa la fila.
+			enVentana := s.ventanasParaPoliticas(time.Now())[d.ID]
+			if got := s.porQueNoActuaria(s.politicas[0], d, enVentana); (got == sinFreno) != actuo || got != f.freno {
+				t.Errorf("el indicador dice freno=%q y la política actuó=%v; la fila dice %q: el `puede_actuar` "+
+					"se calcula distinto de lo que decide la acción (%s)", got, actuo, f.freno, f.porque)
+			}
 			if visible {
 				if puede != actuo {
 					t.Errorf("el inventario dice `puede_actuar: %v` y la política actuó=%v: un indicador que "+
@@ -322,16 +375,10 @@ func TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice(t *testing.T) 
 					t.Errorf("el inventario dice `inerte_por: %q` y la fila dice %q (vacío = ninguna compuerta la "+
 						"frena): el panel manda a arreglarla al lugar equivocado, o marca inerte a una que actúa", inertePor, f.freno)
 				}
-			} else {
+			} else if d.Permite(fleet.CapExec) {
 				// El detalle no viaja a NADIE cuando la máquina no admite exec: el mirón de
 				// politicaEnElInventario tiene exec:* sobre casa, así que es la única razón posible.
-				if d.Permite(fleet.CapExec) {
-					t.Errorf("el detalle de la política no viajó a una credencial con exec:* sobre una máquina que admite exec")
-				}
-				if got := s.porQueNoActuaria(s.politicas[0], d); (got == sinFreno) != actuo || got != f.freno {
-					t.Errorf("el indicador (que nadie puede ver acá) dice freno=%q y la política actuó=%v; la fila dice %q",
-						got, actuo, f.freno)
-				}
+				t.Errorf("el detalle de la política no viajó a una credencial con exec:* sobre una máquina que admite exec")
 			}
 
 			// 3. LA MÉTRICA: exactamente el resultado de la fila, recorriendo el conjunto sembrado.
@@ -361,9 +408,9 @@ func TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice(t *testing.T) 
 			if (f.freno == frenoSinExec || f.freno == frenoAllowlist || f.freno == frenoSinPrincipal) && persona {
 				t.Errorf("LA FILA ESTÁ MAL ESCRITA: dice %q, pero su principal como persona SÍ podría", f.freno)
 			}
-			if (f.freno == frenoConsentimientoPide || f.freno == frenoConsentimientoProhibido) && !persona {
+			if (f.freno == frenoConsentimientoPide || f.freno == frenoConsentimientoProhibido || f.freno == frenoMantenimiento) && !persona {
 				t.Errorf("LA FILA NO MIDE EL EJE: dice %q, pero ya la frenaría la compuerta de la persona; el grado "+
-					"tiene que ser lo ÚNICO que la frena", f.freno)
+					"o la ventana tienen que ser lo ÚNICO que la frena", f.freno)
 			}
 		})
 	}
@@ -592,7 +639,7 @@ func TestElDetalleDeUnaPoliticaLoVeSoloQuienPuedeEjecutarEnEsaMaquina(t *testing
 			if fuente := PuedeSobreDevice(c.p, c.maquina, fleet.CapExec); fuente != c.ve {
 				t.Fatalf("LA FILA ESTÁ MAL ESCRITA: dice ve=%v y PuedeSobreDevice dice %v; la regla del detalle es la compuerta", c.ve, fuente)
 			}
-			detalle, total := s.politicasSobre(c.p, c.maquina)
+			detalle, total := s.politicasSobre(c.p, c.maquina, false)
 			if total != 1 {
 				t.Errorf("politicas_activas = %d: el CONTEO se muestra a cualquiera que vea la máquina, y sin él "+
 					"alguien la ve cambiar sin ninguna pista de por qué", total)

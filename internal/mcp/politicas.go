@@ -55,16 +55,9 @@ func (s *McpServer) aplicarPoliticas(proyecto string, ahora time.Time) int {
 	// para todas las políticas del barrido, y preguntarlo adentro del bucle sería una consulta por
 	// combinación.
 	//
-	// Si la consulta falla NO se saltea nada: un error leyendo las ventanas no puede convertirse
-	// en «no hay mantenimiento» (dispararía en medio de uno) ni en «hay mantenimiento en todas»
-	// (apagaría el auto-heal de la flota entera). Se sigue con el comportamiento de siempre y se
-	// dice, que es el sesgo con el que ya se equivocaba antes de que esto existiera.
-	enMantenimiento, err := s.engine.DevicesEnMantenimiento(ahora)
-	if err != nil {
-		logx.Error("políticas: no se pudieron leer las ventanas de mantenimiento; se evalúa como si no hubiera ninguna",
-			"proyecto", proyecto, "error", err)
-		enMantenimiento = nil
-	}
+	// La lectura, y qué se hace si falla, es ventanasParaPoliticas: la MISMA que usa el inventario
+	// para publicar `inerte_por: "mantenimiento"` (A131).
+	enMantenimiento := s.ventanasParaPoliticas(ahora, "proyecto", proyecto)
 
 	acciones := 0
 	for _, pol := range s.politicas {
@@ -83,6 +76,30 @@ func (s *McpServer) aplicarPoliticas(proyecto string, ahora time.Time) int {
 		}
 	}
 	return acciones
+}
+
+// ventanasParaPoliticas dice qué máquinas están AHORA en una ventana de mantenimiento, para decidir
+// políticas. La leen los dos lados de la decisión: el barrido que actúa (aplicarPoliticas) y el
+// inventario que contesta si actuaría (toolFleetList → politicasSobre → porQueNoActuaria).
+//
+// Si la consulta falla NO se saltea nada: un error leyendo las ventanas no puede convertirse en
+// «no hay mantenimiento» (dispararía en medio de uno) ni en «hay mantenimiento en todas»
+// (apagaría el auto-heal de la flota entera). Se sigue con el comportamiento de siempre y se dice,
+// que es el sesgo con el que ya se equivocaba antes de que esto existiera.
+//
+// ES UNA SOLA FUNCIÓN PARA QUE EL SESGO SEA UNO SOLO. Si el inventario leyera las ventanas por su
+// cuenta y ante el error eligiera el otro lado —«en la duda, inerte», que suena prudente—, el día
+// que la base no contesta diría `puede_actuar: false` de una política que el barrido está
+// ejecutando: la misma contradicción entre indicador y acción que A131 vino a cerrar, sólo que
+// escondida en la rama de error, que es la que nadie prueba.
+func (s *McpServer) ventanasParaPoliticas(ahora time.Time, contexto ...any) map[string]bool {
+	en, err := s.engine.DevicesEnMantenimiento(ahora)
+	if err != nil {
+		logx.Error("políticas: no se pudieron leer las ventanas de mantenimiento; se evalúa como si no hubiera ninguna",
+			append(contexto, "error", err)...)
+		return nil
+	}
+	return en
 }
 
 // evaluarPolitica decide y, si corresponde, actúa sobre UNA máquina. Devuelve si actuó.
@@ -373,12 +390,23 @@ const (
 	frenoConsentimientoProhibido frenoDePolitica = "consentimiento_prohibido"
 	// frenoConsentimientoPide: la máquina exige que su usuario acepte, y un barrido no puede esperar.
 	frenoConsentimientoPide frenoDePolitica = "consentimiento_pide"
+	// frenoMantenimiento: la máquina está en una ventana de mantenimiento. NO lo devuelve
+	// autoridadDePolitica —no es autoridad sino una pausa, y el barrido la mira antes de llegar
+	// ahí—; lo antepone porQueNoActuaria, en el mismo orden en que la frena aplicarPoliticas.
+	frenoMantenimiento frenoDePolitica = "mantenimiento"
 )
 
-// autoridadDePolitica es LA cadena de compuertas de una política sobre una máquina, entera y en
+// autoridadDePolitica es LA cadena de AUTORIDAD de una política sobre una máquina, entera y en
 // orden: el principal vigente, `exec` sobre esa máquina, la allowlist y el eje de consentimiento.
 // Devuelve con qué principal actuaría, qué compuerta la frena (sinFreno si ninguna) y el grado
 // efectivo de consentimiento, que quien actúa necesita para decidir si avisa.
+//
+// LO QUE NO ESTÁ ACÁ, Y POR QUÉ. La ventana de mantenimiento también frena a una política, pero no
+// es autoridad: es una pausa que el barrido consulta UNA vez por proyecto, en aplicarPoliticas,
+// antes de llegar a esta función (preguntarla acá sería una consulta por política × máquina). El
+// inventario la antepone en el mismo orden en porQueNoActuaria, así que `puede_actuar` sí la ve.
+// Lo que queda fuera de los dos es la CONDICIÓN y lo que la rodea —la muestra fresca, el
+// cooldown—, porque el indicador contesta justamente «si la condición se cumpliera».
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════
 // POR QUÉ ES UNA FUNCIÓN Y NO DOS COPIAS (A131)
@@ -396,10 +424,17 @@ const (
 // `avisa`. El defecto era latente y se volvía vivo con el primer `pide` o `prohibido`.
 //
 // Con una sola función, divergir deja de ser algo que se pueda escribir: una cuarta compuerta
-// agregada acá aparece sola en el indicador, y un principal resuelto de otra forma (cacheado,
-// digamos) engaña a los dos lados por igual, que es lo que la tabla de
-// TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice mide contra un hecho escrito por
-// fila y no sólo contra el otro lado.
+// agregada acá aparece sola en el indicador. Lo que una sola función NO puede ver es un defecto
+// adentro de ella, porque engaña a los dos lados por igual, y hay dos clases:
+//
+//   - una compuerta mal escrita (sin la tenencia, digamos) la caza la tabla de
+//     TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice, que compara cada fila contra
+//     un hecho escrito y no sólo contra el otro lado;
+//   - un principal que ENVEJECE (una copia cacheada que sobrevive a la edición del registro) la
+//     tabla NO la ve: arma un servidor nuevo por fila, así que ninguna copia llega a envejecer.
+//     Lo caza TestCadaFormaDeQuitarleAutoridadAlPrincipalApagaLaPolitica, que sobre UN servidor
+//     dispara, edita el registro y vuelve a disparar. Medido con la mutación P1-m5 portada acá:
+//     la tabla queda en verde y esa prueba cae en los pasos 1, 3 y 5.
 //
 // NO TIENE EFECTOS: ni avisos, ni métricas, ni encolados. El inventario la llama por cada fila
 // que dibuja, y un indicador que al consultarse dejara un aviso o sumara una métrica estaría
@@ -610,15 +645,20 @@ func (s *McpServer) cargarCooldowns() {
 // concesión, el comando se cayó de la allowlist, o la máquina pasó a `pide` o `prohibido`— se ve
 // EXACTAMENTE IGUAL que una que funciona: las dos figuran en la lista y ninguna hace nada visible
 // hasta que la condición se cumple. Es una alarma apagada, y la única forma de que alguien lo
-// note antes del incidente es decirlo acá. `inerte_por` dice cuál de esas compuertas es.
+// note antes del incidente es decirlo acá. `inerte_por` dice cuál de esas compuertas es. Una
+// máquina en una ventana de mantenimiento cuenta igual: la política no actúa mientras dure, y una
+// ventana olvidada es exactamente una alarma apagada con el panel en verde.
 //
 // QUIÉN VE QUÉ. El detalle exige `exec` sobre esa máquina, la misma regla que la bitácora: saber
 // qué comando corre en un servidor es casi tan revelador como poder correrlo. Pero el CONTEO se
 // muestra a cualquiera que vea la máquina — que exista algo automático encima no es un secreto, y
 // ocultarlo del todo dejaría a quien sólo tiene `metrics` viendo cambiar una máquina sin ninguna
 // pista de por qué.
+//
+// `enMantenimiento` lo trae el llamador, leído con ventanasParaPoliticas UNA vez para todo el
+// inventario y no una por máquina.
 // ────────────────────────────────────────────────────────────────────────────────────────────
-func (s *McpServer) politicasSobre(p *Principal, d fleet.Device) (detalle []map[string]interface{}, total int) {
+func (s *McpServer) politicasSobre(p *Principal, d fleet.Device, enMantenimiento bool) (detalle []map[string]interface{}, total int) {
 	if len(s.politicas) == 0 {
 		return nil, 0
 	}
@@ -631,10 +671,11 @@ func (s *McpServer) politicasSobre(p *Principal, d fleet.Device) (detalle []map[
 		if !verDetalle {
 			continue
 		}
-		// puede_actuar es la decisión REAL, evaluada ahora contra el registro vigente y el grado de
-		// la máquina: la misma función que decide en actuarSiCorresponde, no una copia de sus
-		// compuertas. La copia que había se quedó con dos de tres (A131).
-		freno := s.porQueNoActuaria(pol, d)
+		// puede_actuar es la decisión REAL, evaluada ahora contra las ventanas de mantenimiento, el
+		// registro vigente y el grado de la máquina: la misma función que decide en
+		// actuarSiCorresponde, no una copia de sus compuertas. La copia que había se quedó con dos
+		// de tres (A131). Lo único que no mira es la condición, que es lo que el campo supone.
+		freno := s.porQueNoActuaria(pol, d, enMantenimiento)
 		fila := map[string]interface{}{
 			"nombre":       pol.Nombre,
 			"principal":    pol.Principal,
@@ -662,23 +703,32 @@ func (s *McpServer) politicasSobre(p *Principal, d fleet.Device) (detalle []map[
 	return detalle, total
 }
 
-// politicaPuedeActuar responde «si la condición se cumpliera ahora mismo, ¿pasaría algo?».
+// porQueNoActuaria contesta «si la condición se cumpliera ahora mismo, ¿pasaría algo?»: devuelve
+// la compuerta que frenaría a la política sobre esa máquina, o sinFreno si ninguna. Es lo que el
+// inventario publica como `puede_actuar` e `inerte_por`, y lo ÚNICO que lo calcula.
 //
 // Un indicador que dijera «sí» donde la política dice «no» sería peor que no tenerlo, porque
-// enseñaría a confiar en él. Por eso no evalúa compuertas propias: pregunta a porQueNoActuaria,
-// que pregunta a autoridadDePolitica, que es la que decide en actuarSiCorresponde.
-func (s *McpServer) politicaPuedeActuar(pol fleet.Politica, d fleet.Device) bool {
-	return s.porQueNoActuaria(pol, d) == sinFreno
-}
-
-// porQueNoActuaria devuelve la compuerta que frenaría a la política sobre esa máquina, o
-// sinFreno si ninguna. Es lo que el inventario publica como `puede_actuar` e `inerte_por`.
+// enseñaría a confiar en él. Por eso no evalúa compuertas propias: antepone la ventana de
+// mantenimiento —en el mismo orden que aplicarPoliticas, que la mira antes que nada— y el resto
+// se lo pregunta a autoridadDePolitica, que es la que decide en actuarSiCorresponde.
 //
 // ERA UNA COPIA DE LAS COMPUERTAS Y SE QUEDÓ CON DOS DE TRES (A131). Decía ser «deliberadamente
 // la MISMA cadena de guardas» que la acción, y A91 le agregó a la acción el eje de
 // consentimiento sin tocarla. Ahora no hay cadena que copiar: la decisión es una sola función, y
 // el indicador descarta lo que no necesita —el principal y el grado— de la misma respuesta.
-func (s *McpServer) porQueNoActuaria(pol fleet.Politica, d fleet.Device) frenoDePolitica {
+//
+// Y LA VENTANA ERA EL HERMANO QUE QUEDABA AFUERA: con una abierta y la condición cumplida, el
+// inventario decía `puede_actuar: true` sin `inerte_por`, y el barrido contaba `mantenimiento` y
+// no actuaba. Medido en la revisión de A131 con una sonda sobre esta rama. Exposición en
+// producción: el contador `mantenimiento` de `vaciar-journal` dio 0 como máximo en 30 días
+// (auditoría A131), o sea que ningún barrido encontró una máquina en ventana en ese lapso.
+//
+// Existía también politicaPuedeActuar, un envoltorio de una línea sobre ésta que después de A131
+// sólo llamaban las pruebas; se borró y las pruebas preguntan acá, que es lo que corre.
+func (s *McpServer) porQueNoActuaria(pol fleet.Politica, d fleet.Device, enMantenimiento bool) frenoDePolitica {
+	if enMantenimiento {
+		return frenoMantenimiento
+	}
 	_, freno, _ := s.autoridadDePolitica(pol, d)
 	return freno
 }

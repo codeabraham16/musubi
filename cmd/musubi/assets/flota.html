@@ -172,7 +172,9 @@ function lista(xs) { return Array.isArray(xs) && xs.length ? xs.join(' ') : '—
 // equivocado, y eso manda a arreglarla a principals.yaml, donde no está el problema. Las claves
 // son las constantes de `frenoDePolitica` (internal/mcp/politicas.go), y
 // TestElPanelTieneTextoParaCadaFrenoDePolitica exige que estén todas. Un motivo que este mapa no
-// conozca se muestra crudo, nunca como una causa inventada.
+// conozca se muestra crudo, nunca como una causa inventada. La ventana de mantenimiento está acá
+// aunque no sea una compuerta de autoridad: mientras dura la política no actúa, y hasta la
+// revisión de A131 el panel no mostraba una ventana abierta en ningún lado.
 const INERTE_POR = {
   sin_registro: 'no hay registro de principals, así que no hay a quién nombrar',
   sin_principal: 'su principal no está en principals.yaml, o su credencial venció',
@@ -180,6 +182,7 @@ const INERTE_POR = {
   allowlist: 'el comando no está en la allowlist de su principal',
   consentimiento_prohibido: 'la máquina tiene el consentimiento en `prohibido` (o en `pide` sin forma de preguntar)',
   consentimiento_pide: 'la máquina exige que su usuario acepte, y un barrido automático no puede esperar la respuesta',
+  mantenimiento: 'la máquina está en una ventana de mantenimiento, y ninguna política actúa sobre ella hasta que la ventana cierre o se cancele',
 };
 
 // AUTOMÁTICO — qué actúa en esta máquina SIN una persona detrás.
