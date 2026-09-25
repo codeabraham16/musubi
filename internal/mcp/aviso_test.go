@@ -159,11 +159,15 @@ func TestConUnAgenteQueSabeAvisarElAvisoSeEncola(t *testing.T) {
 // dejaría un comando pendiente para siempre en la cola de esa máquina, que además es ruido en la
 // bitácora. Se deja la constancia en el log y listo.
 //
-// Sabotaje que la hace fallar: encolar el aviso sin mirar PuedePreguntar.
-// arnes: colision_ok="TestConCuatroOjosElPrimerPedidoNoAcunaContrasena"
+// Sabotaje que la hace fallar: que el embudo (encolarAvisoDeAcceso) deje pasar a la pantalla como
+// si su máquina supiera avisar. Era `&& false` en el `case` de toolFleetScreen, y la corrida
+// nocturna del PR #652 lo dejó en VERDE: desde #621 la precondición estaba escrita dos veces —en
+// ese `case` y en el embudo— y cada copia tapaba a la otra. Medido el 2026-09-24: romper una sola
+// daba verde; romper las dos, rojo en esta línea. Quedó una sola copia, la del embudo, y el
+// sabotaje la exceptúa sólo para este plano. Ya no pisa a la de cuatro ojos: no toca el switch.
 // arnes: archivo="internal/mcp/methods_pantalla.go"
-// arnes: de="\tcase consent.AvisaAlUsuario() && !d.PuedePreguntar:"
-// arnes: a="\tcase consent.AvisaAlUsuario() && !d.PuedePreguntar && false:"
+// arnes: de="func (s *McpServer) encolarAvisoDeAcceso(d fleet.Device, p *Principal, a avisoDeAcceso) bool {"
+// arnes: a="func (s *McpServer) encolarAvisoDeAcceso(d fleet.Device, p *Principal, a avisoDeAcceso) bool {\n\tif a.operacion == \"pantalla\" {\n\t\td.PuedePreguntar = true\n\t}"
 func TestSinCapacidadDeAvisarNoSeEncolaUnAvisoQueNadieVaAMostrar(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	tokenDevice := enrolarConPantalla(t, s, "casa", "pc-gio")
