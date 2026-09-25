@@ -7,6 +7,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **Antes de tocar un agente a mano, se declara la ventana: el runbook trae la receta.** El
+  2026-09-20, en la migración a TLS, se tocó a mano la tarea del agente de `gio` y
+  `AgenteCaidoConMaquinaViva` sonó 50 minutos. Fue la única ventana de trabajo leída como caída en
+  14 días de alertas, y `musubi_fleet_maintenance` no se había llamado nunca: `device_maintenance`
+  tenía cero filas. La plomería estaba entera; faltaba el paso.
+
+  `deploy/RUNBOOK.md` gana la sección «Antes de tocar un agente a mano: declarar la ventana», con
+  la llamada de `./deploy/musubi-tool.sh` que la abre (`minutos`) y la que la cierra (`cancelar`),
+  por qué se cierra aunque la intervención haya fallado, qué credencial puede declararla (`metrics`
+  sobre esa máquina; el rol admin no alcanza) y lo que cambia en `gio` desde el 2026-09-24: rige
+  cuatro ojos y el segundo par de ojos es meir, `exec` no pasa por esa puerta, y el control compara
+  nombres de principal, así que dos credenciales de la misma persona se pueden aprobar entre sí.
+  `AgenteCaidoConMaquinaViva` enlaza a la receta. No cambia ninguna tool ni el actualizador de
+  agentes: la ventana dentro de `actualizar-agente-windows.sh` se descartó porque en las cuatro
+  corridas medidas no habría callado nada.
+
+  *Dos guardas nuevas, con su sabotaje corrido. `TestLasLlamadasDelRunbookUsanLasToolsComoSon`
+  cruza cada llamada a una tool del runbook con el registro: tool existente, JSON válido, sólo
+  parámetros declarados, con su tipo, y los obligatorios presentes —un parámetro mal escrito lo
+  descarta `json.Unmarshal` en silencio—. `TestAntesDeTocarUnAgenteElRunbookDeclaraLaVentana` exige
+  que la receta abra y cierre la ventana en la misma sección, que `AgenteCaidoConMaquinaViva` enlace
+  a ella y que todo enlace interno del runbook llegue a una sección.*
+
 ### Fixed
 - **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
   El ledger era UNA casilla de `meta` que guardaba UNA sesión, y `LedgerAdd` la reiniciaba entera

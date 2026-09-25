@@ -1422,6 +1422,55 @@ Tres desenlaces, y sólo uno es un backup roto:
 `MusubiBackupOffhostStale`, y hoy vale `-1` para siempre porque el destino off-host es local por
 decisión (A37). Un snapshot fresco al lado de la base no sobrevive a que se pierda el disco.
 
+## Antes de tocar un agente a mano: declarar la ventana
+
+Parar, reinstalar o reconfigurar el agente de una máquina —o su tarea programada— produce
+exactamente lo que `AgenteCaidoConMaquinaViva` existe para detectar: el agente deja de latir y la
+máquina sigue en la red. Si lo hacés a propósito, **declará primero una ventana de mantenimiento**.
+Sin ella la alerta suena a los 5 minutos por algo que estás haciendo vos, y una política de
+auto-heal puede actuar sobre la máquina en mitad del trabajo.
+
+**El caso que la trajo.** El 2026-09-20, en la migración a TLS, se tocó a mano la tarea del agente
+de `gio` a las 14:27 UTC (salió con `3221225786`) y `AgenteCaidoConMaquinaViva` sonó desde las 14:39
+durante 50 minutos. Fue la única ventana de trabajo leída como caída en 14 días de alertas, y nadie
+la había declarado: medido el 2026-09-24, `device_maintenance` no tenía una sola fila. La plomería
+estaba entera —las reglas miran `musubi_fleet_device_maintenance` y el auto-heal la respeta—; lo
+que faltaba era este paso en la receta.
+
+```bash
+# 1. ANTES de tocar nada. La respuesta trae el `id` de la ventana: guardalo.
+./deploy/musubi-tool.sh musubi_fleet_maintenance '{"device":"gio","minutos":30,"motivo":"<qué vas a tocar>","project":"musubi"}'
+
+# 2. Al terminar, con el agente latiendo otra vez. Y también si salió MAL (abajo).
+./deploy/musubi-tool.sh musubi_fleet_maintenance '{"device":"gio","cancelar":"<id>","project":"musubi"}'
+```
+
+Desde una sesión con el MCP del cerebro es la misma tool con los mismos argumentos. El guion toma
+la credencial y `MUSUBI_CENTRAL_URL` del entorno: sin la URL le habla a `127.0.0.1:7717`, que sólo
+sirve corriéndolo en el server. Treinta minutos alcanzan para reinstalar una tarea; si va a llevar
+más, pedí más desde el principio en vez de encadenar ventanas.
+
+**Cerrala aunque la intervención haya fallado, y sobre todo entonces.** Mientras la ventana está
+activa se callan las reglas de esa máquina —`MaquinaCaida` y `ServicioCaido` incluidas, no sólo
+ésta— y su auto-heal no actúa. Si el agente quedó muerto, querés que la alerta vuelva a sonar ya, no
+cuando la ventana venza. Si te olvidás, vence sola a los `minutos` que pediste (techo duro de 24 h;
+`MantenimientoEterno` avisa a las 25).
+
+**La credencial necesita `metrics` sobre ESA máquina**, no `admin` ni `exec`: declarar una ventana
+no ejecuta nada. El rol no concede capacidades de flota (C1), así que un admin sin sección `fleet:`
+en `principals.yaml` recibe «no podés declarar mantenimiento». Medido el 2026-09-24, tampoco pueden
+la credencial de las políticas de auto-heal (sólo `exec`) ni la de meir (sólo `screen` sobre `gio`).
+
+**En `gio` rige cuatro ojos desde el 2026-09-24, y el segundo par de ojos es meir.** Si la
+intervención entra por `musubi_fleet_screen`, la sesión espera a que él la apruebe con
+`musubi_fleet_approve`. La aprobación no viaja: avisale antes de pedirla, o la solicitud vence a los
+30 minutos sin que se entere (ver `AprobacionDeCuatroOjosSinAtender`). Y que la apruebe él, no otra
+credencial tuya: el control compara NOMBRES de principal, así que `davantis-2` puede aprobar una
+solicitud de `davantis-consola` y la bitácora diría «aprobado por otro» siendo la misma persona.
+Dos cosas no pasan por esa puerta: declarar la ventana, que no es una sesión, y
+`musubi_fleet_exec`, que cuatro ojos no cubre —es el hueco que la propia
+`musubi_fleet_require_approval` advierte, no una vía alternativa—.
+
 ## MantenimientoEterno
 
 Una máquina lleva más de 25 horas con una ventana de mantenimiento activa.
@@ -1512,6 +1561,9 @@ supone.
 
 El agente de esa máquina no late, **pero el cerebro sí la alcanza por la red**. La máquina está
 encendida. Lo caído es el agente.
+
+**Si lo estás tocando vos**, esta alerta es la que una ventana de mantenimiento calla, y en `gio`
+además rige cuatro ojos: [declarala antes](#antes-de-tocar-un-agente-a-mano-declarar-la-ventana).
 
 **No mires el hardware.** Esta alerta existe para que no lo hagas: hasta que existió, `MaquinaCaida`
 disparaba igual en los dos casos y mandaba a revisar una fuente de alimentación perfectamente sana.
