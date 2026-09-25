@@ -134,15 +134,23 @@ func TestPrecheckFlagsStaleGist(t *testing.T) {
 	}
 }
 
-func TestPrecheckNudgesSaveForBigUnknownFile(t *testing.T) {
+// UN ARCHIVO GRANDE SIN GIST NO RECIBE UN PEDIDO DE GUARDARLO.
+//
+// Medido sobre los transcripts: ese pedido se inyectó 396 veces al leer un archivo y se siguió
+// cero. Interrumpir una lectura para pedir trabajo que le sirve a OTRA sesión no mueve al agente, y
+// cada aviso cuesta sus tokens. Esta prueba fija que no vuelva.
+//
+// Sabotaje que la hace fallar: volver a pedir el gist cuando no hay.
+// arnes: archivo="cmd/musubi/precheck.go"
+// arnes: de="\tif !ok {\n\t\treturn \"\"\n\t}\n\tcurrent, _ := memory.FileFingerprint(root, path)"
+// arnes: a="\tif !ok {\n\t\treturn \"[Musubi — código] No hay gist de «\" + key + \"». Guardá uno con musubi_save_code.\"\n\t}\n\tcurrent, _ := memory.FileFingerprint(root, path)"
+func TestPrecheckNoPideGistDeUnArchivoGrande(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root, "big.go", strings.Repeat("// línea de relleno para superar el umbral\n", 80))
 	store := &fakeCodeStore{mem: map[string]memory.CodeMemory{}}
 	in := `{"tool_name":"Read","tool_input":{"file_path":"big.go"},"session_id":"s"}`
-	out := precheckOutput(store, root, strings.NewReader(in))
-	_, ctx := hookAdditionalContext(t, out)
-	if !strings.Contains(ctx, "musubi_save_code") {
-		t.Errorf("un archivo grande sin gist debe sugerir guardarlo, obtuve %q", ctx)
+	if out := precheckOutput(store, root, strings.NewReader(in)); strings.Contains(out, "musubi_save_code") {
+		t.Errorf("un archivo grande sin gist no tiene que pedir guardarlo, obtuve %q", out)
 	}
 }
 

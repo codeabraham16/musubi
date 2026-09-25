@@ -222,6 +222,36 @@ func TestHookFullGenerationPrimeraVez(t *testing.T) {
 	}
 }
 
+// LA GENERACIÓN COMPLETA SE OFRECE UNA VEZ, NO EN CADA ARRANQUE.
+//
+// La huella y el sentinel sólo los escribía musubi_save_skill, así que un agente que no recorría el
+// flujo dejaba al proyecto en «primera vez» para siempre: medido sobre los transcripts, el bloque
+// salió en 9 de 9 arranques y se siguió en 0, a ~700 tokens cada uno.
+//
+// Sabotaje que la hace fallar: no guardar la huella al ofrecer.
+// arnes: archivo="cmd/musubi/detect.go"
+// arnes: de="\t\t_ = store.SetMeta(memory.MetaStackFingerprint, currentFP)\n\t\treturn buildAdditionalContext(stackResumen)"
+// arnes: a="\t\treturn buildAdditionalContext(stackResumen)"
+func TestLaGeneracionCompletaSeOfreceUnaSolaVez(t *testing.T) {
+	dir := crearGoProject(t)
+	store := newFakeStore() // sin huella, sin sentinel
+	store.topics["project/profile"] = true
+	primera, err := buildHookOutput(dir, store, defaultStartup(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(primera, "auto-descubrimiento de skills") {
+		t.Fatalf("precondición: el primer arranque tiene que ofrecer la generación, obtuve: %q", primera)
+	}
+	segunda, err := buildHookOutput(dir, store, defaultStartup(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(segunda, "auto-descubrimiento de skills") {
+		t.Errorf("el segundo arranque volvió a ofrecer la generación completa: se repite en cada sesión")
+	}
+}
+
 func TestHookDeltaRegeneracion(t *testing.T) {
 	dir := crearGoNodeProject(t)
 	crearSentinel(t, dir)
@@ -258,11 +288,12 @@ func TestHookSinCambiosNiMemoria(t *testing.T) {
 
 func TestCapturePrimingContent(t *testing.T) {
 	s := buildCapturePriming()
-	// R2 (4 clases + tools), R3 (salencia), R4 (shared≠git), R1 (proactivo).
+	// R2 (4 clases + tools), R3 (salencia), R4 (shared≠git), R1 (proactivo). Los hechos van a
+	// musubi_propose_facts y no a save_fact: los deduce el agente, así que entran en cuarentena.
 	for _, want := range []string{
 		"sin que te lo pidan",
 		"Decisiones", "gotchas", "Estado del trabajo",
-		"musubi_save_observation", "musubi_save_fact", "musubi_save_code",
+		"musubi_save_observation", "musubi_propose_facts", "musubi_save_code",
 		"REUSABLE", "trivialidades",
 		"NO un tag ni un commit de git",
 	} {
@@ -457,10 +488,8 @@ func TestDetectOutputHookModeSentinelAusente(t *testing.T) {
 	if ctx == "" {
 		t.Fatal("additionalContext está vacío")
 	}
-	// Verificar que el contexto menciona las herramientas MCP requeridas.
-	if !strings.Contains(ctx, "musubi_detect_stack") {
-		t.Error("additionalContext no menciona 'musubi_detect_stack'")
-	}
+	// Verificar que el contexto menciona las herramientas MCP requeridas. musubi_detect_stack ya no:
+	// está dormida y el stack ya viene detectado en el encabezado del bloque.
 	if !strings.Contains(ctx, "musubi_save_skill") {
 		t.Error("additionalContext no menciona 'musubi_save_skill'")
 	}

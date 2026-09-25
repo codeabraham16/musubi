@@ -3017,7 +3017,7 @@ func (s *McpServer) toolDiscoverSkills(raw json.RawMessage) (interface{}, *RpcEr
 	}
 	if query == "" {
 		return textResult("No pude inferir el stack del proyecto para armar la búsqueda. " +
-			"Pasá un 'query' explícito a musubi_discover_skills (ej. el lenguaje o framework)."), nil
+			"Pasá un 'query' explícito (ej. el lenguaje o framework)."), nil
 	}
 
 	// 1) Catálogo ESTÁTICO cosechado (default): cero rate limit. Si está configurado y se

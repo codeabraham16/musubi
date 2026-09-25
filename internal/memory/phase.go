@@ -153,7 +153,7 @@ func PhaseDirective(phase string) string {
 	case "plan":
 		return "Definí el plan: qué archivos tocás y en qué orden. Confirmá el enfoque con el usuario antes de codear."
 	case "code":
-		return "Implementá el plan siguiendo las convenciones del proyecto (musubi_resolve_skills). Guardá decisiones no obvias con musubi_save_observation."
+		return "Implementá el plan siguiendo las convenciones y las skills del proyecto (musubi_list_skills). Guardá decisiones no obvias con musubi_save_observation."
 	case "verify":
 		return "Verificá: corré tests/build y revisá contra el plan. Guardá lo aprendido y cerrá la fase con musubi_phase action=advance."
 	default:
