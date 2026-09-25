@@ -42,13 +42,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     ≤10 s, y el mensaje dice los dos casos en que eso no alcanza. `MusubiDown` y su runbook dicen
     que un `up == 0` con el proceso vivo puede ser la credencial del scrape vencida.
 
-  *Diecisiete sabotajes nuevos, uno por directiva `arnes:`, los diecisiete corridos en rojo: la rama
+  *Veinte sabotajes nuevos, uno por directiva `arnes:`, los veinte corridos en rojo: la rama
   «por vencer», el redondeo, el umbral del listado contra el de la alerta (en las dos direcciones),
   la llamada al render desde `/metrics`, la vencida fuera del mínimo, la delegación del registro
   recargable, la serie ausente sin fecha futura, la visibilidad read=own (agregando lo prohibido),
   el flag de recarga al encenderse, al apagarse y al restaurar el respaldo con su mtime, el
   contador de recargas, el contador del legacy y su traspaso en la recarga, los nombres de las
-  series contra las `expr` de las alertas, y los días en la fila del CLI. Más los tres naturales del cambio sobre guardas que ya existían —la custodia
+  series contra las `expr` de las alertas, lo que cada `expr` hace con el valor (un solo
+  vencimiento tiene que disparar, el flag 0/1 tiene que poder cumplirse, el `for:` tiene que caber
+  en la ventana del `delta`), y los días en la fila del CLI. Más los tres naturales del cambio sobre guardas que ya existían —la custodia
   en 32 y dos anclas del runbook renombradas—, también en rojo. No se le puso fecha a ninguna
   credencial: eso es producción y va aparte, con el aviso ya desplegado.*
 
