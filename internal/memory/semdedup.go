@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -343,4 +345,113 @@ func (e *DbEngine) ArchiveAsDuplicate(projectID, loserID, canonicalID string) (a
 		e.index.RemoveBatch([]string{loserID})
 	}
 	return true, nil
+}
+
+// RestoreDuplicate DESHACE una fusión: devuelve al acervo la tarjeta que ArchiveAsDuplicate archivó
+// como duplicado de otra, y marca el par `not_duplicate` para que el afilador no la vuelva a fusionar.
+// Devuelve el canónico al que apuntaba.
+//
+// EXISTE PORQUE EL «REVERSIBLE» NO TENÍA REVERSA. ArchiveAsDuplicate se documentó siempre como
+// soft-delete reversible, y no había ningún camino que lo revirtiera: reviveSiArchivada revive sólo
+// por re-guardado y, a propósito, no toca superseded_by. Medido el 2026-09-24: de las 28 fusiones que
+// el afilador había hecho, 8 perdieron algo que la otra tarjeta no decía, y la purga de archivados
+// (`purge_archived_after_days: 90` en el cerebro) las iba a borrar para siempre el 2026-11-19.
+//
+// Qué deshace, en UNA transacción:
+//   - la tarjeta vuelve a ser visible: archived=0, archived_at=NULL, superseded_by=NULL. Con
+//     archived_at en NULL sale además de la ventana de la purga.
+//   - el canónico devuelve los accesos que heredó. Los de la tarjeta no se tocaron al archivarla, así
+//     que son exactamente los que el canónico sumó.
+//   - sync_seq avanza, por la misma razón que en reviveSiArchivada: una fila que revive sin moverlo
+//     queda detrás del cursor de cualquier espejo que ya pasó por ese número.
+//   - el par queda `not_duplicate` (canónico → tarjeta). Sin esa marca, el próximo afilado de fondo
+//     vuelve a proponer el par y la fusión se rehace sola.
+//
+// Qué NO deshace, porque no quedó registrado en ningún lado: la importancia del canónico (se fusionó
+// con MAX y el valor previo se perdió) y los superseded_by de terceros que ArchiveAsDuplicate
+// re-apuntó al canónico.
+//
+// Sólo deshace FUSIONES: una tarjeta archivada sin superseded_by (olvido, cuota) no la archivó una
+// fusión, y se rechaza en vez de revivirla por la puerta de atrás. Idempotente: una tarjeta que ya está
+// visible devuelve restored=false sin error. Aislamiento por tenant fail-closed, igual que al archivar.
+func (e *DbEngine) RestoreDuplicate(projectID, loserID, resolvedBy string) (restored bool, canonicalID string, err error) {
+	var lProj, sup string
+	var lAccess, lArch int
+	err = e.db.QueryRow(
+		`SELECT COALESCE(project_id,''), access_count, COALESCE(archived,0), COALESCE(superseded_by,'')
+		 FROM observations WHERE id = ?`, loserID).Scan(&lProj, &lAccess, &lArch, &sup)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, "", fmt.Errorf("deshacer fusión: la observación %q no existe", loserID)
+	}
+	if err != nil {
+		return false, "", fmt.Errorf("deshacer fusión: leer %q: %w", loserID, err)
+	}
+	if lProj != projectID {
+		return false, "", fmt.Errorf("%w: deshacer fusión de %q (es de %q, esperado %q)", ErrCrossTenant, loserID, lProj, projectID)
+	}
+	if lArch == 0 && sup == "" {
+		return false, "", nil // ya está visible: no hay fusión que deshacer
+	}
+	if lArch == 0 || sup == "" {
+		return false, "", fmt.Errorf("deshacer fusión: %q no la archivó una fusión (archived=%d, superseded_by=%q)", loserID, lArch, sup)
+	}
+	canonicalID = sup
+
+	// El canónico puede no existir más (purgado o borrado). La tarjeta se devuelve igual: es lo que
+	// importa rescatar, y no hay a quién restarle los accesos.
+	var cProj string
+	cErr := e.db.QueryRow(`SELECT COALESCE(project_id,'') FROM observations WHERE id = ?`, canonicalID).Scan(&cProj)
+	canonicoVivo := cErr == nil
+	if cErr != nil && !errors.Is(cErr, sql.ErrNoRows) {
+		return false, "", fmt.Errorf("deshacer fusión: leer el canónico %q: %w", canonicalID, cErr)
+	}
+	if canonicoVivo && cProj != projectID {
+		return false, "", fmt.Errorf("%w: el canónico %q es de %q, esperado %q", ErrCrossTenant, canonicalID, cProj, projectID)
+	}
+
+	tx, err := e.db.Begin()
+	if err != nil {
+		return false, "", fmt.Errorf("deshacer fusión: iniciar transacción: %w", err)
+	}
+	defer tx.Rollback()
+
+	if canonicoVivo {
+		if _, err := tx.Exec(
+			`UPDATE observations SET access_count = MAX(0, access_count - ?) WHERE id = ?`,
+			lAccess, canonicalID); err != nil {
+			return false, "", fmt.Errorf("deshacer fusión: devolver los accesos del canónico: %w", err)
+		}
+	}
+	res, err := tx.Exec(
+		`UPDATE observations
+		 SET archived = 0,
+		     archived_at = NULL,
+		     superseded_by = NULL,
+		     sync_seq = (SELECT IFNULL(MAX(sync_seq),0) FROM observations) + 1
+		 WHERE id = ? AND archived = 1`, loserID)
+	if err != nil {
+		return false, "", fmt.Errorf("deshacer fusión: devolver la tarjeta: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return false, "", fmt.Errorf("deshacer fusión: %q cambió mientras se la devolvía (filas=%d)", loserID, n)
+	}
+	if _, err := upsertObsRelationCon(tx, ObsRelation{
+		SourceID: canonicalID, TargetID: loserID, Relation: RelNotDuplicate,
+		Status: RelStatusResolved, ResolvedBy: resolvedBy, Confidence: 1.0,
+		Reason: "fusión deshecha: archivarla perdía algo que la otra no dice",
+	}); err != nil {
+		return false, "", fmt.Errorf("deshacer fusión: marcar el par not_duplicate: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, "", fmt.Errorf("deshacer fusión: commitear: %w", err)
+	}
+
+	// Post-commit, el espejo de ArchiveAsDuplicate: el archivado la sacó del índice vectorial, y sin
+	// volver a meterla una búsqueda con el índice entrenado no la devuelve hasta el próximo rebuild.
+	if e.index != nil && e.vindexCfg.Enabled {
+		if v, verr := e.observationVector(loserID); verr == nil && len(v) > 0 {
+			e.index.Add(loserID, v)
+		}
+	}
+	return true, canonicalID, nil
 }

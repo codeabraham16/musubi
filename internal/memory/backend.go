@@ -65,6 +65,8 @@ type ObservationStore interface {
 	SemanticDuplicateCandidates(projectID, topicPrefix string, floor float64, maxPairs int) ([]SemDupCandidate, error)
 	NearestVisibleByVector(projectID, topicPrefix string, vec []float32, excludeID string) (id, topic string, cosine float64, err error)
 	ArchiveAsDuplicate(projectID, loserID, canonicalID string) (archived bool, err error)
+	// RestoreDuplicate deshace una fusión de ArchiveAsDuplicate y marca el par `not_duplicate`.
+	RestoreDuplicate(projectID, loserID, resolvedBy string) (restored bool, canonicalID string, err error)
 	GetObservationsBudget(ids []string, budget int) ([]Observation, int, error)
 	// GetObservationsBudgetCtx hidrata por id respetando el ctx (deadline + ProjectScope de
 	// aislamiento multi-tenant, Track 17). El MCP la usa para acotar la expansión a la credencial.

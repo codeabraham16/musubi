@@ -173,19 +173,15 @@ func (s *McpServer) toolFleetScreen(ctx context.Context, raw json.RawMessage) (i
 
 	// LOS AVISOS, RECIÉN ACÁ: ya sabemos que esta sesión se va a abrir. Un `pide` no llega hasta
 	// este punto — se repartió arriba, y su pregunta ya cumple la función de avisar.
-	switch consent := d.ConsentimientoEfectivo(); {
-	case consent.AvisaAlUsuario() && !d.PuedePreguntar:
-		// SE ABRE, Y SE DICE QUE EL AVISO NO SE PUDO ENTREGAR. Prometer una notificación que el
-		// agente de ESTA máquina no sabe dar sería exactamente lo que este eje viene a evitar:
-		// una configuración que se ve puesta y no lo está. Bloquear tampoco: `avisa` no bloquea,
-		// y hacerlo cerraría el acceso por una capacidad que esa máquina puede no tener nunca
-		// —un servidor sin escritorio— por razones que no son de seguridad.
-		s.avisarUnaVezPorDevice(d.ID, nombre, "pantalla", consent)
-	case consent.AvisaAlUsuario():
-		// EL AGENTE SABE AVISAR: se le encola el aviso (A57). El aviso dice «alguien está por
-		// entrar», así que entregarlo después de que la pantalla ya está abierta lo convertiría
-		// en una notificación de algo que ya pasó. El agente lo recoge en su próximo latido
-		// —hasta 30 s— y esa demora es el precio de no ponerlo a escuchar un puerto.
+	//
+	// Si el agente de ESTA máquina no sabe mostrar el aviso, la pantalla se abre igual —`avisa` no
+	// bloquea— y no se encola nada: eso lo decide encolarAvisoDeAcceso, que es el único sitio que
+	// mira `PuedePreguntar`. Acá no se repite (ver el porqué en el embudo).
+	if d.ConsentimientoEfectivo().AvisaAlUsuario() {
+		// Se encola el aviso (A57). Dice «alguien está por entrar», así que entregarlo después de
+		// que la pantalla ya está abierta lo convertiría en una notificación de algo que ya pasó.
+		// El agente lo recoge en su próximo latido —hasta 30 s— y esa demora es el precio de no
+		// ponerlo a escuchar un puerto.
 		s.encolarAvisoDeAcceso(d, p, avisoPantalla)
 	}
 
@@ -692,7 +688,7 @@ var (
 // semántica de `pide` sin que nadie lo decidiera. Lo que no puede pasar es que falle callado, y
 // por eso queda la línea, con la operación adentro para que diga cuál fue.
 // ════════════════════════════════════════════════════════════════════════════════════════════
-func (s *McpServer) encolarAvisoDeAcceso(d fleet.Device, p *Principal, a avisoDeAcceso) {
+func (s *McpServer) encolarAvisoDeAcceso(d fleet.Device, p *Principal, a avisoDeAcceso) bool {
 	// LA PRECONDICIÓN VIVE ACÁ, Y NO EN LOS LLAMADORES. ES EL ARREGLO, y tiene su medición.
 	//
 	// A83 dedujo bien la mitad del problema: había DOS copias del bloque que encola, se agregó un
@@ -711,9 +707,23 @@ func (s *McpServer) encolarAvisoDeAcceso(d fleet.Device, p *Principal, a avisoDe
 	// el camino malo deja de ser representable: un quinto plano no puede olvidarse de una guarda
 	// que no tiene que escribir. No se bloquea, porque `avisa` no bloquea: se deja la constancia
 	// UNA vez por máquina y por plano, igual que hacían los tres llamadores.
+	//
+	// Y LAS TRES COPIAS SE SACARON DESPUÉS (2026-09-24), porque dejarlas tapaba a las guardas. Con
+	// la precondición en los dos lugares, cada uno cubría al otro: la primera corrida nocturna del
+	// arnés (PR #652) puso `&& false` en el `case` de cada llamador y las tres pruebas que dicen
+	// «a una máquina que no sabe avisar no se le encola nada» quedaron en VERDE —el embudo la
+	// atajaba igual—; y sacarla de acá también quedaba en verde —la atajaba el `case`—. Recién con
+	// las dos capas rotas a la vez la de pantalla se ponía roja. Una precondición escrita dos veces
+	// no es defensa en profundidad: es una guarda que ninguna prueba puede ver romperse, y la copia
+	// es justo la que se olvida el próximo camino, como ya pasó con la política.
+	//
+	// DEVUELVE SI ENCOLÓ, y lo usa un solo llamador: el estrangulador de exec marca su ventana sólo
+	// cuando de verdad salió un aviso. Si la marcara también cuando la máquina no sabe mostrarlo,
+	// el primer exec después de que su agente aprenda a avisar caería dentro de una ventana que
+	// nunca avisó nada — avisar de menos, que es el sesgo que esa ventana promete no tener.
 	if !d.PuedePreguntar {
 		s.avisarUnaVezPorDevice(d.ID, d.Name, a.operacion, d.ConsentimientoEfectivo())
-		return
+		return false
 	}
 	quien := nombrePrincipal(p)
 	if quien == "" {
@@ -732,7 +742,9 @@ func (s *McpServer) encolarAvisoDeAcceso(d fleet.Device, p *Principal, a avisoDe
 	}); err != nil {
 		logx.Warn("flota: no se pudo encolar el aviso al usuario; la operación sigue igual",
 			"device", d.Name, "haciendo", a.haciendo, "error", err)
+		return false
 	}
+	return true
 }
 
 // toolFleetConsent fija la política de consentimiento de una máquina.

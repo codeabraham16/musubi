@@ -101,11 +101,6 @@ func (s *McpServer) aplicarConsentimientoDeExec(d fleet.Device, p *Principal, no
 				"(`musubi_fleet_shell`), que SÍ pregunta y espera; o bajá el grado de la máquina a "+
 				"`avisa` si querés que se ejecute avisando.",
 			nombre, d.Consentimiento)
-	case consent.AvisaAlUsuario() && !d.PuedePreguntar:
-		// El agente de esta máquina no sabe notificar. Se ejecuta igual —`avisa` no bloquea— y la
-		// constancia queda en el log, una vez por máquina: prometer una notificación que no se
-		// puede entregar es justo lo que este eje viene a evitar.
-		s.avisarUnaVezPorDevice(d.ID, nombre, "exec", consent)
 	case consent.AvisaAlUsuario():
 		s.encolarAvisoDeExecConVentana(d, p)
 	}
@@ -127,11 +122,17 @@ func (s *McpServer) encolarAvisoDeExecConVentana(d fleet.Device, p *Principal) {
 			return
 		}
 	}
-	s.avisosDados.Store(clave, ahora)
 	// EL ESTRANGULADOR ES LO ÚNICO PROPIO DE EXEC, y por eso es lo único que queda acá: el
 	// encolado es el mismo de los tres caminos y vive en encolarAvisoDeAcceso. Tener dos copias
 	// de ese bloque es lo que produjo A83 — la shell fue el camino que nadie se acordó de copiar.
-	s.encolarAvisoDeAcceso(d, p, avisoExec)
+	//
+	// LA VENTANA SE MARCA SÓLO SI SALIÓ UN AVISO. A una máquina que no sabe mostrarlo el embudo no
+	// le encola nada (y lo deja en el log); marcarla igual haría que el primer exec después de que
+	// su agente aprenda a avisar cayera en una ventana que nunca avisó. Lo mismo si la cola falló:
+	// se reintenta en el próximo exec, que es avisar de más y no de menos.
+	if s.encolarAvisoDeAcceso(d, p, avisoExec) {
+		s.avisosDados.Store(clave, ahora)
+	}
 }
 
 // toolFleetExec encola un comando y espera su resultado hasta el timeout.
