@@ -80,17 +80,22 @@ func comandosEncolados(t *testing.T, s *McpServer) []fleet.Comando {
 //
 // Sabotaje que la hace fallar: quitar el PuedeSobreDevice de evaluarPolitica.
 //
-// EL CORTE LLEVA EL `if !` ENTERO, Y NO ES VERBOSIDAD: `PuedeSobreDevice(` aparece TRES veces en
-// `politicas.go` —acá, en la lectura del inventario y en `politicaPuedeActuar`, que lo usa junto a
-// `argvPermitido` en una sola expresión—. Un `de` repetido no identifica nada, y cortar en la
+// EL CORTE LLEVA EL `if !` ENTERO, Y NO ES VERBOSIDAD: `PuedeSobreDevice(` aparece DOS veces en
+// `politicas.go` —acá y en la lectura del inventario— (eran tres hasta A131, cuando el indicador
+// tenía su propia copia de las compuertas). Un `de` repetido no identifica nada, y cortar en la
 // equivocada da un sabotaje que el censo valida y que no mide NADA.
 //
 // (Y la compuerta NO vive en `evaluarPolitica`, que termina bifurcando: vive en
-// `actuarSiCorresponde`, que es donde las tres compuertas corren para todos los caminos. La prosa
-// de arriba quedó vieja y se deja como está: la directiva apunta al código que HAY.)
+// `autoridadDePolitica`, la función única que consultan la acción y el inventario. La prosa de
+// arriba quedó vieja y se deja como está: la directiva apunta al código que HAY.)
+//
+// La tabla de A131 sabotea esta MISMA línea —le saca la tenencia en vez de la compuerta entera—,
+// así que los dos `de` se pisan a propósito: son dos guardas sobre la misma línea, ésta por la
+// concesión y aquélla por la tenencia.
 // arnes: archivo="internal/mcp/politicas.go"
 // arnes: de="if !PuedeSobreDevice(pr, d, fleet.CapExec) {"
 // arnes: a="if false {"
+// arnes: colision_ok="TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice"
 func TestUnaPoliticaNoPuedeMasQueSuPrincipal(t *testing.T) {
 	// Mismo principal, pero con la concesión de exec acotada a OTRA máquina.
 	acotado := autoHeal()
@@ -121,8 +126,8 @@ func TestUnaPoliticaNoPuedeMasQueSuPrincipal(t *testing.T) {
 //
 // Sabotaje que la hace fallar: quitar el argvPermitido de evaluarPolitica.
 //
-// Mismo cuidado que su hermana de arriba: `argvPermitido(` aparece DOS veces y la otra está en
-// `politicaPuedeActuar`. El `if !` completo desambigua.
+// Mismo cuidado que su hermana de arriba: `argvPermitido(` aparecía DOS veces y la otra estaba en
+// `politicaPuedeActuar`, la copia que A131 reemplazó. El `if !` completo desambigua igual.
 // arnes: archivo="internal/mcp/politicas.go"
 // arnes: de="if !argvPermitido(pr, d, pol.Hacer) {"
 // arnes: a="if false {"
@@ -150,9 +155,13 @@ func TestUnaPoliticaRespetaLaAllowlistDeSuPrincipal(t *testing.T) {
 // de un segundo lugar.
 //
 // Sabotaje que la hace fallar: resolver el principal UNA vez al arranque y guardarlo.
+//
+// El ancla se mudó con A131 a `autoridadDePolitica`, que es donde el principal se resuelve para la
+// acción y para el inventario a la vez. El sabotaje es el mismo: la primera resolución se guarda
+// y se usa aunque después el principal desaparezca.
 // arnes: archivo="internal/mcp/politicas.go"
-// arnes: de="if s.buscarPrincipal == nil {\n\t\treturn false\n\t}\n\tpr, existe := s.buscarPrincipal.porNombre(pol.Principal)"
-// arnes: a="if s.buscarPrincipal == nil {\n\t\treturn false\n\t}\n\tpr, existe := s.buscarPrincipal.porNombre(pol.Principal)\n\tif v, hay := s.avisosDados.Load(\"politica_principal_resuelto\"); hay {\n\t\tpr, existe = v.(*Principal), true\n\t} else if existe {\n\t\ts.avisosDados.Store(\"politica_principal_resuelto\", pr)\n\t}"
+// arnes: de="\tpr, existe := s.buscarPrincipal.porNombre(pol.Principal)\n"
+// arnes: a="\tpr, existe := s.buscarPrincipal.porNombre(pol.Principal)\n\tif v, hay := s.avisosDados.Load(\"politica_principal_resuelto\"); hay {\n\t\tpr, existe = v.(*Principal), true\n\t} else if existe {\n\t\ts.avisosDados.Store(\"politica_principal_resuelto\", pr)\n\t}\n"
 func TestRevocarAlPrincipalApagaLaPolitica(t *testing.T) {
 	s, d := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal()))
 	ahora := time.Now()
@@ -299,9 +308,15 @@ func latir2(s *McpServer, deviceID string, m fleet.Muestra, cuando time.Time) {
 // aserción es un `Contains` sobre el JSON ENTERO de la bitácora. La fila del AVISO le contesta la
 // pregunta aunque la fila de la POLÍTICA diga otra cosa. Es la cara conocida de un `Contains` que
 // no puede fallar por un defecto de un sitio: hay dos ocurrencias y sólo una decide.
+//
+// Y ESTA PRUEBA MIRA SÓLO `argv[0]` (A131): encolar `journalctl` pelado en vez de
+// `journalctl --vacuum-size=200M` la deja en verde. El argv entero lo compara
+// TestLaPoliticaEncolaElArgvEnteroQueAutorizoSuAllowlist, que sabotea esta misma línea con un
+// recorte en vez de un reemplazo: los dos `de` se pisan a propósito.
 // arnes: archivo="internal/mcp/politicas.go"
 // arnes: de="Argv:   pol.Hacer,"
 // arnes: a="Argv:   []string{\"uptime\"},"
+// arnes: colision_ok="TestLaPoliticaEncolaElArgvEnteroQueAutorizoSuAllowlist"
 func TestLaAccionDeUnaPoliticaQuedaEnLaMismaBitacoraQueLasPersonas(t *testing.T) {
 	s, d := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal()))
 	ahora := time.Now()
@@ -444,9 +459,12 @@ func TestSinPoliticasElBarridoNoActuaSobreNadie(t *testing.T) {
 // justamente `avisarUnaVez`. Sacarlo APAGA EL CONTADOR mientras el log sale las diez veces. O sea
 // que el rojo llega por el control positivo apagado —«lo legítimo dejó de pasar»— y encima el
 // número miente sobre lo que pasó. El sabotaje que enciende el invariante es el contrario.
+//
+// Con A131 el aviso pasó de `avisarUnaVez` + un `Delete` suelto a `avisoMientras`, que junta los
+// dos: el sabotaje es el mismo —una clave distinta en cada evaluación—, sobre la llamada nueva.
 // arnes: archivo="internal/mcp/politicas.go"
-// arnes: de="s.avisarUnaVez(\"sin_principal:\"+pol.Nombre, func() {"
-// arnes: a="s.avisarUnaVez(\"sin_principal:\"+pol.Nombre+ahora.String(), func() {"
+// arnes: de="s.avisoMientras(\"sin_principal:\"+pol.Nombre, "
+// arnes: a="s.avisoMientras(\"sin_principal:\"+pol.Nombre+ahora.String(), "
 func TestUnFalloDeConfiguracionDeUnaPoliticaSeAvisaUnaVezYSeCuentaSiempre(t *testing.T) {
 	s, d := prepararPolitica(t, politicaDeMemoria(), registroDePrueba()) // registro VACÍO
 	ahora := time.Now()
@@ -645,9 +663,15 @@ func TestElInventarioDiceQueActuaSoloSobreCadaMaquina(t *testing.T) {
 //
 // Sabotaje que la hace fallar: devolver `puede_actuar: true` fijo, o calcularlo con una cadena de
 // guardas distinta de la que usa evaluarPolitica.
+//
+// La segunda forma dejó de poder escribirse con A131: el indicador ya no tiene cadena propia,
+// llama a `autoridadDePolitica`. Y esta prueba, que clava UNA causa (la allowlist), no la habría
+// visto de todos modos —un indicador sin la compuerta de `exec` la dejaba en verde—; la que
+// recorre todas las causas es TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice. Acá
+// queda la primera forma, sobre la línea que publica el campo.
 // arnes: archivo="internal/mcp/politicas.go"
-// arnes: de=" && argvPermitido(pr, d, pol.Hacer)"
-// arnes: a=""
+// arnes: de="\"puede_actuar\": freno == sinFreno,"
+// arnes: a="\"puede_actuar\": true,"
 func TestUnaPoliticaInerteSeDistingueDeUnaQueFunciona(t *testing.T) {
 	// El principal existe y tiene exec, pero el comando de la política NO está en su allowlist.
 	tullido := autoHeal()
@@ -679,9 +703,15 @@ func TestUnaPoliticaInerteSeDistingueDeUnaQueFunciona(t *testing.T) {
 // pista de por qué.
 //
 // Sabotaje que la hace fallar: mandar el detalle a todo el mundo, o esconder también el conteo.
+//
+// El mirón de esta prueba no tiene `exec` en NINGÚN lado, así que un gate que pregunte «¿tiene
+// exec en alguna máquina?» en vez de «¿sobre ÉSTA?» la deja en verde (A131). Quién ve el detalle,
+// recorriendo cada forma en que PuedeSobreDevice dice que no, lo mide
+// TestElDetalleDeUnaPoliticaLoVeSoloQuienPuedeEjecutarEnEsaMaquina, que sabotea esta misma línea.
 // arnes: archivo="internal/mcp/politicas.go"
 // arnes: de="verDetalle := PuedeSobreDevice(p, d, fleet.CapExec)"
 // arnes: a="verDetalle := true"
+// arnes: colision_ok="TestElDetalleDeUnaPoliticaLoVeSoloQuienPuedeEjecutarEnEsaMaquina"
 func TestSinExecSeVeQueHayAlgoAutomaticoPeroNoQueHace(t *testing.T) {
 	s, _ := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal()))
 	soloMetrics := &Principal{

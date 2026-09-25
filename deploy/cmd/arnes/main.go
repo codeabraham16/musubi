@@ -83,6 +83,27 @@
 //	go run ./deploy/cmd/arnes -correr -paquete ./internal/mcp
 //	go run ./deploy/cmd/arnes -correr -limite 5
 //	go run ./deploy/cmd/arnes -correr -paquete ./internal/mcp -desde 127   # reanudar donde murió
+//	go run ./deploy/cmd/arnes -correr -fragmento 3/8   # uno de cada 8, por turno: el nocturno
+//
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// EL NOCTURNO: TODAS LAS MECANIZADAS EN OCHO FRAGMENTOS, Y POR TURNO
+//
+// Hasta el 2026-09-24 el CI CONTABA los sabotajes (`-validar` en la guarda del censo) y nadie los
+// corría: una directiva puede apuntar a un literal único y aun así su guarda estar hueca. En serie
+// son horas —cuatro y media medidas acá, hasta ocho con el dato de ~44 s por sabotaje de mcp— y un
+// job de GitHub se corta a las seis. `.github/workflows/arnes-nocturno.yml` los parte con
+// `-fragmento k/n`.
+//
+// EL REPARTO ES POR TURNO SOBRE LA POSICIÓN, NO POR TRAMOS. `internal/mcp` tiene más de la mitad
+// de las mecanizadas (532 de ~970 el 2026-09-24; la cuenta de hoy la da `-validar`) y en el orden
+// del censo están todas juntas: cortar por tramos contiguos dejaría un fragmento de
+// mcp puro, el más lento, y otro de paquetes que compilan en un segundo. Por turno se intercalan.
+// Y la posición es la que la corrida ya imprime, así que un `══ 517` de un fragmento sigue
+// sirviendo para `-desde 517`.
+//
+// CERO CORRIDAS ES «NO MEDÍ», Y SALE DISTINTO DE CERO. Antes `-correr -paquete ./internal/noexiste`
+// imprimía «corridas : 0 … ✓ el árbol quedó como estaba» con exit 0: un fragmento vacío, o un censo
+// que vuelve vacío en el runner, habría dejado la noche en verde sin medir nada. Ver `codigoDeSalida`.
 //
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // POR QUÉ EL MUTADOR SE INVOCA POR LA RUTA DEL BINARIO Y NO CON `go run`
@@ -110,6 +131,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -127,6 +150,7 @@ func main() {
 		paquete    = flag.String("paquete", "", "correr sólo los de este paquete (ej ./internal/mcp)")
 		desde      = flag.Int("desde", 0, "empezar en el N-ésimo (1-based, el número que imprime la corrida); 0 = desde el principio")
 		limite     = flag.Int("limite", 0, "correr como máximo N (0 = todos)")
+		fragmento  = flag.String("fragmento", "", "correr sólo el fragmento k de n, por turno sobre la posición (ej 3/8); vacío = todos")
 		insertar   = flag.String("insertar", "", "ruta a un JSON con directivas a escribir en los comentarios")
 		aplicar    = flag.Bool("aplicar", false, "modo interno: aplicar un reemplazo en un archivo")
 		deArch     = flag.String("de-archivo", "", "modo interno: archivo con el texto a reemplazar")
@@ -144,6 +168,15 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	}
+
+	// EL FRAGMENTO SE LEE ANTES DE CENSAR, Y UNO MAL ESCRITO NO CORRE NADA. Un `9/8` o un `3/0` que
+	// pasara terminaría corriendo todo —el job se corta a las seis horas— o nada, y «nada» con
+	// exit 2 es un rojo que dice por qué; «nada» leído como un fragmento vacío no lo sería.
+	fragK, fragN, err := parsearFragmento(*fragmento)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "arnes:", err)
+		os.Exit(2)
 	}
 
 	censo, err := arnes.Censar(*raiz)
@@ -275,7 +308,7 @@ func main() {
 			}
 		}
 		if *correr && len(males) == 0 {
-			if rc := correrTodos(*raiz, censo, *paquete, *desde, *limite); rc != 0 {
+			if rc := correrTodos(*raiz, censo, *paquete, *desde, *limite, fragK, fragN); rc != 0 {
 				salida = rc
 			}
 		} else if *correr {
@@ -283,7 +316,7 @@ func main() {
 				"directiva rota mide otra cosa y su resultado se lee como si midiera ésta.")
 		}
 		if *overlay && len(males) == 0 {
-			if rc := contraOverlay(*raiz, censo, *paquete, *desde, *limite); rc != 0 {
+			if rc := contraOverlay(*raiz, censo, *paquete, *desde, *limite, fragK, fragN); rc != 0 {
 				salida = rc
 			}
 		} else if *overlay {
@@ -597,6 +630,119 @@ func tramoACorrer(total, desde, limite int) (inicio, fin int) {
 	return inicio, fin
 }
 
+// parsearFragmento lee `-fragmento k/n`. Vacío es «sin fragmento» y devuelve 0, 0.
+//
+// TODO LO QUE NO SEA entero/entero CON 1 ≤ k ≤ n ES UN ERROR, y no un valor por defecto. Un typo en
+// el workflow que se leyera como «sin fragmento» correría la lista entera en un job que se corta a
+// las seis horas; uno que se leyera como un fragmento imposible (`9/8`) no correría ninguno. Las
+// dos cosas tienen que ser un rojo con la causa, no una noche rara.
+//
+// `k ≥ 1 ∧ k ≤ n` ya implica `n ≥ 1`, así que un `3/0` o un `3/-1` caen por la misma condición.
+func parsearFragmento(s string) (k, n int, err error) {
+	if s == "" {
+		return 0, 0, nil
+	}
+	ks, ns, ok := strings.Cut(s, "/")
+	if !ok {
+		return 0, 0, fmt.Errorf("-fragmento %q: la forma es k/n, por ejemplo 3/8", s)
+	}
+	k, errK := strconv.Atoi(ks)
+	n, errN := strconv.Atoi(ns)
+	if errK != nil || errN != nil {
+		return 0, 0, fmt.Errorf("-fragmento %q: k y n tienen que ser enteros, por ejemplo 3/8", s)
+	}
+	if k < 1 || k > n {
+		return 0, 0, fmt.Errorf("-fragmento %q: hace falta 1 ≤ k ≤ n (y entonces n ≥ 1)", s)
+	}
+	return k, n, nil
+}
+
+// enFragmento dice si la posición `pos` (1-based, la que imprime la corrida) le toca al
+// fragmento `k` de `n`. Con n == 0 no hay fragmento y le toca todo.
+//
+// Por turno: la 1 al fragmento 1, la 2 al 2, …, la n+1 otra vez al 1. Ver el encabezado.
+func enFragmento(pos, k, n int) bool {
+	if n == 0 {
+		return true
+	}
+	return (pos-1)%n == k-1
+}
+
+// aplicaEn dice si la directiva declara que su prueba existe en `goos`. Sin `sistema=`, en todos.
+func aplicaEn(d *arnes.Directiva, goos string) bool {
+	return len(d.Sistemas) == 0 || slices.Contains(d.Sistemas, goos)
+}
+
+// puesto es una mecanizada con la posición que la corrida imprime para ella.
+type puesto struct {
+	pos   int
+	ancla arnes.Ancla
+}
+
+// seleccionar decide QUÉ SE CORRE, y es la única que lo decide: `correrTodos` y `contraOverlay`
+// recorren lo que esto devuelve y nada más.
+//
+// Existe como función aparte porque las guardas de un filtro metido en el bucle del corredor
+// prueban la aritmética y no el uso: borrar el `if !enFragmento(…) { continue }` del bucle dejaría
+// cada fragmento corriendo la lista entera con todas las pruebas en verde. Así, lo que se prueba es
+// lo que se corre.
+//
+// EL ORDEN ES PARTE DEL CONTRATO: paquete → tramo (`-desde`/`-limite`) → fragmento → sistema.
+// Lo custodia `TestPaqueteTramoFragmentoYSistemaEnEseOrden`.
+//   - La posición es la ABSOLUTA en la lista del paquete, no la relativa al tramo, y el fragmento
+//     se decide sobre ella: el número impreso es el de `-desde`, y `-desde 517 -fragmento 7/8`
+//     corre el resto de ESE fragmento y no otro.
+//   - El sistema va AL FINAL, así que el reparto no depende de la máquina: el fragmento 3 es el
+//     mismo en Linux y en Windows, y lo que cambia es sólo qué parte de él aplica.
+//   - Lo que no aplica sale en `noAplican` y NO en `aCorrer`: si contara como corrida, un
+//     fragmento hecho sólo de directivas de otro sistema daría «corridas : 1» sin haber medido
+//     nada, que es el hueco que `codigoDeSalida` viene a cerrar.
+func seleccionar(mec []arnes.Ancla, paquete string, desde, limite, k, n int, goos string) (aCorrer, noAplican []puesto) {
+	var delPaquete []arnes.Ancla
+	for _, a := range mec {
+		if paquete != "" && a.Directiva.Paquete != paquete {
+			continue
+		}
+		delPaquete = append(delPaquete, a)
+	}
+	inicio, fin := tramoACorrer(len(delPaquete), desde, limite)
+	for i := inicio; i < fin; i++ {
+		p := puesto{pos: i + 1, ancla: delPaquete[i]}
+		if !enFragmento(p.pos, k, n) {
+			continue
+		}
+		if !aplicaEn(p.ancla.Directiva, goos) {
+			noAplican = append(noAplican, p)
+			continue
+		}
+		aCorrer = append(aCorrer, p)
+	}
+	return aCorrer, noAplican
+}
+
+// imprimirNoAplican lista lo que se apartó por sistema. Se dice por nombre y no sólo como número:
+// una directiva apartada es un sabotaje que ESTA máquina no mide, y alguien tiene que saber cuál.
+func imprimirNoAplican(noAplican []puesto, goos string) {
+	for _, p := range noAplican {
+		fmt.Printf("\n══ %d · %s:%d · %s\n", p.pos, p.ancla.Archivo, p.ancla.Linea, p.ancla.Directiva.Prueba)
+		fmt.Printf("   ○ NO APLICA EN %s: la directiva declara sistema=%q\n", goos,
+			strings.Join(p.ancla.Directiva.Sistemas, " "))
+	}
+}
+
+// codigoDeSalida es el exit de `-correr`, y CERO CORRIDAS ES «NO MEDÍ», NO UNA NOCHE LIMPIA.
+//
+// Medido el 2026-09-24: `-correr -paquete ./internal/noexiste` salía 0 con «corridas : 0». En el
+// nocturno eso es un fragmento vacío —un `-fragmento` que no reparte, un censo que vuelve vacío en
+// el runner, o uno hecho sólo de directivas de otro sistema— que deja la noche en verde sin medir
+// un solo sabotaje.
+func codigoDeSalida(corridas, verdes, errores int) int {
+	if corridas == 0 || verdes > 0 || errores > 0 {
+		return 1
+	}
+	return 0
+}
+
 // contraOverlay corre cada sabotaje SIN TOCAR EL DISCO y compara contra el veredicto de disco.
 //
 // LA IDEA NO ES MÍA Y SALE DE UN ACCIDENTE. Un refutador ajeno midió VERDE una directiva que este
@@ -622,7 +768,7 @@ func tramoACorrer(total, desde, limite int) (inicio, fin int) {
 //
 // NO REIMPLEMENTA NINGUNA DE LAS OCHO COMPROBACIONES DE `sabotaje.sh`: no es un veredicto, es un
 // bit por directiva para cruzar contra el veredicto que ya dio el guion.
-func contraOverlay(raiz string, c arnes.Censo, soloPaquete string, desde, limite int) int {
+func contraOverlay(raiz string, c arnes.Censo, soloPaquete string, desde, limite, k, n int) int {
 	tmp, err := os.MkdirTemp("", "arnes-overlay-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -638,18 +784,12 @@ func contraOverlay(raiz string, c arnes.Censo, soloPaquete string, desde, limite
 
 	var corridas, rojos, verdes, errores, nogo int
 	var candidatos []string
-	var delPaquete []arnes.Ancla
-	for _, a := range c.Mecanizadas() {
-		if soloPaquete != "" && a.Directiva.Paquete != soloPaquete {
-			continue
-		}
-		delPaquete = append(delPaquete, a)
-	}
-	inicio, fin := tramoACorrer(len(delPaquete), desde, limite)
-	for i := inicio; i < fin; i++ {
-		a := delPaquete[i]
+	aMedir, noAplican := seleccionar(c.Mecanizadas(), soloPaquete, desde, limite, k, n, runtime.GOOS)
+	imprimirNoAplican(noAplican, runtime.GOOS)
+	for _, p := range aMedir {
+		a := p.ancla
 		d := a.Directiva
-		pos := i + 1
+		pos := p.pos
 		corridas++
 		fmt.Printf("\n══ %d · %s:%d · %s\n", pos, a.Archivo, a.Linea, d.Prueba)
 
@@ -732,6 +872,7 @@ func contraOverlay(raiz string, c arnes.Censo, soloPaquete string, desde, limite
 	fmt.Printf("rojas también         : %d\n", rojos)
 	fmt.Printf("VERDES bajo overlay   : %d   ← candidatos a rojo falso\n", verdes)
 	fmt.Printf("NO MEDIBLES acá       : %d   (el blanco no es un `.go`: el overlay no lo toca)\n", nogo)
+	fmt.Printf("no aplican en %-7s : %d   (la directiva declara otro `sistema=`)\n", runtime.GOOS, len(noAplican))
 	fmt.Printf("sin veredicto         : %d   (no compiló bajo overlay; NO es un verde)\n", errores)
 	for _, cand := range candidatos {
 		fmt.Println("   · " + cand)
@@ -995,7 +1136,7 @@ func primerasRunas(s string, n int) string {
 // EL VEREDICTO QUE IMPORTA ES EL VERDE: una guarda que queda en verde sobre su propio defecto
 // declarado es una red que no está, y su prosa enseña a confiar en ella. Ése es el número que este
 // comando existe para producir.
-func correrTodos(raiz string, c arnes.Censo, soloPaquete string, desde, limite int) int {
+func correrTodos(raiz string, c arnes.Censo, soloPaquete string, desde, limite, k, n int) int {
 	guion := filepath.Join(raiz, "deploy", "pruebas", "sabotaje.sh")
 	if _, err := os.Stat(guion); err != nil {
 		fmt.Fprintln(os.Stderr, "no encuentro deploy/pruebas/sabotaje.sh:", err)
@@ -1028,18 +1169,12 @@ func correrTodos(raiz string, c arnes.Censo, soloPaquete string, desde, limite i
 	motivos := map[string][]string{}
 	var sospechas []string
 	var huecas []string
-	var delPaquete []arnes.Ancla
-	for _, a := range c.Mecanizadas() {
-		if soloPaquete != "" && a.Directiva.Paquete != soloPaquete {
-			continue
-		}
-		delPaquete = append(delPaquete, a)
-	}
-	inicio, fin := tramoACorrer(len(delPaquete), desde, limite)
-	for i := inicio; i < fin; i++ {
-		a := delPaquete[i]
+	aCorrer, noAplican := seleccionar(c.Mecanizadas(), soloPaquete, desde, limite, k, n, runtime.GOOS)
+	imprimirNoAplican(noAplican, runtime.GOOS)
+	for _, p := range aCorrer {
+		a := p.ancla
 		d := a.Directiva
-		pos := i + 1
+		pos := p.pos
 		corridas++
 		fmt.Printf("\n══ %d · %s:%d · %s\n", pos, a.Archivo, a.Linea, d.Prueba)
 
@@ -1130,6 +1265,12 @@ func correrTodos(raiz string, c arnes.Censo, soloPaquete string, desde, limite i
 	fmt.Printf("en ROJO (sanas)   : %d\n", rojos)
 	fmt.Printf("en VERDE (huecas) : %d   ← el hallazgo\n", verdes)
 	fmt.Printf("sin veredicto     : %d   (la herramienta no pudo medir; NO es un verde)\n", errores)
+	fmt.Printf("no aplican acá    : %d   (declaran un `sistema=` que no es %s: no se corrieron)\n", len(noAplican), runtime.GOOS)
+	if corridas == 0 {
+		fmt.Println("\n✗ NO SE CORRIÓ NINGÚN SABOTAJE. Eso no es una corrida limpia: es no haber medido nada.")
+		fmt.Println("  Mirá el `-paquete`, el `-fragmento` y el `-desde`, y si lo que quedó declara otro")
+		fmt.Println("  `sistema=` (la cuenta de «no aplican» de arriba): alguno dejó la lista vacía.")
+	}
 	if len(huecas) > 0 {
 		fmt.Println("\nguardas en verde sobre su propio sabotaje declarado:")
 		for _, h := range huecas {
@@ -1208,12 +1349,9 @@ func correrTodos(raiz string, c arnes.Censo, soloPaquete string, desde, limite i
 	}
 	fmt.Println("\n✓ el árbol quedó como estaba: ningún sabotaje se quedó puesto")
 
-	// SIN VEREDICTO TAMBIÉN ES SALIDA DISTINTA DE CERO. Si esto saliera 0, una corrida donde la
-	// herramienta no pudo medir NADA se leería como una corrida limpia.
-	if verdes > 0 || errores > 0 {
-		return 1
-	}
-	return 0
+	// SIN VEREDICTO TAMBIÉN ES SALIDA DISTINTA DE CERO, Y CERO CORRIDAS TAMBIÉN. Si esto saliera 0,
+	// una corrida donde la herramienta no pudo medir NADA se leería como una corrida limpia.
+	return codigoDeSalida(corridas, verdes, errores)
 }
 
 // estadoDelArbol es la foto que se compara antes y después de la corrida.

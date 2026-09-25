@@ -485,9 +485,6 @@ func A(c guiones.Compuerta, t T) { _ = c.Comando("bash", "-c", ":"); _ = guiones
 			"dos casos el cero de arriba no significa «no hay», significa «no pude medir».",
 			usosDelAyudante)
 	}
-	t.Logf("%d archivos de prueba parseados, %d lanzamientos por el ayudante, %d directos",
-		archivos, usosDelAyudante, len(culpables))
-
 	sort.Strings(culpables)
 	for _, x := range culpables {
 		t.Errorf("UNA PRUEBA LANZA UN PROCESO POR FUERA DE LA COMPUERTA: %s\n"+
@@ -505,6 +502,13 @@ func A(c guiones.Compuerta, t T) { _ = c.Comando("bash", "-c", ":"); _ = guiones
 			"        guiones.Herramienta(t, \"git\", \"-C\", dir, \"status\")\n"+
 			"      Si resulta ser una shell, se entera ahí mismo y en runtime.", x)
 	}
+	// EL CENSO SE IMPRIME DESPUÉS DE LAS ACUSACIONES, y no antes. Sus números CAMBIAN con el
+	// sabotaje (un lanzamiento directo más, un uso del ayudante menos), así que el juez del arnés no
+	// lo puede restar contra el control; impreso primero, era la primera línea del rojo y el motivo
+	// salía de un `t.Logf` en vez de la aserción: «rojo sospechoso» en la primera corrida nocturna
+	// completa (#652). Acá abajo sigue estando para quien lea la salida, sin hacerse pasar por ella.
+	t.Logf("%d archivos de prueba parseados, %d lanzamientos por el ayudante, %d directos",
+		archivos, usosDelAyudante, len(culpables))
 }
 
 // lanzamientosDirectos devuelve las llamadas REALES a `os/exec` que construyen un proceso.

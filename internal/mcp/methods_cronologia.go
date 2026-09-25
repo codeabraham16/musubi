@@ -246,9 +246,27 @@ func ventanaDeArgs(desdeTxt, hastaTxt string, horas float64, ahora time.Time) (f
 		}
 		return fleet.VentanaHasta(hasta, fleet.VentanaDefault), nil
 	case horas > 0:
-		return fleet.VentanaHasta(ahora, time.Duration(horas*float64(time.Hour))), nil
+		return fleet.VentanaHasta(ahora, duracionDeHoras(horas)), nil
 	}
 	return fleet.VentanaHasta(ahora, fleet.VentanaDefault), nil
+}
+
+// duracionDeHoras traduce un `horas` POSITIVO a una duración positiva y acotada al máximo.
+//
+// La conversión directa `time.Duration(horas * float64(time.Hour))` tenía dos bordes que daban la
+// ventana DEFAULT en vez de la pedida, en silencio y sin error: por arriba, más de ~2,56 millones
+// de horas desbordan el int64 —en amd64 la conversión da MinInt64— y VentanaHasta lee esa duración
+// negativa como «no se pidió nada»; por abajo, menos de un nanosegundo trunca a 0, con el mismo
+// resultado. Pedir TODO devolvía 24 h. Se acota ANTES de convertir, con la constante del dominio, y
+// lo positivo se queda positivo: la rama `d <= 0` de VentanaHasta deja de ser alcanzable desde acá.
+func duracionDeHoras(horas float64) time.Duration {
+	if horas >= fleet.VentanaMax.Hours() {
+		return fleet.VentanaMax
+	}
+	if d := time.Duration(horas * float64(time.Hour)); d > 0 {
+		return d
+	}
+	return time.Nanosecond
 }
 
 // filaDeHecho serializa un hecho. Es UNA sola función porque los cinco tipos comparten forma:

@@ -70,6 +70,12 @@ func visibleObsPredicateDe(alias string) string {
 type ProjectScope struct {
 	ProjectID string
 	Federate  bool
+	// Acervo es un tenant COMPARTIDO que la lectura ve además del propio. Vacío en todas las lecturas
+	// salvo la de musubi_memory_expand, que pone ahí el acervo de diseño: musubi_design ya le sirve
+	// ese tenant a cualquier credencial, y los ids que anuncia —un patrón `recortado`, las `fuentes`
+	// de una ficha— tienen que poder expandirse con la MISMA credencial que los recibió. No abre
+	// ningún otro tenant, y no cambia nada cuando la lectura ya es federada.
+	Acervo string
 }
 
 type projectScopeKey struct{}
@@ -102,6 +108,19 @@ func (sc ProjectScope) scopeClause(alias string) (string, []interface{}) {
 	col := "project_id"
 	if alias != "" {
 		col = alias + ".project_id"
+	}
+	if sc.Acervo != "" && sc.Acervo != sc.ProjectID {
+		// Del acervo ajeno entra SÓLO lo visible. Abrirlo sirve para seguir lo que musubi_design ya
+		// anuncia, y musubi_design nunca anuncia una fila archivada, fundida o en cuarentena. Pedida
+		// por id, en cambio, la hidratación no filtra visibilidad (ver hydrateByIDs), así que sin esto
+		// un writer de otro proyecto podía abrir la cuarentena del acervo con sólo conocer un id.
+		// Lo PROPIO no cambia: la credencial sigue expandiendo sus filas como antes.
+		vis := visibleObsPredicate
+		if alias != "" {
+			vis = visibleObsPredicateDe(alias)
+		}
+		return fmt.Sprintf(" AND (%s = ? OR %s IS NULL OR %s = '' OR (%s = ? AND %s))", col, col, col, col, vis),
+			[]interface{}{sc.ProjectID, sc.Acervo}
 	}
 	return fmt.Sprintf(" AND (%s = ? OR %s IS NULL OR %s = '')", col, col, col), []interface{}{sc.ProjectID}
 }
