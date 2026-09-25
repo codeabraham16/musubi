@@ -71,6 +71,8 @@ func TestResolverIdentidadDeServicios(t *testing.T) {
 		errDiceQue string // "" = sin error
 	}{
 		{"el despliegue de siempre: musubi sin variable", 1000, deMusubi, musubiPropia, ""},
+		{"musubi bajo una unidad de sistema con User=, sin XDG_RUNTIME_DIR", 1000,
+			map[string]string{"HOME": "/home/musubi", "USER": "musubi"}, musubiPropia, ""},
 		{"musubi nombrándose a sí mismo", 1000, con(deMusubi, "musubi"), musubiPropia, ""},
 		{"musubi nombrando a otro", 1000, con(deMusubi, "otro"), identidadDeServicios{}, "sin ser root"},
 		{"root sin variable: su propio mundo", 0, deRoot, rootPropia, ""},

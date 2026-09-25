@@ -8,19 +8,28 @@ package main
 // contenedores del dueño. Es la guarda definida y desconectada: la pieza probada, el cable no.
 
 import (
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
+	"reflect"
 	"testing"
+	"time"
 )
 
-// EL RUNTIME PROPIO SE EXPORTA ANTES DE RESOLVER, porque la identidad propia lo toma del entorno.
+// EL AGENTE LE EXPORTA SU RUNTIME A LOS HIJOS AL ARRANCAR, y la identidad propia lo nombra.
 //
-// Sabotaje que la hace fallar: resolver primero y exportar después.
+// Hasta el 2026-09-25 esta prueba custodiaba también el ORDEN (exportar antes de resolver), porque la
+// identidad tomaba su Runtime del entorno y resolver primero la dejaba vacía. Ya no: sin la variable,
+// resolverIdentidadDeServicios nombra el mismo /run/user/<uid> que se exporta, así que ese sabotaje
+// quedaría en verde y se sacó. Lo que se custodia acá es que el hijo reciba la variable.
+//
+// Sabotaje que la hace fallar: no exportar el runtime propio.
 // arnes: archivo="cmd/musubi/identidad_servicios.go"
-// arnes: de="\tif d, ok := runtimeParaHeredar(getenv, uid, func(d string) bool { return esDe(d, uint32(uid)) }); ok {\n\t\t_ = setenv(\"XDG_RUNTIME_DIR\", d)\n\t}\n\treturn resolverIdentidadDeServicios(uid, getenv, buscar)\n"
-// arnes: a="\tid, err := resolverIdentidadDeServicios(uid, getenv, buscar)\n\tif d, ok := runtimeParaHeredar(getenv, uid, func(d string) bool { return esDe(d, uint32(uid)) }); ok {\n\t\t_ = setenv(\"XDG_RUNTIME_DIR\", d)\n\t}\n\treturn id, err\n"
-func TestElAgenteExportaSuRuntimeAntesDeResolverLaIdentidad(t *testing.T) {
+// arnes: de="\t\t_ = setenv(\"XDG_RUNTIME_DIR\", d)\n"
+// arnes: a="\t\t_ = d\n"
+func TestElAgenteExportaSuRuntimeALosHijos(t *testing.T) {
 	esDe := func(dir string, uid uint32) bool { return dir == "/run/user/1000" && uid == 1000 }
 
 	// El despliegue de hoy: unidad de sistema con User=musubi, sin XDG_RUNTIME_DIR en el entorno.
@@ -53,6 +62,72 @@ func TestElAgenteExportaSuRuntimeAntesDeResolverLaIdentidad(t *testing.T) {
 	}
 }
 
+// EL RUNTIME QUE APARECE DESPUÉS DEL ARRANQUE ENTRA AL INVENTARIO, sin reiniciar el agente.
+//
+// Un agente con su propio uid —musubi-server antes de pasar a root, la vuelta atrás, cualquier Linux
+// que lo corra como su usuario— puede llegar antes que user@<uid>.service: el drop-in de contenedores
+// lo admite por escrito. La versión anterior tomaba el runtime del entorno EN ESE INSTANTE, vacío, y
+// así quedaba: la fuente --user salía «ausente» en cada latido, el cerebro podaba las usuario:* y no
+// volvían hasta un reinicio. core01-ensayo-local FAILED dejaba de alertar, que era el objetivo.
+//
+// El «latido» de acá es lo que hace enumerarServiciosDelSistema (Linux): heredarRuntimePropio y
+// después enumerarUnitsDeUsuario. Que ese archivo lo haga así lo custodia la prueba de abajo.
+//
+// Sabotaje que la hace fallar: no nombrar el runtime propio cuando el entorno no lo trae.
+// arnes: archivo="cmd/musubi/identidad_servicios.go"
+// arnes: de="\tif propia.Runtime == \"\" && uid > 0 {"
+// arnes: a="\tif false && propia.Runtime == \"\" && uid > 0 {"
+func TestElRuntimeQueApareceTardeEntraAlInventario(t *testing.T) {
+	existe := false // /run/user/1000: todavía no lo creó el manager del usuario
+	esDe := func(dir string, uid uint32) bool { return existe && dir == "/run/user/1000" && uid == 1000 }
+	// Lo que estadoDelBusDeUsuario leería del disco, con el runtime que la identidad le pase.
+	bus := func(rt string) estadoDelBus {
+		if rt != "/run/user/1000" || !existe {
+			return runtimeAusente
+		}
+		return busListo
+	}
+	env := map[string]string{"HOME": "/home/musubi", "USER": "musubi"}
+	setenv := func(k, v string) error { env[k] = v; return nil }
+
+	original := ejecutarComoParaEnumerar
+	t.Cleanup(func() { ejecutarComoParaEnumerar = original })
+	var heredado []string // el XDG_RUNTIME_DIR que el hijo habría heredado, llamada por llamada
+	ejecutarComoParaEnumerar = func(identidadDeServicios, string, ...string) ([]byte, error) {
+		heredado = append(heredado, env["XDG_RUNTIME_DIR"])
+		if env["XDG_RUNTIME_DIR"] == "" {
+			return nil, errors.New("Failed to connect to user scope bus")
+		}
+		return []byte(salidaDeUsuarioMedida), nil
+	}
+
+	id, err := prepararIdentidadDeServicios(1000, entornoDe(env), setenv, cuentasDePrueba, esDe)
+	if err != nil {
+		t.Fatalf("el agente musubi no resolvió su identidad: %v", err)
+	}
+	if v, puesto := env["XDG_RUNTIME_DIR"]; puesto {
+		t.Errorf("al arrancar se exportó XDG_RUNTIME_DIR=%q y el directorio no existía: podman rootless falla", v)
+	}
+	latido := func() (int, error) {
+		heredarRuntimePropio(1000, entornoDe(env), setenv, esDe)
+		rs, err := enumerarUnitsDeUsuario(id, bus, time.Now())
+		return len(rs), err
+	}
+
+	if n, err := latido(); n != 0 || err != nil {
+		t.Errorf("primer latido, sin runtime: %d units y err=%v; tenía que ser una fuente que no está", n, err)
+	}
+	existe = true
+	n, err := latido()
+	if err != nil || n != 4 {
+		t.Errorf("con el manager del usuario ya arriba, la fuente --user devolvió %d units y err=%v; tenían "+
+			"que entrar las 4 del dueño. La identidad quedó con el runtime del arranque (%q)", n, err, id.Runtime)
+	}
+	if len(heredado) != 1 || heredado[0] != "/run/user/1000" {
+		t.Errorf("el hijo de systemctl --user heredó XDG_RUNTIME_DIR=%q: sin él no llega al bus", heredado)
+	}
+}
+
 // LO QUE runAgent RESUELVE ES LO QUE ENUMERAN LAS FUENTES, y se asigna antes del primer latido.
 //
 // Se lee el código con go/ast y no con un proceso: runAgent llama a os.Exit y abre la red, y lo que
@@ -66,6 +141,22 @@ func TestElAgenteExportaSuRuntimeAntesDeResolverLaIdentidad(t *testing.T) {
 // arnes: archivo="cmd/musubi/servicios_linux.go"
 // arnes: de="enumerarUnitsDeUsuario(identidadParaEnumerar, estadoDelBusDeUsuario, ahora)"
 // arnes: a="enumerarUnitsDeUsuario(identidadDeServicios{}, estadoDelBusDeUsuario, ahora)"
+//
+// Y EL ENUMERADOR DE LINUX LE REINTENTA EL RUNTIME AL HIJO ANTES DE CADA CONSULTA --user
+// (TestElRuntimeQueApareceTardeEntraAlInventario dice por qué).
+//
+// Sabotaje que la hace fallar: reintentarlo DESPUÉS de consultar (diferido al final del enumerador).
+// arnes: archivo="cmd/musubi/servicios_linux.go"
+// arnes: de="\theredarRuntimePropio("
+// arnes: a="\tdefer heredarRuntimePropio("
+// Sabotaje que la hace fallar: reintentarlo con un setenv que no escribe.
+// arnes: archivo="cmd/musubi/servicios_linux.go"
+// arnes: de="os.Setenv,"
+// arnes: a="func(string, string) error { return nil },"
+// Sabotaje que la hace fallar: reintentarlo con un esDe que siempre dice que no.
+// arnes: archivo="cmd/musubi/servicios_linux.go"
+// arnes: de="esDeUid)"
+// arnes: a="func(string, uint32) bool { return false })"
 func TestElAgenteEnumeraConLaIdentidadQueResolvio(t *testing.T) {
 	fset := token.NewFileSet()
 
@@ -132,6 +223,7 @@ func TestElAgenteEnumeraConLaIdentidadQueResolvio(t *testing.T) {
 	// esta prueba corra en Windows: es justamente donde el cable no se compila y nadie lo miraría.
 	enumerador := funcionDelArchivo(t, fset, "servicios_linux.go", "enumerarServiciosDelSistema")
 	conIdentidad := 0
+	var consulta token.Pos
 	ast.Inspect(enumerador.Body, func(n ast.Node) bool {
 		c, ok := n.(*ast.CallExpr)
 		if !ok || !esLlamadaA(c, "enumerarUnitsDeUsuario") || len(c.Args) == 0 {
@@ -139,6 +231,7 @@ func TestElAgenteEnumeraConLaIdentidadQueResolvio(t *testing.T) {
 		}
 		if id, ok := c.Args[0].(*ast.Ident); ok && id.Name == "identidadParaEnumerar" {
 			conIdentidad++
+			consulta = c.Pos()
 		}
 		return true
 	})
@@ -147,6 +240,39 @@ func TestElAgenteEnumeraConLaIdentidadQueResolvio(t *testing.T) {
 			"identidadParaEnumerar; tiene que ser UNA. Con otra identidad, un agente root pregunta por el "+
 			"manager de root y las usuario:* quedan fuera del inventario", conIdentidad)
 	}
+
+	// El reintento del runtime: una sentencia DIRECTA del cuerpo (ni diferida ni bajo un if), antes de
+	// la consulta, y con las funciones de verdad del proceso.
+	var reintentos []*ast.CallExpr
+	for _, st := range enumerador.Body.List {
+		if es, ok := st.(*ast.ExprStmt); ok && esLlamadaA(es.X, "heredarRuntimePropio") {
+			reintentos = append(reintentos, es.X.(*ast.CallExpr))
+		}
+	}
+	if len(reintentos) != 1 {
+		t.Fatalf("enumerarServiciosDelSistema (Linux) llama %d vez/veces a heredarRuntimePropio como sentencia "+
+			"propia; tiene que ser UNA. Sin ella, un agente que arrancó antes que user@<uid> nunca le da el "+
+			"runtime al hijo de systemctl --user", len(reintentos))
+	}
+	r := reintentos[0]
+	if consulta == token.NoPos || r.Pos() > consulta {
+		t.Errorf("%s: el runtime no se le reintenta al hijo ANTES de consultar las units --user", fset.Position(r.Pos()))
+	}
+	if got, quiero := argumentosDe(r), []string{"os.Getuid()", "os.Getenv", "os.Setenv", "esDeUid"}; !reflect.DeepEqual(got, quiero) {
+		t.Errorf("%s: heredarRuntimePropio recibe %v y tienen que ser %v", fset.Position(r.Pos()), got, quiero)
+	}
+}
+
+// argumentosDe devuelve los argumentos de una llamada como texto de Go («os.Getuid()», «esDeUid»).
+func argumentosDe(c *ast.CallExpr) []string {
+	if c == nil {
+		return nil
+	}
+	out := make([]string, len(c.Args))
+	for i, a := range c.Args {
+		out[i] = types.ExprString(a)
+	}
+	return out
 }
 
 // funcionDelArchivo parsea un archivo del paquete y devuelve la función nombrada, o corta la prueba.

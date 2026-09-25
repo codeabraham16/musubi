@@ -77,9 +77,13 @@ type cuentaDelSistema struct {
 // uid<0 es un sistema sin uid (Windows): ahí la variable no significa nada y se rechaza, por la
 // misma razón que un uid>0 con otro nombre.
 //
-// El runtime de la identidad PROPIA es el XDG_RUNTIME_DIR que heredan los hijos —el que runAgent
-// exportó si hacía falta—, no uno deducido: si el hijo no lo tiene, `systemctl --user` no llega al
-// bus, y anunciar un bus que el hijo no va a ver sería abortar el inventario por nada.
+// El runtime de la identidad PROPIA es el XDG_RUNTIME_DIR del entorno y, si no está —una unidad de
+// sistema con `User=`, donde systemd no lo exporta—, el /run/user/<uid> al que cae podman. SE NOMBRA
+// AUNQUE TODAVÍA NO EXISTA: el agente puede arrancar antes que user@<uid>.service, y tomar el runtime
+// del entorno en ese instante lo dejaba vacío PARA SIEMPRE. La fuente `--user` se leía «ausente» en
+// cada latido, el cerebro podaba las usuario:*, y no volvían hasta reiniciar el agente. Con la ruta
+// fija, estadoDelBusDeUsuario la mira en cada latido, igual que en el camino root; que el HIJO la
+// vea es cosa de heredarRuntimePropio, que el enumerador reintenta antes de cada consulta.
 func resolverIdentidadDeServicios(uid int, getenv func(string) string, buscar func(string) (cuentaDelSistema, error)) (identidadDeServicios, error) {
 	pedido := strings.TrimSpace(getenv(envUsuarioDeServicios))
 	propia := identidadDeServicios{
@@ -89,6 +93,9 @@ func resolverIdentidadDeServicios(uid int, getenv func(string) string, buscar fu
 	}
 	if uid >= 0 {
 		propia.Uid = uint32(uid) // el gid propio no hace falta: sin bajar no se le pide nada al sistema
+	}
+	if propia.Runtime == "" && uid > 0 {
+		propia.Runtime = "/run/user/" + strconv.Itoa(uid)
 	}
 	if propia.Nombre == "" && uid == 0 {
 		propia.Nombre = "root"
@@ -218,18 +225,29 @@ func entornoPara(id identidadDeServicios, base []string, esDe func(dir string, u
 }
 
 // prepararIdentidadDeServicios es lo que runAgent hace antes del primer latido: exportar el runtime
-// propio si hace falta (runtimeParaHeredar) y, RECIÉN DESPUÉS, resolver con quién se enumera.
+// propio si ya existe (heredarRuntimePropio) y resolver con quién se enumera.
 //
-// EL ORDEN ES LA MITAD DEL CONTRATO. La identidad propia toma su Runtime del XDG_RUNTIME_DIR del
-// entorno —el que van a heredar los hijos—, y systemd no lo exporta en una unidad de sistema con
-// `User=`. Resolver primero dejaba al agente `musubi` de musubi-server con Runtime vacío: la fuente
-// `--user` se leía como «ausente», en silencio, y ninguna `usuario:*` llegaba al inventario.
+// El orden ya no decide el Runtime de la identidad: sin la variable en el entorno, lo exportado y lo
+// que resolverIdentidadDeServicios nombra son el mismo /run/user/<uid>. Exportar al arrancar es por
+// los hijos —el `musubi_fleet_exec` de una persona también necesita llegar al bus—, y no alcanza
+// solo: si el directorio aparece después, lo exporta el enumerador (servicios_linux.go).
 func prepararIdentidadDeServicios(uid int, getenv func(string) string, setenv func(string, string) error,
 	buscar func(string) (cuentaDelSistema, error), esDe func(dir string, uid uint32) bool) (identidadDeServicios, error) {
+	heredarRuntimePropio(uid, getenv, setenv, esDe)
+	return resolverIdentidadDeServicios(uid, getenv, buscar)
+}
+
+// heredarRuntimePropio exporta XDG_RUNTIME_DIR para los hijos si falta, si el agente no es root y si
+// su /run/user/<uid> existe y es suyo (runtimeParaHeredar decide; acá sólo se escribe).
+//
+// SE LLAMA DOS VECES, Y LA SEGUNDA ES LA QUE ARREGLA EL ARRANQUE: runAgent al arrancar, y el
+// enumerador de Linux antes de cada consulta a `systemctl --user`. Un agente que llegó antes que
+// user@<uid>.service no tenía directorio que exportar, y sin la variable el hijo no encuentra el bus
+// aunque el manager ya esté arriba. Ya puesta, no se vuelve a tocar.
+func heredarRuntimePropio(uid int, getenv func(string) string, setenv func(string, string) error, esDe func(dir string, uid uint32) bool) {
 	if d, ok := runtimeParaHeredar(getenv, uid, func(d string) bool { return esDe(d, uint32(uid)) }); ok {
 		_ = setenv("XDG_RUNTIME_DIR", d)
 	}
-	return resolverIdentidadDeServicios(uid, getenv, buscar)
 }
 
 // identidadParaEnumerar es la que runAgent resolvió al arrancar. El valor cero es «no bajar».

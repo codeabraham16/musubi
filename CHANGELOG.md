@@ -21,7 +21,9 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   deduplicación se comía una. Un `/run/user/<uid>` ausente es una fuente que no está; uno presente
   sin bus (el arranque antes que `user@1000`) **aborta** el inventario en vez de dejar que el cerebro
   pode las `usuario:*` y las reviva un latido después. Un agente que corre como el dueño exporta su
-  `XDG_RUNTIME_DIR` a los hijos si falta y el directorio es suyo.
+  `XDG_RUNTIME_DIR` a los hijos si falta y el directorio es suyo, y lo reintenta antes de cada
+  consulta: si arrancó antes que `user@1000`, las `usuario:*` entran en cuanto el manager levanta, sin
+  reiniciar el agente.
 
   *Modo root* (decisión del dueño: exec y shell como root, sin allowlist del lado del agente). Con el
   binario anterior, un agente root corría `podman ps` como root, leía el store rootful vacío, y el

@@ -18,6 +18,7 @@ package main
 // bloques separados por una línea en blanco. Una llamada.
 
 import (
+	"os"
 	"strings"
 	"time"
 
@@ -46,6 +47,11 @@ func enumerarServiciosDelSistema() ([]fleet.ReporteServicio, error) {
 	// Las units `--user` del dueño —puentes, gateway, CRM, Core01—, con SU identidad: la que
 	// runAgent resolvió al arrancar, no el HOME de este proceso. El porqué está en
 	// servicios_usuario.go; acá sólo se llama, entre el sistema y los contenedores.
+	//
+	// ANTES DE CADA CONSULTA SE LE REINTENTA EL RUNTIME AL HIJO. Un agente con su propio uid que
+	// arrancó antes que user@<uid>.service no tenía /run/user/<uid> que exportar: la identidad ya lo
+	// nombra, y esto se lo da al hijo en cuanto existe. Como root no hace nada.
+	heredarRuntimePropio(os.Getuid(), os.Getenv, os.Setenv, esDeUid)
 	usr, err := enumerarUnitsDeUsuario(identidadParaEnumerar, estadoDelBusDeUsuario, ahora)
 	if err != nil {
 		return nil, err
