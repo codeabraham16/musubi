@@ -1265,7 +1265,8 @@ func correrTodos(raiz string, c arnes.Censo, soloPaquete string, desde, limite, 
 	fmt.Printf("no aplican acá    : %d   (declaran un `sistema=` que no es %s: no se corrieron)\n", len(noAplican), runtime.GOOS)
 	if corridas == 0 {
 		fmt.Println("\n✗ NO SE CORRIÓ NINGÚN SABOTAJE. Eso no es una corrida limpia: es no haber medido nada.")
-		fmt.Println("  Mirá el `-paquete`, el `-fragmento` o el `-desde`: alguno dejó la lista vacía.")
+		fmt.Println("  Mirá el `-paquete`, el `-fragmento` y el `-desde`, y si lo que quedó declara otro")
+		fmt.Println("  `sistema=` (la cuenta de «no aplican» de arriba): alguno dejó la lista vacía.")
 	}
 	if len(huecas) > 0 {
 		fmt.Println("\nguardas en verde sobre su propio sabotaje declarado:")
