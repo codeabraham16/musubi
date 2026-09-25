@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"musubi/internal/fleet"
 	"musubi/internal/logx"
 )
 
@@ -50,6 +51,10 @@ type principalResolver interface {
 	// interfaces separadas invitarían a que el informe de impacto mire un registro más viejo que
 	// el que autentica.
 	impactoDeNombre(device string) ImpactoDeNombre
+	// accesoSobre dice quién puede aprobar sobre esta máquina y a quién le queda `exec` sin
+	// acotar. Va acá por el mismo motivo que impactoDeNombre: si mirara un registro distinto del
+	// que autentica, el informe nombraría aprobadores que ya no pueden entrar.
+	accesoSobre(d fleet.Device) AccesoDeDevice
 	// porNombre resuelve SIN token: lo necesitan las políticas de flota (S10), que actúan con la
 	// autoridad de alguien declarado en principals.yaml pero no presentan credencial ninguna.
 	// Está en la misma interfaz que resolve a propósito — son la misma fuente de verdad, y dos
@@ -101,6 +106,16 @@ func (rr *reloadableRegistry) impactoDeNombre(device string) ImpactoDeNombre {
 		return reg.impactoDeNombre(device)
 	}
 	return ImpactoDeNombre{}
+}
+
+// accesoSobre delega en el snapshot VIGENTE, igual que impactoDeNombre: quien acaba de ser
+// revocado en principals.yaml deja de figurar como aprobador en el mismo instante en que deja de
+// autenticar.
+func (rr *reloadableRegistry) accesoSobre(d fleet.Device) AccesoDeDevice {
+	if reg := rr.cur.Load(); reg != nil {
+		return reg.accesoSobre(d)
+	}
+	return AccesoDeDevice{PorCap: map[fleet.Cap][]string{}}
 }
 
 // porNombre busca en el snapshot vigente (lock-free), igual que resolve. Que las dos preguntas

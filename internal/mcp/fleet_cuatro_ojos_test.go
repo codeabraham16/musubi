@@ -3,6 +3,7 @@ package mcp
 // Pruebas de la aprobación de cuatro ojos (Ola 2). El eje que dice CUÁNTAS PERSONAS hacen falta.
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1185,5 +1186,259 @@ func TestSinLaMarcaUnPideSiLePreguntaAlDueno(t *testing.T) {
 					"entonces la prueba de arriba pasaría por el motivo equivocado")
 			}
 		})
+	}
+}
+
+// ── QUIÉN PUEDE APROBAR (punto 36) ──────────────────────────────────────────────────────────
+//
+// Encender la marca sin saber quién puede aprobar es poner un control a ciegas: con un solo par
+// de ojos la máquina queda cerrada, y con dos credenciales del mismo dueño queda un control que se
+// ve puesto y no lo está. Estas pruebas miran el INFORME que devuelve require_approval al
+// encenderla, no la compuerta: la compuerta ya tiene las suyas arriba.
+
+// encenderYLeer enciende los cuatro ojos como admin local (`call`, stdio) y devuelve la respuesta.
+func encenderYLeer(t *testing.T, s *McpServer, device string) map[string]any {
+	t.Helper()
+	res, e := call(t, s, "musubi_fleet_require_approval", map[string]any{
+		"device": device, "project": "casa", "requerir": true,
+	})
+	if e != nil {
+		t.Fatalf("require_approval(%q): %+v", device, e)
+	}
+	return jsonOf(t, res)
+}
+
+// nombresEn lee una lista de nombres de la respuesta JSON, en el orden en que vino.
+func nombresEn(v any) []string {
+	crudos, _ := v.([]any)
+	out := make([]string, 0, len(crudos))
+	for _, c := range crudos {
+		s, _ := c.(string)
+		out = append(out, s)
+	}
+	return out
+}
+
+// aprobadoresDe devuelve la lista de `credenciales_que_pueden_aprobar` para una capacidad.
+func aprobadoresDe(t *testing.T, res map[string]any, c fleet.Cap) []string {
+	t.Helper()
+	porCap, ok := res["credenciales_que_pueden_aprobar"].(map[string]any)
+	if !ok {
+		t.Fatalf("la respuesta no trae `credenciales_que_pueden_aprobar` como mapa: %v", res)
+	}
+	return nombresEn(porCap[string(c)])
+}
+
+// soloExec tiene `exec` sobre toda la casa y nada de pantalla: puede ejecutar, no aprobar.
+func soloExec(nombre string) Principal {
+	p := *conExec("casa")
+	p.Name = nombre
+	return p
+}
+
+// AL ENCENDERLA, LA TOOL NOMBRA A QUIEN PUEDE APROBAR, Y SÓLO A ELLOS. Quien tiene `exec` y no
+// `screen` no puede aprobar una pantalla, y listarlo convertiría un candado en «dos aprobadores».
+//
+// Sabotaje: que accesoSobre no pregunte a PuedeSobreDevice y anote a todos.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="if !PuedeSobreDevice(p, d, c) {"
+// arnes: a="if false {"
+func TestEncenderCuatroOjosNombraAQuienPuedeAprobar(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarConPantalla(t, s, "casa", "pc-gio")
+	s.buscarPrincipal = registroDePrueba(*conPantalla("casa"), *otroConPantalla("casa"), soloExec("operador"))
+
+	res := encenderYLeer(t, s, "pc-gio")
+
+	if got := strings.Join(aprobadoresDe(t, res, fleet.CapScreen), ","); got != "mirador,revisora" {
+		t.Errorf("pueden aprobar `screen` = [%s], se esperaba [mirador,revisora]: la lista tiene que "+
+			"ser exactamente la de quienes toolFleetApprove dejaría pasar", got)
+	}
+	if got := strings.Join(aprobadoresDe(t, res, fleet.CapScreenView), ","); got != "mirador,revisora" {
+		t.Errorf("pueden aprobar `screen:view` = [%s], se esperaba [mirador,revisora]: `screen` implica mirar", got)
+	}
+	if _, hay := res["candado"]; hay {
+		t.Errorf("con dos credenciales con `screen` la respuesta dice candado: %v", res["candado"])
+	}
+	// La máquina es tier A sin `shell` concedida: no se puede aprobar lo que no se puede pedir.
+	if porCap, _ := res["credenciales_que_pueden_aprobar"].(map[string]any); porCap != nil {
+		if _, hay := porCap[string(fleet.CapShell)]; hay {
+			t.Errorf("informa aprobadores de `shell` sobre una máquina que no la admite: %v", porCap)
+		}
+	}
+	if nota, _ := res["nota"].(string); !strings.Contains(nota, "misma persona") {
+		t.Errorf("falta la nota de que dos credenciales pueden ser una sola persona; nota = %q", nota)
+	}
+	if req, _ := res["requiere_aprobacion"].(bool); !req {
+		t.Errorf("la marca no quedó encendida: %v", res)
+	}
+}
+
+// UN SOLO PAR DE OJOS ES UN CANDADO, Y SE DICE AL ENCENDERLO. Descubrirlo en la urgencia —que es
+// cuando se pide una pantalla— sería el peor momento.
+//
+// Sabotaje: bajar el umbral del candado a «menos de una» credencial.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="if len(nombres) < 2 {"
+// arnes: a="if len(nombres) < 1 {"
+func TestCuatroOjosConUnSoloParDiceCandado(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarConPantalla(t, s, "casa", "pc-gio")
+	s.buscarPrincipal = registroDePrueba(*conPantalla("casa"), soloExec("operador"))
+
+	res := encenderYLeer(t, s, "pc-gio")
+
+	candado := strings.Join(nombresEn(res["candado"]), ",")
+	if !strings.Contains(","+candado+",", ",screen,") {
+		t.Fatalf("una sola credencial con `screen` y la respuesta no dice candado (candado = [%s]).\n"+
+			"  Con un solo par de ojos nadie le puede aprobar a nadie: la marca no vuelve lento el\n"+
+			"  acceso, lo cierra.", candado)
+	}
+	if got := strings.Join(aprobadoresDe(t, res, fleet.CapScreen), ","); got != "mirador" {
+		t.Errorf("pueden aprobar `screen` = [%s], se esperaba [mirador]", got)
+	}
+}
+
+// EXEC ES LA PUERTA DE ATRÁS, Y EL INFORME LA NOMBRA. Cuatro ojos no cubre `exec`; quien lo tiene
+// sin allowlist, o con un intérprete en ella, corre lo que quiera sin segunda persona. Una
+// allowlist de verdad (journalctl) sí acota, y no se denuncia.
+//
+// Sabotaje: que un intérprete en la allowlist cuente como acotada.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="|| algunInterprete(lista)"
+// arnes: a="|| false && algunInterprete(lista)"
+func TestCuatroOjosDenunciaElExecSinAcotar(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarConPantalla(t, s, "casa", "pc-gio")
+	libre := soloExec("libre")
+	conPowershell := soloExec("con-powershell")
+	conPowershell.ExecAllow = map[string][]string{"*": {"powershell"}}
+	acotado := soloExec("acotado")
+	acotado.ExecAllow = map[string][]string{"*": {"journalctl"}}
+	s.buscarPrincipal = registroDePrueba(*conPantalla("casa"), *otroConPantalla("casa"), libre, conPowershell, acotado)
+
+	res := encenderYLeer(t, s, "pc-gio")
+
+	if got := strings.Join(nombresEn(res["exec_sin_acotar"]), ","); got != "libre,con-powershell" {
+		t.Errorf("exec_sin_acotar = [%s], se esperaba [libre,con-powershell].\n"+
+			"  `powershell` permitido no acota nada: es una shell con otro nombre. Y `journalctl` sí\n"+
+			"  acota, así que denunciarlo sería ruido que tapa a los de verdad.", got)
+	}
+}
+
+// SIN REGISTRO NO SE INVENTA UN CANDADO. Por stdio (o legacy sin principals.yaml) el servidor no
+// sabe quién existe; una lista vacía se leería «nadie puede aprobar», que es una afirmación, y la
+// verdad es «no sé».
+//
+// Sabotaje: tratar la falta de registro como un registro vacío.
+// arnes: archivo="internal/mcp/methods_aprobacion.go"
+// arnes: de="if s.buscarPrincipal == nil {"
+// arnes: a="if s.buscarPrincipal == nil {\n\t\t\ts.buscarPrincipal = &PrincipalRegistry{}\n\t\t}\n\t\tif false {"
+func TestSinRegistroNoInventaCandado(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarConPantalla(t, s, "casa", "pc-gio")
+	// SIN s.buscarPrincipal: es el caso.
+
+	res := encenderYLeer(t, s, "pc-gio")
+
+	for _, prohibida := range []string{"candado", "credenciales_que_pueden_aprobar", "sin_camino_aprobable", "exec_sin_acotar"} {
+		if v, hay := res[prohibida]; hay {
+			t.Errorf("sin registro de principals la respuesta trae `%s` = %v: eso afirma algo que el "+
+				"servidor no puede saber", prohibida, v)
+		}
+	}
+	if _, hay := res["aprobadores_desconocidos"]; !hay {
+		t.Errorf("sin registro la respuesta no dice que no sabe quién puede aprobar: %v", res)
+	}
+	if _, hay := res["nota"]; !hay {
+		t.Errorf("la nota de «misma persona» va siempre, también sin registro: %v", res)
+	}
+}
+
+// UNA CREDENCIAL VENCIDA NO ES EL SEGUNDO PAR DE OJOS. PuedeSobreDevice no mira el vencimiento
+// —lo mira resolve, al autenticar—, así que sin el filtro una credencial que ya no abre la puerta
+// taparía el candado real con un «dos aprobadores».
+//
+// Sabotaje: que accesoSobre cuente también a las vencidas.
+// arnes: archivo="internal/mcp/principals.go"
+// arnes: de="if p := &r.principals[i]; !p.Vencida(ahora) {"
+// arnes: a="if p := &r.principals[i]; !p.Vencida(ahora) || true {"
+func TestUnaCredencialVencidaNoCuentaComoAprobadora(t *testing.T) {
+	// EL RELOJ SE FIJA, no se usa el real: una prueba de vencimiento contra time.Now depende de
+	// que ninguna otra haya dejado el reloj del registro cambiado.
+	ahora := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	anterior := ahoraParaVencimiento
+	t.Cleanup(func() { ahoraParaVencimiento = anterior })
+	ahoraParaVencimiento = func() time.Time { return ahora }
+
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarConPantalla(t, s, "casa", "pc-gio")
+	vencida := *otroConPantalla("casa")
+	vencida.Expires = ahora.Add(-24 * time.Hour)
+	s.buscarPrincipal = registroDePrueba(*conPantalla("casa"), vencida)
+
+	res := encenderYLeer(t, s, "pc-gio")
+
+	if got := strings.Join(aprobadoresDe(t, res, fleet.CapScreen), ","); got != "mirador" {
+		t.Errorf("pueden aprobar `screen` = [%s], se esperaba [mirador]: `revisora` venció ayer", got)
+	}
+	if candado := strings.Join(nombresEn(res["candado"]), ","); !strings.Contains(","+candado+",", ",screen,") {
+		t.Errorf("con la segunda credencial vencida la respuesta no dice candado (candado = [%s])", candado)
+	}
+}
+
+// UNA MÁQUINA SIN NADA APROBABLE LO DICE. Sobre un tier B sólo con `metrics` la marca se guarda
+// igual, pero no hay ninguna sesión que pase por ella: callarlo la deja escrita como un control.
+//
+// Sabotaje: no avisar cuando la máquina no admite ninguna capacidad aprobable.
+// arnes: archivo="internal/mcp/methods_aprobacion.go"
+// arnes: de="if len(acceso.PorCap) == 0 {"
+// arnes: a="if len(acceso.PorCap) == 0 && false {"
+func TestUnaMaquinaSinCapacidadAprobableLoDice(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	if _, e := call(t, s, "musubi_fleet_enroll", map[string]any{
+		"name": "altura-db", "tier": "B", "caps": []string{"metrics"}, "project": "casa",
+	}); e != nil {
+		t.Fatalf("enroll: %+v", e)
+	}
+	s.buscarPrincipal = registroDePrueba(*conPantalla("casa"), *otroConPantalla("casa"))
+
+	res := encenderYLeer(t, s, "altura-db")
+
+	if _, hay := res["sin_camino_aprobable"]; !hay {
+		t.Errorf("una máquina que no admite ninguna capacidad aprobable no lo dice: la marca queda "+
+			"escrita como si controlara algo. Respuesta: %v", res)
+	}
+	if v, hay := res["candado"]; hay {
+		t.Errorf("sin capacidades aprobables no hay nada que trabar, y la respuesta dice candado = %v", v)
+	}
+}
+
+// EL CAMINO QUE CORRE DE VERDAD: en producción s.buscarPrincipal es el envoltorio con recarga en
+// caliente, no un *PrincipalRegistry pelado. Todas las de arriba ejercitan el registro directo,
+// así que una delegación rota en principals_reload.go dejaba el informe vacío —o sea, un candado
+// inventado sobre cada máquina— sin que ninguna se pusiera roja.
+//
+// Sabotaje: que el envoltorio no delegue en el snapshot vigente.
+// arnes: archivo="internal/mcp/principals_reload.go"
+// arnes: de="\t\treturn reg.accesoSobre(d)"
+// arnes: a="\t\treturn (*PrincipalRegistry)(nil).accesoSobre(d)"
+func TestElInformeDeAprobadoresPasaPorElEnvoltorioDeProduccion(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	enrolarConPantalla(t, s, "casa", "pc-gio")
+	// LO MISMO que http.go le pone al campo en producción.
+	s.buscarPrincipal = newReloadableRegistry(
+		filepath.Join(t.TempDir(), "principals.yaml"), "",
+		registroDePrueba(*conPantalla("casa"), *otroConPantalla("casa")), time.Now(),
+	)
+
+	res := encenderYLeer(t, s, "pc-gio")
+
+	if got := strings.Join(aprobadoresDe(t, res, fleet.CapScreen), ","); got != "mirador,revisora" {
+		t.Errorf("por el envoltorio de producción, pueden aprobar `screen` = [%s], se esperaba "+
+			"[mirador,revisora]", got)
+	}
+	if v, hay := res["candado"]; hay {
+		t.Errorf("con dos credenciales vigentes el envoltorio informa candado = %v", v)
 	}
 }

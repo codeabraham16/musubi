@@ -248,11 +248,16 @@ func (s *McpServer) toolFleetApprove(ctx context.Context, raw json.RawMessage) (
 
 // toolFleetApprovals lista lo que está esperando una segunda persona.
 //
-// EXISTE PORQUE LA APROBACIÓN NO VIAJA. No hay notificación al que puede aprobar —mandarla
-// exigiría saber a quién, y «quién tiene esta capacidad sobre esta máquina» es una consulta sobre
-// principals.yaml que este track deliberadamente no invierte—. Sin esta lista, la única forma de
-// enterarse sería que el solicitante avise por otro canal, y una solicitud que nadie mira vence
-// sola: el control se convertiría en una negación con demora.
+// EXISTE PORQUE LA APROBACIÓN NO VIAJA. No hay notificación al que puede aprobar. Sin esta lista,
+// la única forma de enterarse sería que el solicitante avise por otro canal, y una solicitud que
+// nadie mira vence sola: el control se convertiría en una negación con demora.
+//
+// «Quién tiene esta capacidad sobre esta máquina» ES una consulta sobre principals.yaml que el
+// track de cuatro ojos decidió NO invertir, y ahora está invertida: la hace accesoSobre. Lo que
+// cambió no es la regla sino dónde se usa. La inversión la lee SÓLO musubi_fleet_require_approval,
+// que es de admin y no notifica a nadie: le dice a quien enciende la marca si del otro lado hay
+// dos credenciales o un candado. Usarla acá para AVISAR a los que pueden aprobar es el paso
+// siguiente, y queda anotado, no hecho: avisar es mandar algo afuera, y eso pide su propio diseño.
 func (s *McpServer) toolFleetApprovals(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	p := principalFrom(ctx)
 	var args struct {
@@ -344,6 +349,47 @@ func (s *McpServer) toolFleetRequireApproval(ctx context.Context, raw json.RawMe
 	if !existe {
 		return nil, rpcErrorf(codeInvalidParams, "no hay una máquina %q en el proyecto %q", nombre, proyecto)
 	}
+
+	// QUIÉN PUEDE APROBAR, CALCULADO ANTES DE ESCRIBIR LA MARCA. Es sólo lectura, y el orden no
+	// es estético: si el informe se armara después y fallara, la marca ya estaría puesta y la
+	// respuesta diría «error» — el admin creería que no la encendió. Así, un fallo acá no toca
+	// nada.
+	var quienes map[string]interface{}
+	if *args.Requerir {
+		quienes = map[string]interface{}{
+			// SIEMPRE, y no sólo cuando hay dos nombres: la lista cuenta CREDENCIALES, y
+			// principals.yaml no dice de quién es cada una.
+			"nota": "Musubi no sabe si dos credenciales son la misma persona. Los nombres de " +
+				"`credenciales_que_pueden_aprobar` son tokens, no gente: si dos son del mismo dueño, " +
+				"esto son dos ojos con dos llaves, y la bitácora va a mostrar «concedida» con dos " +
+				"nombres igual. Que no haya `candado` no quiere decir que el control esté puesto.",
+		}
+		if s.buscarPrincipal == nil {
+			// SIN REGISTRO NO HAY LISTA, Y UNA LISTA VACÍA MENTIRÍA. Vacía se lee «nadie puede
+			// aprobar» —un candado—, y lo que pasa es que este servidor no tiene a quién
+			// preguntarle (stdio, o un servidor sin principals.yaml ni token).
+			quienes["aprobadores_desconocidos"] = "este servidor no tiene registro de principals " +
+				"(stdio, o sin principals.yaml ni token), así que no puede decir quién podría aprobar. " +
+				"No es un candado: es que no se sabe. Preguntalo donde vive el registro."
+		} else {
+			acceso := s.buscarPrincipal.accesoSobre(d)
+			quienes["credenciales_que_pueden_aprobar"] = acceso.PorCap
+			if len(acceso.Candado) > 0 {
+				quienes["candado"] = acceso.Candado
+			}
+			if len(acceso.ExecSinAcotar) > 0 {
+				quienes["exec_sin_acotar"] = acceso.ExecSinAcotar
+			}
+			if len(acceso.PorCap) == 0 {
+				// La marca se guarda igual —apagarla o rechazarla sería decidir por el admin—,
+				// pero no puede quedar dicho como si controlara algo.
+				quienes["sin_camino_aprobable"] = "esta máquina no admite ninguna capacidad que " +
+					"pase por cuatro ojos (`shell`, `screen`, `screen:view`): la marca queda puesta " +
+					"y no frena nada. `exec` y `metrics` no se aprueban."
+			}
+		}
+	}
+
 	if _, err := s.engine.FijarAprobacion(d.ID, *args.Requerir); err != nil {
 		return nil, rpcErrorf(codeInternalError, "%v", err)
 	}
@@ -365,6 +411,9 @@ func (s *McpServer) toolFleetRequireApproval(ctx context.Context, raw json.RawMe
 			"principals.yaml, `exec` acepta cualquier argv sobre esta máquina —o sea `bash -c`, que es " +
 			"una shell con otro nombre y sin segunda persona—. Marcar la máquina sin acotarle `exec` a " +
 			"una allowlist deja esta puerta puesta y la de atrás abierta."
+	}
+	for k, v := range quienes {
+		res[k] = v
 	}
 	return jsonResult(res)
 }

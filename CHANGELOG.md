@@ -7,6 +7,25 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **Pedir cuatro ojos dice quién puede aprobar de verdad.** `musubi_fleet_require_approval`
+  encendía la marca y avisaba en prosa que «con un solo par de ojos la máquina queda cerrada»,
+  pero dejaba que el admin lo averiguara leyendo `principals.yaml` a mano. Medido el 2026-09-24 en
+  el central: sobre la máquina de un tercero, las únicas dos credenciales con `screen` eran del
+  dueño, y 71 de las 79 órdenes de esa semana fueron `exec` (las otras 8, avisos), que esta puerta
+  no cubre. Encenderla ahí dejaba en la bitácora un control que se ve puesto y no lo está.
+
+  Ahora, al encenderla, la respuesta trae `credenciales_que_pueden_aprobar` (capacidad → nombres,
+  con la misma compuerta que usa `musubi_fleet_approve` y sin las credenciales vencidas),
+  `candado` cuando una capacidad tiene menos de dos, `exec_sin_acotar` con quienes tienen `exec`
+  sin allowlist o con un intérprete en ella, y `sin_camino_aprobable` cuando la máquina no admite
+  ninguna capacidad que pase por cuatro ojos. Sin registro de principals (stdio, o un servidor
+  sin `principals.yaml` ni token) no inventa listas vacías: dice `aprobadores_desconocidos`. Y
+  siempre agrega una nota fija: Musubi no sabe si dos credenciales son la misma persona, así que
+  la falta de `candado` no es un verde. El informe se calcula antes de escribir la marca, y no
+  cambian ni los parámetros ni la descripción de la tool. No se encendió la aprobación en ninguna
+  máquina ni se tocaron credenciales.
+
 ### Fixed
 - **El contador de tokens deja de mentir: una sesión nueva ya no borra la cuenta de las demás.**
   El ledger era UNA casilla de `meta` que guardaba UNA sesión, y `LedgerAdd` la reiniciaba entera

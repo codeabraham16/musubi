@@ -419,6 +419,108 @@ func (r *PrincipalRegistry) impactoDeNombre(device string) ImpactoDeNombre {
 	return imp
 }
 
+// AccesoDeDevice dice QUIÉN PUEDE APROBAR sobre una máquina, y existe porque encender los cuatro
+// ojos sin saberlo es poner un control a ciegas.
+//
+// musubi_fleet_require_approval avisaba EN PROSA que «con un solo par de ojos la máquina queda
+// sin acceso interactivo», y dejaba que el admin lo averiguara leyendo principals.yaml a mano.
+// Medido el 2026-09-24 en el central: sobre la máquina de un tercero, las únicas dos credenciales
+// con `screen` eran del dueño, y `exec` —71 de las 79 órdenes de esa semana; las otras 8 eran
+// avisos— no pasa por esta puerta. Encenderla ahí deja en la bitácora un control que se ve puesto
+// y no lo está.
+//
+// SON CREDENCIALES, NO PERSONAS. principals.yaml no tiene ningún campo que diga de quién es cada
+// token, así que dos nombres acá pueden ser la misma persona con dos tokens. Por eso que no haya
+// candado NO es un verde, y la tool lo dice siempre al lado de esta lista.
+type AccesoDeDevice struct {
+	// PorCap son, para cada capacidad APROBABLE que la máquina admite, las credenciales VIGENTES
+	// que la tienen sobre ella: las únicas que pueden pedir esa sesión y las únicas que pueden
+	// aprobársela a otro. Una capacidad que la máquina no admite no figura; una que admite y
+	// nadie tiene figura con la lista vacía.
+	PorCap map[fleet.Cap][]string
+	// Candado son las capacidades de PorCap con MENOS DE DOS credenciales: ahí la marca no vuelve
+	// lento el acceso, lo cierra. Se calcula acá y no en la tool para que el umbral viva en un
+	// solo lugar, al lado de la lista que cuenta.
+	Candado []fleet.Cap
+	// ExecSinAcotar son las credenciales con `exec` sobre esta máquina sin allowlist, o con un
+	// intérprete en ella. Es la puerta de atrás: cuatro ojos no cubre `exec`, y un `powershell`
+	// permitido es una shell con otro nombre y sin segunda persona.
+	ExecSinAcotar []string
+}
+
+// capsQueSeAprueban es el orden en que se informan, de la más cara a la más barata. Se filtra
+// igual con fleet.CapAprobable: si una de éstas deja de ser aprobable, sale del informe sola en
+// vez de prometer un control que el código ya no aplica.
+var capsQueSeAprueban = []fleet.Cap{fleet.CapShell, fleet.CapScreen, fleet.CapScreenView}
+
+// accesoSobre invierte principals.yaml para UNA máquina: quién tiene cada capacidad aprobable
+// sobre ella y a quién le queda `exec` sin acotar. Sólo lee; no escribe ni toma candado.
+//
+// USA LA MISMA COMPUERTA QUE LA APROBACIÓN, PuedeSobreDevice, y no una copia de sus reglas: la
+// lista tiene que ser exactamente la de quienes toolFleetApprove dejaría pasar. Una regla
+// repetida acá se desincroniza el día que cambie allá, y el informe empezaría a nombrar
+// aprobadores que la puerta rechaza.
+//
+// LAS VENCIDAS NO CUENTAN. PuedeSobreDevice no mira el vencimiento —lo mira resolve, al
+// autenticar—, así que sin este filtro una credencial que ya no abre la puerta figuraría como el
+// segundo par de ojos, y el candado real se leería como «dos aprobadores».
+func (r *PrincipalRegistry) accesoSobre(d fleet.Device) AccesoDeDevice {
+	acc := AccesoDeDevice{PorCap: map[fleet.Cap][]string{}}
+	if r == nil {
+		return acc
+	}
+	ahora := ahoraParaVencimiento()
+	vigentes := make([]*Principal, 0, len(r.principals))
+	for i := range r.principals {
+		if p := &r.principals[i]; !p.Vencida(ahora) {
+			vigentes = append(vigentes, p)
+		}
+	}
+	for _, c := range capsQueSeAprueban {
+		if !fleet.CapAprobable(c) || !d.Permite(c) {
+			continue
+		}
+		// Vacía y no nil: en la respuesta, «nadie» tiene que leerse `[]` y no `null`.
+		nombres := []string{}
+		for _, p := range vigentes {
+			if !PuedeSobreDevice(p, d, c) {
+				continue
+			}
+			nombres = append(nombres, p.Name)
+		}
+		acc.PorCap[c] = nombres
+		// Cuatro ojos pide DOS credenciales distintas: una pide y la otra aprueba. Con una sola,
+		// nadie puede aprobarle a nadie; con cero, nadie puede ni pedir.
+		if len(nombres) < 2 {
+			acc.Candado = append(acc.Candado, c)
+		}
+	}
+	for _, p := range vigentes {
+		if !PuedeSobreDevice(p, d, fleet.CapExec) {
+			continue
+		}
+		// comandosPermitidos da la lista EFECTIVA sobre esta máquina —la de su nombre, o la de
+		// "*"—, la misma que aplica argvPermitido. Sin sección no hay techo; con un intérprete
+		// adentro, el techo no acota nada.
+		lista, acotada := comandosPermitidos(p, d)
+		if !acotada || algunInterprete(lista) {
+			acc.ExecSinAcotar = append(acc.ExecSinAcotar, p.Name)
+		}
+	}
+	return acc
+}
+
+// algunInterprete dice si una allowlist deja lanzar cualquier cosa. Mismo criterio que
+// avisosDeInterpretes: `bash` permitido no es una restricción, es la ausencia de una.
+func algunInterprete(lista []string) bool {
+	for _, c := range lista {
+		if fleet.EsInterprete(c) {
+			return true
+		}
+	}
+	return false
+}
+
 // porNombre resuelve un principal por su nombre declarado PARA ACTUAR CON SU AUTORIDAD. Lo usan
 // las POLÍTICAS de flota (S10) y el empuje OTLP, que no presentan un token: nombran a alguien de
 // principals.yaml y ejecutan/exportan en su nombre.
