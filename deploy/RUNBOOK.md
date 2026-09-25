@@ -221,7 +221,9 @@ Lo típico es un `expires:` que no es RFC3339 (`2026-12-23` sin hora, o `23/12/2
 duplicado, o un `read:`/`write:` mal escrito. Corregilo y confirmá con
 `musubi token list --file <principals.yaml>` que ninguna fila diga `ilegible`. La serie
 `musubi_principals_reload_failing` vuelve a 0 en la próxima relectura buena (≤10 s), y la alerta se
-apaga sola.
+apaga sola. También vuelve a 0 si en vez de corregir restaurás el respaldo con su mtime
+(`cp -p`, `cp -a`, `rsync -a`): el cerebro lo reconoce como el archivo que ya tiene cargado y no
+lo relee, así que en ese caso no aparece la línea «recargado en caliente» en el journal.
 
 Si no sabés qué cambió, el respaldo previo a la edición está al lado (`principals.yaml.bak-*`):
 `diff principals.yaml.bak-<fecha> principals.yaml`.

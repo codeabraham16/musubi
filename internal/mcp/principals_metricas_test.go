@@ -245,8 +245,8 @@ func TestUnLectorAcotadoNoVeElVencimientoDeLasCredenciales(t *testing.T) {
 //
 // Sabotaje que la pone roja: no apagarlo cuando la relectura vuelve a andar.
 // arnes: archivo="internal/mcp/principals_reload.go"
-// arnes: de="\trr.recargaFallando.Store(false)\n"
-// arnes: a="\t_ = rr.recargaFallando.Load()\n"
+// arnes: de="\trr.cur.Store(reg)\n\trr.recargaFallando.Store(false)\n"
+// arnes: a="\trr.cur.Store(reg)\n\t_ = rr.recargaFallando.Load()\n"
 //
 // Sabotaje que la pone roja: no contar la relectura rechazada.
 // arnes: archivo="internal/mcp/principals_reload.go"
@@ -300,6 +300,70 @@ func TestUnaRecargaRechazadaSeVeEnMetrics(t *testing.T) {
 	}
 	if v := leer(nombreRegistroRecargasMal); v != "1" {
 		t.Errorf("%s = %s: el contador es la historia y no puede volver atrás al arreglarse", nombreRegistroRecargasMal, v)
+	}
+}
+
+// RESTAURAR EL RESPALDO CON SU MTIME ORIGINAL TAMBIÉN APAGA EL AVISO.
+//
+// `cp -p`, `cp -a` y `rsync -a` preservan el mtime: el archivo roto se va y vuelve, con su mtime,
+// el mismo que el cerebro tiene cargado. Para la recarga no hay nada que releer —el mtime es el del
+// registro vigente—, y la relectura buena, que era lo único que apagaba el flag, no llegaba nunca:
+// `RegistroDePrincipalsSinPoderRecargarse` quedaba sonando hasta el próximo reinicio por algo que
+// ya estaba arreglado, sin una sola línea nueva en el journal que dijera por qué.
+//
+// Sabotaje que la pone roja: no apagar el flag cuando el disco vuelve a tener el mtime cargado.
+// arnes: archivo="internal/mcp/principals_reload.go"
+// arnes: de="\t\trr.recargaFallando.Store(false)\n\t\treturn\n"
+// arnes: a="\t\t_ = rr.recargaFallando.Load()\n\t\treturn\n"
+func TestRestaurarElRespaldoConSuMtimeApagaElAviso(t *testing.T) {
+	ruta := filepath.Join(t.TempDir(), "principals.yaml")
+	sano := `principals:
+  - name: scrape
+    token_sha256: ` + hashToken("tok-scrape") + `
+    role: reader
+    read: all
+`
+	t0 := time.Unix(5_000_000, 0)
+	rr := registroRecargableDesde(t, ruta, sano, "", t0)
+	s := newTestServer(t, embedding.NoopProvider{})
+	leer := func(nombre string) string {
+		t.Helper()
+		v, hay := muestra(scrapear(t, s, rr, "tok-scrape"), nombre)
+		if !hay {
+			t.Fatalf("/metrics no trae %s", nombre)
+		}
+		return v
+	}
+
+	// Una edición con un typo: la relectura se rechaza y el flag se enciende. Es el control: sin
+	// él, un flag que nunca se encendió daría el verde de abajo por el motivo equivocado.
+	writeRegAt(t, ruta, sano+`  - name: con-typo
+    token_sha256: `+hashToken("tok-typo")+`
+    project_id: casa
+    role: reader
+    expires: "el jueves que viene"
+`, t0.Add(time.Minute))
+	rr.reloadIfChanged()
+	if v := leer(nombreRegistroSinRecargar); v != "1" {
+		t.Fatalf("con principals.yaml rechazado %s = %s: la prueba no estaría midiendo el apagado", nombreRegistroSinRecargar, v)
+	}
+
+	// `cp -p principals.yaml.bak principals.yaml`: el mismo contenido y el mismo mtime que el
+	// registro cargado. Más de una pasada, como hace el watch cada 10 s.
+	writeRegAt(t, ruta, sano, t0)
+	for i := 0; i < 3; i++ {
+		rr.reloadIfChanged()
+	}
+	if v := leer(nombreRegistroSinRecargar); v != "0" {
+		t.Errorf("el disco volvió a ser el archivo cargado (mismo contenido y mtime) y %s sigue en %s: "+
+			"la alerta quedaría sonando hasta reiniciar por algo que ya se arregló", nombreRegistroSinRecargar, v)
+	}
+	// La historia no se toca, y el registro que autentica es el de siempre.
+	if v := leer(nombreRegistroRecargasMal); v != "1" {
+		t.Errorf("%s = %s: restaurar el respaldo no borra la relectura rechazada que ya pasó", nombreRegistroRecargasMal, v)
+	}
+	if _, ok := rr.resolve("tok-typo"); ok {
+		t.Error("el principal del archivo rechazado autentica: el registro vigente no es el que se restauró")
 	}
 }
 

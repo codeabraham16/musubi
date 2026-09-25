@@ -28,7 +28,9 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     las recargas del registro. Es lo que tiene que llegar a siete días en cero para poder retirarlo.
   - **Una relectura rechazada de `principals.yaml` deja de ser silenciosa.** Conservar el registro
     anterior es correcto, pero la revocación escrita en el archivo no se aplicaba y el próximo
-    reinicio no arrancaba, y lo único que quedaba era un Warn en el journal.
+    reinicio no arrancaba, y lo único que quedaba era un Warn en el journal. El aviso se apaga
+    cuando el archivo vuelve a cargar, y también cuando se restaura el respaldo con su mtime
+    (`cp -p`, `rsync -a`), que la recarga reconoce como el archivo que ya tenía y no relee.
   - **Tres alertas** en `deploy/musubi-alerts.yml` —`CredencialPorVencer` (`< 14 * 24 * 3600`, el
     mismo número que el listado), `CredencialRecienVencida` (el salto del gauge, no el estado: una
     fila vencida no la deja sonando) y `RegistroDePrincipalsSinPoderRecargarse`—, con sus tres
@@ -40,13 +42,13 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     ≤10 s, y el mensaje dice los dos casos en que eso no alcanza. `MusubiDown` y su runbook dicen
     que un `up == 0` con el proceso vivo puede ser la credencial del scrape vencida.
 
-  *Dieciséis sabotajes nuevos, uno por directiva `arnes:`, los dieciséis corridos en rojo: la rama
+  *Diecisiete sabotajes nuevos, uno por directiva `arnes:`, los diecisiete corridos en rojo: la rama
   «por vencer», el redondeo, el umbral del listado contra el de la alerta (en las dos direcciones),
   la llamada al render desde `/metrics`, la vencida fuera del mínimo, la delegación del registro
   recargable, la serie ausente sin fecha futura, la visibilidad read=own (agregando lo prohibido),
-  el flag de recarga al encenderse y al apagarse, el contador de recargas, el contador del legacy y
-  su traspaso en la recarga, los nombres de las series contra las `expr` de las alertas, y los días
-  en la fila del CLI. Más los tres naturales del cambio sobre guardas que ya existían —la custodia
+  el flag de recarga al encenderse, al apagarse y al restaurar el respaldo con su mtime, el
+  contador de recargas, el contador del legacy y su traspaso en la recarga, los nombres de las
+  series contra las `expr` de las alertas, y los días en la fila del CLI. Más los tres naturales del cambio sobre guardas que ya existían —la custodia
   en 32 y dos anclas del runbook renombradas—, también en rojo. No se le puso fecha a ninguna
   credencial: eso es producción y va aparte, con el aviso ya desplegado.*
 

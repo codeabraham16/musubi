@@ -173,6 +173,12 @@ func (rr *reloadableRegistry) reloadIfChanged() {
 		return
 	}
 	if fi.ModTime().UnixNano() == rr.lastModNano {
+		// EL DISCO VOLVIÓ A SER, POR MTIME, EL ARCHIVO QUE AUTENTICA, y eso también apaga el aviso.
+		// Pasa al restaurar el respaldo con `cp -p`, `cp -a` o `rsync -a`: el archivo roto se va y
+		// vuelve el que estaba cargado, con su mtime original. No hay nada que releer, así que la
+		// relectura buena —el otro lugar donde el flag se apaga— no llega nunca, y sin esta línea
+		// la alerta quedaba sonando hasta el próximo reinicio por algo que ya estaba arreglado.
+		rr.recargaFallando.Store(false)
 		return
 	}
 	reg, err := loadPrincipals(rr.path, rr.legacyToken)
