@@ -37,7 +37,8 @@ func relojDeVencimiento(t *testing.T, ahora time.Time) {
 // deciden, y las mira por separado porque se pueden romper una sin la otra:
 //
 //   - porQueNoActuaria, el indicador que le contesta a un operador «¿si la condición se
-//     cumpliera ahora, pasaría algo?» (sin ventana de mantenimiento: acá no se abre ninguna);
+//     cumpliera ahora, alguna compuerta de esta máquina la frenaría?» (sin ventana de
+//     mantenimiento: acá no se abre ninguna);
 //   - aplicarPoliticas, el camino real, hasta el comando encolado en la bitácora.
 //
 // El control positivo (la MISMA credencial, el MISMO servidor, con el reloj un rato antes del

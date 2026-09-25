@@ -199,8 +199,9 @@ func (s *McpServer) toolFleetList(ctx context.Context, raw json.RawMessage) (int
 	// LAS VENTANAS DE MANTENIMIENTO, UNA VEZ PARA TODO EL INVENTARIO (A131). Una política sobre una
 	// máquina en ventana no actúa, así que su `puede_actuar` tiene que decir que no, y se leen con
 	// la MISMA función que usa el barrido: si cada lado leyera a su manera, el día que la consulta
-	// falla el panel y la acción se contradirían. Sin políticas no hay nada que decidir y no se
-	// consulta.
+	// falla el panel y la acción se contradirían (lo mide
+	// TestConLasVentanasIlegiblesElInventarioDiceLoQueHaceElBarrido). Sin políticas no hay nada que
+	// decidir y no se consulta.
 	var enMantenimiento map[string]bool
 	if len(s.politicas) > 0 {
 		enMantenimiento = s.ventanasParaPoliticas(ahora, "tool", "musubi_fleet_list")

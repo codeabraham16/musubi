@@ -92,6 +92,12 @@ func (s *McpServer) aplicarPoliticas(proyecto string, ahora time.Time) int {
 // que la base no contesta diría `puede_actuar: false` de una política que el barrido está
 // ejecutando: la misma contradicción entre indicador y acción que A131 vino a cerrar, sólo que
 // escondida en la rama de error, que es la que nadie prueba.
+//
+// Y ESO LO CUSTODIA UNA PRUEBA, NO ESTE COMENTARIO:
+// TestConLasVentanasIlegiblesElInventarioDiceLoQueHaceElBarrido rompe SÓLO esta consulta y exige
+// que el `puede_actuar` de musubi_fleet_list y lo que hace aplicarPoliticas coincidan sobre la
+// misma máquina. Hasta la revisión 2 de A131 la frase no tenía guarda: con el inventario eligiendo
+// el otro sesgo, ninguna prueba de comportamiento del paquete se ponía roja.
 func (s *McpServer) ventanasParaPoliticas(ahora time.Time, contexto ...any) map[string]bool {
 	en, err := s.engine.DevicesEnMantenimiento(ahora)
 	if err != nil {
@@ -376,7 +382,8 @@ func (s *McpServer) actuarSiCorresponde(pol fleet.Politica, d fleet.Device, valo
 type frenoDePolitica string
 
 const (
-	// sinFreno: ninguna compuerta frena. Si la condición se cumple, la política actúa.
+	// sinFreno: ninguna compuerta de ESTE par (política × máquina) frena. No es «va a actuar»: la
+	// condición, el cooldown y el estado global del barrido quedan afuera (ver porQueNoActuaria).
 	sinFreno frenoDePolitica = ""
 	// frenoSinRegistro: no hay registro de principals, así que no hay a quién nombrar.
 	frenoSinRegistro frenoDePolitica = "sin_registro"
@@ -405,19 +412,23 @@ const (
 // es autoridad: es una pausa que el barrido consulta UNA vez por proyecto, en aplicarPoliticas,
 // antes de llegar a esta función (preguntarla acá sería una consulta por política × máquina). El
 // inventario la antepone en el mismo orden en porQueNoActuaria, así que `puede_actuar` sí la ve.
-// Lo que queda fuera de los dos es la CONDICIÓN y lo que la rodea —la muestra fresca, el
-// cooldown—, porque el indicador contesta justamente «si la condición se cumpliera».
+// Lo que queda fuera de los dos son DOS cosas, con su porqué en el doc de porQueNoActuaria: la
+// CONDICIÓN y lo que la rodea —la muestra fresca, el cooldown—, porque el indicador contesta
+// justamente «si la condición se cumpliera»; y el estado GLOBAL del barrido —apagado, o un
+// proyecto que no entra en su tope—, porque no es una compuerta de política × máquina sino del
+// cerebro entero.
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════
 // POR QUÉ ES UNA FUNCIÓN Y NO DOS COPIAS (A131)
 //
 // La decisión se consulta desde dos lados: actuarSiCorresponde, que actúa, y el `puede_actuar`
-// del inventario, que le contesta a un operador «si la condición se cumpliera ahora, ¿pasaría
-// algo?». El indicador se presentaba como «deliberadamente la MISMA cadena de guardas» y era una
-// COPIA escrita a mano de dos compuertas. A91 le agregó a la acción la tercera —el eje de
-// consentimiento— y la copia no se enteró: con la máquina en `pide` o en `prohibido`, el
-// inventario decía `puede_actuar: true` y la política no actuaba nunca. Es la alarma apagada que
-// A23 vino a cerrar, reabierta por el mismo mecanismo de siempre: la guarda en N−1 de N caminos.
+// del inventario, que le contesta a un operador «si la condición se cumpliera ahora, ¿alguna
+// compuerta de esta máquina la frenaría?». El indicador se presentaba como «deliberadamente la
+// MISMA cadena de guardas» y era una COPIA escrita a mano de dos compuertas. A91 le agregó a la
+// acción la tercera —el eje de consentimiento— y la copia no se enteró: con la máquina en `pide`
+// o en `prohibido`, el inventario decía `puede_actuar: true` y la política no actuaba nunca. Es
+// la alarma apagada que A23 vino a cerrar, reabierta por el mismo mecanismo de siempre: la guarda
+// en N−1 de N caminos.
 //
 // Medido en la auditoría A131: 0 de 1 pares (política × máquina) expuestos. La única política en
 // producción es `vaciar-journal` sobre `musubi-server`, que no declara grado y resuelve a
@@ -647,7 +658,8 @@ func (s *McpServer) cargarCooldowns() {
 // hasta que la condición se cumple. Es una alarma apagada, y la única forma de que alguien lo
 // note antes del incidente es decirlo acá. `inerte_por` dice cuál de esas compuertas es. Una
 // máquina en una ventana de mantenimiento cuenta igual: la política no actúa mientras dure, y una
-// ventana olvidada es exactamente una alarma apagada con el panel en verde.
+// ventana olvidada es exactamente una alarma apagada con el panel en verde. Lo que el campo NO
+// cubre —la condición, y el estado global del barrido— está escrito en porQueNoActuaria.
 //
 // QUIÉN VE QUÉ. El detalle exige `exec` sobre esa máquina, la misma regla que la bitácora: saber
 // qué comando corre en un servidor es casi tan revelador como poder correrlo. Pero el CONTEO se
@@ -671,10 +683,11 @@ func (s *McpServer) politicasSobre(p *Principal, d fleet.Device, enMantenimiento
 		if !verDetalle {
 			continue
 		}
-		// puede_actuar es la decisión REAL, evaluada ahora contra las ventanas de mantenimiento, el
-		// registro vigente y el grado de la máquina: la misma función que decide en
-		// actuarSiCorresponde, no una copia de sus compuertas. La copia que había se quedó con dos
-		// de tres (A131). Lo único que no mira es la condición, que es lo que el campo supone.
+		// puede_actuar contesta por la cadena de AUTORIDAD —autoridadDePolitica, la misma función
+		// que decide en actuarSiCorresponde y no una copia de sus compuertas: la copia que había se
+		// quedó con dos de tres (A131)— más la ventana de mantenimiento, evaluadas ahora contra el
+		// registro vigente y el grado de la máquina. Deja afuera la condición (con la muestra y el
+		// cooldown) y el estado GLOBAL del barrido; el porqué de cada una, en porQueNoActuaria.
 		freno := s.porQueNoActuaria(pol, d, enMantenimiento)
 		fila := map[string]interface{}{
 			"nombre":       pol.Nombre,
@@ -703,14 +716,37 @@ func (s *McpServer) politicasSobre(p *Principal, d fleet.Device, enMantenimiento
 	return detalle, total
 }
 
-// porQueNoActuaria contesta «si la condición se cumpliera ahora mismo, ¿pasaría algo?»: devuelve
-// la compuerta que frenaría a la política sobre esa máquina, o sinFreno si ninguna. Es lo que el
+// porQueNoActuaria contesta, para UNA política sobre UNA máquina, «si la condición se cumpliera
+// ahora mismo, ¿alguna compuerta de este par la frenaría?»: devuelve la que la frenaría —la
+// ventana de mantenimiento o la cadena de autoridad—, o sinFreno si ninguna. Es lo que el
 // inventario publica como `puede_actuar` e `inerte_por`, y lo ÚNICO que lo calcula.
 //
 // Un indicador que dijera «sí» donde la política dice «no» sería peor que no tenerlo, porque
 // enseñaría a confiar en él. Por eso no evalúa compuertas propias: antepone la ventana de
 // mantenimiento —en el mismo orden que aplicarPoliticas, que la mira antes que nada— y el resto
 // se lo pregunta a autoridadDePolitica, que es la que decide en actuarSiCorresponde.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// LO QUE NO CONTESTA, Y POR QUÉ: `puede_actuar: true` NO ES «VA A ACTUAR»
+//
+//   - LA CONDICIÓN Y LO QUE LA RODEA —la muestra fresca, el cooldown— quedan afuera a propósito:
+//     el campo contesta justamente «si la condición se cumpliera», y sin esa suposición diría
+//     «inerte» de toda política sana mientras la máquina esté bien.
+//   - EL ESTADO GLOBAL DEL BARRIDO también queda afuera, y no es un olvido: no es una compuerta de
+//     política × máquina sino del cerebro entero. Con `fleet.probe_minutes` negativo el intervalo
+//     efectivo es 0, RunFlotaScheduler vuelve al instante y NINGUNA política actúa en ninguna
+//     máquina; y un proyecto que no entra en el tope de proyectosAVigilar (proyectosParaVigilar
+//     por barrido, en orden de project_id) no se barre, así que sus políticas tampoco corren. En
+//     los dos casos este indicador sigue diciendo `puede_actuar: true`: supone que el barrido
+//     corre sobre el proyecto de la máquina.
+//
+// Medido en las revisiones 2 y 3 de A131 con una sonda temporal (sin commitear) sobre esta rama:
+// con el barrido apagado, y con la máquina en un proyecto fuera del tope, el inventario dice
+// `puede_actuar: true` sin `inerte_por` y la política no actúa. Exposición hoy, medida en la
+// revisión 2: 0 —un solo proyecto con máquinas y el sondeo en su default de 5 min—. Publicarlo (un
+// `inerte_por` como `barrido_apagado` o `fuera_del_barrido`, derivado de la MISMA función que
+// decide el barrido y no de una copia del tope) queda como cabo aparte; hasta entonces, lo que
+// vale es esta frontera.
 //
 // ERA UNA COPIA DE LAS COMPUERTAS Y SE QUEDÓ CON DOS DE TRES (A131). Decía ser «deliberadamente
 // la MISMA cadena de guardas» que la acción, y A91 le agregó a la acción el eje de

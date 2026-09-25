@@ -28,20 +28,22 @@ import (
 // como cobertura).
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════
-// LA PRIMERA VERSIÓN DE ESTA GUARDA TENÍA LOS DOS DEFECTOS DE SIEMPRE, UNO PARA CADA LADO
+// LO QUE ESTA GUARDA YA NO MIRA, Y QUIÉN LO MIRA
 //
-//   - LA MIRABA UN COMENTARIO. El uso del mapa se comprobaba con un `strings.Contains` de
-//     `INERTE_POR[p.inerte_por]` sobre el archivo ENTERO. La revisión de A131 devolvió automatico()
-//     al texto fijo de dos causas —el defecto exacto de LD1/P3-L1— dejando ese literal en un
-//     comentario al final de la línea: sabotaje.sh dijo «EL SABOTAJE NO LA PONE EN ROJO» y
-//     `go test ./cmd/musubi` entero dio ok. Ahora se busca en el CÓDIGO (sin comentarios ni
-//     contenido de literales) del cuerpo de automatico(), y adentro de la expresión que arma
-//     `porque`, que es el texto que se dibuja; y se exige además que `porque` se dibuje.
-//   - CASTIGABA EL ARREGLO (falla 7 de sabotaje.sh). Las claves se leían con `^\s*([a-z_]+):`,
-//     así que `'consentimiento_pide': …` —JS válido y equivalente— la ponía roja; y el uso se
-//     buscaba escrito con punto, así que `INERTE_POR[p['inerte_por']]` también. Ahora las claves
-//     se leen del objeto con o sin comillas, y el uso es «un índice de INERTE_POR que nombra
-//     `inerte_por`», se escriba como se escriba el acceso.
+// Hasta la revisión 2 de A131 esta prueba buscaba además, en el TEXTO de automatico(), que el mapa
+// se leyera donde se arma el motivo y que el motivo se dibujara. La revisión lo midió en las dos
+// direcciones y ninguna búsqueda de texto converge contra eso: el texto fijo viejo con una lectura
+// muerta de `INERTE_POR[p.inerte_por]` al lado quedaba en verde, igual que `porque` mencionado y
+// nunca dibujado; y el motivo en una variable intermedia o el mapa envuelto en `Object.freeze`, que
+// dibujan exactamente lo mismo, la ponían roja. Eso lo contesta ahora
+// TestElPanelDibujaPorQueCadaPoliticaEstaInerte, que EJECUTA el JavaScript del panel en node y mira
+// lo que automatico() dibuja. Acá queda lo que se puede comprobar sin correr nada: el conjunto de
+// claves contra el de constantes, en las dos direcciones.
+//
+// Las claves se leen del literal con o sin comillas —`'consentimiento_pide': …` es JS válido y
+// equivalente—, y el literal se encuentra aunque venga envuelto (`Object.freeze({…})`): la primera
+// versión castigaba la clave entre comillas, y la segunda el `Object.freeze` (falla 7 de
+// sabotaje.sh).
 //
 // Exposición medida: 0 hoy. La única política en producción no está inerte, así que el texto no se
 // dibuja; se habría dibujado mal con el primer `pide` o `prohibido` sobre musubi-server.
@@ -54,100 +56,69 @@ import (
 // arnes: arreglo_de="  consentimiento_pide: 'la máquina exige"
 // arnes: arreglo_a="  'consentimiento_pide': 'la máquina exige"
 //
-// Sabotaje: volver automatico() al texto fijo de dos causas, dejando el literal del uso en un
-// comentario. La otra dirección: el acceso escrito con corchetes y comillas sigue en verde.
+// Sabotaje: darle al mapa un texto para una compuerta que el cerebro no produce. La otra dirección:
+// el mismo mapa envuelto en `Object.freeze(…)` tiene que seguir en verde.
 // arnes: archivo="cmd/musubi/assets/flota.html"
-// arnes: de="      ` — INERTE: ${INERTE_POR[p.inerte_por] || 'la frena la compuerta «' + (p.inerte_por || 'sin motivo informado') + '»'}. No va a actuar.`;\n"
-// arnes: a="      ' — INERTE: su principal no tiene `exec` sobre esta máquina, o el comando no está en su allowlist. No va a actuar.'; // INERTE_POR[p.inerte_por]\n"
-// arnes: arreglo_de="INERTE_POR[p.inerte_por] ||"
-// arnes: arreglo_a="INERTE_POR[p['inerte_por']] ||"
+// arnes: de="  mantenimiento: 'la máquina está en una ventana de mantenimiento"
+// arnes: a="  freno_que_el_cerebro_no_produce: 'un estado que el cerebro ya no produce',\n  mantenimiento: 'la máquina está en una ventana de mantenimiento"
+// arnes: arreglo_de="const INERTE_POR = {\n  sin_registro: 'no hay registro de principals, así que no hay a quién nombrar',\n  sin_principal: 'su principal no está en principals.yaml, o su credencial venció',\n  sin_exec: 'su principal no tiene `exec` sobre esta máquina, o la máquina no lo admite',\n  allowlist: 'el comando no está en la allowlist de su principal',\n  consentimiento_prohibido: 'la máquina tiene el consentimiento en `prohibido` (o en `pide` sin forma de preguntar)',\n  consentimiento_pide: 'la máquina exige que su usuario acepte, y un barrido automático no puede esperar la respuesta',\n  mantenimiento: 'la máquina está en una ventana de mantenimiento, y ninguna política actúa sobre ella hasta que la ventana cierre o se cancele',\n};\n"
+// arnes: arreglo_a="const INERTE_POR = Object.freeze({\n  sin_registro: 'no hay registro de principals, así que no hay a quién nombrar',\n  sin_principal: 'su principal no está en principals.yaml, o su credencial venció',\n  sin_exec: 'su principal no tiene `exec` sobre esta máquina, o la máquina no lo admite',\n  allowlist: 'el comando no está en la allowlist de su principal',\n  consentimiento_prohibido: 'la máquina tiene el consentimiento en `prohibido` (o en `pide` sin forma de preguntar)',\n  consentimiento_pide: 'la máquina exige que su usuario acepte, y un barrido automático no puede esperar la respuesta',\n  mantenimiento: 'la máquina está en una ventana de mantenimiento, y ninguna política actúa sobre ella hasta que la ventana cierre o se cancele',\n});\n"
 //
-// Sabotaje: armar `porque` con el mapa y no dibujarlo. La otra dirección: dibujarlo escapado
-// aparte tiene que seguir en verde.
-// arnes: archivo="cmd/musubi/assets/flota.html"
-// arnes: de="title=\"${esc(t + porque)}\""
-// arnes: a="title=\"${esc(t)}\""
-// arnes: arreglo_de="title=\"${esc(t + porque)}\""
-// arnes: arreglo_a="title=\"${esc(t) + esc(porque)}\""
+// Sabotaje: que vistasJS deje de saltear la barra de escape adentro de un string. `'it\'s // q'`
+// termina entonces en la comilla escapada, y lo que sigue se lee como comentario: lo ve el control
+// del instrumento, que hasta la revisión 2 no tenía ningún escape y con este sabotaje quedaba verde.
+// arnes: archivo="cmd/musubi/flota_inerte_por_test.go"
+// arnes: de="\t\t\t\tif src[j] == '\\\\' {\n"
+// arnes: a="\t\t\t\tif false && src[j] == '\\\\' {\n"
 func TestElPanelTieneTextoParaCadaFrenoDePolitica(t *testing.T) {
 	// ── EL INSTRUMENTO, ANTES DE CREERLE ───────────────────────────────────────────────────────
-	// Todo lo de abajo mira el panel a través de vistasJS. Si el lexer dejara de separar un
-	// comentario de un string, las comprobaciones volverían a contentarse con un texto que no
-	// decide nada —o a acusar uno que sí—, y ninguna lo diría.
+	// Las claves se leen a través de vistasJS. Si el lexer dejara de separar un comentario de un
+	// string —o de saltear una comilla escapada—, una clave comentada se contaría como texto, o
+	// una entrada real se perdería, y ninguna comprobación de abajo lo diría.
 	{
-		muestra := "x = 'a // b' + `c ${y + 'd'} e`; // INERTE_POR[z]\n/* w */ v = \"f\";"
+		muestra := "x = 'a // b' + `c ${y + 'd'} e`; // INERTE_POR[z]\n/* w */ v = \"f\";\nu = 'it\\'s // q'; // ZZ"
 		sinCom, cod := vistasJS(muestra)
 		if len(sinCom) != len(muestra) || len(cod) != len(muestra) {
 			t.Fatalf("vistasJS cambió el largo del texto: las dos vistas tienen que alinearse byte a byte con el original")
 		}
-		if strings.Contains(sinCom, "INERTE_POR") || strings.Contains(sinCom, "w") {
+		if strings.Contains(sinCom, "INERTE_POR") || strings.Contains(sinCom, "w") || strings.Contains(sinCom, "ZZ") {
 			t.Fatalf("vistasJS no blanqueó los comentarios: %q", sinCom)
 		}
-		if !strings.Contains(sinCom, "'a // b'") || !strings.Contains(sinCom, `"f"`) {
+		if !strings.Contains(sinCom, "'a // b'") || !strings.Contains(sinCom, `"f"`) || !strings.Contains(sinCom, `'it\'s // q'`) {
 			t.Fatalf("vistasJS se comió un string como si fuera un comentario: %q", sinCom)
 		}
-		if strings.Contains(cod, "a // b") || strings.Contains(cod, "c ") || !strings.Contains(cod, "${y + '") {
+		if strings.Contains(cod, "a // b") || strings.Contains(cod, "c ") || strings.Contains(cod, "// q") || !strings.Contains(cod, "${y + '") {
 			t.Fatalf("la vista de código tiene que blanquear el CONTENIDO de los literales y conservar las expresiones ${…}: %q", cod)
 		}
 	}
 
 	// ── EL PRODUCTOR: las constantes del cerebro ─────────────────────────────────────────────
-	fuente := filepath.Join("..", "..", "internal", "mcp", "politicas.go")
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, fuente, nil, 0)
-	if err != nil {
-		t.Fatalf("no se pudo parsear %s: %v", fuente, err)
-	}
-	frenos := map[string]bool{}
-	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.CONST {
-			continue
-		}
-		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
-			}
-			if tipo, ok := vs.Type.(*ast.Ident); !ok || tipo.Name != "frenoDePolitica" {
-				continue
-			}
-			for _, v := range vs.Values {
-				lit, ok := v.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					t.Fatalf("%s: una constante de frenoDePolitica no es un literal de cadena y esta guarda no la puede leer", fset.Position(v.Pos()))
-				}
-				valor, err := strconv.Unquote(lit.Value)
-				if err != nil {
-					t.Fatalf("%s: %v", fset.Position(v.Pos()), err)
-				}
-				// El vacío es «ninguna compuerta frena»: nunca viaja como `inerte_por`.
-				if valor != "" {
-					frenos[valor] = true
-				}
-			}
-		}
-	}
-	// PISO: cero frenos no es «no hay nada que dibujar», es que el tipo se renombró o se mudó.
-	if len(frenos) < 5 {
-		t.Fatalf("encontré %d constantes de frenoDePolitica en %s y son al menos cinco: la guarda dejó de ver la fuente", len(frenos), fuente)
-	}
+	frenos := frenosDelCerebro(t)
 
-	// ── EL CONSUMIDOR: las claves del mapa, en el asset EMBEBIDO que se sirve ──────────────────
-	p := string(assetsFS(t, "assets/flota.html"))
-	const cabecera = "const INERTE_POR = "
-	ini := strings.Index(p, cabecera+"{")
-	if ini < 0 {
+	// ── EL CONSUMIDOR: las claves del mapa, en el script del asset EMBEBIDO que se sirve ───────
+	guion := scriptDelPanel(t)
+	decl := regexp.MustCompile(`(?m)^[ \t]*(?:const|let|var)\s+INERTE_POR\s*=`).FindStringIndex(guion)
+	if decl == nil {
 		t.Fatal("flota.html no tiene el mapa INERTE_POR: el panel volvió a un texto fijo, que es el defecto de A131")
 	}
-	// Se lexea DESDE la llave del mapa: lo que venga después de su cierre no puede correr nada de
-	// lo que hay adentro.
-	mapaSin, mapaCod := vistasJS(p[ini+len(cabecera):])
-	cierra := cierreJS(mapaCod, 0)
+	// Se lexea DESDE la declaración: lo que venga después del mapa no puede correr nada de lo que
+	// hay adentro, y vistasJS no reconoce literales de regex (esc() tiene uno, más abajo).
+	mapaSin, mapaCod := vistasJS(guion[decl[0]:])
+	igual := decl[1] - decl[0]
+	// El literal es la primera llave del inicializador, venga pelado o envuelto: `= {…}` y
+	// `= Object.freeze({…})` declaran el mismo mapa.
+	fin := finDeSentenciaJS(mapaCod, igual)
+	abre := strings.IndexByte(mapaCod[igual:fin], '{')
+	if abre < 0 {
+		t.Fatal("INERTE_POR no se inicializa con un literal de objeto en flota.html: esta guarda no sabe leer sus " +
+			"claves, y adivinarlas sería inventar cobertura")
+	}
+	abre += igual
+	cierra := cierreJS(mapaCod, abre)
 	if cierra < 0 {
 		t.Fatal("no encontré la llave que cierra el mapa INERTE_POR en flota.html")
 	}
-	claves, err := clavesDeObjetoJS(mapaSin[1:cierra], mapaCod[1:cierra])
+	claves, err := clavesDeObjetoJS(mapaSin[abre+1:cierra], mapaCod[abre+1:cierra])
 	if err != nil {
 		t.Fatalf("el mapa INERTE_POR tiene una entrada que esta guarda no sabe leer, y adivinar su clave sería inventar cobertura: %v", err)
 	}
@@ -177,50 +148,6 @@ func TestElPanelTieneTextoParaCadaFrenoDePolitica(t *testing.T) {
 		t.Errorf("INERTE_POR tiene texto para %s, que no es ninguna constante de frenoDePolitica: explica un "+
 			"estado que el cerebro ya no produce", strings.Join(sobran, ", "))
 	}
-
-	// ── Y EL MAPA SE USA DONDE SE ARMA EL MOTIVO QUE SE DIBUJA, no en cualquier texto ─────────
-	fn := strings.Index(p, "function automatico(")
-	if fn < 0 {
-		t.Fatal("flota.html no tiene automatico(): la columna de lo automático dejó de existir o cambió de nombre, y esta guarda no está mirando nada")
-	}
-	fnSin, fnCod := vistasJS(p[fn:])
-	llave := strings.IndexByte(fnCod, '{')
-	fin := -1
-	if llave >= 0 {
-		fin = cierreJS(fnCod, llave)
-	}
-	if fin < 0 {
-		t.Fatal("no encontré el cuerpo de automatico() en flota.html")
-	}
-	cuerpoSin, cuerpoCod := fnSin[llave:fin+1], fnCod[llave:fin+1]
-	decl := regexp.MustCompile(`\b(?:const|let|var)\s+porque\s*=`).FindStringIndex(cuerpoCod)
-	if decl == nil {
-		t.Fatal("automatico() no arma `porque`, el texto de por qué una política está inerte: sin él el panel " +
-			"no puede decir cuál compuerta la frena. (Si la variable cambió de nombre, esta guarda tiene que seguirla.)")
-	}
-	finDecl := finDeSentenciaJS(cuerpoCod, decl[1])
-	traduce := false
-	for _, m := range regexp.MustCompile(`\bINERTE_POR\s*\[`).FindAllStringIndex(cuerpoCod[decl[1]:finDecl], -1) {
-		abre := decl[1] + m[1] - 1
-		cierraIdx := cierreJS(cuerpoCod, abre)
-		if cierraIdx < 0 || cierraIdx > finDecl {
-			continue
-		}
-		// El ÍNDICE se lee de la vista con los literales intactos: `p['inerte_por']` nombra el campo
-		// adentro de un string, y es tan válido como `p.inerte_por`.
-		if regexp.MustCompile(`\binerte_por\b`).MatchString(cuerpoSin[abre+1 : cierraIdx]) {
-			traduce = true
-		}
-	}
-	if !traduce {
-		t.Errorf("la expresión que arma `porque` en automatico() no indexa INERTE_POR con `inerte_por`: el mapa " +
-			"existe y el panel no lo lee, así que una política inerte se explica con un texto que no depende de " +
-			"la compuerta que la frena — el defecto de A131. (Un comentario o un string que lo nombre no cuenta.)")
-	}
-	if !regexp.MustCompile(`\bporque\b`).MatchString(cuerpoCod[finDecl:]) {
-		t.Errorf("automatico() arma `porque` y nunca lo usa: el motivo traducido no llega a lo que se dibuja, y " +
-			"una política inerte se ve sin decir por qué")
-	}
 }
 
 // vistasJS lexea `src` como JavaScript y devuelve dos vistas del MISMO largo, alineadas byte a byte
@@ -230,9 +157,10 @@ func TestElPanelTieneTextoParaCadaFrenoDePolitica(t *testing.T) {
 //   - codigo: además, el CONTENIDO de los literales en blanco. Quedan las comillas, los backticks y
 //     las expresiones `${…}` de las plantillas, que son código.
 //
-// Los saltos de línea se conservan siempre. NO reconoce literales de regex: automatico() y el mapa
-// INERTE_POR no tienen ninguno, y el control del principio de la prueba es lo que avisa si este
-// lexer deja de separar un comentario de un string.
+// Los saltos de línea se conservan siempre. NO reconoce literales de regex: el mapa INERTE_POR no
+// tiene ninguno y se lexea desde su declaración, así que los que vengan después (el de esc(), por
+// ejemplo) no lo alcanzan. El control del principio de la prueba es lo que avisa si este lexer deja
+// de separar un comentario de un string, o de saltear una comilla escapada.
 func vistasJS(src string) (sinComentarios, codigo string) {
 	sin := []byte(src)
 	cod := []byte(src)
@@ -408,4 +336,81 @@ func clavesDeObjetoJS(sinComentarios, codigo string) (map[string]bool, error) {
 		return nil, err
 	}
 	return claves, nil
+}
+
+// frenosDelCerebro devuelve los valores de las constantes de tipo `frenoDePolitica`, leídos del
+// AST de internal/mcp/politicas.go —la fuente, no una lista copiada acá—, sin el vacío: `sinFreno`
+// es «ninguna compuerta frena» y nunca viaja como `inerte_por`. Lo usan las dos guardas del panel:
+// TestElPanelTieneTextoParaCadaFrenoDePolitica, para el conjunto de claves, y
+// TestElPanelDibujaPorQueCadaPoliticaEstaInerte, para recorrer cada freno aunque el mapa no lo
+// conozca.
+func frenosDelCerebro(t *testing.T) map[string]bool {
+	t.Helper()
+	fuente := filepath.Join("..", "..", "internal", "mcp", "politicas.go")
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, fuente, nil, 0)
+	if err != nil {
+		t.Fatalf("no se pudo parsear %s: %v", fuente, err)
+	}
+	frenos := map[string]bool{}
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			if tipo, ok := vs.Type.(*ast.Ident); !ok || tipo.Name != "frenoDePolitica" {
+				continue
+			}
+			for _, v := range vs.Values {
+				lit, ok := v.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					t.Fatalf("%s: una constante de frenoDePolitica no es un literal de cadena y esta guarda no la puede leer", fset.Position(v.Pos()))
+				}
+				valor, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatalf("%s: %v", fset.Position(v.Pos()), err)
+				}
+				if valor != "" {
+					frenos[valor] = true
+				}
+			}
+		}
+	}
+	// PISO: cero frenos no es «no hay nada que dibujar», es que el tipo se renombró o se mudó.
+	if len(frenos) < 5 {
+		t.Fatalf("encontré %d constantes de frenoDePolitica en %s y son al menos cinco: la guarda dejó de ver la fuente", len(frenos), fuente)
+	}
+	return frenos
+}
+
+// scriptDelPanel devuelve el JavaScript de flota.html TAL COMO SE SIRVE: el contenido de sus bloques
+// <script>, en orden, sacado del asset EMBEBIDO. Las dos guardas del panel lo toman de acá, así
+// que miran los mismos bytes —una leyéndolos y la otra ejecutándolos—.
+func scriptDelPanel(t *testing.T) string {
+	t.Helper()
+	p := string(assetsFS(t, "assets/flota.html"))
+	var guion strings.Builder
+	for resto := p; ; {
+		i := strings.Index(resto, "<script>")
+		if i < 0 {
+			break
+		}
+		resto = resto[i+len("<script>"):]
+		j := strings.Index(resto, "</script>")
+		if j < 0 {
+			t.Fatal("flota.html abre un <script> que no cierra")
+		}
+		guion.WriteString(resto[:j])
+		guion.WriteString("\n")
+		resto = resto[j+len("</script>"):]
+	}
+	if guion.Len() == 0 {
+		t.Fatal("flota.html no tiene ningún <script>: el panel no tiene código que estas guardas puedan mirar")
+	}
+	return guion.String()
 }
