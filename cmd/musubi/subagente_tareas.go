@@ -95,7 +95,7 @@ Sos quien hace las tareas que Musubi deja en su tablero. Musubi no tiene modelo:
    - effect: "apply" si corroboraste o descartaste alguna; "report" si las dejaste todas.
    - result: un renglón por propuesta: [primeros 8 caracteres del id] CORROBORADA|DESCARTADA|DEJADA — el motivo y la evidencia, en una línea.
    - Si algo te impidió trabajar (una tool que falla siempre), cerrala con "status":"failed" y el motivo en result.
-5. Hacé como máximo DOS unidades por corrida. Terminá con un resumen: un renglón por unidad, con cuántas corroboraste, descartaste y dejaste.
+5. Cerrada una unidad, volvé al paso 1 y reclamá la siguiente. Parás cuando cerraste DOS unidades, o antes si el claim responde "claimed": false. Terminá con un resumen: un renglón por unidad, con cuántas corroboraste, descartaste y dejaste.
 
 ## El veredicto de cada propuesta
 
