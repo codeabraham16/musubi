@@ -142,6 +142,12 @@ func (s *McpServer) evaluarPolitica(pol fleet.Politica, d fleet.Device, ahora ti
 	//
 	// El umbral es el MISMO que decide «en línea», y por tier (I2): si la máquina figura caída, su
 	// muestra es rancia por definición.
+	//
+	// Y la edad la mide el reloj del CEREBRO: `tomada` llega acá ya recortada a la hora en que la
+	// muestra entró (memory.latirDeviceCon, A131·T2), así que un agente con el reloj adelantado no
+	// rejuvenece su última muestra. La mitad EnLinea sigue haciendo falta: el registro puede
+	// RETROCEDER —correrPorSSH estampa `last_seen` con la hora en que EMPEZÓ el comando— y dejar
+	// una máquina que figura caída con una muestra más nueva que su último latido.
 	umbral := s.umbralEnLinea(d)
 	if d.UltimaMuestra == nil || !d.EnLinea(ahora, umbral) {
 		return false

@@ -220,6 +220,38 @@ func (m Muestra) Valida() error {
 	return nil
 }
 
+// RecortadaALaLlegada devuelve la muestra con `tomada` recortada a `llegada` —la hora del CEREBRO
+// en la que la muestra entró— y dice si hubo que recortarla.
+//
+// ────────────────────────────────────────────────────────────────────────────────────────────
+// UNA MUESTRA NO PUEDE HABER SIDO TOMADA DESPUÉS DE LLEGAR, Y LA FRESCURA LA MIDE EL CEREBRO
+// (A131·T2, decisión del usuario: recortar al reloj del cerebro).
+//
+// `tomada` la pone el RELOJ DEL AGENTE, que es entrada no confiable y puede ir adelantado. Creerle
+// una fecha del futuro rejuvenece la muestra: con el reloj adelantado X, la última muestra de un
+// agente cuyo colector murió sigue contando como fresca X más allá de su umbral, para las
+// políticas, para `antiguedad_s` y para la alerta de muestra rancia, que miden todas
+// `ahora − tomada`. Recortada a su llegada, un reloj adelantado sigue funcionando —la muestra
+// que llega ahora vale como de ahora—, pero una muestra VIEJA deja de contar como fresca por
+// estar fechada adelante.
+//
+// SE RECORTA Y NO SE RECHAZA. Rechazarla (lo que hace Valida con una `tomada` en cero) apagaría la
+// telemetría entera de una máquina por un reloj corrido dos segundos —medido en la flota: hasta
+// 2 s adelante del cerebro—, y no hay nada falso en el resto de la muestra. Lo único que no se le
+// cree es la fecha, y la que la reemplaza es la única que el cerebro sabe cierta: cuándo la recibió.
+//
+// Una `tomada` ANTERIOR a la llegada no se toca: una muestra que tardó en llegar, o un reloj
+// atrasado, la hacen más vieja, y más vieja es el lado prudente. La aplica el único lugar donde la
+// llegada existe: el UPDATE del latido (memory.latirDeviceCon), que estampa `last_seen` con esa
+// misma hora en la misma sentencia que guarda la muestra.
+func (m Muestra) RecortadaALaLlegada(llegada time.Time) (Muestra, bool) {
+	if !m.Tomada.After(llegada) {
+		return m, false
+	}
+	m.Tomada = llegada.UTC()
+	return m, true
+}
+
 // Serializar lleva la muestra a JSON para guardarla en la fila del dispositivo.
 func (m Muestra) Serializar() (string, error) {
 	b, err := json.Marshal(m)

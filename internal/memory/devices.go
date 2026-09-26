@@ -217,7 +217,13 @@ func (e *DbEngine) LatirDevice(id string, ahora time.Time, muestra string) (bool
 //
 // Asume `id` ya recortado y no vacío: la guarda es del llamador, que es quien puede devolver
 // `false` sin tocar la base.
+//
+// Y ES EL ÚNICO LUGAR DONDE LA MUESTRA Y SU HORA DE LLEGADA ESTÁN JUNTAS, por eso la muestra se
+// recorta ACÁ al reloj del cerebro (A131·T2): `ahora` es la hora en que la recibió el cerebro —la
+// que queda en `last_seen`— y ninguna otra capa la conoce después. Ver
+// fleet.Muestra.RecortadaALaLlegada y muestraAlRelojDelCerebro.
 func latirDeviceCon(x execQuerier, id string, ahora time.Time, muestra string) (bool, error) {
+	muestra = muestraAlRelojDelCerebro(muestra, ahora)
 	// El COALESCE-por-parámetro: cuando `muestra` es vacío la columna se reasigna a sí misma.
 	// Una sola sentencia para los dos casos, en vez de dos caminos que se pueden desincronizar.
 	res, err := x.Exec(
@@ -233,6 +239,33 @@ func latirDeviceCon(x execQuerier, id string, ahora time.Time, muestra string) (
 		return false, fmt.Errorf("error al leer el resultado del latido de %q: %w", id, err)
 	}
 	return n > 0, nil
+}
+
+// muestraAlRelojDelCerebro devuelve el JSON de la muestra listo para guardar, con `tomada`
+// recortada a `llegada` si el agente la fechó después (fleet.Muestra.RecortadaALaLlegada).
+//
+// Sólo reescribe el texto cuando HUBO recorte: una muestra con fecha anterior a su llegada se
+// guarda byte por byte como vino. Vacío sigue siendo «no vino muestra» y no se toca. Un texto
+// ilegible tampoco: se guarda como vino y la lectura lo trata como ausente (escanearDevice), que
+// es lo que ya pasaba; el recorte no agrega una segunda manera de perder un latido.
+//
+// Si la muestra recortada no se pudiera volver a serializar —no pasa con algo que acaba de salir
+// de un JSON válido—, NO se guarda la fecha del futuro: se devuelve vacío, que deja la muestra
+// anterior en su lugar. La anterior es más vieja, y más vieja es el lado prudente.
+func muestraAlRelojDelCerebro(muestra string, llegada time.Time) string {
+	m, err := fleet.MuestraDesdeTexto(muestra)
+	if err != nil || m == nil {
+		return muestra
+	}
+	recortada, hubo := m.RecortadaALaLlegada(llegada)
+	if !hubo {
+		return muestra
+	}
+	texto, err := recortada.Serializar()
+	if err != nil {
+		return ""
+	}
+	return texto
 }
 
 // RenombrarDevice cambia el NOMBRE de una máquina conservando su id, y con él todo su historial
