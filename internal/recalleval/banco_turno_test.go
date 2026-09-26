@@ -50,6 +50,42 @@ func TestConfigDelBancoEsLaDelHook(t *testing.T) {
 	}
 }
 
+// TestElBrazoDelTurnoTraduceElYaml fija con valores LITERALES cómo el brazo del turno traduce un
+// yaml que no es el de fábrica. Las otras pruebas comparan el banco y el hook contra la MISMA
+// función (memory.OpcionesDeRecallDelTurno), así que un defecto adentro de esa función —un campo
+// que deja de seguir al yaml— los mueve a los dos juntos y las deja verdes. Ésta no.
+//
+// Sabotaje: la fuente única ignora recall_stemming.
+// arnes: archivo="internal/memory/opciones_turno.go"
+// arnes: de="\t\tStemming:        memCfg.RecallStemming,"
+// arnes: a="\t\tStemming:        true,"
+//
+// Sabotaje: la fuente única fija mmr_lambda en el valor de fábrica.
+// arnes: archivo="internal/memory/opciones_turno.go"
+// arnes: de="\t\tMMRLambda:   memCfg.MMRLambda,"
+// arnes: a="\t\tMMRLambda:   0.75,"
+func TestElBrazoDelTurnoTraduceElYaml(t *testing.T) {
+	m := config.Default().Memory
+	m.RecallStemming = false
+	m.RecallCooccurrence = false
+	m.RecallGraphCentrality = false
+	m.VectorFloor = 0.42
+	m.MMRLambda = 0.6
+	m.CandidatePool = 77 // gobierna la tool musubi_recall, nunca el hook
+	m.GistMaxTokens = 9  // idem
+	quiero := memory.RecallOptions{
+		NoBump:        true,
+		RankedFTS:     true,
+		CandidatePool: 50,
+		GistMaxTokens: 24,
+		VectorFloor:   0.42,
+		MMRLambda:     0.6,
+	}
+	if got := ConfigTurnoCon(m).Opts; !reflect.DeepEqual(got, quiero) {
+		t.Errorf("el brazo del turno no traduce el yaml como el hook:\n  banco  %+v\n  quiero %+v", got, quiero)
+	}
+}
+
 // TestElBancoCorreElMotorDelHook: con vectores sembrados, el brazo del turno (sin embebedor, como
 // el hook de hoy) da EXACTAMENTE el orden que da sin MMR, porque su motor no ve vectores con qué
 // medir redundancia. El defecto que cierra: el banco sembraba los vectores con model_id ” y los

@@ -13,24 +13,45 @@ import (
 )
 
 // Pruebas de la fuente única de las opciones del turno (memory.OpcionesDeRecallDelTurno) desde el
-// lado del hook. La contracara del banco vive en internal/recalleval (TestConfigDelBancoEsLaDelHook):
-// las dos juntas fijan que el hook y el banco corren EL MISMO ranker, porque los dos tienen que ser
-// iguales a la misma función.
+// lado del hook. La contracara del banco vive en internal/recalleval (TestConfigDelBancoEsLaDelHook
+// y TestElBrazoDelTurnoTraduceElYaml).
 
-// TestBuildTurnRecallUsaLasOpcionesDelTurno: lo que el hook le pasa a Recall es, campo a campo,
-// memory.OpcionesDeRecallDelTurno con el presupuesto del turno encima. Nada más y nada menos.
-//
-// La memCfg lleva valores que NO son los default a propósito: si el hook armara sus opciones con
-// config.Default() en vez de la config que recibe, o con memCfg.CandidatePool (que gobierna la tool
-// musubi_recall y nunca gobernó el hook), la igualdad se rompe.
+// TestBuildTurnRecallUsaLasOpcionesDelTurno: lo que el hook le pasa a Recall, para un yaml que no
+// es el de fábrica, es EXACTAMENTE este literal. Se compara contra valores escritos y no contra la
+// fuente única: si la comparación fuera contra la misma función, un defecto adentro de ella (un
+// campo que deja de seguir al yaml) movería al hook y a lo esperado juntos, y la prueba seguiría
+// verde. Las tres perillas del ranker van en false para que un valor fijo en el de fábrica (true)
+// se vea; memory.candidate_pool y memory.gist_max_tokens gobiernan la tool musubi_recall y nunca
+// gobernaron el hook, así que el hook tiene que seguir en 50 y 24 aunque el yaml diga otra cosa.
 //
 // Sabotaje: el hook apaga el filtro de stopwords después de pedir las opciones a la fuente única.
 // arnes: archivo="cmd/musubi/turn.go"
 // arnes: de="\topts.TokenBudget = p.presupuesto\n"
 // arnes: a="\topts.TokenBudget = p.presupuesto\n\topts.RankedFTS = false\n"
+//
+// Sabotaje: la fuente única fija vector_floor en el valor de fábrica.
+// arnes: archivo="internal/memory/opciones_turno.go"
+// arnes: de="\t\tVectorFloor: memCfg.VectorFloor,"
+// arnes: a="\t\tVectorFloor: 0.30,"
+//
+// Sabotaje: la fuente única ignora recall_cooccurrence.
+// arnes: archivo="internal/memory/opciones_turno.go"
+// arnes: de="\t\tCooccurrence:    memCfg.RecallCooccurrence,"
+// arnes: a="\t\tCooccurrence:    true,"
+//
+// Sabotaje: la fuente única ignora recall_graph_centrality.
+// arnes: archivo="internal/memory/opciones_turno.go"
+// arnes: de="\t\tGraphCentrality: memCfg.RecallGraphCentrality,"
+// arnes: a="\t\tGraphCentrality: true,"
+//
+// Sabotaje: el gist del turno pasa a salir del yaml.
+// arnes: archivo="internal/memory/opciones_turno.go"
+// arnes: de="\t\tGistMaxTokens: defaultGistMaxTokens,"
+// arnes: a="\t\tGistMaxTokens: memCfg.GistMaxTokens,"
 func TestBuildTurnRecallUsaLasOpcionesDelTurno(t *testing.T) {
 	memCfg := config.Default().Memory
 	memCfg.RecallStemming = false
+	memCfg.RecallCooccurrence = false
 	memCfg.RecallGraphCentrality = false
 	memCfg.VectorFloor = 0.42
 	memCfg.MMRLambda = 0.6
@@ -43,15 +64,24 @@ func TestBuildTurnRecallUsaLasOpcionesDelTurno(t *testing.T) {
 
 	buildTurnRecall(store, parametrosDelTurno{sesion: "s1", prompt: "el prompt del turno", presupuesto: 250, memCfg: memCfg})
 
-	quiero := memory.OpcionesDeRecallDelTurno(memCfg, memory.AlcanceDelTurno{})
-	quiero.TokenBudget = 250
-	if !reflect.DeepEqual(store.lastOpts, quiero) {
-		t.Fatalf("el hook no corre las opciones de la fuente única:\n  pasó  %+v\n  quiero %+v", store.lastOpts, quiero)
+	quiero := memory.RecallOptions{
+		TokenBudget:   250,
+		NoBump:        true,
+		RankedFTS:     true,
+		CandidatePool: 50,
+		GistMaxTokens: 24,
+		VectorFloor:   0.42,
+		MMRLambda:     0.6,
 	}
-	// Y lo que la igualdad fija, dicho en claro: el hook filtra stopwords y rankea 50 candidatos.
-	if !store.lastOpts.RankedFTS || store.lastOpts.CandidatePool != 50 {
-		t.Errorf("RankedFTS=%v CandidatePool=%d: el hook corre con RankedFTS y pool 50",
-			store.lastOpts.RankedFTS, store.lastOpts.CandidatePool)
+	if !reflect.DeepEqual(store.lastOpts, quiero) {
+		t.Fatalf("el hook no traduce el yaml como tiene que traducirlo:\n  pasó   %+v\n  quiero %+v", store.lastOpts, quiero)
+	}
+	// Y el literal de antes del refactor, con el mismo yaml, coincide con lo que pasó (el pool y el
+	// gist los normalizaba Recall desde el cero): la fuente única no cambió nada.
+	antes := opcionesDelTurnoDeAntes(250, memCfg)
+	antes.CandidatePool, antes.GistMaxTokens = 50, 24
+	if !reflect.DeepEqual(store.lastOpts, antes) {
+		t.Errorf("el hook se apartó del literal de antes del refactor:\n  pasó  %+v\n  antes %+v", store.lastOpts, antes)
 	}
 }
 
