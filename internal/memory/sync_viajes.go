@@ -11,10 +11,12 @@ import (
 // nota era simular el cable sobre una copia de la base, y la única forma de saber cuántas notas
 // habían salido era un contador de estado que el pull pisaba (ver IngestShared).
 //
-// Lo escriben los drains de internal/mcp al final de cada tick, y SÓLO si el tick salió a la red:
-// un tick que no tenía nada que mandar, o que no pudo hablar con el central, no escribe nada. Sin
-// esa regla, cada tick vacío sería una escritura más sobre una base que comparten varios procesos,
-// y la columna posts contaría intentos que nunca viajaron.
+// Lo escriben los drains de internal/mcp al final de cada tick, y SÓLO si el tick salió a la red.
+// La subida no escribe si no mandó nada o si ningún POST tuvo respuesta. La bajada escribe una vez
+// por tick en que algún Pull volvió bien, AUNQUE la página venga vacía —así cuenta los pulls—, y
+// no escribe en un tick salteado: sin el candado, cediendo tras un fallo, o con el Pull fallido.
+// Sin esa regla cada tick salteado sería una escritura más sobre una base que comparten varios
+// procesos, y la columna posts contaría intentos que nunca viajaron.
 
 // Sentidos de un viaje. Son los mismos dos valores que admite el CHECK de la tabla.
 const (

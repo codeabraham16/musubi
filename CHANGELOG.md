@@ -335,9 +335,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   Ahora una 'sent' que rebota sigue 'sent' (sin tocarle `updated_at`), y `MarkOutboxSent` graba
   `sent_hash` (qué contenido entregó esta máquina) y `sent_at` (cuándo). Los dos drains registran
   al final de cada tick lo que movieron en la tabla nueva `sync_viajes` —filas, posts, bytes, por
-  día y sentido—, y SÓLO si el tick salió a la red: un tick vacío, sin candado, cediendo o con el
-  central inalcanzable no escribe nada. En la bajada eso lo decide una sola variable,
-  `salioALaRed`, que se pone en true tras cada Pull sin error. `musubi_sync_status` suma tres
+  día y sentido—, y SÓLO si el tick salió a la red. La subida no escribe si no mandó nada o si
+  ningún POST tuvo respuesta. La bajada escribe una vez por tick en que un Pull volvió bien, aunque
+  la página venga vacía —así cuenta los pulls—, y no escribe en un tick salteado: sin el candado,
+  cediendo tras un fallo o con el Pull fallido. Eso lo decide una sola variable, `salioALaRed`, que
+  se pone en true tras cada Pull sin error. `musubi_sync_status` suma tres
   líneas: enviadas en 24 h y 7 d (por `sent_at`), el volumen de la subida y el de la bajada (una
   sola línea «bajada», que el PR de la edad de la bajada completa), y lo que no viaja con su motivo
   —locales, en cuarentena, y de un LLM ya corroboradas que siguen locales—. El JSON conserva sus
