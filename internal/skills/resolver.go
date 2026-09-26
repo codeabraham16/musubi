@@ -14,8 +14,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// LoadSkills busca y parsea todos los archivos de skills del directorio .musubi/skills/
+// LoadSkills busca y parsea todos los archivos de skills del directorio .musubi/skills/, o devuelve
+// el catálogo si el resolvedor es de catálogo (NewResolverDeCatalogo).
 func (r *Resolver) LoadSkills() ([]Skill, error) {
+	if r.deCatalogo {
+		return append([]Skill{}, r.catalogo...), nil
+	}
 	skillsDir := filepath.Join(r.skillsDir, config.DirName, config.SkillsDir)
 
 	// Si no existe el directorio, retornar slice vacío (no nil) sin error para resiliencia

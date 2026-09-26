@@ -99,8 +99,8 @@ func escribirSkillMD(destino string, sk skills.Skill) (string, error) {
 		return "", err
 	}
 
-	dir := filepath.Join(destino, sk.Name)
-	ruta := filepath.Join(dir, "SKILL.md")
+	ruta := skills.RutaSkillEnDir(destino, sk.Name)
+	dir := filepath.Dir(ruta)
 
 	if previo, err := os.ReadFile(ruta); err == nil {
 		// REGLA DE ORO, la misma que managedSkillAction: ante la mínima duda, preservar. Un archivo

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"musubi/internal/config"
 )
@@ -243,5 +244,73 @@ func TestElPluginSeHaceAUnLadoDondeElProyectoYaConectaMusubi(t *testing.T) {
 	// Otra sesión, para que el durable del turno 1 vuelva a tocar si el hook no cediera.
 	if out := correrMusubiCon(t, repo, home, strings.Replace(evento, `"s"`, `"s2"`, 1), comoPlugin, "turn", "--hook-mode"); out != "" {
 		t.Errorf("el turno del plugin inyectó en un proyecto que ya corre ese hook: %q", out)
+	}
+}
+
+// EL DAEMON DEL PLUGIN LE NOMBRA AL AGENTE LAS SKILLS DEL PLUGIN, CON EL NOMBRE DEL MANIFIESTO.
+//
+// En un repo sin setup, las skills del plugin son las únicas que el agente tiene, y antes el mapa
+// salía vacío ahí: preguntaba sólo por las exportadas del proyecto. Se mide sobre el proceso, con el
+// plugin instalado por instalarPlugin, porque el cableado vive en runDaemon: las pruebas de
+// internal/mcp fijan qué hace la option y ésta que el daemon la pase, con las cinco skills reales
+// que cubren cada alcance y dentro del tope del cliente.
+//
+// «musubi:» se escribe literal: es cómo Claude Code llama a las skills del plugin (medido el
+// 2026-09-25). Y el prefijo sale del manifiesto instalado: con otro `name`, otro prefijo.
+//
+// Sabotaje que la hace fallar: que el daemon no pase las skills del plugin.
+// arnes: archivo="cmd/musubi/main.go"
+// arnes: de="skillsDelPluginParaElMapa(), mcp.WithVersion(version))"
+// arnes: a="mcp.WithVersion(version))"
+//
+// Sabotaje que la hace fallar: tomar el prefijo de la constante y no del manifiesto.
+// arnes: archivo="cmd/musubi/agente_plugin.go"
+// arnes: de="dirSkillsDelPlugin), manifiesto.Name, cognitiveSkills(nil))\n"
+// arnes: a="dirSkillsDelPlugin), nombrePlugin, cognitiveSkills(nil))\n"
+func TestElDaemonDelPluginNombraLasSkillsDelPlugin(t *testing.T) {
+	home := t.TempDir()
+	repo := proyectoConMemoria(t, home)
+	plugin := filepath.Join(home, ".claude", "skills", "musubi")
+	if err := instalarPlugin(plugin, "musubi", "0.0.0-prueba"); err != nil {
+		t.Fatalf("instalar el plugin: %v", err)
+	}
+	instrucciones := func(extra []string) string {
+		t.Helper()
+		res := respuestasJSONRPC(t, correrMusubiCon(t, repo, home, handshakeYLista, extra, "daemon"))
+		init, _ := res[1]["result"].(map[string]interface{})
+		texto, _ := init["instructions"].(string)
+		if texto == "" {
+			t.Fatalf("el daemon no le habló al agente: %v", res[1])
+		}
+		return texto
+	}
+	cinco := []string{"adversarial-review", "audit-structure-flow", "orchestrate-multiagent", "plan-ahead", "sdd-flow"}
+
+	// CONTROL: el mismo repo sin plugin no tiene skills exportadas, y no hay mapa.
+	if texto := instrucciones(nil); strings.Contains(texto, "plan-ahead") {
+		t.Fatalf("control: sin plugin y sin skills exportadas el mapa nombra plan-ahead:\n%s", texto)
+	}
+
+	texto := instrucciones([]string{"CLAUDE_PLUGIN_ROOT=" + plugin})
+	for _, skill := range cinco {
+		if !strings.Contains(texto, "musubi:"+skill) {
+			t.Errorf("el mapa del plugin no nombra musubi:%s:\n%s", skill, texto)
+		}
+	}
+	if n := len(utf16.Encode([]rune(texto))); n > 2048 {
+		t.Errorf("las instrucciones miden %d unidades UTF-16 y Claude Code corta en 2048", n)
+	}
+
+	// Con otro nombre en el manifiesto, Claude Code las llama de otra forma, y el mapa también.
+	manifiesto := filepath.Join(plugin, ".claude-plugin", "plugin.json")
+	crudo, err := os.ReadFile(manifiesto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifiesto, []byte(strings.Replace(string(crudo), `"name": "musubi"`, `"name": "otro"`, 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if texto := instrucciones([]string{"CLAUDE_PLUGIN_ROOT=" + plugin}); !strings.Contains(texto, "otro:plan-ahead") {
+		t.Errorf("con el plugin llamado «otro» el mapa no nombra otro:plan-ahead:\n%s", texto)
 	}
 }

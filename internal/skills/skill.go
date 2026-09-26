@@ -120,10 +120,23 @@ func (r ResolveRequest) DeclaraAlgo() bool {
 
 type Resolver struct {
 	skillsDir string
+	// catalogo, si deCatalogo, reemplaza a la lectura de .musubi/skills/: ver NewResolverDeCatalogo.
+	catalogo   []Skill
+	deCatalogo bool
 }
 
 func NewResolver(projectPath string) *Resolver {
 	return &Resolver{
 		skillsDir: projectPath,
 	}
+}
+
+// NewResolverDeCatalogo resuelve sobre una lista en memoria en vez de leer .musubi/skills/ de un
+// proyecto.
+//
+// EXISTE PARA LAS SKILLS QUE TRAE EL PLUGIN DE MUSUBI: viajan con el binario, no con el proyecto, y
+// tienen que matchear con la MISMA regla que las del proyecto —alcance declarado, capabilities
+// instaladas—. Una segunda implementación del matcher para ellas se separaría de la primera.
+func NewResolverDeCatalogo(catalogo []Skill) *Resolver {
+	return &Resolver{catalogo: append([]Skill(nil), catalogo...), deCatalogo: true}
 }

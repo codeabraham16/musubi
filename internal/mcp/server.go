@@ -425,6 +425,9 @@ type McpServer struct {
 	// instrucciones es el texto ya armado (base + mapa de skills), una vez por servidor.
 	instruccionesOnce sync.Once
 	instrucciones     string
+	// skillsPlugin son las skills que trae el plugin de Musubi cuando este servidor es el suyo (ver
+	// WithSkillsDelPlugin). nil ⇒ el mapa nombra sólo las del proyecto.
+	skillsPlugin *skillsDelPlugin
 	// principalsFile es la ruta del registro de identidades que el server usa para autenticar.
 	// La fija ListenAndServeHTTP (serve/HTTP); las tools admin (musubi_token_*) la mutan para dar
 	// de alta/baja miembros por la red, sin SSH ni CLI. Vacía en stdio local/tests ⇒ default.
