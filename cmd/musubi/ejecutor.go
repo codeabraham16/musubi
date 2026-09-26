@@ -109,7 +109,11 @@ func ejecutar(c comandoRecibido, base, token string) resultadoDeComando {
 	// la ve latiendo pero muda.
 	//
 	// Lo encontró una prueba del runner de SSH, que tiene exactamente el mismo patrón.
-	cmd.WaitDelay = 2 * time.Second
+	//
+	// EL VALOR ES DEL DOMINIO y no un literal de acá: cada comando de la tanda puede tardar su
+	// timeout y esto, y la cota de `perdido` del cerebro (fleet.EsperaMaxDeEntregado) lo suma una
+	// vez por comando. Un número copiado a los dos lados se desincroniza en silencio.
+	cmd.WaitDelay = fleet.EsperaDeCierreDelAgente
 	// El proceso NO hereda stdin. Un comando que espera una entrada que nunca va a llegar
 	// bloquearía hasta el timeout; con stdin cerrado, lee EOF y termina solo.
 	cmd.Stdin = nil

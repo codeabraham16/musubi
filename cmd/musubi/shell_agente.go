@@ -48,10 +48,15 @@ const comandoShellAgente = fleet.OpShell
 // esperaEntradaAgente es cuánto bloquea el agente pidiéndole teclas al cerebro. Igual que del
 // lado de la persona: una terminal quieta no genera tráfico y una activa se ve al instante.
 //
+// NO LA DECIDE EL AGENTE: el plazo lo pone el cerebro, que retiene el pedido (el relay usa
+// fleet.EsperaLargaDeShell). Acá hace falta para que el timeout del cliente quede por encima, así
+// que se lee del mismo lugar; con un `25 * time.Second` propio, un cerebro que alargara su espera
+// dejaría al agente cortando cada pedido justo antes de la respuesta.
+//
 // (Este doc estaba pegado a comandoShellAgente desde d6a3cb7, describiendo otra declaración, y
 // esperaEntradaAgente quedaba sin ninguno. Misma clase que los cuatro de 695e219, invisible al
 // linter porque ST1020 sólo mira lo exportado.)
-const esperaEntradaAgente = 25 * time.Second
+const esperaEntradaAgente = fleet.EsperaLargaDeShell
 
 // vidaMaxDeLaShellLocal es el techo del agente, y es DELIBERADAMENTE MÁS LARGO que el del cerebro.
 //

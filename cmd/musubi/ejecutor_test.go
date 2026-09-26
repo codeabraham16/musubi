@@ -171,7 +171,7 @@ func iptr(v int) *int { return &v }
 //
 // Sabotaje que la hace fallar: quitar `cmd.WaitDelay`.
 // arnes: archivo="cmd/musubi/ejecutor.go"
-// arnes: de="\tcmd.WaitDelay = 2 * time.Second"
+// arnes: de="\tcmd.WaitDelay = fleet.EsperaDeCierreDelAgente"
 // arnes: a="\tcmd.WaitDelay = 0"
 func TestUnHijoEnBackgroundNoDerrotaElTimeout(t *testing.T) {
 	arranque := time.Now()

@@ -59,7 +59,8 @@ const fleetHeartbeatPath = "/fleet/heartbeat"
 // EL NÚMERO VIVE EN EL DOMINIO (`fleet.ComandosPorEntregaMax`) y acá sólo se usa: la derivación
 // de `perdido` depende de él, así que dos definiciones se desincronizarían y volverían la cota
 // incorrecta EN SILENCIO — subir el tope acá sin tocar la otra haría que un comando vivo se
-// dibuje muerto.
+// dibuje muerto. Hasta A131 (tema T10) ninguna prueba contaba lo que un latido entrega, y este
+// número al doble pasaba en verde (C4-m8); lo cuenta TestUnLatidoEntregaLaTandaEnteraYNiUnComandoMas.
 const maxComandosPorLatido = fleet.ComandosPorEntregaMax
 
 // motivoRechazo es el ÚNICO texto de rechazo, y es el mismo para un token desconocido, uno
