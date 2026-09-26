@@ -63,3 +63,23 @@ func ConfigHibrida() Config {
 func ConfigProduccion() Config {
 	return Config{Name: "produccion", Opts: OptsDeProduccion(), UseVector: true}
 }
+
+// ConfigTurno es el ranker del HOOK por turno (UserPromptSubmit), donde ocurre casi todo el recall
+// del sistema: las opciones salen de memory.OpcionesDeRecallDelTurno —la misma función que llama
+// buildTurnRecall— y el banco corre con SU pool (PoolDelTurno), no con el corpus entero.
+//
+// POR QUÉ NO SE ARMA DESDE OptsDeProduccion. Esas son las opciones de la tool musubi_recall, y el
+// hook corre otras: RankedFTS encendido (filtra stopwords) y el pool clavado en 50. Medir el hook
+// con las de la tool es medir un ranker que el hook no corre, y los gates que decidan encender algo
+// en el hook (el corrector, el vector del turno) se tienen que medir contra éste.
+//
+// Sin vector a propósito: hoy el hook corre sólo léxico, porque la guarda de latencia no le deja
+// construir el embebedor cuando la tabla está presente. El brazo híbrido del turno es
+// ConfigTurno() con UseVector encendido.
+func ConfigTurno() Config {
+	return Config{
+		Name:         "turno",
+		Opts:         memory.OpcionesDeRecallDelTurno(config.Default().Memory, memory.AlcanceDelTurno{}),
+		PoolDelTurno: true,
+	}
+}

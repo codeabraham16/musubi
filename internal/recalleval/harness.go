@@ -84,6 +84,14 @@ type Config struct {
 	// usa el servidor. Reimplementar acá el prompt haría que este banco midiera una IMITACIÓN, y un
 	// número con aspecto de autoridad sobre algo que no corre en producción es peor que no medir.
 	Juez cognition.Provider
+	// PoolDelTurno, si es true, RESPETA el CandidatePool de Opts en vez de subirlo al corpus entero.
+	// Es el modo que corre el ranker del hook: el hook rankea 50 candidatos, no miles, y un banco con
+	// pool = corpus mide otra cosa. Pesa sobre todo en el brazo híbrido, porque augmentWithVectorPool
+	// usa ese mismo límite: con pool = corpus el vector trae hasta 3.155 vecinos, y en el hook trae
+	// 50. Las métricas @k se miden entonces DENTRO de lo que ese pool deja entrar: un relevante que
+	// no entró al pool cuenta como no encontrado, igual que en el turno. En false, el histórico:
+	// pool = corpus, y el recorte lo hacen las @k.
+	PoolDelTurno bool
 	// JuezTopK es cuántos resultados del tope ven al juez. 0 ⇒ cognition.DefaultTopK, la MISMA
 	// constante que aplica el servidor — no una copia: si el banco juzgara más candidatos que
 	// producción, mediría una configuración que nadie va a correr.
@@ -218,15 +226,23 @@ func SeedEngine(dir string, fx *Fixture, embed EmbedFunc) (*memory.DbEngine, err
 	return eng, nil
 }
 
+// recuperador es lo único que Evaluate y rankedIDs necesitan del motor (*memory.DbEngine lo
+// cumple). Existe para que una prueba pueda ver las opciones con las que el banco llama a Recall
+// (TestElBancoCorreElPoolDelTurno) sin sembrar un corpus del tamaño del pool.
+type recuperador interface {
+	Recall(ctx context.Context, query string, opts memory.RecallOptions) (memory.RecallResult, error)
+}
+
 // rankedIDs corre un recall y devuelve solo los ids en orden de score (mejor primero).
-// Fuerza un presupuesto de tokens enorme y un pool amplio para que el ranking NO se
-// recorte por presupuesto: el harness mide CALIDAD DE ORDEN, no empaquetado. NoBump evita
-// que un recall contamine las stats de acceso del siguiente (reproducibilidad).
-func rankedIDs(ctx context.Context, eng *memory.DbEngine, query string, cfg Config, embed EmbedFunc, pool int) ([]string, error) {
+// Fuerza un presupuesto de tokens enorme para que el ranking NO se recorte por presupuesto: el
+// harness mide CALIDAD DE ORDEN, no empaquetado. Salvo en el modo PoolDelTurno, también sube el
+// pool al corpus entero. NoBump evita que un recall contamine las stats de acceso del siguiente
+// (reproducibilidad).
+func rankedIDs(ctx context.Context, eng recuperador, query string, cfg Config, embed EmbedFunc, pool int) ([]string, error) {
 	opts := cfg.Opts
 	opts.NoBump = true
 	opts.TokenBudget = 1 << 30
-	if opts.CandidatePool < pool {
+	if !cfg.PoolDelTurno && opts.CandidatePool < pool {
 		opts.CandidatePool = pool
 	}
 	if cfg.UseVector {
@@ -280,8 +296,10 @@ func rankedIDs(ctx context.Context, eng *memory.DbEngine, query string, cfg Conf
 
 // Evaluate corre todas las queries del fixture bajo una configuración y agrega las
 // métricas en los k pedidos. Omite del promedio las queries sin relevantes.
-func Evaluate(ctx context.Context, eng *memory.DbEngine, fx *Fixture, cfg Config, embed EmbedFunc, ks []int) (Scores, error) {
-	pool := len(fx.Docs) // pool = corpus entero: el recorte lo hacen las métricas @k, no el pool
+func Evaluate(ctx context.Context, eng recuperador, fx *Fixture, cfg Config, embed EmbedFunc, ks []int) (Scores, error) {
+	// pool = corpus entero: el recorte lo hacen las métricas @k, no el pool. En el modo PoolDelTurno
+	// rankedIDs lo ignora y corre con el pool de las opciones, que es el del hook.
+	pool := len(fx.Docs)
 	recallByK := make(map[int][]float64, len(ks))
 	ndcgByK := make(map[int][]float64, len(ks))
 	porConsulta := make(map[string]MetricasConsulta, len(fx.Queries))
