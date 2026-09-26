@@ -8,6 +8,42 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **`musubi uso-agente --contexto`: medir si lo que Musubi pone en el contexto se repite, se pierde
+  o descarrila.** Es el instrumento del frente arranque de la ola 2, y entra antes que cualquier
+  arreglo para tener el antes y el después con la MISMA regla: hasta hoy esos números salían de un
+  python suelto sobre los transcripts. Mide, sólo en las sesiones principales (las hijas se cuentan
+  y no se miden): M1, los turnos de continuación («sigue», «go», «si hazlo») que recibieron
+  «memoria relevante», con dos clasificadores —la lista que va a usar la compuerta del hook y el
+  largo, que no depende de ella—; M1s, los avisos del sistema (`<task-notification>`,
+  `<command-…>`) que recibieron memoria; M2, las compactaciones seguidas de un arranque de Musubi;
+  M3, los ids repetidos dentro de una ventana de contexto; M5, los ids de una ventana anterior que
+  volvieron tras compactar; M7, el eco —un bloque de Musubi posterior a una compactación que
+  repite un pedido del dueño—, salteando la línea con que el corrector de tipeo avisa lo que
+  corrigió; y las reanudaciones. Los forks no dejan rastro en el transcript y salen «sin medir»,
+  como el alcance entero cuando no hay transcripts en la ventana: nunca 0.
+
+  Sobre los transcripts de Musubi y Altura en davantis-1 desde el 09-14 (2026-09-26 22:25 UTC): M1
+  75/129 por lista y 122/197 por largo; M1s 116/388; M2 0/31; M3 173/2.389 (7,2 %); M5 906/1.852,
+  en 27 de las 31 compactaciones; M7 0/572. Contra el python de la línea base, sobre la misma
+  foto: M3 da 44 allá porque el python no alimenta la ventana con lo inyectado ANTES del 09-14 en
+  una ventana que seguía abierta ese día (con ese estado da 173, igual); M1 da 77/123 allá porque
+  el python le anotaba a un «sigue» la memoria de un aviso o de un pedido encolado que llegó
+  detrás.
+
+  **El lector de transcripts pasa a `internal/transcripts`**, que ahora comparten `uso-agente`,
+  `--contexto` y, en los PR que siguen, el hook del turno, el banco de búsqueda y la métrica de
+  proyecto: un solo parser (con la deduplicación por uuid), un solo recorrido (fuera el
+  `journal.jsonl` y las carpetas de experimento, sesiones hijas por la carpeta `subagents/`), un
+  solo `EsDeSistema` y un solo `EsPedidoDeContinuacion`, y un lector por turno. El lector aprende
+  además algo que el de `uso-agente` no sabía: un prompt que llega con el agente trabajando —el
+  dueño escribe, o termina una tarea de fondo— se entrega como adjunto `queued_command` y no como
+  registro `user` (35 pedidos y 117 avisos desde el 09-14), y el hook del turno corre para él; sin
+  contarlo, su memoria se le anotaba al turno anterior. `uso-agente` da los mismos números que
+  antes.
+
+  *Ocho guardas nuevas con su sabotaje corrido (18 sabotajes, todos en rojo), y las 11 directivas
+  de `uso_agente_test.go` que apuntaban al código mudado se reescribieron y se re-corrieron. No
+  cambia ninguna tool: no hay goldens.*
 - **Antes de tocar un agente a mano, se declara la ventana: el runbook trae la receta.** El
   2026-09-20, en la migración a TLS, se tocó a mano la tarea del agente de `gio` y
   `AgenteCaidoConMaquinaViva` sonó 50 minutos. Fue la única ventana de trabajo leída como caída en
