@@ -8,6 +8,45 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El banco corre el ranker del hook, con su pool, y mide el tipeo por clase.** El recall por
+  turno (el hook UserPromptSubmit, donde ocurre casi todo el recall) armaba sus opciones a mano, y
+  el banco de `recalleval` armaba las suyas por su lado: sin `RankedFTS` y con el pool subido al
+  corpus entero, hasta 3.155 candidatos —el vectorial incluido— contra los 50 que rankea el hook.
+  O sea que el banco medía un ranker que el hook no corre, y contra ése se iban a decidir el
+  corrector de tipeo y el vector en el turno.
+
+  `memory.OpcionesDeRecallDelTurno(memCfg, alcance)` pasa a ser la única fuente de las opciones
+  del hook: la llaman `buildTurnRecall` y el brazo nuevo del banco, `recalleval.ConfigTurno`, que
+  corre con `Config.PoolDelTurno` (respeta el pool de las opciones en vez de subirlo al corpus, y
+  las @k se miden dentro de lo que ese pool deja entrar). `AlcanceDelTurno` nace con
+  `ProjectScope` y `Federate` en su valor cero, que es el recall federado de hoy, y
+  `buildTurnRecall` recibe un struct de parámetros en vez de siete posicionales, para que los
+  frentes que siguen le agreguen campos sin romper la firma. **No cambia el ranking**: la salida
+  del hook es la misma, byte a byte.
+
+  `recalleval.PerturbarConsulta(q, clase, semilla)` mete un tipeo determinista en cada término de
+  5 runas o más, por clase: transposición, falta y sobra —las que va a arreglar el corrector— y
+  sustitución, que a propósito no toca, para que el banco no mida al corrector con el mismo error
+  que sabe arreglar. Sobre `golden.json`, un tipeo en el término más largo casi no mueve el MRR
+  (0,722 → 0,694): la consulta es un OR y basta un término vivo. Tipear todos lo baja a 0,500
+  (0,583 en «falta», porque sacar la última letra deja un prefijo que el match por raíz encuentra
+  igual). `TestTipeoFixtureReal` corre lo mismo sobre una copia de la memoria real, sin gate, y es
+  la línea base del frente búsqueda. Medida sobre la base de davantis-1 (3.174 docs, 86 consultas,
+  MRR / R@10): léxico limpio 0,361 / 0,215; con un tipeo, de 0,286 a 0,300 según la clase; con
+  todos los términos tipeados, de 0,132 a 0,165; híbrido limpio 0,401 / 0,279. El mismo léxico con
+  el pool al corpus da 0,397: el pool de 50 del hook le cuesta 0,036 de MRR, y hasta hoy el banco
+  no lo veía.
+
+  *Guardas nuevas, con nueve sabotajes corridos en rojo. `TestLaSalidaDelHookEsLaDeAntesDelRefactor`
+  corre el hook entero sobre un motor real con el literal de antes congelado y con la fuente única,
+  y exige los mismos bytes; aparte, sobre una copia de la base, el binario de main y el de esta rama
+  dieron la misma salida en 30 de 30 turnos, y un control con el pool en 20 dio distinta en 15 de
+  15. `TestBuildTurnRecallUsaLasOpcionesDelTurno` y `TestConfigDelBancoEsLaDelHook` fijan que el
+  hook y el banco sean iguales a la misma función; `TestElBancoCorreElPoolDelTurno`, que el banco le
+  pida a Recall el pool del hook; `TestPerturbarConsultaPorClase` y
+  `TestLaPerturbacionMueveElDorado`, que el instrumento meta el error que dice y mueva el dorado
+  (−0,10 de MRR o más en cada clase). `TestConfigsNoDivergenDeProduccion` suma las filas del brazo
+  del turno.*
 - **Antes de tocar un agente a mano, se declara la ventana: el runbook trae la receta.** El
   2026-09-20, en la migración a TLS, se tocó a mano la tarea del agente de `gio` y
   `AgenteCaidoConMaquinaViva` sonó 50 minutos. Fue la única ventana de trabajo leída como caída en
