@@ -21,7 +21,7 @@ import (
 //
 // Sabotaje: el brazo del turno se arma con las opciones de la tool musubi_recall.
 // arnes: archivo="internal/recalleval/configs.go"
-// arnes: de="\t\tOpts:         memory.OpcionesDeRecallDelTurno(config.Default().Memory, memory.AlcanceDelTurno{}),"
+// arnes: de="\t\tOpts:         memory.OpcionesDeRecallDelTurno(m, memory.AlcanceDelTurno{}),"
 // arnes: a="\t\tOpts:         OptsDeProduccion(),"
 //
 // Sabotaje: el brazo del turno vuelve a correr con el pool = corpus.
@@ -37,19 +37,136 @@ func TestConfigDelBancoEsLaDelHook(t *testing.T) {
 	if !c.PoolDelTurno {
 		t.Error("ConfigTurno corre con pool = corpus: mide un ranker de miles de candidatos, y el hook rankea 50")
 	}
-	// El hook de hoy corre sin vector (la guarda de latencia no le deja construir el embebedor).
-	if c.UseVector {
-		t.Error("ConfigTurno enciende el vector: el hook de hoy es sólo léxico, el híbrido es otro brazo")
+	// El hook de hoy corre sin embebedor (la guarda de latencia no le deja construirlo): ni vector de
+	// consulta ni procedencia de vectores en el motor.
+	if c.UseVector || !c.SinEmbebedor {
+		t.Errorf("ConfigTurno: UseVector=%v SinEmbebedor=%v; el hook de hoy no tiene embebedor, el híbrido es otro brazo",
+			c.UseVector, c.SinEmbebedor)
+	}
+	// Y el brazo del vector en el turno es el mismo hook con el embebedor construido.
+	h := ConfigTurnoHibrido()
+	if !reflect.DeepEqual(h.Opts, quiero) || !h.PoolDelTurno || !h.UseVector || h.SinEmbebedor {
+		t.Errorf("ConfigTurnoHibrido no es el hook con embebedor: %+v", h)
 	}
 }
 
-// recuperadorQueAnota registra las opciones de cada Recall y no devuelve nada.
-type recuperadorQueAnota struct{ opts []memory.RecallOptions }
+// TestElBancoCorreElMotorDelHook: con vectores sembrados, el brazo del turno (sin embebedor, como
+// el hook de hoy) da EXACTAMENTE el orden que da sin MMR, porque su motor no ve vectores con qué
+// medir redundancia. El defecto que cierra: el banco sembraba los vectores con model_id ” y los
+// leía con ”, así que ConfigTurno diversificaba y el hook no. El hook no construye embebedor con
+// la tabla estática presente, nunca llama SetVectorModelID, y en la base real no hay ni un vector
+// con model_id ”. Medido sobre la base de davantis-1: léxico del banco 0,357 / 0,211 (MRR / R@10)
+// contra el hook 0,395 / 0,355.
+//
+// El control es el mismo brazo CON embebedor: tiene que dar otro orden en alguna consulta, o el
+// corpus no distingue MMR y la igualdad de arriba no probaría nada. Por eso el corpus trae notas
+// casi repetidas: con golden.json y hashEmbed, MMR 0,75 no cambiaba el orden de ninguna consulta.
+//
+// Sabotaje: rankedIDs no pone al motor sin procedencia en un brazo SinEmbebedor.
+// arnes: archivo="internal/recalleval/harness.go"
+// arnes: de="\t\tm.SetVectorModelID(\"\")\n"
+// arnes: a="\t\tm.SetVectorModelID(antes)\n"
+//
+// Sabotaje: SeedEngine vuelve a estampar los vectores sin nombre.
+// arnes: archivo="internal/recalleval/harness.go"
+// arnes: de="\t\teng.SetVectorModelID(ModeloDelBanco)"
+// arnes: a="\t\teng.SetVectorModelID(\"\")"
+//
+// Sabotaje: el brazo del turno deja de modelar el motor sin embebedor.
+// arnes: archivo="internal/recalleval/configs.go"
+// arnes: de="\t\tSinEmbebedor: true,"
+// arnes: a="\t\tSinEmbebedor: false,"
+//
+// Sabotaje: el brazo sin embebedor no le devuelve al motor su procedencia.
+// arnes: archivo="internal/recalleval/harness.go"
+// arnes: de="\t\tdefer m.SetVectorModelID(antes)"
+// arnes: a="\t\tdefer m.SetVectorModelID(\"\")"
+func TestElBancoCorreElMotorDelHook(t *testing.T) {
+	fx := corpusParaMMR()
+	ctx := context.Background()
+	eng, err := SeedEngine(t.TempDir(), fx, hashEmbed)
+	if err != nil {
+		t.Fatalf("SeedEngine: %v", err)
+	}
+	defer eng.Close()
+
+	hook := ConfigTurno()
+	sinMMR := ConfigTurno()
+	sinMMR.Opts.MMRLambda = 1
+	conEmbebedor := ConfigTurno()
+	conEmbebedor.SinEmbebedor = false
+
+	distintasConEmbebedor := 0
+	for _, q := range fx.Queries {
+		orden := func(c Config) []string {
+			ids, err := rankedIDs(ctx, eng, q.Text, c, hashEmbed, len(fx.Docs))
+			if err != nil {
+				t.Fatalf("%s/%s: %v", c.Name, q.ID, err)
+			}
+			return ids
+		}
+		ref := orden(sinMMR)
+		if got := orden(hook); !reflect.DeepEqual(got, ref) {
+			t.Errorf("%s: el brazo del hook diversificó, y el hook sin embebedor no puede:\n  brazo   %v\n  sin MMR %v", q.ID, got, ref)
+		}
+		if !reflect.DeepEqual(orden(conEmbebedor), ref) {
+			distintasConEmbebedor++
+		}
+	}
+	if distintasConEmbebedor == 0 {
+		t.Fatal("control: con embebedor (MMR 0,75) el orden no cambió en ninguna consulta; el corpus no distingue MMR y la prueba no mide nada")
+	}
+	if got := eng.VectorModelID(); got != ModeloDelBanco {
+		t.Errorf("después de correr el brazo sin embebedor el motor quedó leyendo con %q, no con %q", got, ModeloDelBanco)
+	}
+	t.Logf("con embebedor, %d de %d consultas cambian de orden por MMR", distintasConEmbebedor, len(fx.Queries))
+}
+
+// corpusParaMMR es un corpus donde la diversidad SE NOTA: cuatro notas casi iguales, todas
+// pertinentes, y otras pertinentes distintas. Con MMR, después de la primera casi repetida sube una
+// distinta; sin MMR, las casi repetidas van juntas.
+func corpusParaMMR() *Fixture {
+	fx := &Fixture{}
+	for i, extra := range []string{"uno", "dos", "tres", "cuatro"} {
+		fx.Docs = append(fx.Docs, Doc{
+			ID:      fmt.Sprintf("casi-%d", i),
+			Topic:   "altura/fichaje",
+			Content: "el fichaje de la raspberry del kiosko quedó con la pantalla en blanco " + extra,
+		})
+	}
+	for i, c := range []string{
+		"el fichaje de la raspberry perdió el wifi y dejó de subir marcas",
+		"el kiosko carga el bundle viejo del navegador y queda en blanco",
+		"la raspberry del fichaje se alcanza por ssh con el usuario altura20",
+		"el deploy del cerebro central pide sudo y un reinicio del servicio",
+		"el panel del cerebro dibuja los hilos con demasiada tinta",
+	} {
+		fx.Docs = append(fx.Docs, Doc{ID: fmt.Sprintf("otra-%d", i), Topic: "varios", Content: c})
+	}
+	fx.Queries = []Query{
+		{ID: "q1", Text: "fichaje de la raspberry en el kiosko", Relevant: []string{"casi-0", "otra-0"}},
+		{ID: "q2", Text: "kiosko en blanco", Relevant: []string{"casi-0", "otra-1"}},
+		{ID: "q3", Text: "raspberry fichaje pantalla", Relevant: []string{"casi-0", "otra-2"}},
+	}
+	return fx
+}
+
+// recuperadorQueAnota registra las opciones de cada Recall, y con qué procedencia de vectores
+// estaba el motor en ese momento, y no devuelve nada.
+type recuperadorQueAnota struct {
+	opts    []memory.RecallOptions
+	modelo  string
+	modelos []string
+}
 
 func (r *recuperadorQueAnota) Recall(_ context.Context, _ string, o memory.RecallOptions) (memory.RecallResult, error) {
 	r.opts = append(r.opts, o)
+	r.modelos = append(r.modelos, r.modelo)
 	return memory.RecallResult{}, nil
 }
+
+func (r *recuperadorQueAnota) VectorModelID() string     { return r.modelo }
+func (r *recuperadorQueAnota) SetVectorModelID(m string) { r.modelo = m }
 
 // TestElBancoCorreElPoolDelTurno: en el modo PoolDelTurno, Evaluate le pide a Recall el pool de las
 // opciones (50, el del hook) aunque el corpus tenga miles de docs. El defecto que cierra: rankedIDs
@@ -69,18 +186,25 @@ func TestElBancoCorreElPoolDelTurno(t *testing.T) {
 	ctx := context.Background()
 	hook := memory.OpcionesDeRecallDelTurno(config.Default().Memory, memory.AlcanceDelTurno{}).CandidatePool
 
-	hibrido := ConfigTurno()
-	hibrido.Name, hibrido.UseVector = "turno-hibrido", true
-	for _, cfg := range []Config{ConfigTurno(), hibrido} {
-		r := &recuperadorQueAnota{}
-		if _, err := Evaluate(ctx, r, fx, cfg, hashEmbed, ks); err != nil {
-			t.Fatalf("%s: %v", cfg.Name, err)
+	for _, c := range []struct {
+		cfg    Config
+		modelo string // la procedencia con la que tiene que estar el motor durante el recall
+	}{
+		{ConfigTurno(), ""},                // el hook de hoy: sin embebedor
+		{ConfigTurnoHibrido(), "sembrado"}, // con embebedor: la del motor
+	} {
+		r := &recuperadorQueAnota{modelo: "sembrado"}
+		if _, err := Evaluate(ctx, r, fx, c.cfg, hashEmbed, ks); err != nil {
+			t.Fatalf("%s: %v", c.cfg.Name, err)
 		}
 		if len(r.opts) != 1 {
-			t.Fatalf("%s: esperaba 1 recall, hubo %d", cfg.Name, len(r.opts))
+			t.Fatalf("%s: esperaba 1 recall, hubo %d", c.cfg.Name, len(r.opts))
 		}
 		if got := r.opts[0].CandidatePool; got != hook || hook != 50 {
-			t.Errorf("%s: el banco le pidió un pool de %d y el hook rankea %d (esperaba 50)", cfg.Name, got, hook)
+			t.Errorf("%s: el banco le pidió un pool de %d y el hook rankea %d (esperaba 50)", c.cfg.Name, got, hook)
+		}
+		if r.modelos[0] != c.modelo || r.modelo != "sembrado" {
+			t.Errorf("%s: el motor leyó con procedencia %q (quería %q) y quedó en %q", c.cfg.Name, r.modelos[0], c.modelo, r.modelo)
 		}
 	}
 

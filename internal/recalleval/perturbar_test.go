@@ -221,11 +221,14 @@ func TestLaPerturbacionMueveElDorado(t *testing.T) {
 // la ola 2: el corrector de tipeo (ola2/corrector-de-tipeo) y el vector del turno se miden contra
 // estos números.
 //
-// Todos los brazos van en el POOL DEL TURNO (ConfigTurno), porque es lo que el hook corre. El único
-// brazo con pool = corpus («turno-pool-corpus») está para ver cuánto cambia el número respecto de
-// las mediciones anteriores, que se hicieron así. Los brazos de tipeo van por clase, sustitución
-// incluida, porque el corrector va a arreglar tres clases y no la cuarta: medir sólo transposiciones
-// sería medirlo con el error que sabe arreglar.
+// Todos los brazos van en el POOL DEL TURNO, porque es lo que el hook corre, y el brazo del hook
+// corre con SU MOTOR: sin embebedor, así que MMR queda inerte aunque las opciones digan 0,75 (ver
+// Config.SinEmbebedor). Los otros tres brazos limpios son los que necesita ola2/vector-en-el-turno
+// para decidir: léxico con MMR, híbrido con MMR (lo que da encender el embebedor tal cual, porque
+// enciende las dos cosas) e híbrido sin MMR. El único brazo con pool = corpus está para medir cuánto
+// le cuesta al hook su pool de 50. Los brazos de tipeo van por clase, sustitución incluida, porque
+// el corrector va a arreglar tres clases y no la cuarta: medir sólo transposiciones sería medirlo
+// con el error que sabe arreglar.
 //
 // No tiene gate a propósito, igual que TestABLexicoVsHibridoFixtureReal: la memoria de trabajo de
 // alguien cambia entre corridas. Tarda ~40 minutos, casi todo en sembrar los vectores.
@@ -258,9 +261,12 @@ func TestTipeoFixtureReal(t *testing.T) {
 
 	ctx := context.Background()
 	ks := []int{1, 5, 10}
-	lexico := ConfigTurno()
-	hibrido := ConfigTurno()
-	hibrido.UseVector = true
+	hook := ConfigTurno() // léxico, pool 50, sin embebedor: MMR inerte
+	lexicoMMR := ConfigTurno()
+	lexicoMMR.SinEmbebedor = false // el motor ve los vectores: MMR 0,75 corre
+	hibridoMMR := ConfigTurnoHibrido()
+	hibridoSinMMR := ConfigTurnoHibrido()
+	hibridoSinMMR.Opts.MMRLambda = 1
 	poolCorpus := ConfigTurno()
 	poolCorpus.PoolDelTurno = false
 
@@ -270,9 +276,11 @@ func TestTipeoFixtureReal(t *testing.T) {
 		fx     *Fixture
 	}
 	brazos := []brazo{
-		{"lexico-limpio", lexico, fx},
-		{"hibrido-limpio", hibrido, fx},
-		{"lexico-limpio-pool-corpus", poolCorpus, fx},
+		{"hook-lexico-pool50-sinMMR", hook, fx},
+		{"lexico-pool50-MMR", lexicoMMR, fx},
+		{"hibrido-pool50-MMR", hibridoMMR, fx},
+		{"hibrido-pool50-sinMMR", hibridoSinMMR, fx},
+		{"lexico-poolCorpus-sinMMR", poolCorpus, fx},
 	}
 	const semilla = 1
 	for _, clase := range ClasesDeTipeo {
@@ -280,10 +288,12 @@ func TestTipeoFixtureReal(t *testing.T) {
 		todos, nTodos := perturbarFixture(fx, func(q string) string { return PerturbarConsulta(q, clase, semilla) })
 		t.Logf("%-13s consultas cambiadas: un tipeo %d · todos %d (de %d)", clase, nUno, nTodos, len(fx.Queries))
 		brazos = append(brazos,
-			brazo{"lexico-un-tipeo-" + string(clase), lexico, uno},
-			brazo{"lexico-todos-" + string(clase), lexico, todos},
-			brazo{"hibrido-un-tipeo-" + string(clase), hibrido, uno},
-			brazo{"hibrido-todos-" + string(clase), hibrido, todos},
+			brazo{"hook-un-tipeo-" + string(clase), hook, uno},
+			brazo{"hook-todos-" + string(clase), hook, todos},
+			brazo{"hibMMR-un-tipeo-" + string(clase), hibridoMMR, uno},
+			brazo{"hibMMR-todos-" + string(clase), hibridoMMR, todos},
+			brazo{"hibSinMMR-un-tipeo-" + string(clase), hibridoSinMMR, uno},
+			brazo{"hibSinMMR-todos-" + string(clase), hibridoSinMMR, todos},
 		)
 	}
 

@@ -70,6 +70,12 @@ type EmbedFunc func(text string) ([]float32, error)
 // relativa a now): así el factor de edad es idéntico para todos, corra el test el día que corra.
 const evalSeedCreatedAt = "2020-01-01 00:00:00"
 
+// ModeloDelBanco es la procedencia (embeddings.model_id) con la que SeedEngine estampa los vectores
+// cuando siembra con un embebedor. Va con nombre, como la estampa el backfill de producción, y no
+// vacía: un motor sin embebedor (vectorModelID "", el hook de hoy) no tiene que verlos. Con ” los
+// veía, y el banco medía MMR donde el hook no lo corre (ver Config.SinEmbebedor).
+const ModeloDelBanco = "recalleval:banco"
+
 // Config es una variante de recall a evaluar. UseVector activa el recall híbrido
 // (rellena QueryVector con embed(query)); requiere un EmbedFunc no-nil en Run.
 type Config struct {
@@ -92,6 +98,22 @@ type Config struct {
 	// no entró al pool cuenta como no encontrado, igual que en el turno. En false, el histórico:
 	// pool = corpus, y el recorte lo hacen las @k.
 	PoolDelTurno bool
+	// SinEmbebedor modela el PROCESO del brazo, no sus opciones: un proceso que no construyó
+	// embebedor deja el motor sin procedencia de vectores (vectorModelID ""), y ese motor no ve los
+	// vectores estampados con nombre. Es el hook de hoy. runTurn no construye el embebedor cuando la
+	// tabla estática está presente (embedderCaroDeConstruir, cmd/musubi/embed.go), así que nunca llama
+	// SetVectorModelID, y vectorsFor filtra `model_id = ''`, que en una base real no tiene ni un vector
+	// (los estampa el backfill, con el nombre del modelo). Resultado: MMR queda inerte en cada turno
+	// aunque MMRLambda valga 0,75.
+	//
+	// POR QUÉ NO ALCANZA CON COPIAR LAS OPCIONES. SeedEngine estampaba los vectores con model_id ''
+	// y el motor del banco los leía con '', así que un brazo con las opciones del hook diversificaba
+	// y el hook no. Medido sobre la base de davantis-1: el léxico del banco daba 0,357 / 0,211 (MRR /
+	// R@10) y el hook, 0,395 / 0,355. Ahora SeedEngine estampa con ModeloDelBanco, como el backfill,
+	// y rankedIDs corre cada recall de este brazo con el motor en "" y lo devuelve como estaba.
+	//
+	// Contradice a UseVector (sin embebedor no hay con qué embeber la consulta): rankedIDs lo rechaza.
+	SinEmbebedor bool
 	// JuezTopK es cuántos resultados del tope ven al juez. 0 ⇒ cognition.DefaultTopK, la MISMA
 	// constante que aplica el servidor — no una copia: si el banco juzgara más candidatos que
 	// producción, mediría una configuración que nadie va a correr.
@@ -140,12 +162,16 @@ func LoadFixture(path string) (*Fixture, error) {
 }
 
 // SeedEngine crea un motor de memoria en dir y guarda todos los docs del fixture. Si
-// embed no es nil, cada doc lleva su embedding (activa la señal vectorial); si es nil,
-// se siembra 100% léxico. El caller es dueño del engine (debe Close()).
+// embed no es nil, cada doc lleva su embedding (activa la señal vectorial) estampado con
+// ModeloDelBanco, y el motor queda leyendo con esa procedencia, como un proceso con embebedor;
+// si es nil, se siembra 100% léxico. El caller es dueño del engine (debe Close()).
 func SeedEngine(dir string, fx *Fixture, embed EmbedFunc) (*memory.DbEngine, error) {
 	eng, err := memory.NewDbEngine(dir)
 	if err != nil {
 		return nil, err
+	}
+	if embed != nil {
+		eng.SetVectorModelID(ModeloDelBanco)
 	}
 	var omitidos []string
 	for _, d := range fx.Docs {
@@ -233,17 +259,39 @@ type recuperador interface {
 	Recall(ctx context.Context, query string, opts memory.RecallOptions) (memory.RecallResult, error)
 }
 
+// motorConProcedencia es el estado del motor que un brazo SinEmbebedor necesita poner como el del
+// hook: con qué procedencia lee los vectores. *memory.DbEngine lo cumple.
+type motorConProcedencia interface {
+	VectorModelID() string
+	SetVectorModelID(string)
+}
+
 // rankedIDs corre un recall y devuelve solo los ids en orden de score (mejor primero).
 // Fuerza un presupuesto de tokens enorme para que el ranking NO se recorte por presupuesto: el
 // harness mide CALIDAD DE ORDEN, no empaquetado. Salvo en el modo PoolDelTurno, también sube el
 // pool al corpus entero. NoBump evita que un recall contamine las stats de acceso del siguiente
-// (reproducibilidad).
+// (reproducibilidad). En un brazo SinEmbebedor corre el recall con el motor sin procedencia de
+// vectores y lo devuelve como estaba.
 func rankedIDs(ctx context.Context, eng recuperador, query string, cfg Config, embed EmbedFunc, pool int) ([]string, error) {
 	opts := cfg.Opts
 	opts.NoBump = true
 	opts.TokenBudget = 1 << 30
 	if !cfg.PoolDelTurno && opts.CandidatePool < pool {
 		opts.CandidatePool = pool
+	}
+	if cfg.SinEmbebedor {
+		if cfg.UseVector {
+			return nil, fmt.Errorf("config %q: UseVector y SinEmbebedor se contradicen, sin embebedor no hay con qué embeber la consulta", cfg.Name)
+		}
+		// Un motor que no deja fijar la procedencia no puede correr en el estado del hook, y seguir
+		// igual mediría el motor con embebedor sin decirlo: se corta.
+		m, ok := eng.(motorConProcedencia)
+		if !ok {
+			return nil, fmt.Errorf("config %q modela un motor sin embebedor y este motor (%T) no deja fijar la procedencia de sus vectores", cfg.Name, eng)
+		}
+		antes := m.VectorModelID()
+		m.SetVectorModelID("")
+		defer m.SetVectorModelID(antes)
 	}
 	if cfg.UseVector {
 		if embed == nil {
