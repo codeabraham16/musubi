@@ -174,6 +174,12 @@ func instalarPlugin(dir, exe, ver string) error {
 		}
 	}
 
+	// El subagente que hace las tareas que Musubi deja en su tablero (subagente_tareas.go). El
+	// servidor se llama como el plugin: es la clave que escribe el .mcp.json de arriba.
+	if err := escribirSubagenteDeTareas(dir, nombrePlugin, nombrePlugin); err != nil {
+		return fmt.Errorf("escribir el subagente de tareas: %w", err)
+	}
+
 	return os.WriteFile(filepath.Join(dir, marcaDelPlugin), []byte("version: "+ver+"\nbinario: "+exe+"\n"), 0o644)
 }
 
@@ -262,19 +268,28 @@ func skillsDelPluginParaElMapa() mcp.Option {
 	if raiz == "" {
 		return ninguna
 	}
+	nombre, err := nombreDelPluginEn(raiz)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "musubi: %v: el mapa no nombra las skills del plugin\n", err)
+		return ninguna
+	}
+	return mcp.WithSkillsDelPlugin(filepath.Join(raiz, dirSkillsDelPlugin), nombre, cognitiveSkills(nil))
+}
+
+// nombreDelPluginEn lee el `name` del plugin.json de un plugin: el prefijo con que Claude Code
+// nombra sus skills y sus subagentes.
+func nombreDelPluginEn(raiz string) (string, error) {
 	crudo, err := os.ReadFile(filepath.Join(raiz, ".claude-plugin", "plugin.json"))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "musubi: no leo el manifiesto del plugin (%v): el mapa no nombra sus skills\n", err)
-		return ninguna
+		return "", fmt.Errorf("no leo el manifiesto del plugin: %w", err)
 	}
 	var manifiesto struct {
 		Name string `json:"name"`
 	}
 	if err := json.Unmarshal(crudo, &manifiesto); err != nil {
-		fmt.Fprintf(os.Stderr, "musubi: el manifiesto del plugin no se entiende (%v): el mapa no nombra sus skills\n", err)
-		return ninguna
+		return "", fmt.Errorf("el manifiesto del plugin no se entiende: %w", err)
 	}
-	return mcp.WithSkillsDelPlugin(filepath.Join(raiz, dirSkillsDelPlugin), manifiesto.Name, cognitiveSkills(nil))
+	return manifiesto.Name, nil
 }
 
 // carpetaDeLaSesion es donde Claude Code lee el `.mcp.json` y el `.claude/settings.json` del

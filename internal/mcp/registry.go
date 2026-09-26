@@ -425,6 +425,21 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		},
 		{
 			Tool: Tool{
+				Name:        "musubi_discard_proposal",
+				Description: "DESCARTA una observación en CUARENTENA (propuesta con musubi_propose_observation) que no merece salir: la reemplaza otra propuesta más nueva del mismo tema (pasá superseded_by con su id), repite una nota visible, o es falsa y nunca fue cierta. Queda ARCHIVADA, invisible al recall y con su sello, y la purga la borra después de su gracia. Sólo actúa sobre una propuesta viva en cuarentena: una nota visible no se descarta por acá. Es el veredicto opuesto a musubi_corroborate.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"id":            {Type: "string", Description: "ID de la propuesta en cuarentena."},
+						"superseded_by": {Type: "string", Description: "Opcional: el id de la observación que la reemplaza (p. ej. el estado más nuevo del mismo tema)."},
+					},
+					Required: []string{"id"},
+				},
+			},
+			handler: s.countingSaveCtx(s.toolDiscardProposal),
+		},
+		{
+			Tool: Tool{
 				Name:        "musubi_recall_facts",
 				Description: "Recupera HECHOS del grafo alrededor de una entidad. Devuelve tripletas compactas (no prosa), ideal para reconstruir contexto con muy pocos tokens. Por defecto devuelve sólo la VERDAD ACTUAL (los hechos invalidados por cardinalidad quedan fuera); pasá as_of para una consulta point-in-time. rank elige el ranking: por defecto BFS hasta max_hops; rank='pagerank' hace recall ASOCIATIVO (Personalized PageRank) que prioriza los hechos más relevantes multi-hop a la entidad.",
 				InputSchema: InputSchema{

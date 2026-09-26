@@ -54,6 +54,8 @@ func main() {
 		runSetup(os.Args[2:])
 	case "agente":
 		runAgente(os.Args[2:])
+	case "tareas":
+		runTareas(os.Args[2:])
 	case "provision":
 		runProvision(os.Args[2:])
 	case "detect":
@@ -172,6 +174,7 @@ func printUsage() {
 	section("Instalación")
 	cmd("setup [--agent <claude|cursor>]", "Inyecta Musubi en el proyecto actual (workspace + MCP + hooks)")
 	cmd("agente <instalar|estado|quitar>", "Musubi como plugin de Claude Code: activo en TODOS los proyectos, sin setup por repo")
+	cmd("tareas [--json]", "Muestra las tareas que Musubi le deja al agente (la cuarentena por revisar) y lo que hizo el subagente con cada una")
 	cmd("init", "Inicializa solo el workspace .musubi/ (config + base de datos)")
 	cmd("provision [--brain ...] [--dry-run]", "Une esta máquina al cerebro central (red + .mcp.json + verificación)")
 

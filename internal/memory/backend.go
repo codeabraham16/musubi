@@ -89,6 +89,9 @@ type ObservationStore interface {
 	// CorroborateObservationCtx saca una observación de cuarentena, acotada al proyecto de la
 	// credencial. Es la ÚNICA salida, y CONSERVA el sello de procedencia.
 	CorroborateObservationCtx(ctx context.Context, id string) error
+	// DescartarPropuestaCtx archiva una propuesta en cuarentena que no merece salir (la reemplaza
+	// otra más nueva, o ya hay una nota visible que dice lo mismo), acotada al proyecto.
+	DescartarPropuestaCtx(ctx context.Context, id, reemplazadaPor string) error
 	// IsQuarantined indica si una observación está en cuarentena.
 	IsQuarantined(id string) (bool, error)
 	// ObservationStamp devuelve el sello de una observación: procedencia, confianza y cuarentena.
