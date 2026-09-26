@@ -17,6 +17,7 @@ package mcp
 // internal/memory/politicas_poda_test.go.
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -157,38 +158,109 @@ func transportesPorTier() map[fleet.Tier]transporteDeTier {
 	}
 }
 
-// desenlaceDeLaAccion es cómo se provoca un resultado que actuarSiCorresponde cuenta después de la
-// marca, y si con él la acción llega a salir por su transporte. Las dos cosas son hechos de la fila.
+// desenlaceDeLaAccion es UNA forma de provocar un resultado que actuarSiCorresponde cuenta después de
+// la marca, y si con ella la acción llega a salir por su transporte. Las dos cosas son hechos de la
+// fila.
 type desenlaceDeLaAccion struct {
-	// provocar deja el mundo listo para ese desenlace; nil si no hace falta nada.
+	// resultado es el que cuenta la métrica: uno de los de resultadosTrasElDisparo.
+	resultado string
+	// causa nombra la forma cuando un mismo resultado se provoca de más de una; vacía si no.
+	causa string
+	// provocar deja el mundo listo para ese desenlace; nil si no hace falta nada. Corre en CADA
+	// cerebro de la fila —el primero y el reiniciado—, así que tiene que poder correr dos veces: lo
+	// que el reinicio se lleva (una falla del proceso) lo vuelve a poner, y lo que queda en la base
+	// (la cola llena) lo comprueba sin duplicarlo.
 	provocar func(t *testing.T, s *McpServer, d fleet.Device)
 	// llegaAlTransporte dice si la acción sale —se encola, o corre por ssh— o se cae antes.
 	llegaAlTransporte bool
 }
 
-// desenlacesPorResultado dice cómo se provoca cada desenlace de la acción.
-func desenlacesPorResultado() map[string]desenlaceDeLaAccion {
-	return map[string]desenlaceDeLaAccion{
-		"ok": {llegaAlTransporte: true},
-		// La cola llena es el fallo que se puede provocar sin romper la base: EncolarComando devuelve
+// String nombra el desenlace en la fila y en los mensajes: el resultado, y su causa si la tiene. Que
+// el mensaje diga la causa no es adorno: un cooldown que se suelta por UNA causa cae en su fila y no
+// en la de la otra, y el rojo tiene que decir cuál fue.
+func (dz desenlaceDeLaAccion) String() string {
+	if dz.causa == "" {
+		return dz.resultado
+	}
+	return dz.resultado + "_por_" + dz.causa
+}
+
+// desenlacesDeLaAccion dice cómo se provoca cada desenlace de la acción, y de cuántas formas.
+//
+// `error` VA DE DOS FORMAS, CON DOS CAUSAS QUE NO SE PARECEN (revisión de A131·T4). Con una sola —la
+// cola llena—, un P1-m10 más fino, que suelta el cooldown sólo cuando el error NO es la cola llena,
+// dejaba internal/mcp en verde salvo el censo: la tabla no tenía otro error con qué preguntarle. Las
+// dos causas son los dos lados que pueden fallar al encolar la acción, antes del transporte y en los
+// dos tiers: la máquina (su cola, fleet.ErrColaLlena) y la base (la escritura del comando).
+//
+// LO QUE QUEDA SIN FILA, dicho: la falla DESPUÉS del transporte —GuardarResultado de un Tier B, con el
+// ssh ya corrido—. Un cooldown que se soltara sólo cuando el error llega después de actuar pasaría por
+// esta tabla; el día que haga falta, es una tercera forma de `error` que aplica sólo al tier síncrono.
+func desenlacesDeLaAccion() []desenlaceDeLaAccion {
+	return []desenlaceDeLaAccion{
+		{resultado: "ok", llegaAlTransporte: true},
+		// La cola llena es el fallo que se provoca sin romper la base: EncolarComando devuelve
 		// ErrColaLlena ANTES de escribir nada, en los dos tiers. Es el caso del manifiesto (P1-m10): un
 		// agente que no levanta su cola, que es justo cuando algo ya va mal.
-		"error": {provocar: llenarLaColaDe, llegaAlTransporte: false},
+		{resultado: "error", causa: "cola_llena", provocar: llenarLaColaDe},
+		// La base que no acepta la escritura del comando: la otra causa, que no es ErrColaLlena ni la
+		// envuelve.
+		{resultado: "error", causa: "base_que_no_encola", provocar: romperElEncoladoDeLaAccion},
 	}
 }
 
-// llenarLaColaDe le deja a la máquina fleet.ColaMaxPorDevice comandos pendientes de una persona: lo
-// que ve el techo de la cola cuando el agente no los levanta.
+// llenarLaColaDe le deja a la máquina la cola LLENA de comandos pendientes de una persona —lo que ve
+// el techo cuando el agente no los levanta— y lo comprueba: encola hasta que el techo contesta
+// fleet.ErrColaLlena, que es el error con que va a caer la acción de la política. En el cerebro
+// reiniciado la cola sigue llena en la base, y el primer intento ya lo dice.
 func llenarLaColaDe(t *testing.T, s *McpServer, d fleet.Device) {
 	t.Helper()
-	for i := 0; i < fleet.ColaMaxPorDevice; i++ {
-		if _, err := s.engine.EncolarComando(fleet.Comando{
+	for i := 0; i <= fleet.ColaMaxPorDevice; i++ {
+		_, err := s.engine.EncolarComando(fleet.Comando{
 			DeviceID: d.ID, ProjectID: d.ProjectID, Principal: "op", Origen: fleet.OrigenPersona,
 			Argv: []string{"uptime"}, Timeout: fleet.ComandoTimeoutDefault,
-		}); err != nil {
-			t.Fatalf("llenando la cola de %s (%d de %d): %v", d.Name, i+1, fleet.ColaMaxPorDevice, err)
+		})
+		if errors.Is(err, fleet.ErrColaLlena) {
+			return
+		}
+		if err != nil {
+			t.Fatalf("llenando la cola de %s (intento %d): %v", d.Name, i+1, err)
 		}
 	}
+	t.Fatalf("encolé %d comandos en %s y el techo no contestó ErrColaLlena: la fila no provoca el desenlace que nombra",
+		fleet.ColaMaxPorDevice+1, d.Name)
+}
+
+// almacenQueNoEncolaLaAccion es la base de siempre con UNA escritura rota: la del comando que ejecuta
+// una política (el aviso al usuario de la máquina se encola igual). Sigue el molde de
+// almacenSinVentanas (politicas_ventanas_ilegibles_test.go): embebe el almacén REAL, porque todo lo
+// demás de la fila —marcar el disparo, leerlo, el inventario, el reinicio— tiene que pasar de verdad.
+type almacenQueNoEncolaLaAccion struct {
+	memory.StorageBackend
+}
+
+// errLaBaseNoEncola es la falla simulada. NO es fleet.ErrColaLlena ni la envuelve: ésa es toda su
+// razón de ser.
+var errLaBaseNoEncola = errors.New("simulado: la base no aceptó la escritura del comando (database is locked)")
+
+// EncolarComando falla para la acción de una política, con el mismo criterio con que
+// ejecucionesDePolitica la cuenta, y deja pasar todo lo demás.
+func (a almacenQueNoEncolaLaAccion) EncolarComando(c fleet.Comando) (fleet.Comando, error) {
+	if c.Origen == fleet.OrigenPolitica && (len(c.Argv) == 0 || c.Argv[0] != comandoAviso) {
+		return fleet.Comando{}, errLaBaseNoEncola
+	}
+	return a.StorageBackend.EncolarComando(c)
+}
+
+// romperElEncoladoDeLaAccion le pone al cerebro la base que no encola la acción. Es una falla del
+// PROCESO y no queda escrita en ningún lado: el cerebro reiniciado arranca con su almacén sano, y la
+// fila se la vuelve a poner.
+func romperElEncoladoDeLaAccion(t *testing.T, s *McpServer, _ fleet.Device) {
+	t.Helper()
+	if _, ya := s.engine.(almacenQueNoEncolaLaAccion); ya {
+		t.Fatal("el almacén de este cerebro ya estaba roto: la fila provoca el desenlace dos veces sobre el mismo cerebro")
+	}
+	s.engine = almacenQueNoEncolaLaAccion{StorageBackend: s.engine}
 }
 
 // curadorDeLaTablaDeCooldown puede correr los comandos de las dos clases de receta (disparosPorCondicion)
@@ -329,9 +401,11 @@ func soltarElSSH(soltar string) error {
 //
 // Acá no se suma un caso por mutación: se recorren los ejes enteros y cada lector del disparo. Una fila
 // por cada condición declarada (AST: seis de host y dos de servicio), por cada tier que admite `exec`
-// (AST: el que encola para su agente y el que corre por ssh dentro del barrido) y por cada resultado que
-// actuarSiCorresponde cuenta después de marcar (AST: `ok` y `error`). En cada una la condición se
-// cumple doce ticks seguidos y el cerebro se reinicia a los treinta segundos, y se exige:
+// (AST: el que encola para su agente y el que corre por ssh dentro del barrido) y por cada forma de
+// provocar cada resultado que actuarSiCorresponde cuenta después de marcar (AST: `ok` y `error`; y
+// `error` por dos causas, la cola llena y la base que no encola, ver desenlacesDeLaAccion). En cada una
+// la condición se cumple doce ticks seguidos y el cerebro se reinicia a los treinta segundos, y se
+// exige:
 //
 //   - UNA decisión en la hora, del resultado de la fila, y ninguna frenada por otra compuerta;
 //   - el disparo en memoria, en la base —con el alcance que la política mira: su servicio, o vacío— y
@@ -349,15 +423,23 @@ func soltarElSSH(soltar string) error {
 // hubiera políticas; hay un Tier B en la flota. Latente: se vuelve vivo con el primer disparo que
 // falle, la primera política de servicio, o —el inventario— con el primer disparo a secas.
 //
-// Las colisiones que se declaran abajo son con esta misma prueba: cuatro sabotajes sobre la misma
-// cadena —marcar, persistir, actuar, contar— que caen en aserciones distintas (la memoria tras
-// decidir, la fila en la base, su alcance, la base a mitad de la acción).
+// Las colisiones que se declaran abajo son con esta misma prueba: cinco sabotajes sobre la misma
+// cadena —marcar, persistir, actuar, contar— que caen en aserciones o filas distintas (la memoria tras
+// decidir en cada causa de `error`, la fila en la base, su alcance, la base a mitad de la acción).
 //
 // Sabotaje: si la acción falla, soltar el cooldown en memoria para «reintentar el próximo tick»
 // (P1-m10), que es contarlo desde el éxito.
 // arnes: archivo="internal/mcp/politicas.go"
 // arnes: de="\t\ts.metrics.contarPolitica(pol.Nombre, \"error\")\n\t\treturn false\n"
 // arnes: a="\t\ts.metrics.contarPolitica(pol.Nombre, \"error\")\n\t\ts.ultimoDisparo.Delete(clave)\n\t\treturn false\n"
+// arnes: colision_ok="TestElCooldownSeCuentaDesdeElDisparoYLoLeenTodosSusLectores"
+//
+// Sabotaje: soltar el cooldown sólo cuando el error NO es la cola llena, un P1-m10 más fino que
+// discrimina por la CAUSA (revisión de T4). Con la cola llena como única causa de `error` en la tabla
+// pasaba en verde; ahora cae en la fila de la base que no encola, y el rojo lo dice por su nombre.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="\t\ts.metrics.contarPolitica(pol.Nombre, \"error\")\n\t\treturn false\n"
+// arnes: a="\t\ts.metrics.contarPolitica(pol.Nombre, \"error\")\n\t\tif !strings.Contains(err.Error(), fleet.ErrColaLlena.Error()) {\n\t\t\ts.ultimoDisparo.Delete(clave)\n\t\t}\n\t\treturn false\n"
 // arnes: colision_ok="TestElCooldownSeCuentaDesdeElDisparoYLoLeenTodosSusLectores"
 //
 // Sabotaje: persistir el disparo recién cuando la acción salió bien (P3-m3).
@@ -387,14 +469,24 @@ func soltarElSSH(soltar string) error {
 // arnes: a="s.ultimoDisparo.Load(pol.ClaveDeCooldown(d.Name)); hay {"
 func TestElCooldownSeCuentaDesdeElDisparoYLoLeenTodosSusLectores(t *testing.T) {
 	resultados := resultadosTrasElDisparo(t)
-	desenlaces := desenlacesPorResultado()
+	desenlaces := desenlacesDeLaAccion()
+	formas := map[string]int{}
+	for _, dz := range desenlaces {
+		formas[dz.resultado]++
+	}
 	for _, r := range resultados {
-		if _, ok := desenlaces[r]; !ok {
+		if formas[r] == 0 {
 			t.Errorf("actuarSiCorresponde cuenta %q después de marcar el cooldown y la tabla no sabe provocarlo: ese "+
 				"desenlace queda sin medir, y es justo por donde se colaban P1-m10 y P3-m3", r)
 		}
 	}
-	for r := range desenlaces {
+	// PISO: `error` por dos causas distintas, como mínimo. Con una sola, un cooldown que se suelta según
+	// la CAUSA del error —con todas menos la que la tabla provoca— pasa por acá sin verse (revisión de T4).
+	if formas["error"] < 2 {
+		t.Errorf("PISO: la tabla provoca `error` de %d forma/s y tienen que ser al menos dos, con causas distintas: con "+
+			"una sola, soltar el cooldown según la causa del error no se distingue de no soltarlo", formas["error"])
+	}
+	for r := range formas {
 		if !slices.Contains(resultados, r) {
 			t.Errorf("la tabla provoca %q y actuarSiCorresponde ya no lo cuenta DESPUÉS de marcar el cooldown: o el "+
 				"resultado desapareció (sacalo de la tabla), o la marca se mudó después de esa rama, y entonces ese "+
@@ -422,12 +514,12 @@ func TestElCooldownSeCuentaDesdeElDisparoYLoLeenTodosSusLectores(t *testing.T) {
 	curador := curadorDeLaTablaDeCooldown()
 	for _, cond := range condiciones {
 		for _, tier := range tiers {
-			for _, resultado := range resultados {
+			for _, dz := range desenlaces {
 				f := filaDeCooldown{
 					cond: cond, disparo: disparos[cond], tier: tier, transporte: transportes[tier],
-					resultado: resultado, desenlace: desenlaces[resultado], desenlaces: resultados, curador: curador,
+					desenlace: dz, desenlaces: resultados, curador: curador,
 				}
-				t.Run(fmt.Sprintf("%s/tier_%s/%s", cond, tier, resultado), f.recorrer)
+				t.Run(fmt.Sprintf("%s/tier_%s/%s", cond, tier, dz), f.recorrer)
 			}
 		}
 	}
@@ -439,7 +531,6 @@ type filaDeCooldown struct {
 	disparo    disparoDeCondicion
 	tier       fleet.Tier
 	transporte transporteDeTier
-	resultado  string
 	desenlace  desenlaceDeLaAccion
 	desenlaces []string // todos los resultados que pasan la marca: su suma son las decisiones
 	curador    Principal
@@ -539,7 +630,7 @@ func (f filaDeCooldown) recorrer(t *testing.T) {
 		}
 		if llego != f.desenlace.llegaAlTransporte {
 			t.Fatalf("la acción llegó al ssh = %v y la fila dice %v: no ejercita el desenlace %q que nombra",
-				llego, f.desenlace.llegaAlTransporte, f.resultado)
+				llego, f.desenlace.llegaAlTransporte, f.desenlace)
 		}
 		// Un ssh que llega DESPUÉS de la espera no dice nada del cooldown: la fila no pudo mirar a mitad
 		// de la acción, y culpar a la marca sería mandar a buscar donde no está el problema.
@@ -561,27 +652,27 @@ func (f filaDeCooldown) recorrer(t *testing.T) {
 	// ── 2 · LO QUE DEJÓ LA DECISIÓN, EN CADA LECTOR ─────────────────────────────────────────────────
 	if n, want := ejecucionesDePolitica(t, s1, d.ID), map[bool]int{true: 1, false: 0}[f.desenlace.llegaAlTransporte]; n != want {
 		t.Fatalf("la política dejó %d comando/s en la bitácora y con el desenlace %q tenían que ser %d: la fila no "+
-			"ejercita lo que nombra", n, f.resultado, want)
+			"ejercita lo que nombra", n, f.desenlace, want)
 	}
 	por, decisiones, frenadas := desenlacesContados(s1, pc.Name, f.desenlaces)
 	if frenadas != 0 {
 		t.Fatalf("la política no llegó a la marca: otra compuerta la frenó %d vez/veces. La fila mide el cooldown y "+
 			"necesita que la decisión pase", frenadas)
 	}
-	if decisiones != 1 || por[f.resultado] != 1 {
-		t.Fatalf("en el primer tick la política tenía que decidir UNA vez, con resultado %q, y contó %v", f.resultado, por)
+	if decisiones != 1 || por[f.desenlace.resultado] != 1 {
+		t.Fatalf("en el primer tick la política tenía que decidir UNA vez, con el desenlace %q, y contó %v", f.desenlace, por)
 	}
 	if cuando, hay := cooldownEnMemoria(s1, clave); !hay || !cuando.Equal(ahora) {
-		t.Fatalf("la política DECIDIÓ actuar (resultado %q) y el cooldown en memoria quedó en %v (hay=%v): el "+
-			"próximo tick vuelve a decidir. Con la cola llena son doce decisiones por hora en vez de una —la "+
+		t.Fatalf("la política DECIDIÓ actuar (desenlace %q) y el cooldown en memoria quedó en %v (hay=%v): el "+
+			"próximo tick vuelve a decidir. Con la acción fallando son doce decisiones por hora en vez de una —la "+
 			"tormenta que el cooldown existe para evitar, justo cuando algo ya va mal—. I14 lo cuenta desde el "+
-			"DISPARO, no desde el resultado", f.resultado, cuando, hay)
+			"DISPARO, no desde el resultado", f.desenlace, cuando, hay)
 	}
 	filas, alcanceGuardado, cuandoGuardado := disparoGuardado(t, s1, pc.Name, d.ID)
 	if filas == 0 || !cuandoGuardado.Equal(ahora) {
-		t.Fatalf("la política decidió (resultado %q) y fleet_policy_state no tiene el disparo de las %s (filas=%d, "+
+		t.Fatalf("la política decidió (desenlace %q) y fleet_policy_state no tiene el disparo de las %s (filas=%d, "+
 			"hora=%v): el cooldown dura lo que dure el proceso, y el reinicio —lo primero que alguien hace cuando "+
-			"algo va mal— lo rearma", f.resultado, hora(ahora), filas, cuandoGuardado)
+			"algo va mal— lo rearma", f.desenlace, hora(ahora), filas, cuandoGuardado)
 	}
 	if filas != 1 || alcanceGuardado != alcance {
 		t.Fatalf("el disparo quedó guardado con alcance %q (%d fila/s) y la política mira %q: al arrancar, "+
@@ -600,13 +691,18 @@ func (f filaDeCooldown) recorrer(t *testing.T) {
 		s1.aplicarPoliticas("casa", tick)
 		if por, decisiones, _ := desenlacesContados(s1, pc.Name, f.desenlaces); decisiones != 1 {
 			t.Fatalf("a los %s del disparo la política llevaba %d decisiones (%v) con un cooldown de 60 min: el "+
-				"cooldown no espacia la DECISIÓN cuando el resultado es %q", tick.Sub(ahora), decisiones, por, f.resultado)
+				"cooldown no espacia la DECISIÓN con el desenlace %q", tick.Sub(ahora), decisiones, por, f.desenlace)
 		}
 	}
 
 	// ── 4 · EL REINICIO ──────────────────────────────────────────────────────────────────────────
 	s1.engine.Close()
 	s2 := servidorSobre(t, dir, pc, reg)
+	// El desenlace vale también para el cerebro reiniciado: sin esto, la vuelta a actuar de abajo mediría
+	// otro desenlace que el que nombra la fila (un almacén roto en el proceso no sobrevive al reinicio).
+	if f.desenlace.provocar != nil {
+		f.desenlace.provocar(t, s2, d)
+	}
 	if v := ultimoDisparoPublicado(t, s2, d.Name, pc.Name); v != hora(ahora) {
 		t.Fatalf("tras el reinicio el inventario publica `ultimo_disparo: %v` y la política disparó a las %s: lo que "+
 			"el cerebro recuperó de la base y lo que muestra no coinciden", v, hora(ahora))
@@ -616,14 +712,14 @@ func (f filaDeCooldown) recorrer(t *testing.T) {
 	s2.aplicarPoliticas("casa", despues)
 	if por, decisiones, _ := desenlacesContados(s2, pc.Name, f.desenlaces); decisiones != 0 {
 		t.Fatalf("a los treinta segundos del reinicio la política volvió a decidir (%v): el disparo de la primera "+
-			"vida (resultado %q) no sobrevivió al reinicio", por, f.resultado)
+			"vida (desenlace %q) no sobrevivió al reinicio", por, f.desenlace)
 	}
 	pasada := ahora.Add(70 * time.Minute)
 	f.disparo.preparar(t, s2, d, pasada)
 	s2.aplicarPoliticas("casa", pasada)
-	if por, decisiones, frenadas := desenlacesContados(s2, pc.Name, f.desenlaces); decisiones != 1 || por[f.resultado] != 1 || frenadas != 0 {
+	if por, decisiones, frenadas := desenlacesContados(s2, pc.Name, f.desenlaces); decisiones != 1 || por[f.desenlace.resultado] != 1 || frenadas != 0 {
 		t.Fatalf("pasado el cooldown el cerebro reiniciado contó %v (y %d frenadas): tenía que volver a decidir UNA "+
-			"vez, con resultado %q. Un cooldown que no se suelta es un apagado", por, frenadas, f.resultado)
+			"vez, con el desenlace %q. Un cooldown que no se suelta es un apagado", por, frenadas, f.desenlace)
 	}
 	if cuando, hay := cooldownEnMemoria(s2, clave); !hay || !cuando.Equal(pasada) {
 		t.Fatalf("la segunda decisión no volvió a marcar la memoria: quedó en %v (hay=%v), esperaba %s", cuando, hay, hora(pasada))
@@ -652,16 +748,19 @@ func servidorConPoliticas(t *testing.T, dir string, pols []config.PolicyConfig, 
 
 // politicasDeLaTablaDeCarga son las políticas configuradas «hoy» en la tabla de la carga, en este
 // orden: una de servicio, una de host y una de servicio con el nombre y el servicio escritos con
-// espacios en los bordes. El ORDEN importa: la primera tiene filas que ya no le corresponden, y
-// detrás vienen otras con filas buenas.
-func politicasDeLaTablaDeCarga() []config.PolicyConfig {
+// blancos MEZCLADOS en los bordes (bordesDeBlancos: el espacio, el tab, el salto de línea y el resto
+// de unicode; con sólo el espacio, recortar con `strings.Trim(x, " ")` pasaba). El ORDEN importa: la
+// primera tiene filas que ya no le corresponden, y detrás vienen otras con filas buenas.
+func politicasDeLaTablaDeCarga(t *testing.T) []config.PolicyConfig {
+	t.Helper()
+	izq, der := bordesDeBlancos(t)
 	return []config.PolicyConfig{
 		{Name: "revivir-web", Principal: "curador", When: string(fleet.CondServicioCaido), Devices: []string{"*"},
 			Service: "nginx", Run: []string{"systemctl", "restart", "nginx"}, CooldownMinutes: 60},
 		{Name: "vaciar-journal", Principal: "curador", When: string(fleet.CondMemPct), Threshold: 90,
 			Devices: []string{"*"}, Run: []string{"journalctl", "--vacuum-size=200M"}, CooldownMinutes: 60},
-		{Name: " revivir-db ", Principal: "curador", When: string(fleet.CondServicioReinicios), Threshold: 3,
-			Devices: []string{"*"}, Service: " postgres ", Run: []string{"systemctl", "restart", "postgres"}, CooldownMinutes: 60},
+		{Name: izq + "revivir-db" + der, Principal: "curador", When: string(fleet.CondServicioReinicios), Threshold: 3,
+			Devices: []string{"*"}, Service: izq + "postgres" + der, Run: []string{"systemctl", "restart", "postgres"}, CooldownMinutes: 60},
 	}
 }
 
@@ -681,8 +780,8 @@ func politicasDeLaTablaDeCarga() []config.PolicyConfig {
 // así que un corte que dependa de por dónde empieza (un `break` en vez del `continue`) no pasa por
 // suerte. El `return` cae siempre en la primera.
 //
-// La tercera política escribe el `name` y el `service` con espacios en los bordes, y el almacén guarda
-// los dos recortados. Hasta A131·T4 la carga buscaba por el nombre crudo y no encontraba sus filas:
+// La tercera política escribe el `name` y el `service` con blancos mezclados en los bordes, y el almacén
+// guarda los dos recortados. Hasta A131·T4 la carga buscaba por el nombre crudo y no encontraba sus filas:
 // esa política perdía el cooldown en cada reinicio (DEFECTO VIVO, latente: el único nombre en
 // producción, `vaciar-journal`, no tiene bordes). Lo cierra ConfigurarFlota, que recorta el nombre en
 // la entrada.
@@ -715,7 +814,7 @@ func politicasDeLaTablaDeCarga() []config.PolicyConfig {
 // arnes: a="Nombre:    pc.Name,"
 // arnes: colision_ok="TestLaPodaHorariaConservaElCooldownDeCadaPoliticaConfigurada"
 func TestAlArrancarSeSiembranLosCooldownsDeLasPoliticasComoEstanHoy(t *testing.T) {
-	pols := politicasDeLaTablaDeCarga()
+	pols := politicasDeLaTablaDeCarga(t)
 	filas := []struct {
 		politica, device, alcance string // tal como las guarda MarcarDisparoDePolitica, que recorta
 		carga                     bool   // HECHO: si la política configurada hoy la hereda
@@ -875,9 +974,10 @@ func TestAlArrancarSeSiembranLosCooldownsDeLasPoliticasComoEstanHoy(t *testing.T
 //
 // Acá se configuran tres —de host y de servicio— y se exige que el conjunto de políticas con estado
 // después de la poda sea EXACTAMENTE el de s.politicas: se deriva de lo configurado, no de una lista
-// escrita en la prueba. La tercera tiene el nombre escrito con espacios en los bordes: el almacén
-// guarda el disparo recortado, y hasta A131·T4 la lista de vivas llevaba el nombre crudo, así que la
-// poda borraba su cooldown cada hora por huérfano (DEFECTO VIVO, latente; lo cierra ConfigurarFlota).
+// escrita en la prueba. La tercera tiene el nombre escrito con blancos mezclados en los bordes: el
+// almacén guarda el disparo recortado, y hasta A131·T4 la lista de vivas llevaba el nombre crudo, así
+// que la poda borraba su cooldown cada hora por huérfano (DEFECTO VIVO, latente; lo cierra
+// ConfigurarFlota).
 //
 // Cada política se busca después de la poda con el nombre que el ALMACÉN le dio a su fila, preguntado
 // al almacén al marcarla, y no con p.Nombre: la primera versión comparaba contra p.Nombre y así fijaba
@@ -898,10 +998,22 @@ func TestAlArrancarSeSiembranLosCooldownsDeLasPoliticasComoEstanHoy(t *testing.T
 // arnes: archivo="internal/mcp/scheduler_flota.go"
 // arnes: de="Nombre:    strings.TrimSpace(pc.Name),"
 // arnes: a="Nombre:    pc.Name,"
-// arnes: colision_ok="TestAlArrancarSeSiembranLosCooldownsDeLasPoliticasComoEstanHoy"
+// arnes: colision_ok="TestAlArrancarSeSiembranLosCooldownsDeLasPoliticasComoEstanHoy TestLaPodaHorariaConservaElCooldownDeCadaPoliticaConfigurada"
+//
+// Sabotaje: recortar el nombre sólo del espacio ASCII, `strings.Trim(pc.Name, " ")`, en vez de
+// TrimSpace (revisión de T4). Con bordes de puro espacio pasaba en verde; con los blancos mezclados de
+// bordesDeBlancos la política queda con un nombre que el almacén no usa, y la poda se lleva su
+// cooldown. Su rojo no es el del nombre crudo: el nombre que queda perdió la capa de espacios de
+// afuera y conserva el resto, y el mensaje lo muestra. La carga del reinicio y la deduplicación de
+// homónimas caen por el mismo motivo.
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="Nombre:    strings.TrimSpace(pc.Name),"
+// arnes: a="Nombre:    strings.Trim(pc.Name, \" \"),"
+// arnes: colision_ok="TestAlArrancarSeSiembranLosCooldownsDeLasPoliticasComoEstanHoy TestLaPodaHorariaConservaElCooldownDeCadaPoliticaConfigurada"
 func TestLaPodaHorariaConservaElCooldownDeCadaPoliticaConfigurada(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
-	if err := s.ConfigurarFlota(config.FleetConfig{Policies: politicasDeLaTablaDeCarga()}); err != nil {
+	configuradas := politicasDeLaTablaDeCarga(t)
+	if err := s.ConfigurarFlota(config.FleetConfig{Policies: configuradas}); err != nil {
 		t.Fatalf("ConfigurarFlota: %v", err)
 	}
 	// PISO: con una sola política configurada, ligar sólo la primera no se distingue de ligarlas todas.
@@ -913,7 +1025,6 @@ func TestLaPodaHorariaConservaElCooldownDeCadaPoliticaConfigurada(t *testing.T) 
 	// p.Nombre fijaba DÓNDE se recorta el `name:` y ponía en rojo, con un mensaje falso, un arreglo que
 	// recortara en la poda en vez de en ConfigurarFlota (revisión de T4).
 	ahora := time.Now().UTC()
-	configuradas := politicasDeLaTablaDeCarga()
 	if len(configuradas) != len(s.politicas) {
 		t.Fatalf("PISO: se configuraron %d políticas y el servidor tiene %d: la prueba no sabe cuál es cuál",
 			len(configuradas), len(s.politicas))
@@ -978,7 +1089,9 @@ func TestLaPodaHorariaConservaElCooldownDeCadaPoliticaConfigurada(t *testing.T) 
 // del recorrido: la variante difiere exactamente en su campo, cada una arranca sola, y con otro nombre
 // arrancan juntas.
 //
-// `Name` TAMBIÉN ENTRA, y su variante es el mismo nombre con espacios en los bordes. La primera versión
+// `Name` TAMBIÉN ENTRA, y su variante es el mismo nombre con blancos mezclados en los bordes
+// (bordesDeBlancos: con bordes de puro espacio, un recorte que sólo conoce el espacio no se distinguía
+// de TrimSpace, y dos homónimas con un tab en el borde arrancaban juntas). La primera versión
 // de esta tabla lo dejaba afuera —«salvo `Name`»—, y ése era justo el eje que quedaba clavado: desde
 // A131·T4 ConfigurarFlota recorta el `name:`, así que `x` y ` x ` son LA MISMA política para el
 // cooldown persistido, la métrica y la poda, y tienen que chocar. De los tres que leen el nombre
@@ -1022,12 +1135,13 @@ func TestDosPoliticasHomonimasNoArrancanDifieranEnLoQueDifieran(t *testing.T) {
 		{"de host", politicaDeMemoria()},
 		{"de servicio", deServicio},
 	}
+	izq, der := bordesDeBlancos(t)
 	// Cómo cambiar CADA campo sin dejar de ser una política válida de su clase y sin dejar de ser
 	// homónima. Devuelve false cuando el campo no admite otro valor en esa clase: una de host no puede
 	// nombrar un servicio (Validar).
 	variantes := map[string]func(p *config.PolicyConfig, deServicio bool) bool{
 		// El nombre sólo puede cambiar en lo que ConfigurarFlota recorta: con otra letra ya no es homónima.
-		"Name":      func(p *config.PolicyConfig, _ bool) bool { p.Name = " " + p.Name + " "; return true },
+		"Name":      func(p *config.PolicyConfig, _ bool) bool { p.Name = izq + p.Name + der; return true },
 		"Principal": func(p *config.PolicyConfig, _ bool) bool { p.Principal += "-suplente"; return true },
 		"When": func(p *config.PolicyConfig, deServicio bool) bool {
 			p.When = string(fleet.CondCPUPct)
