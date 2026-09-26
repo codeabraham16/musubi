@@ -1134,6 +1134,14 @@ func TestLaSerieDeUnaPoliticaExisteAntesDeLaPrimeraAccion(t *testing.T) {
 // y no hay recarga en caliente—; el arreglo es un recorrido de la lista que ya existe y no puede
 // dar un falso positivo, así que se cierra ahora y no el día que alguien agregue la recarga.
 //
+// Y EL EJE DE POLÍTICAS SEGUÍA CLAVADO EN UNA (revisión de T6). La versión de arriba contaba «por
+// cada política de s.politicas», y s.politicas traía una sola (prepararPolitica): pisar con `Store`
+// los contadores de toda política que no fuera la PRIMERA de la lista dejaba internal/mcp entero en
+// verde (medido en la revisión: ok 122,6 s). Ahora es una tabla de una, dos y tres políticas —con
+// tres hay primera, del medio y última— configuradas por ConfigurarFlota, y cada contador de TODA la
+// fila cuenta una cantidad distinta, así que un contador pisado en cualquier posición, o dos cruzados
+// entre políticas, se ven en el número.
+//
 // Sabotaje: cambiar el `LoadOrStore` de sembrarPoliticas por un `Store`.
 // arnes: archivo="internal/mcp/observability.go"
 // arnes: de="m.politicaStats.LoadOrStore(n+\"\\x00\"+r, new(atomic.Int64))"
@@ -1145,43 +1153,78 @@ func TestLaSerieDeUnaPoliticaExisteAntesDeLaPrimeraAccion(t *testing.T) {
 // arnes: a="\t\tfor _, r := range resultadosDePolitica {\n\t\t\tif r != \"ok\" {\n\t\t\t\tm.politicaStats.Store(n+\"\\x00\"+r, &atomic.Int64{})\n\t\t\t\tcontinue\n\t\t\t}\n"
 // arnes: arreglo_de="\t\tfor _, r := range resultadosDePolitica {\n"
 // arnes: arreglo_a="\t\tfor _, r := range resultadosDePolitica {\n\t\t\tif _, ya := m.politicaStats.Load(n+\"\\x00\"+r); ya {\n\t\t\t\tcontinue\n\t\t\t}\n"
+//
+// Sabotaje: pisar con `Store` los contadores de toda política que no sea la PRIMERA de la lista
+// (revisión de T6). Con una sola política configurada pasaba en verde. El arreglo siembra las
+// políticas en el orden inverso, que es la misma siembra.
+// arnes: archivo="internal/mcp/observability.go"
+// arnes: de="\tfor _, n := range nombres {\n\t\tfor _, r := range resultadosDePolitica {\n"
+// arnes: a="\tfor i, n := range nombres {\n\t\tfor _, r := range resultadosDePolitica {\n\t\t\tif i > 0 {\n\t\t\t\tm.politicaStats.Store(n+\"\\x00\"+r, new(atomic.Int64))\n\t\t\t\tcontinue\n\t\t\t}\n"
+// arnes: arreglo_de="\tfor _, n := range nombres {\n"
+// arnes: arreglo_a="\tfor i := range nombres {\n\t\tn := nombres[len(nombres)-1-i]\n"
 func TestSembrarNoPisaUnContadorQueYaCuenta(t *testing.T) {
-	s, _ := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal()))
-
-	// PISO: sin políticas o sin resultados no se contaría nada, y la comparación de abajo pasaría
-	// sin haber puesto a prueba un solo contador.
-	if len(s.politicas) == 0 || len(resultadosDePolitica) == 0 {
-		t.Fatalf("hay %d política(s) configurada(s) y %d resultado(s) en `resultadosDePolitica`: sin "+
-			"los dos no se cuenta nada, y esta guarda pasaría en verde sin haber leído nada",
-			len(s.politicas), len(resultadosDePolitica))
+	// PISO: sin resultados no se contaría nada, y la comparación de abajo pasaría sin haber puesto a
+	// prueba un solo contador.
+	if len(resultadosDePolitica) == 0 {
+		t.Fatal("`resultadosDePolitica` está vacía: sin resultados no se cuenta nada, y esta guarda pasaría " +
+			"en verde sin haber leído nada")
 	}
-	var nombres []string
-	quiero := map[[2]string]float64{}
-	for _, p := range s.politicas {
-		nombres = append(nombres, p.Nombre)
-		for i, r := range resultadosDePolitica {
-			for range i + 1 {
-				s.metrics.contarPolitica(p.Nombre, r)
+	// UNA, DOS Y TRES POLÍTICAS: con una, la primera es la única y la última; con tres hay una del
+	// medio. Una siembra que pisa según la POSICIÓN en la lista sólo se ve con más de una.
+	for _, cuantas := range []int{1, 2, 3} {
+		t.Run(fmt.Sprintf("%d_politicas", cuantas), func(t *testing.T) {
+			var pols []config.PolicyConfig
+			for i := range cuantas {
+				p := politicaDeMemoria()
+				if i > 0 {
+					p.Name = fmt.Sprintf("%s-%d", p.Name, i+1)
+				}
+				pols = append(pols, p)
 			}
-			quiero[[2]string{p.Nombre, r}] = float64(i + 1)
-		}
-	}
-	s.metrics.sembrarPoliticas(nombres) // como haría una recarga
+			s := newTestServer(t, embedding.NoopProvider{})
+			if err := s.ConfigurarFlota(config.FleetConfig{Policies: pols}); err != nil {
+				t.Fatalf("ConfigurarFlota: %v", err)
+			}
+			// PISO: tantas políticas como se configuraron; con menos, la tabla no mide la posición que
+			// nombra.
+			if len(s.politicas) != cuantas {
+				t.Fatalf("se configuraron %d políticas y el servidor tiene %d: la fila no mide lo que nombra",
+					cuantas, len(s.politicas))
+			}
+			var nombres []string
+			quiero := map[[2]string]float64{}
+			cuenta := 0
+			for _, p := range s.politicas {
+				nombres = append(nombres, p.Nombre)
+				for _, r := range resultadosDePolitica {
+					// Una cantidad DISTINTA por contador en toda la fila, no sólo dentro de una política:
+					// dos contadores cruzados, también entre políticas, se ven en el número.
+					cuenta++
+					for range cuenta {
+						s.metrics.contarPolitica(p.Nombre, r)
+					}
+					quiero[[2]string{p.Nombre, r}] = float64(cuenta)
+				}
+			}
+			s.metrics.sembrarPoliticas(nombres) // como haría una recarga
 
-	faltan, distintas, sobran := diferenciaDeSeriesDePolitica(quiero, seriesDeAccionesDePolitica(t, s.metrics.render(nil)))
-	if len(distintas) > 0 {
-		t.Errorf("la siembra pisó %d de los %d contadores que ya venían contando:\n    %s\n\n"+
-			"Una recarga de configuración vuelve a sembrar, y un contador que vuelve a cero borra la "+
-			"historia de la ventana de `increase()`: las alertas se apagan justo cuando alguien está "+
-			"tocando la configuración.", len(distintas), len(quiero), strings.Join(distintas, "\n    "))
-	}
-	if len(faltan) > 0 {
-		t.Errorf("después de volver a sembrar desaparecieron %d de las %d series que venían contando:\n    %s",
-			len(faltan), len(quiero), strings.Join(faltan, "\n    "))
-	}
-	if len(sobran) > 0 {
-		t.Errorf("después de volver a sembrar aparecieron series que nadie contó ni configuró:\n    %s",
-			strings.Join(sobran, "\n    "))
+			faltan, distintas, sobran := diferenciaDeSeriesDePolitica(quiero, seriesDeAccionesDePolitica(t, s.metrics.render(nil)))
+			fila := fmt.Sprintf("con %d política(s)", cuantas)
+			if len(distintas) > 0 {
+				t.Errorf("%s la siembra pisó %d de los %d contadores que ya venían contando:\n    %s\n\n"+
+					"Una recarga de configuración vuelve a sembrar, y un contador que vuelve a cero borra la "+
+					"historia de la ventana de `increase()`: las alertas se apagan justo cuando alguien está "+
+					"tocando la configuración.", fila, len(distintas), len(quiero), strings.Join(distintas, "\n    "))
+			}
+			if len(faltan) > 0 {
+				t.Errorf("%s, después de volver a sembrar desaparecieron %d de las %d series que venían contando:\n    %s",
+					fila, len(faltan), len(quiero), strings.Join(faltan, "\n    "))
+			}
+			if len(sobran) > 0 {
+				t.Errorf("%s, después de volver a sembrar aparecieron series que nadie contó ni configuró:\n    %s",
+					fila, strings.Join(sobran, "\n    "))
+			}
+		})
 	}
 }
 
@@ -1192,6 +1235,16 @@ func TestSembrarNoPisaUnContadorQueYaCuenta(t *testing.T) {
 // significa «no sé»: la guarda la contaría como una serie faltante y culparía a la siembra de algo
 // que es del lector. Las etiquetas se leen en cualquier orden y con el escapado de `%q`, que es
 // como las escribe `renderPoliticas`.
+//
+// UN BLANCO ENTRE LAS ETIQUETAS TAMBIÉN ES UN FATAL, Y A PROPÓSITO (revisión de T6). Con
+// `{policy="x", result="y"}` este lector se niega a leer la línea: es un rechazo honesto —un «no sé»
+// que se dice, no un verde falso— y hoy no se da, porque renderPoliticas escribe las etiquetas
+// pegadas (`%s{policy=%q,result=%q}`). No se toleran porque este lector está para medir lo que lee
+// Prometheus, y ninguna prueba de este paquete pasa el /metrics por el parser de Prometheus: un
+// lector más permisivo que el scrape podría dar por sembrada una serie que el scrape no lee. Si el
+// render cambia de forma, la guarda cae por el lector y lo dice con su nombre; ése es el momento de
+// decidir, contra el parser de verdad, si los blancos se aceptan. Hasta la revisión el mismo rechazo
+// salía como «le falta `policy` o `result`», que manda a buscar una etiqueta que sí está.
 func seriesDeAccionesDePolitica(t *testing.T, out string) map[[2]string]float64 {
 	t.Helper()
 	series := map[[2]string]float64{}
@@ -1213,6 +1266,10 @@ func seriesDeAccionesDePolitica(t *testing.T, out string) map[[2]string]float64 
 			igual := strings.IndexByte(resto, '=')
 			if igual <= 0 {
 				noSe("una etiqueta sin `=`")
+			}
+			if nombre := resto[:igual]; strings.TrimSpace(nombre) != nombre {
+				noSe("un blanco alrededor del nombre de la etiqueta " + strconv.Quote(strings.TrimSpace(nombre)) +
+					": renderPoliticas no los escribe, y este lector no los tolera (ver su doc)")
 			}
 			citado, err := strconv.QuotedPrefix(resto[igual+1:])
 			if err != nil {
