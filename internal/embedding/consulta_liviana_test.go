@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"math"
 	"math/rand"
@@ -632,6 +633,63 @@ func TestUnIndiceAbiertoNoRompeNada(t *testing.T) {
 		return
 	}
 	compararBitABit(t, sp, liv, textosDePrueba())
+}
+
+// TestUnIndiceDeOtroFormatoSeReescribe fija la promesa de formatoIndice: un tokenizer.idx de otro
+// formato —el que deja un binario anterior o posterior, con su crc correcto y una identidad que lo
+// nombra— se trata como si no existiera, y el próximo NewStaticProvider lo reescribe. Si el «al
+// día» sólo mirara que la identidad lo nombra, el atajo quedaría apagado para siempre en toda
+// máquina que haya corrido el otro binario, y el hook volvería a léxico sin avisar.
+//
+// Sabotaje: dar por bueno un índice de otro formato en el «al día».
+// arnes: archivo="internal/embedding/consulta_liviana.go"
+// arnes: de="if err := cabeceraVigente(idx); err != nil {"
+// arnes: a="if err := cabeceraVigente(idx); err != nil && false {"
+func TestUnIndiceDeOtroFormatoSeReescribe(t *testing.T) {
+	dir, _ := tablaDeJugueteConSidecars(t, 200, 8)
+	rutaIdx := filepath.Join(dir, archivoIndice)
+	idx, err := os.ReadFile(rutaIdx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// El índice de otro formato: la misma cabecera con el formato siguiente y el crc rehecho.
+	otro := append([]byte(nil), idx...)
+	binary.LittleEndian.PutUint32(otro[len(magiaIndice):], formatoIndice+1)
+	binary.LittleEndian.PutUint32(otro[len(otro)-4:], crc32.Checksum(otro[:len(otro)-4], castagnoli))
+	if err := os.WriteFile(rutaIdx, otro, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var id identidadDeTabla
+	crudo, err := os.ReadFile(filepath.Join(dir, archivoIdentidad))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(crudo, &id); err != nil {
+		t.Fatal(err)
+	}
+	id.Indice.Tamano = int64(len(otro))
+	id.Indice.CRC32C = crc32.Checksum(otro, castagnoli)
+	crudo, _ = json.MarshalIndent(id, "", "  ")
+	if err := os.WriteFile(filepath.Join(dir, archivoIdentidad), append(crudo, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewConsultaLiviana(dir); err == nil {
+		t.Fatal("control: un índice de otro formato no tenía que servir")
+	}
+
+	sp, err := NewStaticProvider(dir) // el arranque siguiente de un daemon con ESTE binario
+	if err != nil {
+		t.Fatal(err)
+	}
+	ahora, _ := os.ReadFile(rutaIdx)
+	if len(ahora) < largoCabecera || binary.LittleEndian.Uint32(ahora[len(magiaIndice):]) != formatoIndice {
+		t.Fatalf("el índice de otro formato sigue en disco después de un NewStaticProvider: el atajo queda apagado")
+	}
+	liv, err := NewConsultaLiviana(dir)
+	if err != nil {
+		t.Fatalf("después de reescribir tenía que haber atajo: %v", err)
+	}
+	compararBitABit(t, sp, liv, textosDePrueba()[:10])
 }
 
 // TestLosTemporalesHuerfanosSeBorran: un daemon que muere a mitad de escritura (se cierra la sesión

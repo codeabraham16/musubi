@@ -174,6 +174,12 @@ func cargarSidecars(dir string) (identidadDeTabla, []byte, error) {
 	if int64(len(idx)) != id.Indice.Tamano || crc32.Checksum(idx, castagnoli) != id.Indice.CRC32C {
 		return id, nil, fmt.Errorf("%w: %s no es el que la identidad describe", ErrIdentidadVencida, archivoIndice)
 	}
+	// Un índice de OTRO formato (el de un binario anterior o posterior) cuenta como ausente. Si
+	// sólo se mirara que la identidad lo nombra, NewStaticProvider lo daría por «al día» y no lo
+	// reescribiría nunca, mientras la consulta liviana lo rechaza: el atajo apagado para siempre.
+	if err := cabeceraVigente(idx); err != nil {
+		return id, nil, fmt.Errorf("%w: %v", ErrSinAtajo, err)
+	}
 	return id, idx, nil
 }
 

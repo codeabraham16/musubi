@@ -40,7 +40,9 @@ import (
 const (
 	magiaIndice = "MSBTKIDX"
 	// formatoIndice se sube cuando cambia CUALQUIER cosa del formato. Un índice de otro formato no
-	// se interpreta: se lo trata como si no existiera, y NewStaticProvider lo reescribe.
+	// se interpreta: se lo trata como si no existiera, y NewStaticProvider lo reescribe. Lo que
+	// hace cierta esa promesa es que cargarSidecars exige cabeceraVigente: sin eso, el completo
+	// daría por «al día» un índice que la consulta liviana rechaza, y el atajo quedaría apagado.
 	formatoIndice   = 1
 	tipoIndiceUnigr = 1
 )
@@ -113,16 +115,10 @@ func leerIndiceTokenizer(crudo []byte) (*unigram, error) {
 	if crc32.Checksum(cuerpo, castagnoli) != binary.LittleEndian.Uint32(crudo[len(crudo)-4:]) {
 		return nil, fmt.Errorf("%w: el crc no coincide (truncado o corrupto)", errIndiceInvalido)
 	}
-	l := lectorIndice{b: cuerpo}
-	if string(l.bytes(len(magiaIndice))) != magiaIndice {
-		return nil, fmt.Errorf("%w: no es un índice de tokenizer", errIndiceInvalido)
+	if err := cabeceraVigente(cuerpo); err != nil {
+		return nil, err
 	}
-	if f := l.u32(); f != formatoIndice {
-		return nil, fmt.Errorf("%w: formato %d, este binario lee el %d", errIndiceInvalido, f, formatoIndice)
-	}
-	if tipo := l.u32(); tipo != tipoIndiceUnigr {
-		return nil, fmt.Errorf("%w: tipo de tokenizer %d", errIndiceInvalido, tipo)
-	}
+	l := lectorIndice{b: cuerpo, pos: largoCabecera}
 	u := &unigram{}
 	u.unkID = int(l.u32())
 	u.maxRunes = int(l.u32())
@@ -159,6 +155,25 @@ func leerIndiceTokenizer(crudo []byte) (*unigram, error) {
 	u.steps = steps
 	u.piezas = p
 	return u, nil
+}
+
+// largoCabecera es lo que ocupan la magia, el formato y el tipo al principio del índice.
+const largoCabecera = len(magiaIndice) + 8
+
+// cabeceraVigente dice si el índice empieza con la cabecera que ESTE binario sabe leer: la magia,
+// el formato y el tipo. Es una sola función porque son dos los que preguntan —leerIndiceTokenizer
+// para interpretarlo y cargarSidecars para darlo por «al día»— y tienen que contestar lo mismo.
+func cabeceraVigente(idx []byte) error {
+	if len(idx) < largoCabecera || string(idx[:len(magiaIndice)]) != magiaIndice {
+		return fmt.Errorf("%w: no es un índice de tokenizer", errIndiceInvalido)
+	}
+	if f := binary.LittleEndian.Uint32(idx[len(magiaIndice):]); f != formatoIndice {
+		return fmt.Errorf("%w: formato %d, este binario lee el %d", errIndiceInvalido, f, formatoIndice)
+	}
+	if tipo := binary.LittleEndian.Uint32(idx[len(magiaIndice)+4:]); tipo != tipoIndiceUnigr {
+		return fmt.Errorf("%w: tipo de tokenizer %d", errIndiceInvalido, tipo)
+	}
+	return nil
 }
 
 // lectorIndice lee campos consecutivos y recuerda el primer error, así el parseo no se llena de
