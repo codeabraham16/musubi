@@ -37,12 +37,21 @@ import (
 //     desde un trabajo de fondo: peor que no hacerlo. Corre en auto (decide el clasificador) y en
 //     bypassPermissions.
 //   - Si el subagente no está instalado: sin quién lo haga, el aviso mandaría al agente a un callejón.
-//   - Más de una vez cada intervaloDeTareas por proyecto: con varias sesiones abiertas, una sola
-//     lanza al subagente, y el costo queda acotado.
+//   - En un turno que no escribió la persona: una notificación de una tarea de fondo o un mensaje de
+//     otra sesión (prefijosDeTurnoAjeno).
+//
+// POSTEAR ES POR PROYECTO, AVISAR ES POR SESIÓN. El trabajo nuevo entra al tablero a lo sumo cada
+// intervaloDeTareas por proyecto, y eso es lo que acota el costo. El aviso sale una vez por intervalo
+// en CADA sesión. La primera versión avisaba una vez por proyecto, y el 2026-09-26 el aviso se gastó
+// dos veces seguidas en la misma sesión equivocada: una que había arrancado antes de instalar el
+// plugin (la delegación falló con «Agent type 'musubi:musubi-tareas' not found») y que además lo
+// recibió en un turno de notificación. Las sesiones que sí podían delegar se quedaron dos horas sin
+// aviso cada vez. Que dos sesiones deleguen a la vez no duplica trabajo: cada subagente reclama
+// unidades distintas del tablero.
 
 const (
-	// intervaloDeTareas es cada cuánto, como mucho, un proyecto corre una ronda: postear lo nuevo y,
-	// si hay trabajo, avisar.
+	// intervaloDeTareas es cada cuánto, como mucho, un proyecto postea lo nuevo en el tablero, y cada
+	// cuánto, como mucho, una sesión recibe el aviso.
 	intervaloDeTareas = 2 * time.Hour
 	// propuestasPorUnidad es cuántas propuestas lleva una unidad. Orientativo: un tema no se parte.
 	propuestasPorUnidad = 5
@@ -51,6 +60,8 @@ const (
 	topeDeUnidadesAbiertas = 4
 	// metaRondaDeTareas guarda cuándo corrió la última ronda en este proyecto.
 	metaRondaDeTareas = "tareas_ultima_ronda"
+	// metaAvisoDeTareas guarda, por sesión, cuándo recibió el último aviso.
+	metaAvisoDeTareas = "tareas_aviso_por_sesion"
 	// prefijoDeIDs abre el renglón de la spec que dice qué propuestas cubre la unidad. Es lo que el
 	// productor lee para no volver a postear una propuesta ya cubierta.
 	prefijoDeIDs = "ids: "
@@ -59,6 +70,27 @@ const (
 // modosQueCorrenSolos son los modos de permisos de Claude Code en que un subagente de fondo trabaja
 // sin pedirle confirmación a la persona. Son nombres del formato de otro programa: se clavan.
 var modosQueCorrenSolos = map[string]bool{"auto": true, "bypassPermissions": true}
+
+// prefijosDeTurnoAjeno son los comienzos del texto de un turno que NO escribió la persona. Son
+// hechos del formato de Claude Code, medidos el 2026-09-26 en los transcripts de esta máquina: 1186
+// turnos que empiezan con `<task-notification>` (terminó una tarea de fondo) y 193 con `Another
+// Claude session` (un mensaje de otra sesión). Se clavan: si Claude Code los cambia, el aviso vuelve
+// a salir también en esos turnos, que es como era antes, no un daño.
+var prefijosDeTurnoAjeno = []string{"<task-notification>", "Another Claude session"}
+
+// esTurnoDeLaPersona dice si el turno lo escribió la persona.
+//
+// En un turno ajeno el agente está en medio de otra cosa —procesando lo que terminó una tarea suya—
+// y el aviso compite con eso: el 2026-09-26 el primero cayó en uno así y el agente siguió de largo.
+func esTurnoDeLaPersona(prompt string) bool {
+	p := strings.TrimSpace(prompt)
+	for _, pre := range prefijosDeTurnoAjeno {
+		if strings.HasPrefix(p, pre) {
+			return false
+		}
+	}
+	return true
+}
 
 // almacenDeTareas es lo que el productor necesita de la memoria. *memory.DbEngine lo satisface.
 type almacenDeTareas interface {
@@ -84,8 +116,8 @@ type rondaDeTareas struct {
 	propuestas  int // propuestas vivas en cuarentena
 }
 
-// buildTurnTareas corre una ronda del productor, si corresponde, y devuelve el aviso para el agente,
-// o "" si no hay nada que delegar.
+// buildTurnTareas postea lo nuevo si le toca al proyecto, y devuelve el aviso para el agente si le
+// toca a esta sesión y hay algo que delegar; si no, "".
 func buildTurnTareas(t *tareasDelTurno, in turnInput) string {
 	if t == nil || t.store == nil || t.subagente == "" {
 		return ""
@@ -93,21 +125,59 @@ func buildTurnTareas(t *tareasDelTurno, in turnInput) string {
 	if in.AgentID != "" || !modosQueCorrenSolos[in.PermissionMode] {
 		return ""
 	}
-	if !rondaVencida(t.store, t.ahora) {
+	// Un turno ajeno no gasta nada: ni la ronda del proyecto ni el aviso de la sesión.
+	if !esTurnoDeLaPersona(in.Prompt) {
 		return ""
 	}
-	// La marca va ANTES de la ronda: si la ronda falla, se reintenta en el próximo intervalo y no en
-	// cada turno, que pagaría el error una y otra vez dentro del techo de 10 s del hook.
-	_ = t.store.SetMeta(metaRondaDeTareas, t.ahora.UTC().Format(time.RFC3339))
-	r, err := correrRondaDeTareas(t.store, t.ahora)
+	if rondaVencida(t.store, t.ahora) {
+		// La marca va ANTES de la ronda: si la ronda falla, se reintenta en el próximo intervalo y no
+		// en cada turno, que pagaría el error una y otra vez dentro del techo de 10 s del hook.
+		_ = t.store.SetMeta(metaRondaDeTareas, t.ahora.UTC().Format(time.RFC3339))
+		if _, err := correrRondaDeTareas(t.store, t.ahora); err != nil {
+			fmt.Fprintf(os.Stderr, "musubi turn: la ronda de tareas falló: %v\n", err)
+		}
+	}
+	r, err := contarTareas(t.store, t.ahora)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "musubi turn: la ronda de tareas falló: %v\n", err)
+		fmt.Fprintf(os.Stderr, "musubi turn: no pude contar las tareas: %v\n", err)
 		return ""
 	}
 	if r.reclamables == 0 {
 		return ""
 	}
+	if !avisoVencidoEnLaSesion(t.store, in.SessionID, t.ahora) {
+		return ""
+	}
 	return avisoDeTareas(r, t.subagente)
+}
+
+// avisoVencidoEnLaSesion dice si a esta sesión le toca el aviso —nunca lo recibió, o lo recibió hace
+// al menos intervaloDeTareas— y, si le toca, anota que lo recibe ahora.
+func avisoVencidoEnLaSesion(store metaStore, sessionID string, ahora time.Time) bool {
+	m := leerMarcasPorSesion(store, metaAvisoDeTareas)
+	if v, ok := m.Valor[sessionID]; ok {
+		if ultimo, err := time.Parse(time.RFC3339, v); err == nil && ahora.Sub(ultimo) < intervaloDeTareas {
+			return false
+		}
+	}
+	guardarMarcaDeSesion(store, metaAvisoDeTareas, m, sessionID, ahora.UTC().Format(time.RFC3339))
+	return true
+}
+
+// contarTareas cuenta, sin postear nada, las propuestas vivas y las unidades reclamables.
+func contarTareas(store almacenDeTareas, ahora time.Time) (rondaDeTareas, error) {
+	var r rondaDeTareas
+	props, err := store.PropuestasEnCuarentena()
+	if err != nil {
+		return r, err
+	}
+	lote, err := store.WorkBatchStatus(memory.LoteCuarentena)
+	if err != nil {
+		return r, err
+	}
+	r.propuestas = len(props)
+	r.reclamables = unidadesReclamables(lote, ahora)
+	return r, nil
 }
 
 // rondaVencida dice si ya pasó el intervalo desde la última ronda del proyecto. Una marca ilegible
