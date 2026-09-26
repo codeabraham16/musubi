@@ -154,8 +154,9 @@ func TestUnaSubidaQueNoSalioNoRegistraViaje(t *testing.T) {
 		saveShared(t, s, "rechazada")
 		s.drainOutboxOnce(context.Background())
 		got := eng.anotados(memory.ViajeSubida)
-		if len(got) != 1 || got[0].Posts != 1 || got[0].Filas != 0 {
-			t.Errorf("un POST contestado con 500 tenía que contar posts=1 filas=0, vino %+v", got)
+		if len(got) != 1 || got[0].Posts != 1 || got[0].Filas != 0 || got[0].Rechazados != 1 ||
+			got[0].BytesRechazados <= 0 || got[0].BytesCable != 0 {
+			t.Errorf("un POST contestado con 500 tenía que contar posts=1 filas=0, 1 rechazado con sus bytes y 0 B de cable, vino %+v", got)
 		}
 	})
 }
@@ -307,4 +308,59 @@ func TestSyncStatusAcotadoAlProyecto(t *testing.T) {
 		t.Errorf("el admin federado tenía que ver lo de web (seed roto o recorte de más): enviadas=%d no_viajan=%+v",
 			federado.EnviadasDia, federado.NoViajan)
 	}
+}
+
+// TestLaBajadaPorNotaNoCuentaElSondeo: contra el central REAL (su handler HTTP), treinta ticks sin
+// novedades y uno con una nota. Las páginas vacías —el régimen de un nodo quieto, miles por día y
+// por base— suman a posts (el contador de pulls) y a vacias/bytes_vacias, pero NO al cable: así
+// SUM(bytes_cable)/SUM(filas), la métrica (1) del plan, da el peso de la nota y no el del sondeo.
+// Con el cable mezclado, la revisión midió 7.088 B «por nota» para una nota de 2.903 B.
+//
+// Sabotaje: que las páginas vacías vuelvan a sumar al cable.
+// arnes: archivo="internal/mcp/syncclient.go"
+// arnes: de="if len(pl.Items) == 0 {"
+// arnes: a="if false && len(pl.Items) == 0 {"
+func TestLaBajadaPorNotaNoCuentaElSondeo(t *testing.T) {
+	centralEng, err := memory.NewDbEngine(memtest.DirSembrado(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer centralEng.Close()
+	central := NewMcpServer(centralEng, t.TempDir(), embedding.NoopProvider{})
+	ts := httptest.NewServer(central.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second}))
+	defer ts.Close()
+	cli, eng := serverQueAnotaViajes(t, ts.URL, true)
+
+	const ticksVacios = 30
+	for i := 0; i < ticksVacios; i++ {
+		cli.drainInboundOnce(context.Background())
+	}
+	// Una nota del tamaño medio del central (2.617 B de content, medido en producción).
+	if err := centralEng.SaveObservationTyped("nota-real", "t/x", strings.Repeat("palabra ", 327), 1, "semantic", memory.ScopeShared, nil); err != nil {
+		t.Fatal(err)
+	}
+	cli.drainInboundOnce(context.Background())
+
+	vs := eng.anotados(memory.ViajeBajada)
+	if len(vs) != ticksVacios+1 {
+		t.Fatalf("precondición: cada tick que volvió bien registra UN viaje; esperaba %d, hubo %d", ticksVacios+1, len(vs))
+	}
+	nota := vs[len(vs)-1]
+	if nota.Filas != 1 || nota.Vacias != 0 || nota.BytesCable <= 0 {
+		t.Fatalf("precondición: la nota tenía que bajar en una página con datos: %+v", nota)
+	}
+	r, err := cli.engine.ResumenDelSync(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := r.BajadaHoy
+	if b.Filas != 1 || b.BytesCable != nota.BytesCable || b.BytesCrudos != nota.BytesCrudos {
+		t.Errorf("DILUIDA: la métrica (1) da %d B por nota y la página de la nota pesó %d B; el resto es sondeo (%+v)",
+			b.BytesCable/max(b.Filas, 1), nota.BytesCable, b)
+	}
+	if b.Vacias != b.Posts-1 || b.Vacias < ticksVacios || b.BytesVacias <= 0 {
+		t.Errorf("las páginas vacías no quedaron medidas aparte, o dejaron de contar como pulls: %+v", b)
+	}
+	t.Logf("métrica (1) de la bajada = %d B por nota; el sondeo, aparte: %d páginas vacías, %d B (%.0f B cada una), en %d pulls",
+		b.BytesCable/max(b.Filas, 1), b.Vacias, b.BytesVacias, float64(b.BytesVacias)/float64(max(b.Vacias, 1)), b.Posts)
 }

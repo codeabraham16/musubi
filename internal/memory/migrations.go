@@ -2212,6 +2212,11 @@ func schemaMigrations() []migration {
 			//     siguiente de la ola para distinguir el rebote propio de un choque con otra máquina.
 			//   - sync_viajes: lo que movió cada tick, sumado por día (UTC) y sentido. Es el
 			//     instrumento de la ola: sin él, medir los bytes de la subida exigía simular el cable.
+			//     bytes_cable/bytes_crudos cuentan SÓLO lo que viajó con filas; las páginas vacías de
+			//     la bajada (vacias, bytes_vacias) y los POST rechazados de la subida (rechazados,
+			//     bytes_rechazados) van en columnas aparte. Mezclados, SUM(bytes_cable)/SUM(filas)
+			//     medía el ritmo de los sondeos y no el peso de una nota (ver memory.Viaje), y la
+			//     separación tiene que nacer acá: después costaría otra migración.
 			//
 			// ES readCompatible: una tabla que ningún lector viejo consulta y dos ADD COLUMN
 			// nullables sobre outbox, que ninguna consulta vieja selecciona (todas nombran sus
@@ -2220,15 +2225,19 @@ func schemaMigrations() []migration {
 			up: func(x execQuerier) error {
 				if _, err := x.Exec(`
 					CREATE TABLE IF NOT EXISTS sync_viajes (
-						dia          TEXT    NOT NULL,
-						sentido      TEXT    NOT NULL CHECK (sentido IN ('subida','bajada')),
-						filas        INTEGER NOT NULL DEFAULT 0,
-						posts        INTEGER NOT NULL DEFAULT 0,
-						bytes_cable  INTEGER NOT NULL DEFAULT 0,
-						bytes_crudos INTEGER NOT NULL DEFAULT 0,
-						sin_cambios  INTEGER NOT NULL DEFAULT 0,
-						rebotes      INTEGER NOT NULL DEFAULT 0,
-						choques      INTEGER NOT NULL DEFAULT 0,
+						dia              TEXT    NOT NULL,
+						sentido          TEXT    NOT NULL CHECK (sentido IN ('subida','bajada')),
+						filas            INTEGER NOT NULL DEFAULT 0,
+						posts            INTEGER NOT NULL DEFAULT 0,
+						bytes_cable      INTEGER NOT NULL DEFAULT 0,
+						bytes_crudos     INTEGER NOT NULL DEFAULT 0,
+						vacias           INTEGER NOT NULL DEFAULT 0,
+						bytes_vacias     INTEGER NOT NULL DEFAULT 0,
+						rechazados       INTEGER NOT NULL DEFAULT 0,
+						bytes_rechazados INTEGER NOT NULL DEFAULT 0,
+						sin_cambios      INTEGER NOT NULL DEFAULT 0,
+						rebotes          INTEGER NOT NULL DEFAULT 0,
+						choques          INTEGER NOT NULL DEFAULT 0,
 						PRIMARY KEY (dia, sentido)
 					)`); err != nil {
 					return err

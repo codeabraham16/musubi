@@ -346,6 +346,18 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   `musubi_sync_status` deja de figurar entre las lecturas «sin datos de proyecto» y pasa a tener su
   prueba de aislamiento. No cambia la descripción ni el esquema de ninguna tool.
 
+  `bytes_cable` y `bytes_crudos` cuentan SÓLO lo que viajó con filas —los POST aceptados y las
+  páginas que trajeron algo—; las páginas vacías de la bajada (`vacias`, `bytes_vacias`) y los POST
+  rechazados de la subida (`rechazados`, `bytes_rechazados`) van en columnas aparte, y `posts` sigue
+  contando toda página que volvió bien, vacía o no. Mezclados, `SUM(bytes_cable)/SUM(filas)` medía
+  el ritmo de los sondeos y no el peso de una nota: una página vacía pesa 135 B, hay ~2.700 por día
+  y por base, y con un día de davantis-altura el «peso por nota» daba ~21.263 B contra una nota real
+  de 2.903 B. Separados, la misma consulta da los 2.903 B (medido contra el handler real del central
+  con 30 ticks vacíos y una nota), y el costo del sondeo queda medido aparte para el frente que baja
+  el ritmo de los pulls. La verificación de V1, sobre una copia de la base:
+  `SELECT sentido, SUM(bytes_cable)*1.0/SUM(filas), SUM(posts), SUM(vacias), SUM(bytes_vacias),
+  SUM(rechazados), SUM(bytes_rechazados) FROM sync_viajes WHERE dia >= date('now','-6 day') GROUP BY 1`.
+
   ⚠️ **TRAE MIGRACIÓN (v58), LA ÚNICA DE LA OLA 2: hay que cerrar TODAS las sesiones y actualizar
   el binario de CADA máquina antes de volver a abrir las bases.** Es `readCompatible` (una tabla
   nueva y dos `ADD COLUMN` nullables), así que un binario anterior que abre la base migrada entra en
@@ -366,14 +378,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   algún día el transporte de Go descomprime solo una página de la bajada, se cuentan sus crudos y
   no se inventa el cable.
 
-  *Diez guardas nuevas, con su sabotaje corrido y rojo. `TestElRebotePreservaElEnviado`,
+  *Once guardas nuevas, con su sabotaje corrido y rojo. `TestElRebotePreservaElEnviado`,
   `TestLaEntregaDejaQueSalioYCuando`, `TestLosViajesSeSumanPorDiaYSentido`,
   `TestLoQueNoViajaSeCuentaUnaSolaVez` (las tres categorías son disjuntas) y
   `TestUnBinarioAnteriorLeeLaBaseDelContador` (la v57 abre la v58 como legible) en
   `internal/memory`; `TestSyncStatusCuentaLoDeHoy`, `TestUnaSubidaQueNoSalioNoRegistraViaje`,
-  `TestLaBajadaRegistraSuViaje`, `TestUnaBajadaQueNoSalioNoRegistraViaje` y
-  `TestSyncStatusAcotadoAlProyecto` (el vecino ve ceros, el admin federado ve el dato) en
-  `internal/mcp`.*
+  `TestLaBajadaRegistraSuViaje`, `TestUnaBajadaQueNoSalioNoRegistraViaje`,
+  `TestSyncStatusAcotadoAlProyecto` (el vecino ve ceros, el admin federado ve el dato) y
+  `TestLaBajadaPorNotaNoCuentaElSondeo` (la métrica da el peso de la nota con treinta sondeos
+  alrededor) en `internal/mcp`.*
 - **El mapa publicado describe el commit, no el disco: lo que git ignora ya no sube al central.**
   El índice lee el disco y el central guarda la foto con la etiqueta de un commit. #647 frenaba lo
   modificado y lo sin trackear, pero `git status` no lista los **ignorados**, y `walkSourceTree` no

@@ -287,7 +287,8 @@ func (s *McpServer) cesionTrasFallo() time.Duration {
 // pendiente (vectorizarLoBajado). Un tick que no bajó nada no cuesta ni una consulta más.
 //
 // Y si SALIÓ A LA RED —al menos un Pull volvió sin error—, registra el viaje en sync_viajes: las
-// páginas que llegaron, las filas ingeridas y los bytes. `salioALaRed` es la ÚNICA señal de eso y
+// páginas que llegaron (vacías incluidas: es el contador de pulls), las filas ingeridas, los bytes
+// de las páginas con filas y, aparte, los de las vacías. `salioALaRed` es la ÚNICA señal de eso y
 // el defer es el único lugar que la lee: un tick salteado (candado de otro, cesión tras fallar,
 // Pull fallido) no escribe nada, y lo que se quiera anotar por cada bajada real se cuelga de esta
 // misma variable en vez de repetir la condición en cada return.
@@ -301,8 +302,10 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 			s.vectorizarLoBajado()
 		}
 		if salioALaRed {
+			t := s.syncClient.bajadaDesde(antes)
 			viaje.Filas = int64(ingeridas)
-			viaje.BytesCable, viaje.BytesCrudos = s.syncClient.bajadaDesde(antes)
+			viaje.BytesCable, viaje.BytesCrudos = t.BytesCable, t.BytesCrudos
+			viaje.Vacias, viaje.BytesVacias = t.Vacias, t.BytesVacias
 			if rerr := s.engine.RegistrarViaje(memory.ViajeBajada, viaje); rerr != nil {
 				logx.Error("inbound: no se pudo registrar el viaje de la bajada", "error", rerr)
 			}

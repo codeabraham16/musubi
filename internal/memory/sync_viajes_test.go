@@ -148,17 +148,20 @@ func TestLaEntregaDejaQueSalioYCuando(t *testing.T) {
 //
 // Sabotaje: que el UPSERT pise las filas en vez de sumarlas.
 // arnes: archivo="internal/memory/sync_viajes.go"
-// arnes: de="filas        = sync_viajes.filas        + excluded.filas,"
-// arnes: a="filas        = excluded.filas,"
+// arnes: de="filas            = sync_viajes.filas            + excluded.filas,"
+// arnes: a="filas            = excluded.filas,"
 func TestLosViajesSeSumanPorDiaYSentido(t *testing.T) {
 	e := newTestEngine(t)
-	if err := e.RegistrarViaje(ViajeSubida, Viaje{Filas: 2, Posts: 2, BytesCable: 600, BytesCrudos: 600}); err != nil {
+	if err := e.RegistrarViaje(ViajeSubida, Viaje{Filas: 2, Posts: 3, BytesCable: 600, BytesCrudos: 600, Rechazados: 1, BytesRechazados: 310}); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.RegistrarViaje(ViajeSubida, Viaje{Filas: 3, Posts: 4, BytesCable: 900, BytesCrudos: 900}); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.RegistrarViaje(ViajeBajada, Viaje{Filas: 50, Posts: 1, BytesCable: 150000, BytesCrudos: 150000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.RegistrarViaje(ViajeBajada, Viaje{Posts: 2, Vacias: 2, BytesVacias: 270}); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.RegistrarViaje("de-costado", Viaje{Filas: 1}); err == nil {
@@ -177,14 +180,15 @@ func TestLosViajesSeSumanPorDiaYSentido(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := r.SubidaHoy; got.Filas != 5 || got.Posts != 6 || got.BytesCable != 1500 || got.BytesCrudos != 1500 {
-		t.Errorf("subida de hoy = %+v; esperaba filas=5 posts=6 bytes=1500", got)
+	if got := r.SubidaHoy; got.Filas != 5 || got.Posts != 7 || got.BytesCable != 1500 || got.BytesCrudos != 1500 ||
+		got.Rechazados != 1 || got.BytesRechazados != 310 {
+		t.Errorf("subida de hoy = %+v; esperaba filas=5 posts=7 bytes=1500 y aparte 1 rechazado de 310 B", got)
 	}
 	if r.Subida7d != r.SubidaHoy {
 		t.Errorf("con un solo día, 7 d (%+v) tenía que ser igual a hoy (%+v)", r.Subida7d, r.SubidaHoy)
 	}
-	if got := r.BajadaHoy; got.Filas != 50 || got.Posts != 1 || got.BytesCable != 150000 {
-		t.Errorf("bajada de hoy = %+v; esperaba filas=50 posts=1 bytes=150000", got)
+	if got := r.BajadaHoy; got.Filas != 50 || got.Posts != 3 || got.BytesCable != 150000 || got.Vacias != 2 || got.BytesVacias != 270 {
+		t.Errorf("bajada de hoy = %+v; esperaba filas=50 posts=3 bytes=150000 y aparte 2 vacías de 270 B", got)
 	}
 }
 

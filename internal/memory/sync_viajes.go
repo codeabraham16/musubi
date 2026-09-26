@@ -27,20 +27,35 @@ const (
 //   - Filas: en la subida, las filas que el central aceptó; en la bajada, las que se ingirieron acá.
 //   - Posts: en la subida, los POST que el central CONTESTÓ (aceptados o rechazados: un rechazo
 //     también le costó al central, y posts > filas es como se ve una tormenta de reintentos); en la
-//     bajada, las páginas que llegaron bien. Un pedido que no llegó a tener respuesta no cuenta.
-//   - BytesCable / BytesCrudos: el cuerpo que viajó, tal como fue por el cable y descomprimido. Hoy
-//     no se comprime en ningún sentido, así que valen lo mismo; los PR de compresión los separan.
+//     bajada, TODAS las páginas que llegaron bien, vacías o no: es el contador de pulls. Un pedido
+//     que no llegó a tener respuesta no cuenta.
+//   - BytesCable / BytesCrudos: el cuerpo de lo que viajó CON FILAS —los POST aceptados, las
+//     páginas que trajeron algo—, tal como fue por el cable y descomprimido. Así
+//     SUM(bytes_cable)/SUM(filas) es el peso de una nota que viaja, y no el ritmo de los sondeos.
+//     Hoy no se comprime en ningún sentido y valen lo mismo; los PR de compresión los separan.
+//   - Vacias / BytesVacias: las páginas de la bajada que volvieron bien SIN filas y lo que pesaron.
+//     Es el costo fijo del sondeo (~135 B por página, miles por día y por base) y se mide aparte:
+//     mezclado con lo anterior, el «peso por nota» medía el ritmo de pulls (medido en la revisión:
+//     21.263 B por nota contra una nota real de 2.903 B) y el frente que baja ese ritmo no tendría
+//     con qué verse.
+//   - Rechazados / BytesRechazados: los POST de la subida que el central contestó sin aceptar la
+//     nota (4xx, 5xx, un error JSON-RPC) y el cuerpo que viajó igual. Mismo motivo: un corte del
+//     central reintentado N veces no es peso de nota.
 //   - SinCambios, Rebotes, Choques: nacen en cero. Los llenan los PR siguientes de la ola (el
 //     central que no re-guarda lo que ya tiene, y el pull que distingue un rebote propio de un
 //     choque con otra máquina). Están en la tabla desde ya para no pedir otra migración.
 type Viaje struct {
-	Filas       int64 `json:"filas"`
-	Posts       int64 `json:"posts"`
-	BytesCable  int64 `json:"bytes_cable"`
-	BytesCrudos int64 `json:"bytes_crudos"`
-	SinCambios  int64 `json:"sin_cambios"`
-	Rebotes     int64 `json:"rebotes"`
-	Choques     int64 `json:"choques"`
+	Filas           int64 `json:"filas"`
+	Posts           int64 `json:"posts"`
+	BytesCable      int64 `json:"bytes_cable"`
+	BytesCrudos     int64 `json:"bytes_crudos"`
+	Vacias          int64 `json:"vacias"`
+	BytesVacias     int64 `json:"bytes_vacias"`
+	Rechazados      int64 `json:"rechazados"`
+	BytesRechazados int64 `json:"bytes_rechazados"`
+	SinCambios      int64 `json:"sin_cambios"`
+	Rebotes         int64 `json:"rebotes"`
+	Choques         int64 `json:"choques"`
 }
 
 // RegistrarViaje SUMA el viaje de un tick a la fila del día (UTC) y sentido. Un solo UPSERT, así
@@ -53,17 +68,23 @@ func (e *DbEngine) RegistrarViaje(sentido string, v Viaje) error {
 		return fmt.Errorf("sentido de viaje desconocido %q: es %q o %q", sentido, ViajeSubida, ViajeBajada)
 	}
 	if _, err := e.db.Exec(`
-		INSERT INTO sync_viajes (dia, sentido, filas, posts, bytes_cable, bytes_crudos, sin_cambios, rebotes, choques)
-		VALUES (date('now'), ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO sync_viajes (dia, sentido, filas, posts, bytes_cable, bytes_crudos, vacias, bytes_vacias,
+			rechazados, bytes_rechazados, sin_cambios, rebotes, choques)
+		VALUES (date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(dia, sentido) DO UPDATE SET
-			filas        = sync_viajes.filas        + excluded.filas,
-			posts        = sync_viajes.posts        + excluded.posts,
-			bytes_cable  = sync_viajes.bytes_cable  + excluded.bytes_cable,
-			bytes_crudos = sync_viajes.bytes_crudos + excluded.bytes_crudos,
-			sin_cambios  = sync_viajes.sin_cambios  + excluded.sin_cambios,
-			rebotes      = sync_viajes.rebotes      + excluded.rebotes,
-			choques      = sync_viajes.choques      + excluded.choques`,
-		sentido, v.Filas, v.Posts, v.BytesCable, v.BytesCrudos, v.SinCambios, v.Rebotes, v.Choques); err != nil {
+			filas            = sync_viajes.filas            + excluded.filas,
+			posts            = sync_viajes.posts            + excluded.posts,
+			bytes_cable      = sync_viajes.bytes_cable      + excluded.bytes_cable,
+			bytes_crudos     = sync_viajes.bytes_crudos     + excluded.bytes_crudos,
+			vacias           = sync_viajes.vacias           + excluded.vacias,
+			bytes_vacias     = sync_viajes.bytes_vacias     + excluded.bytes_vacias,
+			rechazados       = sync_viajes.rechazados       + excluded.rechazados,
+			bytes_rechazados = sync_viajes.bytes_rechazados + excluded.bytes_rechazados,
+			sin_cambios      = sync_viajes.sin_cambios      + excluded.sin_cambios,
+			rebotes          = sync_viajes.rebotes          + excluded.rebotes,
+			choques          = sync_viajes.choques          + excluded.choques`,
+		sentido, v.Filas, v.Posts, v.BytesCable, v.BytesCrudos, v.Vacias, v.BytesVacias,
+		v.Rechazados, v.BytesRechazados, v.SinCambios, v.Rebotes, v.Choques); err != nil {
 		return fmt.Errorf("error al registrar el viaje de %s: %w", sentido, err)
 	}
 	return nil
@@ -121,10 +142,12 @@ func (e *DbEngine) ResumenDelSync(ctx context.Context) (ResumenDelSync, error) {
 	sumar := func(sentido, desde string, v *Viaje) error {
 		return e.db.QueryRowContext(ctx, `
 			SELECT COALESCE(SUM(filas),0), COALESCE(SUM(posts),0), COALESCE(SUM(bytes_cable),0),
-			       COALESCE(SUM(bytes_crudos),0), COALESCE(SUM(sin_cambios),0), COALESCE(SUM(rebotes),0),
-			       COALESCE(SUM(choques),0)
+			       COALESCE(SUM(bytes_crudos),0), COALESCE(SUM(vacias),0), COALESCE(SUM(bytes_vacias),0),
+			       COALESCE(SUM(rechazados),0), COALESCE(SUM(bytes_rechazados),0),
+			       COALESCE(SUM(sin_cambios),0), COALESCE(SUM(rebotes),0), COALESCE(SUM(choques),0)
 			FROM sync_viajes WHERE sentido = ? AND dia >= date('now', ?)`, sentido, desde).
-			Scan(&v.Filas, &v.Posts, &v.BytesCable, &v.BytesCrudos, &v.SinCambios, &v.Rebotes, &v.Choques)
+			Scan(&v.Filas, &v.Posts, &v.BytesCable, &v.BytesCrudos, &v.Vacias, &v.BytesVacias,
+				&v.Rechazados, &v.BytesRechazados, &v.SinCambios, &v.Rebotes, &v.Choques)
 	}
 	for _, c := range []struct {
 		sentido, desde string
