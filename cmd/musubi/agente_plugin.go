@@ -61,24 +61,42 @@ var ganchosDelAgente = []struct{ evento, matcher, sub string }{
 	{"Stop", "", "capture --hook-mode"},
 }
 
-// dirDelPlugin es donde se instala: ~/.claude/skills/musubi.
+// dirDelPlugin es donde se instala: <config de Claude Code>/skills/musubi.
 func dirDelPlugin() (string, error) {
+	base, err := dirConfigDeClaude()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "skills", nombrePlugin), nil
+}
+
+// dirConfigDeClaude es la carpeta de configuración de Claude Code: CLAUDE_CONFIG_DIR si está puesta
+// (así la reubica Claude Code), y si no ~/.claude. La leen el plugin y sus permisos: con dos
+// derivaciones distintas, con la variable puesta el plugin iba a un lado y los permisos a otro.
+func dirConfigDeClaude() (string, error) {
+	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
+		return d, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".claude", "skills", nombrePlugin), nil
+	return filepath.Join(home, ".claude"), nil
 }
 
 // runAgente implementa `musubi agente <instalar|estado|quitar> [--dir RUTA]`.
 func runAgente(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "uso: musubi agente <instalar|estado|quitar> [--dir RUTA]")
+		fmt.Fprintln(os.Stderr, "uso: musubi agente <instalar|estado|quitar> [--dir RUTA] [--settings RUTA] [--sin-permisos] [--flota-sin-preguntar]")
 		os.Exit(2)
 	}
 	accion := args[0]
 	fs := flag.NewFlagSet("agente "+accion, flag.ExitOnError)
 	dirF := fs.String("dir", "", "carpeta del plugin (default: ~/.claude/skills/musubi)")
+	settingsF := fs.String("settings", "", "settings.json de Claude Code donde van los permisos (default: ~/.claude/settings.json)")
+	sinPermisos := fs.Bool("sin-permisos", false, "instalar sin tocar los permisos de Claude Code")
+	flotaSinPreguntar := fs.Bool("flota-sin-preguntar", false,
+		"permitir también, sin preguntar, las tools que actúan sobre otras máquinas de la flota o sobre credenciales")
 	_ = fs.Parse(args[1:])
 	dir := *dirF
 	if dir == "" {
@@ -104,11 +122,39 @@ func runAgente(args []string) {
 			os.Exit(1)
 		}
 		fmt.Printf("Plugin de Musubi instalado en %s.\n", dir)
+		if !*sinPermisos {
+			settings := *settingsF
+			if settings == "" {
+				if settings, err = settingsPorDefecto(); err != nil {
+					fmt.Fprintf(os.Stderr, "musubi agente: no sé dónde está el settings.json de Claude Code: %v\n", err)
+					os.Exit(1)
+				}
+			}
+			p, err := instalarPermisos(dir, settings, *flotaSinPreguntar)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "musubi agente: el plugin quedó instalado, pero no pude poner los permisos: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Permisos en %s: Musubi permitido (%d regla(s) puestas por Musubi)", settings, len(p.Allow))
+			if len(p.Ask) > 0 {
+				fmt.Printf("; %d tool(s) que actúan sobre otras máquinas o credenciales siguen preguntando (--flota-sin-preguntar las permite)", len(p.Ask)/len(servidoresDeMusubi(nombrePlugin)))
+			}
+			fmt.Println(".")
+		}
 		fmt.Println("Claude Code lo carga solo en la próxima sesión (musubi@skills-dir); en una sesión abierta, /reload-plugins.")
 		fmt.Println("Donde un repo ya conecta Musubi por su .mcp.json, el plugin se hace a un lado y ese repo sigue como estaba.")
 	case "estado":
 		fmt.Println(estadoDelPlugin(dir, version))
+		if p, ok := leerPermisosAnotados(dir); ok {
+			fmt.Printf("Permisos: %d permitidas y %d en «preguntar», puestas por Musubi en %s.\n", len(p.Allow), len(p.Ask), p.Settings)
+		} else {
+			fmt.Println("Permisos: Musubi no puso ninguno (cada llamada puede pedir confirmación).")
+		}
 	case "quitar":
+		if err := quitarPermisos(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "musubi agente: no pude sacar los permisos que había puesto: %v\n", err)
+			os.Exit(1)
+		}
 		if err := quitarPlugin(dir); err != nil {
 			fmt.Fprintf(os.Stderr, "musubi agente: %v\n", err)
 			os.Exit(1)

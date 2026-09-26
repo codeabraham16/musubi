@@ -16,6 +16,10 @@ type wireResult struct {
 	aviso   string // algo que el operador tiene que saber aunque el paso haya salido bien
 }
 
+// ServidorCerebro es el nombre de la entrada del .mcp.json que conecta con el cerebro central. Lo
+// leen también los permisos que escribe `musubi agente instalar`: una regla por nombre de servidor.
+const ServidorCerebro = "musubi-cerebro"
+
 // wireMCPJSON cablea (idempotente) el .mcp.json de projectDir con DOS entradas: la LOCAL
 // ("musubi", stdio al binario, forma portable ${MUSUBI_BIN}) y la del CEREBRO
 // ("musubi-cerebro", stdio a `musubi cerebro`, que reenvía al brain y resuelve el bearer con
@@ -83,7 +87,7 @@ func wireMCPJSON(projectDir, brain, tokenEnv, exePath string, dryRun bool) (wire
 		Command: "${MUSUBI_BIN:-" + exePath + "}",
 		Args:    []string{"cerebro", "--url", baseDelCerebro, "--token-env", tokenEnv},
 	}
-	merged, err = bootstrap.MergeMCPServer(merged, "musubi-cerebro", cerebro)
+	merged, err = bootstrap.MergeMCPServer(merged, ServidorCerebro, cerebro)
 	if err != nil {
 		return res, err
 	}

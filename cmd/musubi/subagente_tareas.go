@@ -67,6 +67,7 @@ func contenidoDelSubagenteDeTareas(plugin, servidor string) string {
 		"{{TOOLS}}", strings.Join(toolsDelSubagenteDeTareas(plugin, servidor), ", "),
 		"{{LOTE}}", memory.LoteCuarentena,
 		"{{AGENTE}}", agenteEnElTablero,
+		"{{GIT}}", strings.Join(comandosGitDeLectura, ", "),
 	).Replace(plantillaDelSubagenteDeTareas)
 }
 
@@ -109,7 +110,7 @@ DESCARTAR — musubi_discard_proposal con {"id":"<id>"}:
 Descartar la archiva: deja de competir por el recall, y la purga la borra después de su gracia.
 
 CORROBORAR — musubi_corroborate con {"id":"<id>"}:
-- si lo central de la nota se sostiene en el repo y lo verificaste con Read, Grep, Glob o git de sólo lectura (git log, git show, git grep, git branch --contains): nombres de archivos y funciones, commits, números de PR, lo que el código hace. Algo que viste, no que supusiste.
+- si lo central de la nota se sostiene en el repo y lo verificaste con Read, Grep, Glob o git de sólo lectura ({{GIT}}): nombres de archivos y funciones, commits, números de PR, lo que el código hace. Algo que viste, no que supusiste.
 - una nota de estado que es la MÁS NUEVA de su tema se corrobora si lo que afirma del estado se comprueba (lo mergeado, lo que existe en el código). Si una parte ya no vale —algo que decía pendiente y ya se hizo—, igual se corrobora, porque es historia fechada, y lo decís en el motivo.
 Corroborar la hace visible al recall con su sello de procedencia: sigue diciendo que la escribió un modelo.
 

@@ -113,6 +113,12 @@ already has its own wiring (`musubi setup`), the plugin steps aside and that rep
 before. `musubi agente estado` tells you whether the plugin matches the binary; `musubi agente
 quitar` removes it.
 
+The install also sets Claude Code **permissions** in `~/.claude/settings.json`, so the agent uses
+Musubi without asking you to confirm every call: Musubi's servers are allowed, and the tools that act
+**on another fleet machine or on credentials** keep asking (`--flota-sin-preguntar` allows them too;
+`--sin-permisos` leaves settings untouched). Musubi records which rules it added: reinstalling
+replaces them, `quitar` removes them, and your own rules are never touched.
+
 Prefer to wire a single project? Inside the repo:
 
 ```bash
