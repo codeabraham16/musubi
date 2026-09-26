@@ -113,6 +113,12 @@ Musubi queda inerte y no crea nada. Donde un repo ya tiene su propio cableado (`
 plugin se hace a un lado y ese repo sigue como estaba. `musubi agente estado` dice si el plugin
 está al día con el binario; `musubi agente quitar` lo saca.
 
+La instalación también deja los **permisos** de Claude Code en `~/.claude/settings.json`, para que
+el agente use Musubi sin pedirte confirmación en cada llamada: los servidores de Musubi quedan
+permitidos, y las tools que actúan **sobre otra máquina de la flota o sobre credenciales** siguen
+preguntando (`--flota-sin-preguntar` también las permite; `--sin-permisos` no toca nada). Musubi
+anota qué reglas agregó: reinstalar las reemplaza, `quitar` las saca, y las tuyas no se tocan nunca.
+
 ¿Preferís cablear un solo proyecto? Adentro del repo:
 
 ```bash

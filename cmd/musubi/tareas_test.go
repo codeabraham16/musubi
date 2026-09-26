@@ -342,6 +342,7 @@ func TestElPluginTraeElSubagenteDeTareas(t *testing.T) {
 	// El hook lo encuentra: como plugin, y desde un repo cableado a mano (carpeta de siempre).
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "") // la carpeta de siempre, no la de la máquina que corre la prueba
 	t.Setenv("CLAUDE_PLUGIN_ROOT", plugin)
 	if got := subagenteDeTareasDisponible(); got != "musubi:musubi-tareas" {
 		t.Errorf("como plugin, el subagente es %q; quería musubi:musubi-tareas", got)
