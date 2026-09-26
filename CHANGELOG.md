@@ -379,15 +379,19 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   algún día el transporte de Go descomprime solo una página de la bajada, se cuentan sus crudos y
   no se inventa el cable.
 
-  *Doce guardas nuevas, con su sabotaje corrido y rojo. `TestElRebotePreservaElEnviado`,
+  *Diecinueve guardas nuevas, con su sabotaje corrido y rojo. `TestElRebotePreservaElEnviado`,
   `TestLaEntregaDejaQueSalioYCuando`, `TestLosViajesSeSumanPorDiaYSentido`,
-  `TestLoQueNoViajaSeCuentaUnaSolaVez` (las tres categorías son disjuntas) y
-  `TestUnBinarioAnteriorLeeLaBaseDelContador` (la v57 abre la v58 como legible) en
+  `TestLoQueNoViajaSeCuentaUnaSolaVez` (las tres categorías son disjuntas),
+  `TestUnBinarioAnteriorLeeLaBaseDelContador` (la v57 abre la v58 como legible),
+  `TestLasEnviadasRespetanSuVentana`, `TestHoyYSieteDiasSonDiasDeLaTabla`,
+  `TestUnaPropuestaDescartadaNoCuentaComoCuarentena` y `TestUnaMuertaQueRebotaQuedaEspejo` en
   `internal/memory`; `TestSyncStatusCuentaLoDeHoy`, `TestUnaSubidaQueNoSalioNoRegistraViaje`,
   `TestLaBajadaRegistraSuViaje`, `TestUnaBajadaQueNoSalioNoRegistraViaje`,
   `TestSyncStatusAcotadoAlProyecto` y `TestSyncStatusNoMuestraElOutboxAjeno` (el vecino ve ceros,
-  el admin federado ve el dato) y `TestLaBajadaPorNotaNoCuentaElSondeo` (la métrica da el peso
-  de la nota con treinta sondeos alrededor) en `internal/mcp`.*
+  el admin federado ve el dato), `TestLaBajadaPorNotaNoCuentaElSondeo` (la métrica da el peso de la
+  nota con treinta sondeos alrededor), `TestLosBytesDeLaSubidaSonLosQueRecibeElCentral` y
+  `TestLosBytesDeLaBajadaSonLosDelCuerpoServido` (bytes exactos contra un central de prueba) y
+  `TestLaLineaDeLaBajadaEsUnaSola` en `internal/mcp`.*
 - **El mapa publicado describe el commit, no el disco: lo que git ignora ya no sube al central.**
   El índice lee el disco y el central guarda la foto con la etiqueta de un commit. #647 frenaba lo
   modificado y lo sin trackear, pero `git status` no lista los **ignorados**, y `walkSourceTree` no

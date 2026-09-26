@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -161,8 +162,8 @@ func TestUnaSubidaQueNoSalioNoRegistraViaje(t *testing.T) {
 	})
 }
 
-// centralQueSirvePull arma un central que contesta musubi_sync_pull con `n` items en la primera
-// página y vacío después.
+// centralQueSirvePull arma un central que contesta musubi_sync_pull con los mismos `n` items en
+// CADA pedido: no mira el cursor.
 func centralQueSirvePull(n int) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var items []string
@@ -371,6 +372,25 @@ func TestSyncStatusNoMuestraElOutboxAjeno(t *testing.T) {
 	}
 }
 
+// TestLaLineaDeLaBajadaEsUnaSola: el contrato con el frente que mide la edad de la bajada es UNA sola
+// línea «bajada:», que ese PR completa con la edad y la próxima; dos líneas podrían contradecirse.
+//
+// Sabotaje: partir la línea en dos.
+// arnes: archivo="internal/mcp/sync_viajes.go"
+// arnes: de="s += fmt.Sprintf(\"\\nbajada: hoy"
+// arnes: a="s += \"\\nbajada: (vacío)\"\n\ts += fmt.Sprintf(\"\\nbajada: hoy"
+func TestLaLineaDeLaBajadaEsUnaSola(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	res, e := call(t, s, "musubi_sync_status", map[string]interface{}{})
+	if e != nil {
+		t.Fatalf("sync_status: %+v", e)
+	}
+	txt := res.(CallToolResponse).Content[0].Text
+	if n := strings.Count(txt, "\nbajada:"); n != 1 {
+		t.Errorf("musubi_sync_status trae %d líneas «bajada:»; el contrato es una sola:\n%s", n, txt)
+	}
+}
+
 // TestLaBajadaPorNotaNoCuentaElSondeo: contra el central REAL (su handler HTTP), treinta ticks sin
 // novedades y uno con una nota. Las páginas vacías —el régimen de un nodo quieto, miles por día y
 // por base— suman a posts (el contador de pulls) y a vacias/bytes_vacias, pero NO al cable: así
@@ -424,4 +444,117 @@ func TestLaBajadaPorNotaNoCuentaElSondeo(t *testing.T) {
 	}
 	t.Logf("métrica (1) de la bajada = %d B por nota; el sondeo, aparte: %d páginas vacías, %d B (%.0f B cada una), en %d pulls",
 		b.BytesCable/max(b.Filas, 1), b.Vacias, b.BytesVacias, float64(b.BytesVacias)/float64(max(b.Vacias, 1)), b.Posts)
+}
+
+// TestLosBytesDeLaBajadaSonLosDelCuerpoServido: el cable de la bajada es EXACTAMENTE el cuerpo que
+// sirvió el central, con su salto de línea final, y el de la página vacía va aparte con su largo
+// exacto. Los PR de compresión editan justo estas líneas.
+//
+// Sabotaje: contar sólo el texto del resultado en vez del cuerpo que viajó.
+// arnes: archivo="internal/mcp/syncclient.go"
+// arnes: de="n := contado.terminar()"
+// arnes: a="n := int64(len(toolResult.Content[0].Text))"
+func TestLosBytesDeLaBajadaSonLosDelCuerpoServido(t *testing.T) {
+	var mu sync.Mutex
+	var servidos []int
+	central := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Params struct {
+				Arguments struct {
+					AfterRowID int64 `json:"after_rowid"`
+				} `json:"arguments"`
+			} `json:"params"`
+		}
+		_ = json.Unmarshal(body, &req)
+		payload := `{"items":[],"next_cursor":2}`
+		if req.Params.Arguments.AfterRowID == 0 {
+			payload = `{"items":[` +
+				`{"rowid":1,"id":"c1","topic_key":"t/a","content":"alfa del central","importance":1,"mem_type":"semantic","author":"ana","project_id":"acme"},` +
+				`{"rowid":2,"id":"c2","topic_key":"t/b","content":"beta del central","importance":1,"mem_type":"semantic","author":"juan","project_id":"acme"}` +
+				`],"next_cursor":2}`
+		}
+		cuerpo := []byte(`{"jsonrpc":"2.0","id":"pull","result":{"content":[{"type":"text","text":` + strconv.Quote(payload) + `}]}}` + "\n")
+		mu.Lock()
+		servidos = append(servidos, len(cuerpo))
+		mu.Unlock()
+		_, _ = w.Write(cuerpo)
+	}))
+	defer central.Close()
+	s, _ := serverQueAnotaViajes(t, central.URL, true)
+
+	s.drainInboundOnce(context.Background()) // la página con las dos filas
+	s.drainInboundOnce(context.Background()) // el cursor ya avanzó: una página vacía
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(servidos) != 2 {
+		t.Fatalf("precondición: esperaba 2 páginas servidas, hubo %d", len(servidos))
+	}
+	r, err := s.engine.ResumenDelSync(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := r.BajadaHoy
+	if b.BytesCable != int64(servidos[0]) || b.BytesCrudos != int64(servidos[0]) || b.Filas != 2 {
+		t.Errorf("bajada: cable %d / crudos %d con %d filas; el central sirvió %d B en la página con datos", b.BytesCable, b.BytesCrudos, b.Filas, servidos[0])
+	}
+	if b.Vacias != 1 || b.BytesVacias != int64(servidos[1]) || b.Posts != 2 {
+		t.Errorf("bajada: %d vacías de %d B en %d páginas; el central sirvió una vacía de %d B", b.Vacias, b.BytesVacias, b.Posts, servidos[1])
+	}
+}
+
+// TestLosBytesDeLaSubidaSonLosQueRecibeElCentral: el cable de la subida es EXACTAMENTE lo que recibió
+// el central por las notas que aceptó, y el cuerpo del POST que rechazó va aparte, entero.
+//
+// Sabotaje: contar el content de la nota en vez del cuerpo del POST.
+// arnes: archivo="internal/mcp/syncclient.go"
+// arnes: de="c.trafico.subidaCable.Add(int64(len(payload)))"
+// arnes: a="c.trafico.subidaCable.Add(int64(len(item.Content)))"
+func TestLosBytesDeLaSubidaSonLosQueRecibeElCentral(t *testing.T) {
+	var mu sync.Mutex
+	var aceptados, rechazados int64
+	central := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Params struct {
+				Arguments struct {
+					ID string `json:"id"`
+				} `json:"arguments"`
+			} `json:"params"`
+		}
+		_ = json.Unmarshal(body, &req)
+		mu.Lock()
+		defer mu.Unlock()
+		if req.Params.Arguments.ID == "rechazada" {
+			rechazados += int64(len(body))
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"x","error":{"code":-32602,"message":"params inválidos"}}`))
+			return
+		}
+		aceptados += int64(len(body))
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"x","result":{"content":[{"type":"text","text":"ok"}]}}`))
+	}))
+	defer central.Close()
+	s, _ := serverQueAnotaViajes(t, central.URL, false)
+	for _, id := range []string{"a1", "a2", "rechazada"} {
+		saveShared(t, s, id)
+	}
+	s.drainOutboxOnce(context.Background())
+
+	r, err := s.engine.ResumenDelSync(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	v := r.SubidaHoy
+	if v.Filas != 2 || v.Posts != 3 || v.Rechazados != 1 {
+		t.Fatalf("precondición: esperaba 2 aceptadas y 1 rechazada en 3 posts, vino %+v", v)
+	}
+	if v.BytesCable != aceptados || v.BytesCrudos != aceptados {
+		t.Errorf("subida: cable %d / crudos %d; el central recibió %d B de las aceptadas", v.BytesCable, v.BytesCrudos, aceptados)
+	}
+	if v.BytesRechazados != rechazados {
+		t.Errorf("subida: %d B rechazados; el central recibió %d B de la rechazada", v.BytesRechazados, rechazados)
+	}
 }

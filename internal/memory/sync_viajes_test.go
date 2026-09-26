@@ -192,6 +192,142 @@ func TestLosViajesSeSumanPorDiaYSentido(t *testing.T) {
 	}
 }
 
+// TestLasEnviadasRespetanSuVentana: «enviadas en 24 h» y «en 7 d» miran la hora de la última
+// entrega, cada una con su ventana. Una entrega de hace 3 días cuenta en 7 d y no en 24 h; una de
+// hace 10 días no cuenta en ninguna.
+//
+// Sabotaje: ensanchar la ventana de 24 h a 30 días.
+// arnes: archivo="internal/memory/sync_viajes.go"
+// arnes: de="b.sent_at >= datetime('now','-1 day')"
+// arnes: a="b.sent_at >= datetime('now','-30 day')"
+func TestLasEnviadasRespetanSuVentana(t *testing.T) {
+	e := newTestEngine(t)
+	for _, id := range []string{"hoy", "hace-3", "hace-10"} {
+		if err := e.SaveObservationTyped(id, "t/x", "nota compartida "+id, 1, "semantic", ScopeShared, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := e.ClaimOutboxBatch(50, 60); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"hoy", "hace-3", "hace-10"} {
+		if err := e.MarkOutboxSent(id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for id, hace := range map[string]string{"hace-3": "-3 day", "hace-10": "-10 day"} {
+		if _, err := e.db.Exec(`UPDATE outbox SET sent_at = datetime('now', ?) WHERE obs_id = ?`, hace, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	r, err := e.ResumenDelSync(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.EnviadasDia != 1 || r.EnviadasSemana != 2 {
+		t.Errorf("enviadas 24 h / 7 d = %d / %d; esperaba 1 / 2 (hoy; hoy y hace 3 días; hace 10 días afuera)", r.EnviadasDia, r.EnviadasSemana)
+	}
+}
+
+// TestHoyYSieteDiasSonDiasDeLaTabla: «hoy» es sólo la fila de hoy y «7 d» son las siete filas que
+// terminan hoy. Una fila de hace 3 días cuenta en 7 d y no en hoy; una de hace 8 días, en ninguna.
+//
+// Sabotaje: que «hoy» de la subida sume la semana.
+// arnes: archivo="internal/memory/sync_viajes.go"
+// arnes: de="{ViajeSubida, \"+0 day\", &r.SubidaHoy},"
+// arnes: a="{ViajeSubida, \"-6 day\", &r.SubidaHoy},"
+func TestHoyYSieteDiasSonDiasDeLaTabla(t *testing.T) {
+	e := newTestEngine(t)
+	for _, sentido := range []string{ViajeSubida, ViajeBajada} {
+		for hace, filas := range map[string]int{"+0 day": 1, "-3 day": 10, "-8 day": 100} {
+			if _, err := e.db.Exec(`INSERT INTO sync_viajes (dia, sentido, filas, posts) VALUES (date('now', ?), ?, ?, ?)`,
+				hace, sentido, filas, filas); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	r, err := e.ResumenDelSync(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		nombre string
+		v      Viaje
+		filas  int64
+	}{
+		{"subida hoy", r.SubidaHoy, 1}, {"subida 7 d", r.Subida7d, 11},
+		{"bajada hoy", r.BajadaHoy, 1}, {"bajada 7 d", r.Bajada7d, 11},
+	} {
+		if c.v.Filas != c.filas || c.v.Posts != c.filas {
+			t.Errorf("%s = filas %d posts %d; esperaba %d (hoy=1, hace 3 días=10, hace 8 días=100 afuera)", c.nombre, c.v.Filas, c.v.Posts, c.filas)
+		}
+	}
+}
+
+// TestUnaPropuestaDescartadaNoCuentaComoCuarentena: descartar una propuesta la archiva y sigue con
+// quarantined=1. Ya no espera a nadie, así que no es algo que «no viaja porque nadie la corroboró».
+//
+// Sabotaje: contar en cuarentena también lo archivado.
+// arnes: archivo="internal/memory/sync_viajes.go"
+// arnes: de="quarantined = 1 AND archived = 0 AND superseded_by IS NULL THEN"
+// arnes: a="quarantined = 1 THEN"
+func TestUnaPropuestaDescartadaNoCuentaComoCuarentena(t *testing.T) {
+	e := newTestEngine(t)
+	viva, err := e.ProposeObservation("", "", "t/x", "propuesta que sigue esperando", "modelo-x", 0.5, "semantic", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descartada, err := e.ProposeObservation("", "", "t/x", "propuesta que alguien descartó", "modelo-x", 0.5, "semantic", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.DescartarPropuesta(descartada, ""); err != nil {
+		t.Fatal(err)
+	}
+	if q, err := e.IsQuarantined(viva); err != nil || !q {
+		t.Fatalf("precondición: la propuesta viva tenía que seguir en cuarentena (q=%v, err=%v)", q, err)
+	}
+	r, err := e.ResumenDelSync(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.NoViajan.EnCuarentena != 1 {
+		t.Errorf("en cuarentena = %d; esperaba 1 (la descartada no espera corroboración)", r.NoViajan.EnCuarentena)
+	}
+}
+
+// TestUnaMuertaQueRebotaQuedaEspejo: una fila en dead-letter cuya observación baja del central queda
+// 'espejo': el central ya la tiene, y dejarla 'dead' haría que un musubi_sync_requeue la volviera a
+// subir. Es la otra rama del mismo CASE que conserva la 'sent'.
+//
+// Sabotaje: que el sello conserve también la 'dead'.
+// arnes: archivo="internal/memory/inboundsync.go"
+// arnes: de="THEN 'sent' ELSE 'espejo' END, attempts = 0"
+// arnes: a="THEN 'sent' WHEN outbox.status = 'dead' THEN 'dead' ELSE 'espejo' END, attempts = 0"
+func TestUnaMuertaQueRebotaQuedaEspejo(t *testing.T) {
+	e := newTestEngine(t)
+	const contenido = "una nota que el central rechazó una vez"
+	if err := e.SaveObservationTyped("muerta-1", "t/x", contenido, 1, "semantic", ScopeShared, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.ClaimOutboxBatch(50, 60); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.MarkOutboxDead("muerta-1", "rechazo de prueba"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.IngestShared(SharedObs{
+		ID: "muerta-1", TopicKey: "t/x", Content: contenido,
+		Importance: 1, MemType: "semantic", Author: "davantis-mando-admin", ProjectID: "acme",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, sa, _ := sentDe(t, e, "muerta-1"); st != outboxEspejo || sa != nil {
+		t.Errorf("una 'dead' que rebota quedó status=%q sent_at=%v; esperaba 'espejo' sin hora de entrega", st, textoONulo(sa))
+	}
+}
+
 // TestLoQueNoViajaSeCuentaUnaSolaVez: las tres categorías de «no viaja» son disjuntas. Una
 // propuesta corroborada de un LLM que sigue local cuenta como tal y NO como local a secas, una en
 // cuarentena no cuenta como local, y lo archivado o compartido no cuenta.
