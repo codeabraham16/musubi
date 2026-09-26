@@ -412,6 +412,22 @@ func avisosDeInterpretes(p Principal) []string {
 // NO cuenta el comodín `*`: una concesión sobre todas las máquinas sobrevive a cualquier rename y
 // listarla sería ruido que tapa lo que sí importa. Lo que importa es exactamente lo que se rompe:
 // las que nombran a ESTA.
+//
+// LAS DOS LISTAS SE LEEN CON LA MISMA GRAMÁTICA, fleet.SelectorNombra (A131·T3 y su revisión). Una
+// clave de `fleet_exec_allow` es un selector de máquina igual que los de `fleet:` —un nombre exacto
+// o el comodín—, y la lista de allowlists la buscaba por su cuenta, `p.ExecAllow[device]`. Para una
+// máquina que se llama `*` (NombreDeDeviceValido lo deja) eso encontraba la entrada del COMODÍN y la
+// listaba como «se rompe», mientras la lista de concesiones, corregida por T3, ya no listaba la
+// concesión `*` de la misma persona: el mismo informe con dos criterios. Medido en la revisión con
+// una sonda sobre la punta de T3: `Concesiones=[]` y `Allowlists=["op"]` para un `op` con `exec:
+// ["*"]` y `fleet_exec_allow: {"*": …}`. Exposición: 0, ninguna máquina del cerebro se llama `*`
+// (auditoría A131: altura-db, davantis-1, gio, musubi-server).
+//
+// Y LA DE ALLOWLISTS LA BUSCA fleet.EntradaDeAllowlist, LA MISMA QUE LA COMPUERTA (revisión 2). El
+// recorrido con SelectorNombra que dejó la revisión leía bien la clave, pero la compuerta
+// (argvPermitido) seguía buscándola por su cuenta y sin recortar: con una clave ` davantis `, este
+// informe avisaba que el rename rompía una allowlist que la compuerta ni siquiera encontraba. Ahora
+// «la entrada que nombra a esta máquina» es una sola respuesta para los tres que la preguntan.
 func (r *PrincipalRegistry) impactoDeNombre(device string) ImpactoDeNombre {
 	var imp ImpactoDeNombre
 	if r == nil || strings.TrimSpace(device) == "" {
@@ -421,14 +437,17 @@ func (r *PrincipalRegistry) impactoDeNombre(device string) ImpactoDeNombre {
 		p := &r.principals[i]
 		for _, selectores := range p.Fleet {
 			for _, sel := range selectores {
-				if sel == device {
+				// La MISMA gramática que la compuerta (fleet.SelectorAlcanza, vía SelectorNombra): el
+				// informe dice qué se rompe con el rename, y sólo lo sabe si lee el selector igual que
+				// quien lo aplica (A131·T3).
+				if fleet.SelectorNombra(sel, device) {
 					imp.Concesiones = append(imp.Concesiones, p.Name)
 					goto allow
 				}
 			}
 		}
 	allow:
-		if _, hay := p.ExecAllow[device]; hay {
+		if _, nombrada, _ := fleet.EntradaDeAllowlist(p.ExecAllow, device); nombrada {
 			imp.Allowlists = append(imp.Allowlists, p.Name)
 		}
 	}

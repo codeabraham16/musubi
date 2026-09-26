@@ -119,9 +119,15 @@ func TestUnaMaquinaQueLaAllowlistNoNombraNoPermiteNada(t *testing.T) {
 // un no-op: el principal se arma A MANO con el ayudante de acá y se mete al contexto directo, sin
 // leer ningún `principals.yaml`. `parsearExecAllow` sólo lo llama el cargador del registro, que en
 // estas pruebas no corre. El corte que sí la enciende vive en la decisión, no en el parseo.
-// arnes: archivo="internal/mcp/fleet_authz.go"
-// arnes: de="\tif lista, hay := p.ExecAllow[d.Name]; hay {\n\t\treturn fleet.PermiteArgv(lista, argv) // 2\n\t}\n"
-// arnes: a="\tif lista, hay := p.ExecAllow[d.Name]; hay && len(lista) > 0 {\n\t\treturn fleet.PermiteArgv(lista, argv) // 2\n\t}\n"
+//
+// Y LA DECISIÓN SE MUDÓ (A131·T3, revisión 2): qué entrada manda —la que nombra a la máquina, o la
+// del comodín— ya no la busca argvPermitido con `p.ExecAllow[d.Name]` sino fleet.EntradaDeAllowlist,
+// la gramática que comparten la compuerta, el inventario y el informe del rename. El corte es el
+// mismo, en su nuevo lugar: la entrada vacía que nombra a la máquina deja de devolverse, y el
+// recorrido sigue hasta la del comodín.
+// arnes: archivo="internal/fleet/politica.go"
+// arnes: de="\t\t\treturn lista, true, true\n"
+// arnes: a="\t\t\tif len(lista) > 0 {\n\t\t\t\treturn lista, true, true\n\t\t\t}\n"
 func TestUnaEntradaVaciaApagaLaMaquinaAunqueHayaComodin(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConExec(t, s, "casa", "nas")

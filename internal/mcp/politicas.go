@@ -62,6 +62,20 @@ func (s *McpServer) aplicarPoliticas(proyecto string, ahora time.Time) int {
 	acciones := 0
 	for _, pol := range s.politicas {
 		for _, d := range devices {
+			// EL ALCANCE VA PRIMERO, Y ÉSTE ES EL ÚNICO LUGAR DEL BARRIDO QUE LO DECIDE (A131·T3).
+			//
+			// PRIMERO, porque todo lo de abajo es de una política SOBRE esta máquina. La ventana se
+			// contaba antes que el alcance, así que una ventana en una máquina que la política ni
+			// nombra le sumaba `mantenimiento`, y el contador que contesta «¿no actuó porque estaba
+			// en mantenimiento?» decía que sí donde la política nunca iba a actuar.
+			//
+			// ÚNICO, porque vivía adentro de evaluarPolitica, y condicionarlo a la clase (P2-m5:
+			// `&& !pol.EsDeServicio()`) no ponía nada en rojo. El inventario pregunta lo mismo con la
+			// misma función, en politicasSobre, y TestUnaPoliticaActuaYFiguraSoloSobreLasMaquinasQueNombra
+			// compara a los dos contra un hecho escrito, en cada condición.
+			if !pol.Alcanza(d.Name) {
+				continue
+			}
 			if enMantenimiento[d.ID] {
 				// Se CUENTA, con resultado propio. Un salteo silencioso se ve igual que una
 				// política que nunca tuvo que actuar, y la pregunta «¿el auto-heal no actuó
@@ -112,10 +126,19 @@ func (s *McpServer) ventanasParaPoliticas(ahora time.Time, contexto ...any) map[
 //
 // El orden de las guardas es de más barato a más caro, pero sobre todo es de más específico a más
 // general: primero lo que descarta la mayoría sin tocar nada.
+//
+// EL ALCANCE NO SE MIRA ACÁ: lo decide aplicarPoliticas antes de llegar, antes incluso que la ventana
+// de mantenimiento (ver el porqué ahí). Quien llame a esta función ya eligió una máquina que la
+// política alcanza.
+//
+// Y POR ESO NO PUEDE TENER OTRO LLAMADOR (revisión 2 de T3). Una tool que la llamara sobre una máquina
+// elegida por otro criterio —«probar esta política acá»— actuaría fuera del alcance, y la tabla de
+// alcance no se pondría roja: mide al barrido, no a esta función. Lo sostiene
+// TestLaCadenaDeAccionDeUnaPoliticaTieneUnaSolaEntrada, que lee del código quién nombra a cada eslabón
+// de la cadena que termina en ejecutar. Repetir acá pol.Alcanza —el mismo predicado, y barato— se midió
+// y se descartó: con esa segunda lectura puesta, el glob propio que la tabla siembra en el barrido
+// queda en verde, y P2-m5 sólo se ve por el contador `mantenimiento`. El porqué entero, en esa prueba.
 func (s *McpServer) evaluarPolitica(pol fleet.Politica, d fleet.Device, ahora time.Time) bool {
-	if !pol.Alcanza(d.Name) {
-		return false
-	}
 	if d.Revoked {
 		return false
 	}
@@ -192,28 +215,31 @@ func (s *McpServer) evaluarPoliticaDeServicio(pol fleet.Politica, d fleet.Device
 		// no saber no es una razón para tocar una máquina.
 		return false
 	}
-	for _, sv := range servicios {
-		if sv.Nombre != pol.Servicio {
-			continue
-		}
-		// Hasta A131 esto era una copia a mano de Fresco con el umbral en una variable local, y
-		// cambiarla por el umbral del host no ponía nada en rojo (P4-m3). Ver servicioFresco.
-		fresco := servicioFresco(sv, ahora)
-		valor, dispara := pol.DisparaSobreServicio(sv, fresco)
-		if !dispara {
-			return false
-		}
-		v := 0.0
-		if valor != nil {
-			v = *valor
-		}
-		return s.actuarSiCorresponde(pol, d, &v, ahora)
+	// EL SERVICIO SE BUSCA POR SU NOMBRE EXACTO, con la función del dominio (ServicioEn) y no con un
+	// predicado escrito acá: lo que se decide es sobre ESE servicio, nunca sobre uno que se le
+	// parezca (A131·T3, P4-m7).
+	sv, esta := pol.ServicioEn(servicios)
+	if !esta {
+		// EL SERVICIO NO ESTÁ EN EL INVENTARIO DE ESA MÁQUINA, y eso NO dispara, tenga el inventario
+		// la forma que tenga: vacío (la máquina nunca enumeró, o no tiene con qué), con otros nombres,
+		// o con éste dado de baja —ServiciosDeDevice sólo trae `revoked = 0`—. Podría tentar tratarlo
+		// como «caído» —no está, algo pasó— pero es exactamente al revés: la ausencia significa que la
+		// máquina no lo enumera, no que se cayó. Una política que reinicia lo que no
+		// existe es la que se lleva puesto un host donde alguien escribió mal el nombre.
+		return false
 	}
-	// EL SERVICIO NO ESTÁ EN EL INVENTARIO DE ESA MÁQUINA, y eso NO dispara. Podría tentar
-	// tratarlo como «caído» —no está, algo pasó— pero es exactamente al revés: la ausencia
-	// significa que la máquina no lo enumera, no que se cayó. Una política que reinicia lo que no
-	// existe es la que se lleva puesto un host donde alguien escribió mal el nombre.
-	return false
+	// Hasta A131 esto era una copia a mano de Fresco con el umbral en una variable local, y
+	// cambiarla por el umbral del host no ponía nada en rojo (P4-m3). Ver servicioFresco.
+	fresco := servicioFresco(sv, ahora)
+	valor, dispara := pol.DisparaSobreServicio(sv, fresco)
+	if !dispara {
+		return false
+	}
+	v := 0.0
+	if valor != nil {
+		v = *valor
+	}
+	return s.actuarSiCorresponde(pol, d, &v, ahora)
 }
 
 // actuarSiCorresponde es TODO lo que las dos clases de política comparten: el cooldown, la
@@ -685,6 +711,9 @@ func (s *McpServer) politicasSobre(p *Principal, d fleet.Device, enMantenimiento
 	}
 	verDetalle := PuedeSobreDevice(p, d, fleet.CapExec)
 	for _, pol := range s.politicas {
+		// EL ALCANCE, CON LA MISMA FUNCIÓN QUE EL BARRIDO (aplicarPoliticas): una política figura sobre
+		// una máquina exactamente donde el barrido la evalúa. Sin este filtro (P3-m6), una política
+		// que sólo nombra `nas` aparecía con su detalle entero en la fila de cualquier otra máquina.
 		if !pol.Alcanza(d.Name) {
 			continue
 		}
@@ -732,8 +761,10 @@ func (s *McpServer) politicasSobre(p *Principal, d fleet.Device, enMantenimiento
 //
 // Un indicador que dijera «sí» donde la política dice «no» sería peor que no tenerlo, porque
 // enseñaría a confiar en él. Por eso no evalúa compuertas propias: antepone la ventana de
-// mantenimiento —en el mismo orden que aplicarPoliticas, que la mira antes que nada— y el resto
-// se lo pregunta a autoridadDePolitica, que es la que decide en actuarSiCorresponde.
+// mantenimiento —en el mismo orden que aplicarPoliticas, que la mira apenas después del alcance—
+// y el resto se lo pregunta a autoridadDePolitica, que es la que decide en actuarSiCorresponde. El
+// alcance no lo repite: quien la llama (politicasSobre) ya descartó las máquinas que la política
+// no alcanza, con la misma función que el barrido.
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════
 // LO QUE NO CONTESTA, Y POR QUÉ: `puede_actuar: true` NO ES «VA A ACTUAR»

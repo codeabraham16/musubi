@@ -66,9 +66,19 @@ func TestLaConcesionEsPorCapacidadYNoUnBooleano(t *testing.T) {
 }
 
 // C3 — la concesión es POR MÁQUINA.
+//
+// (A131·T3) `servidor-critico` no comparte nada con `pc-gio` ni con `nas`, así que comparar por
+// prefijo en tieneGrant la dejaba en verde. Desde T3 el selector lo evalúa fleet.SelectorAlcanza, la
+// misma función que el alcance de una política, y sus formas las recorre
+// TestUnSelectorAlcanzaSoloAlComodinOAlNombreExacto (internal/fleet); que la compuerta no vuelva a
+// tener una gramática propia lo mide TestUnaPoliticaActuaYFiguraSoloSobreLasMaquinasQueNombra, con un
+// PISO sobre las mismas formas de parecido (internal/fleet/fleettest). Hasta la revisión de T3 esa
+// tabla no tenía piso y le faltaba el glob: una regla glob en tieneGrant dejaba internal/mcp entero
+// en verde. El `de` de abajo es el mismo bucle, con la llamada en lugar de la comparación.
+//
 // Sabotaje: que tieneGrant devuelva true si la lista no está vacía, sin mirar el nombre.
 // arnes: archivo="internal/mcp/fleet_authz.go"
-// arnes: de="\t\tfor _, selector := range selectores {\n\t\t\tif selector == comodinFlota || selector == nombreDevice {\n\t\t\t\treturn true\n\t\t\t}\n\t\t}"
+// arnes: de="\t\tfor _, selector := range selectores {\n\t\t\tif fleet.SelectorAlcanza(selector, nombreDevice) {\n\t\t\t\treturn true\n\t\t\t}\n\t\t}"
 // arnes: a="\t\tif len(selectores) > 0 {\n\t\t\treturn true\n\t\t}"
 func TestLaConcesionEsPorMaquina(t *testing.T) {
 	p := &Principal{
@@ -236,10 +246,16 @@ func TestCapsQuePuedeEsLaInterseccionEnOrden(t *testing.T) {
 
 // C7 — el escalamiento que cierra: alguien con exec sobre dos máquinas NOMBRADAS no puede
 // mintear una tercera con exec.
+//
+// (A131·T3, revisión) La comparación del bucle es ahora fleet.EsComodin, y el sabotaje ya no
+// reemplaza el bucle entero: entra al principio, para no pisar el `de` de
+// TestPuedeOtorgarLeeElComodinComoLaGramatica, que mira la lectura del comodín en la misma línea.
+// Es el mismo sabotaje: cualquier selector escrito alcanza para otorgar.
+//
 // Sabotaje: que puedeOtorgar acepte cualquier selector (no sólo el comodín).
 // arnes: archivo="internal/mcp/fleet_authz.go"
-// arnes: de="\tfor _, selector := range p.Fleet[c] {\n\t\tif selector == comodinFlota {\n\t\t\treturn true\n\t\t}\n\t}"
-// arnes: a="\tif len(p.Fleet[c]) > 0 {\n\t\treturn true\n\t}"
+// arnes: de="\tfor _, selector := range p.Fleet[c] {\n"
+// arnes: a="\tfor _, selector := range p.Fleet[c] {\n\t\tif selector != \"\" {\n\t\t\treturn true\n\t\t}\n"
 func TestNoSePuedeOtorgarLoQueNoSeTiene(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 

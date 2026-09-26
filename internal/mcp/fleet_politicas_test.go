@@ -377,6 +377,12 @@ func TestLaAccionDeUnaPoliticaQuedaEnLaMismaBitacoraQueLasPersonas(t *testing.T)
 
 // El alcance de la política es un selector de máquina, igual que el de las concesiones. Una
 // política sobre `nas` no puede tocar `pc-gio` aunque su principal sí pueda.
+//
+// (A131·T3) `nas` y `pc-gio` no comparten ni una letra, así que cualquier comparación laxa contesta
+// el mismo «no», y la condición es una sola, de host: comparar por prefijo (P2-m4) o saltear el
+// alcance de las políticas de servicio (P2-m5) la dejaban en verde. Las formas de parecerse sin ser,
+// en cada condición declarada y en los cuatro lugares que leen un selector, las recorre
+// TestUnaPoliticaActuaYFiguraSoloSobreLasMaquinasQueNombra.
 func TestUnaPoliticaSoloTocaLasMaquinasQueNombra(t *testing.T) {
 	pol := politicaDeMemoria()
 	pol.Devices = []string{"nas"} // que no existe en este proyecto
@@ -684,6 +690,11 @@ func TestPodarElEstadoDePoliticasConListaVaciaNoBorraNada(t *testing.T) {
 // S10 dejó al cerebro ejecutando comandos en máquinas ajenas sin una persona detrás, y eso no
 // aparecía en ningún lado salvo hurgando la bitácora DESPUÉS del hecho.
 //
+// (A131·T3) Esta prueba usa sólo `["*"]`, que alcanza a TODA máquina: sacarle al inventario el filtro
+// de alcance (P3-m6) la dejaba en verde, y una política que sólo nombra `otra-pc` aparecía con su
+// detalle entero en la fila de pc-gio. Que la política figure exactamente donde el barrido la
+// evalúa lo mide TestUnaPoliticaActuaYFiguraSoloSobreLasMaquinasQueNombra.
+//
 // Sabotaje que la hace fallar: no agregar `politicas`/`politicas_activas` al inventario.
 // arnes: archivo="internal/mcp/methods_fleet.go"
 // arnes: de="\t\t\t\tfila[\"politicas_activas\"] = total\n"
@@ -798,6 +809,11 @@ func TestSinExecSeVeQueHayAlgoAutomaticoPeroNoQueHace(t *testing.T) {
 
 // Sin políticas configuradas, el campo NO aparece: un `politicas_activas: 0` en cada fila es
 // ruido que entrena a ignorar la columna.
+//
+// (A131·T3) Mira un cerebro SIN políticas, y el ruido aparece también con políticas que no alcanzan
+// a la máquina: publicar el campo cuando `len(s.politicas) > 0` (P4-m1) la dejaba en verde. Ese caso
+// —que en producción son 3 de las 4 filas: `vaciar-journal` sólo nombra a musubi-server— lo recorre
+// TestUnaPoliticaActuaYFiguraSoloSobreLasMaquinasQueNombra.
 func TestSinPoliticasElInventarioNoMencionaNada(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarConExec(t, s, "casa", "pc-gio")
@@ -917,10 +933,16 @@ func TestUnaPoliticaDeServicioActuaSinTelemetriaDelHost(t *testing.T) {
 // ENUMERA — no que se cayó. Una política que reinicia lo que no existe es la que se lleva puesto
 // un host donde alguien escribió mal el nombre del servicio, y lo hace en silencio y para siempre.
 //
+// (A131·T3) Esta prueba arma UN inventario, no vacío y con un vecino (`sshd`) que no se parece al
+// buscado ni cumple la condición: comparar por prefijo (P4-m7) o tratar el inventario vacío como
+// caída (P4-m8) la dejaban en verde. Cada forma de la ausencia, con parecidos que cumplen, la recorre
+// TestUnaPoliticaDeServicioSoloMiraElServicioQueNombra. El `de` de abajo quedó un nivel más adentro
+// cuando la búsqueda pasó a Politica.ServicioEn: el `return false` vive ahora en `if !esta`.
+//
 // Sabotaje que la hace fallar: devolver true cuando el servicio no aparece en el inventario.
 // arnes: archivo="internal/mcp/politicas.go"
-// arnes: de="\t// existe es la que se lleva puesto un host donde alguien escribió mal el nombre.\n\treturn false\n"
-// arnes: a="\t// existe es la que se lleva puesto un host donde alguien escribió mal el nombre.\n\treturn true\n"
+// arnes: de="\t\t// existe es la que se lleva puesto un host donde alguien escribió mal el nombre.\n\t\treturn false\n"
+// arnes: a="\t\t// existe es la que se lleva puesto un host donde alguien escribió mal el nombre.\n\t\treturn true\n"
 func TestUnServicioAusenteDelInventarioNoDisparaLaPolitica(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	enrolarDePrueba(t, s, "casa", "pc-gio")

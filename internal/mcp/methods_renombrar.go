@@ -12,6 +12,11 @@ package mcp
 //	argvPermitido     → la allowlist de comandos por máquina (`exec_allow`)
 //	Politica.Alcanza  → a qué máquinas alcanza una política (`config.yaml`)
 //
+// Los tres leen el nombre con la MISMA gramática del dominio —fleet.SelectorAlcanza los dos de los
+// extremos, fleet.EntradaDeAllowlist el del medio—, y el informe de abajo pregunta con esas mismas
+// funciones (A131·T3 y sus dos revisiones): si el informe leyera un selector distinto que quien lo
+// aplica, avisaría que se rompe algo que no se rompe, o callaría lo que sí.
+//
 // Así que renombrar puede SACARLE `exec` a alguien, DÁRSELO, o meter una máquina adentro del
 // alcance de una política que la va a tocar sola — todo en silencio, y con el síntoma apareciendo
 // días después como «esto dejó de andar».
@@ -156,10 +161,12 @@ func (s *McpServer) impactoDe(nombre string) ImpactoDeNombre {
 func (s *McpServer) politicasQueNombran(nombre string) []string {
 	var out []string
 	for _, pol := range s.politicas {
-		// `Sobre` y no un helper: `Alcanza` también acepta el comodín, y acá interesa lo que
-		// NOMBRA a esta máquina — una política sobre todas sobrevive al rename.
-		for _, d := range fleet.LimpiarSelectores(pol.Sobre) {
-			if d == nombre {
+		// SelectorNombra y no `Alcanza`: `Alcanza` también acepta el comodín, y acá interesa lo que
+		// NOMBRA a esta máquina — una política sobre todas sobrevive al rename. Es la misma gramática
+		// que decide el alcance (fleet.SelectorAlcanza), así que el informe no puede listar como
+		// «se rompe» algo que la política en realidad no alcanzaba, ni callar algo que sí (A131·T3).
+		for _, sel := range pol.Sobre {
+			if fleet.SelectorNombra(sel, nombre) {
 				out = append(out, pol.Nombre)
 				break
 			}

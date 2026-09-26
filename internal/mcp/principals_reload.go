@@ -26,14 +26,18 @@ import (
 //	argvPermitido     → la allowlist de comandos por máquina (`exec_allow`)
 //	Politica.Alcanza  → a qué máquinas alcanza una política (`config.yaml`)
 //
+// Los tres leen el nombre con la misma gramática (fleet.SelectorAlcanza y fleet.EntradaDeAllowlist),
+// y este informe también: ver methods_renombrar.go.
+//
 // Así que un rename le puede SACAR `exec` a alguien, o DÁRSELO, o meter una máquina adentro del
 // alcance de una política — sin que nadie lo haya pedido y sin que quede rastro de por qué. Este
 // tipo es lo que permite decirlo ANTES, en vez de que se descubra cuando algo deja de andar.
 type ImpactoDeNombre struct {
 	// Concesiones son los principals cuya sección `fleet:` nombra esta máquina.
 	Concesiones []string
-	// Allowlists son los principals con una entrada de `exec_allow` para esta máquina. Van
-	// aparte de las concesiones porque se pierden distinto: quedarse sin concesión niega el
+	// Allowlists son los principals con una entrada de `exec_allow` que NOMBRA esta máquina: la
+	// del comodín no cuenta, igual que en Concesiones, porque sobrevive al rename. Van aparte de
+	// las concesiones porque se pierden distinto: quedarse sin concesión niega el
 	// acceso —ruidoso, se nota—; quedarse sin entrada de allowlist con la SECCIÓN presente
 	// deniega TODO comando por el paso 4 de argvPermitido, que es igual de silencioso y mucho
 	// más confuso.

@@ -268,15 +268,123 @@ func (p Politica) CooldownEfectivo() time.Duration {
 	return p.Cooldown
 }
 
-// Alcanza dice si esta política aplica a esta máquina. Mismo selector que las concesiones, para
-// que no haya dos gramáticas de «qué máquinas» que se puedan desincronizar.
+// Alcanza dice si esta política aplica a esta máquina: si alguno de sus selectores la alcanza.
+//
+// LA GRAMÁTICA ES SelectorAlcanza, LA MISMA FUNCIÓN QUE LEE LA COMPUERTA DE LAS CONCESIONES (A131·T3).
+// Este comentario ya decía «mismo selector que las concesiones, para que no haya dos gramáticas de
+// "qué máquinas" que se puedan desincronizar», y lo que había eran COPIAS de la comparación: una acá,
+// otra en tieneGrant y una más en cada informe del rename. Ninguna prueba las miraba con un selector
+// que compartiera algo con el nombre de la máquina, así que comparar por prefijo acá (P2-m4) dejaba
+// el paquete entero en verde: una política escrita para `davantis` habría actuado sobre `davantis-1`.
 func (p Politica) Alcanza(nombreDevice string) bool {
-	for _, s := range LimpiarSelectores(p.Sobre) {
-		if s == "*" || s == nombreDevice {
+	for _, s := range p.Sobre {
+		if SelectorAlcanza(s, nombreDevice) {
 			return true
 		}
 	}
 	return false
+}
+
+// ComodinMaquinas es el selector que alcanza a TODAS las máquinas del alcance de quien lo escribe.
+// Hay que escribirlo: una lista vacía no significa «todas» en ningún lado (ver Validar, y
+// parsearFleet en internal/mcp).
+const ComodinMaquinas = "*"
+
+// EsComodin dice si un selector es el comodín: con los bordes recortados, como todo selector.
+//
+// ES LA ÚNICA LECTURA DEL COMODÍN (A131·T3 y sus dos revisiones). La hacen SelectorAlcanza,
+// SelectorNombra y EntradaDeAllowlist, y también puedeOtorgar (internal/mcp), la compuerta que decide
+// si alguien puede CONCEDER una capacidad a una máquina que se está dando de alta. Esa compuerta
+// comparaba `selector == "*"` sin recortar mientras SelectorAlcanza recortaba: con ` * `, la misma
+// concesión alcanzaba a todas las máquinas y no dejaba otorgarla en ninguna que naciera. Y la
+// allowlist de comandos buscaba su entrada `"*"` por su cuenta, también sin recortar. Hoy ninguna de
+// las dos muerde, porque parsearFleet y parsearExecAllow recortan antes de que el selector llegue a
+// una compuerta; justamente por eso nadie iba a ver el día que mordiera.
+//
+// Y LO SOSTIENE UNA GUARDA, NO ESTE COMENTARIO. La revisión 2 de T3 encontró que esta misma frase ya
+// estaba escrita y era falsa: argvPermitido y comandosPermitidos leían la entrada del comodín con
+// `p.ExecAllow[comodinFlota]`. TestLaAllowlistYElComodinSeLeenSoloConLaGramatica (internal/mcp) barre
+// el código de producción de internal/fleet y de internal/mcp, y falla con cualquier otra lectura del
+// comodín —ComodinMaquinas fuera de esta función, o un `"*"` escrito— y con cualquier lectura de
+// `fleet_exec_allow` por clave que no pase por EntradaDeAllowlist.
+func EsComodin(selector string) bool {
+	return strings.TrimSpace(selector) == ComodinMaquinas
+}
+
+// SelectorAlcanza dice si un selector de máquina —de una política o de una concesión— alcanza a esta
+// máquina: el comodín, o su nombre EXACTO. Es LA gramática de «qué máquinas» del track y la leen
+// todos los que la necesitan: Politica.Alcanza, la compuerta de las concesiones (tieneGrant, en
+// internal/mcp), las tres listas de los informes del rename (políticas, concesiones y allowlists, por
+// SelectorNombra) y la allowlist de comandos (argvPermitido y comandosPermitidos, por
+// EntradaDeAllowlist, que lee la clave con SelectorNombra y el comodín con EsComodin). Es una sola
+// función para que no se puedan separar: de dos copias de una comparación, la que se afloja no avisa.
+//
+// EXACTO QUIERE DECIR EXACTO: sin prefijos, sin sufijos, sin mayúsculas indistintas y sin globs. En
+// la malla conviven `davantis` y `davantis-1`, que son dos máquinas distintas (la laptop Linux y la
+// PC Windows), y lo que se escribió para la primera no puede tocar la segunda. Y las mayúsculas
+// importan porque importan en el registro: el índice único de devices es (project_id, name) con la
+// colación binaria de SQLite, así que `DAVANTIS` y `davantis` pueden ser dos máquinas a la vez.
+//
+// Lo único que se normaliza son los espacios de los bordes del SELECTOR, que es lo que ya hacían
+// LimpiarSelectores con `devices:` y parsearFleet con `fleet:`. Del lado de la máquina no hace falta:
+// AltaDevice y RenombrarDevice guardan el nombre recortado.
+func SelectorAlcanza(selector, nombreDevice string) bool {
+	return EsComodin(selector) || SelectorNombra(selector, nombreDevice)
+}
+
+// SelectorNombra dice si un selector NOMBRA a esta máquina: su nombre exacto, sin el comodín. Es la
+// pregunta del rename —qué se rompe si la máquina cambia de nombre—, y ahí el comodín no cuenta: lo
+// que se escribió para todas sobrevive a cualquier rename, y listarlo sería ruido que tapa lo que sí
+// se rompe.
+//
+// UNA MÁQUINA PUEDE LLAMARSE `*`: NombreDeDeviceValido no lo excluye y ValidarAlta sólo pide un
+// nombre no vacío. A esa máquina el comodín la ALCANZA y no la NOMBRA, y nada puede nombrarla: el
+// único selector que la escribe es el que alcanza a todas. Esto SÍ cambió un comportamiento en
+// A131·T3, aunque el commit dijera que no: los informes del rename comparaban con `==`, y para una
+// máquina `*` listaban como «se rompe» —y como «hereda», renombrando HACIA `*`— cada política y
+// cada concesión sobre `*`, que sobreviven a cualquier rename. Es una corrección (el ruido que este
+// criterio existe para evitar), no un defecto. La revisión de T3 la llevó a la tercera lista del
+// informe, la de `fleet_exec_allow`, que había quedado comparando por su cuenta (impactoDeNombre).
+func SelectorNombra(selector, nombreDevice string) bool {
+	s := strings.TrimSpace(selector)
+	return s != "" && !EsComodin(s) && s == nombreDevice
+}
+
+// EntradaDeAllowlist busca, en una allowlist de comandos por máquina —la `fleet_exec_allow` de una
+// credencial: selector de máquina → argv[0] permitidos—, la entrada que manda sobre esta máquina.
+// Devuelve sus comandos, si esa entrada NOMBRA a la máquina (o es la del comodín), y si hay alguna.
+//
+// LA PRECEDENCIA ES LA DE argvPermitido (internal/mcp): la entrada que nombra a la máquina manda,
+// aunque esté VACÍA —así se apaga `exec` sobre una máquina puntual sin sacarla de la concesión—; si
+// ninguna la nombra, la del comodín. Sin ninguna de las dos, `hay` es false, y qué significa lo decide
+// quien llama: para la compuerta, que no pasa nada; para el informe del rename, que no hay entrada que
+// se rompa.
+//
+// LA CLAVE ES UN SELECTOR DE MÁQUINA, Y SE LEE CON LA GRAMÁTICA (A131·T3, revisión 2): SelectorNombra
+// para el nombre y EsComodin para el comodín, con los bordes recortados, como se leen `fleet:` y
+// `devices:`. argvPermitido y comandosPermitidos buscaban `p.ExecAllow[d.Name]` y
+// `p.ExecAllow[comodinFlota]` —una búsqueda por clave, sin recortar— mientras el informe del rename
+// leía la misma clave con SelectorNombra. Medido en la revisión 2 con una sonda: con la clave
+// ` davantis `, el informe listaba la allowlist como «se rompe» y argvPermitido no la encontraba; con
+// ` * `, EsComodin decía que era el comodín y argvPermitido lo ignoraba. Exposición: 0, porque
+// parsearExecAllow recorta cada clave y es el único constructor en producción. Lo que se cierra es la
+// tercera lectura del mismo selector, que es la que se separa sin avisar.
+//
+// En lo que arma parsearExecAllow hay a lo sumo una clave por máquina (recorta y guarda en un mapa).
+// En un mapa armado a mano con dos claves que nombran a la misma —`nas` y ` nas `—, cuál manda depende
+// del orden del recorrido.
+func EntradaDeAllowlist(porMaquina map[string][]string, nombreDevice string) (comandos []string, nombrada, hay bool) {
+	var delComodin []string
+	hayComodin := false
+	for clave, lista := range porMaquina {
+		if SelectorNombra(clave, nombreDevice) {
+			return lista, true, true
+		}
+		if EsComodin(clave) {
+			delComodin, hayComodin = lista, true
+		}
+	}
+	return delComodin, false, hayComodin
 }
 
 // LimpiarSelectores normaliza una lista de selectores de máquina.
@@ -288,6 +396,35 @@ func LimpiarSelectores(in []string) []string {
 		}
 	}
 	return out
+}
+
+// ServicioEn busca, en el inventario de UNA máquina, el servicio que esta política mira, y dice si
+// está. Una política de host no mira ninguno.
+//
+// ES UNA BÚSQUEDA POR CLAVE, Y NO UN RECORRIDO CON UN PREDICADO SOBRE NOMBRES (A131·T3). Lo que había
+// era un bucle con `if sv.Nombre != pol.Servicio { continue }`, y cambiarlo por un prefijo (P4-m7)
+// dejaba el paquete en verde: la única prueba ponía al lado un `sshd`, que ninguna comparación laxa
+// confunde con el nombre buscado. Con `nginx` ausente y un `nginx-exporter` caído, la política habría
+// reiniciado nginx por el estado de otro servicio. La clave es la del registro —el índice único de
+// services es (project_id, device_id, name), con la colación binaria de SQLite—, así que dos nombres
+// que difieren en una mayúscula son dos servicios, y acá también.
+//
+// EL NOMBRE DE LA POLÍTICA SE RECORTA, como lo recortan Validar y ClaveDeCooldown. El bucle comparaba
+// el campo crudo, así que un `service: " nginx"` pasaba la validación, figuraba en el inventario como
+// una política sobre la máquina y no encontraba NUNCA su servicio: todo nombre guardado está recortado
+// (RecortarReporte para lo que reporta la máquina, AltaServicio para lo que declara una persona). Una
+// alarma apagada con todo en verde.
+func (p Politica) ServicioEn(inventario []Servicio) (Servicio, bool) {
+	buscado := strings.TrimSpace(p.Servicio)
+	if !p.EsDeServicio() || buscado == "" {
+		return Servicio{}, false
+	}
+	porNombre := make(map[string]Servicio, len(inventario))
+	for _, sv := range inventario {
+		porNombre[sv.Nombre] = sv
+	}
+	sv, esta := porNombre[buscado]
+	return sv, esta
 }
 
 // DisparaSobreServicio evalúa una condición de servicio. Devuelve el valor medido y si dispara.
