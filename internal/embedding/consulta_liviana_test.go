@@ -197,8 +197,8 @@ func recortar(s string) string {
 //
 // Sabotaje: leer la fila del token siguiente en vez de la del token.
 // arnes: archivo="internal/embedding/consulta_liviana.go"
-// arnes: de="c.inicio+int64(id)*filaBytes"
-// arnes: a="c.inicio+int64(id+1)*filaBytes"
+// arnes: de="c.inicio+int64(distintas[k])*filaBytes"
+// arnes: a="c.inicio+int64(distintas[k]+1)*filaBytes"
 func TestConsultaLivianaEsBitExacta(t *testing.T) {
 	dir, sp := tablaDeJugueteConSidecars(t, 400, 16)
 	liv, err := NewConsultaLiviana(dir)
@@ -853,6 +853,56 @@ func TestConsultaLivianaRespetaElPlazo(t *testing.T) {
 			t.Fatalf("el Embed cortó recién a los %v con un plazo de 100 ms", demora)
 		}
 	})
+}
+
+// TestConsultaLivianaLeeLasFilasEnParalelo: un prompt largo son cientos de filas distintas, y con
+// la tabla fría cada una espera al disco. Medido en davantis-1 sobre POTION, leídas de a una tardaban
+// 1,3-1,7 s con 7 KB de prompt y 2,7-2,9 s con 20 KB, contra una meta de p95 de 450 ms para el hook
+// entero. Acá el disco lento lo simula una costura: ~150 filas a 25 ms cada una son ~3,8 s de a una,
+// y en paralelo tienen que bajar de 1,5 s. Además: cada fila distinta se lee UNA sola vez, y el
+// vector sigue siendo el de StaticProvider.
+//
+// Sabotaje: leer las filas de a una.
+// arnes: archivo="internal/embedding/consulta_liviana.go"
+// arnes: de="lectoresDeFilas = 8"
+// arnes: a="lectoresDeFilas = 1"
+func TestConsultaLivianaLeeLasFilasEnParalelo(t *testing.T) {
+	dir, sp := tablaDeJugueteConSidecars(t, 400, 16)
+	liv, err := NewConsultaLiviana(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c contador
+	c.instalar(t)
+	lecturasLentas(t, 25*time.Millisecond)
+	texto := textoConMuchasFilas()
+	t0 := time.Now()
+	v, err := liv.Embed(context.Background(), texto)
+	demora := time.Since(t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	distintas := map[int]bool{}
+	for _, id := range liv.tok.EncodeIDs(texto) {
+		distintas[id] = true
+	}
+	if len(distintas) < 100 {
+		t.Fatalf("control: el texto usa sólo %d filas distintas, y la prueba necesita muchas", len(distintas))
+	}
+	if got, quiero := c.leidos[archivoTabla], int64(len(distintas))*16*4; got != quiero {
+		t.Fatalf("se leyeron %d bytes de la tabla para %d filas distintas (tenían que ser %d: cada fila una vez)",
+			got, len(distintas), quiero)
+	}
+	if demora > 1500*time.Millisecond {
+		t.Fatalf("%d filas distintas a 25 ms cada una tardaron %v: se están leyendo de a una", len(distintas), demora)
+	}
+	ref, _ := sp.Embed(context.Background(), texto)
+	for j := range ref {
+		if math.Float32bits(ref[j]) != math.Float32bits(v[j]) {
+			t.Fatalf("leídas en paralelo, el vector difiere del de StaticProvider en la componente %d", j)
+		}
+	}
+	t.Logf("%d filas distintas con 25 ms por lectura: %v", len(distintas), demora)
 }
 
 // TestLosTemporalesHuerfanosSeBorran: un daemon que muere a mitad de escritura (se cierra la sesión

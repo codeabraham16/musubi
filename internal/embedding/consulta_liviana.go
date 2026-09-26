@@ -31,9 +31,11 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"musubi/internal/logx"
@@ -404,8 +406,9 @@ func (c *ConsultaLiviana) Dimensions() int { return c.dim }
 
 // Embed produce el MISMO vector que StaticProvider.Embed: el mismo tokenizer (sobre el índice), la
 // misma media y la misma normalización (mediaNormalizada, que es una sola función para los dos).
-// Lo único distinto es de dónde sale cada fila: ReadAt en vez de la tabla en memoria. Una fila
-// repetida en el texto se lee una sola vez.
+// Lo único distinto es de dónde sale cada fila: ReadAt en vez de la tabla en memoria (leerFilas).
+// El orden en que se leen las filas no toca el vector: la suma la hace mediaNormalizada en el orden
+// del texto, sobre las mismas filas.
 //
 // RESPETA EL CONTEXTO, a diferencia de StaticProvider, que tiene todo en memoria y no tiene en qué
 // esperar. Éste lee del disco, y en frío un prompt largo son cientos de lecturas: el plazo que le
@@ -416,37 +419,99 @@ func (c *ConsultaLiviana) Embed(ctx context.Context, text string) ([]float32, er
 		return nil, err
 	}
 	ids := c.tok.EncodeIDs(text)
-	var f archivoDeLectura
-	defer func() {
-		if f != nil {
-			_ = f.Close()
-		}
-	}()
-	leidas := make(map[int][]float32)
-	filaBytes := int64(c.dim) * 4
-	fila := func(id int) ([]float32, error) {
-		if r, ok := leidas[id]; ok {
-			return r, nil
-		}
-		if err := ctx.Err(); err != nil { // el plazo corta entre una lectura y la siguiente
-			return nil, err
-		}
-		if f == nil {
-			var err error
-			if f, err = c.abrirTabla(); err != nil {
-				return nil, err
-			}
-		}
-		buf := make([]byte, filaBytes)
-		if _, err := f.ReadAt(buf, c.inicio+int64(id)*filaBytes); err != nil {
-			return nil, fmt.Errorf("leyendo la fila %d de la tabla: %w", id, err)
-		}
-		r := make([]float32, c.dim)
-		for j := range r {
-			r[j] = math.Float32frombits(binary.LittleEndian.Uint32(buf[j*4:]))
-		}
-		leidas[id] = r
-		return r, nil
+	leidas, err := c.leerFilas(ctx, ids)
+	if err != nil {
+		return nil, err
 	}
-	return mediaNormalizada(ids, c.filas, c.dim, fila)
+	return mediaNormalizada(ids, c.filas, c.dim, func(id int) ([]float32, error) { return leidas[id], nil })
+}
+
+// lectoresDeFilas es cuántas filas se leen a la vez, y filasPorLector cuántas justifican sumar un
+// lector. Medido en davantis-1 con la tabla fría (ver el PR): un prompt de 7 KB son ~700 filas
+// distintas, y leídas de a una en el orden del texto tardaban 1,3-1,7 s, casi todo esperando al
+// disco una lectura a la vez. En paralelo el disco atiende varias juntas.
+const (
+	lectoresDeFilas = 8
+	filasPorLector  = 16
+)
+
+// leerFilas lee UNA vez cada fila distinta que usa el texto, en orden de offset y con varios
+// lectores a la vez, y devuelve las filas por id.
+//
+// CADA LECTOR ABRE SU PROPIO ARCHIVO, y no es un descuido: en Windows, las lecturas con ReadAt sobre
+// un mismo *os.File se hacen de a una (internal/poll toma el candado de lectura y escritura del
+// descriptor en Pread), así que varios lectores sobre un archivo compartido no leerían en paralelo.
+// Abrir por lector cuesta una apertura, y cada apertura vuelve a comprobar la identidad (abrirTabla).
+func (c *ConsultaLiviana) leerFilas(ctx context.Context, ids []int) (map[int][]float32, error) {
+	distintas := make([]int, 0, len(ids))
+	vistas := make(map[int]struct{}, len(ids))
+	for _, id := range ids {
+		if id < 0 || id >= c.filas {
+			continue // mediaNormalizada las saltea igual: no hay nada que leer
+		}
+		if _, ok := vistas[id]; !ok {
+			vistas[id] = struct{}{}
+			distintas = append(distintas, id)
+		}
+	}
+	slices.Sort(distintas) // en orden de offset: el disco y la caché lo agradecen
+	filas := make([][]float32, len(distintas))
+	filaBytes := int64(c.dim) * 4
+
+	var (
+		siguiente atomic.Int64
+		mu        sync.Mutex
+		primerErr error
+		wg        sync.WaitGroup
+	)
+	fallar := func(err error) {
+		mu.Lock()
+		if primerErr == nil {
+			primerErr = err
+		}
+		mu.Unlock()
+	}
+	lectores := min(lectoresDeFilas, (len(distintas)+filasPorLector-1)/filasPorLector)
+	for range lectores {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			f, err := c.abrirTabla()
+			if err != nil {
+				fallar(err)
+				return
+			}
+			defer func() { _ = f.Close() }()
+			buf := make([]byte, filaBytes)
+			for {
+				k := int(siguiente.Add(1) - 1)
+				if k >= len(distintas) {
+					return
+				}
+				if err := ctx.Err(); err != nil { // el plazo corta entre una lectura y la siguiente
+					fallar(err)
+					return
+				}
+				id := distintas[k]
+				if _, err := f.ReadAt(buf, c.inicio+int64(distintas[k])*filaBytes); err != nil {
+					fallar(fmt.Errorf("leyendo la fila %d de la tabla: %w", id, err))
+					return
+				}
+				r := make([]float32, c.dim)
+				for j := range r {
+					r[j] = math.Float32frombits(binary.LittleEndian.Uint32(buf[j*4:]))
+				}
+				filas[k] = r
+			}
+		}()
+	}
+	wg.Wait()
+	if primerErr != nil {
+		return nil, primerErr
+	}
+	leidas := make(map[int][]float32, len(distintas))
+	for k, id := range distintas {
+		leidas[id] = filas[k]
+	}
+	return leidas, nil
 }
