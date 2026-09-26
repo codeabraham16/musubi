@@ -122,3 +122,43 @@ func (s *McpServer) toolCorroborate(ctx context.Context, raw json.RawMessage) (i
 			"Conserva su sello: procedencia %s, confianza %.2f. Corroborar la hace visible, no la vuelve un hecho humano.",
 		args.ID, prov, conf)), nil
 }
+
+// toolDiscardProposal es el veredicto opuesto a corroborar: archiva la propuesta sin volverla
+// visible. Los errores dicen lo mismo que los de corroborar, por la misma razón: un id equivocado
+// tiene que notarse.
+//
+// ES UNA TOOL PROPIA Y NO UN `reject` DE musubi_corroborate, y la razón es de despliegue. Un servidor
+// viejo decodifica los argumentos en un struct e IGNORA en silencio el campo que no conoce: con
+// `{"id":…,"reject":true}`, un daemon anterior a este cambio vería sólo el id y CORROBORARÍA —haría
+// visible justo la nota que había que sacar—, sin un solo error. Y ese daemon viejo existe siempre
+// durante un cambio de binario: las sesiones abiertas conservan el suyo hasta reiniciarse. Con una
+// tool propia, el servidor viejo no la tiene y la llamada falla a la vista.
+func (s *McpServer) toolDiscardProposal(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		ID           string `json:"id"`
+		SupersededBy string `json:"superseded_by"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
+	}
+	id, reemplazadaPor := strings.TrimSpace(args.ID), strings.TrimSpace(args.SupersededBy)
+	if id == "" {
+		return nil, rpcErrorf(codeInvalidParams, "id es obligatorio")
+	}
+	if err := s.engine.DescartarPropuestaCtx(s.scopedCtx(ctx), id, reemplazadaPor); err != nil {
+		if errors.Is(err, memory.ErrObservationNotFound) {
+			return nil, rpcErrorf(codeInvalidParams, "%v", err)
+		}
+		if errors.Is(err, memory.ErrCrossTenant) {
+			return nil, rpcErrorf(codeUnauthorized, "%v", err)
+		}
+		if errors.Is(err, memory.ErrNotQuarantined) {
+			return nil, rpcErrorf(codeInvalidParams, "la observación %q no es una propuesta viva en cuarentena: no hay nada que descartar", id)
+		}
+		return nil, rpcErrorf(codeInvalidParams, "no se pudo descartar la propuesta: %v", err)
+	}
+	if reemplazadaPor != "" {
+		return textResult(fmt.Sprintf("Propuesta descartada (id: %s): la reemplaza %s. Queda archivada, invisible al recall.", id, reemplazadaPor)), nil
+	}
+	return textResult("Propuesta descartada (id: " + id + "). Queda archivada, invisible al recall."), nil
+}

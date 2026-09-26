@@ -110,27 +110,66 @@ func (e *DbEngine) CreateWorkBatch(batchID string, specs []WorkUnitSpec) (WorkBa
 	if err != nil {
 		return WorkBatch{}, fmt.Errorf("error al iniciar la transacción del batch: %w", err)
 	}
+	if err := insertarUnidades(tx, batchID, 0, specs); err != nil {
+		tx.Rollback()
+		return WorkBatch{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return WorkBatch{}, fmt.Errorf("error al confirmar el batch: %w", err)
+	}
+	return e.WorkBatchStatus(batchID)
+}
+
+// SumarAlLote agrega unidades a un lote que puede existir ya, continuando su secuencia.
+//
+// EXISTE PORQUE EL RECLAMO VA POR `seq`: un lote que crece en rondas —el de las tareas del sistema,
+// ver tareas_del_sistema.go— con CreateWorkBatch empezaría cada ronda en 0, y las unidades nuevas se
+// mezclarían con las viejas en vez de ponerse en la cola detrás de ellas. La secuencia se lee y se
+// escribe en la misma transacción: dos rondas a la vez no pueden repetir un número.
+func (e *DbEngine) SumarAlLote(batchID string, specs []WorkUnitSpec) (WorkBatch, error) {
+	if strings.TrimSpace(batchID) == "" {
+		return WorkBatch{}, fmt.Errorf("sumar al lote requiere el id del lote")
+	}
+	if len(specs) == 0 {
+		return WorkBatch{}, fmt.Errorf("sumar al lote requiere al menos una unidad")
+	}
+	tx, err := e.db.Begin()
+	if err != nil {
+		return WorkBatch{}, fmt.Errorf("error al iniciar la transacción del lote: %w", err)
+	}
+	var desde int
+	if err := tx.QueryRow(`SELECT COALESCE(MAX(seq)+1, 0) FROM work_units WHERE batch_id=?`, batchID).Scan(&desde); err != nil {
+		tx.Rollback()
+		return WorkBatch{}, fmt.Errorf("error al leer la secuencia del lote: %w", err)
+	}
+	if err := insertarUnidades(tx, batchID, desde, specs); err != nil {
+		tx.Rollback()
+		return WorkBatch{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return WorkBatch{}, fmt.Errorf("error al confirmar el lote: %w", err)
+	}
+	return e.WorkBatchStatus(batchID)
+}
+
+// insertarUnidades escribe las unidades de un lote, numeradas desde `desde`, dentro de tx.
+func insertarUnidades(tx *sql.Tx, batchID string, desde int, specs []WorkUnitSpec) error {
 	for i, s := range specs {
 		// La autonomía se valida ACÁ, al postear, y no al cerrar: un nivel mal escrito
 		// ("l2", "L4") que se descubriera recién al completar dejaría al agente trabajando
 		// bajo un techo que nadie fijó. Fail-closed y temprano.
 		nivel, err := normalizarAutonomia(s.Autonomy)
 		if err != nil {
-			tx.Rollback()
-			return WorkBatch{}, fmt.Errorf("unidad %d: %w", i, err)
+			return fmt.Errorf("unidad %d: %w", i, err)
 		}
 		if _, err := tx.Exec(
 			`INSERT INTO work_units (id, batch_id, seq, title, spec, status, autonomy) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			uuid.NewString(), batchID, i, s.Title, s.Spec, WorkOpen, nivel,
+			uuid.NewString(), batchID, desde+i, s.Title, s.Spec, WorkOpen, nivel,
 		); err != nil {
-			tx.Rollback()
-			return WorkBatch{}, fmt.Errorf("error al crear unidad %d: %w", i, err)
+			return fmt.Errorf("error al crear unidad %d: %w", i, err)
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return WorkBatch{}, fmt.Errorf("error al confirmar el batch: %w", err)
-	}
-	return e.WorkBatchStatus(batchID)
+	return nil
 }
 
 // ClaimWorkUnit reclama atómicamente la próxima unidad reclamable y le asigna un
@@ -186,11 +225,14 @@ func (e *DbEngine) ClaimWorkUnit(batchID, agent string, ttlSeconds, maxAttempts 
 
 	var row *sql.Row
 	if batchID == "" {
+		// SIN LOTE NO SE TOMA UN LOTE DEL SISTEMA: ese trabajo lo hace quien lo nombra (ver
+		// tareas_del_sistema.go). Un sub-agente de una orquestación propia que reclama «de
+		// cualquiera» se llevaría una unidad de la cuarentena sin saber qué es.
 		row = e.db.QueryRow(`
 			UPDATE work_units SET `+setClause+`
-			WHERE id = (SELECT id FROM work_units WHERE `+eligible+` ORDER BY created_at, seq, rowid LIMIT 1)
+			WHERE id = (SELECT id FROM work_units WHERE `+eligible+` AND batch_id NOT LIKE ? ORDER BY created_at, seq, rowid LIMIT 1)
 			RETURNING `+workUnitCols,
-			WorkClaimed, agent, agent, ttlSeconds, entrada, WorkOpen, WorkClaimed)
+			WorkClaimed, agent, agent, ttlSeconds, entrada, WorkOpen, WorkClaimed, PrefijoLoteDelSistema+"%")
 	} else {
 		row = e.db.QueryRow(`
 			UPDATE work_units SET `+setClause+`
@@ -511,12 +553,17 @@ func (e *DbEngine) ClearWorkBatch(batchID string) error {
 
 // ActiveBatch devuelve el batch con trabajo pendiente (open/claimed) más reciente,
 // para el recordatorio por turno. ok=false si no hay ninguno en curso.
+//
+// NO DEVUELVE UN LOTE DEL SISTEMA. El recordatorio le dice al agente principal «monitoreá y
+// consolidá», que es lo que hace quien ORQUESTÓ el lote; los del sistema los postea Musubi y los
+// hace un subagente propio (ver tareas_del_sistema.go), y nombrárselos al principal como suyos lo
+// mandaría a consolidar trabajo que no pidió.
 func (e *DbEngine) ActiveBatch() (WorkBatch, bool, error) {
 	var batchID string
 	err := e.db.QueryRow(`
 		SELECT batch_id FROM work_units
-		WHERE status IN (?, ?)
-		ORDER BY created_at DESC, rowid DESC LIMIT 1`, WorkOpen, WorkClaimed).Scan(&batchID)
+		WHERE status IN (?, ?) AND batch_id NOT LIKE ?
+		ORDER BY created_at DESC, rowid DESC LIMIT 1`, WorkOpen, WorkClaimed, PrefijoLoteDelSistema+"%").Scan(&batchID)
 	if err == sql.ErrNoRows {
 		return WorkBatch{}, false, nil
 	}

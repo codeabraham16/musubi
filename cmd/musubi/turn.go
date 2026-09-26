@@ -71,6 +71,11 @@ func turnSurfaceChanged(store turnStore, key, sessionID, payload string) bool {
 type turnInput struct {
 	Prompt    string `json:"prompt"`
 	SessionID string `json:"session_id"`
+	// PermissionMode y AgentID los manda Claude Code en todo evento de hook (medido en el binario
+	// 2.1.223): el modo de permisos de la sesión, y el id del subagente cuando el hook corre dentro de
+	// uno. Los usan las tareas (tareas.go).
+	PermissionMode string `json:"permission_mode"`
+	AgentID        string `json:"agent_id"`
 }
 
 // turnOutput arma el additionalContext del hook UserPromptSubmit a partir del
@@ -92,6 +97,13 @@ func turnOutput(store turnStore, loopCfg config.LoopConfig, pipeCfg config.Pipel
 // guardaste un archivo hace diez segundos no mide nada. Con la sonda afuera, la
 // política se prueba con entradas fijas y el resto del loop no se entera.
 func turnOutputWith(store turnStore, loopCfg config.LoopConfig, pipeCfg config.PipelineConfig, maCfg config.MultiAgentConfig, memCfg config.MemoryConfig, probe gateProbe, stdin io.Reader, embedder embedding.Provider) string {
+	return turnOutputConTareas(store, loopCfg, pipeCfg, maCfg, memCfg, probe, stdin, embedder, nil)
+}
+
+// turnOutputConTareas es turnOutputWith más las tareas que Musubi le deja al agente (tareas.go). Sólo
+// el hook real las pasa: postear en el tablero es escribir en la memoria, y las pruebas del resto del
+// turno no tienen por qué hacerlo.
+func turnOutputConTareas(store turnStore, loopCfg config.LoopConfig, pipeCfg config.PipelineConfig, maCfg config.MultiAgentConfig, memCfg config.MemoryConfig, probe gateProbe, stdin io.Reader, embedder embedding.Provider, tareas *tareasDelTurno) string {
 	if store == nil {
 		return ""
 	}
@@ -134,6 +146,8 @@ func turnOutputWith(store turnStore, loopCfg config.LoopConfig, pipeCfg config.P
 	if loopCfg.CaptureReminder {
 		blocks = append(blocks, accountedBlock{"capture_reminder", buildCaptureReminder(store, in.SessionID, loopCfg)})
 	}
+	// Las tareas que Musubi le deja al agente: un aviso para delegarlas a un subagente de fondo.
+	blocks = append(blocks, accountedBlock{"turn_tareas", buildTurnTareas(tareas, in)})
 	// El gate de revisión va ÚLTIMO a propósito: es el único bloque del turno que pide
 	// una acción sobre el trabajo YA HECHO, y el final del contexto es la posición que
 	// mejor se lee. Los demás bloques son material para lo que viene; éste es una
@@ -803,7 +817,8 @@ func runTurn() {
 		}
 	}
 
-	out := turnOutputWith(engine, cfg.Loop, cfg.Pipeline, cfg.MultiAgent, cfg.Memory, gitGateProbe{root: root}, os.Stdin, embedder)
+	tareas := &tareasDelTurno{store: engine, subagente: subagenteDeTareasDisponible(), ahora: time.Now()}
+	out := turnOutputConTareas(engine, cfg.Loop, cfg.Pipeline, cfg.MultiAgent, cfg.Memory, gitGateProbe{root: root}, os.Stdin, embedder, tareas)
 	if out != "" {
 		fmt.Println(out)
 	}

@@ -336,7 +336,7 @@ explore → plan → code → verify, reminding the agent of the phase each turn
 
 ## MCP tools
 
-The server exposes **79 tools**, grouped by domain. There are 84 registered: five are **dormant**
+The server exposes **80 tools**, grouped by domain. There are 85 registered: five are **dormant**
 and `tools/list` does not return them, because their context cost was not paid back by their measured
 use. They wake up without recompiling via `MUSUBI_TOOLS_ALL=1`, and the list lives next to its reason
 in `internal/mcp/tools_dormidas_test.go`:
@@ -371,7 +371,7 @@ The domain table below lists every tool, dormant ones included:
 | **Design** | `musubi_design` (the design engine as a capability: builds a brief anchored in the `musubi-design` corpus for the caller to compose from; callable from any project, model-free) · `musubi_distill` (OFFLINE distiller: turns `ingested/*` blobs into curated `design-corpus/*` cards; admin, opt-in, idempotent and resumable) · `musubi_sharpen` (OFFLINE sharpener: pairs twin cards by cosine with an LLM judge — MERGE archives the weaker one, KEEP keeps both; admin, opt-in, conservative and reversible: `undo` brings a merged card back) |
 | **Knowledge graph** | `musubi_save_fact` · `musubi_recall_facts` · `musubi_entity_context` |
 | **Cognition** (3rd pillar) | `musubi_propose_facts` (the LLM PROPOSES into quarantine; the core stays model-free) · `musubi_ask` (reasoned answer over memory, RAG; opt-in) |
-| **Write quarantine** | `musubi_propose_observation` (everything an LLM generated lands here, invisible to recall) · `musubi_corroborate` (the only way out; keeps the provenance seal) |
+| **Write quarantine** | `musubi_propose_observation` (everything an LLM generated lands here, invisible to recall) · `musubi_corroborate` (the way out into recall; keeps the provenance seal) · `musubi_discard_proposal` (the opposite verdict: archives it without making it visible) |
 | **Code memory** | `musubi_save_code` · `musubi_recall_code` |
 | **Code graph** | `musubi_codegraph_index` · `musubi_codegraph_push` · `musubi_code_graph` · `musubi_impact` · `musubi_map` · `musubi_code_context` · `musubi_detect_changes` |
 | **Tokens** | `musubi_tokens` (ledger + session governor) |

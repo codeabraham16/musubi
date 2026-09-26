@@ -265,7 +265,7 @@ func TestElPluginSeHaceAUnLadoDondeElProyectoYaConectaMusubi(t *testing.T) {
 //
 // Sabotaje que la hace fallar: tomar el prefijo de la constante y no del manifiesto.
 // arnes: archivo="cmd/musubi/agente_plugin.go"
-// arnes: de="dirSkillsDelPlugin), manifiesto.Name, cognitiveSkills(nil))\n"
+// arnes: de="dirSkillsDelPlugin), nombre, cognitiveSkills(nil))\n"
 // arnes: a="dirSkillsDelPlugin), nombrePlugin, cognitiveSkills(nil))\n"
 func TestElDaemonDelPluginNombraLasSkillsDelPlugin(t *testing.T) {
 	home := t.TempDir()

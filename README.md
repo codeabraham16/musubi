@@ -75,7 +75,7 @@ flowchart LR
     end
     subgraph M["Musubi · daemon Go"]
         direction TB
-        RPC["JSON-RPC 2.0 / stdio<br/>79 herramientas MCP"]
+        RPC["JSON-RPC 2.0 / stdio<br/>80 herramientas MCP"]
         COG["resolver de skills · grafo<br/>gobernador de tokens<br/>conflictos · workflows"]
     end
     DB[("SQLite<br/>local-first")]
@@ -382,7 +382,7 @@ explorar → planear → codear → verificar recordándole la fase al agente ca
 
 ## Herramientas MCP
 
-El servidor expone **79 herramientas**, agrupadas por dominio. Hay 84 registradas: cinco están
+El servidor expone **80 herramientas**, agrupadas por dominio. Hay 85 registradas: cinco están
 **dormidas** y `tools/list` no las devuelve, porque su costo en contexto no se pagaba con su uso
 medido. Se despiertan sin recompilar con `MUSUBI_TOOLS_ALL=1`, y la lista vive con su motivo al lado
 en `internal/mcp/tools_dormidas_test.go`:
@@ -416,7 +416,7 @@ importa no es si la tool responde, sino si el FLUJO tiene otra entrada:
 | **Diseño** | `musubi_design` (el motor de diseño como capacidad: arma un brief anclado en el acervo `musubi-design` para que el caller componga; invocable desde cualquier proyecto, model-free) · `musubi_distill` (destilador OFFLINE del acervo: convierte los blobs `ingested/*` en tarjetas curadas `design-corpus/*`; admin, opt-in, idempotente y reanudable) · `musubi_sharpen` (afilador OFFLINE: junta las tarjetas gemelas por coseno con un juez LLM — MERGE archiva la más débil, KEEP las conserva; admin, opt-in, conservador y reversible: `undo` devuelve una tarjeta fusionada) |
 | **Grafo de conocimiento** | `musubi_save_fact` · `musubi_recall_facts` · `musubi_entity_context` |
 | **Cognición** (3er pilar) | `musubi_propose_facts` (el LLM PROPONE en cuarentena; el core sigue model-free) · `musubi_ask` (respuesta razonada sobre la memoria, RAG; opt-in) |
-| **Cuarentena de escritura** | `musubi_propose_observation` (todo lo que generó un LLM entra acá, invisible al recall) · `musubi_corroborate` (única salida; conserva el sello de procedencia) |
+| **Cuarentena de escritura** | `musubi_propose_observation` (todo lo que generó un LLM entra acá, invisible al recall) · `musubi_corroborate` (la salida hacia el recall; conserva el sello de procedencia) · `musubi_discard_proposal` (el veredicto opuesto: la archiva sin volverla visible) |
 | **Memoria de código** | `musubi_save_code` · `musubi_recall_code` |
 | **Grafo de código** | `musubi_codegraph_index` · `musubi_codegraph_push` · `musubi_code_graph` · `musubi_code_graph_viz` · `musubi_impact` · `musubi_map` · `musubi_code_context` · `musubi_detect_changes` |
 | **Tokens** | `musubi_tokens` (ledger + gobernador de sesión) |
@@ -599,7 +599,8 @@ musubi_propose_observation   → llm:<modelo>    EN CUARENTENA: invisible al rec
                                                 no se promueve a shared,
                                                 no viaja al cerebro central
         │
-        └── musubi_corroborate ──→ visible, PERO conserva el sello
+        ├── musubi_corroborate ──→ visible, PERO conserva el sello
+        └── musubi_discard_proposal ──→ archivada: invisible, y la purga la borra
 ```
 
 **El sello es por dónde entraste, no lo que dijiste ser.** `musubi_propose_observation` no expone
@@ -793,7 +794,7 @@ internal/
   detector/        # DetectStack + ExtractDeps (manifests, mtime cache)
   embedding/       # Provider: Ollama + OpenAI-compatible + Noop
   logx/            # logging estructurado a stderr
-  mcp/             # servidor JSON-RPC 2.0 + las 79 herramientas MCP (84 registradas − 5 dormidas)
+  mcp/             # servidor JSON-RPC 2.0 + las 80 herramientas MCP (85 registradas − 5 dormidas)
   memory/          # SQLite: observaciones, FTS5, embeddings, grafo, índice IVF,
                    #   telemetría, code memory, ledger de tokens, workflows
   selfupdate/      # `musubi update`: descarga + checksum + auto-reemplazo
