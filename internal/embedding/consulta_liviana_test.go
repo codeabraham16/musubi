@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -1036,6 +1037,56 @@ func TestLaTablaQueCambiaDuranteLaCargaNoSeFirmaConLaHuellaNueva(t *testing.T) {
 	liv, err := NewConsultaLiviana(dir)
 	if err != nil || liv.Name() != fresco.Name() {
 		t.Fatalf("después de un arranque sano la identidad tenía que ser la de la tabla nueva: %v", err)
+	}
+}
+
+// TestLosSidecarsQuedanLegiblesParaTodos: tokenizer.idx e identidad.json quedan en 0644, como la
+// tabla. Con el 0600 de os.CreateTemp, en Linux otro usuario que use la misma tabla no los podría
+// leer y los reescribiría como suyos. En Windows el modo sólo decide el atributo de sólo lectura, así
+// que ahí la prueba mira que el modo se pida; donde el modo es real, mira además el archivo.
+//
+// Sabotaje: dejar el modo con que los crea os.CreateTemp.
+// arnes: archivo="internal/embedding/consulta_liviana.go"
+// arnes: de="_ = cambiarModo(tmp, modoDeSidecar)"
+// arnes: a="_ = modoDeSidecar"
+func TestLosSidecarsQuedanLegiblesParaTodos(t *testing.T) {
+	t.Run("un sistema de archivos sin modos no cuesta el sidecar", func(t *testing.T) {
+		previo := cambiarModo
+		cambiarModo = func(*os.File, os.FileMode) error { return fmt.Errorf("simulado: EPERM") }
+		t.Cleanup(func() { cambiarModo = previo })
+		dir, _ := tablaDeJugueteConSidecars(t, 200, 8)
+		if _, err := NewConsultaLiviana(dir); err != nil {
+			t.Fatalf("si el chmod falla, el sidecar tiene que quedar igual: %v", err)
+		}
+	})
+
+	pedidos := map[string]os.FileMode{}
+	var mu sync.Mutex
+	previo := cambiarModo
+	cambiarModo = func(f *os.File, m os.FileMode) error {
+		base := filepath.Base(f.Name())
+		mu.Lock()
+		pedidos[base[:strings.Index(base, ".tmp-")]] = m
+		mu.Unlock()
+		return previo(f, m)
+	}
+	t.Cleanup(func() { cambiarModo = previo })
+
+	dir, _ := tablaDeJugueteConSidecars(t, 200, 8)
+	for _, f := range []string{archivoIndice, archivoIdentidad} {
+		if m, ok := pedidos[f]; !ok || m != 0o644 {
+			t.Fatalf("%s: el modo pedido fue %v (pedido=%v); tiene que ser 0644", f, m, ok)
+		}
+		if runtime.GOOS == "windows" {
+			continue
+		}
+		st, err := os.Stat(filepath.Join(dir, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Mode().Perm() != 0o644 {
+			t.Fatalf("%s quedó en %v; tiene que quedar en 0644 como la tabla", f, st.Mode().Perm())
+		}
 	}
 }
 

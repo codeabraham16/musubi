@@ -289,6 +289,14 @@ var renombrar = os.Rename
 // crearTemporal es os.CreateTemp; costura para probar la carpeta sin escritura.
 var crearTemporal = os.CreateTemp
 
+// modoDeSidecar es el modo con que quedan tokenizer.idx e identidad.json: el mismo que
+// model.safetensors y tokenizer.json, que `embed pull` crea con os.Create.
+const modoDeSidecar os.FileMode = 0o644
+
+// cambiarModo es (*os.File).Chmod; costura para ver que se llama también donde el modo no tiene
+// efecto (en Windows sólo decide el atributo de sólo lectura).
+var cambiarModo = (*os.File).Chmod
+
 // escribirAtomico escribe en un temporal de nombre ÚNICO del mismo directorio y lo renombra encima.
 // Nombre único porque varios daemons pueden arrancar a la vez y escribir el mismo sidecar: con un
 // temporal fijo, uno truncaría el del otro a mitad de camino. Si el rename falla, el temporal se
@@ -308,6 +316,13 @@ func escribirAtomico(ruta string, armar func() ([]byte, error)) ([]byte, error) 
 		_, err = tmp.Write(datos)
 	}
 	if err == nil {
+		// os.CreateTemp crea en 0600. En Linux eso deja el sidecar legible sólo para quien lo
+		// escribió: otro usuario que use la misma tabla (el servicio del central y un `sudo musubi
+		// …`, o daemons de usuarios distintos) no podría leerlo, lo daría por ausente y lo
+		// reescribiría como suyo en cada arranque. Es best-effort: un sistema de archivos que no
+		// guarda modos (algunos montajes FUSE contestan EPERM) no puede costar el sidecar, que a
+		// quien lo escribió le sirve igual.
+		_ = cambiarModo(tmp, modoDeSidecar)
 		err = tmp.Sync()
 	}
 	if cerr := tmp.Close(); err == nil {
