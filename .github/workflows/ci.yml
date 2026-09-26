@@ -412,6 +412,45 @@ jobs:
             exit 1
           }
 
+      # El paso de abajo corre tests de cmd/musubi, que es un paquete CARO: sin techo tomaría el
+      # default de Go (10m por paquete). El techo sale del mismo archivo que en los jobs `test` y
+      # `test-cross`, y viaja por $GITHUB_ENV como allá.
+      - name: Presupuesto de pruebas (política)
+        shell: bash
+        run: |
+          set -euo pipefail
+          source ./presupuesto-de-pruebas.env
+          : "${RACE_TIMEOUT:?presupuesto-de-pruebas.env no definió RACE_TIMEOUT}"
+          echo "RACE_TIMEOUT=$RACE_TIMEOUT" >> "$GITHUB_ENV"
+
+      - name: Embebedor de consulta bit-exacto contra el asset real
+        env:
+          MUSUBI_POTION_DIR: ${{ github.workspace }}/.musubi/embeddings/potion-multilingual-128M
+          MUSUBI_SPM_TESTDATA: ${{ github.workspace }}/.musubi/embeddings/potion-multilingual-128M
+        # EL EMBEBEDOR DE CONSULTA DUPLICA UNA RUTA CRITICA, Y ESTO ES LO QUE LA ATA A LA ORIGINAL.
+        #
+        # La consulta liviana (internal/embedding/consulta_liviana.go) da el vector de una consulta
+        # sin cargar la tabla: el tokenizer sale de tokenizer.idx y las filas se leen con ReadAt.
+        # Tiene que dar EXACTAMENTE el vector de StaticProvider; si difiere, la consulta se compara
+        # contra vectores incompatibles y el ranking se corrompe sin un error. La tabla de juguete
+        # de `go test ./...` no tiene el charsmap real (Precompiled), y por eso estas tres corren
+        # aca, sobre POTION: el vector contra StaticProvider, los ids del indice contra la
+        # referencia de testdata, y el embebedor de consulta contra el del daemon (resolveEmbedder).
+        #
+        # El `grep` con espacio final es por lo mismo que los de arriba: `--- SKIP` no es
+        # `--- PASS`, y el espacio ancla el nombre contra el `(1.23s)`.
+        run: |
+          set -o pipefail
+          go test ./internal/embedding/ -run TestConsultaLivianaEsBitExactaConLaTablaReal -count=1 -timeout "$RACE_TIMEOUT" -v | tee consulta-liviana.txt
+          go test ./internal/embedding/ -run TestIndiceTokenizerBitExacto -count=1 -timeout "$RACE_TIMEOUT" -v | tee -a consulta-liviana.txt
+          go test ./cmd/musubi/ -run TestEmbebedorDeConsultaIgualAlDelDaemonConLaTablaReal -count=1 -timeout "$RACE_TIMEOUT" -v | tee -a consulta-liviana.txt
+          for t in TestConsultaLivianaEsBitExactaConLaTablaReal TestIndiceTokenizerBitExacto TestEmbebedorDeConsultaIgualAlDelDaemonConLaTablaReal; do
+            grep -q -- "--- PASS: $t " consulta-liviana.txt || {
+              echo "::error::el embebedor de consulta NO EJECUTO $t (se salteo, o el nombre ya no existe). Un verde de este job sin esa linea no ata el vector liviano al de StaticProvider."
+              exit 1
+            }
+          done
+
   lint:
     runs-on: ubuntu-latest
     steps:
