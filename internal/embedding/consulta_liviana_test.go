@@ -905,6 +905,140 @@ func TestConsultaLivianaLeeLasFilasEnParalelo(t *testing.T) {
 	t.Logf("%d filas distintas con 25 ms por lectura: %v", len(distintas), demora)
 }
 
+// TestElCompletoSanaUnaTablaConMismoTamanoYFecha fija lo único que cubre el hueco que acepta la
+// decisión 5 (la tabla se da por no cambiada mirando tamaño y fecha): si alguien reescribe la tabla
+// con el MISMO tamaño y la MISMA fecha, la consulta liviana no lo ve, pero el primer proveedor
+// completo que arranque sí, porque su «al día» compara el checksum de CONTENIDO que acaba de
+// calcular, y reescribe la identidad. Sin eso, el hueco sería para siempre.
+//
+// Sabotaje: el «al día» sin comparar el checksum.
+// arnes: archivo="internal/embedding/consulta_liviana.go"
+// arnes: de="err == nil && id.Checksum == checksum && id.Tabla == tabla && id.Tokenizer == tok {"
+// arnes: a="err == nil && id.Tabla == tabla && id.Tokenizer == tok {"
+func TestElCompletoSanaUnaTablaConMismoTamanoYFecha(t *testing.T) {
+	dir, sp := tablaDeJugueteConSidecars(t, 200, 8)
+	tab := filepath.Join(dir, archivoTabla)
+	st, err := os.Stat(tab)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crudo, err := os.ReadFile(tab)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crudo[len(crudo)-2] ^= 0x40 // otro valor en la última fila: mismo tamaño
+	if err := os.WriteFile(tab, crudo, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(tab, st.ModTime(), st.ModTime()); err != nil { // y la misma fecha
+		t.Fatal(err)
+	}
+	liv, err := NewConsultaLiviana(dir)
+	if err != nil || liv.Name() != sp.Name() {
+		t.Fatalf("control: con el mismo tamaño y la misma fecha la identidad se da por buena (decisión 5): %v", err)
+	}
+	sp2, err := NewStaticProvider(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sp2.Name() == sp.Name() {
+		t.Fatal("control: el contenido cambió y el checksum del proveedor completo no")
+	}
+	liv2, err := NewConsultaLiviana(dir)
+	if err != nil {
+		t.Fatalf("después del arranque del proveedor completo tenía que haber atajo: %v", err)
+	}
+	if liv2.Name() != sp2.Name() {
+		t.Fatalf("la identidad NO se sanó: la consulta liviana dice %s y la tabla es %s", liv2.Name(), sp2.Name())
+	}
+}
+
+// swapAlCerrar reemplaza la tabla en disco apenas cargarTablaEnStreaming cierra el archivo: la
+// tabla cambia ENTRE la carga y la escritura de los sidecars.
+type swapAlCerrar struct {
+	archivoDeLectura
+	hacer func()
+}
+
+func (s *swapAlCerrar) Close() error {
+	err := s.archivoDeLectura.Close()
+	if s.hacer != nil {
+		s.hacer()
+		s.hacer = nil
+	}
+	return err
+}
+
+// TestLaTablaQueCambiaDuranteLaCargaNoSeFirmaConLaHuellaNueva fija por qué NewStaticProvider toma
+// las huellas ANTES de leer la tabla. Si la tabla se reemplaza mientras se carga, el checksum y el
+// índice son de la VIEJA; tomar la huella después le pegaría la fecha y el tamaño de la NUEVA, y la
+// consulta liviana aceptaría esa identidad sobre la tabla nueva: vectores de una tabla con el nombre
+// de otra, que es la corrupción de N1.
+//
+// Sabotaje: volver a tomar la huella de la tabla después de cargarla.
+// arnes: archivo="internal/embedding/static.go"
+// arnes: de="if u, ok := tok.(*unigram); ok && errTabla == nil && errTok == nil {"
+// arnes: a="if u, ok := tok.(*unigram); ok && errTabla == nil && errTok == nil { huellaTabla, errTabla = huellaDe(filepath.Join(dir, archivoTabla))"
+func TestLaTablaQueCambiaDuranteLaCargaNoSeFirmaConLaHuellaNueva(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "tabla-juguete")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	escribirTablaDeJuguete(t, dir, 200, 8, 7)
+	tab := filepath.Join(dir, archivoTabla)
+	nueva, err := os.ReadFile(tab)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := len(nueva) - 8*4*50; i < len(nueva); i++ { // otras 50 filas, mismo tamaño
+		nueva[i] ^= 0x5a
+	}
+	previo := abrirParaLeer
+	usado := false
+	abrirParaLeer = func(ruta string) (archivoDeLectura, error) {
+		f, err := previo(ruta)
+		if err != nil || usado || filepath.Base(ruta) != archivoTabla {
+			return f, err
+		}
+		usado = true
+		return &swapAlCerrar{archivoDeLectura: f, hacer: func() {
+			if err := os.WriteFile(tab, nueva, 0o644); err != nil {
+				t.Errorf("no se pudo reemplazar la tabla: %v", err)
+			}
+			masTarde := time.Now().Add(time.Hour)
+			_ = os.Chtimes(tab, masTarde, masTarde)
+		}}, nil
+	}
+	t.Cleanup(func() { abrirParaLeer = previo })
+
+	if _, err := NewStaticProvider(dir); err != nil { // carga la VIEJA; al cerrar, queda la nueva
+		t.Fatal(err)
+	}
+	abrirParaLeer = previo
+	if !usado {
+		t.Fatal("control: la costura no reemplazó la tabla, así que esta prueba no mide nada")
+	}
+	if liv, err := NewConsultaLiviana(dir); err == nil {
+		fresco, ferr := NewStaticProvider(dir)
+		if ferr != nil {
+			t.Fatal(ferr)
+		}
+		t.Fatalf("CORRUPCIÓN N1: la consulta liviana se construyó con la procedencia %s sobre una tabla que es %s",
+			liv.Name(), fresco.Name())
+	} else if !errors.Is(err, ErrSinAtajo) && !errors.Is(err, ErrIdentidadVencida) {
+		t.Fatalf("sin atajo tiene que decirlo con ErrSinAtajo o ErrIdentidadVencida, no con %v", err)
+	}
+	// Y el arranque siguiente, ya sin cambios a mitad de carga, deja la identidad correcta.
+	fresco, err := NewStaticProvider(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	liv, err := NewConsultaLiviana(dir)
+	if err != nil || liv.Name() != fresco.Name() {
+		t.Fatalf("después de un arranque sano la identidad tenía que ser la de la tabla nueva: %v", err)
+	}
+}
+
 // TestLosTemporalesHuerfanosSeBorran: un daemon que muere a mitad de escritura (se cierra la sesión
 // que lo lanzó) deja su temporal; el próximo proveedor completo lo borra si es viejo, y deja el de
 // un daemon que puede estar escribiendo ahora.

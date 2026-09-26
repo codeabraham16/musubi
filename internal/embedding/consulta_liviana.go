@@ -209,7 +209,10 @@ func escribirSidecarsSiHaceFalta(dir string, u *unigram, checksum string, tabla,
 		huella  huellaArchivo
 	}{{archivoTabla, tabla}, {archivoTokenizer, tok}} {
 		st, err := os.Stat(filepath.Join(dir, par.archivo))
-		if err != nil || !par.huella.coincide(st) {
+		if err == nil && !par.huella.coincide(st) {
+			err = fmt.Errorf("%s cambió (tamaño o fecha) mientras se cargaba", par.archivo)
+		}
+		if err != nil {
 			avisarSinAtajo(dir, "la tabla cambió mientras se cargaba: no se escribe el índice del tokenizer", err)
 			return
 		}
