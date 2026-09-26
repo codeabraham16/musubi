@@ -441,6 +441,12 @@ func TestElHookDelTurnoLeDejaLasTareasAlAgente(t *testing.T) {
 // arnes: de="\tif !esTurnoDeLaPersona(in.Prompt) {\n"
 // arnes: a="\tif false && !esTurnoDeLaPersona(in.Prompt) {\n"
 //
+// Sabotaje que la hace fallar: reconocer sólo la forma presentada del turno de otra sesión, no la
+// cruda que recibe el hook.
+// arnes: archivo="cmd/musubi/tareas.go"
+// arnes: de="var prefijosDeTurnoAjeno = []string{\"<task-notification>\", \"<cross-session-message\", \"<agent-message\", \"Another Claude session\"}\n"
+// arnes: a="var prefijosDeTurnoAjeno = []string{\"<task-notification>\", \"Another Claude session\"}\n"
+//
 // Sabotaje que la hace fallar: un solo aviso por proyecto, no por sesión.
 // arnes: archivo="cmd/musubi/tareas.go"
 // arnes: de="\tif !avisoVencidoEnLaSesion(t.store, in.SessionID, t.ahora) {\n"
@@ -462,6 +468,8 @@ func TestElAvisoEsPorSesionYSoloEnTurnosDeLaPersona(t *testing.T) {
 	// Los turnos ajenos no avisan, no postean y no gastan el intervalo.
 	for _, ajeno := range []string{
 		"<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>",
+		"<cross-session-message from=\"otra\">¿seguís con lo tuyo?</cross-session-message>",
+		"<agent-message from=\"a1\">\n[Subagent hand-back] el informe</agent-message>",
 		"Another Claude session sent you a message: ¿seguís con lo tuyo?",
 	} {
 		if out := turno("a", ajeno, ahora); out != "" {

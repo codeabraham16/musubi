@@ -71,12 +71,20 @@ const (
 // sin pedirle confirmación a la persona. Son nombres del formato de otro programa: se clavan.
 var modosQueCorrenSolos = map[string]bool{"auto": true, "bypassPermissions": true}
 
-// prefijosDeTurnoAjeno son los comienzos del texto de un turno que NO escribió la persona. Son
-// hechos del formato de Claude Code, medidos el 2026-09-26 en los transcripts de esta máquina: 1186
-// turnos que empiezan con `<task-notification>` (terminó una tarea de fondo) y 193 con `Another
-// Claude session` (un mensaje de otra sesión). Se clavan: si Claude Code los cambia, el aviso vuelve
-// a salir también en esos turnos, que es como era antes, no un daño.
-var prefijosDeTurnoAjeno = []string{"<task-notification>", "Another Claude session"}
+// prefijosDeTurnoAjeno son los comienzos del texto de un turno que NO escribió la persona, tal como
+// le llega AL HOOK: crudo, antes de que Claude Code lo presente. Son hechos de su formato, medidos
+// el 2026-09-26 en los `queued_command` de los transcripts de esta máquina: `<task-notification>`
+// (1035: terminó una tarea de fondo), `<cross-session-message` (168: un mensaje de otra sesión) y
+// `<agent-message` (6: un subagente entrega su informe).
+//
+// LA PRIMERA MEDICIÓN MIRÓ LO QUE NO VE EL HOOK. El transcript guarda el turno de otra sesión ya
+// presentado («Another Claude session sent a message…»), y ése fue el prefijo que se clavó; el
+// hook recibe el crudo, así que un informe de subagente se leyó como turno de la persona y se llevó
+// el aviso. Se conserva la forma presentada por si algún camino la entrega así.
+//
+// Se clavan: si Claude Code los cambia, el aviso vuelve a salir también en esos turnos, que es como
+// era antes, no un daño.
+var prefijosDeTurnoAjeno = []string{"<task-notification>", "<cross-session-message", "<agent-message", "Another Claude session"}
 
 // esTurnoDeLaPersona dice si el turno lo escribió la persona.
 //
