@@ -195,6 +195,7 @@ func medirSesionContexto(s transcripts.Sesion, v transcripts.Ventana, m *Medicio
 	var pedidos []string             // comienzos de los pedidos sustantivos, para el eco
 	conReinyeccion := map[int]bool{}
 	esperandoArranque := false
+	compactacionContada := false // la compactación que abrió la ventana en curso cae en la pedida
 
 	for _, t := range s.Turnos {
 		cuenta, despues := v.Ubicar(t.Timestamp)
@@ -212,9 +213,15 @@ func medirSesionContexto(s transcripts.Sesion, v transcripts.Ventana, m *Medicio
 			enLaVentana = map[string]bool{}
 			ventana = t.Ventana
 		}
-		if t.Compactacion && cuenta {
-			m.M2.Compactaciones++
-			esperandoArranque = true
+		if t.Compactacion {
+			// M5 se mide sólo en las ventanas que abrió una compactación CONTADA: si no, una
+			// compactación de antes de --desde sumaría reinyecciones sin sumarse a sí misma, y
+			// «compactaciones con alguno de vuelta» podría pasar del total.
+			compactacionContada = cuenta
+			if cuenta {
+				m.M2.Compactaciones++
+				esperandoArranque = true
+			}
 		}
 		if t.Origen == transcripts.OrigenHumano {
 			esperandoArranque = false // llegó el pedido siguiente y el arranque no habló
@@ -241,7 +248,7 @@ func medirSesionContexto(s transcripts.Sesion, v transcripts.Ventana, m *Medicio
 						m.M3.Repetidos++
 					}
 				}
-				if !enLaVentana[id] && t.Ventana > 0 && cuenta {
+				if !enLaVentana[id] && compactacionContada && cuenta {
 					m.M5.IDs++
 					if antes[id] {
 						m.M5.Reinyectados++

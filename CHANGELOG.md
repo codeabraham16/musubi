@@ -22,13 +22,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   corrigió; y las reanudaciones. Los forks no dejan rastro en el transcript y salen «sin medir»,
   como el alcance entero cuando no hay transcripts en la ventana: nunca 0.
 
-  Sobre los transcripts de Musubi y Altura en davantis-1 desde el 09-14 (2026-09-26 22:25 UTC): M1
-  75/129 por lista y 122/197 por largo; M1s 116/388; M2 0/31; M3 173/2.389 (7,2 %); M5 906/1.852,
-  en 27 de las 31 compactaciones; M7 0/572. Contra el python de la línea base, sobre la misma
+  Sobre los transcripts de Musubi y Altura en davantis-1 desde el 09-14 (2026-09-26 22:37 UTC): M1
+  76/129 por lista y 123/197 por largo; M1s 117/390; M2 0/31; M3 173/2.393 (7,2 %); M5 630/1.500,
+  en 21 de las 31 compactaciones; M7 0/575. Contra el python de la línea base, sobre la misma
   foto: M3 da 44 allá porque el python no alimenta la ventana con lo inyectado ANTES del 09-14 en
-  una ventana que seguía abierta ese día (con ese estado da 173, igual); M1 da 77/123 allá porque
+  una ventana que seguía abierta ese día (con ese estado da 173, igual); M1 da 78/123 allá porque
   el python le anotaba a un «sigue» la memoria de un aviso o de un pedido encolado que llegó
-  detrás.
+  detrás, y no contaba como turno el «sigue» encolado. M5 se mide sólo en las ventanas que abre
+  una compactación de la ventana pedida.
 
   **El lector de transcripts pasa a `internal/transcripts`**, que ahora comparten `uso-agente`,
   `--contexto` y, en los PR que siguen, el hook del turno, el banco de búsqueda y la métrica de
@@ -41,7 +42,7 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   contarlo, su memoria se le anotaba al turno anterior. `uso-agente` da los mismos números que
   antes.
 
-  *Ocho guardas nuevas con su sabotaje corrido (18 sabotajes, todos en rojo), y las 11 directivas
+  *Nueve guardas nuevas con su sabotaje corrido (19 sabotajes, todos en rojo), y las 11 directivas
   de `uso_agente_test.go` que apuntaban al código mudado se reescribieron y se re-corrieron. No
   cambia ninguna tool: no hay goldens.*
 - **Antes de tocar un agente a mano, se declara la ventana: el runbook trae la receta.** El

@@ -220,3 +220,34 @@ func TestMedirContextoSinSesionesPrincipalesDiceSinMedir(t *testing.T) {
 		t.Errorf("subagentes_no_medidos = %s, quería 1", inf["subagentes_no_medidos"])
 	}
 }
+
+// Sabotaje que la hace fallar: medir M5 en una ventana cuya compactación quedó antes de --desde.
+// arnes: archivo="cmd/musubi/uso_agente_contexto.go"
+// arnes: de="\t\t\t\tif !enLaVentana[id] && compactacionContada && cuenta {\n"
+// arnes: a="\t\t\t\tif !enLaVentana[id] && (compactacionContada || t.Ventana > 0) && cuenta {\n"
+func TestMedirContextoM5SoloEnCompactacionesContadas(t *testing.T) {
+	// La compactación es del 20 y el id vuelve el 21. Medido desde el 21, no hay compactación que
+	// contar, así que tampoco hay «compactación con alguno de vuelta»: si no, el cociente de M5
+	// puede pasar de 1 (N ventanas con reinyección sobre 0 compactaciones).
+	raiz := t.TempDir()
+	escribirTranscript(t, raiz, "-home-x/s1.jsonl",
+		fxPrompt("p1", fxTS("2026-09-20", 1), "armá el deploy del central con la receta"),
+		fxHook("h1", fxTS("2026-09-20", 2), "UserPromptSubmit", "[Musubi — memoria relevante] Contexto.\n- a [id:1]"),
+		fxBordeDeCompactacion("b1", fxTS("2026-09-20", 3)),
+		fxPrompt("p2", fxTS("2026-09-21", 1), "revisá la receta del deploy otra vez"),
+		fxHook("h2", fxTS("2026-09-21", 2), "UserPromptSubmit", "[Musubi — memoria relevante] Contexto.\n- a [id:1]"),
+	)
+	v, err := transcripts.ParsearVentana("2026-09-21", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inf, err := medirContexto(raiz, v, nil)
+	if err != nil || inf.Principal.MedicionContexto == nil {
+		t.Fatalf("medirContexto: %v, estado %q", err, inf.Principal.Estado)
+	}
+	m := inf.Principal.MedicionContexto
+	if m.M2.Compactaciones != 0 || m.M5 != (MedidaM5{}) {
+		t.Errorf("desde el 21: M2 = %+v y M5 = %+v; quería 0 compactaciones y M5 vacío (la compactación "+
+			"es del 20)", m.M2, m.M5)
+	}
+}
