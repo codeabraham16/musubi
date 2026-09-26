@@ -66,7 +66,14 @@ func (s *McpServer) ConfigurarFlota(cfg config.FleetConfig) error {
 	vistos := make(map[string]bool, len(cfg.Policies))
 	for _, pc := range cfg.Policies {
 		pol := fleet.Politica{
-			Nombre:    pc.Name,
+			// EL NOMBRE ENTRA RECORTADO, Y ÉSTA ES LA ÚNICA PUERTA POR DONDE ENTRA (A131·T4). Es la
+			// clave del estado que le sobrevive al proceso: el almacén guarda el disparo con el
+			// nombre RECORTADO (MarcarDisparoDePolitica), y los que lo leen —cargarCooldowns al
+			// arrancar y la poda horaria— lo buscaban con el nombre crudo. Con `name: " x "` el
+			// cooldown no sobrevivía a un reinicio (la política volvía a actuar a los treinta
+			// segundos) y la poda lo borraba cada hora por huérfano. Es el gemelo del `service:` con
+			// bordes que cerró A131·T3; recortado acá, todos los que miran el nombre ven el mismo.
+			Nombre:    strings.TrimSpace(pc.Name),
 			Principal: pc.Principal,
 			Cuando:    fleet.Condicion(pc.When),
 			Supera:    pc.Threshold,
