@@ -5,6 +5,9 @@ package mcp
 // autoridad propia — y las guardas que la sostienen.
 
 import (
+	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1012,6 +1015,30 @@ func TestUnServicioAusenteDelInventarioNoDisparaLaPolitica(t *testing.T) {
 // producción el 2026-08-31: se configuró la primera política real, disparó, la serie apareció,
 // se reinició el cerebro y volvió a haber cero series.
 //
+// ── A131·T6: EXIGÍA CUATRO RESULTADOS DE SIETE, SOBRE UNA SOLA POLÍTICA ─────────────────────────
+//
+// Hasta A131·T6 exigía en cero una lista ESCRITA A MANO de cuatro resultados (ok, rechazada,
+// sin_principal, error) y configuraba UNA política. Los dos ejes estaban clavados, y cada uno
+// dejaba pasar una siembra rota con el paquete entero en verde (medido en la auditoría A131, y
+// de nuevo sobre la base de este cambio):
+//
+//   - RESULTADOS. `resultadosDePolitica` —la única copia, la que recorre la siembra— tiene siete.
+//     Los tres que la lista no miraba son `mantenimiento` y los dos de consentimiento, justo los
+//     que lee `PoliticaFrenadaPorConsentimiento` (`result=~"consentimiento_.*"`). Y
+//     `TestSeSiembranTodosLosResultadosQueSeEmiten` contrasta el AST contra la VARIABLE, no contra
+//     lo que la siembra recorre: sembrar `resultadosDePolitica[:4]`, o saltear los de
+//     consentimiento, no lo veía nadie, y la alerta quedaba ciega al primer bloqueo (P4-d1, P4-m10).
+//   - POLÍTICAS. Con una sola, «se siembran todas» y «se siembra la última» son la misma salida:
+//     `append(nombres[:0], p.Nombre)` pasaba igual (P4-m11).
+//
+// Ahora los resultados salen de `resultadosDePolitica` y de ninguna otra lista, las políticas de
+// una tabla de una, dos y tres, y se lee el /metrics RENDERIZADO —lo que lee `increase()`— con
+// igualdad en los dos sentidos: falta, sobra o vale otra cosa que cero. La cadena queda cerrada:
+// lo que se emite (AST) es la variable (`TestSeSiembranTodosLosResultadosQueSeEmiten`), y la
+// variable es lo que el render trae en cero (ésta). Exposición medida: cero — una política en
+// producción con sus siete series en 0, y las cuatro máquinas con el consentimiento por defecto
+// (`avisa`), que no frena.
+//
 // Sabotaje que la hace fallar: sacar la llamada a `sembrarPoliticas` de `ConfigurarFlota`.
 //
 // OJO CON EL NOMBRE DE ARRIBA: la llamada real está en `scheduler_flota.go`, no en
@@ -1021,19 +1048,73 @@ func TestUnServicioAusenteDelInventarioNoDisparaLaPolitica(t *testing.T) {
 // arnes: archivo="internal/mcp/scheduler_flota.go"
 // arnes: de="\ts.metrics.sembrarPoliticas(nombres)\n"
 // arnes: a=""
+//
+// Sabotaje: sembrar sólo los cuatro primeros resultados de la lista (P4-m10).
+// arnes: archivo="internal/mcp/observability.go"
+// arnes: de="\t\tfor _, r := range resultadosDePolitica {\n"
+// arnes: a="\t\tfor _, r := range resultadosDePolitica[:4] {\n"
+// arnes: colision_ok="TestSembrarNoPisaUnContadorQueYaCuenta"
+// arnes: arreglo_de="\t\tfor _, r := range resultadosDePolitica {\n"
+// arnes: arreglo_a="\t\tfor i := range resultadosDePolitica {\n\t\t\tr := resultadosDePolitica[len(resultadosDePolitica)-1-i]\n"
+//
+// Sabotaje: saltear en la siembra los dos resultados de consentimiento (P4-d1).
+// arnes: archivo="internal/mcp/observability.go"
+// arnes: de="\t\t\t// LoadOrStore y no Store: sembrar NUNCA puede pisar un contador que ya viene\n"
+// arnes: a="\t\t\tif strings.HasPrefix(r, \"consentimiento_\") {\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\t// LoadOrStore y no Store: sembrar NUNCA puede pisar un contador que ya viene\n"
+//
+// Sabotaje: sembrar sólo la última política configurada (P4-m11).
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\t\tnombres = append(nombres, p.Nombre)\n"
+// arnes: a="\t\tnombres = append(nombres[:0], p.Nombre)\n"
+// arnes: arreglo_de="\t\tnombres = append(nombres, p.Nombre)\n"
+// arnes: arreglo_a="\t\tnombres = append([]string{p.Nombre}, nombres...)\n"
 func TestLaSerieDeUnaPoliticaExisteAntesDeLaPrimeraAccion(t *testing.T) {
-	s, _ := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal()))
+	// PISO: sin resultados que exigir, cada fila de abajo pasaría sin haber mirado una sola serie.
+	if len(resultadosDePolitica) == 0 {
+		t.Fatal("`resultadosDePolitica` está vacía: esta guarda exige en cero cada resultado de esa lista, " +
+			"y sin ninguno pasaría en verde sin haber leído nada")
+	}
+	// UNA, DOS Y TRES POLÍTICAS: con una, la primera y la última son la misma; con tres hay una del
+	// medio. Los nombres son de la fila; lo que se exige sale de la configuración que se pasó.
+	for _, cuantas := range []int{1, 2, 3} {
+		t.Run(fmt.Sprintf("%d_politicas", cuantas), func(t *testing.T) {
+			var pols []config.PolicyConfig
+			for i := range cuantas {
+				p := politicaDeMemoria()
+				if i > 0 {
+					p.Name = fmt.Sprintf("%s-%d", p.Name, i+1)
+				}
+				pols = append(pols, p)
+			}
+			s := newTestServer(t, embedding.NoopProvider{})
+			if err := s.ConfigurarFlota(config.FleetConfig{Policies: pols}); err != nil {
+				t.Fatalf("ConfigurarFlota: %v", err)
+			}
 
-	out := s.metrics.render(nil)
-	for _, quiero := range []string{
-		`musubi_fleet_policy_actions_total{policy="vaciar-journal",result="ok"} 0`,
-		`musubi_fleet_policy_actions_total{policy="vaciar-journal",result="rechazada"} 0`,
-		`musubi_fleet_policy_actions_total{policy="vaciar-journal",result="sin_principal"} 0`,
-		`musubi_fleet_policy_actions_total{policy="vaciar-journal",result="error"} 0`,
-	} {
-		if !strings.Contains(out, quiero) {
-			t.Errorf("falta la serie en cero %q: sin ella `increase()` no devuelve nada y la alerta no puede distinguir «no actuó» de «el cerebro dejó de exportar»", quiero)
-		}
+			quiero := map[[2]string]float64{}
+			for _, p := range pols {
+				for _, r := range resultadosDePolitica {
+					quiero[[2]string{p.Name, r}] = 0
+				}
+			}
+			faltan, distintas, sobran := diferenciaDeSeriesDePolitica(quiero, seriesDeAccionesDePolitica(t, s.metrics.render(nil)))
+			fila := fmt.Sprintf("con %d política(s) recién configurada(s)", cuantas)
+			if len(faltan) > 0 {
+				t.Errorf("%s faltan %d de las %d series que tienen que nacer en cero:\n    %s\n\n"+
+					"Sin la serie, `increase()` no devuelve nada: la alerta no distingue «no actuó» de «el "+
+					"cerebro dejó de exportar», y tampoco ve la subida de AUSENTE a 1, así que el PRIMER "+
+					"evento de ese resultado —que puede ser el único— no la levanta.",
+					fila, len(faltan), len(quiero), strings.Join(faltan, "\n    "))
+			}
+			if len(distintas) > 0 {
+				t.Errorf("%s hay series que no nacen en cero, y ninguna política actuó todavía:\n    %s",
+					fila, strings.Join(distintas, "\n    "))
+			}
+			if len(sobran) > 0 {
+				t.Errorf("%s hay series que ninguna política configurada ni ningún resultado de "+
+					"`resultadosDePolitica` explica:\n    %s", fila, strings.Join(sobran, "\n    "))
+			}
+		})
 	}
 }
 
@@ -1044,19 +1125,150 @@ func TestLaSerieDeUnaPoliticaExisteAntesDeLaPrimeraAccion(t *testing.T) {
 // — o sea, apagaría las alertas justo cuando alguien está tocando la configuración, que es
 // exactamente cuando más importan.
 //
+// A131·T6: AFIRMABA LA IDEMPOTENCIA SOBRE SIETE CONTADORES Y LA MEDÍA SOBRE UNO. Contaba sólo
+// `ok`, así que una siembra que pisara todos los demás —`rechazada` y `sin_principal`, los de
+// `PoliticaSinPermiso`, incluidos— pasaba en verde (P4-m12). Ahora cuenta cada resultado de
+// `resultadosDePolitica` una cantidad DISTINTA (su posición más uno), para que un contador pisado
+// o dos cruzados se vean en el número, y lee el /metrics renderizado. Exposición medida: cero —
+// `sembrarPoliticas` tiene un solo llamador, que corre una vez al arrancar sobre un mapa vacío,
+// y no hay recarga en caliente—; el arreglo es un recorrido de la lista que ya existe y no puede
+// dar un falso positivo, así que se cierra ahora y no el día que alguien agregue la recarga.
+//
 // Sabotaje: cambiar el `LoadOrStore` de sembrarPoliticas por un `Store`.
 // arnes: archivo="internal/mcp/observability.go"
 // arnes: de="m.politicaStats.LoadOrStore(n+\"\\x00\"+r, new(atomic.Int64))"
 // arnes: a="m.politicaStats.Store(n+\"\\x00\"+r, new(atomic.Int64))"
+//
+// Sabotaje: pisar con `Store` todo resultado que no sea `ok` (P4-m12).
+// arnes: archivo="internal/mcp/observability.go"
+// arnes: de="\t\tfor _, r := range resultadosDePolitica {\n"
+// arnes: a="\t\tfor _, r := range resultadosDePolitica {\n\t\t\tif r != \"ok\" {\n\t\t\t\tm.politicaStats.Store(n+\"\\x00\"+r, &atomic.Int64{})\n\t\t\t\tcontinue\n\t\t\t}\n"
+// arnes: arreglo_de="\t\tfor _, r := range resultadosDePolitica {\n"
+// arnes: arreglo_a="\t\tfor _, r := range resultadosDePolitica {\n\t\t\tif _, ya := m.politicaStats.Load(n+\"\\x00\"+r); ya {\n\t\t\t\tcontinue\n\t\t\t}\n"
 func TestSembrarNoPisaUnContadorQueYaCuenta(t *testing.T) {
 	s, _ := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal()))
 
-	s.metrics.contarPolitica("vaciar-journal", "ok")
-	s.metrics.contarPolitica("vaciar-journal", "ok")
-	s.metrics.sembrarPoliticas([]string{"vaciar-journal"}) // como haría una recarga
-
-	quiero := `musubi_fleet_policy_actions_total{policy="vaciar-journal",result="ok"} 2`
-	if out := s.metrics.render(nil); !strings.Contains(out, quiero) {
-		t.Errorf("la siembra pisó un contador que ya venía contando: se esperaba %q", quiero)
+	// PISO: sin políticas o sin resultados no se contaría nada, y la comparación de abajo pasaría
+	// sin haber puesto a prueba un solo contador.
+	if len(s.politicas) == 0 || len(resultadosDePolitica) == 0 {
+		t.Fatalf("hay %d política(s) configurada(s) y %d resultado(s) en `resultadosDePolitica`: sin "+
+			"los dos no se cuenta nada, y esta guarda pasaría en verde sin haber leído nada",
+			len(s.politicas), len(resultadosDePolitica))
 	}
+	var nombres []string
+	quiero := map[[2]string]float64{}
+	for _, p := range s.politicas {
+		nombres = append(nombres, p.Nombre)
+		for i, r := range resultadosDePolitica {
+			for range i + 1 {
+				s.metrics.contarPolitica(p.Nombre, r)
+			}
+			quiero[[2]string{p.Nombre, r}] = float64(i + 1)
+		}
+	}
+	s.metrics.sembrarPoliticas(nombres) // como haría una recarga
+
+	faltan, distintas, sobran := diferenciaDeSeriesDePolitica(quiero, seriesDeAccionesDePolitica(t, s.metrics.render(nil)))
+	if len(distintas) > 0 {
+		t.Errorf("la siembra pisó %d de los %d contadores que ya venían contando:\n    %s\n\n"+
+			"Una recarga de configuración vuelve a sembrar, y un contador que vuelve a cero borra la "+
+			"historia de la ventana de `increase()`: las alertas se apagan justo cuando alguien está "+
+			"tocando la configuración.", len(distintas), len(quiero), strings.Join(distintas, "\n    "))
+	}
+	if len(faltan) > 0 {
+		t.Errorf("después de volver a sembrar desaparecieron %d de las %d series que venían contando:\n    %s",
+			len(faltan), len(quiero), strings.Join(faltan, "\n    "))
+	}
+	if len(sobran) > 0 {
+		t.Errorf("después de volver a sembrar aparecieron series que nadie contó ni configuró:\n    %s",
+			strings.Join(sobran, "\n    "))
+	}
+}
+
+// seriesDeAccionesDePolitica lee del /metrics renderizado cada serie de `nombrePoliticaAcciones`
+// —lo mismo que lee Prometheus— como (política, resultado) → valor.
+//
+// UNA LÍNEA DEL CONTADOR QUE NO SABE LEER ES UN FATAL, NO UN SALTEO. Callarla sería un cero que
+// significa «no sé»: la guarda la contaría como una serie faltante y culparía a la siembra de algo
+// que es del lector. Las etiquetas se leen en cualquier orden y con el escapado de `%q`, que es
+// como las escribe `renderPoliticas`.
+func seriesDeAccionesDePolitica(t *testing.T, out string) map[[2]string]float64 {
+	t.Helper()
+	series := map[[2]string]float64{}
+	for _, linea := range strings.Split(out, "\n") {
+		resto, ok := strings.CutPrefix(linea, nombrePoliticaAcciones)
+		if !ok || (resto != "" && resto[0] != '{' && resto[0] != ' ') {
+			continue // otra métrica, aunque empiece igual; `# HELP` y `# TYPE` no empiezan con el nombre
+		}
+		noSe := func(por string) {
+			t.Helper()
+			t.Fatalf("no sé leer esta línea del contador de políticas (%s): %q", por, linea)
+		}
+		if !strings.HasPrefix(resto, "{") {
+			noSe("sin etiquetas no hay política ni resultado")
+		}
+		etiquetas := map[string]string{}
+		resto = resto[1:]
+		for !strings.HasPrefix(resto, "}") {
+			igual := strings.IndexByte(resto, '=')
+			if igual <= 0 {
+				noSe("una etiqueta sin `=`")
+			}
+			citado, err := strconv.QuotedPrefix(resto[igual+1:])
+			if err != nil {
+				noSe("un valor de etiqueta sin comillas: " + err.Error())
+			}
+			valor, err := strconv.Unquote(citado)
+			if err != nil {
+				noSe(err.Error())
+			}
+			etiquetas[resto[:igual]] = valor
+			resto = resto[igual+1+len(citado):]
+			switch {
+			case strings.HasPrefix(resto, ","):
+				resto = resto[1:]
+			case !strings.HasPrefix(resto, "}"):
+				noSe("después de un valor de etiqueta no viene `,` ni `}`")
+			}
+		}
+		v, err := strconv.ParseFloat(strings.TrimSpace(resto[1:]), 64)
+		if err != nil {
+			noSe("el valor no es un número: " + err.Error())
+		}
+		pol, conPol := etiquetas["policy"]
+		res, conRes := etiquetas["result"]
+		if !conPol || !conRes {
+			noSe("le falta `policy` o `result`")
+		}
+		clave := [2]string{pol, res}
+		if _, repetida := series[clave]; repetida {
+			noSe("la misma política y resultado salen dos veces")
+		}
+		series[clave] = v
+	}
+	return series
+}
+
+// diferenciaDeSeriesDePolitica compara lo que se exige contra lo que el render trae, en los dos
+// sentidos: las que faltan, las que están con otro valor y las que sobran, ya ordenadas y escritas
+// para el mensaje de la guarda que llama.
+func diferenciaDeSeriesDePolitica(quiero, hay map[[2]string]float64) (faltan, distintas, sobran []string) {
+	for k, q := range quiero {
+		v, ok := hay[k]
+		switch {
+		case !ok:
+			faltan = append(faltan, fmt.Sprintf("policy=%q result=%q", k[0], k[1]))
+		case v != q:
+			distintas = append(distintas, fmt.Sprintf("policy=%q result=%q vale %v y tenía que valer %v", k[0], k[1], v, q))
+		}
+	}
+	for k, v := range hay {
+		if _, ok := quiero[k]; !ok {
+			sobran = append(sobran, fmt.Sprintf("policy=%q result=%q = %v", k[0], k[1], v))
+		}
+	}
+	sort.Strings(faltan)
+	sort.Strings(distintas)
+	sort.Strings(sobran)
+	return faltan, distintas, sobran
 }
