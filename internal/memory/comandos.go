@@ -46,10 +46,15 @@ func (e *DbEngine) EncolarComando(c fleet.Comando) (fleet.Comando, error) {
 	// SIEMPRE —sus miles de filas muertas ocupando el cupo— y destrabarla exigiría borrar
 	// bitácora, que es justo lo que este repo no hace. Lo vencido no es presión de cola: es
 	// historia.
+	//
+	// «Lo que todavía podría ejecutarse» lo dice el MISMO límite con el que la toma vence
+	// (fleet.LimiteDeVida): el techo cuenta exactamente los pendientes que la toma, a la hora del
+	// encolado, todavía no vencería. Hasta la revisión de A131 (tema T9) el techo restaba por su
+	// cuenta.
 	if c.Creado.IsZero() {
 		c.Creado = time.Now().UTC()
 	}
-	vivos := c.Creado.Add(-fleet.ComandoVidaMax).UTC().Format(time.RFC3339)
+	vivos := fleet.LimiteDeVida(c.Creado).UTC().Format(time.RFC3339)
 	var enCola int
 	if err := e.db.QueryRow(
 		`SELECT COUNT(*) FROM device_commands WHERE device_id = ? AND estado = ? AND creado >= ?`,
@@ -67,9 +72,16 @@ func (e *DbEngine) EncolarComando(c fleet.Comando) (fleet.Comando, error) {
 	if err != nil {
 		return fleet.Comando{}, err
 	}
-	// EL ORIGEN SE NORMALIZA AL ESCRIBIR, no al leer: un valor raro que entre desde un llamador
-	// nuevo se guarda como desconocido en vez de crear una categoría que ninguna superficie sabe
-	// dibujar. Lo desconocido ya tiene significado; lo inventado, no.
+	// EL ORIGEN SE NORMALIZA AL ESCRIBIR, Y TAMBIÉN AL LEER (escanearComando): un valor raro que
+	// entre desde un llamador nuevo se guarda como desconocido en vez de crear una categoría que
+	// ninguna superficie sabe dibujar. Lo desconocido ya tiene significado; lo inventado, no.
+	//
+	// SON DOS PUERTAS Y CADA UNA SE PRUEBA SOLA. Esta cuida lo que queda en la tabla; la de
+	// escanearComando, lo que llega desde una fila escrita por otro camino (a mano, una versión
+	// futura, una migración). Este comentario decía «no al leer», y hasta A131 (tema T9) cada puerta
+	// sobrevivía sin prueba porque estaba la otra: sacar cualquiera de las dos dejaba todo verde.
+	// Las atan TestLoQueQuedaEnLaTablaEsUnOrigenDelEnum (la columna cruda) y
+	// TestUnOrigenRaroEnLaTablaSeLeeDesconocidoPorCadaPuerta (siembra por SQL).
 	c.Origen = fleet.OrigenValido(c.Origen)
 	// ── LA CLASIFICACIÓN SE EXIGE ACÁ, QUE ES LA ÚNICA PUERTA ───────────────────────────────
 	//
@@ -143,7 +155,9 @@ func (e *DbEngine) TomarComandos(deviceID string, ahora time.Time, tope int) ([]
 func tomarComandosEnTx(tx *sql.Tx, deviceID string, ahora time.Time, tope int) ([]fleet.Comando, error) {
 	// Primero vencer lo viejo. Se hace acá y no en un barrido de fondo porque el momento en que
 	// importa es JUSTO antes de entregar: es la única ventana donde un comando podría colarse.
-	limite := ahora.Add(-fleet.ComandoVidaMax).UTC().Format(time.RFC3339)
+	// El límite es el que lee la vista (fleet.Comando.Vencido): lo que una superficie muestra
+	// `expirado` es exactamente lo que acá no se entrega.
+	limite := fleet.LimiteDeVida(ahora).UTC().Format(time.RFC3339)
 	// Lo que vence sin entregarse también lleva su secreto encima, y ya no va a servirle a nadie:
 	// se tapa ANTES de marcarlo, en la misma transacción, por la misma razón que abajo.
 	if err := taparPantallasPendientesVencidas(tx, deviceID, limite); err != nil {

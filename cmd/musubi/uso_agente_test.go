@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -104,7 +105,7 @@ func escribirTranscript(t *testing.T, raiz, rel string, registros ...map[string]
 // decide si eso es un fallo.
 func medirFixture(t *testing.T, raiz string) (principal, subagentes *MedicionUso, inf InformeUso) {
 	t.Helper()
-	inf, err := medirUsoAgente(raiz, ventanaUso{})
+	inf, err := medirUsoAgente(raiz, ventanaUso{}, nil)
 	if err != nil {
 		t.Fatalf("medirUsoAgente: %v", err)
 	}
@@ -477,5 +478,151 @@ func TestUsoAgenteVentanaSinTranscriptsDiceSinMedir(t *testing.T) {
 	if n := strings.Count(tabla.String(), "sin medir"); n != 2 || strings.Contains(tabla.String(), "transcripts medidos") {
 		t.Errorf("con la ventana vacía la tabla dice «sin medir» %d vez/veces (quería 2, una por alcance) "+
 			"o imprime números:\n%s", n, tabla.String())
+	}
+}
+
+// EL NOMBRE DE UNA CARPETA DE PROYECTO SE FIJA CON LO MEDIDO, NO CON LA FUNCIÓN. Los tres casos son
+// carpetas reales de esta máquina (2026-09-25) junto a la ruta de trabajo que las generó: la regla
+// es un hecho del formato de Claude Code, y derivar el esperado de carpetaDeProyecto dejaría a la
+// prueba midiendo a la función contra sí misma.
+//
+// Sabotaje que la hace fallar: dejar pasar los caracteres que no son letras ni dígitos.
+// arnes: archivo="cmd/musubi/uso_agente.go"
+// arnes: de="\t\tb.WriteByte('-')\n"
+// arnes: a="\t\tb.WriteRune(r)\n"
+func TestUsoAgenteNombraLaCarpetaComoClaudeCode(t *testing.T) {
+	medidas := map[string]string{
+		"/home/davantis/.cache/musubi-uso-agente/e2e":               "-home-davantis--cache-musubi-uso-agente-e2e",
+		"/home/davantis/musubi/.claude/worktrees/wf_31193ce6-417-5": "-home-davantis-musubi--claude-worktrees-wf-31193ce6-417-5",
+		"/tmp/claude-1000/musubi-e2e-DH14gM":                        "-tmp-claude-1000-musubi-e2e-DH14gM",
+	}
+	for ruta, quiere := range medidas {
+		if got := carpetaDeProyecto(ruta); got != quiere {
+			t.Errorf("carpetaDeProyecto(%q) = %q, Claude Code la llamó %q", ruta, got, quiere)
+		}
+	}
+}
+
+// LAS CARPETAS DE EXPERIMENTO NO SE MIDEN, Y LO QUE QUEDÓ AFUERA SE DICE.
+//
+// Una prueba de conducta con `claude -p` en un mktemp arranca vacía a propósito, y medida junto a
+// las sesiones reales las contamina: el 2026-09-25 las skills invocadas y las llamadas sin
+// ToolSearch que el medidor contaba venían todas de carpetas de experimento. Las de la temporal del
+// sistema se excluyen solas; las de otro lado, con `--excluir`; y el informe dice cuántas cayeron y
+// con qué patrones, porque un número sin eso no se puede comparar con otro.
+//
+// LA TEMPORAL SE MUEVE A UNA RUTA LITERAL y su nombre de carpeta se escribe literal: ver la prueba
+// de arriba. `-tmpxyz` comparte el prefijo sin colgar de la temporal, y tiene que medirse.
+//
+// Sabotaje que la hace fallar: no excluir ninguna carpeta.
+// arnes: archivo="cmd/musubi/uso_agente.go"
+// arnes: de="\t\t\tif filepath.Dir(ruta) == filepath.Clean(dir) && excluida(d.Name(), exclusiones) {\n"
+// arnes: a="\t\t\tif false {\n"
+//
+// Sabotaje que la hace fallar: excluir la temporal pero no lo que cuelga de ella.
+// arnes: archivo="cmd/musubi/uso_agente.go"
+// arnes: de="\t\tfor _, patron := range []string{base, base + \"-*\"} {\n"
+// arnes: a="\t\tfor _, patron := range []string{base} {\n"
+//
+// Sabotaje que la hace fallar: no poner las exclusiones por defecto.
+// arnes: archivo="cmd/musubi/uso_agente.go"
+// arnes: de="\t\texclusiones = append(exclusionesPorDefecto(), exclusiones...)\n"
+// arnes: a="\t\texclusiones = append([]string{}, exclusiones...)\n"
+//
+// Sabotaje que la hace fallar: que --incluir-temporales no las incluya.
+// arnes: archivo="cmd/musubi/uso_agente.go"
+// arnes: de="\tif !*conTemporales {\n"
+// arnes: a="\tif !*conTemporales || true {\n"
+//
+// Sabotaje que la hace fallar: que la carpeta pedida pueda excluirse a sí misma.
+// arnes: archivo="cmd/musubi/uso_agente.go"
+// arnes: de="\t\t\tif ruta == dir {\n"
+// arnes: a="\t\t\tif false {\n"
+func TestUsoAgenteExcluyeLasCarpetasDeExperimento(t *testing.T) {
+	raiz := t.TempDir() // ANTES de mover la temporal: t.TempDir la lee
+	tmp, carpetaTmp := "/tmpx", "-tmpx"
+	if runtime.GOOS == "windows" {
+		tmp, carpetaTmp = `C:\tmpx`, "C--tmpx"
+		t.Setenv("TMP", tmp)
+		t.Setenv("TEMP", tmp)
+	} else {
+		t.Setenv("TMPDIR", tmp)
+	}
+	sesion := func(rel, id string) {
+		escribirTranscript(t, raiz, rel,
+			fxPrompt("p-"+id, fxTS("2026-09-20", 1), "tarea"),
+			fxLlamada("a-"+id, fxTS("2026-09-20", 2), "toolu_"+id, "mcp__musubi__musubi_recall", nil),
+		)
+	}
+	sesion("-home-x/s1.jsonl", "real")
+	sesion(carpetaTmp+"-musubi-e2e-AB12/s2.jsonl", "mktemp")   // experimento en la temporal
+	sesion(carpetaTmp+"/s3.jsonl", "entemporal")               // sesión abierta EN la temporal
+	sesion("-home-x--cache-e2e-real/s4.jsonl", "cache")        // experimento fuera de la temporal
+	sesion("-tmpxyz/s5.jsonl", "vecina")                       // no cuelga de la temporal
+	sesion("-home-x/s1/subagents/agent-a1.jsonl", "subagente") // lo de adentro de un proyecto medido
+
+	medir := func(args ...string) (principal float64, excluidas float64, patrones []any) {
+		t.Helper()
+		var js, errOut bytes.Buffer
+		if code := usoAgente(append([]string{"--json"}, args...), &js, &errOut); code != 0 {
+			t.Fatalf("%v: exit %d, stderr: %s", args, code, errOut.String())
+		}
+		var inf map[string]any
+		if err := json.Unmarshal(js.Bytes(), &inf); err != nil {
+			t.Fatalf("el --json no es JSON: %v", err)
+		}
+		p, _ := inf["principal"].(map[string]any)
+		n, _ := p["llamadas_a_tools_de_musubi"].(float64)
+		e, _ := inf["carpetas_excluidas"].(float64)
+		pat, _ := inf["exclusiones"].([]any)
+		return n, e, pat
+	}
+
+	// 1) Por defecto: afuera las dos de la temporal; adentro el resto, incluida la vecina. Los
+	// patrones se preguntan ANTES que los números: que no haya patrones y que haya patrones que no
+	// excluyen son dos defectos distintos, y así cada uno falla con su propio motivo.
+	n, e, pat := medir("--dir", raiz)
+	if !reflect.DeepEqual(pat, []any{carpetaTmp, carpetaTmp + "-*"}) {
+		t.Errorf("el informe dice que excluyó por %v; quería %q y %q", pat, carpetaTmp, carpetaTmp+"-*")
+	}
+	if n != 3 || e != 2 {
+		t.Errorf("por defecto: %v llamadas y %v carpetas excluidas; quería 3 (real, cache, vecina) y 2 (las de la temporal)", n, e)
+	}
+
+	// 2) --excluir suma a las de la temporal.
+	if n, e, _ := medir("--dir", raiz, "--excluir", "-home-x--cache-*"); n != 2 || e != 3 {
+		t.Errorf("con --excluir: %v llamadas y %v excluidas; quería 2 y 3", n, e)
+	}
+
+	// 3) --incluir-temporales las mide, y el informe no inventa exclusiones.
+	if n, e, pat := medir("--dir", raiz, "--incluir-temporales"); n != 5 || e != 0 || len(pat) != 0 {
+		t.Errorf("con --incluir-temporales: %v llamadas, %v excluidas, patrones %v; quería 5, 0 y ninguno", n, e, pat)
+	}
+
+	// 4) Las dos juntas: las temporales entran y el patrón propio sigue valiendo.
+	if n, e, _ := medir("--dir", raiz, "--incluir-temporales", "--excluir", "-home-x--cache-*"); n != 4 || e != 1 {
+		t.Errorf("con las dos: %v llamadas y %v excluidas; quería 4 y 1", n, e)
+	}
+
+	// 5) La carpeta pedida no se excluye a sí misma, aunque el patrón la alcance.
+	t.Chdir(filepath.Join(raiz, "-home-x"))
+	if n, e, _ := medir("--dir", ".", "--excluir", "*"); n != 1 || e != 1 {
+		t.Errorf("con --dir . y --excluir '*': %v llamadas y %v excluidas; quería 1 (s1) y 1 (la carpeta de s1, "+
+			"con el subagente adentro)", n, e)
+	}
+
+	// 6) Un patrón roto se rechaza al leer los argumentos, no se ignora.
+	var tabla, errOut bytes.Buffer
+	if code := usoAgente([]string{"--dir", raiz, "--excluir", "["}, &tabla, &errOut); code != 2 {
+		t.Errorf("un patrón inválido salió con %d; quería 2 (argumentos que no sirven)", code)
+	}
+
+	// 7) La tabla lo dice.
+	tabla.Reset()
+	if code := usoAgente([]string{"--dir", raiz}, &tabla, &errOut); code != 0 {
+		t.Fatalf("exit %d, stderr: %s", code, errOut.String())
+	}
+	if !strings.Contains(tabla.String(), "excluidas: 2 carpeta(s) de proyecto por "+carpetaTmp+" "+carpetaTmp+"-*") {
+		t.Errorf("la tabla no dice qué excluyó:\n%s", tabla.String())
 	}
 }

@@ -2,11 +2,6 @@ package fleet
 
 import (
 	"go/ast"
-	"go/parser"
-	"go/token"
-	"os"
-	"strconv"
-	"strings"
 	"testing"
 )
 
@@ -63,56 +58,13 @@ func TestTiposDeHechoEsElEnumEntero(t *testing.T) {
 // tiposDeHechoDeclarados devuelve valor → nombre de cada constante de tipo TipoDeHecho que
 // declaran los archivos de producción del paquete: con el tipo escrito (`X TipoDeHecho = "x"`) o
 // convertido (`X = TipoDeHecho("x")`).
+//
+// El barrido es el de constantesDeclaradas (origen_cerrado_test.go), que desde A131·T9 cierra
+// también el enum de OrigenComando: una sola copia del recorrido, para que las dos listas no se
+// aten a su fuente con dos reglas distintas.
 func tiposDeHechoDeclarados(t *testing.T) map[string]string {
 	t.Helper()
-	entradas, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := map[string]string{}
-	fset := token.NewFileSet()
-	for _, e := range entradas {
-		n := e.Name()
-		if e.IsDir() || !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, n, nil, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, d := range f.Decls {
-			g, ok := d.(*ast.GenDecl)
-			if !ok || g.Tok != token.CONST {
-				continue
-			}
-			for _, s := range g.Specs {
-				vs := s.(*ast.ValueSpec)
-				tipado := esIdent(vs.Type, "TipoDeHecho")
-				for i, nombre := range vs.Names {
-					if i >= len(vs.Values) {
-						continue
-					}
-					v := vs.Values[i]
-					if c, ok := v.(*ast.CallExpr); ok && esIdent(c.Fun, "TipoDeHecho") && len(c.Args) == 1 {
-						v = c.Args[0]
-					} else if !tipado {
-						continue
-					}
-					lit, ok := v.(*ast.BasicLit)
-					if !ok || lit.Kind != token.STRING {
-						t.Fatalf("%s: %s es un TipoDeHecho con un valor que no es un literal; ampliá el barrido",
-							fset.Position(vs.Pos()), nombre.Name)
-					}
-					valor, err := strconv.Unquote(lit.Value)
-					if err != nil {
-						t.Fatal(err)
-					}
-					out[valor] = nombre.Name
-				}
-			}
-		}
-	}
-	return out
+	return constantesDeclaradas(t, "TipoDeHecho")
 }
 
 func esIdent(e ast.Expr, nombre string) bool {

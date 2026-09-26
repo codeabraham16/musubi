@@ -210,9 +210,16 @@ func politicaDeMemoria2() fleet.Politica {
 // umbral. Una política sin esta guarda actuaría para siempre sobre una máquina muerta.
 //
 // Sabotaje que la hace fallar: quitar el chequeo de EnLinea / de la edad de la muestra.
+//
+// (A131·T2) ESTA GUARDA MIDE UN PUNTO DE CADA EJE —un Tier A, 30 min de silencio, latido y muestra
+// en el mismo instante— y cuatro mutaciones la dejaban en verde con el paquete entero. Los ejes
+// enteros los recorre TestUnaPoliticaDeHostActuaSoloConLatidoYMuestraDentroDelUmbralDeSuTier, que
+// sabotea esta MISMA línea insertando un umbral de otro tier detrás (P1-m7, P1-m8): este sabotaje
+// le borra el ancla, así que los dos `de` se pisan a propósito.
 // arnes: archivo="internal/mcp/politicas.go"
 // arnes: de="\tumbral := s.umbralEnLinea(d)\n"
 // arnes: a="\tumbral := 24 * time.Hour\n"
+// arnes: colision_ok="TestUnaPoliticaDeHostActuaSoloConLatidoYMuestraDentroDelUmbralDeSuTier"
 func TestUnaPoliticaNoActuaSobreUnaMuestraRancia(t *testing.T) {
 	s, d := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal()))
 	ahora := time.Now()
@@ -229,9 +236,16 @@ func TestUnaPoliticaNoActuaSobreUnaMuestraRancia(t *testing.T) {
 // late, así que figura en línea, pero su última muestra envejece sin parar.
 //
 // Sabotaje que la hace fallar: chequear sólo EnLinea y no la edad de la muestra.
+//
+// (A131·T2) Con una muestra de 30 min, veinte veces el umbral de un Tier A, cualquier umbral menor
+// la satisface: usar el de sondeo (15 min) sólo en este chequeo (P1-m9) la dejaba en verde. La
+// magnitud y los tiers los recorre TestUnaPoliticaDeHostActuaSoloConLatidoYMuestraDentroDelUmbralDeSuTier,
+// que sabotea esta MISMA línea insertando ese umbral delante: este sabotaje le borra el ancla, así
+// que los dos `de` se pisan a propósito.
 // arnes: archivo="internal/mcp/politicas.go"
 // arnes: de="\tif ahora.Sub(d.UltimaMuestra.Tomada) > umbral {\n"
 // arnes: a="\tif ahora.Sub(d.UltimaMuestra.Tomada) > 24*time.Hour {\n"
+// arnes: colision_ok="TestUnaPoliticaDeHostActuaSoloConLatidoYMuestraDentroDelUmbralDeSuTier"
 func TestUnaMaquinaQueLateSinMedirNoDisparaPoliticas(t *testing.T) {
 	s, d := prepararPolitica(t, politicaDeMemoria(), registroDePrueba(autoHeal()))
 	ahora := time.Now()
@@ -819,6 +833,12 @@ func registroQuePermiteSystemctl() *PrincipalRegistry {
 // sigue mandando su inventario de servicios, y ahí es donde uno quiere que algo actúe.
 //
 // Sabotaje que la hace fallar: mandar las políticas de servicio por el camino de la muestra.
+//
+// (A131·T2) Esta guarda arma un solo estado de la muestra («nunca reportó», no «el colector
+// murió»), entra por debajo del barrido y prueba el inventario en 0 s y 3×UmbralInventario, que el
+// umbral del host y el del inventario clasifican igual: P4-m3, P4-m4 y P4-m5 la dejaban en verde.
+// Los ejes enteros, por el barrido de producción y contra la columna `fresco` del operador, los
+// recorre TestUnaPoliticaDeServicioDecidePorSuInventarioYNoPorLaMuestraDelHost.
 // arnes: archivo="internal/mcp/politicas.go"
 // arnes: de="if pol.EsDeServicio() {"
 // arnes: a="if false {"

@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -52,6 +53,9 @@ import (
 //   - Los subagentes viven bajo una carpeta `subagents/`; los de un workflow, además, en
 //     `subagents/workflows/wf_*/`, junto a un `journal.jsonl` que es la bitácora del workflow y NO
 //     un transcript (112 medidos): se excluye por nombre.
+//   - Cada carpeta de proyecto es la ruta de trabajo con todo carácter que no sea letra o dígito
+//     ASCII cambiado por `-` (`/home/davantis/.cache/x` → `-home-davantis--cache-x`). Por eso las
+//     carpetas de experimento se reconocen por el nombre: ver exclusionesPorDefecto.
 
 // Tipos de adjunto de Claude Code que este comando lee. Son strings del formato de OTRO programa y
 // por eso van con nombre: si Claude Code los renombra, se cambian acá y en ningún otro lado.
@@ -91,6 +95,11 @@ type InformeUso struct {
 	SalteadosPorFecha int      `json:"salteados_por_fecha"`
 	LineasIlegibles   int      `json:"lineas_ilegibles"`
 	SkillsDeMusubi    []string `json:"skills_de_musubi"`
+	// Exclusiones son los patrones con que se descartaron carpetas de proyecto enteras, y
+	// CarpetasExcluidas cuántas cayeron. Viajan en el informe porque un número medido sin decir qué
+	// quedó afuera no se puede comparar con otro.
+	Exclusiones       []string `json:"exclusiones"`
+	CarpetasExcluidas int      `json:"carpetas_excluidas"`
 
 	Principal  AlcanceUso `json:"principal"`
 	Subagentes AlcanceUso `json:"subagentes"`
@@ -609,9 +618,93 @@ func esDeSubagente(rel string) bool {
 	return false
 }
 
+// carpetaDeProyecto es el nombre de la carpeta donde Claude Code guarda los transcripts de una ruta
+// de trabajo: cada carácter que no es letra ni dígito ASCII pasa a `-`. Es un hecho del formato de
+// OTRO programa, medido en las 49 carpetas de esta máquina: `/home/davantis/.cache/x` da
+// `-home-davantis--cache-x`, y el `_` de `wf_31193ce6` también pasa a `-`.
+func carpetaDeProyecto(ruta string) string {
+	var b strings.Builder
+	for _, r := range ruta {
+		if r < 128 && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteByte('-')
+	}
+	return b.String()
+}
+
+// exclusionesPorDefecto son las carpetas de proyecto de la carpeta TEMPORAL del sistema: la de
+// `os.TempDir()` y todas las que cuelgan de ella.
+//
+// UNA SESIÓN QUE TRABAJA EN UNA CARPETA TEMPORAL ES UN EXPERIMENTO, no trabajo: una prueba de
+// conducta con `claude -p` en un mktemp, que por diseño arranca vacía. Medida junto a las reales las
+// contamina, y en la dirección que más engaña: el 2026-09-25, las invocaciones de skills y las
+// llamadas sin ToolSearch que el medidor contaba venían TODAS de carpetas de experimento, y en los
+// proyectos reales eran cero.
+//
+// SE DERIVA DE `os.TempDir()` y no se escribe `-tmp-*`: en Windows la temporal es
+// `C:\Users\…\Temp` y en macOS cuelga de `/var/folders`, y un patrón clavado al Linux de hoy no
+// excluiría nada allá. Se prueba también la ruta con los enlaces resueltos, porque la sesión guarda
+// la carpeta como la ve el proceso: en macOS `/var` es un enlace a `/private/var`.
+//
+// Los experimentos que corren FUERA de la temporal no se pueden reconocer desde acá: van con
+// `--excluir`.
+func exclusionesPorDefecto() []string {
+	var out []string
+	visto := map[string]bool{}
+	tmp := filepath.Clean(os.TempDir())
+	rutas := []string{tmp}
+	if real, err := filepath.EvalSymlinks(tmp); err == nil {
+		rutas = append(rutas, real)
+	}
+	for _, r := range rutas {
+		base := carpetaDeProyecto(r)
+		for _, patron := range []string{base, base + "-*"} {
+			if !visto[patron] {
+				visto[patron] = true
+				out = append(out, patron)
+			}
+		}
+	}
+	return out
+}
+
+// excluida dice si una carpeta de proyecto cae en alguna exclusión. Los patrones ya se validaron al
+// leer los argumentos: acá un error de patrón no puede pasar, y si pasara no excluye.
+func excluida(nombre string, exclusiones []string) bool {
+	for _, patron := range exclusiones {
+		if ok, _ := path.Match(patron, nombre); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// listaDePatrones es un flag que se puede repetir: `--excluir a --excluir b`.
+type listaDePatrones []string
+
+func (l *listaDePatrones) String() string { return strings.Join(*l, ",") }
+
+func (l *listaDePatrones) Set(v string) error {
+	if _, err := path.Match(v, ""); err != nil {
+		return fmt.Errorf("%q no es un patrón válido: %v", v, err)
+	}
+	*l = append(*l, v)
+	return nil
+}
+
 // medirUsoAgente camina `dir`, lee cada transcript y arma el informe. No escribe nada.
-func medirUsoAgente(dir string, v ventanaUso) (InformeUso, error) {
-	inf := InformeUso{Dir: dir, SkillsDeMusubi: skillsDeMusubi()}
+//
+// `exclusiones` se comparan contra el nombre de cada carpeta de proyecto —las hijas DIRECTAS de
+// `dir`—, y una que cae se saltea entera y se cuenta. Sólo las hijas directas: más abajo están las
+// carpetas de cada sesión, que se llaman con un uuid, y un patrón pensado para proyectos no tiene
+// nada que decir de ellas.
+func medirUsoAgente(dir string, v ventanaUso, exclusiones []string) (InformeUso, error) {
+	inf := InformeUso{Dir: dir, SkillsDeMusubi: skillsDeMusubi(), Exclusiones: exclusiones}
+	if inf.Exclusiones == nil {
+		inf.Exclusiones = []string{}
+	}
 	if v.hayDesde {
 		inf.Desde = v.desde.Format("2006-01-02")
 	}
@@ -631,7 +724,19 @@ func medirUsoAgente(dir string, v ventanaUso) (InformeUso, error) {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
+		if d.IsDir() {
+			// La carpeta pedida no se excluye a sí misma. Con `--dir .` su nombre es «.», que un
+			// `--excluir '*'` alcanza, y el informe diría que no hubo nada que medir.
+			if ruta == dir {
+				return nil
+			}
+			if filepath.Dir(ruta) == filepath.Clean(dir) && excluida(d.Name(), exclusiones) {
+				inf.CarpetasExcluidas++
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), ".jsonl") {
 			return nil
 		}
 		if d.Name() == journalDeWorkflow {
@@ -726,6 +831,10 @@ func usoAgente(args []string, out, errOut io.Writer) int {
 	hasta := fl.String("hasta", "", "último día a medir, AAAA-MM-DD (UTC, inclusive)")
 	dir := fl.String("dir", "", "carpeta de transcripts (default: ~/.claude/projects)")
 	comoJSON := fl.Bool("json", false, "emitir el informe como JSON")
+	var excluir listaDePatrones
+	fl.Var(&excluir, "excluir", "patrón (glob) de carpetas de proyecto a no medir; se puede repetir")
+	conTemporales := fl.Bool("incluir-temporales", false,
+		"medir también las carpetas de la temporal del sistema, que por defecto se excluyen (son experimentos)")
 	if err := fl.Parse(args); err != nil {
 		return 2
 	}
@@ -744,7 +853,11 @@ func usoAgente(args []string, out, errOut io.Writer) int {
 			return 1
 		}
 	}
-	inf, err := medirUsoAgente(*dir, v)
+	exclusiones := []string(excluir)
+	if !*conTemporales {
+		exclusiones = append(exclusionesPorDefecto(), exclusiones...)
+	}
+	inf, err := medirUsoAgente(*dir, v, exclusiones)
 	if err != nil {
 		fmt.Fprintf(errOut, "musubi uso-agente: %v — sin medir\n", err)
 		return 1
@@ -777,6 +890,12 @@ func imprimirUsoAgente(w io.Writer, inf InformeUso) {
 	fmt.Fprintf(w, "  archivos : %d .jsonl · %d journal.jsonl excluidos (no son transcripts) · "+
 		"%d salteados (sin cambios desde antes de la ventana) · %d línea(s) ilegible(s)\n",
 		inf.Archivos, inf.JournalExcluidos, inf.SalteadosPorFecha, inf.LineasIlegibles)
+	if len(inf.Exclusiones) == 0 {
+		fmt.Fprintf(w, "  excluidas: ninguna carpeta (se midió todo lo que hay en la carpeta)\n")
+	} else {
+		fmt.Fprintf(w, "  excluidas: %d carpeta(s) de proyecto por %s (--incluir-temporales mide las temporales)\n",
+			inf.CarpetasExcluidas, strings.Join(inf.Exclusiones, " "))
+	}
 	fmt.Fprintf(w, "  skills de Musubi (derivadas de cognitive.go): %s\n", strings.Join(inf.SkillsDeMusubi, ", "))
 	imprimirAlcanceUso(w, "Sesiones PRINCIPALES", inf.Principal)
 	imprimirAlcanceUso(w, "SUBAGENTES", inf.Subagentes)

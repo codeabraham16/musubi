@@ -451,7 +451,12 @@ func (s *McpServer) toolFleetShellLog(ctx context.Context, raw json.RawMessage) 
 		}
 		if !ses.Cerrada.IsZero() {
 			fila["cerrada"] = ses.Cerrada.UTC().Format(time.RFC3339)
-			fila["duracion_seg"] = int(ses.Cerrada.Sub(ses.Creada).Seconds())
+			// La duración con la regla de la cronología (Hecho.Duracion), pedida por la misma puerta:
+			// una sesión cerrada antes de abrirse, o con la apertura ilegible, no tiene duración. Acá
+			// se restaba a mano y salía negativa o saturada.
+			if dur, hay := fleet.HechoDeSesionShell(ses, nombre).Duracion(); hay {
+				fila["duracion_seg"] = int(dur.Seconds())
+			}
 		}
 		if ses.Error != "" {
 			fila["motivo"] = ses.Error

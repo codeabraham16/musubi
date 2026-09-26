@@ -530,8 +530,11 @@ func conResultado(fila map[string]interface{}, c fleet.Comando, ahora time.Time)
 	}
 	if !c.Terminado.IsZero() {
 		fila["terminado"] = c.Terminado.UTC().Format(time.RFC3339)
-		if !c.Entregado.IsZero() {
-			fila["duracion_ms"] = c.Terminado.Sub(c.Entregado).Milliseconds()
+		// Cuánto corrió, con la regla de la cronología (fleet.Comando.DuracionDeEjecucion): sin
+		// entrega, o con el resultado antes de la entrega, no hay duración. Acá se restaba a mano y
+		// el segundo caso salía negativo.
+		if dur, hay := c.DuracionDeEjecucion(); hay {
+			fila["duracion_ms"] = dur.Milliseconds()
 		}
 	}
 	return fila

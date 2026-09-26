@@ -65,8 +65,9 @@ func TestLaColaDeUnaMaquinaTieneTecho(t *testing.T) {
 // Sabotaje: sacar el `AND creado >= ?` del conteo → falla acá, y `gio` (11.007 pendientes viejos)
 // no podría volver a recibir un comando nunca.
 // arnes: archivo="internal/memory/comandos.go"
-// arnes: de="\tvivos := c.Creado.Add(-fleet.ComandoVidaMax).UTC().Format(time.RFC3339)\n"
+// arnes: de="\tvivos := fleet.LimiteDeVida(c.Creado).UTC().Format(time.RFC3339)\n"
 // arnes: a="\tvivos := time.Unix(0, 0).UTC().Format(time.RFC3339)\n"
+// arnes: colision_ok="TestElRelojDeLaColaSeCuentaEnUnSoloLugar"
 func TestLoVencidoNoOcupaLugarEnLaCola(t *testing.T) {
 	e := newTestEngine(t)
 	d, _ := altaDePrueba(t, e, "casa", "pc-gio")
