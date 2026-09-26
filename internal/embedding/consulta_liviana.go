@@ -33,6 +33,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"musubi/internal/logx"
@@ -207,17 +208,16 @@ func escribirSidecarsSiHaceFalta(dir string, u *unigram, checksum string, tabla,
 	}{{archivoTabla, tabla}, {archivoTokenizer, tok}} {
 		st, err := os.Stat(filepath.Join(dir, par.archivo))
 		if err != nil || !par.huella.coincide(st) {
-			logx.Warn("la tabla cambió mientras se cargaba: no se escribe el índice del tokenizer", "archivo", par.archivo)
+			avisarSinAtajo(dir, "la tabla cambió mientras se cargaba: no se escribe el índice del tokenizer", err)
 			return
 		}
 	}
-	idx, err := escribirIndiceTokenizer(u)
-	if err != nil {
-		logx.Warn("no se pudo armar el índice del tokenizer; la consulta liviana queda sin atajo", "error", err)
-		return
-	}
-	if err := escribirAtomico(filepath.Join(dir, archivoIndice), idx); err != nil {
-		logx.Warn("no se pudo escribir el índice del tokenizer; la consulta liviana queda sin atajo", "error", err)
+	// El índice se ARMA ADENTRO de escribirAtomico, después de crear el temporal: en una carpeta sin
+	// escritura (el usuario de un servicio, una ruta del sistema, un disco lleno) armarlo cuesta
+	// 0,7-1,1 s sobre POTION —ordenar 500.353 piezas— y se tiraría en cada construcción.
+	idx, err := escribirAtomico(filepath.Join(dir, archivoIndice), func() ([]byte, error) { return armarIndice(u) })
+	if err != nil { // sin índice nuevo no hay identidad nueva: ver «EL ORDEN», arriba
+		avisarSinAtajo(dir, "no se pudo escribir el índice del tokenizer", err)
 		return
 	}
 	id := identidadDeTabla{Formato: formatoIdentidad, Checksum: checksum, Tabla: tabla, Tokenizer: tok}
@@ -227,11 +227,28 @@ func escribirSidecarsSiHaceFalta(dir string, u *unigram, checksum string, tabla,
 	if err != nil {
 		return
 	}
-	if err := escribirAtomico(filepath.Join(dir, archivoIdentidad), append(crudo, '\n')); err != nil {
-		logx.Warn("no se pudo escribir la identidad de la tabla; la consulta liviana queda sin atajo", "error", err)
+	if _, err := escribirAtomico(filepath.Join(dir, archivoIdentidad), func() ([]byte, error) { return append(crudo, '\n'), nil }); err != nil {
+		avisarSinAtajo(dir, "no se pudo escribir la identidad de la tabla", err)
 		return
 	}
 	logx.Info("índice del tokenizer escrito: el embebedor de consulta ya no carga la tabla", "dir", dir)
+}
+
+// armarIndice es escribirIndiceTokenizer; costura para contar cuántas veces se arma el índice.
+var armarIndice = escribirIndiceTokenizer
+
+// avisosSinAtajo recuerda por carpeta de tabla si ya se avisó que los sidecars no se pudieron dejar
+// al día. Una carpeta sin escritura no se arregla sola entre una construcción y la siguiente, y un
+// daemon o un serve construyen el proveedor más de una vez: un WARN por construcción es ruido que
+// tapa los avisos que sí cambian algo.
+var avisosSinAtajo sync.Map
+
+// avisarSinAtajo avisa UNA vez por proceso y por carpeta que la consulta liviana queda sin atajo.
+func avisarSinAtajo(dir, que string, err error) {
+	if _, ya := avisosSinAtajo.LoadOrStore(dir, true); ya {
+		return
+	}
+	logx.Warn(que+"; la consulta liviana queda sin atajo (se avisa una vez por proceso)", "dir", dir, "error", err)
 }
 
 // edadDeHuerfano es a partir de cuándo un temporal de sidecar se da por abandonado. Escribir el
@@ -264,17 +281,27 @@ func limpiarTemporalesHuerfanos(dir string, ahora time.Time) {
 // archivo que otro proceso tiene abierto: Go abre sin FILE_SHARE_DELETE).
 var renombrar = os.Rename
 
+// crearTemporal es os.CreateTemp; costura para probar la carpeta sin escritura.
+var crearTemporal = os.CreateTemp
+
 // escribirAtomico escribe en un temporal de nombre ÚNICO del mismo directorio y lo renombra encima.
 // Nombre único porque varios daemons pueden arrancar a la vez y escribir el mismo sidecar: con un
 // temporal fijo, uno truncaría el del otro a mitad de camino. Si el rename falla, el temporal se
 // borra y el archivo de destino queda como estaba —entero, viejo o ausente, nunca a medias—.
-func escribirAtomico(ruta string, datos []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(ruta), filepath.Base(ruta)+".tmp-"+strconv.Itoa(os.Getpid())+"-*")
+//
+// El contenido se pide a `armar` DESPUÉS de crear el temporal, y eso es el contrato: crear el
+// temporal es la prueba de que se puede escribir, y armar el índice es lo caro. Devuelve lo que
+// escribió, porque la identidad necesita su tamaño y su crc.
+func escribirAtomico(ruta string, armar func() ([]byte, error)) ([]byte, error) {
+	tmp, err := crearTemporal(filepath.Dir(ruta), filepath.Base(ruta)+".tmp-"+strconv.Itoa(os.Getpid())+"-*")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	nombre := tmp.Name()
-	_, err = tmp.Write(datos)
+	datos, err := armar()
+	if err == nil {
+		_, err = tmp.Write(datos)
+	}
 	if err == nil {
 		err = tmp.Sync()
 	}
@@ -286,9 +313,9 @@ func escribirAtomico(ruta string, datos []byte) error {
 	}
 	if err != nil {
 		_ = os.Remove(nombre)
-		return err
+		return nil, err
 	}
-	return nil
+	return datos, nil
 }
 
 // ConsultaLiviana es el embebedor de consulta: implementa Provider sin tener la tabla en memoria.

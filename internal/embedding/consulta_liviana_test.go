@@ -16,6 +16,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"musubi/internal/logx"
 )
 
 // --- la tabla Unigram de juguete ------------------------------------------------------------
@@ -553,8 +555,8 @@ func TestConsultaLivianaNoAbreElTokenizerJSON(t *testing.T) {
 //
 // Sabotaje: seguir de largo cuando el índice no se pudo escribir.
 // arnes: archivo="internal/embedding/consulta_liviana.go"
-// arnes: de="if err := escribirAtomico(filepath.Join(dir, archivoIndice), idx); err != nil {"
-// arnes: a="if err := escribirAtomico(filepath.Join(dir, archivoIndice), idx); err != nil && false {"
+// arnes: de="if err != nil { // sin índice nuevo no hay identidad nueva"
+// arnes: a="if err != nil && false { // sin índice nuevo no hay identidad nueva"
 func TestUnIndiceQueNoSePudoReemplazarNoDejaUnaIdentidadNueva(t *testing.T) {
 	dir, _ := tablaDeJugueteConSidecars(t, 200, 8)
 	identidadVieja, err := os.ReadFile(filepath.Join(dir, archivoIdentidad))
@@ -690,6 +692,89 @@ func TestUnIndiceDeOtroFormatoSeReescribe(t *testing.T) {
 		t.Fatalf("después de reescribir tenía que haber atajo: %v", err)
 	}
 	compararBitABit(t, sp, liv, textosDePrueba()[:10])
+}
+
+// sinEscritura hace que crear un temporal falle en cualquier carpeta, como en una carpeta de
+// tabla sin permiso de escritura, y cuenta cuántas veces se arma el índice.
+func sinEscritura(t *testing.T) *int {
+	t.Helper()
+	armados := 0
+	previoCrear, previoArmar := crearTemporal, armarIndice
+	crearTemporal = func(string, string) (*os.File, error) {
+		return nil, fmt.Errorf("simulado: la carpeta de la tabla no admite escritura")
+	}
+	armarIndice = func(u *unigram) ([]byte, error) {
+		armados++
+		return previoArmar(u)
+	}
+	t.Cleanup(func() { crearTemporal, armarIndice = previoCrear, previoArmar })
+	return &armados
+}
+
+// TestSinEscrituraNoSeArmaElIndice: en una carpeta de tabla sin escritura (el usuario de un
+// servicio sin permiso, una tabla en una ruta del sistema, un disco lleno), el proveedor completo
+// NO arma el índice. Armarlo cuesta 0,7-1,1 s sobre POTION, y antes se armaba entero en cada
+// construcción —capture lo construye en cada fin de turno— para después no poder escribirlo.
+//
+// Sabotaje: armar el índice antes de saber si se puede escribir.
+// arnes: archivo="internal/embedding/consulta_liviana.go"
+// arnes: de="idx, err := escribirAtomico(filepath.Join(dir, archivoIndice), func() ([]byte, error) { return armarIndice(u) })"
+// arnes: a="_, _ = armarIndice(u); idx, err := escribirAtomico(filepath.Join(dir, archivoIndice), func() ([]byte, error) { return armarIndice(u) })"
+func TestSinEscrituraNoSeArmaElIndice(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "tabla-juguete")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	escribirTablaDeJuguete(t, dir, 200, 8, 7)
+	armados := sinEscritura(t)
+	for i := 0; i < 2; i++ {
+		if _, err := NewStaticProvider(dir); err != nil {
+			t.Fatalf("una carpeta sin escritura no puede romper el proveedor completo: %v", err)
+		}
+	}
+	if *armados != 0 {
+		t.Fatalf("se armó el índice %d vez/veces en una carpeta donde no se podía escribir", *armados)
+	}
+	for _, f := range []string{archivoIndice, archivoIdentidad} {
+		if _, err := os.Stat(filepath.Join(dir, f)); !os.IsNotExist(err) {
+			t.Fatalf("%s no tenía que existir: %v", f, err)
+		}
+	}
+	// Control: la costura cuenta de verdad cuando SÍ se puede escribir.
+	crearTemporal = os.CreateTemp
+	if _, err := NewStaticProvider(dir); err != nil {
+		t.Fatal(err)
+	}
+	if *armados != 1 {
+		t.Fatalf("control: con escritura el índice se tenía que armar una vez, y se armó %d", *armados)
+	}
+}
+
+// TestElAvisoDeSinEscrituraSaleUnaVez: sin escritura, el aviso sale una vez por proceso y por
+// carpeta, no una por construcción.
+//
+// Sabotaje: avisar en cada construcción.
+// arnes: archivo="internal/embedding/consulta_liviana.go"
+// arnes: de="if _, ya := avisosSinAtajo.LoadOrStore(dir, true); ya {"
+// arnes: a="if _, ya := avisosSinAtajo.LoadOrStore(dir, true); ya && false {"
+func TestElAvisoDeSinEscrituraSaleUnaVez(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "tabla-juguete")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	escribirTablaDeJuguete(t, dir, 200, 8, 7)
+	sinEscritura(t)
+	var log strings.Builder
+	restaurar := logx.Capturar(&log)
+	defer restaurar()
+	for i := 0; i < 3; i++ {
+		if _, err := NewStaticProvider(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := strings.Count(log.String(), "queda sin atajo"); n != 1 {
+		t.Fatalf("el aviso salió %d veces en 3 construcciones (tiene que salir una):\n%s", n, log.String())
+	}
 }
 
 // TestLosTemporalesHuerfanosSeBorran: un daemon que muere a mitad de escritura (se cierra la sesión
