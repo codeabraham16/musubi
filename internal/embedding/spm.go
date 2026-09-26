@@ -34,15 +34,35 @@ import (
 // camino de Viterbi sólo emite unk cuando ninguna pieza cubre esa runa.
 const unkPenalty = 10.0
 
-// unigram es un tokenizer SentencePiece/Unigram cargado desde un tokenizer.json de HF.
+// unigram es un tokenizer SentencePiece/Unigram cargado desde un tokenizer.json de HF, o desde el
+// índice binario que se escribe al lado (indice_tokenizer.go).
+//
+// EL VOCABULARIO TIENE DOS FORMAS Y UNA SOLA TIENE QUE ESTAR PUESTA: el mapa `vocab` (+ `scores`)
+// cuando viene de tokenizer.json, o `piezas` cuando viene del índice. Todo lo demás —el
+// normalizer, Metaspace, el Viterbi, el unk— es el MISMO código para las dos: lo único que cambia
+// es cómo se contesta «qué piezas del vocab empiezan en esta posición» (coincidencias). Así la
+// igualdad bit a bit entre los dos caminos no depende de haber copiado bien un algoritmo, sino de
+// que una búsqueda devuelva las mismas piezas que la otra.
 type unigram struct {
-	steps    []normStep     // normalizer (en orden)
-	vocab    map[string]int // pieza -> id (índice en el vocab)
-	scores   []float64      // id -> log-prob
-	maxRunes int            // longitud (en runas) de la pieza más larga (cota de Viterbi)
-	unkScore float64        // score de una runa sin cobertura
-	unkID    int            // id del token unk (unk_id del modelo)
-	repl     string         // símbolo de Metaspace (▁)
+	steps    []normStep       // normalizer (en orden)
+	vocab    map[string]int   // pieza -> id (índice en el vocab); nil si vino del índice
+	scores   []float64        // id -> log-prob; nil si vino del índice
+	piezas   *piezasOrdenadas // el vocab ordenado del índice; nil si vino de tokenizer.json
+	maxRunes int              // longitud (en runas) de la pieza más larga (cota de Viterbi)
+	unkScore float64          // score de una runa sin cobertura
+	unkID    int              // id del token unk (unk_id del modelo)
+	repl     string           // símbolo de Metaspace (▁)
+	// normCrudo es el normalizer TAL CUAL vino en tokenizer.json. Se guarda para escribirlo en el
+	// índice: así el camino liviano arma los pasos con el MISMO parseNormalizer, en vez de con una
+	// segunda serialización que se pueda desfasar de la primera.
+	normCrudo json.RawMessage
+}
+
+// coincidencia es una pieza del vocab que empieza en la posición que el Viterbi está mirando.
+type coincidencia struct {
+	largo int // en runas
+	id    int
+	score float64
 }
 
 // EncodeIDs reproduce tokenizer.encode(text, add_special_tokens=false).ids para Unigram.
@@ -71,6 +91,8 @@ func (u *unigram) viterbi(runes []rune) []int {
 	for i := 1; i <= n; i++ {
 		best[i] = ninf
 	}
+	var cands []coincidencia
+	var clave []byte
 	for i := 0; i < n; i++ {
 		if best[i] == ninf {
 			continue
@@ -79,13 +101,12 @@ func (u *unigram) viterbi(runes []rune) []int {
 		if lim > n-i {
 			lim = n - i
 		}
-		for l := 1; l <= lim; l++ {
-			if id, ok := u.vocab[string(runes[i:i+l])]; ok {
-				if sc := best[i] + u.scores[id]; sc > best[i+l] {
-					best[i+l] = sc
-					bpID[i+l] = id
-					bpPrev[i+l] = i
-				}
+		cands, clave = u.coincidencias(runes[i:i+lim], cands[:0], clave)
+		for _, c := range cands {
+			if sc := best[i] + c.score; sc > best[i+c.largo] {
+				best[i+c.largo] = sc
+				bpID[i+c.largo] = c.id
+				bpPrev[i+c.largo] = i
 			}
 		}
 		// Fallback unk (id 1): una runa sin pieza. unkScore es muy negativo, así que sólo
@@ -101,6 +122,23 @@ func (u *unigram) viterbi(runes []rune) []int {
 		ids = append([]int{bpID[pos]}, ids...)
 	}
 	return ids
+}
+
+// coincidencias agrega a dst, en orden CRECIENTE de largo, cada pieza del vocab que es exactamente
+// runes[:l] para algún l de 1 a len(runes). El orden importa: el Viterbi relaja en ese orden y
+// desempata con `>` estricto, así que dos búsquedas que devolvieran las mismas piezas en otro
+// orden podrían elegir otro camino ante un empate. `clave` es un buffer que se reusa entre
+// posiciones para no reservar memoria por runa.
+func (u *unigram) coincidencias(runes []rune, dst []coincidencia, clave []byte) ([]coincidencia, []byte) {
+	if u.piezas != nil {
+		return u.piezas.coincidencias(runes, dst, clave)
+	}
+	for l := 1; l <= len(runes); l++ {
+		if id, ok := u.vocab[string(runes[:l])]; ok {
+			dst = append(dst, coincidencia{largo: l, id: id, score: u.scores[id]})
+		}
+	}
+	return dst, clave
 }
 
 // --- normalizer: pasos en orden (Precompiled / Replace / Strip) ---
@@ -251,12 +289,13 @@ func newUnigram(normalizer json.RawMessage, metaspace tkMetaspace, model tkUnigr
 		unkID = 1 // [UNK] convencional
 	}
 	u := &unigram{
-		steps:    steps,
-		vocab:    make(map[string]int, len(model.Vocab)),
-		scores:   make([]float64, len(model.Vocab)),
-		maxRunes: 1,
-		unkID:    unkID,
-		repl:     repl,
+		steps:     steps,
+		vocab:     make(map[string]int, len(model.Vocab)),
+		scores:    make([]float64, len(model.Vocab)),
+		maxRunes:  1,
+		unkID:     unkID,
+		repl:      repl,
+		normCrudo: normalizer,
 	}
 	minScore := 0.0
 	for id, entry := range model.Vocab {

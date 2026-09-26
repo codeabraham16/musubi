@@ -8,6 +8,27 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El vector de una consulta, sin cargar la tabla: ~25 ms y 16 MB en vez de 1,9-2,8 s y 854 MB.**
+  El hook por turno corre sin vector porque armar el embebedor estático cuesta más de un segundo
+  por prompt (el 76 % es el tokenizer: armar un mapa de 500.353 piezas) y cientos de MB. Ahora hay
+  un embebedor de consulta que da el MISMO vector, bit a bit: `embedding.NewProviderDeConsulta`,
+  que con la tabla estática devuelve `ConsultaLiviana`. El tokenizer sale de `tokenizer.idx` —las
+  piezas ordenadas, más el normalizer con el charsmap, Metaspace y el unk—, que se usa tal cual se
+  lee, con una búsqueda binaria que se angosta runa a runa; de `model.safetensors` se leen con
+  `ReadAt` sólo las filas de los tokens del texto; y el nombre sale de `identidad.json`. Nunca abre
+  `tokenizer.json`.
+
+  Los dos archivos los escribe `NewStaticProvider` al lado de la tabla (daemon, serve, backfill)
+  cuando faltan o están vencidos, con temporal único y rename; si Windows no deja renombrar porque
+  un hook tiene el índice abierto, la identidad no se reescribe y el atajo queda apagado hasta el
+  próximo arranque. La tabla se da por no cambiada mirando tamaño y fecha (decisión del dueño); la
+  identidad además se ata al índice por su crc, así un índice de otra tabla no se usa. Sin sidecars,
+  o con la tabla cambiada, no hay atajo (`ErrSinAtajo`, `ErrIdentidadVencida`) y el caller sigue
+  sin vector, como hoy. El tipo nuevo entra en las exenciones del portero y del troceo, que es lo
+  que mantiene su vector igual al del daemon para un prompt de más de 6.000 bytes o con forma de
+  secreto. Este cambio NO enciende el vector en el hook: eso es `ola2/vector-en-el-turno`, que
+  depende del banco con forma de prompt. El job `recall-gate` suma las tres comparaciones contra
+  POTION real.
 - **Antes de tocar un agente a mano, se declara la ventana: el runbook trae la receta.** El
   2026-09-20, en la migración a TLS, se tocó a mano la tarea del agente de `gio` y
   `AgenteCaidoConMaquinaViva` sonó 50 minutos. Fue la única ventana de trabajo leída como caída en

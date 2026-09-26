@@ -6,10 +6,37 @@ import (
 	"musubi/internal/config"
 )
 
+// modoDeConstruccion dice para qué se arma el embebedor. Cambia UNA cosa: con "static", si se
+// carga la tabla entera (modoCompleto) o se arma la consulta liviana (modoConsulta). Los proveedores
+// por red se construyen igual en los dos modos, porque construirlos no lee nada.
+type modoDeConstruccion int
+
+const (
+	modoCompleto modoDeConstruccion = iota
+	modoConsulta
+)
+
 // NewProvider construye el Provider adecuado según la configuración.
 // Por defecto (provider vacío o "none") devuelve NoopProvider.
 func NewProvider(cfg config.EmbeddingConfig) (Provider, error) {
-	base, err := newBaseProvider(cfg)
+	return nuevoProvider(cfg, modoCompleto)
+}
+
+// NewProviderDeConsulta construye el embebedor para quien sólo va a embeber CONSULTAS y no puede
+// pagar la tabla: un proceso efímero, como el hook por turno. Con "static" devuelve la consulta
+// liviana (consulta_liviana.go), que da el mismo vector que NewProvider sin cargar la tabla; si no
+// hay índice del tokenizer al lado de la tabla, devuelve ErrSinAtajo o ErrIdentidadVencida y NO cae
+// a cargar la tabla entera —eso es justo lo que el caller no puede pagar—.
+//
+// Pasa por el MISMO envoltorio que NewProvider: el vector de la consulta tiene que salir de la
+// misma transformación que el del índice (invariante E2), y eso no se garantiza con un constructor
+// aparte que «hoy da lo mismo».
+func NewProviderDeConsulta(cfg config.EmbeddingConfig) (Provider, error) {
+	return nuevoProvider(cfg, modoConsulta)
+}
+
+func nuevoProvider(cfg config.EmbeddingConfig, modo modoDeConstruccion) (Provider, error) {
+	base, err := newBaseProvider(cfg, modo)
 	if err != nil {
 		return nil, err
 	}
@@ -25,13 +52,20 @@ func NewProvider(cfg config.EmbeddingConfig) (Provider, error) {
 
 // newBaseProvider arma el embedder desnudo, sin portero. Separado de NewProvider para que quede
 // imposible construir uno sin pasar por el envoltorio.
-func newBaseProvider(cfg config.EmbeddingConfig) (Provider, error) {
+func newBaseProvider(cfg config.EmbeddingConfig, modo modoDeConstruccion) (Provider, error) {
 	switch cfg.Provider {
 	case "", "none":
 		return NoopProvider{}, nil
 	case "static":
 		// Tabla estática (model2vec/POTION): embeddings model-free at inference, sin
 		// red ni cgo. La tabla la aporta el usuario en static_path (bring-your-own-table).
+		if modo == modoConsulta {
+			c, err := NewConsultaLiviana(cfg.StaticPath)
+			if err != nil {
+				return nil, err
+			}
+			return c, nil
+		}
 		return NewStaticProvider(cfg.StaticPath)
 	case "ollama":
 		return NewOllamaProvider(cfg.BaseURL, cfg.Model, cfg.Dimensions), nil

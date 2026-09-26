@@ -298,10 +298,12 @@ func limiteSeguro(texto string, max int) int {
 
 // newTroceado envuelve p si vale la pena. NoopProvider y StaticProvider quedan afuera por lo que
 // SON —el primero no embebe, el segundo es una tabla en proceso sin límite de pedido— igual que
-// con el portero: así el camino sin red sigue siendo bit-idéntico por construcción.
+// con el portero: así el camino sin red sigue siendo bit-idéntico por construcción. ConsultaLiviana
+// también: troceada, un prompt de más de trozoInicial bytes daría el promedio de sus trozos y no el
+// vector del texto entero, que es el que StaticProvider le da al mismo texto.
 func newTroceado(p Provider) Provider {
 	switch p.(type) {
-	case NoopProvider, *StaticProvider:
+	case NoopProvider, *StaticProvider, *ConsultaLiviana:
 		return p
 	default:
 		return troceado{inner: p}
