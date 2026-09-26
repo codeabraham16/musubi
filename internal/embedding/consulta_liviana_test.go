@@ -777,6 +777,84 @@ func TestElAvisoDeSinEscrituraSaleUnaVez(t *testing.T) {
 	}
 }
 
+// lecturasLentas hace que cada lectura de la tabla tarde `demora`, como un disco frío y ocupado.
+// Se instala DESPUÉS de construir la consulta liviana, así afecta sólo a las filas.
+func lecturasLentas(t *testing.T, demora time.Duration) {
+	t.Helper()
+	previo := abrirParaLeer
+	abrirParaLeer = func(ruta string) (archivoDeLectura, error) {
+		f, err := previo(ruta)
+		if err != nil || filepath.Base(ruta) != archivoTabla {
+			return f, err
+		}
+		return &archivoLento{archivoDeLectura: f, demora: demora}, nil
+	}
+	t.Cleanup(func() { abrirParaLeer = previo })
+}
+
+type archivoLento struct {
+	archivoDeLectura
+	demora time.Duration
+}
+
+func (a *archivoLento) ReadAt(p []byte, off int64) (int, error) {
+	time.Sleep(a.demora)
+	return a.archivoDeLectura.ReadAt(p, off)
+}
+
+// textoConMuchasFilas usa casi todas las piezas del vocab de juguete: son ~150 filas distintas.
+func textoConMuchasFilas() string {
+	return strings.Join(piezasDeJuguete()[3:], " ")
+}
+
+// TestConsultaLivianaRespetaElPlazo: el hook le pone un plazo al Embed (turnEmbedTimeout, 2 s) y
+// confía en que el proveedor lo respete. Con la tabla fría, un prompt largo son cientos de
+// lecturas; si el Embed no mirara el contexto, el plazo no cortaría nada y el hook se comería su
+// techo de 10 s. También con el contexto ya cancelado, aunque el texto no tenga ninguna fila que
+// leer: quien pidió el vector ya no lo espera.
+//
+// Sabotaje: no mirar el contexto entre una lectura y la siguiente.
+// arnes: archivo="internal/embedding/consulta_liviana.go"
+// arnes: de="if err := ctx.Err(); err != nil { // el plazo corta entre una lectura y la siguiente"
+// arnes: a="if err := ctx.Err(); err != nil && false { // el plazo corta entre una lectura y la siguiente"
+//
+// Sabotaje: no mirar el contexto al entrar.
+// arnes: archivo="internal/embedding/consulta_liviana.go"
+// arnes: de="if err := ctx.Err(); err != nil { // quien pidió el vector ya no lo espera"
+// arnes: a="if err := ctx.Err(); err != nil && false { // quien pidió el vector ya no lo espera"
+func TestConsultaLivianaRespetaElPlazo(t *testing.T) {
+	dir, _ := tablaDeJugueteConSidecars(t, 400, 16)
+	liv, err := NewConsultaLiviana(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("con el contexto ya cancelado", func(t *testing.T) {
+		ctx, cancelar := context.WithCancel(context.Background())
+		cancelar()
+		for _, tx := range []string{"", "deploy la tabla del hook"} {
+			if v, err := liv.Embed(ctx, tx); !errors.Is(err, context.Canceled) {
+				t.Fatalf("Embed(%q) con el contexto cancelado devolvió err=%v y un vector de %d", tx, err, len(v))
+			}
+		}
+	})
+
+	t.Run("el plazo vence a mitad de las lecturas", func(t *testing.T) {
+		lecturasLentas(t, 25*time.Millisecond) // ~150 filas: varios segundos sin el plazo
+		ctx, cancelar := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancelar()
+		t0 := time.Now()
+		_, err := liv.Embed(ctx, textoConMuchasFilas())
+		demora := time.Since(t0)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("con el plazo vencido el Embed devolvió err=%v después de %v", err, demora)
+		}
+		if demora > time.Second {
+			t.Fatalf("el Embed cortó recién a los %v con un plazo de 100 ms", demora)
+		}
+	})
+}
+
 // TestLosTemporalesHuerfanosSeBorran: un daemon que muere a mitad de escritura (se cierra la sesión
 // que lo lanzó) deja su temporal; el próximo proveedor completo lo borra si es viejo, y deja el de
 // un daemon que puede estar escribiendo ahora.

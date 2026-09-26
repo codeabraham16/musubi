@@ -406,7 +406,15 @@ func (c *ConsultaLiviana) Dimensions() int { return c.dim }
 // misma media y la misma normalización (mediaNormalizada, que es una sola función para los dos).
 // Lo único distinto es de dónde sale cada fila: ReadAt en vez de la tabla en memoria. Una fila
 // repetida en el texto se lee una sola vez.
-func (c *ConsultaLiviana) Embed(_ context.Context, text string) ([]float32, error) {
+//
+// RESPETA EL CONTEXTO, a diferencia de StaticProvider, que tiene todo en memoria y no tiene en qué
+// esperar. Éste lee del disco, y en frío un prompt largo son cientos de lecturas: el plazo que le
+// pone quien lo llama (el hook del turno le da 2 s) tiene que poder cortarlo entre una lectura y
+// la siguiente.
+func (c *ConsultaLiviana) Embed(ctx context.Context, text string) ([]float32, error) {
+	if err := ctx.Err(); err != nil { // quien pidió el vector ya no lo espera
+		return nil, err
+	}
 	ids := c.tok.EncodeIDs(text)
 	var f archivoDeLectura
 	defer func() {
@@ -419,6 +427,9 @@ func (c *ConsultaLiviana) Embed(_ context.Context, text string) ([]float32, erro
 	fila := func(id int) ([]float32, error) {
 		if r, ok := leidas[id]; ok {
 			return r, nil
+		}
+		if err := ctx.Err(); err != nil { // el plazo corta entre una lectura y la siguiente
+			return nil, err
 		}
 		if f == nil {
 			var err error
