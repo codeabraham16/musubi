@@ -164,10 +164,30 @@ func TestLosCincoCamposQueElAgenteConsumeLleganDeVerdad(t *testing.T) {
 // valor va seguido de un espacio y no de una comilla. Así la guarda distingue una DECLARACIÓN de
 // una mención, que es lo que la hace usable en vez de un falso positivo permanente.
 //
+// EL PREFIJO `musubi:` TAMBIÉN ES DE CABLE, y era la copia que quedaba: `ejecutar` lo comparaba con
+// su propio literal hasta A131 (tema T7). No divergía, pero era una de las tres comparaciones del
+// prefijo —exec, políticas y agente— y las otras dos, escritas igual, decidían sobre el argv crudo
+// y dejaban pasar una operación interna con una parte vacía adelante. Hoy las tres son
+// fleet.EsOperacionInterna, y esta prueba es la que impide que vuelva la copia de este lado.
+//
+// NO ES GUARDA DE ESE DEFECTO, y conviene no contarla así (lo marcó la revisión de T7): pregunta
+// por un TEXTO —el literal en este paquete—, y el agente limpiaba el argv antes de despachar, así
+// que su copia nunca decidió distinto. Que caiga en la base 5017a45 prueba que el literal estaba,
+// no que la puerta estuviera abierta. La puerta la sostienen las pruebas de comportamiento:
+// TestConExecNoSeEncolaUnaOperacionInternaDisfrazada (mcp) y
+// TestUnaPoliticaNoEncolaUnaOperacionInternaDisfrazada y
+// TestLaCabezaDelArgvSeLeeComoLaDespachaElAgente (fleet).
+//
 // Sabotaje que la hace fallar: volver a poner `const comandoAvisarAgente = "musubi:avisar"`.
 // arnes: archivo="cmd/musubi/avisador.go"
 // arnes: de="const comandoAvisarAgente = fleet.OpAvisar"
 // arnes: a="const comandoAvisarAgente = \"musubi:avisar\""
+// Sabotaje: volver a comparar el prefijo con un literal propio en `ejecutar` → el prefijo vuelve a
+// tener dos declaraciones.
+// arnes: archivo="cmd/musubi/ejecutor.go"
+// arnes: de="\tif fleet.EsOperacionInterna(argv) {"
+// arnes: a="\tif len(argv[0]) >= len(\"musubi:\") && argv[0][:len(\"musubi:\")] == \"musubi:\" {"
+// arnes: colision_ok="TestLaOperacionInternaSeInterceptaYNoSeLanzaComoBinario"
 func TestNingunValorDeCableSeRedeclaraFueraDelDominio(t *testing.T) {
 	valores := map[string]string{
 		fleet.OpAvisar:                "fleet.OpAvisar",
@@ -175,6 +195,9 @@ func TestNingunValorDeCableSeRedeclaraFueraDelDominio(t *testing.T) {
 		fleet.OpPantalla:              "fleet.OpPantalla",
 		fleet.OpShell:                 "fleet.OpShell",
 		fleet.PrefijoRespuestaPermiso: "fleet.PrefijoRespuestaPermiso",
+		// El prefijo también es de cable, y era la copia que quedaba: `ejecutar` lo comparaba con
+		// su propio literal hasta A131 (T7). Hoy la pregunta es fleet.EsOperacionInterna.
+		fleet.PrefijoOperacionInterna: "fleet.EsOperacionInterna",
 	}
 	archivos, err := filepath.Glob("*.go")
 	if err != nil {

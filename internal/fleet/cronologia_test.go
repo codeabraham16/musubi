@@ -168,7 +168,7 @@ func TestElPlanoDeUnAvisoLoDecideQuienLoEncolo(t *testing.T) {
 // rojo por build roto se lee igual que uno por guarda que funciona. Medido: el arnés lo marcó
 // «sin veredicto», que es lo correcto.
 // arnes: archivo="internal/fleet/cronologia.go"
-// arnes: de="\tid := \"\"\n\tif len(argv) > 1 {\n\t\tid = argv[1]\n\t}\n\treturn []string{OpPantalla, id, \"[oculto]\"}"
+// arnes: de="\tid := \"\"\n\tif limpio := LimpiarArgv(argv); len(limpio) > 1 {\n\t\tid = limpio[1]\n\t}\n\treturn []string{OpPantalla, id, \"[oculto]\"}"
 // arnes: a="\treturn argv"
 func TestElArgvDeBitacoraNuncaLlevaLaContrasena(t *testing.T) {
 	const secreto = "ContraseñaDeSesión123"
