@@ -405,7 +405,13 @@ func imprimirContexto(w io.Writer, inf InformeContexto) {
 	fmt.Fprintf(w, "  transcripts medidos: %d · prompts: %d humanos, %d avisos del sistema, %d internos de Claude Code\n",
 		m.Transcripts, m.PromptsPorOrigen[string(transcripts.OrigenHumano)],
 		m.PromptsPorOrigen[string(transcripts.OrigenSistema)], m.PromptsPorOrigen[string(transcripts.OrigenInterno)])
-	fila := func(etiqueta, valor string) { fmt.Fprintf(w, "  %-62s %s\n", etiqueta, valor) }
+	fila := func(etiqueta, valor string) {
+		if valor == "" { // un título de grupo: sin relleno al final de la línea
+			fmt.Fprintf(w, "  %s\n", etiqueta)
+			return
+		}
+		fmt.Fprintf(w, "  %-62s %s\n", etiqueta, valor)
+	}
 	conteo := func(c ConteoDeTurnos) string {
 		return fmt.Sprintf("%s · %d ids", fraccion(c.ConMemoria, c.Turnos), c.IDs)
 	}

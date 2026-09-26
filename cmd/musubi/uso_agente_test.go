@@ -500,7 +500,7 @@ func TestUsoAgenteNombraLaCarpetaComoClaudeCode(t *testing.T) {
 	}
 	for ruta, quiere := range medidas {
 		if got := transcripts.CarpetaDeProyecto(ruta); got != quiere {
-			t.Errorf("carpetaDeProyecto(%q) = %q, Claude Code la llamó %q", ruta, got, quiere)
+			t.Errorf("CarpetaDeProyecto(%q) = %q, Claude Code la llamó %q", ruta, got, quiere)
 		}
 	}
 }
