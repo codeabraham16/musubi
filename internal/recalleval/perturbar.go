@@ -16,11 +16,12 @@ import (
 // misma clase de error que el corrector sabe arreglar: circular. Por eso cada clase es un brazo, y
 // la sustitución está para ver lo que el corrector a propósito no toca.
 //
-// TODOS LOS TÉRMINOS DE 5 RUNAS O MÁS, NO SÓLO EL MÁS LARGO. Medido sobre golden.json: un tipeo en
-// el término más largo no mueve el MRR (0,722 → 0,722), porque la consulta es un OR y basta un
-// término vivo para encontrar lo mismo. Un instrumento que no mueve el dorado no puede defender un
-// gate. El brazo de UN tipeo (PerturbarTerminoMasLargo) se conserva igual, porque es el caso más
-// común en un prompt real y el que la línea base del frente ya midió.
+// TODOS LOS TÉRMINOS DE 5 RUNAS O MÁS, NO SÓLO EL MÁS LARGO. Medido sobre golden.json con el ranker
+// del turno (ConfigTurno) y la semilla 1: un tipeo de transposición en el término más largo casi no
+// mueve el MRR (0,722 → 0,694), porque la consulta es un OR y basta un término vivo para encontrar
+// lo mismo; tipear todos lo baja a ~0,5 (ver TestLaPerturbacionMueveElDorado). Un instrumento que
+// no mueve el dorado no puede defender un gate. El brazo de UN tipeo (PerturbarTerminoMasLargo) se
+// conserva igual, porque es el caso más común en un prompt real.
 //
 // QUÉ ES UN TÉRMINO: lo mismo que para el recall (rankedTerms en internal/memory/recall.go), una
 // corrida de letras o dígitos. Sólo se perturban los que son TODO letras y tienen 5 runas o más,
