@@ -196,7 +196,7 @@ func printUsage() {
 	cmd("conflicts shadow [--json]", "Lee el modo sombra: dónde el motor coincidió con el detector (y nunca lo corrigió)")
 
 	section("Medición")
-	cmd("uso-agente [--desde F] [--hasta F]", "Lee los transcripts de Claude Code: ¿el agente USA las tools y skills de Musubi? (sólo lectura; --dir, --json)")
+	cmd("uso-agente [--desde F] [--hasta F]", "Lee los transcripts de Claude Code: ¿el agente USA las tools y skills de Musubi? (sólo lectura; --dir, --json, --excluir; las carpetas temporales no se miden salvo --incluir-temporales)")
 
 	section("Ingesta")
 	cmd("ingest [--as ...] [--lang ...] [--json] <url>", "Convierte un link (video/red social/artículo) en texto; --save lo guarda en memoria")
