@@ -193,10 +193,10 @@ func storeConTareas(t *testing.T) *memory.DbEngine {
 // arnes: a="\tif !modosQueCorrenSolos[in.PermissionMode] {\n"
 // arnes: colision_ok="TestElAvisoDeTareasSaleSoloDondeElSubagentePuedeTrabajarSolo"
 //
-// Sabotaje que la hace fallar: avisar en cada turno.
+// Sabotaje que la hace fallar: avisar en cada turno de la sesión.
 // arnes: archivo="cmd/musubi/tareas.go"
-// arnes: de="\treturn ahora.Sub(ultima) >= intervaloDeTareas\n"
-// arnes: a="\treturn ahora.Sub(ultima) >= 0\n"
+// arnes: de="\t\tif ultimo, err := time.Parse(time.RFC3339, v); err == nil && ahora.Sub(ultimo) < intervaloDeTareas {\n"
+// arnes: a="\t\tif ultimo, err := time.Parse(time.RFC3339, v); err == nil && false && ahora.Sub(ultimo) < intervaloDeTareas {\n"
 //
 // Sabotaje que la hace fallar: avisar aunque no haya nada que reclamar.
 // arnes: archivo="cmd/musubi/tareas.go"
@@ -421,5 +421,81 @@ func TestElHookDelTurnoLeDejaLasTareasAlAgente(t *testing.T) {
 		if !strings.Contains(tabla.String(), quiere) {
 			t.Errorf("musubi tareas no dice %q:\n%s", quiere, tabla.String())
 		}
+	}
+}
+
+// UN TURNO AJENO NO AVISA NI GASTA NADA; CADA SESIÓN RECIBE SU AVISO; POSTEAR SIGUE SIENDO POR PROYECTO.
+//
+// Medido el 2026-09-26: el primer aviso cayó en una notificación de una tarea de fondo, en una
+// sesión que no tenía el subagente, y el segundo otra vez en esa sesión. Con el aviso por proyecto,
+// las sesiones que sí podían delegar se quedaban dos horas sin él cada vez. Ahora un turno ajeno
+// no toca el intervalo, y el aviso se cuenta por sesión; que dos sesiones deleguen a la vez no
+// duplica trabajo, porque cada subagente reclama unidades distintas. Lo que sigue siendo por
+// proyecto es el posteo: el trabajo NUEVO entra al tablero a lo sumo cada intervaloDeTareas.
+//
+// Los prefijos de los turnos ajenos se escriben literales: son del formato de Claude Code.
+//
+// Sabotaje que la hace fallar: avisar también en un turno que no escribió la persona.
+// arnes: archivo="cmd/musubi/tareas.go"
+// arnes: de="\tif !esTurnoDeLaPersona(in.Prompt) {\n"
+// arnes: a="\tif false && !esTurnoDeLaPersona(in.Prompt) {\n"
+//
+// Sabotaje que la hace fallar: un solo aviso por proyecto, no por sesión.
+// arnes: archivo="cmd/musubi/tareas.go"
+// arnes: de="\tif !avisoVencidoEnLaSesion(t.store, in.SessionID, t.ahora) {\n"
+// arnes: a="\tif !avisoVencidoEnLaSesion(t.store, \"proyecto\", t.ahora) {\n"
+//
+// Sabotaje que la hace fallar: postear en cada turno.
+// arnes: archivo="cmd/musubi/tareas.go"
+// arnes: de="\treturn ahora.Sub(ultima) >= intervaloDeTareas\n"
+// arnes: a="\treturn ahora.Sub(ultima) >= 0\n"
+func TestElAvisoEsPorSesionYSoloEnTurnosDeLaPersona(t *testing.T) {
+	const sub = "musubi:musubi-tareas"
+	ahora := time.Now()
+	e := storeConTareas(t)
+	turno := func(sesion, prompt string, cuando time.Time) string {
+		return buildTurnTareas(&tareasDelTurno{store: e, subagente: sub, ahora: cuando},
+			turnInput{Prompt: prompt, SessionID: sesion, PermissionMode: "auto"})
+	}
+
+	// Los turnos ajenos no avisan, no postean y no gastan el intervalo.
+	for _, ajeno := range []string{
+		"<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>",
+		"Another Claude session sent you a message: ¿seguís con lo tuyo?",
+	} {
+		if out := turno("a", ajeno, ahora); out != "" {
+			t.Errorf("un turno ajeno (%.30q) avisó: %q", ajeno, out)
+		}
+	}
+	if lote := loteDeCuarentena(t, e); lote.Total != 0 {
+		t.Fatalf("un turno ajeno posteó %d unidad(es)", lote.Total)
+	}
+	// El primer turno de la persona, justo después, sí: el intervalo no se gastó.
+	if out := turno("a", "seguimos", ahora); out == "" {
+		t.Fatal("el turno de la persona después de dos ajenos no avisó: el intervalo se gastó en turnos ajenos")
+	}
+
+	// Otra sesión, en el mismo momento, también recibe el suyo, y no se postea de nuevo.
+	if out := turno("b", "hola", ahora.Add(time.Minute)); out == "" {
+		t.Error("la segunda sesión no recibió el aviso: sigue siendo uno por proyecto")
+	}
+	if lote := loteDeCuarentena(t, e); lote.Total != 1 {
+		t.Errorf("con dos sesiones el lote tiene %d unidad(es); quería 1", lote.Total)
+	}
+	// La misma sesión, dentro del intervalo, no.
+	if out := turno("a", "otra cosa", ahora.Add(2*time.Minute)); out != "" {
+		t.Errorf("la sesión «a» recibió dos avisos dentro del intervalo: %q", out)
+	}
+
+	// Una propuesta nueva entra al tablero recién cuando vence el intervalo del PROYECTO, aunque
+	// otra sesión nueva hable antes.
+	proponer(t, e, "t/nuevo", "un tema nuevo")
+	turno("c", "hola desde otra", ahora.Add(3*time.Minute))
+	if lote := loteDeCuarentena(t, e); lote.Total != 1 {
+		t.Errorf("la propuesta nueva se posteó antes de que venciera el intervalo del proyecto (lote: %d)", lote.Total)
+	}
+	turno("c", "más tarde", ahora.Add(intervaloDeTareas+time.Minute))
+	if lote := loteDeCuarentena(t, e); lote.Total != 2 {
+		t.Errorf("vencido el intervalo, la propuesta nueva no entró al tablero (lote: %d)", lote.Total)
 	}
 }

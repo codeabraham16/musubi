@@ -225,7 +225,17 @@ const maxMarcasPorSesion = 64
 //
 // Un valor viejo (el id suelto, o «id\x00modo») no es JSON y se lee como «nada marcado»: a lo sumo
 // un aviso de más, una vez, al instalar el binario.
-func marcarUnaVezPorSesion(store turnStore, key, sessionID, valor string) bool {
+func marcarUnaVezPorSesion(store metaStore, key, sessionID, valor string) bool {
+	m := leerMarcasPorSesion(store, key)
+	if previo, ok := m.Valor[sessionID]; ok && previo == valor {
+		return false
+	}
+	guardarMarcaDeSesion(store, key, m, sessionID, valor)
+	return true
+}
+
+// leerMarcasPorSesion lee las marcas de una clave. Un valor ilegible se lee como «nada marcado».
+func leerMarcasPorSesion(store metaStore, key string) marcasPorSesion {
 	m := marcasPorSesion{Valor: map[string]string{}}
 	if raw, ok, _ := store.GetMeta(key); ok && raw != "" {
 		var leidas marcasPorSesion
@@ -233,9 +243,12 @@ func marcarUnaVezPorSesion(store turnStore, key, sessionID, valor string) bool {
 			m = leidas
 		}
 	}
-	if previo, ok := m.Valor[sessionID]; ok && previo == valor {
-		return false
-	}
+	return m
+}
+
+// guardarMarcaDeSesion anota `valor` para la sesión y guarda, acotando a las últimas
+// maxMarcasPorSesion sesiones.
+func guardarMarcaDeSesion(store metaStore, key string, m marcasPorSesion, sessionID, valor string) {
 	if _, ok := m.Valor[sessionID]; !ok {
 		m.Orden = append(m.Orden, sessionID)
 	}
@@ -247,7 +260,6 @@ func marcarUnaVezPorSesion(store turnStore, key, sessionID, valor string) bool {
 	if b, err := json.Marshal(m); err == nil {
 		_ = store.SetMeta(key, string(b))
 	}
-	return true
 }
 
 // ledgerDeLaSesion lee la cuenta de ESTA sesión. El hook sí conoce su id, así que no tiene por qué
