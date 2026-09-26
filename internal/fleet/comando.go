@@ -51,9 +51,16 @@ const (
 	ComandosPorEntregaMax = 10
 
 	// MargenDeReporte cubre los viajes de vuelta de la tanda. El agente reporta apenas termina
-	// cada comando —no espera al próximo latido— así que es un round-trip HTTP, no un ciclo de
-	// sondeo; y cubre también la espera larga con la que el agente se entera de que el cerebro le
-	// cerró la shell. Dos minutos es holgado a propósito.
+	// cada comando —no espera al próximo latido— así que es un round-trip HTTP por comando, no un
+	// ciclo de sondeo, y los de una tanda van en serie. Dos minutos es holgado a propósito: el
+	// cliente con el que el agente reporta corta cada viaje a los diez segundos (clienteLatido, en
+	// cmd/musubi/agent.go), así que ni una tanda llena con cada reporte en el borde de ese corte
+	// —cien segundos— lo agota.
+	//
+	// LA ESPERA LARGA DE LA SHELL NO VA ACÁ, aunque también es un viaje: es un término propio de la
+	// cuenta (EsperaLargaDeShell, en tanda.go). Adentro del margen no entraba: veinticinco segundos de
+	// esa espera y diez reportes en el borde del corte son dos minutos y cinco, y el último de la tanda
+	// se habría dibujado perdido con su reporte en viaje. Lo señaló la revisión adversaria de A131.
 	MargenDeReporte = 2 * time.Minute
 
 	// EsperaMaxDeEntregado es cuánto puede estar `entregado` un comando VIVO, en el peor caso.
@@ -78,15 +85,17 @@ const (
 	// ShellVidaMax, dos horas. Entre los 102 y los 120 minutos de una shell viva, la cronología y la
 	// bitácora dibujaban `perdido` su fila al lado de la sesión `activa`, y lo que viajaba detrás de
 	// ella en la misma tanda —vivo, esperando su turno— también: el error caro de arriba. Lo midió
-	// la auditoría A131 como defecto VIVO (C4-LD1); en producción hubo una sola fila de shell, de un
-	// minuto, así que nadie llegó a verlo.
+	// la auditoría A131 como defecto VIVO (C4-LD1). En producción nadie llegó a verlo: hubo una sola
+	// fila `musubi:shell`, que estuvo 0,0 minutos en `entregado`, y una sola sesión, que duró un minuto.
 	//
 	// EL PEOR CASO ES UNA SHELL Y NUEVE COMANDOS, NO DIEZ SHELLS. El cerebro cierra cada sesión a
 	// los ShellVidaMax de CREADA (AbrirSesionShell fija `vence`, y cada pedido del agente pregunta
 	// SesionShell.Viva), y la sesión se crea antes de encolar su comando, o sea antes de la entrega:
 	// todas las shells de una tanda terminan, juntas, a lo sumo ShellVidaMax después de entregadas.
-	// Una segunda no suma otras dos horas; arranca con su plazo ya corrido. Los otros nueve esperan
-	// cada uno su timeout y, si lo vencen, la espera de cierre del agente (tanda.go).
+	// Una segunda no suma otras dos horas; arranca con su plazo ya corrido. El agente se entera del
+	// cierre a lo sumo una espera larga después (EsperaLargaDeShell, en tanda.go), y recién ahí suelta
+	// la tanda. Los otros nueve esperan cada uno su timeout y, si lo vencen, la espera de cierre del
+	// agente (tanda.go).
 	//
 	// ShellVidaMax Y NO EL TECHO LOCAL DEL AGENTE, que es de tres horas: ése existe por si el
 	// cerebro no cierra nunca la sesión, y con el cerebro caído la shell no dura — la espera larga
@@ -109,7 +118,8 @@ const (
 	// comando. Se deja anotado, no olvidado.
 	EsperaMaxDeEntregado = ShellVidaMax +
 		(ComandosPorEntregaMax-1)*(ComandoTimeoutMax+EsperaDeCierreDelAgente) +
-		MargenDeReporte
+		MargenDeReporte +
+		EsperaLargaDeShell
 
 	// ColaMaxPorDevice es cuántos comandos TODAVÍA EJECUTABLES puede tener encolados una máquina.
 	//

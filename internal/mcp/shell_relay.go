@@ -45,7 +45,11 @@ const (
 // Es `var` y no `const` por UNA sola razón: la prueba de «esperando al agente» tiene que poder
 // achicarla. Sin eso, verificar esa rama costaría 25 s de suite y nadie la verificaría — que es
 // exactamente cómo se llega a una guarda que nunca se probó. No la toca nadie en producción.
-var esperaSalidaShell = 25 * time.Second
+//
+// EL VALOR VIVE EN EL DOMINIO (fleet.EsperaLargaDeShell) porque la cota de `perdido` lo suma: es lo
+// más tarde que el agente se entera de que la sesión cerró, y hasta ahí la tanda que trajo la shell
+// sigue parada. Un número que el relay usa y la cuenta copia se desincroniza en silencio.
+var esperaSalidaShell = fleet.EsperaLargaDeShell
 
 // entradaMaxShell acota cuánto se acepta por request de entrada. Una persona tecleando manda
 // decenas de bytes; un pegado grande, unos miles. 64 KiB es holgado y le pone techo a lo que

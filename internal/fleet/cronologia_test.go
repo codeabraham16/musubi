@@ -504,6 +504,12 @@ func TestElHechoArrastraElOrigenDelComando(t *testing.T) {
 // arnes: archivo="internal/fleet/comando.go"
 // arnes: de="\tif c.Perdido(ahora) {\n\t\treturn EstadoPerdido\n\t}\n"
 // arnes: a=""
+//
+// LO QUE ESTA PRUEBA NO VE, dicho: el instante del muerto sale de la misma constante que custodia
+// (`EsperaMaxDeEntregado` y un minuto), así que se corre con ella. Con la cota en 24 h queda en verde
+// (A131, C4-m4): mide que la rama de `perdido` existe, no que la cota sea la correcta. La cota,
+// cercada por las dos puntas desde la fuente de cada techo, la mide
+// TestLaCotaDePerdidoEsLaPeorTandaRealNiMasNiMenos (cota_de_perdido_test.go).
 func TestUnEntregadoQueNuncaReportaSeMuestraPerdido(t *testing.T) {
 	ahora := time.Date(2026, 8, 31, 5, 0, 0, 0, time.UTC)
 
@@ -543,6 +549,13 @@ func TestUnEntregadoQueNuncaReportaSeMuestraPerdido(t *testing.T) {
 // arnes: archivo="internal/fleet/comando.go"
 // arnes: de="\treturn ahora.Sub(c.Entregado) > EsperaMaxDeEntregado"
 // arnes: a="\treturn ahora.Sub(c.Entregado) > c.Timeout+MargenDeReporte"
+//
+// LO QUE ESTA PRUEBA NO VE, dicho: clava la espera en 89 minutos, debajo de los nueve de adelante,
+// y deja sin mirar la franja en la que el último CORRE su propio timeout y viaja su reporte. Una
+// cuenta hecha sobre nueve (A131, C4-m6) o sin el margen del reporte (C4-m7) la deja en verde, y
+// tampoco ve una tanda que trae una shell adelante (C4-LD1). Esa franja, recorrida entera con cada
+// comando de la peor tanda, la miden TestLaCotaDePerdidoEsLaPeorTandaRealNiMasNiMenos y
+// TestCadaOperacionInternaTieneDecididoCuantoOcupaAlAgente (cota_de_perdido_test.go).
 func TestElUltimoDeUnaTandaLargaNoSeMarcaPerdidoMientrasEspera(t *testing.T) {
 	ahora := time.Date(2026, 8, 31, 5, 0, 0, 0, time.UTC)
 

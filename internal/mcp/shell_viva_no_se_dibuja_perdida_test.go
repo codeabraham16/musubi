@@ -23,9 +23,9 @@ import (
 // de hace treinta segundos, o sea VIVA. Las guardas del dominio (internal/fleet/cota_de_perdido_test.go)
 // miden la cuenta; ésta mide que lo que se ve no se contradiga.
 //
-// EXPOSICIÓN medida por la auditoría: una sola fila `musubi:shell` en la historia de producción, de
-// un minuto, y ninguna sesión abierta hoy. Hace falta una shell de Tier A de más de 102 minutos, con
-// tráfico, para verlo.
+// EXPOSICIÓN medida por la auditoría: una sola fila `musubi:shell` en la historia de producción, que
+// estuvo 0,0 minutos en `entregado`; la única sesión duró un minuto, y hoy no hay ninguna abierta.
+// Hace falta una shell de Tier A de más de 102 minutos, con tráfico, para verlo.
 //
 // Sabotaje: la cuenta de la cota sin la shell, la de la base → la fila del canal y el comando de atrás
 // se dibujan perdidos al lado de la sesión activa.

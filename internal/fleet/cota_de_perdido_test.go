@@ -18,8 +18,9 @@ package fleet
 //     está en el doc de EsperaMaxDeEntregado).
 //
 // Acá la tanda se ARMA desde la fuente de cada techo —ShellVidaMax, que aplica el cerebro;
-// ComandoTimeoutMax, que valida el cerebro y aplica el agente; EsperaDeCierreDelAgente, que usa el
-// agente; ComandosPorEntregaMax, que respeta el transporte (lo mide internal/mcp)— y NUNCA desde
+// EsperaLargaDeShell, con la que el relay le avisa al agente que la shell cerró; ComandoTimeoutMax,
+// que valida el cerebro y aplica el agente; EsperaDeCierreDelAgente, que usa el agente;
+// ComandosPorEntregaMax, que respeta el transporte (lo mide internal/mcp)— y NUNCA desde
 // EsperaMaxDeEntregado: derivar el escenario de la constante custodiada es lo que dejó verde a C4-m4.
 
 import (
@@ -33,12 +34,20 @@ import (
 // el cerebro valida (ValidarComando) y el agente aplica, más la espera de cierre de sus tuberías.
 const techoDeUnComando = ComandoTimeoutMax + EsperaDeCierreDelAgente
 
+// techoDeUnaShell es lo más que una shell tiene ocupado al agente, contado desde la entrega: el
+// cerebro la cierra a los ShellVidaMax de creada —y se crea antes de la entrega—, y el agente se
+// entera a lo sumo una espera larga después, cuando le vuelve vacío el pedido de teclas que tenía
+// colgado y el siguiente encuentra la sesión cerrada. Es un término aparte y no parte del margen
+// del reporte: adentro del margen no entraba con los diez reportes en el borde de su corte.
+const techoDeUnaShell = ShellVidaMax + EsperaLargaDeShell
+
 // finesDeLaPeorTanda devuelve, para la tanda que más tarda en volver, cuánto después de la entrega
-// TERMINA cada comando, sin el viaje del reporte: la shell primero —muere a lo sumo ShellVidaMax
-// después de la entrega, porque su sesión se crea antes— y detrás ComandosPorEntregaMax-1 comandos
-// que agotan cada uno su techo, en serie, que es como los atiende el agente.
+// TERMINA cada comando, sin el viaje del reporte: la shell primero —la suelta a lo sumo
+// techoDeUnaShell después de la entrega— y detrás ComandosPorEntregaMax-1 comandos que agotan cada
+// uno su techo, en serie, que es como los atiende el agente. Los viajes de los reportes, uno por
+// comando, los cubre MargenDeReporte.
 func finesDeLaPeorTanda() []time.Duration {
-	fines := []time.Duration{ShellVidaMax}
+	fines := []time.Duration{techoDeUnaShell}
 	for i := 1; i < ComandosPorEntregaMax; i++ {
 		fines = append(fines, fines[i-1]+techoDeUnComando)
 	}
@@ -57,8 +66,9 @@ func finesDeLaPeorTanda() []time.Duration {
 //
 // EXPOSICIÓN medida por la auditoría: de 1.807 comandos terminados, el que más tardó entre la entrega
 // y el resultado tardó 9 minutos; la tanda más grande fue de 9 comandos, y hubo una sola fila de
-// shell, de un minuto. Ningún `entregado` de hoy cae en la franja que estas mutaciones mueven: los
-// cuatro que quedan llevan días y se ven `perdido` con cualquiera de las cotas.
+// shell, que estuvo 0,0 minutos en `entregado` (lo que duró un minuto fue su sesión). Ningún
+// `entregado` de hoy cae en la franja que estas mutaciones mueven: los cuatro que quedan llevan días
+// y se ven `perdido` con cualquiera de las cotas.
 //
 // Sabotaje: la cuenta sin la shell, la de la base (C4-LD1) → la fila de una shell viva y lo que viaja
 // detrás se dibujan perdidos desde los 102 minutos.
@@ -79,7 +89,13 @@ func finesDeLaPeorTanda() []time.Duration {
 // Sabotaje: la cuenta sin el margen del reporte (C4-m7) → el último se dibuja perdido mientras su
 // resultado viaja.
 // arnes: archivo="internal/fleet/comando.go"
-// arnes: de="\t\tMargenDeReporte\n"
+// arnes: de="\t\tMargenDeReporte +\n"
+// arnes: a="\t\t0 +\n"
+// Sabotaje: la cuenta sin la espera larga de la shell, adentro del margen como la dejaba la primera
+// cuenta con la shell → el último se dibuja perdido veinticinco segundos antes de que su reporte
+// pueda llegar.
+// arnes: archivo="internal/fleet/comando.go"
+// arnes: de="\t\tEsperaLargaDeShell\n"
 // arnes: a="\t\t0\n"
 // Sabotaje: el «tarde y cierto» llevado al extremo (C4-m4) → un comando que se perdió de verdad se ve
 // corriendo un día entero.
@@ -166,8 +182,8 @@ type techoDeOperacion struct {
 // exige que las dos listas sean la misma.
 func cuantoOcupaAlAgente() map[string]techoDeOperacion {
 	return map[string]techoDeOperacion{
-		OpShell: {ShellVidaMax, "la sesión entera: el agente reporta recién al cerrarla, y el cerebro " +
-			"la cierra a los ShellVidaMax de creada"},
+		OpShell: {techoDeUnaShell, "la sesión entera: el agente reporta recién al cerrarla, el cerebro " +
+			"la cierra a los ShellVidaMax de creada, y el agente se entera a lo sumo una espera larga después"},
 		OpPreguntar: {AvisoTimeout, "el agente corta la pregunta a los AvisoTimeout (cmd/musubi/avisador.go)"},
 		OpAvisar: {techoDeUnComando, "el agente corta el aviso a los diez segundos (cmd/musubi/avisador.go), " +
 			"y el techo de un comando lo cubre"},
@@ -195,8 +211,9 @@ func cuantoOcupaAlAgente() map[string]techoDeOperacion {
 // la entrega—, así que dos shells en una tanda no suman cuatro horas. Una segunda operación larga sin
 // esa propiedad se sumaría una vez por comando y la cuenta habría que rehacerla: esto la frena.
 //
-// EXPOSICIÓN medida por la auditoría: una sola fila `musubi:shell` en la historia de producción, de
-// un minuto; ninguna sesión pasó de 102 minutos, y hoy no hay ninguna abierta.
+// EXPOSICIÓN medida por la auditoría: una sola fila `musubi:shell` en la historia de producción, que
+// estuvo 0,0 minutos en `entregado`, y una sola sesión, que duró un minuto; ninguna pasó de 102
+// minutos, y hoy no hay ninguna abierta.
 //
 // Sabotaje: declarar una operación interna nueva sin decidir cuánto ocupa al agente → la cota podría
 // no cubrirla y nadie se enteraría.

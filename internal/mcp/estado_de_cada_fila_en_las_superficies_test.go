@@ -29,6 +29,16 @@ import (
 // musubi_fleet_contexto no entra: lee la misma cronología pero devuelve cuántos hechos hay de cada
 // tipo, no el estado de cada uno.
 //
+// musubi_fleet_exec TAMPOCO SE RECORRE, y ésa sí dibuja un estado sin pasar por EstadoActual: cuando
+// su espera vence sin resultado devuelve el estado GUARDADO (methods_exec.go, la rama «todavía sin
+// resultado»), y las ramas que encolan y vuelven dicen `pendiente`. Hoy no puede mentir, porque la
+// fila que muestra nace adentro de esa misma llamada, que espera a lo sumo esperaMaxExec, y lo
+// guardado sólo se aparta de lo derivado pasado fleet.ComandoVidaMax sin que nadie la levante o
+// pasada fleet.EsperaMaxDeEntregado desde la entrega. Ninguna siembra hace que esa rama muestre una
+// fila que diverja, así que recorrerla —o agregarle ahí la derivación— daría una guarda verde contra
+// su propio sabotaje. LA PREMISA SÍ SE MIDE, abajo: si la espera de exec alcanza alguna de las dos
+// cotas, esto se pone rojo, y esa rama tiene que pasar por EstadoActual y entrar a esta prueba.
+//
 // EXPOSICIÓN medida por la auditoría: hoy hay 4 comandos `entregado` en producción, de davantis-1, con
 // 4,5 a 19 días sin reporte; las dos superficies los muestran `perdido`. Con la mutación, la
 // cronología los dibujaría `entregado`: corriendo.
@@ -45,6 +55,18 @@ import (
 // arnes: de="\tfila[\"estado\"] = string(c.EstadoActual(ahora))"
 // arnes: a="\tfila[\"estado\"] = string(c.Estado)"
 func TestCadaSuperficieMuestraElEstadoQueDerivaElDominioDeCadaFila(t *testing.T) {
+	// LA PREMISA DE LO QUE NO SE RECORRE: musubi_fleet_exec muestra el estado guardado de una fila que
+	// nació en la misma llamada, y eso vale sólo mientras su espera no alcance ninguna cota del dominio.
+	for _, cota := range []struct {
+		nombre string
+		valor  time.Duration
+	}{{"fleet.ComandoVidaMax", fleet.ComandoVidaMax}, {"fleet.EsperaMaxDeEntregado", fleet.EsperaMaxDeEntregado}} {
+		if esperaMaxExec >= cota.valor {
+			t.Errorf("musubi_fleet_exec espera hasta %s y %s es %s: la fila que devuelve «todavía sin resultado» "+
+				"ya puede estar vencida o perdida, y esa rama muestra el estado GUARDADO. Pasala por EstadoActual "+
+				"y sumala a las superficies de esta prueba", esperaMaxExec, cota.nombre, cota.valor)
+		}
+	}
 	s := newTestServer(t, embedding.NoopProvider{})
 	if _, e := call(t, s, "musubi_fleet_enroll", map[string]interface{}{
 		"name": "pc-gio", "tier": "A", "project": "infra", "caps": []string{"metrics", "exec"}, "os": "linux",

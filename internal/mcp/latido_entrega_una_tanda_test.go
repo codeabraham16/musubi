@@ -17,8 +17,15 @@ import (
 // da por sentado que una entrega nunca lleva más. Ninguna prueba del árbol contaba cuántos comandos
 // entrega un latido. La auditoría A131 (C4-m8) puso `maxComandosPorLatido = 2 *
 // fleet.ComandosPorEntregaMax` —exactamente el modo de falla que el comentario de fleet_http.go
-// nombra— y fleet y mcp quedaron verdes: con veinte en la tanda, el último espera a diecinueve y se
-// dibuja muerto mientras espera.
+// nombra— y fleet y mcp quedaron verdes.
+//
+// DÓNDE MUERDE, con la cota de hoy: cuando la tanda trae una shell. La cota se arma con UNA shell y
+// nueve comandos detrás, y una shell ocupa al agente más que once comandos en su techo, así que
+// veinte comandos comunes —el doble de la tanda— todavía reportan adentro de ella. Con una shell
+// adelante, en cambio, lo que viaja al final espera la sesión entera y diez comandos más de los que
+// la cota cuenta, y se dibuja muerto mientras espera su turno: el error caro, el que manda a relanzar
+// lo que va a correr igual. La prueba no espera a que la tanda traiga una shell para decirlo: cuenta
+// la entrega, que es la premisa de la cota para cualquier tanda.
 //
 // Acá se encola por el motor una cola de cada largo que importa —uno, justo la tanda, uno más y el
 // techo de la cola, cada una en su máquina— y se manda UN latido real por HTTP: cada máquina recibe
@@ -28,10 +35,10 @@ import (
 //
 // EXPOSICIÓN medida por la auditoría: nunca pasó. De 1.748 entregas, la más grande llevó 9 comandos.
 // La condición previa sí existió: 88 comandos creados en 15 minutos sobre una máquina y 37 sobre
-// otra. Con la mutación, un agente que vuelve con la cola llena se lleva hasta ColaMaxPorDevice de una.
+// otra. Con la mutación, un agente que vuelve con la cola llena se lleva el doble de la tanda de una.
 //
-// Sabotaje: que el latido entregue el doble de la tanda (C4-m8) → el último de la tanda espera a
-// diecinueve y se dibuja perdido mientras espera.
+// Sabotaje: que el latido entregue el doble de la tanda (C4-m8) → si la tanda trae una shell, lo que
+// viaja al final espera la sesión entera y diez comandos de más, y se dibuja perdido mientras espera.
 // arnes: archivo="internal/mcp/fleet_http.go"
 // arnes: de="const maxComandosPorLatido = fleet.ComandosPorEntregaMax"
 // arnes: a="const maxComandosPorLatido = 2 * fleet.ComandosPorEntregaMax"
@@ -72,8 +79,9 @@ func TestUnLatidoEntregaLaTandaEnteraYNiUnComandoMas(t *testing.T) {
 		quiero := min(cola, tanda)
 		if len(r.Comandos) > tanda {
 			t.Errorf("%s: con %d en cola, un latido entregó %d comandos y la cota de `perdido` cuenta tandas "+
-				"de %d: el último espera a los %d de adelante, más de lo que la cota le concede, y se "+
-				"dibuja muerto mientras espera su turno", nombre, cola, len(r.Comandos), tanda, len(r.Comandos)-1)
+				"de %d. Si esa tanda trae una shell, lo que viaja al final espera la sesión entera y más "+
+				"comandos de los que la cota cuenta (%d de más), y se dibuja muerto mientras espera su turno",
+				nombre, cola, len(r.Comandos), tanda, len(r.Comandos)-tanda)
 		} else if len(r.Comandos) != quiero {
 			t.Errorf("%s: con %d en cola, un latido entregó %d comandos y tenían que ser %d: la tanda es %d y "+
 				"lo que sobra espera al próximo latido", nombre, cola, len(r.Comandos), quiero, tanda)
