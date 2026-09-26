@@ -57,6 +57,9 @@ type SyncClient struct {
 	url   string
 	token string
 	http  *http.Client
+	// trafico cuenta los bytes que viajaron por sentido; los drains registran la diferencia de
+	// cada tick en sync_viajes (ver sync_viajes.go).
+	trafico traficoDelSync
 }
 
 // NewSyncClient construye el cliente desde la config. Resuelve el token con
@@ -241,6 +244,11 @@ func (c *SyncClient) Push(item memory.OutboxItem) error {
 		return fmt.Errorf("%w: %v", errTransient, err)
 	}
 	defer resp.Body.Close()
+	// El central contestó, así que el cuerpo viajó entero: cuenta para sync_viajes aunque la
+	// respuesta sea un rechazo. Hoy va sin comprimir, así que cable y crudos son el mismo número.
+	c.trafico.subidaPosts.Add(1)
+	c.trafico.subidaCable.Add(int64(len(payload)))
+	c.trafico.subidaCrudos.Add(int64(len(payload)))
 	return classifyResponse(resp)
 }
 
@@ -506,7 +514,8 @@ func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int6
 		return nil, afterRowID, "", fmt.Errorf("%w: pull HTTP %d", errTransient, resp.StatusCode)
 	}
 	var rpcResp syncRPCResponse
-	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
+	contado := &lectorContado{r: resp.Body}
+	if err := json.NewDecoder(contado).Decode(&rpcResp); err != nil {
 		return nil, afterRowID, "", fmt.Errorf("%w: decodificar pull: %v", errTransient, err)
 	}
 	if rpcResp.Error != nil {
@@ -531,6 +540,14 @@ func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int6
 	var pl pullPayload
 	if err := json.Unmarshal([]byte(toolResult.Content[0].Text), &pl); err != nil {
 		return nil, afterRowID, "", fmt.Errorf("%w: pull payload inválido: %v", errPermanent, err)
+	}
+	// La página llegó bien: su cuerpo cuenta para sync_viajes. Si el transporte de Go la
+	// descomprimió solo (resp.Uncompressed), el tamaño del cable se perdió en el camino y no se
+	// inventa: se cuentan sólo los crudos. Hoy no pasa —el central contesta sin comprimir—.
+	n := contado.terminar()
+	c.trafico.bajadaCrudos.Add(n)
+	if !resp.Uncompressed {
+		c.trafico.bajadaCable.Add(n)
 	}
 	return pl.Items, pl.NextCursor, pl.Alcance, nil
 }

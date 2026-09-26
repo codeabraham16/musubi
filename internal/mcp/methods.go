@@ -438,12 +438,25 @@ func (s *McpServer) toolPromote(ctx context.Context, raw json.RawMessage) (inter
 // toolSyncStatus devuelve la salud del sync saliente del cerebro híbrido (F2): observaciones
 // shared pendientes/enviadas/en dead-letter, antigüedad de la más vieja pendiente y último
 // error. Read-only, sin params.
-func (s *McpServer) toolSyncStatus(_ json.RawMessage) (interface{}, *RpcError) {
+//
+// Recibe el ctx porque lo que cuenta sobre observaciones (lo que no viaja, las enviadas) va acotado
+// al proyecto de la credencial: el central también sirve esta tool.
+func (s *McpServer) toolSyncStatus(ctx context.Context, _ json.RawMessage) (interface{}, *RpcError) {
 	h, err := s.engine.OutboxHealth()
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error al leer el estado del sync: %v", err)
 	}
-	body, _ := json.Marshal(h)
+	// Lo que salió en 24 h / 7 d (por sent_at), lo que movió cada sentido (sync_viajes) y lo que no
+	// viaja con su motivo. El JSON lleva el reporte de siempre APLANADO —las claves viejas no se
+	// mueven— y el resumen nuevo bajo "viajes".
+	r, err := s.engine.ResumenDelSync(s.scopedCtx(ctx))
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al leer los viajes del sync: %v", err)
+	}
+	body, _ := json.Marshal(struct {
+		memory.OutboxHealthReport
+		Viajes memory.ResumenDelSync `json:"viajes"`
+	}{h, r})
 	summary := fmt.Sprintf("Sync saliente — pendientes: %d, enviadas: %d, dead-letter: %d", h.Pending, h.Sent, h.Dead)
 	if h.Pending > 0 && h.OldestPendingAgeSec > 0 {
 		summary += fmt.Sprintf(" (la más vieja pendiente hace %ds)", h.OldestPendingAgeSec)
@@ -454,6 +467,7 @@ func (s *McpServer) toolSyncStatus(_ json.RawMessage) (interface{}, *RpcError) {
 	if h.Espejo > 0 {
 		summary += fmt.Sprintf("; %d bajadas del central y NO re-subidas (espejo)", h.Espejo)
 	}
+	summary += lineasDelViaje(r, s.memory.TeamMode)
 	if h.LastError != "" {
 		summary += "\nÚltimo error: " + h.LastError
 	}

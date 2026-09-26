@@ -285,11 +285,27 @@ func (s *McpServer) cesionTrasFallo() time.Duration {
 //
 // Si ingirió al menos una fila, al salir —por cualquiera de sus returns— pide vectorizar lo
 // pendiente (vectorizarLoBajado). Un tick que no bajó nada no cuesta ni una consulta más.
+//
+// Y si SALIÓ A LA RED —al menos un Pull volvió sin error—, registra el viaje en sync_viajes: las
+// páginas que llegaron, las filas ingeridas y los bytes. `salioALaRed` es la ÚNICA señal de eso y
+// el defer es el único lugar que la lee: un tick salteado (candado de otro, cesión tras fallar,
+// Pull fallido) no escribe nada, y lo que se quiera anotar por cada bajada real se cuelga de esta
+// misma variable en vez de repetir la condición en cada return.
 func (s *McpServer) drainInboundOnce(ctx context.Context) {
 	ingeridas := 0
+	salioALaRed := false
+	var viaje memory.Viaje
+	antes := s.syncClient.foto()
 	defer func() {
 		if ingeridas > 0 {
 			s.vectorizarLoBajado()
+		}
+		if salioALaRed {
+			viaje.Filas = int64(ingeridas)
+			viaje.BytesCable, viaje.BytesCrudos = s.syncClient.bajadaDesde(antes)
+			if rerr := s.engine.RegistrarViaje(memory.ViajeBajada, viaje); rerr != nil {
+				logx.Error("inbound: no se pudo registrar el viaje de la bajada", "error", rerr)
+			}
 		}
 	}()
 	// CEDER DESPUÉS DE FALLAR. Soltar el candado tras un Pull fallido no alcanzaba: si el Pull muere
@@ -344,6 +360,10 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 			}
 		}
 		items, next, alcance, err := s.syncClient.Pull(cur, limit)
+		if err == nil {
+			salioALaRed = true
+			viaje.Posts++ // una página que llegó bien, aunque venga vacía o se descarte por el alcance
+		}
 		if err == nil && alcanceCambio(alcance, alcanceVisto) {
 			// EL RECORTE DEL CENTRAL NO ES EL MISMO CON EL QUE SE AVANZÓ ESTE CURSOR, así que el
 			// cursor es inservible: el filtro de proyecto SALTA filas en vez de ocultarlas, y todo lo
@@ -489,6 +509,21 @@ func (s *McpServer) drainOutboxOnce(ctx context.Context) {
 		logx.Error("drain: no se pudo reclamar el batch del outbox", "error", err)
 		return
 	}
+	// EL VIAJE DEL TICK, a sync_viajes. Sólo si algún POST tuvo respuesta del central: un tick sin
+	// nada que mandar, o con el central inalcanzable, no escribe nada — si no, cada tick vacío sería
+	// una escritura más sobre una base que comparten varios procesos.
+	aceptadas := 0
+	antes := s.syncClient.foto()
+	defer func() {
+		v := s.syncClient.subidaDesde(antes)
+		if v.Posts == 0 {
+			return
+		}
+		v.Filas = int64(aceptadas)
+		if rerr := s.engine.RegistrarViaje(memory.ViajeSubida, v); rerr != nil {
+			logx.Error("drain: no se pudo registrar el viaje de la subida", "error", rerr)
+		}
+	}()
 	for _, item := range items {
 		select {
 		case <-ctx.Done():
@@ -497,6 +532,7 @@ func (s *McpServer) drainOutboxOnce(ctx context.Context) {
 		}
 		perr := s.syncClient.Push(item)
 		if perr == nil {
+			aceptadas++
 			if merr := s.engine.MarkOutboxSent(item.ObsID); merr != nil {
 				logx.Error("drain: no se pudo marcar como enviado", "obs_id", item.ObsID, "error", merr)
 			}

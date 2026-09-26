@@ -243,8 +243,14 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       se suman. Arranca en cero y no se pudo rellenar (el ledger no guarda argumentos, y
 	//       dentro de access_count las dos señales ya están sumadas). readCompatible: dos ADD
 	//       COLUMN con default.
-	if latestSchemaVersion() != 57 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 57", latestSchemaVersion())
+	//    58 · `contador_honesto_del_sync`. El sello 'espejo' del pull pisaba también las filas
+	//       'sent', así que cada nota propia que rebotaba dejaba de contar como enviada: en
+	//       davantis-1, 308 de 312 'sent' eran justo las que el central había retirado. Se agregan
+	//       outbox.sent_at (cuándo salió de acá), outbox.sent_hash (qué contenido entregó) y la
+	//       tabla sync_viajes (lo que movió cada tick, por día y sentido). Es la ÚNICA migración de
+	//       la ola 2. readCompatible: tabla nueva y dos ADD COLUMN nullables.
+	if latestSchemaVersion() != 58 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 58", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.
@@ -266,7 +272,7 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 		}
 		cols[name] = true
 	}
-	for _, want := range []string{"id", "obs_id", "status", "enqueued_hash", "attempts", "next_attempt_at", "last_error", "created_at", "updated_at"} {
+	for _, want := range []string{"id", "obs_id", "status", "enqueued_hash", "attempts", "next_attempt_at", "last_error", "created_at", "updated_at", "sent_hash", "sent_at"} {
 		if !cols[want] {
 			t.Errorf("falta la columna outbox.%s", want)
 		}

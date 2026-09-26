@@ -401,6 +401,11 @@ type OutboxStore interface {
 	IngestShared(o SharedObs) (inserted bool, err error)
 	OutboxHealth() (OutboxHealthReport, error)
 	RequeueDeadOutbox() (int, error)
+	// RegistrarViaje suma a sync_viajes lo que movió un tick que SALIÓ a la red, y ResumenDelSync
+	// lo lee junto con las enviadas por sent_at y lo que no viaja, acotado al proyecto del ctx (ver
+	// sync_viajes.go).
+	RegistrarViaje(sentido string, v Viaje) error
+	ResumenDelSync(ctx context.Context) (ResumenDelSync, error)
 }
 
 // DeviceStore — el REGISTRO DE LA FLOTA (track «Control de flota»): dispositivos controlados,

@@ -197,13 +197,19 @@ func (e *DbEngine) loadOutboxPayloads(ids []string, attemptsByID map[string]int)
 }
 
 // MarkOutboxSent marca la fila 'sent' tras una entrega exitosa (R13). No se re-entrega.
+//
+// Deja escrito además QUÉ salió y CUÁNDO (migración v58): sent_hash es el hash que esta máquina
+// entregó por última vez y sent_at la hora de esa entrega. «Enviadas en 24 h» se cuenta con sent_at
+// y no con el estado, porque el estado lo mueven otros caminos (una edición local la devuelve a
+// 'pending'); la hora de la última salida no la escribe nadie más que esta marca.
 func (e *DbEngine) MarkOutboxSent(obsID string) error {
 	// Fencing por estado (auditoría #13c): una marca sólo aplica a una fila NO terminal (pending/claimed),
 	// nunca a una 'sent'/'dead'. Sin esto, con dos drainers solapados por vencimiento de lease, un ciclo
 	// rezagado podía re-marcar una fila que otro ya resolvió (p. ej. un MarkRetry tardío revivía un 'sent'
 	// a 'pending' = phantom pending). Excluir los estados terminales corta esa resurrección.
 	if _, err := e.db.Exec(`
-		UPDATE outbox SET status = 'sent', last_error = NULL, updated_at = datetime('now')
+		UPDATE outbox SET status = 'sent', last_error = NULL, updated_at = datetime('now'),
+			sent_hash = enqueued_hash, sent_at = datetime('now')
 		WHERE obs_id = ? AND status IN ('pending','claimed')`, obsID); err != nil {
 		return fmt.Errorf("error al marcar outbox como enviado: %w", err)
 	}

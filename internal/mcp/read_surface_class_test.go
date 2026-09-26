@@ -278,6 +278,11 @@ func TestEveryReadOnlyToolClassified(t *testing.T) {
 		"musubi_detect_changes",  // methods_detect_test (necesita git runner)
 		"musubi_search_skills",   // behavior-bleed via GetSkillDecisionsCtx (Track 19); no marker-in-text
 		"musubi_sync_pull",       // aislamiento por credencial verificado en sync_pull_test (TestToolSyncPullScoped)
+		// musubi_sync_status cuenta observaciones desde que dice «lo que no viaja» y las enviadas en
+		// 24 h: sólo agregados, así que no entra al barrido por marcador. Su test dedicado
+		// (TestSyncStatusAcotadoAlProyecto, sync_viajes_test) exige ceros para el tenant vecino y el
+		// dato para el admin federado.
+		"musubi_sync_status",
 		// readiness_medido_test (TestReadinessAcotadaAlProyecto). NO entra al barrido por marcador
 		// porque no devuelve NINGÚN texto del dato: sólo agregados. Eso no la exime — filtrar
 		// «cuántas veces invocó el otro equipo» es la misma información de negocio que filtrar QUÉ
@@ -305,7 +310,6 @@ func TestEveryReadOnlyToolClassified(t *testing.T) {
 		// dia filtrara por ellas, hay que MOVERLA al barrido de aislamiento.
 		"musubi_list_skills": true,
 		"musubi_tokens":      true, // ledger de la sesion
-		"musubi_sync_status": true, // estado del outbox (no por-proyecto)
 		"musubi_phase":       true, // pipeline de fases de la sesion
 		"musubi_whoami":      true, // identidad del propio principal (nunca datos de otro tenant)
 		// Contadores EN MEMORIA del proceso (F5): no lee ninguna tabla, así que no hay nada que

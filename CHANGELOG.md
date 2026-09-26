@@ -326,6 +326,54 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **El contador de enviadas cuenta lo que salió de acá, y el sync lleva la cuenta de lo que mueve.**
+  Desde #656 el pull sella 'espejo' lo que baja, y ese sello pisaba también las filas 'sent': cada
+  nota propia que volvía en la bajada dejaba de contar como enviada. Medido el 2026-09-26 en
+  davantis-1: 312 'sent', la última del 22/09 —con el central registrando 196 saves de esta PC el
+  25/09—, y 308 de esas 312 retiradas en el central. 'sent' contaba justo lo que ya no volvía.
+
+  Ahora una 'sent' que rebota sigue 'sent' (sin tocarle `updated_at`), y `MarkOutboxSent` graba
+  `sent_hash` (qué contenido entregó esta máquina) y `sent_at` (cuándo). Los dos drains registran
+  al final de cada tick lo que movieron en la tabla nueva `sync_viajes` —filas, posts, bytes, por
+  día y sentido—, y SÓLO si el tick salió a la red: un tick vacío, sin candado, cediendo o con el
+  central inalcanzable no escribe nada. En la bajada eso lo decide una sola variable,
+  `salioALaRed`, que se pone en true tras cada Pull sin error. `musubi_sync_status` suma tres
+  líneas: enviadas en 24 h y 7 d (por `sent_at`), el volumen de la subida y el de la bajada (una
+  sola línea «bajada», que el PR de la edad de la bajada completa), y lo que no viaja con su motivo
+  —locales, en cuarentena, y de un LLM ya corroboradas que siguen locales—. El JSON conserva sus
+  claves y agrega `viajes`. Lo que cuenta observaciones va acotado al proyecto de la credencial,
+  porque el central también sirve la tool y un conteo del vecino es información del vecino: por eso
+  `musubi_sync_status` deja de figurar entre las lecturas «sin datos de proyecto» y pasa a tener su
+  prueba de aislamiento. No cambia la descripción ni el esquema de ninguna tool.
+
+  ⚠️ **TRAE MIGRACIÓN (v58), LA ÚNICA DE LA OLA 2: hay que cerrar TODAS las sesiones y actualizar
+  el binario de CADA máquina antes de volver a abrir las bases.** Es `readCompatible` (una tabla
+  nueva y dos `ADD COLUMN` nullables), así que un binario anterior que abre la base migrada entra en
+  SÓLO LECTURA en vez de caerse: medido sobre la copia, el binario de `3fd81c33` sirve
+  `musubi_sync_status` y `musubi_search_keyword` y rechaza `musubi_save_observation` con -32005.
+  Pero un proceso viejo que YA estaba corriendo cuando otro migró la base sigue escribiendo —medido:
+  un daemon de `3fd81c33` guardó una nota después de la migración— y mientras viva hace lo de antes:
+  no graba `sent_at`, no registra viajes y vuelve a convertir en 'espejo' lo enviado que rebota. No
+  rompe nada; subcuenta. Y el escalón de sólo lectura lo tiene el daemon, no los hooks: `turn`,
+  `detect`, `capture` y `precheck` de un binario viejo no abren la base migrada y callan hasta que
+  se actualiza. Por eso se cierran todas las sesiones: en davantis-1 son los daemons, los
+  `musubi cerebro` y el agente, en la base de Musubi y en la de altura-erp.
+
+  Lo que ya quedó sellado 'espejo' no se rellena: la base no dice cuáles de esas filas salieron de
+  acá ni cuándo, y un `sent_at` inventado sería justo la clase de dato que este arreglo viene a
+  sacar. El contador cuenta desde el despliegue.
+  Los bytes van sin comprimir en los dos sentidos (cable = crudos) hasta los PR de compresión; si
+  algún día el transporte de Go descomprime solo una página de la bajada, se cuentan sus crudos y
+  no se inventa el cable.
+
+  *Diez guardas nuevas, con su sabotaje corrido y rojo. `TestElRebotePreservaElEnviado`,
+  `TestLaEntregaDejaQueSalioYCuando`, `TestLosViajesSeSumanPorDiaYSentido`,
+  `TestLoQueNoViajaSeCuentaUnaSolaVez` (las tres categorías son disjuntas) y
+  `TestUnBinarioAnteriorLeeLaBaseDelContador` (la v57 abre la v58 como legible) en
+  `internal/memory`; `TestSyncStatusCuentaLoDeHoy`, `TestUnaSubidaQueNoSalioNoRegistraViaje`,
+  `TestLaBajadaRegistraSuViaje`, `TestUnaBajadaQueNoSalioNoRegistraViaje` y
+  `TestSyncStatusAcotadoAlProyecto` (el vecino ve ceros, el admin federado ve el dato) en
+  `internal/mcp`.*
 - **El mapa publicado describe el commit, no el disco: lo que git ignora ya no sube al central.**
   El índice lee el disco y el central guarda la foto con la etiqueta de un commit. #647 frenaba lo
   modificado y lo sin trackear, pero `git status` no lista los **ignorados**, y `walkSourceTree` no

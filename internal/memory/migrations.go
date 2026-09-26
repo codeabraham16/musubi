@@ -2191,6 +2191,54 @@ func schemaMigrations() []migration {
 				return agregarColumnaSiFalta(x, "observations", "last_expanded", "last_expanded DATETIME")
 			},
 		},
+		{
+			version:        58,
+			name:           "contador_honesto_del_sync",
+			readCompatible: true,
+			// EL CONTADOR DE ENVIADAS CONTABA LO QUE EL CENTRAL RETIRÓ, NO LO QUE SALIÓ DE ACÁ.
+			//
+			// Desde #656 el pull sella 'espejo' lo que baja, y ese sello pisaba también una fila
+			// 'sent': cada nota propia que volvía en la bajada dejaba de contar como enviada. Medido
+			// el 2026-09-26 en davantis-1: 312 filas 'sent', 308 de ellas retiradas en el central y 0
+			// visibles, la última del 22/09, mientras el central registraba 196 saves de esta PC el
+			// 25/09. O sea que 'sent' contaba justo lo que NO volvió a bajar.
+			//
+			// Tres piezas, y es la ÚNICA migración de la ola a propósito: cada migración deja la base
+			// fuera del alcance de ESCRITURA de todo binario anterior, y en davantis-1 conviven
+			// daemons de versiones distintas.
+			//   - outbox.sent_at: CUÁNDO salió de acá por última vez. «Enviadas en 24 h» se cuenta
+			//     con esto y no con el estado, que otros caminos cambian.
+			//   - outbox.sent_hash: QUÉ contenido entregó esta máquina por última vez. Lo usa el PR
+			//     siguiente de la ola para distinguir el rebote propio de un choque con otra máquina.
+			//   - sync_viajes: lo que movió cada tick, sumado por día (UTC) y sentido. Es el
+			//     instrumento de la ola: sin él, medir los bytes de la subida exigía simular el cable.
+			//
+			// ES readCompatible: una tabla que ningún lector viejo consulta y dos ADD COLUMN
+			// nullables sobre outbox, que ninguna consulta vieja selecciona (todas nombran sus
+			// columnas). Ninguna respuesta existente cambia de filas. Un binario anterior la puede
+			// LEER; escribirla no, y eso lo sigue cortando ErrSchemaTooNew.
+			up: func(x execQuerier) error {
+				if _, err := x.Exec(`
+					CREATE TABLE IF NOT EXISTS sync_viajes (
+						dia          TEXT    NOT NULL,
+						sentido      TEXT    NOT NULL CHECK (sentido IN ('subida','bajada')),
+						filas        INTEGER NOT NULL DEFAULT 0,
+						posts        INTEGER NOT NULL DEFAULT 0,
+						bytes_cable  INTEGER NOT NULL DEFAULT 0,
+						bytes_crudos INTEGER NOT NULL DEFAULT 0,
+						sin_cambios  INTEGER NOT NULL DEFAULT 0,
+						rebotes      INTEGER NOT NULL DEFAULT 0,
+						choques      INTEGER NOT NULL DEFAULT 0,
+						PRIMARY KEY (dia, sentido)
+					)`); err != nil {
+					return err
+				}
+				if err := agregarColumnaSiFalta(x, "outbox", "sent_hash", "sent_hash TEXT"); err != nil {
+					return err
+				}
+				return agregarColumnaSiFalta(x, "outbox", "sent_at", "sent_at DATETIME")
+			},
+		},
 	}
 }
 
