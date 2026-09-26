@@ -424,10 +424,19 @@ type Hecho struct {
 	// «corrió algo sin argumentos».
 	Argv []string
 
-	// Origen es QUIÉN lo originó: una persona o una regla (A59). Vacío = no se sabe, y eso NO es
-	// «persona»: las filas anteriores a la migración 41 no lo dicen, y rellenarlas con «persona»
-	// le atribuiría a alguien lo que disparó una regla. Sólo lo llevan los hechos que salen de
-	// `device_commands`; una sesión la abre siempre alguien.
+	// Origen es QUIÉN lo originó: una persona o una regla (A59). Sólo lo llevan los hechos que
+	// salen de `device_commands`, que es donde vive esa columna.
+	//
+	// EN UN HECHO DE device_commands, VACÍO = NO SE SABE, y eso NO es «persona»: las filas
+	// anteriores a la migración 41 no lo dicen, y rellenarlas con «persona» le atribuiría a alguien
+	// lo que disparó una regla.
+	//
+	// EN UNA SESIÓN, VACÍO = NO APLICA, y no «no se sabe»: la sesión no es una fila de esa tabla, y
+	// el `tipo` del hecho es lo que dice que es una sesión. Este comentario decía, al lado del «no se
+	// sabe», que «una sesión la abre siempre alguien», que es medio argumento para llenarlo: la
+	// auditoría A131 lo llenó sólo en la puerta de pantalla (C4-m2) y todo quedó verde, con dos
+	// sesiones contando historias distintas. La regla por puerta la recorre
+	// TestElOrigenDelHechoLoDecideSuPuerta.
 	Origen OrigenComando
 
 	// Termino es cuándo dejó de estar en curso. Cero = no terminó, o no se sabe. No se rellena
@@ -437,7 +446,21 @@ type Hecho struct {
 
 // Duracion devuelve cuánto duró, y si eso se sabe. El booleano es el punto: un `0` devuelto a
 // secas se dibuja como «duró nada» y lo que pasa es que todavía está corriendo.
+//
+// SE SABE SÓLO CON LAS DOS PUNTAS Y EN ORDEN. Un cero en cualquiera de las dos es «no se sabe»: en
+// `termino` es lo que no terminó; en `cuando`, una fila cuyo comienzo no se pudo leer
+// (escanearComando deja el cero si `creado` es ilegible). La regla del `cuando` faltó hasta A131
+// (tema T9): el fin menos el cero de Go daba la duración saturada —unos 292 años— con `hay=true`.
+// Un fin ANTERIOR al comienzo es dato corrupto, no una duración negativa; uno IGUAL sí se sabe, y
+// es cero: la tabla guarda segundos enteros, así que es lo que deja lo que terminó en el mismo
+// segundo en que empezó.
+//
+// La regla del `termino` en cero va escrita aunque el `Before` parezca cubrirla: con un `cuando`
+// anterior al año 1 el cero de Go queda DESPUÉS del comienzo, y ahí es ella la que decide.
 func (h Hecho) Duracion() (time.Duration, bool) {
+	if h.Cuando.IsZero() {
+		return 0, false
+	}
 	if h.Termino.IsZero() || h.Termino.Before(h.Cuando) {
 		return 0, false
 	}

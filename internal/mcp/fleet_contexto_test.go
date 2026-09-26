@@ -252,6 +252,7 @@ func TestLaActividadDelContextoSeCompuertaComoLaCronologia(t *testing.T) {
 // arnes: archivo="internal/mcp/methods_contexto.go"
 // arnes: de="\"no_visto\": append(fleet.HuecosDelContexto(),"
 // arnes: a="\"no_visto\": append([]string(nil),"
+// arnes: colision_ok="TestCadaToolDeVentanaDevuelveTodosLosHuecosDeSuDominio"
 func TestElContextoDeclaraQueEsCorrelacionYNoCausa(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	sembrarContexto(t, s)
