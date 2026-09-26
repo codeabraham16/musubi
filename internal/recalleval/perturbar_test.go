@@ -172,6 +172,12 @@ func perturbarFixture(fx *Fixture, f func(string) string) (*Fixture, int) {
 // arnes: archivo="internal/recalleval/perturbar.go"
 // arnes: de="\treturn perturbar(q, clase, semilla, false)"
 // arnes: a="\treturn q"
+//
+// Sabotaje: la perturbación vuelve a tipear sólo el término más largo (las consultas cambian, pero
+// el MRR del dorado casi no se mueve: es el instrumento que el crítico del plan refutó).
+// arnes: archivo="internal/recalleval/perturbar.go"
+// arnes: de="\t\tcase !soloElMasLargo:\n\t\t\taTipear = append(aTipear, t)"
+// arnes: a="\t\tcase false:\n\t\t\taTipear = append(aTipear, t)"
 func TestLaPerturbacionMueveElDorado(t *testing.T) {
 	fx := loadGolden(t)
 	ctx := context.Background()
