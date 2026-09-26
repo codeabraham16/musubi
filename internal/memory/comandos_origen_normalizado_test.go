@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"musubi/internal/fleet"
+	"musubi/internal/fleet/fleettest"
 )
 
 // origenesDelEnum son los orígenes que OrigenValido conserva: el enum entero, tal como lo exporta
@@ -27,33 +28,19 @@ func origenesDelEnum(t *testing.T) []fleet.OrigenComando {
 	return fleet.OrigenesDeComando
 }
 
-// origenesRaros deriva del enum los valores que se le parecen sin serlo, y suma dos que no se
-// parecen a nada. Es el mismo corpus que la prueba del dominio, derivado de la misma forma.
+// origenesRaros son los valores que se le parecen al enum sin serlo, y dos que no se parecen a nada.
+// Los deriva fleettest.OrigenesParecidos, la misma fuente que usa la prueba del dominio
+// (internal/fleet): hasta la revisión de T9 cada una tenía su copia de la derivación.
 func origenesRaros(t *testing.T) []fleet.OrigenComando {
 	t.Helper()
-	delEnum := origenesDelEnum(t)
-	enum := map[fleet.OrigenComando]bool{}
-	for _, o := range delEnum {
-		enum[o] = true
+	var valores []string
+	for _, o := range origenesDelEnum(t) {
+		valores = append(valores, string(o))
 	}
-	vistos := map[fleet.OrigenComando]bool{}
 	var out []fleet.OrigenComando
-	sumar := func(o fleet.OrigenComando) {
-		if !enum[o] && !vistos[o] {
-			vistos[o] = true
-			out = append(out, o)
-		}
+	for _, r := range fleettest.OrigenesParecidos(valores) {
+		out = append(out, fleet.OrigenComando(r))
 	}
-	for _, o := range delEnum {
-		s := string(o)
-		sumar(fleet.OrigenComando(strings.ToUpper(s)))
-		sumar(fleet.OrigenComando(s + " "))
-		sumar(fleet.OrigenComando(" " + s))
-		sumar(fleet.OrigenComando(s + "x"))
-	}
-	sumar("cron")
-	sumar("robot")
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
 
@@ -117,17 +104,28 @@ func TestLoQueQuedaEnLaTablaEsUnOrigenDelEnum(t *testing.T) {
 // A131 (C3-m9) sacó la de escanearComando y fleet, memory y mcp quedaron verdes. Una fila escrita a
 // mano, por una versión futura o por una migración, con `origen = 'cron'`, llegaba así a la
 // bitácora, a la cronología y al agente. Acá la fila se siembra con SQL directo —la puerta de
-// escritura no corre, así que no puede tapar nada— y se lee por las CINCO puertas que convierten una
-// fila de device_commands en un comando: las cinco que llaman a escanearComando.
+// escritura no corre, así que no puede tapar nada— y se lee por cada puerta que convierte una fila
+// de device_commands en un comando.
+//
+// LAS PUERTAS SALEN DEL FUENTE (puertasDeLecturaDeComandos): toda función exportada del paquete que
+// llega a escanearComando. Hasta la segunda revisión de T9 eran cinco escritas a mano; ahora la tabla
+// de abajo dice sólo CÓMO se lee cada una, y una puerta nueva sin su lectura pone esto en rojo. Cada
+// puerta lee su propia máquina: las que entregan cambian el estado de lo que tocan, y compartir
+// filas haría que el orden de la tabla decidiera qué ve cada una.
 //
 // EXPOSICIÓN medida por la auditoría: cero filas hoy (user_version 57, 12.821 filas, 0 fuera del
 // enum). Aparecería por una escritura a mano, por un downgrade después de una versión que escriba una
 // categoría nueva, o por una migración que llene la columna.
 //
-// Sabotaje: sacar la normalización al leer (C3-m9) → el origen raro llega crudo a las cinco puertas.
+// Sabotaje: sacar la normalización al leer (C3-m9) → el origen raro llega crudo a todas las puertas.
 // arnes: archivo="internal/memory/comandos.go"
 // arnes: de="\tc.Origen = fleet.OrigenValido(fleet.OrigenComando(origen))"
 // arnes: a="\tc.Origen = fleet.OrigenComando(origen)"
+// Sabotaje: una puerta de lectura nueva (otra consulta que convierte filas en comandos) → nadie la
+// recorre con un origen raro, y con la lista a mano esto seguía verde.
+// arnes: archivo="internal/memory/comandos.go"
+// arnes: de="// ComandoPorID devuelve un comando. Lo usa la espera acotada de musubi_fleet_exec.\n"
+// arnes: a="// UltimoComando devuelve el último comando encolado para una máquina.\nfunc (e *DbEngine) UltimoComando(deviceID string) (fleet.Comando, error) {\n\treturn escanearComando(e.db.QueryRow(`SELECT `+columnasComando+` FROM device_commands WHERE device_id = ? ORDER BY creado DESC LIMIT 1`, deviceID))\n}\n\n// ComandoPorID devuelve un comando. Lo usa la espera acotada de musubi_fleet_exec.\n"
 func TestUnOrigenRaroEnLaTablaSeLeeDesconocidoPorCadaPuerta(t *testing.T) {
 	e := newTestEngine(t)
 	ahora := time.Now().UTC()
@@ -167,61 +165,80 @@ func TestUnOrigenRaroEnLaTablaSeLeeDesconocidoPorCadaPuerta(t *testing.T) {
 		}
 	}
 
-	// Las tres puertas que sólo leen comparten máquina.
-	lectura, _ := altaDePrueba(t, e, "casa", "pc-lectura")
-	quiero := sembrar(lectura)
-	porID := map[string]fleet.OrigenComando{}
-	for id := range quiero {
-		c, ok, err := e.ComandoPorID(id)
-		if err != nil || !ok {
-			t.Fatalf("ComandoPorID(%s): ok=%v err=%v", id, ok, err)
+	// CÓMO se lee cada puerta, dada su máquina sembrada: qué origen devolvió por id. QUÉ puertas hay
+	// no lo decide esta tabla.
+	type lectura func(d fleet.Device, ids []string) (map[string]fleet.OrigenComando, error)
+	comandos := func(cs []fleet.Comando, err error) (map[string]fleet.OrigenComando, error) {
+		out := map[string]fleet.OrigenComando{}
+		for _, c := range cs {
+			out[c.ID] = c.Origen
 		}
-		porID[id] = c.Origen
+		return out, err
 	}
-	revisar("ComandoPorID", quiero, porID)
+	leerPor := map[string]lectura{
+		"DbEngine.ComandoPorID": func(_ fleet.Device, ids []string) (map[string]fleet.OrigenComando, error) {
+			out := map[string]fleet.OrigenComando{}
+			for _, id := range ids {
+				c, ok, err := e.ComandoPorID(id)
+				if err != nil {
+					return nil, err
+				}
+				if ok {
+					out[id] = c.Origen
+				}
+			}
+			return out, nil
+		},
+		"DbEngine.BitacoraDeComandos": func(d fleet.Device, _ []string) (map[string]fleet.OrigenComando, error) {
+			return comandos(e.BitacoraDeComandos(d.ProjectID, d.ID, 200))
+		},
+		"DbEngine.CronologiaDeDevice": func(d fleet.Device, _ []string) (map[string]fleet.OrigenComando, error) {
+			hechos, _, err := e.CronologiaDeDevice(d.ProjectID, d.ID, fleet.VentanaHasta(ahora, time.Hour), 300, ahora)
+			out := map[string]fleet.OrigenComando{}
+			for _, h := range hechos {
+				out[h.Referencia] = h.Origen
+			}
+			return out, err
+		},
+		"DbEngine.TomarComandos": func(d fleet.Device, _ []string) (map[string]fleet.OrigenComando, error) {
+			return comandos(e.TomarComandos(d.ID, ahora, fleet.ColaMaxPorDevice))
+		},
+		"DbEngine.LatirYTomarComandos": func(d fleet.Device, _ []string) (map[string]fleet.OrigenComando, error) {
+			_, cs, err := e.LatirYTomarComandos(d.ID, ahora, "", fleet.ColaMaxPorDevice)
+			return comandos(cs, err)
+		},
+	}
 
-	bitacora, err := e.BitacoraDeComandos("casa", lectura.ID, 200)
-	if err != nil {
-		t.Fatal(err)
+	puertas := puertasDeLecturaDeComandos(t)
+	nombres := make([]string, 0, len(puertas))
+	for p := range puertas {
+		nombres = append(nombres, p)
 	}
-	enBitacora := map[string]fleet.OrigenComando{}
-	for _, c := range bitacora {
-		enBitacora[c.ID] = c.Origen
-	}
-	revisar("BitacoraDeComandos", quiero, enBitacora)
-
-	hechos, _, err := e.CronologiaDeDevice("casa", lectura.ID, fleet.VentanaHasta(ahora, time.Hour), 300, ahora)
-	if err != nil {
-		t.Fatal(err)
-	}
-	enCronologia := map[string]fleet.OrigenComando{}
-	for _, h := range hechos {
-		enCronologia[h.Referencia] = h.Origen
-	}
-	revisar("CronologiaDeDevice", quiero, enCronologia)
-
-	// Las dos que ENTREGAN cambian el estado de lo que tocan: cada una con su máquina.
-	tomas := []struct {
-		nombre string
-		tomar  func(id string) ([]fleet.Comando, error)
-	}{
-		{"TomarComandos", func(id string) ([]fleet.Comando, error) { return e.TomarComandos(id, ahora, fleet.ColaMaxPorDevice) }},
-		{"LatirYTomarComandos", func(id string) ([]fleet.Comando, error) {
-			_, cs, err := e.LatirYTomarComandos(id, ahora, "", fleet.ColaMaxPorDevice)
-			return cs, err
-		}},
-	}
-	for i, toma := range tomas {
-		d, _ := altaDePrueba(t, e, "casa", fmt.Sprintf("pc-toma-%d", i))
+	sort.Strings(nombres)
+	for i, p := range nombres {
+		leer, ok := leerPor[p]
+		if !ok {
+			t.Errorf("%s convierte filas de device_commands en comandos (%s) y esta prueba no sabe leerla: "+
+				"sumale cómo en leerPor, o un origen raro puede llegar crudo por ahí sin que nadie lo mida",
+				p, strings.Join(puertas[p], " → "))
+			continue
+		}
+		d, _ := altaDePrueba(t, e, "casa", fmt.Sprintf("pc-puerta-%d", i))
 		quiero := sembrar(d)
-		entregados, err := toma.tomar(d.ID)
+		ids := make([]string, 0, len(quiero))
+		for id := range quiero {
+			ids = append(ids, id)
+		}
+		leidos, err := leer(d, ids)
 		if err != nil {
-			t.Fatalf("%s: %v", toma.nombre, err)
+			t.Fatalf("%s: %v", p, err)
 		}
-		enToma := map[string]fleet.OrigenComando{}
-		for _, c := range entregados {
-			enToma[c.ID] = c.Origen
+		revisar(p, quiero, leidos)
+	}
+	for p := range leerPor {
+		if _, ok := puertas[p]; !ok {
+			t.Errorf("la prueba sabe leer %s y el fuente dice que ya no llega a escanearComando: o dejó de ser "+
+				"una puerta de lectura, o cambió de nombre y la nueva quedó sin medir", p)
 		}
-		revisar(toma.nombre, quiero, enToma)
 	}
 }

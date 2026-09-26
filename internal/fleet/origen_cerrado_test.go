@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"musubi/internal/fleet/fleettest"
 )
 
 // origenesDecididos es la DECISIÓN sobre cada origen del enum: si es automático. Escrita a mano a
@@ -22,30 +24,20 @@ func origenesDecididos() map[OrigenComando]bool {
 	}
 }
 
-// origenesFueraDelEnum deriva del enum los valores que se le PARECEN sin serlo —mayúsculas, un
-// blanco de más, una letra de más— y suma dos que no se parecen a nada. Son los que un llamador
-// nuevo, una fila escrita a mano o una versión futura podrían traer.
+// origenesFueraDelEnum son los valores que se le PARECEN al enum sin serlo —mayúsculas, un blanco de
+// más, una letra de más— y dos que no se parecen a nada: los que un llamador nuevo, una fila escrita
+// a mano o una versión futura podrían traer. Los deriva fleettest.OrigenesParecidos, la misma fuente
+// que usan las pruebas de internal/memory: hasta la revisión de T9 cada una tenía su copia.
 func origenesFueraDelEnum(t *testing.T, enum map[OrigenComando]bool) []OrigenComando {
 	t.Helper()
-	vistos := map[OrigenComando]bool{}
-	var out []OrigenComando
-	sumar := func(o OrigenComando) {
-		if enum[o] || vistos[o] {
-			return
-		}
-		vistos[o] = true
-		out = append(out, o)
-	}
+	var valores []string
 	for o := range enum {
-		s := string(o)
-		sumar(OrigenComando(strings.ToUpper(s)))
-		sumar(OrigenComando(s + " "))
-		sumar(OrigenComando(" " + s))
-		sumar(OrigenComando(s + "x"))
+		valores = append(valores, string(o))
 	}
-	sumar("cron")
-	sumar("robot")
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	var out []OrigenComando
+	for _, r := range fleettest.OrigenesParecidos(valores) {
+		out = append(out, OrigenComando(r))
+	}
 	return out
 }
 
