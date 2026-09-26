@@ -10,6 +10,7 @@ import (
 
 	"musubi/internal/bootstrap"
 	"musubi/internal/config"
+	"musubi/internal/mcp"
 )
 
 // agente_plugin.go — MUSUBI INSTALADO UNA VEZ, ACTIVO EN TODOS LOS PROYECTOS.
@@ -40,6 +41,10 @@ import (
 
 // nombrePlugin es el nombre del plugin, y por lo tanto el prefijo de todo lo que expone.
 const nombrePlugin = "musubi"
+
+// dirSkillsDelPlugin es la carpeta de skills dentro del plugin. La nombran el manifiesto, el
+// instalador que escribe los SKILL.md y el servidor que se los nombra al agente.
+const dirSkillsDelPlugin = "skills"
 
 // marcaDelPlugin prueba que la carpeta la escribió Musubi. Sin ella, `instalar` no pisa y `quitar`
 // no borra: la carpeta ~/.claude/skills/musubi podría ser una skill que alguien hizo a mano.
@@ -123,7 +128,7 @@ func instalarPlugin(dir, exe, ver string) error {
 	if entradas, err := os.ReadDir(dir); err == nil && len(entradas) > 0 && !esPluginDeMusubi(dir) {
 		return fmt.Errorf("%s ya existe y no es un plugin de Musubi (le falta %s): no lo piso", dir, marcaDelPlugin)
 	}
-	for _, sub := range []string{".claude-plugin", "hooks", "skills"} {
+	for _, sub := range []string{".claude-plugin", "hooks", dirSkillsDelPlugin} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
 			return err
 		}
@@ -136,7 +141,7 @@ func instalarPlugin(dir, exe, ver string) error {
 		"name":        nombrePlugin,
 		"version":     ver,
 		"description": "Musubi: la memoria persistente del proyecto y su mapa de código, activa en todos los proyectos.",
-		"skills":      []string{"./skills/"},
+		"skills":      []string{"./" + dirSkillsDelPlugin + "/"},
 		"mcpServers":  "./.mcp.json",
 		"hooks":       "./hooks/hooks.json",
 	}
@@ -164,7 +169,7 @@ func instalarPlugin(dir, exe, ver string) error {
 	// Las skills cognitivas, con el MISMO escritor que el export a .claude/skills: una editada a
 	// mano se preserva igual que allá.
 	for _, sk := range cognitiveSkills(nil) {
-		if _, err := escribirSkillMD(filepath.Join(dir, "skills"), sk); err != nil {
+		if _, err := escribirSkillMD(filepath.Join(dir, dirSkillsDelPlugin), sk); err != nil {
 			return fmt.Errorf("escribir la skill %s: %w", sk.Name, err)
 		}
 	}
@@ -242,6 +247,35 @@ func quitarPlugin(dir string) error {
 // corriendoComoPlugin dice si este proceso lo lanzó el plugin: Claude Code le pasa
 // CLAUDE_PLUGIN_ROOT a los servidores y hooks de un plugin, y a ningún otro.
 func corriendoComoPlugin() bool { return os.Getenv("CLAUDE_PLUGIN_ROOT") != "" }
+
+// skillsDelPluginParaElMapa es la option con que el servidor del plugin le nombra al agente las
+// skills que el plugin trae. Si este proceso no es el del plugin, o su manifiesto no se lee, es una
+// option que no hace nada (WithSkillsDelPlugin sin carpeta): así va siempre dentro de la llamada.
+//
+// EL PREFIJO SALE DEL MANIFIESTO INSTALADO, no de nombrePlugin: Claude Code nombra las skills de un
+// plugin con el `name` de su plugin.json (medido: un plugin en la carpeta `plug` con name
+// `pruebagentes` expuso `pruebagentes:<agente>`), así que es el manifiesto el que dice cómo las ve
+// el agente. Sin manifiesto legible no se nombra ninguna: un prefijo adivinado es un callejón.
+func skillsDelPluginParaElMapa() mcp.Option {
+	ninguna := mcp.WithSkillsDelPlugin("", "", nil)
+	raiz := os.Getenv("CLAUDE_PLUGIN_ROOT")
+	if raiz == "" {
+		return ninguna
+	}
+	crudo, err := os.ReadFile(filepath.Join(raiz, ".claude-plugin", "plugin.json"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "musubi: no leo el manifiesto del plugin (%v): el mapa no nombra sus skills\n", err)
+		return ninguna
+	}
+	var manifiesto struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(crudo, &manifiesto); err != nil {
+		fmt.Fprintf(os.Stderr, "musubi: el manifiesto del plugin no se entiende (%v): el mapa no nombra sus skills\n", err)
+		return ninguna
+	}
+	return mcp.WithSkillsDelPlugin(filepath.Join(raiz, dirSkillsDelPlugin), manifiesto.Name, cognitiveSkills(nil))
+}
 
 // carpetaDeLaSesion es donde Claude Code lee el `.mcp.json` y el `.claude/settings.json` del
 // proyecto: CLAUDE_PROJECT_DIR, o el cwd.

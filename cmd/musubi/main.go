@@ -557,7 +557,12 @@ func runDaemon() {
 	// servidor que le habla al agente (WithInstruccionesParaElAgente): el central no, porque el relé
 	// le reenvía su handshake al agente; y el degradado y el de sólo lectura tampoco, porque
 	// nombrarle tools que van a fallar es peor que callarse. Ver internal/mcp/agente.go.
-	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithMotorQuota(cfg.Cognition.EffectiveMotorQuotaPerHour()), mcp.WithCognition(resolveCognition(cfg)), mcp.WithCognitionConfig(cfg.Cognition), mcp.WithUsageLedger(engine, cfg.UsageLedger), mcp.WithSpoolLocal(filepath.Join(root, ".musubi", "live")), mcp.WithInstruccionesParaElAgente(), mcp.WithVersion(version))
+	//
+	// Corriendo como el servidor del plugin, skillsDelPluginParaElMapa le suma al mapa de skills las
+	// que trae el plugin (musubi:<nombre>): en un repo sin setup son las únicas que el agente tiene.
+	// Fuera del plugin no hace nada. Va DENTRO de la llamada, como todas: la guarda de la versión
+	// (TestTodoServidorQueSeSirveDeclaraSuVersion) lee la llamada entera.
+	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithMotorQuota(cfg.Cognition.EffectiveMotorQuotaPerHour()), mcp.WithCognition(resolveCognition(cfg)), mcp.WithCognitionConfig(cfg.Cognition), mcp.WithUsageLedger(engine, cfg.UsageLedger), mcp.WithSpoolLocal(filepath.Join(root, ".musubi", "live")), mcp.WithInstruccionesParaElAgente(), skillsDelPluginParaElMapa(), mcp.WithVersion(version))
 	defer server.CloseLedger() // baja lo que quede en el buffer del ledger de uso (F0)
 	// El VERTEDERO del feed en vivo: sólo acá, no en runServe. El central ya reparte por HTTP;
 	// un daemon stdio no tiene por dónde sacar sus eventos y por eso el trabajo local no se veía.

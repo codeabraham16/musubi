@@ -92,39 +92,107 @@ func (s *McpServer) instruccionesParaElAgente() string {
 // nueve skills de Musubi, listadas sólo con su descripción, se invocaron 0 veces en 402 turnos.
 const encabezadoDelMapa = "Skills de Musubi en este proyecto: cargá la que corresponda con la tool Skill ANTES de empezar ese trabajo, vos o el subagente al que se lo delegues:"
 
+// skillsDelPlugin son las skills que trae el plugin de Musubi: dónde están sus SKILL.md, cómo las
+// llama Claude Code y con qué se resuelven.
+type skillsDelPlugin struct {
+	dir      string // la carpeta de skills del plugin
+	prefijo  string // el nombre del plugin: Claude Code las lista como «<prefijo>:<skill>»
+	resolver *skills.Resolver
+}
+
+// WithSkillsDelPlugin le dice al servidor que es el del plugin de Musubi y qué skills trae ese
+// plugin: `dir` es su carpeta de skills, `prefijo` el nombre del plugin y `catalogo` las skills que
+// el binario sabe escribir ahí.
+//
+// SIN ESTO, DONDE EL PLUGIN ES LO ÚNICO QUE HAY, EL MAPA SALÍA VACÍO. El mapa preguntaba sólo por
+// las skills exportadas del proyecto (.claude/skills), y un repo que nunca corrió `musubi setup` no
+// tiene ninguna, aunque el plugin le ofrezca las cognitivas como `musubi:<nombre>`. El agente las
+// veía en su listado con la descripción sola, que es la forma que no se sigue (ver
+// encabezadoDelMapa).
+func WithSkillsDelPlugin(dir, prefijo string, catalogo []skills.Skill) Option {
+	return func(s *McpServer) {
+		if dir == "" || prefijo == "" {
+			return
+		}
+		s.skillsPlugin = &skillsDelPlugin{dir: dir, prefijo: prefijo, resolver: skills.NewResolverDeCatalogo(catalogo)}
+	}
+}
+
+// fuenteDelMapa es un lugar de donde salen skills para el mapa: con qué se resuelven y cómo las
+// carga el agente. `cargable` devuelve el nombre que el agente escribe en la tool Skill, o false si
+// no la puede cargar.
+type fuenteDelMapa struct {
+	resolver *skills.Resolver
+	cargable func(nombre string) (string, bool)
+}
+
+// fuentesDelMapa son las skills del proyecto y, si este servidor es el del plugin, las del plugin.
+func (s *McpServer) fuentesDelMapa() []fuenteDelMapa {
+	exportada := func(nombre string) bool {
+		_, err := os.Stat(skills.RutaSkillAgente(s.projectPath, nombre))
+		return err == nil
+	}
+	var fuentes []fuenteDelMapa
+	if s.resolver != nil && s.projectPath != "" {
+		fuentes = append(fuentes, fuenteDelMapa{resolver: s.resolver, cargable: func(nombre string) (string, bool) {
+			return nombre, exportada(nombre)
+		}})
+	}
+	if p := s.skillsPlugin; p != nil {
+		fuentes = append(fuentes, fuenteDelMapa{resolver: p.resolver, cargable: func(nombre string) (string, bool) {
+			// LA DEL PROYECTO TAPA A LA DEL PLUGIN: con una skill del mismo nombre en .claude/skills,
+			// Claude Code lista la del proyecto y esconde «musubi:<nombre>» (medido el 2026-09-25 en
+			// el skill_listing). Nombrar la tapada mandaría al agente a una skill fuera de su lista.
+			if s.projectPath != "" && exportada(nombre) {
+				return "", false
+			}
+			if _, err := os.Stat(skills.RutaSkillEnDir(p.dir, nombre)); err != nil {
+				return "", false
+			}
+			return p.prefijo + ":" + nombre, true
+		}})
+	}
+	return fuentes
+}
+
 // mapaDeSkills devuelve un renglón por valor del vocabulario de alcance: «- cuando <frase> →
 // <skills>». La frase es la misma que usa la descripción del SKILL.md (skills.FraseDeAlcance).
 //
-// SÓLO NOMBRA SKILLS QUE EL AGENTE PUEDE CARGAR: las que tienen su SKILL.md exportado. Una skill
+// SÓLO NOMBRA SKILLS QUE EL AGENTE PUEDE CARGAR: las del proyecto con su SKILL.md exportado y las
+// del plugin con el suyo en el plugin, cada una con el nombre con que el agente la carga. Una skill
 // que no está en el formato del agente es un callejón, igual que una tool dormida.
 //
-// Y DE CADA ALCANCE, LAS MÁS ESPECÍFICAS: sdd-flow declara planificar, implementar y revisar, y
-// nombrarla en los tres renglones taparía a plan-ahead y a adversarial-review, que declaran uno solo.
-// Queda en el alcance donde es la única.
+// Y DE CADA ALCANCE, LAS MÁS ESPECÍFICAS, CONTANDO LAS DOS FUENTES JUNTAS: sdd-flow declara
+// planificar, implementar y revisar, y nombrarla en los tres renglones taparía a plan-ahead y a
+// adversarial-review, que declaran uno solo. Queda en el alcance donde es la única.
 func (s *McpServer) mapaDeSkills() []string {
-	if s.resolver == nil || s.projectPath == "" {
+	fuentes := s.fuentesDelMapa()
+	if len(fuentes) == 0 {
 		return nil
 	}
 	var renglones []string
 	for _, alcance := range skills.VocabularioDeAlcance() {
-		resueltas, err := s.resolver.ResolveConDetalle(skills.ResolveRequest{Phase: alcance, Task: alcance})
-		if err != nil {
-			return nil
-		}
 		mejor := 0
 		var nombres []string
-		for _, r := range resueltas {
-			if r.Matcheo != skills.PorAlcance {
-				continue
+		for _, f := range fuentes {
+			resueltas, err := f.resolver.ResolveConDetalle(skills.ResolveRequest{Phase: alcance, Task: alcance})
+			if err != nil {
+				return nil
 			}
-			if _, err := os.Stat(skills.RutaSkillAgente(s.projectPath, r.Name)); err != nil {
-				continue
-			}
-			switch n := len(r.AppliesTo); {
-			case mejor == 0 || n < mejor:
-				mejor, nombres = n, []string{r.Name}
-			case n == mejor:
-				nombres = append(nombres, r.Name)
+			for _, r := range resueltas {
+				if r.Matcheo != skills.PorAlcance {
+					continue
+				}
+				nombre, ok := f.cargable(r.Name)
+				if !ok {
+					continue
+				}
+				switch n := len(r.AppliesTo); {
+				case mejor == 0 || n < mejor:
+					mejor, nombres = n, []string{nombre}
+				case n == mejor:
+					nombres = append(nombres, nombre)
+				}
 			}
 		}
 		if len(nombres) == 0 {

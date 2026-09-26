@@ -43,9 +43,16 @@ func FraseDeAlcance(v string) string { return frasesDeAlcance[v] }
 // y el servidor, que sólo le nombra al agente las skills que de verdad puede cargar.
 const DirSkillsAgente = ".claude/skills"
 
-// RutaSkillAgente es el SKILL.md de una skill en el formato del agente.
+// RutaSkillAgente es el SKILL.md de una skill del proyecto en el formato del agente.
 func RutaSkillAgente(root, nombre string) string {
-	return filepath.Join(root, filepath.FromSlash(DirSkillsAgente), nombre, "SKILL.md")
+	return RutaSkillEnDir(filepath.Join(root, filepath.FromSlash(DirSkillsAgente)), nombre)
+}
+
+// RutaSkillEnDir es el SKILL.md de una skill dentro de una carpeta de skills del agente: la del
+// proyecto (.claude/skills) o la del plugin. La forma —una carpeta por skill con su SKILL.md— es la
+// que Claude Code lee, y la escriben y la preguntan varios: vive en un solo lugar.
+func RutaSkillEnDir(dir, nombre string) string {
+	return filepath.Join(dir, nombre, "SKILL.md")
 }
 
 // CuandoUsarla devuelve la cláusula que dice CUÁNDO aplica la skill, o "" si no hay con qué.
