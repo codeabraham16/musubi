@@ -687,6 +687,14 @@ func politicasDeLaTablaDeCarga() []config.PolicyConfig {
 // producción, `vaciar-journal`, no tiene bordes). Lo cierra ConfigurarFlota, que recorta el nombre en
 // la entrada.
 //
+// Lo sembrado se compara contra la clave que va a buscar la DECISIÓN —ClaveDeCooldown de la política
+// configurada que hereda cada fila, y cuál es la dice el nombre con el que el almacén la guarda—, no
+// contra una clave armada con el nombre recortado de la fila. La primera versión hacía lo segundo y así
+// fijaba DÓNDE se recorta el `name:`: un arreglo correcto que dejara el nombre crudo en la política y
+// recortara al buscar sus filas sembraba la clave que la decisión busca, y ella lo daba por faltante
+// (revisión de T4, S4). Al revés, una carga que sembrara con el nombre recortado mientras la decisión
+// busca con el crudo ahora cae, y antes pasaba.
+//
 // Exposición medida (auditoría A131): 0. fleet_policy_state tiene 0 filas (esquema 57) y la única
 // política configurada nunca actuó, así que no hay fila vieja que pueda cortar nada. Hacen falta tres
 // cosas que hoy no existen: una política de servicio que ya disparó, que le cambien el `service`, y un
@@ -724,10 +732,43 @@ func TestAlArrancarSeSiembranLosCooldownsDeLasPoliticasComoEstanHoy(t *testing.T
 		{"borrada-del-archivo", "dev-a", "", false, "una política que ya no está configurada"},
 	}
 
+	dir := t.TempDir()
+	semilla, err := memory.NewDbEngine(dir)
+	if err != nil {
+		t.Fatalf("NewDbEngine: %v", err)
+	}
+	base := time.Now().UTC().Truncate(time.Second)
+	horas := make([]time.Time, len(filas))
+	for i, f := range filas {
+		horas[i] = base.Add(-time.Duration(i+1) * time.Minute) // una hora distinta por fila
+		if err := semilla.MarcarDisparoDePolitica(f.politica, f.device, f.alcance, horas[i]); err != nil {
+			t.Fatalf("sembrar %+v: %v", f, err)
+		}
+	}
+	semilla.Close()
+
+	s := servidorConPoliticas(t, dir, pols, registroDePrueba(curadorDeLaTablaDeCooldown()))
+
+	// A QUÉ POLÍTICA CONFIGURADA LE CORRESPONDE CADA FILA LO DICE EL ALMACÉN: el nombre con el que guarda
+	// el disparo de cada una de s.politicas, preguntado marcándolo en un almacén aparte. La primera versión
+	// suponía ese nombre (la fila, recortada) y así fijaba DÓNDE se recorta el `name:` (revisión de T4).
+	if len(s.politicas) != len(pols) {
+		t.Fatalf("PISO: se configuraron %d políticas y el servidor tiene %d: la prueba no sabe cuál es cuál", len(pols), len(s.politicas))
+	}
+	guardados := nombresGuardados(t, s.politicas)
+	configurada := make(map[string]fleet.Politica, len(guardados))
+	conBordes := false
+	for i, nombre := range guardados {
+		configurada[nombre] = s.politicas[i]
+		conBordes = conBordes || pols[i].Name != nombre
+	}
+
 	// PISO: una fila que NO carga en la primera política de la lista, y filas que SÍ cargan en las que
-	// vienen detrás (sin eso, cortar la carga en la primera fila vieja no se distingue de seguir); y
-	// una política con filas de los dos lados (sin eso, cortar sólo esa política tampoco).
-	primera := strings.TrimSpace(pols[0].Name)
+	// vienen detrás (sin eso, cortar la carga en la primera fila vieja no se distingue de seguir); una
+	// política con filas de los dos lados (sin eso, cortar sólo esa política tampoco); y una política
+	// cuyo `name:` escrito no es el que el almacén guarda (sin eso, buscar por el nombre crudo —el
+	// defecto vivo de T4— no se distingue de buscar por el guardado).
+	primera := guardados[0]
 	viejaEnLaPrimera, buenaDetras := false, false
 	porPolitica := map[string]map[bool]bool{}
 	for _, f := range filas {
@@ -744,36 +785,38 @@ func TestAlArrancarSeSiembranLosCooldownsDeLasPoliticasComoEstanHoy(t *testing.T
 			mezcladas++
 		}
 	}
-	if !viejaEnLaPrimera || !buenaDetras || mezcladas == 0 {
+	if !viejaEnLaPrimera || !buenaDetras || mezcladas == 0 || !conBordes {
 		t.Fatalf("PISO: fila vieja en la primera política = %v, fila buena en otra detrás = %v, políticas con "+
-			"filas de los dos lados = %d: sin las tres, un corte de la carga pasa por esta tabla sin verse",
-			viejaEnLaPrimera, buenaDetras, mezcladas)
+			"filas de los dos lados = %d, política con el `name:` escrito distinto del guardado = %v: sin las "+
+			"cuatro, un corte de la carga o el nombre crudo pasan por esta tabla sin verse",
+			viejaEnLaPrimera, buenaDetras, mezcladas, conBordes)
 	}
 
-	dir := t.TempDir()
-	semilla, err := memory.NewDbEngine(dir)
-	if err != nil {
-		t.Fatalf("NewDbEngine: %v", err)
-	}
-	base := time.Now().UTC().Truncate(time.Second)
+	// LA CLAVE ESPERADA ES LA QUE VA A BUSCAR LA DECISIÓN: ClaveDeCooldown de la política TAL COMO QUEDÓ
+	// CONFIGURADA, no una armada con el nombre de la fila. Una fila que no se hereda se explica con la
+	// clave que tendría si se cargara con su propio alcance.
 	esperado := map[string]time.Time{}
 	porque := map[string]string{}
 	for i, f := range filas {
-		cuando := base.Add(-time.Duration(i+1) * time.Minute) // una hora distinta por fila
-		if err := semilla.MarcarDisparoDePolitica(f.politica, f.device, f.alcance, cuando); err != nil {
-			t.Fatalf("sembrar %+v: %v", f, err)
+		pol, hay := configurada[f.politica]
+		if f.carga && !hay {
+			t.Fatalf("PISO: la fila %s · %s dice que la hereda una política configurada, y ninguna de las de hoy se "+
+				"guarda con ese nombre (%q): la tabla no mide lo que dice", f.politica, f.device, guardados)
 		}
-		// La clave con la que la DECISIÓN buscaría ese disparo: la del dominio, para la política con ese
-		// nombre y ese servicio.
-		clave := fleet.Politica{Nombre: f.politica, Servicio: f.alcance}.ClaveDeCooldown(f.device)
+		if !hay {
+			pol = fleet.Politica{Nombre: f.politica} // ya no está configurada: nadie busca su disparo
+		}
+		clave := pol.ClaveDeCooldown(f.device)
+		if !f.carga {
+			pol.Servicio = f.alcance
+			clave = pol.ClaveDeCooldown(f.device)
+		}
 		porque[clave] = f.politica + " · " + f.device + " · alcance " + strconv.Quote(f.alcance) + ": " + f.porque
 		if f.carga {
-			esperado[clave] = cuando
+			esperado[clave] = horas[i]
 		}
 	}
-	semilla.Close()
 
-	s := servidorConPoliticas(t, dir, pols, registroDePrueba(curadorDeLaTablaDeCooldown()))
 	for vuelta := 0; vuelta < 20; vuelta++ {
 		if vuelta > 0 {
 			// Otra carga, como la de otro arranque: el mismo cargarCooldowns que llama ConfigurarFlota.
@@ -836,6 +879,12 @@ func TestAlArrancarSeSiembranLosCooldownsDeLasPoliticasComoEstanHoy(t *testing.T
 // guarda el disparo recortado, y hasta A131·T4 la lista de vivas llevaba el nombre crudo, así que la
 // poda borraba su cooldown cada hora por huérfano (DEFECTO VIVO, latente; lo cierra ConfigurarFlota).
 //
+// Cada política se busca después de la poda con el nombre que el ALMACÉN le dio a su fila, preguntado
+// al almacén al marcarla, y no con p.Nombre: la primera versión comparaba contra p.Nombre y así fijaba
+// DÓNDE se recorta el `name:`. Un arreglo correcto que recortara en la poda y dejara el nombre crudo en
+// la política la ponía en rojo diciendo que la poda se llevó un cooldown que seguía en la tabla
+// (revisión de T4, S4).
+//
 // Exposición medida (auditoría A131): 0. Una sola política configurada (`vaciar-journal`, sin bordes)
 // y fleet_policy_state con 0 filas; en 30 días nunca hubo dos políticas vivas a la vez.
 //
@@ -859,38 +908,55 @@ func TestLaPodaHorariaConservaElCooldownDeCadaPoliticaConfigurada(t *testing.T) 
 	if len(s.politicas) < 2 {
 		t.Fatalf("PISO: la prueba configura %d política/s y necesita al menos dos", len(s.politicas))
 	}
+	// Lo que la poda tiene que conservar es la fila que el ALMACÉN guardó para cada política configurada,
+	// con el nombre que el almacén le dio: se mide marcando (marcarYVerComoSeGuarda). Compararla contra
+	// p.Nombre fijaba DÓNDE se recorta el `name:` y ponía en rojo, con un mensaje falso, un arreglo que
+	// recortara en la poda en vez de en ConfigurarFlota (revisión de T4).
 	ahora := time.Now().UTC()
-	for _, p := range s.politicas {
-		if err := s.engine.MarcarDisparoDePolitica(p.Nombre, "dev-1", p.Servicio, ahora); err != nil {
-			t.Fatalf("marcar %q: %v", p.Nombre, err)
+	configuradas := politicasDeLaTablaDeCarga()
+	if len(configuradas) != len(s.politicas) {
+		t.Fatalf("PISO: se configuraron %d políticas y el servidor tiene %d: la prueba no sabe cuál es cuál",
+			len(configuradas), len(s.politicas))
+	}
+	guardada := make([]string, len(s.politicas))
+	conBordes := 0
+	for i, p := range s.politicas {
+		guardada[i] = marcarYVerComoSeGuarda(t, s.engine, p.Nombre, "dev-1", p.Servicio, ahora)
+		if configuradas[i].Name != guardada[i] {
+			conBordes++
 		}
 	}
+	// PISO: una política cuyo `name:` escrito NO es el nombre que el almacén guarda. Sin ella, podar por el
+	// nombre crudo (el defecto vivo de T4) no se distingue de podar por el guardado.
+	if conBordes == 0 {
+		t.Fatalf("PISO: ninguna política configurada se guarda con un nombre distinto del que se escribió (%q): el "+
+			"`name:` con bordes quedó sin medir", guardada)
+	}
 	huerfanas := []string{"borrada-del-archivo", "renombrada-hace-un-mes"}
-	for _, h := range huerfanas {
-		if err := s.engine.MarcarDisparoDePolitica(h, "dev-1", "", ahora); err != nil {
-			t.Fatalf("marcar %q: %v", h, err)
-		}
+	huerfanaGuardada := make([]string, len(huerfanas))
+	for i, h := range huerfanas {
+		huerfanaGuardada[i] = marcarYVerComoSeGuarda(t, s.engine, h, "dev-1", "", ahora)
 	}
 
 	s.podarEstadoDePoliticasSiToca(ahora)
 
 	quedan := politicasConEstado(t, s)
 	var perdidas []string
-	for _, p := range s.politicas {
-		if !quedan[p.Nombre] {
-			perdidas = append(perdidas, strconv.Quote(p.Nombre))
+	for i, p := range s.politicas {
+		if !quedan[guardada[i]] {
+			perdidas = append(perdidas, fmt.Sprintf("%q (guardada como %q)", p.Nombre, guardada[i]))
 		}
-		delete(quedan, p.Nombre)
+		delete(quedan, guardada[i])
 	}
 	if len(perdidas) > 0 {
 		t.Errorf("la poda horaria se llevó el cooldown persistido de %s, que SÍ está/n configurada/s: el próximo "+
 			"reinicio la/s deja actuar antes de tiempo", strings.Join(perdidas, ", "))
 	}
-	for _, h := range huerfanas {
-		if quedan[h] {
+	for i, h := range huerfanas {
+		if quedan[huerfanaGuardada[i]] {
 			t.Errorf("la poda no se llevó el estado de %q, que ya no está configurada: la tabla crece sin techo", h)
 		}
-		delete(quedan, h)
+		delete(quedan, huerfanaGuardada[i])
 	}
 	if len(quedan) > 0 {
 		t.Errorf("después de la poda hay estado de políticas que la prueba no sembró: %v", quedan)
@@ -906,14 +972,23 @@ func TestLaPodaHorariaConservaElCooldownDeCadaPoliticaConfigurada(t *testing.T) 
 // deduplicar por (nombre, servicio) —la forma de ClaveDeCooldown— dejaba el paquete en verde (P2-m10):
 // dos políticas de servicio homónimas sobre nginx y postgres arrancaban y compartían politicaStats.
 //
-// Acá el eje es el CAMPO: se recorren por reflexión los de config.PolicyConfig salvo `Name`, y por cada
-// uno se arma una segunda política VÁLIDA que tiene el mismo nombre y difiere sólo en ese campo, sobre
-// una base de host y otra de servicio. Un campo nuevo sin variante pone esto rojo. Los controles están
-// adentro del recorrido: la variante difiere exactamente en su campo, cada una arranca sola, y con
-// otro nombre arrancan juntas.
+// Acá el eje es el CAMPO: se recorren por reflexión TODOS los de config.PolicyConfig, y por cada uno se
+// arma una segunda política VÁLIDA que difiere sólo en ese campo y sigue siendo homónima, sobre una base
+// de host y otra de servicio. Un campo nuevo sin variante pone esto rojo. Los controles están adentro
+// del recorrido: la variante difiere exactamente en su campo, cada una arranca sola, y con otro nombre
+// arrancan juntas.
 //
-// Exposición medida (auditoría A131): 0. Una sola política configurada, de host; ningún nombre
-// repetido.
+// `Name` TAMBIÉN ENTRA, y su variante es el mismo nombre con espacios en los bordes. La primera versión
+// de esta tabla lo dejaba afuera —«salvo `Name`»—, y ése era justo el eje que quedaba clavado: desde
+// A131·T4 ConfigurarFlota recorta el `name:`, así que `x` y ` x ` son LA MISMA política para el
+// cooldown persistido, la métrica y la poda, y tienen que chocar. De los tres que leen el nombre
+// recortado, la carga y la poda quedaron medidas y la deduplicación no: deduplicar por el `name:`
+// CRUDO de la configuración dejaba internal/mcp entero en verde salvo el censo (medido en la revisión
+// de T4, sabotaje N1), y con el scheduler_flota.go de la base —el nombre crudo en todos lados— las dos
+// arrancaban juntas.
+//
+// Exposición medida (auditoría A131): 0. Una sola política configurada, de host, `vaciar-journal`, sin
+// bordes; ningún nombre repetido.
 //
 // Sabotaje: deduplicar por (nombre, servicio), la forma de la clave del cooldown (P2-m10). El arreglo
 // es el mismo que declara la tabla de T5: preguntar por la presencia de la clave es la misma regla.
@@ -922,7 +997,19 @@ func TestLaPodaHorariaConservaElCooldownDeCadaPoliticaConfigurada(t *testing.T) 
 // arnes: a="\t\tif vistos[pol.Nombre+\"\\x00\"+pol.Servicio] {\n\t\t\treturn fmt.Errorf(\"hay dos políticas llamadas %q: el cooldown y las métricas se llevan por nombre, así que se pisarían entre sí\", pol.Nombre)\n\t\t}\n\t\tvistos[pol.Nombre+\"\\x00\"+pol.Servicio] = true\n"
 // arnes: arreglo_de="\t\tif vistos[pol.Nombre] {\n"
 // arnes: arreglo_a="\t\tif _, repetida := vistos[pol.Nombre]; repetida {\n"
-// arnes: colision_ok="TestDosPoliticasHomonimasNoArrancanEnNingunaPosicion"
+// arnes: colision_ok="TestDosPoliticasHomonimasNoArrancanEnNingunaPosicion TestDosPoliticasHomonimasNoArrancanDifieranEnLoQueDifieran"
+//
+// Sabotaje: deduplicar por el `name:` CRUDO de la configuración y no por el nombre de la política, que
+// entra recortado (N1 de la revisión de T4): `x` y ` x ` arrancan juntas y se pisan en la base. El
+// arreglo deduplica por el `name:` recortado a mano, que es la misma regla escrita desde el otro lado.
+// Los dos `de` de esta prueba y el de la tabla de T5 se pisan a propósito: son el mismo bloque, y cada
+// sabotaje cae en su fila (el campo `Service` o el campo `Name`).
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\t\tif vistos[pol.Nombre] {\n\t\t\treturn fmt.Errorf(\"hay dos políticas llamadas %q: el cooldown y las métricas se llevan por nombre, así que se pisarían entre sí\", pol.Nombre)\n\t\t}\n\t\tvistos[pol.Nombre] = true\n"
+// arnes: a="\t\tif vistos[pc.Name] {\n\t\t\treturn fmt.Errorf(\"hay dos políticas llamadas %q: el cooldown y las métricas se llevan por nombre, así que se pisarían entre sí\", pol.Nombre)\n\t\t}\n\t\tvistos[pc.Name] = true\n"
+// arnes: arreglo_de="\t\tif vistos[pol.Nombre] {\n\t\t\treturn fmt.Errorf(\"hay dos políticas llamadas %q: el cooldown y las métricas se llevan por nombre, así que se pisarían entre sí\", pol.Nombre)\n\t\t}\n\t\tvistos[pol.Nombre] = true\n"
+// arnes: arreglo_a="\t\tif vistos[strings.TrimSpace(pc.Name)] {\n\t\t\treturn fmt.Errorf(\"hay dos políticas llamadas %q: el cooldown y las métricas se llevan por nombre, así que se pisarían entre sí\", pol.Nombre)\n\t\t}\n\t\tvistos[strings.TrimSpace(pc.Name)] = true\n"
+// arnes: colision_ok="TestDosPoliticasHomonimasNoArrancanEnNingunaPosicion TestDosPoliticasHomonimasNoArrancanDifieranEnLoQueDifieran"
 func TestDosPoliticasHomonimasNoArrancanDifieranEnLoQueDifieran(t *testing.T) {
 	deServicio := config.PolicyConfig{
 		Name: "revivir", Principal: "curador", When: string(fleet.CondServicioCaido), Devices: []string{"*"},
@@ -935,9 +1022,12 @@ func TestDosPoliticasHomonimasNoArrancanDifieranEnLoQueDifieran(t *testing.T) {
 		{"de host", politicaDeMemoria()},
 		{"de servicio", deServicio},
 	}
-	// Cómo cambiar CADA campo sin dejar de ser una política válida de su clase. Devuelve false cuando el
-	// campo no admite otro valor en esa clase: una de host no puede nombrar un servicio (Validar).
+	// Cómo cambiar CADA campo sin dejar de ser una política válida de su clase y sin dejar de ser
+	// homónima. Devuelve false cuando el campo no admite otro valor en esa clase: una de host no puede
+	// nombrar un servicio (Validar).
 	variantes := map[string]func(p *config.PolicyConfig, deServicio bool) bool{
+		// El nombre sólo puede cambiar en lo que ConfigurarFlota recorta: con otra letra ya no es homónima.
+		"Name":      func(p *config.PolicyConfig, _ bool) bool { p.Name = " " + p.Name + " "; return true },
 		"Principal": func(p *config.PolicyConfig, _ bool) bool { p.Principal += "-suplente"; return true },
 		"When": func(p *config.PolicyConfig, deServicio bool) bool {
 			p.When = string(fleet.CondCPUPct)
@@ -963,11 +1053,10 @@ func TestDosPoliticasHomonimasNoArrancanDifieranEnLoQueDifieran(t *testing.T) {
 	if _, ok := tipo.FieldByName("Name"); !ok {
 		t.Fatal("config.PolicyConfig ya no tiene `Name`: la identidad de una política cambió de campo y esta prueba no sabe cuál comparar")
 	}
+	// TODOS los campos, `Name` incluido: excluirlo era el eje clavado de la primera versión.
 	var campos []string
 	for i := 0; i < tipo.NumField(); i++ {
-		if n := tipo.Field(i).Name; n != "Name" {
-			campos = append(campos, n)
-		}
+		campos = append(campos, tipo.Field(i).Name)
 	}
 	for _, c := range campos {
 		if _, ok := variantes[c]; !ok {
@@ -1012,12 +1101,19 @@ func TestDosPoliticasHomonimasNoArrancanDifieranEnLoQueDifieran(t *testing.T) {
 					t.Fatalf("con nombres distintos no arrancan juntas (%v): se rechaza por otra cosa que el nombre", err)
 				}
 				err := s.ConfigurarFlota(config.FleetConfig{Policies: []config.PolicyConfig{b.pc, otra}})
+				if err == nil && campo == "Name" {
+					t.Fatalf("dos políticas %s llamadas %q y %q —el mismo nombre salvo los bordes, que ConfigurarFlota "+
+						"recorta— arrancaron juntas. Recortado, ése es el nombre con el que se llevan el cooldown "+
+						"persistido, la métrica, los avisos y la poda: las dos se pisan en la base sin que nada falle",
+						b.clase, b.pc.Name, otra.Name)
+				}
 				if err == nil {
 					t.Fatalf("dos políticas %s llamadas %q que difieren sólo en `%s` arrancaron. El cooldown persistido, "+
 						"la métrica, los avisos y la poda se llevan POR NOMBRE: una tapa a la otra sin que nada falle",
 						b.clase, b.pc.Name, campo)
 				}
-				if !strings.Contains(err.Error(), strconv.Quote(b.pc.Name)) {
+				// Cualquiera de las dos formas del nombre sirve para que el operador sepa cuál está repetida.
+				if !strings.Contains(err.Error(), strconv.Quote(b.pc.Name)) && !strings.Contains(err.Error(), strconv.Quote(otra.Name)) {
 					t.Errorf("el arranque se negó, pero el error no nombra a la repetida %q: %v", b.pc.Name, err)
 				}
 			})
