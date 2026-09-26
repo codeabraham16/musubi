@@ -15,10 +15,19 @@ import (
 // de 5 runas o más que sea todo letras, sin tocar la primera letra ni lo que no es término; es
 // determinista; y el brazo de un tipeo toca sólo el término más largo.
 //
+// CON 64 SEMILLAS Y NO CON UNA. Con una sola (la 7) ningún término caía en la posición 0, así que
+// una perturbación que podía sacar la primera letra seguía verde: 64 semillas por seis términos son
+// 384 errores por clase, y la posición 0 no se escapa.
+//
 // Sabotaje: los términos de exactamente 5 runas dejan de recibir tipeo.
 // arnes: archivo="internal/recalleval/perturbar.go"
 // arnes: de="if len(palabra) < minRunasPerturbables {"
 // arnes: a="if len(palabra) <= minRunasPerturbables {"
+//
+// Sabotaje: «falta» puede sacar la primera letra.
+// arnes: archivo="internal/recalleval/perturbar.go"
+// arnes: de="\tcase TipeoFalta:\n\t\tk := 1 + int(h%uint64(n-1))"
+// arnes: a="\tcase TipeoFalta:\n\t\tk := int(h % uint64(n))"
 func TestPerturbarConsultaPorClase(t *testing.T) {
 	// «quedó» tiene 5 runas justas (y una tilde: se cuenta en runas, no en bytes); «deploy2prod» no
 	// es todo letras; «el», «del», «en», «y», «la» son cortos.
@@ -27,30 +36,32 @@ func TestPerturbarConsultaPorClase(t *testing.T) {
 
 	orig := terminosComoTexto(q)
 	for _, clase := range ClasesDeTipeo {
-		p := PerturbarConsulta(q, clase, 7)
-		if p != PerturbarConsulta(q, clase, 7) {
+		if PerturbarConsulta(q, clase, 7) != PerturbarConsulta(q, clase, 7) {
 			t.Errorf("%s: la misma entrada dio dos salidas: no es determinista", clase)
 		}
-		if p == PerturbarConsulta(q, clase, 8) {
+		if PerturbarConsulta(q, clase, 7) == PerturbarConsulta(q, clase, 8) {
 			t.Errorf("%s: dos semillas dieron la misma perturbación", clase)
 		}
-		pert := terminosComoTexto(p)
-		if len(pert) != len(orig) {
-			t.Fatalf("%s: %q tiene %d términos y el original %d: el tipeo partió o fundió términos", clase, p, len(pert), len(orig))
-		}
-		if separadores(p) != separadores(q) {
-			t.Errorf("%s: cambió lo que no es término: %q", clase, p)
-		}
-		for i, o := range orig {
-			n := pert[i]
-			if !quierenTipeo[o] {
-				if n != o {
-					t.Errorf("%s: %q no es perturbable y quedó %q", clase, o, n)
-				}
-				continue
+		for semilla := uint64(1); semilla <= 64; semilla++ {
+			p := PerturbarConsulta(q, clase, semilla)
+			pert := terminosComoTexto(p)
+			if len(pert) != len(orig) {
+				t.Fatalf("%s/%d: %q tiene %d términos y el original %d: el tipeo partió o fundió términos", clase, semilla, p, len(pert), len(orig))
 			}
-			if !esTipeoDeClase(o, n, clase) {
-				t.Errorf("%s: %q → %q no es un error de esa clase (o tocó la primera letra)", clase, o, n)
+			if separadores(p) != separadores(q) {
+				t.Errorf("%s/%d: cambió lo que no es término: %q", clase, semilla, p)
+			}
+			for i, o := range orig {
+				n := pert[i]
+				if !quierenTipeo[o] {
+					if n != o {
+						t.Errorf("%s/%d: %q no es perturbable y quedó %q", clase, semilla, o, n)
+					}
+					continue
+				}
+				if !esTipeoDeClase(o, n, clase) {
+					t.Errorf("%s/%d: %q → %q no es un error de esa clase (o tocó la primera letra)", clase, semilla, o, n)
+				}
 			}
 		}
 	}
