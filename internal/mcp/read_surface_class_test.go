@@ -278,10 +278,11 @@ func TestEveryReadOnlyToolClassified(t *testing.T) {
 		"musubi_detect_changes",  // methods_detect_test (necesita git runner)
 		"musubi_search_skills",   // behavior-bleed via GetSkillDecisionsCtx (Track 19); no marker-in-text
 		"musubi_sync_pull",       // aislamiento por credencial verificado en sync_pull_test (TestToolSyncPullScoped)
-		// musubi_sync_status cuenta observaciones desde que dice «lo que no viaja» y las enviadas en
-		// 24 h: sólo agregados, así que no entra al barrido por marcador. Su test dedicado
-		// (TestSyncStatusAcotadoAlProyecto, sync_viajes_test) exige ceros para el tenant vecino y el
-		// dato para el admin federado.
+		// musubi_sync_status cuenta observaciones —el outbox, «lo que no viaja», las enviadas en 24 h—
+		// y el outbox trae además el TEXTO del último error: todo va acotado al proyecto de la
+		// credencial. Son agregados, así que no entra al barrido por marcador. Sus tests dedicados
+		// (TestSyncStatusAcotadoAlProyecto y TestSyncStatusNoMuestraElOutboxAjeno, sync_viajes_test)
+		// exigen ceros para el tenant vecino y el dato para el admin federado.
 		"musubi_sync_status",
 		// readiness_medido_test (TestReadinessAcotadaAlProyecto). NO entra al barrido por marcador
 		// porque no devuelve NINGÚN texto del dato: sólo agregados. Eso no la exime — filtrar

@@ -341,8 +341,9 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   líneas: enviadas en 24 h y 7 d (por `sent_at`), el volumen de la subida y el de la bajada (una
   sola línea «bajada», que el PR de la edad de la bajada completa), y lo que no viaja con su motivo
   —locales, en cuarentena, y de un LLM ya corroboradas que siguen locales—. El JSON conserva sus
-  claves y agrega `viajes`. Lo que cuenta observaciones va acotado al proyecto de la credencial,
-  porque el central también sirve la tool y un conteo del vecino es información del vecino: por eso
+  claves y agrega `viajes`. Todo lo que cuenta observaciones —el outbox con el texto de su último
+  error, lo que no viaja y las enviadas— va acotado al proyecto de la credencial, porque el central
+  también sirve la tool y un conteo del vecino es información del vecino: por eso
   `musubi_sync_status` deja de figurar entre las lecturas «sin datos de proyecto» y pasa a tener su
   prueba de aislamiento. No cambia la descripción ni el esquema de ninguna tool.
 
@@ -378,15 +379,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   algún día el transporte de Go descomprime solo una página de la bajada, se cuentan sus crudos y
   no se inventa el cable.
 
-  *Once guardas nuevas, con su sabotaje corrido y rojo. `TestElRebotePreservaElEnviado`,
+  *Doce guardas nuevas, con su sabotaje corrido y rojo. `TestElRebotePreservaElEnviado`,
   `TestLaEntregaDejaQueSalioYCuando`, `TestLosViajesSeSumanPorDiaYSentido`,
   `TestLoQueNoViajaSeCuentaUnaSolaVez` (las tres categorías son disjuntas) y
   `TestUnBinarioAnteriorLeeLaBaseDelContador` (la v57 abre la v58 como legible) en
   `internal/memory`; `TestSyncStatusCuentaLoDeHoy`, `TestUnaSubidaQueNoSalioNoRegistraViaje`,
   `TestLaBajadaRegistraSuViaje`, `TestUnaBajadaQueNoSalioNoRegistraViaje`,
-  `TestSyncStatusAcotadoAlProyecto` (el vecino ve ceros, el admin federado ve el dato) y
-  `TestLaBajadaPorNotaNoCuentaElSondeo` (la métrica da el peso de la nota con treinta sondeos
-  alrededor) en `internal/mcp`.*
+  `TestSyncStatusAcotadoAlProyecto` y `TestSyncStatusNoMuestraElOutboxAjeno` (el vecino ve ceros,
+  el admin federado ve el dato) y `TestLaBajadaPorNotaNoCuentaElSondeo` (la métrica da el peso
+  de la nota con treinta sondeos alrededor) en `internal/mcp`.*
 - **El mapa publicado describe el commit, no el disco: lo que git ignora ya no sube al central.**
   El índice lee el disco y el central guarda la foto con la etiqueta de un commit. #647 frenaba lo
   modificado y lo sin trackear, pero `git status` no lista los **ignorados**, y `walkSourceTree` no

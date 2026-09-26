@@ -246,16 +246,22 @@ func TestUnaBajadaQueNoSalioNoRegistraViaje(t *testing.T) {
 	})
 }
 
-// syncStatusComo llama a musubi_sync_status con la credencial p y devuelve el resumen de viajes del
-// JSON (la última línea del texto).
-func syncStatusComo(t *testing.T, s *McpServer, p *Principal) memory.ResumenDelSync {
+// textoDeSyncStatusComo llama a musubi_sync_status con la credencial p y devuelve el texto entero.
+func textoDeSyncStatusComo(t *testing.T, s *McpServer, p *Principal) string {
 	t.Helper()
 	params, _ := json.Marshal(CallToolRequest{Name: "musubi_sync_status", Arguments: json.RawMessage(`{}`)})
 	out, rpcErr := s.handleToolsCall(withPrincipal(context.Background(), p), params)
 	if rpcErr != nil {
 		t.Fatalf("sync_status como %s: %+v", p.Name, rpcErr)
 	}
-	txt := out.(CallToolResponse).Content[0].Text
+	return out.(CallToolResponse).Content[0].Text
+}
+
+// syncStatusComo llama a musubi_sync_status con la credencial p y devuelve el resumen de viajes del
+// JSON (la última línea del texto).
+func syncStatusComo(t *testing.T, s *McpServer, p *Principal) memory.ResumenDelSync {
+	t.Helper()
+	txt := textoDeSyncStatusComo(t, s, p)
 	var cuerpo struct {
 		Viajes memory.ResumenDelSync `json:"viajes"`
 	}
@@ -272,7 +278,7 @@ func syncStatusComo(t *testing.T, s *McpServer, p *Principal) memory.ResumenDelS
 //
 // Sabotaje: contar con el ctx pelado, sin el alcance de la credencial.
 // arnes: archivo="internal/mcp/methods.go"
-// arnes: de="s.engine.ResumenDelSync(s.scopedCtx(ctx))"
+// arnes: de="s.engine.ResumenDelSync(sctx)"
 // arnes: a="s.engine.ResumenDelSync(ctx)"
 func TestSyncStatusAcotadoAlProyecto(t *testing.T) {
 	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
@@ -307,6 +313,61 @@ func TestSyncStatusAcotadoAlProyecto(t *testing.T) {
 	if federado.EnviadasDia != 1 || federado.NoViajan.Locales != 1 || federado.NoViajan.EnCuarentena != 1 {
 		t.Errorf("el admin federado tenía que ver lo de web (seed roto o recorte de más): enviadas=%d no_viajan=%+v",
 			federado.EnviadasDia, federado.NoViajan)
+	}
+}
+
+// TestSyncStatusNoMuestraElOutboxAjeno: lo que musubi_sync_status cuenta del OUTBOX —pendientes,
+// enviadas, dead-letter, espejo, la antigüedad y el TEXTO del último error— también es del proyecto
+// dueño de cada nota. Una credencial de otro proyecto ve ceros y ningún error ajeno; el admin
+// federado ve el dato. Hoy es latente (el central no tiene outbox), pero la tool se declara aislada.
+//
+// Sabotaje: leer el outbox con el ctx pelado.
+// arnes: archivo="internal/mcp/methods.go"
+// arnes: de="s.engine.OutboxHealthCtx(sctx)"
+// arnes: a="s.engine.OutboxHealthCtx(ctx)"
+func TestSyncStatusNoMuestraElOutboxAjeno(t *testing.T) {
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.SetProjectID("")
+	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{})
+	for _, id := range []string{"web-enviada", "web-muerta"} {
+		if err := engine.SaveObservationTypedFrom("web", "", id, "web/t", "VICTIM "+id, 1, "semantic", memory.ScopeShared, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := engine.ClaimOutboxBatch(50, 60); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.MarkOutboxSent("web-enviada"); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.MarkOutboxDead("web-muerta", "rechazo permanente de la nota VICTIM de web"); err != nil {
+		t.Fatal(err)
+	}
+
+	type outbox struct {
+		Pending, Sent, Dead, Espejo int
+		OldestPendingAgeSec         int64  `json:"oldest_pending_age_seconds"`
+		LastError                   string `json:"last_error"`
+	}
+	leer := func(txt string) outbox {
+		var o outbox
+		if err := json.Unmarshal([]byte(txt[strings.LastIndex(txt, "\n")+1:]), &o); err != nil {
+			t.Fatalf("decodear el JSON de sync_status: %v\n%s", err, txt)
+		}
+		return o
+	}
+
+	txt := textoDeSyncStatusComo(t, s, &Principal{Name: "alice", Role: RoleWriter, ProjectID: "crm"})
+	if o := leer(txt); o != (outbox{}) || strings.Contains(txt, "VICTIM") {
+		t.Errorf("FUGA cross-tenant: crm ve el outbox de web: %+v\n%s", o, txt)
+	}
+	fed := leer(textoDeSyncStatusComo(t, s, &Principal{Name: "root", Role: RoleAdmin}))
+	if fed.Sent != 1 || fed.Dead != 1 || !strings.Contains(fed.LastError, "VICTIM") {
+		t.Errorf("el admin federado tenía que ver el outbox de web (seed roto o recorte de más): %+v", fed)
 	}
 }
 

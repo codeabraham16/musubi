@@ -400,6 +400,9 @@ type OutboxStore interface {
 	// en el outbox local (anti-loop). UPSERT idempotente por id. Devuelve si insertó una fila nueva.
 	IngestShared(o SharedObs) (inserted bool, err error)
 	OutboxHealth() (OutboxHealthReport, error)
+	// OutboxHealthCtx es OutboxHealth acotado al proyecto del ctx: lo que muestra musubi_sync_status,
+	// que también sirve el central a credenciales de otros proyectos (ver outbox.go).
+	OutboxHealthCtx(ctx context.Context) (OutboxHealthReport, error)
 	RequeueDeadOutbox() (int, error)
 	// RegistrarViaje suma a sync_viajes lo que movió un tick que SALIÓ a la red, y ResumenDelSync
 	// lo lee junto con las enviadas por sent_at y lo que no viaja, acotado al proyecto del ctx (ver
