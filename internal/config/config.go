@@ -573,6 +573,13 @@ type SyncConfig struct {
 	AuthTokenEnv string `yaml:"auth_token_env"`
 	// DrainIntervalSeconds es cada cuántos segundos corre el drain (default 30). <=0 desactiva.
 	DrainIntervalSeconds int `yaml:"drain_interval_seconds"`
+	// InboundIdleMaxSeconds es el TOPE del espaciado de la bajada: cuánto puede llegar a esperar el
+	// dueño del candado entre dos pedidos al central cuando las bajadas vuelven vacías y nadie
+	// trabaja sobre esta base. Con actividad —un turno en cualquier terminal, o un daemon que
+	// arranca— o con una bajada que trae filas, la bajada vuelve a un pedido por tick. 0 ⇒ 300 s (ver
+	// EffectiveInboundIdleMaxSeconds); negativo ⇒ ritmo fijo, un pedido por tick, la conducta de
+	// antes. Ver internal/mcp/bajada_ritmo.go.
+	InboundIdleMaxSeconds int `yaml:"inbound_idle_max_seconds,omitempty"`
 	// BatchSize es el tope de filas reclamadas por tick (default 50).
 	BatchSize int `yaml:"batch_size"`
 	// MaxAttempts YA NO HACE NADA, y se conserva a propósito.
@@ -633,6 +640,17 @@ func (s SyncConfig) HasDestination() bool {
 // destino el default es contar — apagable con flota_vivo: false. Ver SyncConfig.FlotaVivo.
 func (s SyncConfig) FlotaVivoActivo() bool {
 	return s.HasDestination() && (s.FlotaVivo == nil || *s.FlotaVivo)
+}
+
+// EffectiveInboundIdleMaxSeconds es el tope del espaciado de la bajada que se usa de verdad: 0 ⇒ 300,
+// y cualquier otro valor tal cual, negativo incluido (ritmo fijo). El 0 es el default y no «sin
+// tope»: un config sin la clave —todos los que existen— espacia. 300 s es la demora máxima que se
+// aceptó para una máquina quieta; con actividad la bajada vuelve al tick apenas llega el turno.
+func (s SyncConfig) EffectiveInboundIdleMaxSeconds() int {
+	if s.InboundIdleMaxSeconds == 0 {
+		return 300
+	}
+	return s.InboundIdleMaxSeconds
 }
 
 // UpdateConfig controla el chequeo de nuevas versiones del binario al arrancar.

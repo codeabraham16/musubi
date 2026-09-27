@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"musubi/internal/cognition"
+	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/logx"
 	"musubi/internal/memory"
@@ -171,20 +172,79 @@ func (s *McpServer) RunMaintenanceScheduler(ctx context.Context, interval time.D
 // (D8/R6). El claim y los marks son transacciones cortas del engine (thread-safe por sí solas);
 // el POST ocurre entre medio, fuera de todo lock. interval<=0 o syncClient nil desactivan el
 // drain. Pensado para correr en su propia goroutine; bloquea hasta la cancelación.
+//
+// ENTRE TICKS, UN SONDEO LOCAL cada sondeoDelOutbox: si hay algo que un claim tomaría, drena ya. Sin
+// él, una nota que escribía OTRO proceso sobre la misma base —la captura, los hooks, otro daemon—
+// esperaba al tick siguiente: medido el 2026-09-25, 22 s de mediana entre el guardado y el central,
+// con el intervalo de 30 s. El sondeo es una lectura sobre el índice del claim (HayOutboxPorSubir): no
+// toma el candado de escritura ni sale a la red, y con seis daemons por base son tres lecturas por
+// segundo. Corre en esta misma goroutine, así que nunca hay dos drains del mismo proceso a la vez.
 func (s *McpServer) RunOutboxScheduler(ctx context.Context, interval time.Duration) {
 	if interval <= 0 || s.syncClient == nil {
 		return
 	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
+	var sondeo <-chan time.Time
+	if sondeoDelOutbox < interval {
+		ts := time.NewTicker(sondeoDelOutbox)
+		defer ts.Stop()
+		sondeo = ts.C
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 			s.drainOutboxOnce(ctx)
+		case <-sondeo:
+			hay, err := s.engine.HayOutboxPorSubir()
+			if err != nil {
+				logx.Error("drain: no se pudo sondear el outbox", "error", err)
+				continue
+			}
+			if hay {
+				s.drainOutboxOnce(ctx)
+			}
 		}
 	}
+}
+
+// sondeoDelOutbox es cada cuánto RunOutboxScheduler mira, sin red, si hay algo para subir.
+const sondeoDelOutbox = 2 * time.Second
+
+// subloteDelDrain es cuántas filas reclama el drain por vez: la décima parte del lease, con piso de
+// una, y nunca más que batch_size.
+//
+// Hasta este arreglo el drain reclamaba batch_size (50) filas con UN lease de 60 s y las empujaba de
+// a una. Con seis daemons por base cada push tardaba ~3,5 s, 50 no entraban en 60 s, el lease vencía
+// a mitad de la lista y otro daemon reclamaba —y volvía a subir— las que el primero todavía tenía en
+// la mano: 116 saves al central por 95 notas, medido el 2026-09-25. Con un sublote que entra holgado
+// en su lease (seis filas en 60 s son diez segundos por push), cada claim trae su lease fresco.
+func subloteDelDrain(cfg config.SyncConfig) int {
+	lease := cfg.LeaseSeconds
+	if lease <= 0 {
+		lease = 60 // el default de ClaimOutboxBatch
+	}
+	k := lease / 10
+	if k < 1 {
+		k = 1
+	}
+	if cfg.BatchSize > 0 && cfg.BatchSize < k {
+		k = cfg.BatchSize
+	}
+	return k
+}
+
+// tiempoDelTick es cuánto puede seguir reclamando sublotes un mismo drain: el 80 % del intervalo, para
+// que el tick siguiente lo encuentre terminado. Sin intervalo configurado (las pruebas llaman al drain
+// directo) vale el del default, 30 s.
+func tiempoDelTick(cfg config.SyncConfig) time.Duration {
+	seg := cfg.DrainIntervalSeconds
+	if seg <= 0 {
+		seg = 30
+	}
+	return time.Duration(seg) * time.Second * 8 / 10
 }
 
 // metaInboundCursor guarda el rowid del central hasta el que ya bajamos memoria shared (C5.3b).
@@ -232,11 +292,21 @@ func (s *McpServer) leaseBajadaSegundos() int {
 // ENTRANTE, C5.3b): el espejo de RunOutboxScheduler en sentido de bajada. Solo corre si hay sync
 // configurado (syncClient) Y el proyecto está en team mode (memory.team_mode) — un proyecto local no
 // baja nada. Preserva local-first: baja a la DB local, el recall sigue offline y rápido.
+//
+// AL ARRANCAR, ANTES DEL PRIMER TICK: anota la marca de actividad y baja una vez. Un daemon que
+// arranca es una terminal que se abrió o que reinició su MCP, o sea alguien trabajando: la marca
+// despierta al dueño del candado —casi nunca este proceso— en su próximo tick, aunque esté
+// espaciado (ver bajada_ritmo.go), y el pull de acá baja ya si el dueño es éste, en vez de esperar
+// un tick entero con la memoria de la sesión anterior.
 func (s *McpServer) RunInboundScheduler(ctx context.Context, interval time.Duration) {
 	if interval <= 0 || s.syncClient == nil || !s.memory.TeamMode {
 		return
 	}
 	s.intervaloBajada.Store(int64(interval))
+	if err := s.engine.SetMeta(memory.MetaDespertarBajada, strconv.FormatInt(time.Now().Unix(), 10)); err != nil {
+		logx.Error("inbound: no se pudo anotar la marca de actividad al arrancar", "error", err)
+	}
+	s.drainInboundOnce(ctx) // pull al arrancar
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -290,15 +360,22 @@ func (s *McpServer) tickBajada() time.Duration {
 // `salioALaRed`, así que la escribe únicamente el dueño del candado y únicamente cuando un Pull
 // volvió bien: un tick salteado no escribe nada, igual que antes.
 //
-// La próxima es un tick base porque hoy la bajada no espacia sus pedidos. Si algún día espacia,
-// la próxima tiene que salir del ritmo, o musubi_sync_status prometería un pedido que no va a haber.
+// LA PRÓXIMA ES LA QUE VA A HABER DE VERDAD: la que dice el ritmo (ver bajada_ritmo.go), que es
+// también quien se entera acá de cómo volvió la bajada. Con un tick fijo, después de una vacía
+// musubi_sync_status prometería un pedido a los 30 s que el ritmo no va a hacer hasta los 60, y a
+// partir de ahí la línea diría «y no se anotó otra» con la bajada sana. Lo que la próxima no puede
+// saber es un despertar que llegue después: eso lo agrega la línea, que lee la marca (ver
+// describirUltimaBajada).
 //
 // Las páginas con filas salen del mismo viaje que va a sync_viajes —las que llegaron menos las
 // vacías—: así una página que trajo filas y no pudo ingerir ninguna no se anota como una bajada
-// vacía (ver memory.UltimaBajada).
+// vacía (ver memory.UltimaBajada), y tampoco espacia la bajada.
 func (s *McpServer) anotarUltimaBajada(v memory.Viaje) {
 	ahora := time.Now()
-	u := memory.UltimaBajada{Unix: ahora.Unix(), Filas: v.Filas, ProximaUnix: ahora.Add(s.tickBajada()).Unix(), ConFilas: v.Posts - v.Vacias}
+	u := memory.UltimaBajada{Unix: ahora.Unix(), Filas: v.Filas, ConFilas: v.Posts - v.Vacias}
+	tick := s.tickBajada()
+	ticks := s.ritmoBajada.anotar(u.ConFilas, tick)
+	u.ProximaUnix = ahora.Add(time.Duration(ticks) * tick).Unix()
 	if err := s.engine.RegistrarBajada(v, u); err != nil {
 		logx.Error("inbound: no se pudo registrar el viaje ni la edad de la bajada", "error", err)
 	}
@@ -317,8 +394,8 @@ func (s *McpServer) anotarUltimaBajada(v memory.Viaje) {
 // de las páginas con filas y, aparte, los de las vacías. En la misma transacción anota la última
 // bajada, que es la edad que muestra musubi_sync_status (anotarUltimaBajada). `salioALaRed` es la
 // ÚNICA señal de eso y el defer es el único lugar que la lee: un tick salteado (candado de otro,
-// cesión tras fallar, Pull fallido) no escribe nada, y lo que se quiera anotar por cada bajada real
-// se cuelga de esta misma variable en vez de repetir la condición en cada return.
+// cesión tras fallar, el ritmo, Pull fallido) no escribe nada, y lo que se quiera anotar por cada
+// bajada real se cuelga de esta misma variable en vez de repetir la condición en cada return.
 func (s *McpServer) drainInboundOnce(ctx context.Context) {
 	ingeridas := 0
 	salioALaRed := false
@@ -359,6 +436,17 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 		// semántico. Si el cursor avanzó desde la última vez que lo miró, vectoriza él. Cuesta una
 		// lectura local por tick y cero tráfico al central.
 		s.vectorizarSiBajoOtro()
+		// Y el ritmo vuelve a la base: si este proceso toma el candado más adelante, baja en ese tick
+		// (ver ritmoBajada.cedido).
+		s.ritmoBajada.cedido()
+		return
+	}
+	// EL RITMO (ver bajada_ritmo.go): una bajada vacía espacia la siguiente, y la actividad sobre esta
+	// base la despierta. El corte va DESPUÉS de reclamar, así el dueño renueva el candado en cada tick
+	// aunque no salga a la red —si no, el lease vencería en la espera, otro proceso lo tomaría y los
+	// dos volverían a alternarse—, y ANTES de leer el cursor, así un tick salteado cuesta el reclamo y
+	// una lectura de la marca, nada más.
+	if !s.ritmoBajada.tocaIr(s.hayActividadLocal()) {
 		return
 	}
 	var cur int64
@@ -531,12 +619,29 @@ func (s *McpServer) vectorizarLoBajado() {
 	})
 }
 
-// drainOutboxOnce reclama un batch del outbox y empuja cada fila al central, aplicando el
-// resultado (sent / retry con backoff / dead). Best-effort: un fallo de una fila no aborta el
-// batch. Quién muere lo decide el CÓDIGO DE ERROR y nada más: un fallo permanente va directo a
-// dead (R11-R13), un fallo transitorio NUNCA muere y se reprograma con backoff exponencial+jitter.
-// Cada item trae Attempts (intentos ya fallidos), que alimenta el backoff y la observabilidad y
-// NO corta nada. El ctx corta el barrido a mitad si hay shutdown.
+// drainOutboxOnce empuja el outbox al central en SUBLOTES: reclama subloteDelDrain filas, empuja
+// cada una aplicando el resultado (sent / retry con backoff / dead), y vuelve a reclamar mientras el
+// claim traiga un sublote lleno y quede tiempo del tick (tiempoDelTick). Cada claim trae su lease
+// fresco, así que ninguna fila espera en la mano del drain más de lo que su lease la cubre: con un
+// solo claim de batch_size filas, las de atrás vencían mientras se empujaban las de adelante y otro
+// daemon las volvía a subir (ver subloteDelDrain).
+//
+// Best-effort: un fallo de una fila no aborta el sublote. Quién muere lo decide el CÓDIGO DE ERROR y
+// nada más: un fallo permanente va directo a dead (R11-R13), un fallo transitorio NUNCA muere y se
+// reprograma con backoff exponencial+jitter. Cada item trae Attempts (intentos ya fallidos), que
+// alimenta el backoff y la observabilidad y NO corta nada. El ctx corta el barrido a mitad si hay
+// shutdown.
+//
+// ANTES DE CADA PUSH se pregunta si la fila sigue siendo de este claim (sigueSiendoMia): si otro
+// drainer la tomó, o se editó y ya no es lo que se tiene en la mano, ese payload no sale; y si sigue
+// siendo de este claim, se la suelta para que la versión nueva salga ya. Una edición que llega con el
+// POST de v1 ya en el aire no suelta la fila (enqueueOutboxTx): la suelta la marca de v1 cuando vuelve,
+// y v2 sale detrás. Así el orden en que el central recibe las versiones lo pone el cliente, y otro
+// drainer no sube v2 a la par. Lo que esto NO cierra: un push más largo que su lease. Al vencer, otro
+// drainer la puede reclamar y subir con el primero todavía en el aire; se cierra renovando el lease
+// antes de cada push.
+//
+// El tick deja UN viaje de subida en sync_viajes, con todos sus sublotes sumados.
 //
 // ESTE COMENTARIO DECÍA «un fallo transitorio va a dead cuando se alcanzó max_attempts» hasta el
 // 2026-09-11, y era falso desde que `sync-hardening` sacó el tope por conteo — o sea que la doc de
@@ -544,11 +649,10 @@ func (s *McpServer) vectorizarLoBajado() {
 // la misma función. La regla vive UNA sola vez, en config.SyncConfig.MaxAttempts; acá no se repite
 // a propósito, porque repetirla es lo que dejó tres copias divergiendo en silencio.
 func (s *McpServer) drainOutboxOnce(ctx context.Context) {
-	items, err := s.engine.ClaimOutboxBatch(s.syncCfg.BatchSize, s.syncCfg.LeaseSeconds)
-	if err != nil {
-		logx.Error("drain: no se pudo reclamar el batch del outbox", "error", err)
-		return
-	}
+	// Las dos defensas contra el envío doble, juntas: el sublote que entra en su lease y la pregunta
+	// antes de cada push. Cada una tapa casi todo lo que la otra deja pasar; sin las dos es main.
+	k, vigente := subloteDelDrain(s.syncCfg), s.sigueSiendoMia
+	limite := time.Now().Add(tiempoDelTick(s.syncCfg))
 	// EL VIAJE DEL TICK, a sync_viajes. Sólo si algún POST tuvo respuesta del central: un tick sin
 	// nada que mandar, o con el central inalcanzable, no escribe nada — si no, cada tick vacío sería
 	// una escritura más sobre una base que comparten varios procesos.
@@ -564,11 +668,51 @@ func (s *McpServer) drainOutboxOnce(ctx context.Context) {
 			logx.Error("drain: no se pudo registrar el viaje de la subida", "error", rerr)
 		}
 	}()
+	for {
+		items, err := s.engine.ClaimOutboxBatch(k, s.syncCfg.LeaseSeconds)
+		if err != nil {
+			logx.Error("drain: no se pudo reclamar el sublote del outbox", "error", err)
+			return
+		}
+		aceptadas += s.empujarSublote(ctx, items, vigente)
+		if len(items) < k || ctx.Err() != nil || !time.Now().Before(limite) {
+			return
+		}
+	}
+}
+
+// sigueSiendoMia pregunta, justo antes del push, si la fila sigue reclamada por el claim que trajo el
+// ítem y con el mismo contenido (ReclamoVigente). Si la respuesta es no, lo que se tiene en la mano
+// es viejo o ajeno: otro drainer la reclamó al vencer el lease, o una edición la cambió mientras
+// esperaba su turno —la fila sigue reclamada por este claim, y empujarSublote la suelta para que la
+// versión nueva salga en el claim siguiente—. Si la lectura falla tampoco sale, y se intenta soltar
+// igual; si eso tampoco puede, vuelve a salir cuando venza el lease, que es tarde pero no pierde nada.
+func (s *McpServer) sigueSiendoMia(item memory.OutboxItem) bool {
+	vigente, err := s.engine.ReclamoVigente(item.ObsID, item.Hash, item.Reclamo)
+	if err != nil {
+		logx.Error("drain: no se pudo verificar el claim antes del push", "obs_id", item.ObsID, "error", err)
+		return false
+	}
+	return vigente
+}
+
+// empujarSublote empuja los ítems de un claim y aplica a cada uno su marca; el que vigente rechaza no
+// sale. Devuelve cuántos aceptó el central.
+func (s *McpServer) empujarSublote(ctx context.Context, items []memory.OutboxItem, vigente func(memory.OutboxItem) bool) (aceptadas int) {
 	for _, item := range items {
 		select {
 		case <-ctx.Done():
-			return
+			return aceptadas
 		default:
+		}
+		if !vigente(item) {
+			// No sale, así que no vuelve ninguna marca que suelte la fila. Si sigue siendo de este
+			// claim —se editó mientras esperaba su turno—, se suelta acá para que la versión nueva
+			// salga ya y no al vencer el lease; si es de otro drainer, el CAS no la toca.
+			if serr := s.engine.SoltarReclamo(item.ObsID, item.Reclamo); serr != nil {
+				logx.Error("drain: no se pudo soltar un reclamo que no salió", "obs_id", item.ObsID, "error", serr)
+			}
+			continue
 		}
 		perr := s.syncClient.Push(item)
 		if perr == nil {
@@ -598,6 +742,7 @@ func (s *McpServer) drainOutboxOnce(ctx context.Context) {
 			logx.Error("drain: no se pudo reprogramar el reintento", "obs_id", item.ObsID, "error", merr)
 		}
 	}
+	return aceptadas
 }
 
 // backoffSeconds calcula el backoff del n-ésimo intento (n>=1): exponencial base*2^(n-1),

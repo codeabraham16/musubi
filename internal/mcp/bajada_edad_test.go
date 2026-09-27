@@ -118,11 +118,12 @@ func edadEnSegundos(linea string) int {
 }
 
 // TestSyncStatusDiceLaEdadDeLaBajada: la línea «bajada» dice cuándo bajó por última vez, si trajo
-// algo y cuándo se espera la próxima —un tick, 30 s sin config—. Antes del primer Pull, «nunca»;
-// después de una página sin filas, «vacía»; después de una con dos, «2 filas». Y la edad es la del
-// Pull que acaba de volver: «hace 0 s», con hasta 2 s para el commit del tick y el redondeo a
-// segundos. Lo lee de la meta que anota el dueño del candado, no de la memoria del proceso que
-// contesta.
+// algo y cuándo se espera la próxima —la que va a haber de verdad, la del ritmo (bajada_ritmo.go)—.
+// Antes del primer Pull, «nunca»; después de una página sin filas, «vacía» y la próxima a DOS ticks
+// (60 s sin config: una vacía hace saltear el tick siguiente); después de una con dos, «2 filas» y la
+// próxima otra vez a un tick. Y la edad es la del Pull que acaba de volver: «hace 0 s», con hasta 2 s
+// para el commit del tick y el redondeo a segundos. Lo lee de la meta que anota el dueño del
+// candado, no de la memoria del proceso que contesta.
 //
 // Sabotaje: que la meta anote un instante viejo y no el del tick que volvió.
 // arnes: archivo="internal/mcp/scheduler.go"
@@ -141,13 +142,18 @@ func edadEnSegundos(linea string) int {
 //
 // Sabotaje: que la meta anote cero filas aunque el tick haya bajado dos.
 // arnes: archivo="internal/mcp/scheduler.go"
-// arnes: de="Filas: v.Filas, ProximaUnix:"
-// arnes: a="Filas: 0, ProximaUnix:"
+// arnes: de="Filas: v.Filas, ConFilas:"
+// arnes: a="Filas: 0, ConFilas:"
 //
-// Sabotaje: que la próxima sea el mismo instante de la última y no un tick después.
+// Sabotaje: que la próxima sea el mismo instante de la última y no la que viene.
 // arnes: archivo="internal/mcp/scheduler.go"
-// arnes: de="ProximaUnix: ahora.Add(s.tickBajada()).Unix()"
-// arnes: a="ProximaUnix: ahora.Unix()"
+// arnes: de="u.ProximaUnix = ahora.Add("
+// arnes: a="u.ProximaUnix = ahora.Add(0*"
+//
+// Sabotaje: que la próxima sea siempre un tick y no la del ritmo, que promete un pedido que no va a haber.
+// arnes: archivo="internal/mcp/scheduler.go"
+// arnes: de="time.Duration(ticks) * tick"
+// arnes: a="time.Duration(0*ticks+1) * tick"
 func TestSyncStatusDiceLaEdadDeLaBajada(t *testing.T) {
 	var filas atomic.Int64
 	central := centralConFilas(&filas)
@@ -163,21 +169,27 @@ func TestSyncStatusDiceLaEdadDeLaBajada(t *testing.T) {
 	if !strings.Contains(l, " · última hace ") || !strings.Contains(l, " (vacía), próxima en ~") {
 		t.Errorf("después de una bajada vacía la línea tenía que decir «última hace … (vacía), próxima en ~…»:\n%s", l)
 	}
-	// La próxima es la última más un tick; entre el Pull y esta lectura pasan fracciones de segundo,
-	// y la cota de abajo deja lugar a una máquina cargada.
-	if n := proximaEnSegundos(l); n < 20 || n > 30 {
-		t.Errorf("la próxima tenía que caer a ~30 s (un tick sin config), vino %d:\n%s", n, l)
+	// La próxima es la última más DOS ticks: después de una vacía el ritmo saltea el tick siguiente.
+	// Entre el Pull y esta lectura pasan fracciones de segundo, y la cota de abajo deja lugar a una
+	// máquina cargada.
+	if n := proximaEnSegundos(l); n < 50 || n > 60 {
+		t.Errorf("después de una vacía la próxima tenía que caer a ~60 s (dos ticks sin config), vino %d:\n%s", n, l)
 	}
 	if n := edadEnSegundos(l); n < 0 || n > 2 {
 		t.Errorf("recién volvió el Pull: la edad tenía que ser «hace 0 s» (hasta 2 s), vino %d:\n%s", n, l)
 	}
 	t.Logf("después de una bajada vacía: %s", l)
 
+	s.drainInboundOnce(context.Background()) // el tick que el ritmo saltea: no sale a la red
 	filas.Store(2)
 	s.drainInboundOnce(context.Background()) // una página con dos filas
 	l, _ = lineaDeBajada(t, textoDeSyncStatus(t, s))
 	if !strings.Contains(l, " · última hace ") || !strings.Contains(l, " (2 filas), próxima en ~") {
 		t.Errorf("después de bajar dos filas la línea tenía que decir «última hace … (2 filas), próxima en ~…»:\n%s", l)
+	}
+	// Una bajada con filas devuelve el ritmo al tick: la próxima vuelve a un tick.
+	if n := proximaEnSegundos(l); n < 20 || n > 30 {
+		t.Errorf("después de bajar filas la próxima tenía que volver a ~30 s (un tick sin config), vino %d:\n%s", n, l)
 	}
 	if n := edadEnSegundos(l); n < 0 || n > 2 {
 		t.Errorf("recién volvió el Pull con dos filas: la edad tenía que ser «hace 0 s» (hasta 2 s), vino %d:\n%s", n, l)

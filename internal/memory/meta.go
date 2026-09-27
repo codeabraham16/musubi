@@ -1,8 +1,6 @@
 package memory
 
 import (
-	"database/sql"
-	"fmt"
 	"time"
 
 	"musubi/internal/logx"
@@ -48,28 +46,13 @@ const MetaGistsAutomaticos = "code_memory_auto_version"
 
 // GetMeta devuelve el valor de una clave de metadatos (ok=false si no existe).
 func (e *DbEngine) GetMeta(key string) (string, bool, error) {
-	var v string
-	err := e.db.QueryRow(`SELECT value FROM meta WHERE key = ?`, key).Scan(&v)
-	if err == sql.ErrNoRows {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("error al leer meta %q: %w", key, err)
-	}
-	return v, true, nil
+	return leerMeta(e.db, key)
 }
 
-// SetMeta inserta o actualiza una clave de metadatos.
+// SetMeta inserta o actualiza una clave de metadatos. Para leer-modificar-escribir una clave que
+// escriben varios procesos, ver MetaEnTransaccion.
 func (e *DbEngine) SetMeta(key, value string) error {
-	_, err := e.db.Exec(
-		`INSERT INTO meta (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
-		 ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP`,
-		key, value,
-	)
-	if err != nil {
-		return fmt.Errorf("error al guardar meta %q: %w", key, err)
-	}
-	return nil
+	return escribirMeta(e.db, key, value)
 }
 
 // MetaDue indica si corresponde correr una tarea throttled identificada por key:

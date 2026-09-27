@@ -35,6 +35,7 @@ package mcp
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,6 +56,10 @@ const proyectosParaExportar = 64
 // significa «nadie midió», que es distinto de «no está»: con nil no se emite ninguna serie.
 type vidaDeRedLookup func(deviceID string, ahora time.Time) (fleet.VidaDeRed, bool)
 
+// relojLookup responde cuánto se corrió el reloj de una máquina, si alguien lo midió (A133). Un
+// `nil` significa «nadie midió», igual que en vidaDeRedLookup: no se emite ninguna serie.
+type relojLookup func(deviceID string, ahora time.Time) (time.Duration, bool)
+
 // renderFlota agrega al exposition format las métricas de las máquinas que `p` puede ver.
 //
 // Recibe el principal ya resuelto por el handler: la autorización NO se decide acá, se APLICA.
@@ -69,7 +74,8 @@ type vidaDeRedLookup func(deviceID string, ahora time.Time) (fleet.VidaDeRed, bo
 // alguien agrega un campo, y la discrepancia se descubre semanas después, cuando dos dashboards
 // muestran cosas distintas.
 func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal, ahora time.Time,
-	intervaloSonda time.Duration, versionCerebro string, vidaDe vidaDeRedLookup, techoServicios, techoAprobaciones int) {
+	intervaloSonda time.Duration, versionCerebro string, vidaDe vidaDeRedLookup, relojDe relojLookup,
+	techoServicios, techoAprobaciones int) {
 	vistos, truncadoProyectos, ilegible := devicesVisiblesParaMetricas(engine, p)
 	// Los tres hechos viajan JUNTOS en la misma estructura que usa el empuje. Que las dos bocas
 	// compartan el tipo es lo que impide que una empiece a reportar algo que la otra no.
@@ -148,6 +154,8 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 	recorte.Ilegible = recorte.Ilegible || ilegAprob
 	// SI EL TAILNET VE A LAS QUE NO LATEN (Ola 3). Va con las mismas máquinas ya compuertadas.
 	renderVidaDeRed(&cuerpo, vistos, ahora, vidaDe)
+	// CUÁNTO SE CORRIÓ EL RELOJ DE CADA UNA (A133). Mismas máquinas ya compuertadas.
+	renderRelojes(&cuerpo, vistos, ahora, relojDe)
 	// LAS BAJAS RECIENTES, que no están en `vistos` justamente por estar dadas de baja.
 	truncBajas, ilegBajas := renderBajasRecientes(&cuerpo, engine, p, ahora)
 	recorte.Proyectos = recorte.Proyectos || truncBajas
@@ -196,6 +204,19 @@ func renderFlota(b *strings.Builder, engine memory.StorageBackend, p *Principal,
 // pasar es TestNingunaSerieDelCerebroCaeEnElDescarteDelScrape.
 const nombreVidaDeRed = "musubi_fleet_net_up"
 
+// nombreRelojDesfase es cuánto se corrió el reloj de una máquina respecto del cerebro, en segundos
+// y CON SIGNO: positivo es un reloj ADELANTADO (A133). Es la hora de envío que manda el agente
+// menos la hora de llegada del latido, así que el viaje de red la corre unos milisegundos hacia
+// abajo.
+//
+// LA MIDE EL CEREBRO, y por eso el nombre no empieza con `musubi_fleet_device_`: esa familia la
+// descarta el scrape porque llega por el empuje OTLP, y ésta no viaja por el empuje. Con ese
+// prefijo no llegaría a ningún lado, que es lo que le pasó a `musubi_fleet_device_net_up`.
+//
+// FALTA CUANDO NO SE MIDIÓ: agentes anteriores al capver 4, máquinas sin agente (Tier B) y las
+// que dejaron de latir hace más de 90 s. Su ausencia es «no sé», nunca «en hora».
+const nombreRelojDesfase = "musubi_fleet_clock_offset_seconds"
+
 // seriesSoloDelScrape son las que produce EL CEREBRO y no viajan por el empuje OTLP.
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════
@@ -217,6 +238,8 @@ var seriesSoloDelScrape = []string{
 	nombreAprobPendientes,
 	nombreAprobEspera,
 	nombreVidaDeRed,
+	// El desfase del reloj lo calcula el cerebro al recibir el latido; no está en la muestra.
+	nombreRelojDesfase,
 	// Sale de observability.go y no de este archivo, que es exactamente por lo que faltó acá
 	// durante meses: la custodia leía UN archivo y esta serie vive en otro. Es la de mayor
 	// consecuencia de las cinco —tres alertas cuelgan de ella y no tiene copia por OTLP—.
@@ -448,6 +471,31 @@ func renderVidaDeRed(b *strings.Builder, vistos []fleet.Device, ahora time.Time,
 			valor = 1
 		}
 		fmt.Fprintf(b, "%s{project=%q,device=%q} %d\n", nombreVidaDeRed, d.ProjectID, d.Name, valor)
+	}
+}
+
+// renderRelojes publica el desfase del reloj de las máquinas que lo tienen medido (A133).
+//
+// Las etiquetas pasan por citarLabel y no por `%q`: citarLabel escribe exactamente los escapes que
+// define el exposition format (`\\`, `\"` y `\n`), y `%q` escribe además otros —un tabulador como
+// `\t`— que el formato no define.
+func renderRelojes(b *strings.Builder, vistos []fleet.Device, ahora time.Time, relojDe relojLookup) {
+	if relojDe == nil {
+		return
+	}
+	tipoEscrito := false
+	for _, d := range vistos {
+		desfase, hay := relojDe(d.ID, ahora)
+		if !hay {
+			continue
+		}
+		if !tipoEscrito {
+			fmt.Fprintf(b, "# HELP %s Cuánto se corrió el reloj de esta máquina respecto del cerebro, en segundos. POSITIVO = adelantado. Es la hora de envío del latido menos la de llegada, así que el viaje de red la corre unos milisegundos hacia abajo. FALTA cuando no se midió (agente anterior al capver 4, máquina sin agente o que dejó de latir): su ausencia es «no sé», nunca «en hora».\n# TYPE %s gauge\n",
+				nombreRelojDesfase, nombreRelojDesfase)
+			tipoEscrito = true
+		}
+		fmt.Fprintf(b, "%s{project=%s,device=%s} %s\n", nombreRelojDesfase,
+			citarLabel(d.ProjectID), citarLabel(d.Name), strconv.FormatFloat(desfase.Seconds(), 'f', 3, 64))
 	}
 }
 

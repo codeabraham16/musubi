@@ -436,6 +436,9 @@ func TestLaBajadaPorNotaNoCuentaElSondeo(t *testing.T) {
 	ts := httptest.NewServer(central.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second}))
 	defer ts.Close()
 	cli, eng := serverQueAnotaViajes(t, ts.URL, true)
+	// Ritmo FIJO (tope negativo): la prueba mide lo que anota CADA página vacía, y con el espaciado la
+	// mayoría de estos treinta ticks no saldría a la red (eso lo mide bajada_ritmo_test.go).
+	cli.ritmoBajada = nuevoRitmoBajada(-time.Second)
 
 	const ticksVacios = 30
 	for i := 0; i < ticksVacios; i++ {

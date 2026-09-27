@@ -40,10 +40,13 @@ func TestDrainInboundDosProcesosNoBajanLoMismo(t *testing.T) {
 	}
 	defer engine.Close()
 
-	// Dos servidores sobre la MISMA base: dos terminales abiertas en el mismo proyecto.
+	// Dos servidores sobre la MISMA base: dos terminales abiertas en el mismo proyecto. Con el ritmo
+	// FIJO (tope negativo): esta prueba mira el candado, y con el espaciado el tick siguiente del dueño
+	// —después de una página vacía— no sale a la red a propósito. Que el dueño renueve el candado en
+	// esos ticks lo mira TestElDuenoRenuevaElCandadoAunqueNoSalgaALaRed.
 	nuevo := func() *McpServer {
 		s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{}, WithMemory(config.MemoryConfig{TeamMode: true}))
-		s.SetSyncClient(newTestSyncClient(t, stub.URL), config.SyncConfig{BatchSize: 50, DrainIntervalSeconds: 30})
+		s.SetSyncClient(newTestSyncClient(t, stub.URL), config.SyncConfig{BatchSize: 50, DrainIntervalSeconds: 30, InboundIdleMaxSeconds: -1})
 		return s
 	}
 	terminalA, terminalB := nuevo(), nuevo()

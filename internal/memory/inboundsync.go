@@ -206,14 +206,19 @@ func (e *DbEngine) IngestShared(o SharedObs) (Ingesta, error) {
 	// dice qué hay acá: comparar contra él contaba un rebote o un choque cada vez que bajaba justo lo
 	// que ya estaba. Con el mismo contenido no hay nada que conservar y sigue el camino de siempre.
 	//
-	// ⚠️ LO QUE ESTO NO CIERRA, y queda para fix/sync-drain-sin-doble-push. Una 'claimed' cuya
+	// UN CHOQUE SOBRE UNA 'claimed' SE CUENTA Y NADA MÁS: no toca el outbox. Una 'claimed' cuya
 	// entrega el central YA confirmó, pero que el drain todavía no marcó, se conserva igual que una
 	// edición sin salir: si en esa ventana (~un RTT más la espera del candado) baja una versión ajena
-	// más nueva, se conserva la local, el cursor pasa la ajena y la marca deja la fila 'sent'. Acá
-	// queda la local y en el central la ajena, sin push ni pull que lo cierre; main convergía porque
-	// el pull pisaba la reclamada. El cliente no sabe si su push ya se confirmó, así que no se arregla
-	// acá: la salida que propuso la revisión es que un Choque conservado sobre una 'claimed' deje la
-	// fila para volver a subir la local (gana la última) en vez de que la marca la cierre 'sent'.
+	// más nueva, se conserva la local, el cursor pasa la ajena y la marca deja la fila 'sent'. Es una
+	// divergencia CONOCIDA: esta máquina (M) subió v1, otra (G) subió v3 después, y el central y G
+	// quedan con v3 mientras M se queda con v1 hasta su próxima edición. La ola sólo la cuenta
+	// (Ingesta.Choque, que la bajada anota en sync_viajes); cerrarla es #15.
+	//
+	// Devolver la reclamada a la cola para que la local vuelva a subir se probó, y es peor: v1 sale de
+	// nuevo, pisa a v3 en el central, G baja v1, y v3 —la escritura más nueva— se pierde en las tres
+	// máquinas. Gana la PRIMERA. El cliente no sabe si su push llegó al central antes o después que la
+	// ajena, y distinguirlo pide rebobinar el cursor de la bajada o que el central devuelva el sync_seq
+	// de cada save: las dos cosas quedan para #15.
 	var estado string
 	var entregado sql.NullString
 	switch err := tx.QueryRow(`SELECT status, sent_hash FROM outbox WHERE obs_id = ?`, o.ID).
