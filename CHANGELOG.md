@@ -493,6 +493,68 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **«sigue» y los avisos del sistema no son una consulta: el hook del turno ya no busca memoria con
+  ellos.** El recall por turno usaba el prompt como consulta fuera lo que fuera. Con «sigue» traía
+  cualquier nota que dijera «sigue», y con un `<task-notification>` buscaba con el texto del aviso
+  (uno trajo architecture/notifications porque el aviso decía «notification»). Sobre los
+  transcripts de Musubi y Altura en davantis-1 desde el 09-14: 76 de 130 turnos de continuación
+  recibieron memoria (432 ids) y 128 de 356 avisos que el hook ve (396 ids). Sobre una copia de la
+  base real, «sigue» inyectaba 11 ids, y «?» otros 11: los más recientes, de cualquier tema.
+
+  Ahora `turnOutputConTareas` clasifica el prompt antes del recall, con los MISMOS clasificadores
+  del medidor (`transcripts.EsDeSistema` y `transcripts.EsPedidoDeContinuacion`): lo que la
+  compuerta calla es lo que `musubi uso-agente --contexto` cuenta en M1 y M1s, que después de
+  instalar tienen que dar 0. El orden de la función queda escrito como contrato entre frentes
+  (prompt vacío → marca de actividad de la bajada, que llega con feat/bajada-con-ritmo → compuerta
+  → recall). Los demás bloques del turno no cambian. La simulación sobre esos mismos turnos: los
+  130 de continuación y los 356 avisos dejan de buscar, y ningún pedido sustantivo se calla. Los 34
+  prompts distintos que la compuerta calla son del tipo «continua», «mira», «como va?», «que
+  sigue?», «si hazlo y sigue» o «ya está listo,»: seguir o preguntar el estado, sin decir de qué.
+  Un efecto de costado, escrito en `registrarSesionDelta`: como esos turnos ya no buscan, tampoco
+  refrescan la marca de la sesión en el índice del delta, y una sesión que espera un workflow entre
+  avisos y «sigue» puede ser la más vieja cuando arrancan sus hijas. Con las llegadas reales del
+  09-19 al 09-26 no cambió ningún desalojo; lo cierra fix/delta-no-desaloja-interactivas.
+
+  **«Qué es un término» lo dice el recall, y hay uno solo: `memory.TerminosDeConsulta`**, que usan
+  el recall (`rankedTerms`), la compuerta y, en el PR que sigue, el corrector de tipeo. La lista
+  de continuación tenía una copia de las stopwords del recall y un tokenizador propio que partía
+  «v2» en «v» y «2»: callaba un prompt que el recall habría buscado por «v2». Ahora un prompt que
+  pasa la compuerta le deja al recall al menos un término, y el recall nunca busca sin ninguno: sin
+  un solo tramo de letras o dígitos («?») caía a las notas más recientes, y con puras palabras
+  vacías («de la») buscaba "de" OR "la". El fallback sigue siendo del recall, no de la definición.
+  **Cambia la regla del medidor**, que es la misma función: sobre los 529 turnos humanos desde el
+  09-14 no reclasifica ninguno, así que la línea base de M1 por lista sigue en 76/130.
+
+  **El pedido sustantivo se guarda por sesión**, para que feat/memoria-tras-compactar vuelva a
+  buscar memoria sobre él después de compactar, sin mostrarlo: la meta `loop_pedidos:<sesión>`
+  guarda los tres últimos (`[{t, texto}]`), pasados por `internal/redact` antes de truncarlos a
+  200 runas, y no escribe si el pedido es el mismo que el último. Cada secreto queda como «…» y no
+  como `[REDACTED:<tipo>]`: el pedido va a ser una consulta, y la marca le sumaría «REDACTED» y las
+  palabras del tipo (6 de los 3.408 pedidos de la historia llevaban una). Un «sigue» o un aviso no
+  lo pisan. Se poda con el índice del delta: cuando una sesión sale de `loop_delta_sessions`, sus
+  pedidos se vacían (sin escribir nada si no tenía), y una sesión que guardó un pedido sin haber
+  escrito su delta se anota en el índice para que la poda la alcance; también cuando repite el
+  pedido, porque dos hooks a la vez pueden sacarla del índice con el pedido adentro. Hasta que
+  llegue su lector, la meta no la lee nadie.
+
+  **Latencia del hook**, sobre dos copias de la base real y con 8 rondas intercaladas en una
+  máquina compartida: con la mezcla de los turnos reales (399 sustantivos, 130 de continuación y
+  356 avisos) pasa de p50 751 / p95 2.284 ms a 664 / 1.763 ms. Un «sigue» baja de 675 a 532 ms
+  de p50, y un aviso de 811 a 614. En un pedido sustantivo el p50 no se mueve (750 → 745 ms): la
+  escritura del pedido, medida aparte con el motor real, cuesta p50 10 ms y p95 42 ms, y cero si
+  el pedido se repite, así que el p95 del turno sustantivo (2.052 → 2.235 ms) es ruido de la
+  máquina. Anotar una sesión que todavía no está en el índice suma otra escritura (p50 41 ms), y
+  sólo la primera vez.
+
+  *Pruebas: `TestContinuacionYSistemaNoTraenMemoria` (con el motor real y un control: sin la
+  compuerta, «sigue» y el aviso sí traían memoria), `TestUnPromptSinTerminosNoBuscaMemoriaAlAzar`,
+  `TestElPedidoSustantivoSeRecuerdaPorSesion` (también el pedido repetido, que no escribe, y un
+  secreto que cruza la runa 200, que no deja un trozo en claro), `TestElPedidoSinSesionNoSeGuarda`,
+  `TestLaMarcaDelRedactorNoEntraALaConsulta`, `TestLosPedidosSePodanConElDelta`,
+  `TestElPedidoRepetidoVuelveAlIndice`, `TestTerminosDeConsultaYElFallbackDelRecall`, y la tabla
+  de `TestLaListaDeContinuacionNoSeComeElContenido` con filas reales. 22 sabotajes, todos rojos.
+  Cuatro pruebas del delta usaban «q» como prompt: una runa, sin término; ahora usan «qué
+  sabemos». No cambia la descripción ni el esquema de ninguna tool.*
 - **El contador de enviadas cuenta lo que salió de acá, y el sync lleva la cuenta de lo que mueve.**
   Desde #656 el pull sella 'espejo' lo que baja, y ese sello pisaba también las filas 'sent': cada
   nota propia que volvía en la bajada dejaba de contar como enviada. Medido el 2026-09-26 en
