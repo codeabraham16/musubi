@@ -31,7 +31,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
+	"regexp"
 	"strings"
 	"time"
 
@@ -671,7 +671,7 @@ func writeHTTPJSON(w http.ResponseWriter, r *http.Request, resp JsonRpcResponse)
 //
 // Es más estrecha que el estándar, y a propósito: un «*» también admitiría gzip y acá no alcanza.
 // Comprimirle a quien no lo nombró es la única forma en que este cambio podría romper a un cliente;
-// no comprimir no rompe a nadie. Ante la duda —un q ilegible, por ejemplo—, en claro.
+// no comprimir no rompe a nadie. Ante la duda —un q que no es un qvalue, por ejemplo—, en claro.
 func aceptaGzip(h string) bool {
 	for _, parte := range strings.Split(h, ",") {
 		nombre, params, _ := strings.Cut(parte, ";")
@@ -683,14 +683,24 @@ func aceptaGzip(h string) bool {
 			if !ok || !strings.EqualFold(strings.TrimSpace(k), "q") {
 				continue
 			}
-			if q, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err != nil || q <= 0 {
+			// El peso se lee con la gramática del RFC y no con strconv.ParseFloat, que acepta «NaN»,
+			// «+Inf» y floats hexadecimales: como `NaN <= 0` da false, «gzip;q=NaN» se leía como un sí.
+			v = strings.TrimSpace(v)
+			if !qvalue.MatchString(v) {
 				return false
+			}
+			if strings.Trim(v, "0.") == "" {
+				return false // «0», «0.» o «0.000»: un no explícito
 			}
 		}
 		return true
 	}
 	return false
 }
+
+// qvalue es la gramática del peso de un Accept-Encoding (RFC 9110 §12.4.2): «0» o «1», con hasta
+// tres decimales, y el «1» sólo con ceros.
+var qvalue = regexp.MustCompile(`^(?:0(?:\.[0-9]{0,3})?|1(?:\.0{0,3})?)$`)
 
 // resolveServiceAuth resuelve el token (desde la env var nombrada) y si el bind es
 // loopback, aplicando el gating de seguridad: un bind NO-loopback exige token. Devuelve

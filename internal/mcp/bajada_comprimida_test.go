@@ -112,8 +112,8 @@ func gunzip(t *testing.T, b []byte) []byte {
 }
 
 // TestRespuestaGzipSoloSiSeAcepta: la página de la bajada sale comprimida SÓLO si el pedido nombra
-// gzip, y descomprimida es la misma página, byte a byte. Sin la cabecera, con «gzip;q=0» o con un
-// «*» a secas, sale en claro. Y una respuesta chica —la página vacía de un tick sin novedades— no se
+// gzip, y descomprimida es la misma página, byte a byte. Sin la cabecera, con «gzip;q=0», con un q
+// que no es un qvalue («gzip;q=NaN») o con un «*» a secas, sale en claro. Y una respuesta chica —la página vacía de un tick sin novedades— no se
 // comprime aunque se pida.
 //
 // Lo que importa de verdad es la mitad negativa: el /mcp del central tiene más clientes que el sync
@@ -132,8 +132,13 @@ func gunzip(t *testing.T, b []byte) []byte {
 //
 // Sabotaje: leer «gzip;q=0» como un sí.
 // arnes: archivo="internal/mcp/http.go"
-// arnes: de="; err != nil || q <= 0 {"
-// arnes: a="; false && (err != nil || q <= 0) {"
+// arnes: de="if strings.Trim(v, \"0.\") == \"\" {"
+// arnes: a="if false {"
+//
+// Sabotaje: leer un q que no es un qvalue («NaN», «+Inf», un float hexadecimal) como un número más.
+// arnes: archivo="internal/mcp/http.go"
+// arnes: de="if !qvalue.MatchString(v) {"
+// arnes: a="if false {"
 //
 // Sabotaje: comprimir también las respuestas chicas.
 // arnes: archivo="internal/mcp/http.go"
@@ -178,8 +183,10 @@ func TestRespuestaGzipSoloSiSeAcepta(t *testing.T) {
 		t.Errorf("con gzip entre varias codificaciones, Content-Encoding = %q; esperaba gzip", resp.Header.Get("Content-Encoding"))
 	}
 
-	// «gzip;q=0» es un NO explícito, y un «*» a secas no nombra gzip: los dos, en claro.
-	for _, acepta := range []string{"gzip;q=0, identity", "*"} {
+	// «gzip;q=0» es un NO explícito, y un «*» a secas no nombra gzip: los dos, en claro. Un q que no es
+	// un qvalue del RFC tampoco dice que sí: strconv.ParseFloat lee «NaN», «+Inf» y los floats
+	// hexadecimales, y `NaN <= 0` da false.
+	for _, acepta := range []string{"gzip;q=0, identity", "*", "gzip;q=NaN", "gzip;q=+Inf", "gzip;q=0x1p-2"} {
 		resp, b := postComoViaja(t, ts.URL, pagina, acepta)
 		if ce := resp.Header.Get("Content-Encoding"); ce != "" || !bytes.Equal(b, claro) {
 			t.Errorf("con Accept-Encoding %q la respuesta vino con Content-Encoding %q (%d B; en claro son %d): quien no pidió gzip lo recibió",
