@@ -656,9 +656,17 @@ func clearDeltaState(store metaStore, sessionID string) {
 
 // registrarSesionDelta anota la última escritura de la sesión y, si hay más de maxDeltaSessions,
 // vacía el delta de las más viejas, y también sus pedidos (recordarPedido): el índice es la única
-// poda de las claves por sesión del turno. Leer-modificar-escribir sin candado: dos hooks de sesiones
-// distintas a la vez pueden perder una entrada del índice, y lo único que cuesta es que esa clave
-// no se pode; el delta de cada sesión vive en su propia clave y no se pisa.
+// poda de las claves por sesión del turno.
+//
+// LEER-MODIFICAR-ESCRIBIR SIN CANDADO, y desde que el índice poda también los pedidos, perder una
+// actualización cuesta más que una clave sin podar. Con dos hooks de sesiones distintas a la vez:
+// (a) uno escribe el índice que leyó antes de que el otro anotara su sesión, y esa sesión queda
+// afuera con sus pedidos —texto de sus prompts— sin poda, para siempre si no vuelve a anotarse (un
+// recall suyo con resultados, o un pedido sustantivo suyo, aunque lo repita); (b) uno desaloja a la
+// sesión más vieja justo cuando ésta guarda un pedido nuevo, y se lo borra: hasta su próximo pedido,
+// una compactación no tendría consulta. El delta de cada sesión vive en su propia clave y no se
+// pisa. Lo de fondo —el índice y los pedidos en UNA transacción, como LedgerAdd— es de
+// fix/delta-no-desaloja-interactivas, que reescribe esta función.
 func registrarSesionDelta(store metaStore, sessionID string, ahora int64) {
 	sesiones := map[string]int64{}
 	if raw, ok, _ := store.GetMeta(metaDeltaSessions); ok && raw != "" {
@@ -765,6 +773,14 @@ func recordarPedido(store metaStore, sessionID, prompt string, ahora time.Time) 
 		texto = string(r[:maxRunasDePedido])
 	}
 	ps := leerPedidos(store, sessionID)
+	// LA PODA ES LA DEL ÍNDICE DEL DELTA (registrarSesionDelta), y una sesión que nunca escribió su
+	// delta no está en él: el recall no trajo nada, o delta_injection está apagado. Sin anotarla,
+	// sus pedidos no se podarían nunca. Se mira ANTES de la salida por el pedido repetido: una
+	// carrera entre dos hooks puede sacar a la sesión del índice con sus pedidos adentro (ver
+	// registrarSesionDelta), y repetir el pedido es una ocasión de volver a anotarla.
+	if !sesionEnElIndice(store, sessionID) {
+		registrarSesionDelta(store, sessionID, ahora.Unix())
+	}
 	if n := len(ps); n > 0 && ps[n-1].Texto == texto {
 		return
 	}
@@ -777,12 +793,6 @@ func recordarPedido(store metaStore, sessionID, prompt string, ahora time.Time) 
 		return
 	}
 	_ = store.SetMeta(pedidosKey(sessionID), string(data))
-	// LA PODA ES LA DEL ÍNDICE DEL DELTA (registrarSesionDelta), y una sesión que nunca escribió su
-	// delta no está en él: el recall no trajo nada, o delta_injection está apagado. Sin anotarla,
-	// sus pedidos no se podarían nunca.
-	if !sesionEnElIndice(store, sessionID) {
-		registrarSesionDelta(store, sessionID, ahora.Unix())
-	}
 }
 
 // olvidarPedidos vacía los pedidos de una sesión que salió del índice. Sólo escribe si había algo:

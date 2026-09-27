@@ -507,8 +507,9 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   200 runas, y no escribe si el pedido es el mismo que el último. Un «sigue» o un aviso no lo
   pisan. Se poda con el índice del delta: cuando una sesión sale de `loop_delta_sessions`, sus
   pedidos se vacían (sin escribir nada si no tenía), y una sesión que guardó un pedido sin haber
-  escrito su delta se anota en el índice para que la poda la alcance. Hasta que llegue su lector,
-  la meta no la lee nadie.
+  escrito su delta se anota en el índice para que la poda la alcance; también cuando repite el
+  pedido, porque dos hooks a la vez pueden sacarla del índice con el pedido adentro. Hasta que
+  llegue su lector, la meta no la lee nadie.
 
   **Latencia del hook**, sobre dos copias de la base real y con 8 rondas intercaladas en una
   máquina compartida: con la mezcla de los turnos reales (399 sustantivos, 130 de continuación y
@@ -522,8 +523,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   *Pruebas: `TestContinuacionYSistemaNoTraenMemoria` (con el motor real y un control: sin la
   compuerta, «sigue» y el aviso sí traían memoria), `TestUnPromptSinTerminosNoBuscaMemoriaAlAzar`,
   `TestElPedidoSustantivoSeRecuerdaPorSesion`, `TestLosPedidosSePodanConElDelta`,
-  `TestTerminosDeConsultaYElFallbackDelRecall`, y la tabla de
-  `TestLaListaDeContinuacionNoSeComeElContenido` con filas reales. 17 sabotajes, todos rojos.
+  `TestElPedidoRepetidoVuelveAlIndice`, `TestTerminosDeConsultaYElFallbackDelRecall`, y la tabla de
+  `TestLaListaDeContinuacionNoSeComeElContenido` con filas reales. 18 sabotajes, todos rojos.
   Cuatro pruebas del delta usaban «q» como prompt: una runa, sin término; ahora usan «qué
   sabemos». No cambia la descripción ni el esquema de ninguna tool.*
 - **El contador de enviadas cuenta lo que salió de acá, y el sync lleva la cuenta de lo que mueve.**

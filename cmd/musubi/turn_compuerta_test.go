@@ -253,3 +253,55 @@ func saveDeltaStateEn(store metaStore, sesion string, en time.Time) {
 	_ = store.SetMeta(deltaKey(sesion), `{"x":"h"}`)
 	registrarSesionDelta(store, sesion, en.Unix())
 }
+
+// storeIntercalado corre UNA vez otra operación justo después de que alguien lee el índice del
+// delta: es lo que pasa cuando dos hooks de sesiones distintas corren a la vez, porque el
+// leer-modificar-escribir de registrarSesionDelta no tiene candado.
+type storeIntercalado struct {
+	*fakeTurnStore
+	alLeerElIndice func()
+}
+
+func (s *storeIntercalado) GetMeta(key string) (string, bool, error) {
+	v, ok, err := s.fakeTurnStore.GetMeta(key)
+	if f := s.alLeerElIndice; key == metaDeltaSessions && f != nil {
+		s.alLeerElIndice = nil
+		f()
+	}
+	return v, ok, err
+}
+
+// TestElPedidoRepetidoVuelveAlIndice: una carrera entre dos hooks saca a una sesión del índice con
+// su pedido adentro, y si la sesión repite el pedido, vuelve a anotarse, así que la poda la alcanza.
+// Antes, el pedido repetido salía antes de mirar el índice y el pedido quedaba sin poda para siempre.
+//
+// Sabotaje: el pedido repetido sale antes de mirar el índice.
+// arnes: archivo="cmd/musubi/turn.go"
+// arnes: de="\tps := leerPedidos(store, sessionID)\n"
+// arnes: a="\tps := leerPedidos(store, sessionID)\n\tif len(ps) > 0 && ps[len(ps)-1].Texto == texto {\n\t\treturn\n\t}\n"
+func TestElPedidoRepetidoVuelveAlIndice(t *testing.T) {
+	store := &fakeTurnStore{meta: map[string]string{}}
+	ahora := time.Unix(1_800_000_000, 0)
+	const pedido = "revisá el TLS del cerebro"
+
+	// Una hija lee el índice; antes de que lo reescriba, S guarda su pedido y se anota. La hija
+	// escribe el índice que había leído, sin S.
+	hija := &storeIntercalado{fakeTurnStore: store, alLeerElIndice: func() {
+		recordarPedido(store, "S", pedido, ahora)
+	}}
+	registrarSesionDelta(hija, "hija", ahora.Add(time.Second).Unix())
+	if sesionEnElIndice(store, "S") || len(leerPedidos(store, "S")) != 1 {
+		t.Fatal("CONTROL: la carrera tenía que dejar a S fuera del índice con su pedido guardado; si no, la prueba no mide nada")
+	}
+
+	recordarPedido(store, "S", pedido, ahora.Add(2*time.Second)) // S repite el pedido
+	if !sesionEnElIndice(store, "S") {
+		t.Fatal("S repitió el pedido y no volvió al índice: su pedido no se podaría nunca")
+	}
+	for i := 0; i < maxDeltaSessions; i++ {
+		saveDeltaStateEn(store, fmt.Sprintf("hija-%02d", i), ahora.Add(time.Duration(i+3)*time.Second))
+	}
+	if ps := leerPedidos(store, "S"); len(ps) != 0 {
+		t.Errorf("S salió del índice y su pedido sigue ahí: %+v", ps)
+	}
+}
