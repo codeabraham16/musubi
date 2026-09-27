@@ -203,7 +203,7 @@ func TestLaEdadDeLaBajadaNoContradiceAlVolumen(t *testing.T) {
 	t.Run("meta de hace tres días y viajes de hoy", func(t *testing.T) {
 		s, eng := serverQueAnotaViajes(t, "http://127.0.0.1:1", true)
 		vieja := memory.UltimaBajada{Unix: ahora - 3*dia, ProximaUnix: ahora - 3*dia + 30}
-		if err := eng.StorageBackend.SetMeta(memory.MetaUltimaBajada, vieja.Valor()); err != nil {
+		if err := eng.SetMeta(memory.MetaUltimaBajada, vieja.Valor()); err != nil {
 			t.Fatal(err)
 		}
 		if err := eng.StorageBackend.RegistrarViaje(memory.ViajeBajada, memory.Viaje{Posts: 5, Vacias: 5}); err != nil {
@@ -223,7 +223,7 @@ func TestLaEdadDeLaBajadaNoContradiceAlVolumen(t *testing.T) {
 			t.Fatal(err)
 		}
 		vieja := memory.UltimaBajada{Unix: ahora - 9*dia, ProximaUnix: ahora - 9*dia + 30}
-		if err := eng.StorageBackend.SetMeta(memory.MetaUltimaBajada, vieja.Valor()); err != nil {
+		if err := eng.SetMeta(memory.MetaUltimaBajada, vieja.Valor()); err != nil {
 			t.Fatal(err)
 		}
 		l, _ := lineaDeBajada(t, textoDeSyncStatus(t, s))
@@ -253,7 +253,7 @@ func TestLaUltimaBajadaIlegibleNoRompeLaLinea(t *testing.T) {
 	} {
 		t.Run(c.nombre, func(t *testing.T) {
 			s, eng := serverQueAnotaViajes(t, "http://127.0.0.1:1", true)
-			if err := eng.StorageBackend.SetMeta(memory.MetaUltimaBajada, c.valor); err != nil {
+			if err := eng.SetMeta(memory.MetaUltimaBajada, c.valor); err != nil {
 				t.Fatal(err)
 			}
 			l, sigue := lineaDeBajada(t, textoDeSyncStatus(t, s))
