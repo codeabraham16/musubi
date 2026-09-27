@@ -521,6 +521,68 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **«sigue» y los avisos del sistema no son una consulta: el hook del turno ya no busca memoria con
+  ellos.** El recall por turno usaba el prompt como consulta fuera lo que fuera. Con «sigue» traía
+  cualquier nota que dijera «sigue», y con un `<task-notification>` buscaba con el texto del aviso
+  (uno trajo architecture/notifications porque el aviso decía «notification»). Sobre los
+  transcripts de Musubi y Altura en davantis-1 desde el 09-14: 76 de 130 turnos de continuación
+  recibieron memoria (432 ids) y 128 de 356 avisos que el hook ve (396 ids). Sobre una copia de la
+  base real, «sigue» inyectaba 11 ids, y «?» otros 11: los más recientes, de cualquier tema.
+
+  Ahora `turnOutputConTareas` clasifica el prompt antes del recall, con los MISMOS clasificadores
+  del medidor (`transcripts.EsDeSistema` y `transcripts.EsPedidoDeContinuacion`): lo que la
+  compuerta calla es lo que `musubi uso-agente --contexto` cuenta en M1 y M1s, que después de
+  instalar tienen que dar 0. El orden de la función queda escrito como contrato entre frentes
+  (prompt vacío → marca de actividad de la bajada, que llega con feat/bajada-con-ritmo → compuerta
+  → recall). Los demás bloques del turno no cambian. La simulación sobre esos mismos turnos: los
+  130 de continuación y los 356 avisos dejan de buscar, y ningún pedido sustantivo se calla. Los 34
+  prompts distintos que la compuerta calla son del tipo «continua», «mira», «como va?», «que
+  sigue?», «si hazlo y sigue» o «ya está listo,»: seguir o preguntar el estado, sin decir de qué.
+  Un efecto de costado, escrito en `registrarSesionDelta`: como esos turnos ya no buscan, tampoco
+  refrescan la marca de la sesión en el índice del delta, y una sesión que espera un workflow entre
+  avisos y «sigue» puede ser la más vieja cuando arrancan sus hijas. Con las llegadas reales del
+  09-19 al 09-26 no cambió ningún desalojo; lo cierra fix/delta-no-desaloja-interactivas.
+
+  **«Qué es un término» lo dice el recall, y hay uno solo: `memory.TerminosDeConsulta`**, que usan
+  el recall (`rankedTerms`), la compuerta y, en el PR que sigue, el corrector de tipeo. La lista
+  de continuación tenía una copia de las stopwords del recall y un tokenizador propio que partía
+  «v2» en «v» y «2»: callaba un prompt que el recall habría buscado por «v2». Ahora un prompt que
+  pasa la compuerta le deja al recall al menos un término, y el recall nunca busca sin ninguno: sin
+  un solo tramo de letras o dígitos («?») caía a las notas más recientes, y con puras palabras
+  vacías («de la») buscaba "de" OR "la". El fallback sigue siendo del recall, no de la definición.
+  **Cambia la regla del medidor**, que es la misma función: sobre los 529 turnos humanos desde el
+  09-14 no reclasifica ninguno, así que la línea base de M1 por lista sigue en 76/130.
+
+  **El pedido sustantivo se guarda por sesión**, para que feat/memoria-tras-compactar vuelva a
+  buscar memoria sobre él después de compactar, sin mostrarlo: la meta `loop_pedidos:<sesión>`
+  guarda los tres últimos (`[{t, texto}]`), pasados por `internal/redact` antes de truncarlos a
+  200 runas, y no escribe si el pedido es el mismo que el último. Cada secreto queda como «…» y no
+  como `[REDACTED:<tipo>]`: el pedido va a ser una consulta, y la marca le sumaría «REDACTED» y las
+  palabras del tipo (6 de los 3.408 pedidos de la historia llevaban una). Un «sigue» o un aviso no
+  lo pisan. Se poda con el índice del delta: cuando una sesión sale de `loop_delta_sessions`, sus
+  pedidos se vacían (sin escribir nada si no tenía), y una sesión que guardó un pedido sin haber
+  escrito su delta se anota en el índice para que la poda la alcance; también cuando repite el
+  pedido, porque dos hooks a la vez pueden sacarla del índice con el pedido adentro. Hasta que
+  llegue su lector, la meta no la lee nadie.
+
+  **Latencia del hook**, sobre dos copias de la base real y con 8 rondas intercaladas en una
+  máquina compartida: con la mezcla de los turnos reales (399 sustantivos, 130 de continuación y
+  356 avisos) pasa de p50 751 / p95 2.284 ms a 664 / 1.763 ms. Un «sigue» baja de 675 a 532 ms
+  de p50, y un aviso de 811 a 614. En un pedido sustantivo el p50 no se mueve (750 → 745 ms): la
+  escritura del pedido, medida aparte con el motor real, cuesta p50 10 ms y p95 42 ms, y cero si
+  el pedido se repite, así que el p95 del turno sustantivo (2.052 → 2.235 ms) es ruido de la
+  máquina. Anotar una sesión que todavía no está en el índice suma otra escritura (p50 41 ms), y
+  sólo la primera vez.
+
+  *Pruebas: `TestContinuacionYSistemaNoTraenMemoria` (con el motor real y un control: sin la
+  compuerta, «sigue» y el aviso sí traían memoria), `TestUnPromptSinTerminosNoBuscaMemoriaAlAzar`,
+  `TestElPedidoSustantivoSeRecuerdaPorSesion` (también el pedido repetido, que no escribe, y un
+  secreto que cruza la runa 200, que no deja un trozo en claro), `TestElPedidoSinSesionNoSeGuarda`,
+  `TestLaMarcaDelRedactorNoEntraALaConsulta`, `TestLosPedidosSePodanConElDelta`,
+  `TestElPedidoRepetidoVuelveAlIndice`, `TestTerminosDeConsultaYElFallbackDelRecall`, y la tabla
+  de `TestLaListaDeContinuacionNoSeComeElContenido` con filas reales. 22 sabotajes, todos rojos.
+  Cuatro pruebas del delta usaban «q» como prompt: una runa, sin término; ahora usan «qué
+  sabemos». No cambia la descripción ni el esquema de ninguna tool.*
 - **El contador de enviadas cuenta lo que salió de acá, y el sync lleva la cuenta de lo que mueve.**
   Desde #656 el pull sella 'espejo' lo que baja, y ese sello pisaba también las filas 'sent': cada
   nota propia que volvía en la bajada dejaba de contar como enviada. Medido el 2026-09-26 en
@@ -589,6 +651,81 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   nota con treinta sondeos alrededor), `TestLosBytesDeLaSubidaSonLosQueRecibeElCentral` y
   `TestLosBytesDeLaBajadaSonLosDelCuerpoServido` (bytes exactos contra un central de prueba) y
   `TestLaLineaDeLaBajadaEsUnaSola` en `internal/mcp`.*
+- **Una edición local ya no se pierde por el push ni por el pull.**
+  Dos pérdidas, medidas en main y ninguna con un error a la vista. Por el PUSH: el drain reclama v1,
+  se edita v2 mientras v1 viaja, el central acepta v1 y `MarkOutboxSent`, que miraba sólo el estado,
+  dejaba la fila 'sent' con v2 adentro: v2 no salía nunca. Por el PULL: con v2 'pending', la bajada
+  trae otra versión de la misma id y el UPSERT de `IngestShared` le pisaba el contenido; como el
+  payload del envío se arma desde `observations`, el push siguiente subía la versión del central.
+  Reproducido con dos procesos sobre una misma base contra un central que devuelve lo que se le sube
+  (`TestUnaEdicionEnVueloLlegaAlCentral`): en main el central y esta máquina terminan con v1 y el
+  outbox dice `sent=1`; con este arreglo los dos terminan con v2.
+
+  `OutboxItem` lleva el `Hash` del contenido que se empuja, leído en el mismo SELECT del payload, y
+  las tres marcas lo reciben y lo comparan con el `content_hash` que la observación tiene AL MARCAR.
+  `MarkOutboxSent(id, hash)` deja la fila 'sent' sólo si coinciden, y sólo entonces re-sella
+  `enqueued_hash` y borra `last_error` —si no, el 200 tardío de la versión vieja borraba el error de
+  la que sigue pendiente—; `MarkOutboxRetry` y `MarkOutboxDead` sólo aplican a esa versión, así una
+  edición que llegó en vuelo no hereda el backoff ni el dead-letter de la vieja. `MarkOutboxSent`
+  anota igual `sent_hash` y `sent_at` de lo que salió aunque la fila quede 'pending', porque la
+  versión vieja SÍ salió y va a volver en la bajada. `IngestShared` lee la fila de outbox en su
+  transacción: si está 'pending' o 'claimed' y lo que hay acá es otro contenido que el que baja, no
+  escribe NADA —ni el contenido ni el tema, la importancia o el tipo, ni toca el vector— y la
+  edición local sale entera en el próximo tick, donde gana por ser la última. Y lo cuenta en el
+  viaje de la bajada (`sync_viajes`): `rebotes` si el contenido que bajó es lo que esta máquina
+  entregó por última vez (`sent_hash`), `choques` si no; cada choque se loguea con su id. `choques`
+  cuenta las ediciones de contenido que se cruzaron con una de acá, y NO es cota de nada, porque se
+  equivoca para los dos lados. De más: la re-entrega de la versión de base de una nota que bajó de
+  otra máquina y se editó acá, porque ese hash no se guarda. De menos: un cambio ajeno de SÓLO
+  metadatos (tema, importancia, tipo) sobre la versión que esta máquina entregó, mientras acá espera
+  una edición, baja con el contenido de `sent_hash`: cuenta como rebote, no entra, y el push de la
+  edición local lo pisa en el central. Separarlo del rebote común —el de una edición que acá también
+  cambió los metadatos— pide saber qué metadatos salieron, y eso no se guarda: `sent_hash` es sólo
+  del contenido, y guardarlos sería otra columna y otra migración. Con ese número se decide si vale
+  guardar las dos versiones.
+
+  Las marcas comparan contra lo que la observación tiene, y no contra lo encolado
+  (`outbox.enqueued_hash`), porque las dos columnas pueden no coincidir en una fila en vuelo, y
+  contra lo encolado esa fila no se cerraba NUNCA: el push salía bien, la marca no aplicaba y se
+  volvía a empujar en cada lease, para siempre y con cara de sana —sin `last_error`, con `sent_at`
+  al día y un rebote por vuelta—. Se llega ahí por dos caminos de producción: un binario anterior a
+  este arreglo que baja otra versión encima de una edición pendiente (la ventana de despliegue, con
+  daemons viejos y nuevos sobre la misma base), y una 'pending' que la retención purgó —el outbox no
+  tiene FK— y que el central re-entrega con otro contenido. Medido en la revisión: 4 saves al
+  central en 4 ticks, donde main la cerraba con el primer 200; ahora sale una vez y queda 'sent'
+  (`TestUnaHuerfanaReentregadaSaleUnaSolaVez`). Por lo mismo, la conservación del pull compara el
+  CONTENIDO de acá con el que baja y no el hash encolado: si no, cada re-entrega de lo que ya estaba
+  en una fila con deriva se contaba como rebote o choque.
+
+  Sin migración (usa el `sent_hash` de v58) y sin cambios en tools ni en el central: el arreglo es
+  del cliente y viaja con el binario de cada máquina. Cambian dos firmas internas: `IngestShared`
+  devuelve `memory.Ingesta` en vez de un bool, y las marcas del outbox reciben el hash. Lo que NO
+  arregla: dos drainers que empujan versiones distintas de la misma nota a la vez —en davantis-1 hay
+  varios daemons por base— pueden llegar al central en orden invertido y dejar la vieja; eso es del
+  envío doble, que ataca `fix/sync-drain-sin-doble-push`. Y con él queda una ventana de un RTT: si
+  el central ya confirmó la entrega de una fila 'claimed' que el drain todavía no marcó, y justo baja
+  una versión ajena más nueva, se conserva la local y la marca la deja 'sent': acá queda la local y
+  en el central la ajena, sin push ni pull que lo cierre (main convergía, porque el pull pisaba la
+  reclamada). El cliente no sabe si su push ya se confirmó, así que va con ese PR. Las ediciones
+  simultáneas desde dos máquinas siguen siendo «gana la última»: se cuentan, no se guardan las dos.
+
+  *Catorce guardas nuevas, con su sabotaje corrido y rojo. `TestEdicionEnVueloNoQuedaEnviada`,
+  `TestUnReintentoViejoNoFrenaLaEdicion`, `TestUnRechazoViejoNoMataLaEdicion`,
+  `TestUnExitoViejoNoBorraElErrorNuevo` (una marca de la versión vieja no toca la edición que llegó
+  en vuelo, ni su último error), `TestElReboteDeLoQueViajabaNoEsChoque`,
+  `TestPullNoPisaUnaEdicionPendiente` (ni el contenido, ni los metadatos, ni el vector),
+  `TestUnaReclamadaNoLaPisaElPull` y `TestUnaHuerfanaRecibeLoQueBaja` (las otras dos mitades de la
+  conservación: una fila 'claimed' se conserva, una huérfana no), `TestUnChoqueSeCuentaAparte`,
+  `TestLaMismaVersionNoEsChoque` y
+  `TestUnaFilaConDerivaSeCierraConLaEntrega` (las tres marcas aplican sobre una fila con deriva, y
+  la entrega re-sella lo encolado) en `internal/memory`; `TestUnaEdicionEnVueloLlegaAlCentral` (el
+  caso entero, con dos procesos sobre una base), `TestUnaHuerfanaReentregadaSaleUnaSolaVez` (la
+  deriva de punta a punta, con el drain de verdad) y `TestLaBajadaCuentaRebotesYChoques` en
+  `internal/mcp`. Y tres que ya estaban ganan lo suyo: `TestEspejoNoPisaUnaPendienteLocal` (#656)
+  mira también el contenido —y deja de custodiar el WHERE del sello, al que su pendiente ya no
+  llega: ahora lo custodia `TestLaMismaVersionNoEsChoque`, con una pendiente idéntica a lo que
+  baja—, y `TestDrainOfflineFirstRecovery` y `TestDrainPermanentGoesDead` custodian que el drain le
+  pase al reintento y al dead-letter el hash de lo que empujó.*
 - **El inventario de la flota ya no dice que una política actuaría cuando el barrido no la va a visitar.**
   Había dos casos en que `musubi_fleet_list` publicaba `puede_actuar: true` y la política no corría
   nunca:

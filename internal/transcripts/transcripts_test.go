@@ -82,12 +82,19 @@ func TestEsDeSistemaReconoceLosAvisos(t *testing.T) {
 //
 // Sabotaje que la hace fallar: comparar sin plegar los acentos.
 // arnes: archivo="internal/transcripts/prompts.go"
-// arnes: de="\t\t\tout = append(out, plegarAcentos.Replace(b.String()))\n"
-// arnes: a="\t\t\tout = append(out, b.String())\n"
+// arnes: de="\tconsulta := plegarAcentos.Replace(strings.ToLower(prompt))\n"
+// arnes: a="\tconsulta := strings.ToLower(prompt)\n"
+//
+// Sabotaje que la hace fallar: la lista parte el prompt con un criterio propio y no con el término
+// del recall (memory.TerminosDeConsulta).
+// arnes: archivo="internal/transcripts/prompts.go"
+// arnes: de="\tfor _, t := range memory.TerminosDeConsulta(consulta) {\n"
+// arnes: a="\tfor _, t := range append(strings.Fields(consulta), memory.TerminosDeConsulta(\"\")...) {\n"
 func TestLaListaDeContinuacionNoSeComeElContenido(t *testing.T) {
 	// Prompts reales del dueño, cortos: los de arriba dicen qué hacer y tienen que buscar memoria;
 	// los de abajo sólo piden seguir. Un falso «continuación» le quita la memoria a un pedido de
-	// verdad, así que la tabla carga más filas de ese lado.
+	// verdad, así que la tabla carga más filas de ese lado. Las filas marcadas «real» son prompts de
+	// los transcripts de Musubi y Altura desde el 2026-09-14.
 	casos := map[string]bool{
 		"hazlo global":                 false,
 		"bajalo":                       false,
@@ -95,6 +102,10 @@ func TestLaListaDeContinuacionNoSeComeElContenido(t *testing.T) {
 		"mira en git":                  false,
 		"sigue con el TLS del cerebro": false,
 		"revisa el commit 3fd81c33":    false,
+		"haz el commit":                false, // real
+		"desplega el bot":              false, // real
+		"y push":                       false, // real
+		"v2":                           false, // un término para el recall, aunque sea letra y dígito
 		"":                             false, // una imagen sola: trae otra cosa
 		"go":                           true,
 		"continua":                     true,
@@ -104,6 +115,13 @@ func TestLaListaDeContinuacionNoSeComeElContenido(t *testing.T) {
 		"Sigue":                        true,
 		"dale, seguí":                  true,
 		"ok 1":                         true,
+		"como va?":                     true, // real: pregunta el estado, no dice de qué
+		"que sigue?":                   true, // real
+		"ya está listo,":               true, // real
+		"mira esto":                    true, // real
+		"como v?":                      true, // real, y sin un solo término: el recall buscaría al azar
+		"?":                            true, // sin tramos: el recall caería a las notas más recientes
+		"de la":                        true, // sólo palabras vacías: el recall buscaría "de" OR "la"
 	}
 	for prompt, quiere := range casos {
 		if got := EsPedidoDeContinuacion(prompt); got != quiere {

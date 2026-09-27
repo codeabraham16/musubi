@@ -105,14 +105,23 @@ func TestEspejoNoTapaUnaEdicionLocal(t *testing.T) {
 	t.Error("MORDAZA: una edición LOCAL de una observación bajada no llegó a la cola de envío")
 }
 
-// TestEspejoNoPisaUnaPendienteLocal cubre la guarda del ON CONFLICT: si esta máquina tenía una
-// intención de envío SIN SALIR todavía ('pending'), el sello de espejo no la puede matar. Sellarla
-// sería descartar un envío local en silencio, que es peor que el eco que vino a arreglar.
+// TestEspejoNoPisaUnaPendienteLocal: si esta máquina tenía una intención de envío SIN SALIR todavía
+// ('pending'), lo que baja no la puede matar. Sellarla sería descartar un envío local en silencio,
+// que es peor que el eco que vino a arreglar.
+//
+// Nació (#656) como la guarda del WHERE del sello, y YA NO LO ES: su pendiente tiene OTRO contenido
+// que el que baja, y eso ahora lo corta antes la rama Ingesta{Rebote/Choque} de IngestShared, sin
+// llegar al sello. El WHERE sólo decide sobre una pendiente con el MISMO contenido, y lo custodia
+// TestLaMismaVersionNoEsChoque. Esta prueba mira el estado y también el CONTENIDO, que es lo que no
+// miraba: con el estado salvado, el UPSERT le pisaba el texto y el claim —que arma el payload desde
+// observations— empujaba «version del central». Su sabotaje vive en
+// TestPullNoPisaUnaEdicionPendiente, que custodia la misma rama.
 func TestEspejoNoPisaUnaPendienteLocal(t *testing.T) {
 	e := newTestEngine(t)
 
 	// Nace local, se promueve a shared: queda 'pending' esperando el drain.
-	if err := e.SaveObservation("mia-1", "t/x", "esto lo escribi yo y todavia no salio", nil); err != nil {
+	const local = "esto lo escribi yo y todavia no salio"
+	if err := e.SaveObservation("mia-1", "t/x", local, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.PromoteObservation("mia-1"); err != nil {
@@ -140,6 +149,12 @@ func TestEspejoNoPisaUnaPendienteLocal(t *testing.T) {
 	}
 	if despues != outboxPending {
 		t.Errorf("ENVÍO PERDIDO: el sello de espejo pisó una fila local sin enviar (%q -> %q)", antes, despues)
+	}
+	if c := contenidoDe(t, e, "mia-1"); c != local {
+		t.Errorf("EDICIÓN PERDIDA: la fila sigue pendiente pero con el contenido del central (%q)", c)
+	}
+	if it := reclamarUna(t, e, "mia-1"); it.Content != local {
+		t.Errorf("el push iba a subir %q en vez de lo que se escribió acá", it.Content)
 	}
 }
 
