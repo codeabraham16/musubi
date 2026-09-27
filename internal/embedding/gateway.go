@@ -124,10 +124,12 @@ func (g guarded) scrubText(text string) (clean string, n int, err error) {
 //
 // NoopProvider y StaticProvider quedan afuera por lo que SON, no por cómo estén configurados: el
 // primero no embebe, el segundo es una tabla en proceso. Así el camino sin red es bit-idéntico por
-// construcción (invariante E4).
+// construcción (invariante E4). ConsultaLiviana es la misma tabla leída de a filas, y queda afuera
+// por lo mismo: si pasara por el portero, una consulta con forma de secreto se embebería tapada y
+// ya no daría el vector que el índice tiene para ese texto.
 func needsGateway(p Provider) bool {
 	switch p.(type) {
-	case NoopProvider, *StaticProvider:
+	case NoopProvider, *StaticProvider, *ConsultaLiviana:
 		return false
 	default:
 		return true
@@ -166,7 +168,7 @@ type GatewayStatus struct {
 // Reusa newBaseProvider y config.NormalizeGatewayMode para que el diagnóstico no pueda divergir de
 // lo que el constructor realmente hace.
 func InspectGateway(cfg config.EmbeddingConfig) GatewayStatus {
-	base, err := newBaseProvider(cfg)
+	base, err := newBaseProvider(cfg, modoCompleto)
 	if err != nil {
 		return GatewayStatus{Status: "error", Message: "la semántica no arranca: " + err.Error()}
 	}

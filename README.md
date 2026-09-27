@@ -119,10 +119,11 @@ permitidos, y las tools que actúan **sobre otra máquina de la flota o sobre cr
 preguntando (`--flota-sin-preguntar` también las permite; `--sin-permisos` no toca nada). Musubi
 anota qué reglas agregó: reinstalar las reemplaza, `quitar` las saca, y las tuyas no se tocan nunca.
 
-Y deja el **ahorro de tokens**: la conversación se resume al llegar a **400k tokens**
+Y deja el **ahorro de tokens**: la conversación se resume al llegar a **250k tokens**
 (`autoCompactWindow`) en vez de crecer hasta cerca del millón. Medido sobre 14 días de uso real, el
-68 % del gasto era releer la conversación entera en cada pedido; resumir a los 400k gasta un 38 %
-menos, y Musubi repone la memoria relevante después de cada resumen. `--compactar-en N` elige otro
+68 % del gasto era releer la conversación entera en cada pedido; resumir a los 250k gasta un 46 %
+menos, y sigue siendo más contexto que el de una sesión normal de Claude (200k). Musubi trae la
+memoria relevante en cada turno, también después de un resumen. `--compactar-en N` elige otro
 tamaño y `--compactar-en 0` no pone ninguno. Si ya tenías una ventana tuya, Musubi la respeta.
 
 ¿Preferís cablear un solo proyecto? Adentro del repo:

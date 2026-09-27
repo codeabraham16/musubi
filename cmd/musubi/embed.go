@@ -192,14 +192,9 @@ func applyMirror(spec embedding.ModelSpec, mirror string) embedding.ModelSpec {
 // recall léxico. Un provider explícito (static/ollama/openai) se respeta. Ante CUALQUIER
 // error al construir el proveedor, cae a léxico (NoopProvider) en vez de abortar el arranque.
 func resolveEmbedder(cfg config.Config, root string) embedding.Provider {
-	ec := cfg.Embedding
-	if ec.Provider == "" || ec.Provider == "none" {
-		def := filepath.Join(root, ".musubi", "embeddings", defaultEmbedModel)
-		if hasStaticTable(def) {
-			ec.Provider = "static"
-			ec.StaticPath = def
-			logx.Info("memoria semántica auto-detectada (tabla presente)", "tabla", defaultEmbedModel)
-		}
+	ec, auto := configDelEmbebedor(cfg, root)
+	if auto {
+		logx.Info("memoria semántica auto-detectada (tabla presente)", "tabla", defaultEmbedModel)
 	}
 	prov, err := embedding.NewProvider(ec)
 	if err != nil {
@@ -208,6 +203,24 @@ func resolveEmbedder(cfg config.Config, root string) embedding.Provider {
 		return embedding.NoopProvider{}
 	}
 	return prov
+}
+
+// configDelEmbebedor es la config con la que resolveEmbedder construye el embebedor, con la
+// auto-detección de la tabla ya aplicada, y si esa auto-detección se usó. Está aparte para que el
+// embebedor de CONSULTA (embedding.NewProviderDeConsulta) salga de la MISMA config que el del
+// daemon: dos auto-detecciones escritas por separado podrían elegir tablas distintas, y el vector
+// de la consulta dejaría de ser comparable con los del índice.
+func configDelEmbebedor(cfg config.Config, root string) (config.EmbeddingConfig, bool) {
+	ec := cfg.Embedding
+	if ec.Provider == "" || ec.Provider == "none" {
+		def := filepath.Join(root, ".musubi", "embeddings", defaultEmbedModel)
+		if hasStaticTable(def) {
+			ec.Provider = "static"
+			ec.StaticPath = def
+			return ec, true
+		}
+	}
+	return ec, false
 }
 
 // resolveCognition construye el motor del 3er pilar (Cognición) desde la config. F0: apagado por

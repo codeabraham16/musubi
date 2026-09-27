@@ -53,11 +53,15 @@ func NewStaticProvider(dir string) (*StaticProvider, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("static_path vacío: apuntá embedding.static_path a un directorio con model.safetensors + tokenizer.json")
 	}
-	table, rows, dim, crcTabla, nTabla, err := cargarTablaEnStreaming(filepath.Join(dir, "model.safetensors"))
+	// Las huellas (tamaño y fecha) se toman ANTES de leer: son las que van a identidad.json si hay
+	// que escribirla, y ver escribirSidecarsSiHaceFalta para por qué antes y no después.
+	huellaTabla, errTabla := huellaDe(filepath.Join(dir, archivoTabla))
+	huellaTok, errTok := huellaDe(filepath.Join(dir, archivoTokenizer))
+	table, rows, dim, crcTabla, nTabla, err := cargarTablaEnStreaming(filepath.Join(dir, archivoTabla))
 	if err != nil {
 		return nil, fmt.Errorf("tabla estática: %w", err)
 	}
-	tokRaw, err := os.ReadFile(filepath.Join(dir, "tokenizer.json"))
+	tokRaw, err := os.ReadFile(filepath.Join(dir, archivoTokenizer))
 	if err != nil {
 		return nil, fmt.Errorf("tokenizer: %w", err)
 	}
@@ -65,18 +69,24 @@ func NewStaticProvider(dir string) (*StaticProvider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tokenizer: %w", err)
 	}
+	// N1: la identidad lleva el CONTENIDO, no sólo el nombre de la carpeta. Con sólo el
+	// basename, re-destilar la tabla in-place NO cambiaba el model_id: los vectores viejos
+	// seguían pareciendo compatibles y la búsqueda los comparaba por coseno contra los de la
+	// tabla nueva ⇒ ranking corrupto EN SILENCIO. Con el checksum, una tabla distinta es una
+	// identidad distinta y el contrato de procedencia (F2.2) excluye sola a los vectores viejos.
+	checksum := checksumDeCRC(crcTabla, nTabla, crc32.Checksum(tokRaw, castagnoli), int64(len(tokRaw)))
+	// El índice del tokenizer y la identidad para la consulta liviana (consulta_liviana.go). Se
+	// escriben acá porque éste es el único momento en que el tokenizer ya está armado y el checksum
+	// ya está calculado: hacerlo en otro lado costaría volver a leer los dos archivos.
+	if u, ok := tok.(*unigram); ok && errTabla == nil && errTok == nil {
+		escribirSidecarsSiHaceFalta(dir, u, checksum, huellaTabla, huellaTok)
+	}
 	return &StaticProvider{
-		table: table,
-		rows:  rows,
-		dim:   dim,
-		tok:   tok,
-		// N1: la identidad lleva el CONTENIDO, no sólo el nombre de la carpeta. Con sólo el
-		// basename, re-destilar la tabla in-place NO cambiaba el model_id: los vectores viejos
-		// seguían pareciendo compatibles y la búsqueda los comparaba por coseno contra los de la
-		// tabla nueva ⇒ ranking corrupto EN SILENCIO. Con el checksum, una tabla distinta es una
-		// identidad distinta y el contrato de procedencia (F2.2) excluye sola a los vectores viejos.
-		modelID: "static:" + filepath.Base(filepath.Clean(dir)) + "@" +
-			checksumDeCRC(crcTabla, nTabla, crc32.Checksum(tokRaw, castagnoli), int64(len(tokRaw))),
+		table:   table,
+		rows:    rows,
+		dim:     dim,
+		tok:     tok,
+		modelID: modelIDDe(dir, checksum),
 	}, nil
 }
 
@@ -109,7 +119,7 @@ const topeDeHeader = 8 << 20
 // así un archivo que crece mientras se lee no puede mentir sobre su tamaño. La guarda que lo fija
 // es TestLaCargaEnStreamingDaLaMismaIdentidadYLosMismosValores.
 func cargarTablaEnStreaming(ruta string) (tabla []float32, filas, dim int, crc uint32, leidos int64, err error) {
-	f, err := os.Open(ruta)
+	f, err := abrirParaLeer(ruta)
 	if err != nil {
 		return nil, 0, 0, 0, 0, err
 	}
@@ -288,32 +298,45 @@ func (p *StaticProvider) Dimensions() int { return p.dim }
 // L2-normalize. Reproduce bit-exacto model2vec/POTION (config normalize=true; pca/zipf
 // vienen horneados en la tabla al destilar, así que en inferencia son no-op).
 func (p *StaticProvider) Embed(_ context.Context, text string) ([]float32, error) {
-	ids := p.tok.EncodeIDs(text)
-	acc := make([]float64, p.dim)
+	return mediaNormalizada(p.tok.EncodeIDs(text), p.rows, p.dim, func(id int) ([]float32, error) {
+		return p.table[id*p.dim : (id+1)*p.dim], nil
+	})
+}
+
+// mediaNormalizada es el mean-pool + L2 de los DOS embebedores estáticos: StaticProvider, con la
+// tabla en memoria, y ConsultaLiviana, que lee cada fila del disco. Es una sola función a propósito:
+// la consulta liviana existe para dar el MISMO vector bit a bit, y dos copias de esta cuenta —el
+// orden de la suma, la acumulación en float64, dónde se divide— se separarían en silencio la
+// primera vez que alguien tocara una. `fila` devuelve la fila `id`, que siempre está en rango.
+func mediaNormalizada(ids []int, filas, dim int, fila func(id int) ([]float32, error)) ([]float32, error) {
+	acc := make([]float64, dim)
 	n := 0
 	for _, id := range ids {
-		if id < 0 || id >= p.rows {
+		if id < 0 || id >= filas {
 			continue
 		}
-		base := id * p.dim
-		for j := 0; j < p.dim; j++ {
-			acc[j] += float64(p.table[base+j])
+		r, err := fila(id)
+		if err != nil {
+			return nil, err
+		}
+		for j := 0; j < dim; j++ {
+			acc[j] += float64(r[j])
 		}
 		n++
 	}
-	out := make([]float32, p.dim)
+	out := make([]float32, dim)
 	if n == 0 {
 		return out, nil // texto sin tokens conocidos: vector cero (coseno 0, no rompe)
 	}
 	inv := 1.0 / float64(n)
 	var norm2 float64
-	for j := 0; j < p.dim; j++ {
+	for j := 0; j < dim; j++ {
 		acc[j] *= inv
 		norm2 += acc[j] * acc[j]
 	}
 	l2 := math.Sqrt(norm2)
 	if l2 > 0 {
-		for j := 0; j < p.dim; j++ {
+		for j := 0; j < dim; j++ {
 			out[j] = float32(acc[j] / l2)
 		}
 	}

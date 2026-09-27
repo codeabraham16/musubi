@@ -22,15 +22,51 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   Compactando una sesión de prueba con una palabra testigo, el resumen registró la instrucción. Lo
   registran el plugin, `musubi setup` y `provision`; si el proyecto ya corre el hook desde su propio
   settings, el del plugin se calla.
+- **El vector de una consulta, sin cargar la tabla: ~25 ms y 16 MB para un prompt corto, en vez de
+  1,4-2,8 s y 854 MB.**
+  El hook por turno corre sin vector porque armar el embebedor estático cuesta más de un segundo
+  por prompt (el 76 % es el tokenizer: armar un mapa de 500.353 piezas) y cientos de MB. Ahora hay
+  un embebedor de consulta que da el MISMO vector, bit a bit: `embedding.NewProviderDeConsulta`,
+  que con la tabla estática devuelve `ConsultaLiviana`. El tokenizer sale de `tokenizer.idx` —las
+  piezas ordenadas, más el normalizer con el charsmap, Metaspace y el unk—, que se usa tal cual se
+  lee, con una búsqueda binaria que se angosta runa a runa; de `model.safetensors` se leen con
+  `ReadAt` sólo las filas de los tokens del texto; y el nombre sale de `identidad.json`. Nunca abre
+  `tokenizer.json`.
+
+  Lo que cuesta embeber crece con las filas DISTINTAS del texto, y en frío cada una espera al disco.
+  Las filas se leen una vez cada una, en orden de offset y con ocho lectores a la vez (un archivo por
+  lector: en Windows, los `ReadAt` sobre un mismo archivo se hacen de a uno). Medido en davantis-1
+  sobre POTION, sin contar los ~20 ms (caliente) a ~55 ms (frío) de construir: 200 B, 3 ms en frío
+  y 0,5 ms en caliente; 2 KB, 10-13 ms y 4-5 ms; 7 KB, 32-35 ms y 16-18 ms; 20 KB, 81-139 ms y
+  50-112 ms (leyendo de a una, en frío: 41-45, 129-148 y 274-295 ms). El Embed respeta el
+  contexto, así que el plazo de quien lo llama lo corta entre una lectura y la siguiente.
+
+  Los dos archivos los escribe `NewStaticProvider` al lado de la tabla (daemon, serve, backfill)
+  cuando faltan o están vencidos, con temporal único y rename; si Windows no deja renombrar porque
+  un hook tiene el índice abierto, la identidad no se reescribe y el atajo queda apagado hasta el
+  próximo arranque. La tabla se da por no cambiada mirando tamaño y fecha (decisión del dueño); la
+  identidad además se ata al índice por su crc, así un índice de otra tabla no se usa. Sin sidecars,
+  o con la tabla cambiada, no hay atajo (`ErrSinAtajo`, `ErrIdentidadVencida`) y el caller sigue
+  sin vector, como hoy. El tipo nuevo entra en las exenciones del portero y del troceo, que es lo
+  que mantiene su vector igual al del daemon para un prompt de más de 6.000 bytes o con forma de
+  secreto. Este cambio NO enciende el vector en el hook: eso es `ola2/vector-en-el-turno`, que
+  depende del banco con forma de prompt. El job `recall-gate` suma las tres comparaciones contra
+  POTION real.
 - **El ahorro de tokens viene con la instalación: `musubi agente instalar` resume la conversación a
-  los 400k.** Deja `autoCompactWindow: 400000` en el settings de Claude Code, junto a los permisos.
+  los 250k.** Deja `autoCompactWindow: 250000` en el settings de Claude Code, junto a los permisos.
   Medido el 2026-09-26 sobre 14 días de transcripts propios (16.433 respuestas de la API): el 68 %
   del gasto era RELEER la conversación. Con el modelo de 1M, la sesión crecía hasta cerca del millón
   antes de resumirse, con una mediana de 434k tokens por pedido y un 68 % del costo en pedidos de más
   de 400k. Simulado sobre los pedidos de los últimos 4 días, ya con Opus 5.5, el ahorro es de 38 % a
-  los 400k, 42 % a los 300k y 48 % a los 200k. El default es 400k: saca casi todo lo que sacan los
-  topes más chicos con la mitad de las compactaciones. La simulación no cuenta los archivos que el
-  agente vuelve a leer después de un resumen, así que el ahorro real es algo menor. Verificado en el
+  los 400k, 42 % a los 300k, 46 % a los 250k y 48 % a los 200k. Arrancar una sesión nueva al volver de
+  una pausa de más de una hora ahorraría el 54 % (cada vuelta reescribe la conversación entera, con la
+  caché ya vencida, a 40 veces el precio de releerla), pero Claude Code no deja que un hook ni un
+  plugin la abran solos, y su compactación en reposo (`tengu_sunny_locket`) está apagada del lado del
+  servidor para esta cuenta. El default queda en 250k: es lo que más se acerca sin quitarle poder al
+  agente —sigue siendo más contexto que una sesión normal de Claude, de 200k—, y más abajo el ahorro
+  casi no crece mientras las compactaciones se disparan (54 y 90 en cuatro días, contra 38). La
+  simulación no cuenta los archivos que el agente vuelve a leer después de un resumen, así que el
+  ahorro real es algo menor. Verificado en el
   binario 2.1.283: `/context` pasa de «/ 1m» a «/ 400k». Igual que con los permisos, sólo se toca lo
   que Musubi puso: una ventana propia de la persona se respeta, la de Musubi queda anotada en el
   plugin (`.musubi-ahorro.json`), reinstalar la actualiza, `quitar` la saca, y si la persona la

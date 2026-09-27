@@ -119,10 +119,11 @@ Musubi without asking you to confirm every call: Musubi's servers are allowed, a
 `--sin-permisos` leaves settings untouched). Musubi records which rules it added: reinstalling
 replaces them, `quitar` removes them, and your own rules are never touched.
 
-It also sets up **token saving**: the conversation is summarized when it reaches **400k tokens**
+It also sets up **token saving**: the conversation is summarized when it reaches **250k tokens**
 (`autoCompactWindow`) instead of growing to nearly a million. Measured over 14 days of real use, 68 %
-of the spend was re-reading the whole conversation on every request; summarizing at 400k spends 38 %
-less, and Musubi restores the relevant memory after each summary. `--compactar-en N` picks another
+of the spend was re-reading the whole conversation on every request; summarizing at 250k spends 46 %
+less, and it is still more context than a regular Claude session has (200k). Musubi brings the
+relevant memory on every turn, after a summary too. `--compactar-en N` picks another
 size and `--compactar-en 0` sets none. If you already had your own window, Musubi keeps it.
 
 Prefer to wire a single project? Inside the repo:
