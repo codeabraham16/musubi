@@ -197,7 +197,9 @@ go build -o musubi ./cmd/musubi
 - Writes the starter **cognitive skills** into `.musubi/skills/` and the **SDD templates**
   (proposal, spec, design, tasks) into `.musubi/templates/sdd/`.
 - Generates/merges `.mcp.json` so the agent **loads the `musubi` server automatically**.
-- Injects four **hooks** into `.claude/settings.json` (Claude Code) and protects the DB via `.gitignore`.
+- Injects five **hooks** into `.claude/settings.json` (Claude Code) and protects the DB via `.gitignore`.
+  The fifth, `PreCompact`, tells the conversation summary what to keep: the person's rules and
+  decisions, the state of the work and the next step.
 
 | Agent | MCP config | Hooks |
 |--------|-----------|-------|
