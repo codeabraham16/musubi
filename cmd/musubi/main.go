@@ -222,7 +222,7 @@ func printUsage() {
 	cmd("turn --hook-mode", "UserPromptSubmit: inyecta contexto relevante al prompt")
 	cmd("precheck --hook-mode", "PreToolUse: gist antes de leer; radio de impacto antes de editar")
 	cmd("capture --hook-mode", "Stop: captura los commits nuevos como memoria (red de seguridad)")
-	cmd("precompact --hook-mode", "PreCompact: avisa de bajar lo durable ANTES de que se resuma")
+	cmd("precompact --hook-mode", "PreCompact: le dice al resumen qué conservar (reglas, decisiones, estado del trabajo)")
 }
 
 // avisarQueConfigGobierna escribe en stderr, al arrancar, CUÁL config.yaml se cargó — y avisa si
