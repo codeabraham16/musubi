@@ -112,7 +112,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   (bajo la resolución del reloj) y 7 ms de p50 y 16 ms de p95 cuando escribe; el hook entero, en A/B
   contra el binario anterior con el método del banco de latencia (copias de la base, orden
   alternado, mezcla de los turnos reales), +9 ms de p50 sobre ~420-520 ms, y el p95 cambia de signo
-  entre corridas (−434 y +362 ms): ruido.
+  entre corridas (−434 y +362 ms): ruido. Eso es sin otro escritor: si otra conexión tiene tomada la
+  base, la marca espera como cualquier escritura hasta el `busy_timeout` (5 s) y, si vence, no se
+  escribe —la reintenta el turno siguiente, y el tope acota lo que se atrasa la bajada—. Medido con
+  la base tomada 20 s: un «sigue» tardó 20,0 s, contra 15,2 s en main, que ya escribía en ese camino.
 
   La clave nueva `sync.inbound_idle_max_seconds` (en `.musubi/config.example.yaml`) fija el tope: 0
   o ausente es 300; un negativo deja el ritmo fijo, un pedido por tick. El alta no la escribe. Una
