@@ -9,7 +9,6 @@ package mcp
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -29,6 +28,12 @@ import (
 // por debajo del tope del central (4 MiB) para dejar margen, y bien por encima de lo que pesa el
 // grafo de un proyecto chico, que es justo el que puede estar hablándole a un central viejo.
 const umbralCompresionPush = 1 << 20 // 1 MiB
+
+// umbralCompresionSubida es a partir de cuántos bytes el POST de UNA nota (Push) viaja comprimido.
+// Lo que queda por debajo es poco y chico: medido el 2026-09-26 sobre las 3.569 notas compartidas
+// de davantis-1, 18 no llegan (7.080 B de JSON entre todas) y comprimirlas ahorraría 1.980 B, el
+// 0,02 % de la subida. La nota media pesa 3.030 B y viaja en 1.672.
+const umbralCompresionSubida = 512
 
 // errTransient marca un fallo reintentar-able (red/timeout/5xx/429): la fila vuelve a
 // 'pending' con backoff. errPermanent marca un fallo que NO se reintenta (4xx de params,
@@ -236,6 +241,26 @@ func (c *SyncClient) Push(item memory.OutboxItem) error {
 		return fmt.Errorf("%w: no se pudo serializar el request de sync: %v", errPermanent, err)
 	}
 
+	// LA NOTA VIAJA COMPRIMIDA por encima de umbralCompresionSubida, y SIN el resguardo de
+	// PushGraphDe (comprimir sólo por encima de 1 MiB). Aquel umbral cuidaba a los centrales
+	// anteriores a #306, que no descomprimen, y hoy no queda ninguno: medido el 2026-09-26, el único
+	// central de la malla corre 0.141.0-main.ac3b0e2, cuyo readRequestBody descomprime todo POST a
+	// /mcp, y los push del grafo ya le llegan comprimidos por tailscale serve (:10000) todos los días.
+	// Copiar aquel umbral acá era no comprimir nunca: una nota pesa KB, no MiB.
+	//
+	// Si un cliente nuevo le hablara a un central anterior a #306, el central leería el gzip como
+	// JSON roto, contestaría -32700 y la fila iría a dead-letter: no se pierde, espera a
+	// musubi_sync_requeue. Por eso el central se actualiza antes que sus clientes.
+	crudo := int64(len(payload))
+	viajaComprimida := false
+	if len(payload) > umbralCompresionSubida {
+		// Si comprimir fallara (con un bytes.Buffer no pasa), la nota sale en claro: comprimir es un
+		// ahorro, no una condición para entregar.
+		if z, zerr := comprimirGzip(payload); zerr == nil {
+			payload, viajaComprimida = z, true
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), c.http.Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(payload))
@@ -243,6 +268,9 @@ func (c *SyncClient) Push(item memory.OutboxItem) error {
 		return fmt.Errorf("%w: no se pudo construir el request de sync: %v", errPermanent, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if viajaComprimida {
+		req.Header.Set("Content-Encoding", "gzip")
+	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
@@ -255,17 +283,20 @@ func (c *SyncClient) Push(item memory.OutboxItem) error {
 	defer resp.Body.Close()
 	// El central contestó, así que el cuerpo viajó entero: el POST cuenta para sync_viajes aunque
 	// la respuesta sea un rechazo.
+	//
+	// De acá para abajo `payload` es lo que cruzó la red —comprimido si viajó comprimido— y `crudo`
+	// el largo del JSON de la nota. Cable sobre crudos es lo que ahorró la compresión.
 	c.trafico.subidaPosts.Add(1)
 	if rechazo := classifyResponse(resp); rechazo != nil {
 		// Viajó y le costó al central, pero no dejó ninguna nota: sus bytes van APARTE. Sumados al
-		// cable de las aceptadas, un corte reintentado N veces se leería como notas más pesadas.
+		// cable de las aceptadas, un corte reintentado N veces se leería como notas más pesadas. Son
+		// los del cable, porque lo que se mide acá es la red.
 		c.trafico.rechazados.Add(1)
 		c.trafico.bytesRechazados.Add(int64(len(payload)))
 		return rechazo
 	}
-	// Hoy va sin comprimir, así que cable y crudos son el mismo número.
 	c.trafico.subidaCable.Add(int64(len(payload)))
-	c.trafico.subidaCrudos.Add(int64(len(payload)))
+	c.trafico.subidaCrudos.Add(crudo)
 	return nil
 }
 
@@ -341,15 +372,11 @@ func (c *SyncClient) PushGraphDe(pub memory.PublicacionDelGrafo, nodes []memory.
 	crudo := len(payload)
 	comprimido := false
 	if crudo > umbralCompresionPush {
-		var buf bytes.Buffer
-		zw := gzip.NewWriter(&buf)
-		if _, werr := zw.Write(payload); werr != nil {
-			return fmt.Errorf("%w: comprimir push del grafo: %v", errPermanent, werr)
+		z, zerr := comprimirGzip(payload)
+		if zerr != nil {
+			return fmt.Errorf("%w: comprimir push del grafo: %v", errPermanent, zerr)
 		}
-		if cerr := zw.Close(); cerr != nil {
-			return fmt.Errorf("%w: cerrar el gzip del push: %v", errPermanent, cerr)
-		}
-		payload = buf.Bytes()
+		payload = z
 		comprimido = true
 		logx.Info("federación del grafo: payload comprimido", "crudo_bytes", crudo, "gzip_bytes", len(payload),
 			"nodos", len(nodes), "aristas", len(edges), "gists", len(gists))
