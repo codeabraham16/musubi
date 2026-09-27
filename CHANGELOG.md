@@ -8,17 +8,21 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
-- **El banco corre el ranker del hook, con su pool, y mide el tipeo por clase.** El recall por
-  turno (el hook UserPromptSubmit, donde ocurre casi todo el recall) armaba sus opciones a mano, y
-  el banco de `recalleval` armaba las suyas por su lado: sin `RankedFTS` y con el pool subido al
-  corpus entero, hasta 3.155 candidatos —el vectorial incluido— contra los 50 que rankea el hook.
-  O sea que el banco medía un ranker que el hook no corre, y contra ése se iban a decidir el
-  corrector de tipeo y el vector en el turno.
+- **El banco corre el ranker del hook —sus opciones, su pool y su motor— y mide el tipeo por
+  clase.** El recall por turno (el hook UserPromptSubmit, donde ocurre casi todo el recall) armaba
+  sus opciones a mano, y el banco de `recalleval` armaba las suyas por su lado: sin `RankedFTS`, con
+  el pool subido al corpus entero (hasta 3.155 candidatos, el vectorial incluido, contra los 50 que
+  rankea el hook) y sobre un motor que SÍ diversificaba. El hook no: con la tabla estática presente
+  no construye el embebedor, así que su motor queda sin procedencia de vectores y MMR no encuentra
+  con qué medir redundancia, aunque `mmr_lambda` valga 0,75. O sea que el banco medía un ranker que
+  el hook no corre, y contra ése se iban a decidir el corrector de tipeo y el vector en el turno.
 
   `memory.OpcionesDeRecallDelTurno(memCfg, alcance)` pasa a ser la única fuente de las opciones
   del hook: la llaman `buildTurnRecall` y el brazo nuevo del banco, `recalleval.ConfigTurno`, que
-  corre con `Config.PoolDelTurno` (respeta el pool de las opciones en vez de subirlo al corpus, y
-  las @k se miden dentro de lo que ese pool deja entrar). `AlcanceDelTurno` nace con
+  corre con `Config.PoolDelTurno` (respeta el pool de las opciones y mide las @k dentro de él) y
+  con `Config.SinEmbebedor` (el motor en el estado del hook: `SeedEngine` estampa los vectores con
+  nombre, como el backfill, y el brazo los lee sin procedencia). `ConfigTurnoHibrido` es el hook
+  con su embebedor construido, que enciende el vector y MMR juntos. `AlcanceDelTurno` nace con
   `ProjectScope` y `Federate` en su valor cero, que es el recall federado de hoy, y
   `buildTurnRecall` recibe un struct de parámetros en vez de siete posicionales, para que los
   frentes que siguen le agreguen campos sin romper la firma. **No cambia el ranking**: la salida
@@ -27,26 +31,36 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   `recalleval.PerturbarConsulta(q, clase, semilla)` mete un tipeo determinista en cada término de
   5 runas o más, por clase: transposición, falta y sobra —las que va a arreglar el corrector— y
   sustitución, que a propósito no toca, para que el banco no mida al corrector con el mismo error
-  que sabe arreglar. Sobre `golden.json`, un tipeo en el término más largo casi no mueve el MRR
-  (0,722 → 0,694): la consulta es un OR y basta un término vivo. Tipear todos lo baja a 0,500
-  (0,583 en «falta», porque sacar la última letra deja un prefijo que el match por raíz encuentra
-  igual). `TestTipeoFixtureReal` corre lo mismo sobre una copia de la memoria real, sin gate, y es
-  la línea base del frente búsqueda. Medida sobre la base de davantis-1 (3.174 docs, 86 consultas,
-  MRR / R@10): léxico limpio 0,361 / 0,215; con un tipeo, de 0,286 a 0,300 según la clase; con
-  todos los términos tipeados, de 0,132 a 0,165; híbrido limpio 0,401 / 0,279. El mismo léxico con
-  el pool al corpus da 0,397: el pool de 50 del hook le cuesta 0,036 de MRR, y hasta hoy el banco
-  no lo veía.
+  que sabe arreglar. La letra de más imita la del dueño: en sus prompts es casi siempre una letra
+  ajena en el medio de la palabra, y sólo ~1 de cada 6 una repetida. Sobre `golden.json`, un tipeo
+  en el término más largo casi no mueve el MRR (0,722 → 0,694): la consulta es un OR y basta un
+  término vivo. Tipear todos lo baja a 0,500 (0,583 en «falta», porque sacar la última letra deja
+  un prefijo que el match por raíz encuentra igual).
 
-  *Guardas nuevas, con nueve sabotajes corridos en rojo. `TestLaSalidaDelHookEsLaDeAntesDelRefactor`
+  `TestTipeoFixtureReal` corre lo mismo sobre una copia de la memoria real, sin gate, y es la línea
+  base del frente búsqueda. Medida sobre la base de davantis-1 (3.194 docs, 88 consultas, MRR /
+  R@10): el hook como corre hoy, 0,391 / 0,351 limpio; con un tipeo, de 0,309 a 0,324 según la
+  clase; con todos los términos tipeados, de 0,144 a 0,187. Para decidir el vector en el turno,
+  los cuatro brazos con el pool de 50: léxico sin MMR (el hook) 0,391 / 0,351 · léxico con MMR
+  0,354 / 0,212 · híbrido con MMR 0,392 / 0,273 · híbrido sin MMR 0,418 / 0,354. O sea que
+  encender el embebedor tal cual (vector y MMR juntos) deja el MRR igual y baja el R@10, y el
+  vector sin MMR sube el MRR sin perder R@10; la caída de R@10 por MMR está inflada por el
+  etiquetado por topic (ver `mmr_real_test.go`), así que es una cota. El mismo léxico con el pool
+  al corpus da 0,414 / 0,388: el pool de 50 del hook le cuesta 0,023 de MRR.
+
+  *Guardas nuevas, con 21 sabotajes corridos en rojo. `TestLaSalidaDelHookEsLaDeAntesDelRefactor`
   corre el hook entero sobre un motor real con el literal de antes congelado y con la fuente única,
   y exige los mismos bytes; aparte, sobre una copia de la base, el binario de main y el de esta rama
   dieron la misma salida en 30 de 30 turnos, y un control con el pool en 20 dio distinta en 15 de
-  15. `TestBuildTurnRecallUsaLasOpcionesDelTurno` y `TestConfigDelBancoEsLaDelHook` fijan que el
-  hook y el banco sean iguales a la misma función; `TestElBancoCorreElPoolDelTurno`, que el banco le
-  pida a Recall el pool del hook; `TestPerturbarConsultaPorClase` y
-  `TestLaPerturbacionMueveElDorado`, que el instrumento meta el error que dice y mueva el dorado
-  (−0,10 de MRR o más en cada clase). `TestConfigsNoDivergenDeProduccion` suma las filas del brazo
-  del turno.*
+  15. `TestBuildTurnRecallUsaLasOpcionesDelTurno` y `TestElBrazoDelTurnoTraduceElYaml` fijan con
+  valores escritos cómo el hook y el banco traducen un yaml que no es el de fábrica.
+  `TestElBancoCorreElMotorDelHook` exige que, con vectores sembrados, el brazo del hook dé el mismo
+  orden que sin MMR, y que el mismo brazo con embebedor lo cambie. `TestElBancoCorreElPoolDelTurno`,
+  que el banco le pida a Recall el pool del hook y con el motor en el estado de cada brazo.
+  `TestPerturbarConsultaPorClase` (64 semillas), `TestSobraMezclaLetraAjenaYRepetida` y
+  `TestLaPerturbacionMueveElDorado`, que el instrumento meta el error que dice, con la mezcla del
+  dueño, y mueva el dorado (−0,10 de MRR o más en cada clase). `TestConfigsNoDivergenDeProduccion`
+  suma las filas del brazo del turno.*
 - **Antes de tocar un agente a mano, se declara la ventana: el runbook trae la receta.** El
   2026-09-20, en la migración a TLS, se tocó a mano la tarea del agente de `gio` y
   `AgenteCaidoConMaquinaViva` sonó 50 minutos. Fue la única ventana de trabajo leída como caída en
