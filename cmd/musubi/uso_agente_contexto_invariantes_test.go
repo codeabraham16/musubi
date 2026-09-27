@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"musubi/internal/config"
+	"musubi/internal/memory"
 	"musubi/internal/transcripts"
 )
 
@@ -95,6 +97,36 @@ func TestUnSoloClasificadorDePromptHumano(t *testing.T) {
 			t.Errorf("esTurnoDeLaPersona(%.40q) dice ajeno=%v, y EsDeSistema dice %v: dos criterios de «lo "+
 				"escribió la persona» en el mismo hook", c.prompt, ajeno, c.sistema)
 		}
+	}
+}
+
+// Sabotaje que la hace fallar: que el hook del turno cambie el título del bloque y el medidor no se
+// entere (M1 y M1s caerían a 0 en silencio, y el «después» se leería como un éxito).
+// arnes: archivo="cmd/musubi/turn.go"
+// arnes: de="\theader := encabezadoDeMemoria(\"[Musubi — memoria relevante] Contexto de fondo"
+// arnes: a="\theader := encabezadoDeMemoria(\"[Musubi — memoria pertinente] Contexto de fondo"
+func TestMedirContextoReconoceElBloqueRealDelHook(t *testing.T) {
+	// El medidor reconoce el recall del turno por su título. En vez de copiar el literal, esta prueba
+	// le pasa la salida REAL del hook: si el hook cambia el título o el formato de los ids, falla acá.
+	store := newFakeTurnStore()
+	store.recall = memory.RecallResult{Count: 1, Items: []memory.RecallItem{
+		{ID: "0199abcd-0001", TopicKey: "deploy/central", Gist: "la receta del deploy del central", ContentHash: "h"}}}
+	loop := config.LoopConfig{PerTurnRecall: true, RecallBudget: 250}
+	pedido := "armá el deploy del central con la receta"
+	in := `{"prompt":"` + pedido + `","session_id":"s-medir"}`
+	_, bloque := hookAdditionalContext(t, turnOutput(store, loop, pipeOff(), maOff(), config.MemoryConfig{}, strings.NewReader(in)))
+	if bloque == "" {
+		t.Fatal("el hook del turno no inyectó nada con un recall de un item")
+	}
+	raiz := t.TempDir()
+	escribirTranscript(t, raiz, "-home-x/s1.jsonl",
+		fxPrompt("p1", fxTS("2026-09-20", 1), pedido),
+		fxHook("h1", fxTS("2026-09-20", 2), "UserPromptSubmit", bloque),
+	)
+	m := medirContextoFixture(t, raiz)
+	if m.M1.Sustantivos != (ConteoDeTurnos{Turnos: 1, ConMemoria: 1, IDs: 1}) {
+		t.Errorf("sustantivos = %+v con la salida real del hook: quería 1 turno con memoria y 1 id — el medidor "+
+			"no reconoce el bloque que el hook produce:\n%s", m.M1.Sustantivos, bloque)
 	}
 }
 
