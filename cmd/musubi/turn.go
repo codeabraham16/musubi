@@ -669,14 +669,15 @@ func clearDeltaState(store metaStore, sessionID string) {
 // pisa. Lo de fondo —el índice y los pedidos en UNA transacción, como LedgerAdd— es de
 // fix/delta-no-desaloja-interactivas, que reescribe esta función.
 //
-// QUIÉN REFRESCA LA MARCA CAMBIÓ CON LA COMPUERTA DEL TURNO (esUnaConsulta). Antes, cada turno con
-// recall re-anotaba la sesión con la hora (saveDeltaState), también un «sigue» o un aviso del
-// sistema; ahora esos turnos no buscan, y la marca de una sesión interactiva se queda en la de su
-// último pedido sustantivo con resultados —con delta_injection apagado, en la de su primer pedido:
-// recordarPedido sólo la anota si falta—. Una sesión que espera un workflow entre avisos y «sigue»
-// puede ser la más vieja cuando arrancan sus hijas, y perder el delta (su próximo pedido le repite
-// memoria que ya tiene en contexto) y los pedidos. Con las llegadas reales de la semana del 09-19 al
-// 09-26 hubo un desalojo de una sesión principal con cada régimen: hoy no muerde. Lo neutraliza
+// QUIÉN REFRESCA LA MARCA CAMBIÓ CON LA COMPUERTA DEL TURNO (esUnaConsulta). Antes, cada turno cuyo
+// recall traía algo re-anotaba la sesión con la hora (saveDeltaState), también un «sigue» o un aviso
+// del sistema; ahora esos turnos no buscan, y la marca de una sesión interactiva se queda en la de su
+// último pedido sustantivo con resultados, o en la de su arranque (el priming siembra el delta). Con
+// delta_injection apagado ya era así, porque el recall no anota, y recordarPedido la anota sólo si
+// falta. Una sesión que espera un workflow entre avisos y «sigue» puede ser la más vieja cuando
+// arrancan sus hijas, y perder el delta (su próximo pedido le repite memoria que ya tiene en
+// contexto) y los pedidos. Con las llegadas reales de la semana del 09-19 al 09-26 hubo un desalojo
+// de una sesión principal con cada régimen: hoy no muerde. Lo neutraliza
 // fix/delta-no-desaloja-interactivas, que desaloja primero a las sesiones sin turnos.
 func registrarSesionDelta(store metaStore, sessionID string, ahora int64) {
 	sesiones := map[string]int64{}
