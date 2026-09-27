@@ -50,14 +50,14 @@ const (
 	formatoIdentidad = 1
 )
 
-// ErrSinAtajo: no hay índice ni identidad utilizables al lado de la tabla (nunca se escribieron,
-// son de otro formato, la tabla es WordPiece). No es una falla: el embebedor de consulta no está
-// disponible y el caller sigue sin vector.
+// ErrSinAtajo dice que no hay índice ni identidad utilizables al lado de la tabla (nunca se
+// escribieron, son de otro formato, la tabla es WordPiece). No es una falla: el embebedor de
+// consulta no está disponible y el caller sigue sin vector.
 var ErrSinAtajo = errors.New("sin índice del tokenizer: el proveedor completo todavía no lo escribió")
 
-// ErrIdentidadVencida: el índice y la identidad existen pero ya no describen la tabla que hay en
-// disco (cambió el tamaño o la fecha de model.safetensors o de tokenizer.json, o el índice no es el
-// que la identidad dice). Usarlos daría vectores de OTRA tabla con el nombre de ésta, que es la
+// ErrIdentidadVencida dice que el índice y la identidad existen pero ya no describen la tabla que
+// hay en disco (cambió el tamaño o la fecha de model.safetensors o de tokenizer.json, o el índice no
+// es el que la identidad dice). Usarlos daría vectores de OTRA tabla con el nombre de ésta, que es la
 // corrupción silenciosa que N1 prohíbe; por eso no se construye nada.
 var ErrIdentidadVencida = errors.New("la identidad de la tabla está vencida: la tabla cambió desde que se escribió el índice")
 
