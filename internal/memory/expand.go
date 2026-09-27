@@ -131,7 +131,7 @@ func (e *DbEngine) hydrateByIDs(ctx context.Context, ids []string, budget int) (
 	args = append(args, scopeArgs...)
 
 	rows, err := e.db.QueryContext(ctx,
-		`SELECT id, topic_key, content, COALESCE(created_at,'')
+		`SELECT id, topic_key, content, COALESCE(created_at,''), COALESCE(project_id,'')
 		 FROM observations WHERE id IN (`+strings.Join(placeholders, ",")+`)`+scopeSQL,
 		args...,
 	)
@@ -143,7 +143,7 @@ func (e *DbEngine) hydrateByIDs(ctx context.Context, ids []string, budget int) (
 	byID := make(map[string]Observation, len(ids))
 	for rows.Next() {
 		var o Observation
-		if err := rows.Scan(&o.ID, &o.TopicKey, &o.Content, &o.CreatedAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.TopicKey, &o.Content, &o.CreatedAt, &o.ProjectID); err != nil {
 			return nil, 0, nil, fmt.Errorf("error al escanear observación: %w", err)
 		}
 		byID[o.ID] = o
