@@ -527,6 +527,20 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   Los bytes van sin comprimir en los dos sentidos (cable = crudos) hasta los PR de compresión; si
   algún día el transporte de Go descomprime solo una página de la bajada, se cuentan sus crudos y
   no se inventa el cable.
+
+  *Diecinueve guardas nuevas, con su sabotaje corrido y rojo. `TestElRebotePreservaElEnviado`,
+  `TestLaEntregaDejaQueSalioYCuando`, `TestLosViajesSeSumanPorDiaYSentido`,
+  `TestLoQueNoViajaSeCuentaUnaSolaVez` (las tres categorías son disjuntas),
+  `TestUnBinarioAnteriorLeeLaBaseDelContador` (la v57 abre la v58 como legible),
+  `TestLasEnviadasRespetanSuVentana`, `TestHoyYSieteDiasSonDiasDeLaTabla`,
+  `TestUnaPropuestaDescartadaNoCuentaComoCuarentena` y `TestUnaMuertaQueRebotaQuedaEspejo` en
+  `internal/memory`; `TestSyncStatusCuentaLoDeHoy`, `TestUnaSubidaQueNoSalioNoRegistraViaje`,
+  `TestLaBajadaRegistraSuViaje`, `TestUnaBajadaQueNoSalioNoRegistraViaje`,
+  `TestSyncStatusAcotadoAlProyecto` y `TestSyncStatusNoMuestraElOutboxAjeno` (el vecino ve ceros,
+  el admin federado ve el dato), `TestLaBajadaPorNotaNoCuentaElSondeo` (la métrica da el peso de la
+  nota con treinta sondeos alrededor), `TestLosBytesDeLaSubidaSonLosQueRecibeElCentral` y
+  `TestLosBytesDeLaBajadaSonLosDelCuerpoServido` (bytes exactos contra un central de prueba) y
+  `TestLaLineaDeLaBajadaEsUnaSola` en `internal/mcp`.*
 - **Una edición local ya no se pierde por el push ni por el pull.**
   Dos pérdidas, medidas en main y ninguna con un error a la vista. Por el PUSH: el drain reclama v1,
   se edita v2 mientras v1 viaja, el central acepta v1 y `MarkOutboxSent`, que miraba sólo el estado,
@@ -559,19 +573,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   envío doble, que ataca `fix/sync-drain-sin-doble-push`. Las ediciones simultáneas desde dos
   máquinas siguen siendo «gana la última»: se cuentan, no se guardan las dos.
 
-  *Diecinueve guardas nuevas, con su sabotaje corrido y rojo. `TestElRebotePreservaElEnviado`,
-  `TestLaEntregaDejaQueSalioYCuando`, `TestLosViajesSeSumanPorDiaYSentido`,
-  `TestLoQueNoViajaSeCuentaUnaSolaVez` (las tres categorías son disjuntas),
-  `TestUnBinarioAnteriorLeeLaBaseDelContador` (la v57 abre la v58 como legible),
-  `TestLasEnviadasRespetanSuVentana`, `TestHoyYSieteDiasSonDiasDeLaTabla`,
-  `TestUnaPropuestaDescartadaNoCuentaComoCuarentena` y `TestUnaMuertaQueRebotaQuedaEspejo` en
-  `internal/memory`; `TestSyncStatusCuentaLoDeHoy`, `TestUnaSubidaQueNoSalioNoRegistraViaje`,
-  `TestLaBajadaRegistraSuViaje`, `TestUnaBajadaQueNoSalioNoRegistraViaje`,
-  `TestSyncStatusAcotadoAlProyecto` y `TestSyncStatusNoMuestraElOutboxAjeno` (el vecino ve ceros,
-  el admin federado ve el dato), `TestLaBajadaPorNotaNoCuentaElSondeo` (la métrica da el peso de la
-  nota con treinta sondeos alrededor), `TestLosBytesDeLaSubidaSonLosQueRecibeElCentral` y
-  `TestLosBytesDeLaBajadaSonLosDelCuerpoServido` (bytes exactos contra un central de prueba) y
-  `TestLaLineaDeLaBajadaEsUnaSola` en `internal/mcp`.*
+  *Nueve guardas nuevas, con su sabotaje corrido y rojo. `TestEdicionEnVueloNoQuedaEnviada`,
+  `TestUnReintentoViejoNoFrenaLaEdicion`, `TestUnRechazoViejoNoMataLaEdicion` (una marca de la
+  versión vieja no toca la edición que llegó en vuelo), `TestElReboteDeLoQueViajabaNoEsChoque`,
+  `TestPullNoPisaUnaEdicionPendiente` (ni el contenido, ni los metadatos, ni el vector),
+  `TestUnChoqueSeCuentaAparte` y `TestLaMismaVersionNoEsChoque` en `internal/memory`;
+  `TestUnaEdicionEnVueloLlegaAlCentral` (el caso entero, con dos procesos sobre una base) y
+  `TestLaBajadaCuentaRebotesYChoques` en `internal/mcp`. Y tres que ya estaban ganan lo suyo:
+  `TestEspejoNoPisaUnaPendienteLocal` (#656) mira también el contenido, y
+  `TestDrainOfflineFirstRecovery` y `TestDrainPermanentGoesDead` custodian que el drain le pase
+  al reintento y al dead-letter el hash de lo que empujó.*
 - **El mapa publicado describe el commit, no el disco: lo que git ignora ya no sube al central.**
   El índice lee el disco y el central guarda la foto con la etiqueta de un commit. #647 frenaba lo
   modificado y lo sin trackear, pero `git status` no lista los **ignorados**, y `walkSourceTree` no
