@@ -68,6 +68,12 @@ func TestDrainSuccessMarksSent(t *testing.T) {
 }
 
 // Escenario: offline-first — central caído deja pending con attempts↑; al volver, sent.
+//
+// Sabotaje: que el drain no le pase al reintento el hash de lo que empujó (la marca no aplica, la
+// fila queda reclamada hasta que vence el lease y no sale al volver el central).
+// arnes: archivo="internal/mcp/scheduler.go"
+// arnes: de="s.engine.MarkOutboxRetry(item.ObsID, item.Hash, backoff, perr.Error())"
+// arnes: a="s.engine.MarkOutboxRetry(item.ObsID, \"\", backoff, perr.Error())"
 func TestDrainOfflineFirstRecovery(t *testing.T) {
 	// BackoffBaseSeconds=1 para que la recuperación sea rápida (next_attempt_at = now+1s).
 	s, stub, closeFn := wireSync(t, config.SyncConfig{BatchSize: 50, LeaseSeconds: 60, MaxAttempts: 5, BackoffBaseSeconds: 1, BackoffMaxSeconds: 5})
@@ -95,6 +101,12 @@ func TestDrainOfflineFirstRecovery(t *testing.T) {
 }
 
 // Escenario: fallo permanente (400) va directo a dead-letter.
+//
+// Sabotaje: que el drain no le pase a la marca de dead el hash de lo que empujó (la fila queda
+// reclamada en vez de ir a dead-letter).
+// arnes: archivo="internal/mcp/scheduler.go"
+// arnes: de="s.engine.MarkOutboxDead(item.ObsID, item.Hash, perr.Error())"
+// arnes: a="s.engine.MarkOutboxDead(item.ObsID, \"\", perr.Error())"
 func TestDrainPermanentGoesDead(t *testing.T) {
 	s, stub, closeFn := wireSync(t, config.SyncConfig{BatchSize: 50, LeaseSeconds: 60, MaxAttempts: 5, BackoffBaseSeconds: 5, BackoffMaxSeconds: 300})
 	defer closeFn()

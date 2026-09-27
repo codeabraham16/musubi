@@ -37,6 +37,32 @@ type SharedObs struct {
 	ProjectID  string  `json:"project_id"`
 }
 
+// Ingesta es lo que IngestShared hizo con una fila bajada del central.
+//
+// Rebote y Choque son las dos maneras de encontrar acá una edición LOCAL SIN SALIR —la fila de
+// outbox en 'pending' o 'claimed'— con otro contenido que el que bajó. En los dos casos se conserva
+// la local, que sale en el próximo tick y en el central gana por ser la última; lo que cambia es de
+// dónde vino lo que bajó:
+//   - Rebote: el CONTENIDO que bajó es lo que esta máquina entregó por última vez
+//     (outbox.sent_hash). El central devuelve lo que se le subió, y eso no es un conflicto con nadie.
+//   - Choque: cualquier otro contenido. Cuenta las ediciones de contenido que se cruzaron con una de
+//     acá, y NO es cota de nada, porque se equivoca para los dos lados. Cuenta de más la re-entrega
+//     de la versión de base de una nota que bajó de otra máquina y se editó acá: sent_hash sólo anota
+//     lo que salió de esta máquina, y el hash de esa base no se guarda. Y cuenta de menos un cambio
+//     ajeno de SÓLO metadatos (tema, importancia, tipo) sobre la versión que esta máquina entregó,
+//     mientras acá espera una edición: baja con el contenido de sent_hash, así que es un Rebote, no
+//     entra, y el push de la edición local lo pisa en el central. Separarlo del rebote común —el de
+//     una edición que acá también cambió los metadatos— pide saber qué metadatos salieron, y eso no
+//     se guarda: sent_hash es sólo del contenido, y guardarlos sería una columna y una migración.
+//     Con este número el dueño decide si vale guardar las dos versiones.
+//
+// A lo sumo uno de los dos es true, y ninguno si la fila se pisó o se insertó como siempre.
+type Ingesta struct {
+	Insertada bool // la fila no existía acá
+	Rebote    bool
+	Choque    bool
+}
+
 // ListSharedForPull devuelve hasta limit observaciones 'shared' visibles con rowid > afterRowID, en
 // orden ascendente de rowid (cursor monótono y estable para paginar sin perder ni repetir filas),
 // ACOTADAS al proyecto del ctx (aislamiento multi-tenant T17-19: el central sólo entrega la memoria
@@ -117,8 +143,9 @@ func (e *DbEngine) ListSharedForPull(ctx context.Context, afterRowID int64, limi
 // preserva created_at y las stats de acceso). Preserva el project_id y el author de ORIGEN. Redacta
 // el contenido por defensa en profundidad (el central ya redacta al ingerir; el borde a shared es
 // donde vive la garantía). No indexa vector en este primitivo mínimo (ingest léxico; el FTS lo
-// mantienen los triggers AFTER INSERT/UPDATE). Devuelve si insertó una fila nueva (vs. update).
-func (e *DbEngine) IngestShared(o SharedObs) (inserted bool, err error) {
+// mantienen los triggers AFTER INSERT/UPDATE). Devuelve si insertó una fila nueva (vs. update) y si
+// conservó una edición local sin salir (ver Ingesta).
+func (e *DbEngine) IngestShared(o SharedObs) (Ingesta, error) {
 	clean, _ := redact.Redact(o.Content)
 	gist := Gist(clean, defaultGistMaxTokens)
 	hash := ContentHash(clean)
@@ -130,7 +157,7 @@ func (e *DbEngine) IngestShared(o SharedObs) (inserted bool, err error) {
 	// fila entre la lectura y el UPSERT.
 	tx, err := e.db.Begin()
 	if err != nil {
-		return false, fmt.Errorf("error al abrir la transacción de ingest shared: %w", err)
+		return Ingesta{}, fmt.Errorf("error al abrir la transacción de ingest shared: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -140,7 +167,51 @@ func (e *DbEngine) IngestShared(o SharedObs) (inserted bool, err error) {
 	case errors.Is(err, sql.ErrNoRows):
 		existia = false
 	case err != nil:
-		return false, fmt.Errorf("error al leer el contenido previo de %s: %w", o.ID, err)
+		return Ingesta{}, fmt.Errorf("error al leer el contenido previo de %s: %w", o.ID, err)
+	}
+
+	// UNA EDICIÓN LOCAL SIN SALIR NO LA PISA EL PULL. Si la fila de outbox está 'pending' o 'claimed'
+	// y lo que hay acá es otro contenido que el que baja, acá hay una versión que el central todavía
+	// no tiene, y el UPSERT de abajo la reemplazaba por la del central: el payload del envío se arma
+	// desde observations, así que el push siguiente subía la versión del central y la edición se
+	// perdía en los dos lados sin un error. Medido en main: nota enviada (v1), edición local (v2,
+	// 'pending'), bajada de v1 ⇒ el claim devolvía «version del CENTRAL». El sello de #656 ya salvaba
+	// el ESTADO de la fila; esto salva la edición.
+	//
+	// No se escribe NADA: ni el contenido ni topic_key, importance o mem_type. La edición local es
+	// una unidad y sale entera en el próximo tick, donde gana por ser la última; tomar los metadatos
+	// de lo que bajó mezclaría la versión local con la de base (en un rebote, con la versión propia
+	// ANTERIOR) y el push subiría esa mezcla. Tampoco se toca el vector, que es el del contenido que
+	// queda, ni el sello, que ya respeta una 'pending'/'claimed'.
+	//
+	// Lo que decide es el CONTENIDO de acá contra el que baja —lo que el UPSERT pisaría— y no
+	// outbox.enqueued_hash. En una fila con deriva (ver hashActual en outbox.go) el hash encolado no
+	// dice qué hay acá: comparar contra él contaba un rebote o un choque cada vez que bajaba justo lo
+	// que ya estaba. Con el mismo contenido no hay nada que conservar y sigue el camino de siempre.
+	//
+	// ⚠️ LO QUE ESTO NO CIERRA, y queda para fix/sync-drain-sin-doble-push. Una 'claimed' cuya
+	// entrega el central YA confirmó, pero que el drain todavía no marcó, se conserva igual que una
+	// edición sin salir: si en esa ventana (~un RTT más la espera del candado) baja una versión ajena
+	// más nueva, se conserva la local, el cursor pasa la ajena y la marca deja la fila 'sent'. Acá
+	// queda la local y en el central la ajena, sin push ni pull que lo cierre; main convergía porque
+	// el pull pisaba la reclamada. El cliente no sabe si su push ya se confirmó, así que no se arregla
+	// acá: la salida que propuso la revisión es que un Choque conservado sobre una 'claimed' deje la
+	// fila para volver a subir la local (gana la última) en vez de que la marca la cierre 'sent'.
+	var estado string
+	var entregado sql.NullString
+	switch err := tx.QueryRow(`SELECT status, sent_hash FROM outbox WHERE obs_id = ?`, o.ID).
+		Scan(&estado, &entregado); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return Ingesta{}, fmt.Errorf("error al leer el outbox de %s: %w", o.ID, err)
+	}
+	otroContenido := previo != clean
+	enVuelo := existia && (estado == outboxPending || estado == outboxClaimed)
+	if enVuelo && otroContenido {
+		if entregado.Valid && entregado.String == hash {
+			return Ingesta{Rebote: true}, nil
+		}
+		return Ingesta{Choque: true}, nil
 	}
 
 	// UPSERT espejo del de saveObservation, PERO sin enqueueOutboxTx (anti-loop) y forzando
@@ -179,7 +250,7 @@ func (e *DbEngine) IngestShared(o SharedObs) (inserted bool, err error) {
 			sync_seq=(SELECT IFNULL(MAX(sync_seq),0)+1 FROM observations)`,
 		o.ID, o.TopicKey, clean, gist, hash, tokens, o.Importance, memType, o.ProjectID, o.Author)
 	if err != nil {
-		return false, fmt.Errorf("error al ingerir observación shared: %w", err)
+		return Ingesta{}, fmt.Errorf("error al ingerir observación shared: %w", err)
 	}
 
 	// ⚠️ UNA EDICIÓN QUE BAJA DEL CENTRAL DEJABA EL VECTOR DEL CONTENIDO VIEJO. El central sube el
@@ -218,9 +289,11 @@ func (e *DbEngine) IngestShared(o SharedObs) (inserted bool, err error) {
 	// enqueued_hash sí se refresca, igual que en las demás: es contra lo que enqueueOutboxTx mide
 	// una edición local.
 	//
-	// ⚠️ Lo que este arreglo NO toca: el UPSERT de arriba igual pisa el CONTENIDO local con el del
-	// central (último que escribe gana). Eso es el diseño declarado del enlace, no un descuido de
-	// acá, y cambiarlo es otra discusión.
+	// Lo que este sello no decide es el CONTENIDO: sobre una fila ya entregada o bajada, el UPSERT de
+	// arriba lo pisa con el del central (último que escribe gana), que es el diseño declarado del
+	// enlace. La excepción, una edición local sin salir, ni llega hasta acá: la corta la rama de
+	// Ingesta{Rebote/Choque} antes del UPSERT. Lo que sí llega con 'pending' es una pendiente con el
+	// MISMO contenido que baja (la misma captura en dos máquinas), y para ésa está el WHERE.
 	if _, err := tx.Exec(`
 		INSERT INTO outbox (obs_id, enqueued_hash, status, attempts, next_attempt_at, created_at, updated_at)
 		VALUES (?, ?, 'espejo', 0, datetime('now'), datetime('now'), datetime('now'))
@@ -230,22 +303,22 @@ func (e *DbEngine) IngestShared(o SharedObs) (inserted bool, err error) {
 			updated_at = CASE WHEN outbox.status = 'sent' THEN outbox.updated_at ELSE datetime('now') END
 		WHERE outbox.status NOT IN ('pending','claimed')`,
 		o.ID, hash); err != nil {
-		return false, fmt.Errorf("error al sellar como espejo la obs bajada %s: %w", o.ID, err)
+		return Ingesta{}, fmt.Errorf("error al sellar como espejo la obs bajada %s: %w", o.ID, err)
 	}
 
 	cambio := existia && previo != clean
 	if cambio {
 		if _, err := tx.Exec(`DELETE FROM embeddings WHERE observation_id = ?`, o.ID); err != nil {
-			return false, fmt.Errorf("error al invalidar el vector viejo de %s: %w", o.ID, err)
+			return Ingesta{}, fmt.Errorf("error al invalidar el vector viejo de %s: %w", o.ID, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("error al commitear el ingest shared de %s: %w", o.ID, err)
+		return Ingesta{}, fmt.Errorf("error al commitear el ingest shared de %s: %w", o.ID, err)
 	}
 	if cambio && e.index != nil {
 		// Post-commit, como en saveObservation: el IVF no guarda un candidato muerto. La
 		// correctitud ya la da el JOIN contra embeddings; esto es precisión del recall.
 		e.index.Remove(o.ID)
 	}
-	return !existia, nil
+	return Ingesta{Insertada: !existia}, nil
 }

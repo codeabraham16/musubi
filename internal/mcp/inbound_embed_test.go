@@ -175,9 +175,9 @@ type engineQueFallaEn struct {
 	id string
 }
 
-func (e engineQueFallaEn) IngestShared(o memory.SharedObs) (bool, error) {
+func (e engineQueFallaEn) IngestShared(o memory.SharedObs) (memory.Ingesta, error) {
 	if o.ID == e.id {
-		return false, errors.New("ingest roto a propósito (test)")
+		return memory.Ingesta{}, errors.New("ingest roto a propósito (test)")
 	}
 	return e.DbEngine.IngestShared(o)
 }

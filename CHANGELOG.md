@@ -623,6 +623,81 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   nota con treinta sondeos alrededor), `TestLosBytesDeLaSubidaSonLosQueRecibeElCentral` y
   `TestLosBytesDeLaBajadaSonLosDelCuerpoServido` (bytes exactos contra un central de prueba) y
   `TestLaLineaDeLaBajadaEsUnaSola` en `internal/mcp`.*
+- **Una edición local ya no se pierde por el push ni por el pull.**
+  Dos pérdidas, medidas en main y ninguna con un error a la vista. Por el PUSH: el drain reclama v1,
+  se edita v2 mientras v1 viaja, el central acepta v1 y `MarkOutboxSent`, que miraba sólo el estado,
+  dejaba la fila 'sent' con v2 adentro: v2 no salía nunca. Por el PULL: con v2 'pending', la bajada
+  trae otra versión de la misma id y el UPSERT de `IngestShared` le pisaba el contenido; como el
+  payload del envío se arma desde `observations`, el push siguiente subía la versión del central.
+  Reproducido con dos procesos sobre una misma base contra un central que devuelve lo que se le sube
+  (`TestUnaEdicionEnVueloLlegaAlCentral`): en main el central y esta máquina terminan con v1 y el
+  outbox dice `sent=1`; con este arreglo los dos terminan con v2.
+
+  `OutboxItem` lleva el `Hash` del contenido que se empuja, leído en el mismo SELECT del payload, y
+  las tres marcas lo reciben y lo comparan con el `content_hash` que la observación tiene AL MARCAR.
+  `MarkOutboxSent(id, hash)` deja la fila 'sent' sólo si coinciden, y sólo entonces re-sella
+  `enqueued_hash` y borra `last_error` —si no, el 200 tardío de la versión vieja borraba el error de
+  la que sigue pendiente—; `MarkOutboxRetry` y `MarkOutboxDead` sólo aplican a esa versión, así una
+  edición que llegó en vuelo no hereda el backoff ni el dead-letter de la vieja. `MarkOutboxSent`
+  anota igual `sent_hash` y `sent_at` de lo que salió aunque la fila quede 'pending', porque la
+  versión vieja SÍ salió y va a volver en la bajada. `IngestShared` lee la fila de outbox en su
+  transacción: si está 'pending' o 'claimed' y lo que hay acá es otro contenido que el que baja, no
+  escribe NADA —ni el contenido ni el tema, la importancia o el tipo, ni toca el vector— y la
+  edición local sale entera en el próximo tick, donde gana por ser la última. Y lo cuenta en el
+  viaje de la bajada (`sync_viajes`): `rebotes` si el contenido que bajó es lo que esta máquina
+  entregó por última vez (`sent_hash`), `choques` si no; cada choque se loguea con su id. `choques`
+  cuenta las ediciones de contenido que se cruzaron con una de acá, y NO es cota de nada, porque se
+  equivoca para los dos lados. De más: la re-entrega de la versión de base de una nota que bajó de
+  otra máquina y se editó acá, porque ese hash no se guarda. De menos: un cambio ajeno de SÓLO
+  metadatos (tema, importancia, tipo) sobre la versión que esta máquina entregó, mientras acá espera
+  una edición, baja con el contenido de `sent_hash`: cuenta como rebote, no entra, y el push de la
+  edición local lo pisa en el central. Separarlo del rebote común —el de una edición que acá también
+  cambió los metadatos— pide saber qué metadatos salieron, y eso no se guarda: `sent_hash` es sólo
+  del contenido, y guardarlos sería otra columna y otra migración. Con ese número se decide si vale
+  guardar las dos versiones.
+
+  Las marcas comparan contra lo que la observación tiene, y no contra lo encolado
+  (`outbox.enqueued_hash`), porque las dos columnas pueden no coincidir en una fila en vuelo, y
+  contra lo encolado esa fila no se cerraba NUNCA: el push salía bien, la marca no aplicaba y se
+  volvía a empujar en cada lease, para siempre y con cara de sana —sin `last_error`, con `sent_at`
+  al día y un rebote por vuelta—. Se llega ahí por dos caminos de producción: un binario anterior a
+  este arreglo que baja otra versión encima de una edición pendiente (la ventana de despliegue, con
+  daemons viejos y nuevos sobre la misma base), y una 'pending' que la retención purgó —el outbox no
+  tiene FK— y que el central re-entrega con otro contenido. Medido en la revisión: 4 saves al
+  central en 4 ticks, donde main la cerraba con el primer 200; ahora sale una vez y queda 'sent'
+  (`TestUnaHuerfanaReentregadaSaleUnaSolaVez`). Por lo mismo, la conservación del pull compara el
+  CONTENIDO de acá con el que baja y no el hash encolado: si no, cada re-entrega de lo que ya estaba
+  en una fila con deriva se contaba como rebote o choque.
+
+  Sin migración (usa el `sent_hash` de v58) y sin cambios en tools ni en el central: el arreglo es
+  del cliente y viaja con el binario de cada máquina. Cambian dos firmas internas: `IngestShared`
+  devuelve `memory.Ingesta` en vez de un bool, y las marcas del outbox reciben el hash. Lo que NO
+  arregla: dos drainers que empujan versiones distintas de la misma nota a la vez —en davantis-1 hay
+  varios daemons por base— pueden llegar al central en orden invertido y dejar la vieja; eso es del
+  envío doble, que ataca `fix/sync-drain-sin-doble-push`. Y con él queda una ventana de un RTT: si
+  el central ya confirmó la entrega de una fila 'claimed' que el drain todavía no marcó, y justo baja
+  una versión ajena más nueva, se conserva la local y la marca la deja 'sent': acá queda la local y
+  en el central la ajena, sin push ni pull que lo cierre (main convergía, porque el pull pisaba la
+  reclamada). El cliente no sabe si su push ya se confirmó, así que va con ese PR. Las ediciones
+  simultáneas desde dos máquinas siguen siendo «gana la última»: se cuentan, no se guardan las dos.
+
+  *Catorce guardas nuevas, con su sabotaje corrido y rojo. `TestEdicionEnVueloNoQuedaEnviada`,
+  `TestUnReintentoViejoNoFrenaLaEdicion`, `TestUnRechazoViejoNoMataLaEdicion`,
+  `TestUnExitoViejoNoBorraElErrorNuevo` (una marca de la versión vieja no toca la edición que llegó
+  en vuelo, ni su último error), `TestElReboteDeLoQueViajabaNoEsChoque`,
+  `TestPullNoPisaUnaEdicionPendiente` (ni el contenido, ni los metadatos, ni el vector),
+  `TestUnaReclamadaNoLaPisaElPull` y `TestUnaHuerfanaRecibeLoQueBaja` (las otras dos mitades de la
+  conservación: una fila 'claimed' se conserva, una huérfana no), `TestUnChoqueSeCuentaAparte`,
+  `TestLaMismaVersionNoEsChoque` y
+  `TestUnaFilaConDerivaSeCierraConLaEntrega` (las tres marcas aplican sobre una fila con deriva, y
+  la entrega re-sella lo encolado) en `internal/memory`; `TestUnaEdicionEnVueloLlegaAlCentral` (el
+  caso entero, con dos procesos sobre una base), `TestUnaHuerfanaReentregadaSaleUnaSolaVez` (la
+  deriva de punta a punta, con el drain de verdad) y `TestLaBajadaCuentaRebotesYChoques` en
+  `internal/mcp`. Y tres que ya estaban ganan lo suyo: `TestEspejoNoPisaUnaPendienteLocal` (#656)
+  mira también el contenido —y deja de custodiar el WHERE del sello, al que su pendiente ya no
+  llega: ahora lo custodia `TestLaMismaVersionNoEsChoque`, con una pendiente idéntica a lo que
+  baja—, y `TestDrainOfflineFirstRecovery` y `TestDrainPermanentGoesDead` custodian que el drain le
+  pase al reintento y al dead-letter el hash de lo que empujó.*
 - **El inventario de la flota ya no dice que una política actuaría cuando el barrido no la va a visitar.**
   Había dos casos en que `musubi_fleet_list` publicaba `puede_actuar: true` y la política no corría
   nunca:
