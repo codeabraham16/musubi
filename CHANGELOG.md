@@ -28,13 +28,16 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   448 MiB reservados). Ninguna página real se le acerca: las 50 notas más grandes del central suman
   642.551 B.
 
-  Ningún cliente que hoy le habla al `/mcp` del central se rompe, y está probado uno por uno: el
-  sync, el canal `musubi cerebro` y el relay del panel (`musubi dashboard`, por donde llegan el CRM
-  y el navegador) son Go, y piden gzip y lo descomprimen solos, igual que el `fetch` de Node (el del
-  adjudicador B1, que es Claude Code con un servidor `type: http`), `requests` y `httpx`; curl sin
-  `--compressed` (`musubi-tool.sh`), `urllib` y el `http.request` de Node no lo piden y reciben el
-  cuerpo en claro de siempre. El gateway de Telegram, los puentes de WhatsApp y altura-voz no le
-  hablan al `/mcp` del central. El stream del panel (`/api/stream`) no pasa por acá y sale en claro
+  Ningún cliente que hoy le habla al `/mcp` del central se rompe. Probados contra el handler real:
+  el sync, el canal `musubi cerebro` y el relay del panel (`musubi dashboard`, por donde llegan el
+  CRM y el navegador) son Go, y piden gzip y lo descomprimen solos, igual que el `fetch` de Node,
+  `requests` y `httpx`; curl sin `--compressed` (`musubi-tool.sh`), `urllib` y el `http.request` de
+  Node no lo piden y reciben el cuerpo en claro de siempre. El adjudicador B1 (Claude Code con un
+  servidor `type: http`) NO se probó: corre Claude Code nativo 2.1.218, un ELF con Bun 1.4.0
+  adentro —el Node del server no interviene—, y que su `fetch` pide `gzip, deflate, br, zstd` y
+  descomprime solo sale de leer el binario, no de una corrida. La prueba es su primera corrida
+  después de V3. El gateway de Telegram, los puentes de WhatsApp y altura-voz no le hablan al
+  `/mcp` del central. El stream del panel (`/api/stream`) no pasa por acá y sale en claro
   aunque se pida gzip: un stream comprimido no llega hasta que el compresor suelta un bloque.
 
   **Despliegue:** la bajada viaja comprimida recién con el central nuevo (ventana V3). Un cliente
