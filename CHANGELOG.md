@@ -8,6 +8,36 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El vector de una consulta, sin cargar la tabla: ~25 ms y 16 MB para un prompt corto, en vez de
+  1,4-2,8 s y 854 MB.**
+  El hook por turno corre sin vector porque armar el embebedor estático cuesta más de un segundo
+  por prompt (el 76 % es el tokenizer: armar un mapa de 500.353 piezas) y cientos de MB. Ahora hay
+  un embebedor de consulta que da el MISMO vector, bit a bit: `embedding.NewProviderDeConsulta`,
+  que con la tabla estática devuelve `ConsultaLiviana`. El tokenizer sale de `tokenizer.idx` —las
+  piezas ordenadas, más el normalizer con el charsmap, Metaspace y el unk—, que se usa tal cual se
+  lee, con una búsqueda binaria que se angosta runa a runa; de `model.safetensors` se leen con
+  `ReadAt` sólo las filas de los tokens del texto; y el nombre sale de `identidad.json`. Nunca abre
+  `tokenizer.json`.
+
+  Lo que cuesta embeber crece con las filas DISTINTAS del texto, y en frío cada una espera al disco.
+  Las filas se leen una vez cada una, en orden de offset y con ocho lectores a la vez (un archivo por
+  lector: en Windows, los `ReadAt` sobre un mismo archivo se hacen de a uno). Medido en davantis-1
+  sobre POTION, sin contar los ~20 ms (caliente) a ~55 ms (frío) de construir: 200 B, 3 ms en frío
+  y 0,5 ms en caliente; 2 KB, 10-13 ms y 4-5 ms; 7 KB, 32-35 ms y 16-18 ms; 20 KB, 81-139 ms y
+  50-112 ms (leyendo de a una, en frío: 41-45, 129-148 y 274-295 ms). El Embed respeta el
+  contexto, así que el plazo de quien lo llama lo corta entre una lectura y la siguiente.
+
+  Los dos archivos los escribe `NewStaticProvider` al lado de la tabla (daemon, serve, backfill)
+  cuando faltan o están vencidos, con temporal único y rename; si Windows no deja renombrar porque
+  un hook tiene el índice abierto, la identidad no se reescribe y el atajo queda apagado hasta el
+  próximo arranque. La tabla se da por no cambiada mirando tamaño y fecha (decisión del dueño); la
+  identidad además se ata al índice por su crc, así un índice de otra tabla no se usa. Sin sidecars,
+  o con la tabla cambiada, no hay atajo (`ErrSinAtajo`, `ErrIdentidadVencida`) y el caller sigue
+  sin vector, como hoy. El tipo nuevo entra en las exenciones del portero y del troceo, que es lo
+  que mantiene su vector igual al del daemon para un prompt de más de 6.000 bytes o con forma de
+  secreto. Este cambio NO enciende el vector en el hook: eso es `ola2/vector-en-el-turno`, que
+  depende del banco con forma de prompt. El job `recall-gate` suma las tres comparaciones contra
+  POTION real.
 - **El ahorro de tokens viene con la instalación: `musubi agente instalar` resume la conversación a
   los 400k.** Deja `autoCompactWindow: 400000` en el settings de Claude Code, junto a los permisos.
   Medido el 2026-09-26 sobre 14 días de transcripts propios (16.433 respuestas de la API): el 68 %

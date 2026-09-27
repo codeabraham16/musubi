@@ -120,17 +120,23 @@ func TestE1MismoTextoMismoTapado(t *testing.T) {
 
 // El invariante es estructural: si NewProvider devuelve SIEMPRE un envuelto para los providers con
 // red, entonces las rutas que indexan y las que consultan usan el mismo objeto y ven la misma
-// transformación. Lo que hay que impedir es que exista una forma de obtener uno desnudo.
+// transformación. Lo que hay que impedir es que exista una forma de obtener uno desnudo. Y el
+// constructor de CONSULTA es otra puerta de la misma fábrica: con red, tiene que salir envuelto igual.
 func TestE2NoHayFormaDeObtenerUnProviderConRedSinPortero(t *testing.T) {
-	for _, prov := range []string{"ollama", "openai", "openai-compatible"} {
-		cfg := cfgConRed("")
-		cfg.Provider = prov
-		p, err := NewProvider(cfg)
-		if err != nil {
-			t.Fatalf("NewProvider(%q): %v", prov, err)
-		}
-		if _, envuelto := p.(guarded); !envuelto {
-			t.Fatalf("FUGA E2: %q sale de la fábrica SIN portero (%T); el índice y la query podrían divergir", prov, p)
+	constructores := map[string]func(config.EmbeddingConfig) (Provider, error){
+		"NewProvider": NewProvider, "NewProviderDeConsulta": NewProviderDeConsulta,
+	}
+	for nombre, construir := range constructores {
+		for _, prov := range []string{"ollama", "openai", "openai-compatible"} {
+			cfg := cfgConRed("")
+			cfg.Provider = prov
+			p, err := construir(cfg)
+			if err != nil {
+				t.Fatalf("%s(%q): %v", nombre, prov, err)
+			}
+			if _, envuelto := p.(guarded); !envuelto {
+				t.Fatalf("FUGA E2: %q sale de %s SIN portero (%T); el índice y la query podrían divergir", prov, nombre, p)
+			}
 		}
 	}
 }
