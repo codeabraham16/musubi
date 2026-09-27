@@ -177,6 +177,9 @@ type McpServer struct {
 	bajadaCedidaHasta atomic.Int64
 	intervaloBajada   atomic.Int64
 	cursorBajadaVisto atomic.Int64
+	// ritmoBajada espacia la bajada cuando vuelve vacía y la despierta con actividad (ver
+	// bajada_ritmo.go). Lo arma SetSyncClient con el tope de la config; nil sale en cada tick.
+	ritmoBajada *ritmoBajada
 	// sondaEscritura es el estado del sondeo de ESCRITURA de /readyz (ver observability.go). Vive
 	// acá y no en el handler porque tiene que sobrevivir entre pedidos: es lo que evita lanzar una
 	// goroutine nueva por cada sondeo mientras una escritura está colgada. El cero vale como
@@ -495,6 +498,8 @@ func (s *McpServer) CloseLedger() { s.ledger.close() }
 func (s *McpServer) SetSyncClient(client *SyncClient, cfg config.SyncConfig) {
 	s.syncClient = client
 	s.syncCfg = cfg
+	// El ritmo de la bajada sale de la MISMA config (ver bajada_ritmo.go): un tope negativo lo deja fijo.
+	s.ritmoBajada = nuevoRitmoBajada(time.Duration(cfg.EffectiveInboundIdleMaxSeconds()) * time.Second)
 }
 
 // defaultScope es el scope que recibe una captura SIN scope explícito (C5.2): 'shared' cuando el

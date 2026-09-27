@@ -77,6 +77,52 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   duraciones van redondeadas a la unidad más cercana (dos días y 23 horas son `3 d`, no `2 d`). No
   cambia el esquema ni la descripción de ninguna tool y no trae migración: viaja en la V1 con el
   resto de la ola.
+- **La bajada deja de preguntarle al central cada 30 s cuando no hay nada, y vuelve a los 30 s en
+  cuanto alguien trabaja.** Medido en el ledger del central el 2026-09-26: 6.207 `musubi_sync_pull`
+  en un día, el 92,8 % de todas sus invocaciones, casi todos páginas vacías de ~135 B. Ahora el
+  dueño del candado, después de k bajadas vacías seguidas, saltea 2^k − 1 ticks —desde la segunda,
+  hasta uno más al azar, para desparejar máquinas— con un tope: 60, 120, 240 y 300 s de ahí en más.
+  Todo cuenta TICKS del scheduler, sin reloj ni jitter en la base, así que el ritmo con actividad es
+  exactamente el tick. Medido con el scheduler real contra un central de prueba, en 120 ticks (una
+  hora): una base quieta pide 14 veces (−88 %), con un turno cada 10 min 24 (−80 %), y con un turno
+  por tick 120, como antes.
+
+  Vuelven al tick y reinician el espaciado: una bajada con filas; la marca de actividad
+  `sync:inbound_despertar`, que escribe el hook del turno con TODO prompt no vacío —«sigue» y los
+  avisos del sistema incluidos, antes de la compuerta de consulta— y todo daemon al arrancar, que
+  además baja una vez antes del primer tick; y el cambio de dueño del candado: quien lo recupera
+  baja en ese tick, sin heredar lo que le quedaba por esperar de cuando era dueño. Vacía es sin
+  páginas con filas, no sin filas ingeridas: una página que no entra no espacia la bajada atascada.
+  El ledger local de invocaciones NO despierta, a propósito: 260 en 7 días (188 de trabajo) y sólo
+  en 27 de 168 horas, contra ~68 prompts por día, y una tool nueva contaría como trabajo: el tope
+  acota lo que queda afuera.
+
+  El corte va después de reclamar el candado: el dueño lo renueva en cada tick aunque no salga a la
+  red, y el lease no vence en la espera. Un tick salteado escribe una sola fila —esa renovación, que
+  ya hacía— y lee la marca; uno que sale y vuelve vacío escribe tres (candado, `sync_viajes`,
+  `sync:inbound_ultima`), medido con triggers sobre las 37 tablas de una base de prueba. La meta
+  `sync:inbound_ultima` anota ahora la próxima REAL, la del ritmo, y no un tick base: la línea
+  «bajada» de `musubi_sync_status` dice `próxima en ~3 min` con la bajada espaciada, y `próxima en
+  ≤20 s (hubo actividad después de la última)` cuando un turno ya la adelantó.
+
+  El hook reescribe la marca sólo si la vigente tiene 15 s o más —medio tick—, así una ráfaga de
+  avisos o de «sigue» no escribe una vez por turno; el costo es que un turno que llega antes de eso,
+  con la marca ya leída, no vuelve a despertar y la próxima bajada llega hasta un tick más tarde.
+  Medido sobre una copia de la base de davantis-1: la marca cuesta menos de 0,5 ms cuando sólo lee
+  (bajo la resolución del reloj) y 7 ms de p50 y 16 ms de p95 cuando escribe; el hook entero, en A/B
+  contra el binario anterior con el método del banco de latencia (copias de la base, orden
+  alternado, mezcla de los turnos reales), +9 ms de p50 sobre ~420-520 ms, y el p95 cambia de signo
+  entre corridas (−434 y +362 ms): ruido.
+
+  La clave nueva `sync.inbound_idle_max_seconds` (en `.musubi/config.example.yaml`) fija el tope: 0
+  o ausente es 300; un negativo deja el ritmo fijo, un pedido por tick. El alta no la escribe. Una
+  máquina quieta tarda hasta 5 min en ver una nota nueva del central —un tick más si el candado
+  cambia de dueño en un cierre ordenado, y además el lease si el dueño muere sin soltarlo—.
+
+  ⚠️ **El panel del central va a mostrar el latido «sin sondeo» más seguido**: su ventana es de un
+  minuto, y con las bajadas espaciadas es lo normal, no un cerebro caído. Lo corrige
+  `fix/panel-latido-ventana`, que viaja con el próximo despliegue del central. Sólo cliente: el
+  central no cambia, no hay migración y no cambia ninguna tool.
 - **Cada resumen de la conversación conserva lo que el agente no puede perder.** Antes de que Claude
   Code compacte, el hook `PreCompact` le pasa al resumen las instrucciones de Musubi: conservar
   textuales las reglas, decisiones y pedidos de la persona (marcando los que no se cumplieron), el

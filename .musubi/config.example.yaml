@@ -154,6 +154,11 @@ mode: local # local | team
 #   auth_token_env: MUSUBI_TOKEN
 #   drain_interval_seconds: 10
 #   allow_insecure_token: true # sólo si el transporte ya cifra (p. ej. una malla WireGuard/tailnet)
+#   inbound_idle_max_seconds: 300 # TOPE del espaciado de la bajada. Una bajada vacía espacia la
+#                           # siguiente (2, 4, 8… ticks) hasta este tope; un turno en cualquier
+#                           # terminal de esta base, un daemon que arranca o una bajada con filas la
+#                           # devuelven a un pedido por tick. 0 o ausente = 300. Negativo = ritmo fijo,
+#                           # un pedido por tick como antes. El alta (`musubi provision`) no lo escribe
 
 # --- Flota de máquinas (track «Control de flota», S10) --------------------------------------------
 # El LATIDO PROPIO del cerebro sobre la flota: sondear a los que no tienen agente, dejar caducar las

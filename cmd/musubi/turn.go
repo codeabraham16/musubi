@@ -128,6 +128,7 @@ func turnOutputConTareas(store turnStore, loopCfg config.LoopConfig, pipeCfg con
 	if prompt == "" {
 		return ""
 	}
+	marcarActividadParaLaBajada(store)
 	esConsulta := esUnaConsulta(prompt)
 	budget := memCfg.SessionTokenBudget
 	brevity := memCfg.BrevityMode
