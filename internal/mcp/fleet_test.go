@@ -209,8 +209,8 @@ func TestElRechazoNoDiceCualExistio(t *testing.T) {
 // B4 — el cuerpo del POST no puede cambiar quién es el dispositivo.
 // Sabotaje: leer un `device_id` del cuerpo y usarlo en vez del token.
 // arnes: archivo="internal/mcp/fleet_http.go"
-// arnes: de="\t\tmuestraJSON, notaMuestra, notaServicios, notaProtocolo := s.leerCuerpoDelLatido(r, d)"
-// arnes: a="\t\tif b, _ := io.ReadAll(io.LimitReader(r.Body, latidoMaxBytes+1)); len(b) > 0 {\n\t\t\tvar sup struct {\n\t\t\t\tDeviceID string `json:\"device_id\"`\n\t\t\t}\n\t\t\tif jsonpkg.Unmarshal(b, &sup) == nil && sup.DeviceID != \"\" {\n\t\t\t\tif otro, hay, e := s.engine.DevicePorID(sup.DeviceID); e == nil && hay {\n\t\t\t\t\td = otro\n\t\t\t\t}\n\t\t\t}\n\t\t\tr.Body = io.NopCloser(strings.NewReader(string(b)))\n\t\t}\n\t\tmuestraJSON, notaMuestra, notaServicios, notaProtocolo := s.leerCuerpoDelLatido(r, d)"
+// arnes: de="\t\tmuestraJSON, notaMuestra, notaServicios, notaProtocolo, enviadoMs := s.leerCuerpoDelLatido(r, d)"
+// arnes: a="\t\tif b, _ := io.ReadAll(io.LimitReader(r.Body, latidoMaxBytes+1)); len(b) > 0 {\n\t\t\tvar sup struct {\n\t\t\t\tDeviceID string `json:\"device_id\"`\n\t\t\t}\n\t\t\tif jsonpkg.Unmarshal(b, &sup) == nil && sup.DeviceID != \"\" {\n\t\t\t\tif otro, hay, e := s.engine.DevicePorID(sup.DeviceID); e == nil && hay {\n\t\t\t\t\td = otro\n\t\t\t\t}\n\t\t\t}\n\t\t\tr.Body = io.NopCloser(strings.NewReader(string(b)))\n\t\t}\n\t\tmuestraJSON, notaMuestra, notaServicios, notaProtocolo, enviadoMs := s.leerCuerpoDelLatido(r, d)"
 // arnes: colision_ok="TestElServidorNoLeeElCuerpoEnteroAMemoria"
 func TestElCuerpoDelLatidoNoPuedeSuplantar(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)

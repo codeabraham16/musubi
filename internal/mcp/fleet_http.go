@@ -84,6 +84,11 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		// LA HORA DE LLEGADA SE TOMA ACÁ, antes de resolver el token, leer el cuerpo o escribir la
+		// base (A133). El desfase del reloj de la máquina es su hora de envío menos ésta, así que
+		// cualquier espera de este lado —una base ocupada, un cuerpo que tarda— se leería como un
+		// reloj atrasado.
+		llegada := time.Now()
 
 		// LA CREDENCIAL SE MIRA ANTES QUE LA IP, y el orden es TODO el asunto.
 		//
@@ -152,7 +157,7 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 				logx.Info("flota: rotación de token completada; el token anterior dejó de valer", "device", d.Name)
 			}
 		}
-		muestraJSON, notaMuestra, notaServicios, notaProtocolo := s.leerCuerpoDelLatido(r, d)
+		muestraJSON, notaMuestra, notaServicios, notaProtocolo, enviadoMs := s.leerCuerpoDelLatido(r, d)
 
 		// UNA SOLA TRANSACCIÓN PARA LAS DOS ESCRITURAS QUE SIEMPRE OCURREN: la señal de vida y
 		// el paso por la cola (que vence lo viejo y marca entregado lo que se lleva). Eran dos
@@ -181,6 +186,10 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 			escribirLatido(w, http.StatusUnauthorized, fleet.RespuestaLatido{OK: false, Motivo: motivoRechazo})
 			return
 		}
+		// EL RELOJ SE ANOTA RECIÉN ACÁ, con el latido ya aceptado (A133): una máquina que un admin
+		// revocó entre la resolución del token y la transacción no puede quedar publicando su
+		// desfase. Un latido sin hora BORRA la medición anterior (ver reloj.go).
+		s.registrarReloj(d.ID, enviadoMs, llegada)
 
 		resp := fleet.RespuestaLatido{OK: true, Device: d.Name, Project: d.ProjectID,
 			Muestra: notaMuestra, Servicios: notaServicios, Protocolo: notaProtocolo}
@@ -207,15 +216,16 @@ func (s *McpServer) handlerLatido(limiter *authLimiter) http.HandlerFunc {
 
 // leerCuerpoDelLatido extrae del cuerpo lo que la máquina reporta de SÍ MISMA: el autorreporte,
 // el inventario de servicios y la telemetría. Devuelve el JSON de la muestra a guardar (vacío = no
-// tocar la columna) y una nota legible para el agente por cada uno de los dos bloques.
+// tocar la columna), una nota legible para el agente por cada uno de los dos bloques y la hora de
+// envío que dijo el agente (0 si no la dijo o si el cuerpo no se pudo leer).
 //
 // NUNCA DEVUELVE ERROR, y es el invariante D7: un cuerpo roto, una muestra absurda o una
 // capacidad que falta descartan la MEDICIÓN, no el LATIDO. Estar viva y saber medirse son cosas
 // distintas, y un agente con el colector roto no debe desaparecer del inventario — es
 // precisamente cuando más querés verlo.
-func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, notaMuestra, notaServicios, notaProtocolo string) {
+func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, notaMuestra, notaServicios, notaProtocolo string, enviadoMs int64) {
 	if r.Body == nil || r.ContentLength == 0 {
-		return "", "", "", notaProtocolo
+		return "", "", "", notaProtocolo, 0
 	}
 	// D6 — el cuerpo está ACOTADO. Un agente corre en la superficie más expuesta de la flota;
 	// un cuerpo sin tope es un DoS con forma de telemetría. El techo general del transporte
@@ -227,16 +237,29 @@ func (s *McpServer) leerCuerpoDelLatido(r *http.Request, d fleet.Device) (json, 
 	// entraba. Los dos techos siguen existiendo por separado y cada uno acota lo suyo.
 	crudo, err := io.ReadAll(io.LimitReader(r.Body, latidoMaxBytes+1))
 	if err != nil {
-		return "", "descartada: no se pudo leer el cuerpo", "", notaProtocolo
+		return "", "descartada: no se pudo leer el cuerpo", "", notaProtocolo, 0
 	}
 	if len(crudo) > latidoMaxBytes {
-		return "", "descartada: cuerpo demasiado grande", "", notaProtocolo
+		return "", "descartada: cuerpo demasiado grande", "", notaProtocolo, 0
 	}
 
 	var cuerpo fleet.CuerpoLatido
 	if err := jsonpkg.Unmarshal(crudo, &cuerpo); err != nil {
-		return "", "descartada: JSON inválido", "", notaProtocolo
+		return "", "descartada: JSON inválido", "", notaProtocolo, 0
 	}
+	// LA HORA DE ENVÍO SALE CON EL CUERPO LEÍDO, pase lo que pase después con la muestra (A133).
+	// Por eso lo que sigue vive en otra función: sus salidas tempranas —sin muestra, sin la
+	// capacidad `metrics`, una muestra inválida— descartan la MEDICIÓN de la máquina, no la del
+	// reloj. Con la hora devuelta en cada una de ellas, olvidarla en una sola borraría el desfase
+	// de esa máquina en cada latido, sin error y sin aviso.
+	json, notaMuestra, notaServicios, notaProtocolo = s.aplicarCuerpoDelLatido(d, cuerpo)
+	return json, notaMuestra, notaServicios, notaProtocolo, cuerpo.EnviadoMs
+}
+
+// aplicarCuerpoDelLatido guarda lo que el cuerpo ya leído trae: el autorreporte, el contrato, el
+// inventario de servicios y la telemetría. Devuelve lo mismo que leerCuerpoDelLatido salvo la
+// hora de envío, y rige el mismo invariante D7: nada de acá tira el latido.
+func (s *McpServer) aplicarCuerpoDelLatido(d fleet.Device, cuerpo fleet.CuerpoLatido) (json, notaMuestra, notaServicios, notaProtocolo string) {
 	// EL AUTORREPORTE VA ANTES DEL CORTE POR «no vino muestra», y el orden es el invariante.
 	//
 	// Se escribió al revés la primera vez y las pruebas lo agarraron: un agente en un OS sin
