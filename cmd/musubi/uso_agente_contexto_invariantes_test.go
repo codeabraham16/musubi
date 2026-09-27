@@ -186,8 +186,8 @@ func TestMedirContextoM1sSoloCuentaLoQueVeElHook(t *testing.T) {
 //
 // Sabotaje que la hace fallar: que M1 por largo cuente también los avisos del sistema cortos.
 // arnes: archivo="cmd/musubi/uso_agente_contexto.go"
-// arnes: de="\t\t\t\tif transcripts.LoVeElHook(t.Prompt) {\n\t\t\t\t\tsumarTurno(&m.M1s)\n"
-// arnes: a="\t\t\t\tif esPromptCorto(t.Prompt) {\n\t\t\t\t\tsumarTurno(&m.M1.PorLargo)\n\t\t\t\t}\n\t\t\t\tif transcripts.LoVeElHook(t.Prompt) {\n\t\t\t\t\tsumarTurno(&m.M1s)\n"
+// arnes: de="\t\t\t\t\tsumarTurno(&m.M1s)\n\t\t\t\t} else {\n"
+// arnes: a="\t\t\t\t\tsumarTurno(&m.M1s)\n\t\t\t\t\tif esPromptCorto(t.Prompt) {\n\t\t\t\t\t\tsumarTurno(&m.M1.PorLargo)\n\t\t\t\t\t}\n\t\t\t\t} else {\n"
 //
 // Sabotaje que la hace fallar: contar en M2, M3 y M7 los hooks que no son de Musubi.
 // arnes: archivo="cmd/musubi/uso_agente_contexto.go"
