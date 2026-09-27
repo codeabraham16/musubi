@@ -526,9 +526,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
   *Pruebas: `TestContinuacionYSistemaNoTraenMemoria` (con el motor real y un control: sin la
   compuerta, «sigue» y el aviso sí traían memoria), `TestUnPromptSinTerminosNoBuscaMemoriaAlAzar`,
-  `TestElPedidoSustantivoSeRecuerdaPorSesion`, `TestLosPedidosSePodanConElDelta`,
-  `TestElPedidoRepetidoVuelveAlIndice`, `TestTerminosDeConsultaYElFallbackDelRecall`, y la tabla de
-  `TestLaListaDeContinuacionNoSeComeElContenido` con filas reales. 18 sabotajes, todos rojos.
+  `TestElPedidoSustantivoSeRecuerdaPorSesion` (también el pedido repetido, que no escribe, y un
+  secreto que cruza la runa 200, que no deja un trozo en claro), `TestElPedidoSinSesionNoSeGuarda`,
+  `TestLosPedidosSePodanConElDelta`, `TestElPedidoRepetidoVuelveAlIndice`,
+  `TestTerminosDeConsultaYElFallbackDelRecall`, y la tabla de
+  `TestLaListaDeContinuacionNoSeComeElContenido` con filas reales. 21 sabotajes, todos rojos.
   Cuatro pruebas del delta usaban «q» como prompt: una runa, sin término; ahora usan «qué
   sabemos». No cambia la descripción ni el esquema de ninguna tool.*
 - **El contador de enviadas cuenta lo que salió de acá, y el sync lleva la cuenta de lo que mueve.**

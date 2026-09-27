@@ -135,9 +135,9 @@ func TestUnPromptSinTerminosNoBuscaMemoriaAlAzar(t *testing.T) {
 }
 
 // TestElPedidoSustantivoSeRecuerdaPorSesion: cada sesión guarda SUS pedidos sustantivos, los tres
-// últimos, redactados y truncados; un «sigue» o un aviso del sistema no pisan el último. (El
-// sabotaje de la compuerta que deja pasar los avisos también la pone roja: ver
-// TestContinuacionYSistemaNoTraenMemoria.)
+// últimos, pasados por el redactor y DESPUÉS truncados; un «sigue» o un aviso del sistema no pisan el
+// último, y el mismo pedido otra vez no vuelve a escribir. (El sabotaje de la compuerta que deja
+// pasar los avisos también la pone roja: ver TestContinuacionYSistemaNoTraenMemoria.)
 //
 // Sabotaje: los pedidos no son por sesión.
 // arnes: archivo="cmd/musubi/turn.go"
@@ -154,14 +154,24 @@ func TestUnPromptSinTerminosNoBuscaMemoriaAlAzar(t *testing.T) {
 // arnes: de="\tif r := []rune(texto); len(r) > maxRunasDePedido {\n"
 // arnes: a="\tif r := []rune(texto); len(r) > maxRunasDePedido*100 {\n"
 //
+// Sabotaje: el pedido se trunca antes de pasar por el redactor.
+// arnes: archivo="cmd/musubi/turn.go"
+// arnes: de="\t\ttexto = string(r[:maxRunasDePedido])\n"
+// arnes: a="\t\ttexto, _ = redact.Redact(string([]rune(prompt)[:maxRunasDePedido]))\n"
+//
 // Sabotaje: sin tope de pedidos.
 // arnes: archivo="cmd/musubi/turn.go"
 // arnes: de="\tif len(ps) > maxPedidos {\n"
 // arnes: a="\tif len(ps) > maxPedidos*10 {\n"
+//
+// Sabotaje: el pedido repetido se vuelve a guardar.
+// arnes: archivo="cmd/musubi/turn.go"
+// arnes: de="\tif n := len(ps); n > 0 && ps[n-1].Texto == texto {\n"
+// arnes: a="\tif n := len(ps); n > 0 && ps[n-1].Texto == texto && false {\n"
 func TestElPedidoSustantivoSeRecuerdaPorSesion(t *testing.T) {
-	store := &fakeTurnStore{meta: map[string]string{}, recall: memory.RecallResult{
+	store := &storeQueCuenta{fakeTurnStore: &fakeTurnStore{meta: map[string]string{}, recall: memory.RecallResult{
 		Count: 1, Items: []memory.RecallItem{{ID: "x1", TopicKey: "t", Gist: "memoria", ContentHash: "h1"}},
-	}}
+	}}, escrituras: map[string]int{}}
 	turno := func(sesion, prompt string) {
 		in, _ := json.Marshal(map[string]string{"session_id": sesion, "prompt": prompt})
 		turnOutput(store, deltaLoop(), pipeOff(), maOff(), config.MemoryConfig{}, strings.NewReader(string(in)))
@@ -185,6 +195,16 @@ func TestElPedidoSustantivoSeRecuerdaPorSesion(t *testing.T) {
 		t.Errorf("B tiene que ver su propio pedido, no el de A: es %q", got)
 	}
 
+	// El mismo pedido otra vez no escribe: recordarPedido es una escritura más por turno sobre una
+	// base con _txlock=immediate que comparten varios daemons, y la que no cambia nada se ahorra.
+	turno("A", "armá el banco de tipeo")
+	if n := store.escrituras[pedidosKey("A")]; n != 1 {
+		t.Errorf("A pidió dos veces lo mismo y sus pedidos se escribieron %d veces, no una", n)
+	}
+	if ps := leerPedidos(store, "A"); len(ps) != 1 {
+		t.Errorf("el pedido repetido se guardó dos veces: %+v", ps)
+	}
+
 	// El secreto no llega a la meta, y el largo queda acotado.
 	secreto := "ghp_" + strings.Repeat("a1B2c3D4e5", 4)
 	turno("A", "hacé el push con el token "+secreto+" al mirror")
@@ -197,6 +217,19 @@ func TestElPedidoSustantivoSeRecuerdaPorSesion(t *testing.T) {
 		t.Errorf("el pedido tenía que quedar truncado a %d runas, quedó con %d", maxRunasDePedido, len(got))
 	}
 
+	// Primero el redactor y después el truncado. Al revés, un secreto que cruza la runa
+	// maxRunasDePedido le llega cortado al redactor, que ya no lo reconoce (la regla de ghp_ pide 20
+	// caracteres, y el catch-all de entropía otros tantos), y el trozo queda en claro. Es sintético.
+	cruza := "ghp_" + strings.Repeat("Zq9Xw2Lm7Kp4", 3)
+	pedido := strings.Repeat("revisá el mirror ", 11) + "con " + cruza + " y seguí"
+	if desde := len([]rune(pedido[:strings.Index(pedido, cruza)])); desde >= maxRunasDePedido || desde+len(cruza) <= maxRunasDePedido {
+		t.Fatalf("CONTROL: el secreto tiene que cruzar la runa %d, y va de la %d a la %d", maxRunasDePedido, desde, desde+len(cruza))
+	}
+	turno("A", pedido)
+	if got := ultimo("A"); strings.Contains(got, "ghp_") {
+		t.Errorf("quedó en claro un trozo del secreto que cruzaba el corte: %q", got)
+	}
+
 	turno("A", "medí la latencia del hook")
 	ps := leerPedidos(store, "A")
 	if len(ps) != maxPedidos {
@@ -204,6 +237,33 @@ func TestElPedidoSustantivoSeRecuerdaPorSesion(t *testing.T) {
 	}
 	if ps[len(ps)-1].Texto != "medí la latencia del hook" || ps[len(ps)-1].T == 0 {
 		t.Errorf("el último pedido de A tiene que ser el último que pidió, con su hora: %+v", ps[len(ps)-1])
+	}
+}
+
+// storeQueCuenta cuenta las escrituras en la meta, clave por clave.
+type storeQueCuenta struct {
+	*fakeTurnStore
+	escrituras map[string]int
+}
+
+func (s *storeQueCuenta) SetMeta(key, value string) error {
+	s.escrituras[key]++
+	return s.fakeTurnStore.SetMeta(key, value)
+}
+
+// TestElPedidoSinSesionNoSeGuarda: sin session_id no hay a qué compactación devolverle el pedido, y
+// guardarlo lo dejaría en una clave que comparten todos los turnos sin sesión («loop_pedidos:»),
+// anotada en el índice del delta como una sesión más.
+//
+// Sabotaje: recordarPedido guarda aunque no haya sesión.
+// arnes: archivo="cmd/musubi/turn.go"
+// arnes: de="\tif sessionID == \"\" {\n\t\treturn // sin sesión no hay a qué compactación devolvérselo\n"
+// arnes: a="\tif sessionID == \"\" && false {\n\t\treturn // sin sesión no hay a qué compactación devolvérselo\n"
+func TestElPedidoSinSesionNoSeGuarda(t *testing.T) {
+	store := &fakeTurnStore{meta: map[string]string{}}
+	recordarPedido(store, "", "revisá el TLS del cerebro", time.Unix(1_800_000_000, 0))
+	if len(store.meta) != 0 {
+		t.Errorf("sin sesión, recordarPedido escribió en la meta: %v", store.meta)
 	}
 }
 
