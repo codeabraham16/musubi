@@ -277,7 +277,8 @@ func (e *DbEngine) IngestShared(o SharedObs) (Ingesta, error) {
 	// Lo que este sello no decide es el CONTENIDO: sobre una fila ya entregada o bajada, el UPSERT de
 	// arriba lo pisa con el del central (último que escribe gana), que es el diseño declarado del
 	// enlace. La excepción, una edición local sin salir, ni llega hasta acá: la corta la rama de
-	// Ingesta{Rebote/Choque} antes del UPSERT.
+	// Ingesta{Rebote/Choque} antes del UPSERT. Lo que sí llega con 'pending' es una pendiente con el
+	// MISMO contenido que baja (la misma captura en dos máquinas), y para ésa está el WHERE.
 	if _, err := tx.Exec(`
 		INSERT INTO outbox (obs_id, enqueued_hash, status, attempts, next_attempt_at, created_at, updated_at)
 		VALUES (?, ?, 'espejo', 0, datetime('now'), datetime('now'), datetime('now'))

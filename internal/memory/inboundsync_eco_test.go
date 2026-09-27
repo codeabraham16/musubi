@@ -105,14 +105,17 @@ func TestEspejoNoTapaUnaEdicionLocal(t *testing.T) {
 	t.Error("MORDAZA: una edición LOCAL de una observación bajada no llegó a la cola de envío")
 }
 
-// TestEspejoNoPisaUnaPendienteLocal cubre la guarda del ON CONFLICT: si esta máquina tenía una
-// intención de envío SIN SALIR todavía ('pending'), el sello de espejo no la puede matar. Sellarla
-// sería descartar un envío local en silencio, que es peor que el eco que vino a arreglar.
+// TestEspejoNoPisaUnaPendienteLocal: si esta máquina tenía una intención de envío SIN SALIR todavía
+// ('pending'), lo que baja no la puede matar. Sellarla sería descartar un envío local en silencio,
+// que es peor que el eco que vino a arreglar.
 //
-// Y mira también el CONTENIDO, que es lo que esta prueba no miraba: con el estado salvado, el UPSERT
-// de IngestShared igual le pisaba el texto, y el claim —que arma el payload desde observations—
-// empujaba «version del central». La fila seguía 'pending' y la edición ya no existía. La guarda de
-// eso es la rama Ingesta{Rebote/Choque}, y su sabotaje vive en TestPullNoPisaUnaEdicionPendiente.
+// Nació (#656) como la guarda del WHERE del sello, y YA NO LO ES: su pendiente tiene OTRO contenido
+// que el que baja, y eso ahora lo corta antes la rama Ingesta{Rebote/Choque} de IngestShared, sin
+// llegar al sello. El WHERE sólo decide sobre una pendiente con el MISMO contenido, y lo custodia
+// TestLaMismaVersionNoEsChoque. Esta prueba mira el estado y también el CONTENIDO, que es lo que no
+// miraba: con el estado salvado, el UPSERT le pisaba el texto y el claim —que arma el payload desde
+// observations— empujaba «version del central». Su sabotaje vive en
+// TestPullNoPisaUnaEdicionPendiente, que custodia la misma rama.
 func TestEspejoNoPisaUnaPendienteLocal(t *testing.T) {
 	e := newTestEngine(t)
 

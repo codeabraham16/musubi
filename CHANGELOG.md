@@ -600,8 +600,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   caso entero, con dos procesos sobre una base), `TestUnaHuerfanaReentregadaSaleUnaSolaVez` (la
   deriva de punta a punta, con el drain de verdad) y `TestLaBajadaCuentaRebotesYChoques` en
   `internal/mcp`. Y tres que ya estaban ganan lo suyo: `TestEspejoNoPisaUnaPendienteLocal` (#656)
-  mira también el contenido, y `TestDrainOfflineFirstRecovery` y `TestDrainPermanentGoesDead`
-  custodian que el drain le pase al reintento y al dead-letter el hash de lo que empujó.*
+  mira también el contenido —y deja de custodiar el WHERE del sello, al que su pendiente ya no
+  llega: ahora lo custodia `TestLaMismaVersionNoEsChoque`, con una pendiente idéntica a lo que
+  baja—, y `TestDrainOfflineFirstRecovery` y `TestDrainPermanentGoesDead` custodian que el drain le
+  pase al reintento y al dead-letter el hash de lo que empujó.*
 - **El mapa publicado describe el commit, no el disco: lo que git ignora ya no sube al central.**
   El índice lee el disco y el central guarda la foto con la etiqueta de un commit. #647 frenaba lo
   modificado y lo sin trackear, pero `git status` no lista los **ignorados**, y `walkSourceTree` no

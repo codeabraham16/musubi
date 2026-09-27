@@ -296,10 +296,20 @@ func TestUnChoqueSeCuentaAparte(t *testing.T) {
 // contenido— baja idéntica mientras la de acá todavía no salió. No hay edición que conservar ni nada
 // que contar: acá está lo mismo que bajó.
 //
+// Y la fila sigue 'pending' y sale: es una intención de envío local, y el sello de espejo no la
+// puede matar (#656). Es ESTA prueba la que custodia el WHERE del sello: con otro contenido, una
+// pendiente ni llega al sello —la corta antes la rama Ingesta{Rebote/Choque}—, así que el WHERE
+// sólo decide sobre una pendiente con el mismo contenido que baja.
+//
 // Sabotaje: conservar toda fila en vuelo, sin comparar el contenido.
 // arnes: archivo="internal/memory/inboundsync.go"
 // arnes: de="if enVuelo && otroContenido {"
 // arnes: a="if enVuelo && (otroContenido || true) {"
+//
+// Sabotaje: que el sello de espejo vuelva a pisar las filas 'pending'/'claimed'.
+// arnes: archivo="internal/memory/inboundsync.go"
+// arnes: de="WHERE outbox.status NOT IN ('pending','claimed')`,"
+// arnes: a="WHERE 1 = 1`,"
 func TestLaMismaVersionNoEsChoque(t *testing.T) {
 	e := newTestEngine(t)
 	const commit = "feat: la misma captura en las dos maquinas"
@@ -315,6 +325,12 @@ func TestLaMismaVersionNoEsChoque(t *testing.T) {
 	}
 	if ing != (Ingesta{}) {
 		t.Errorf("la misma versión bajada contra una pendiente idéntica dio %+v; esperaba ni rebote ni choque", ing)
+	}
+	if st, _, _ := outboxRow(t, e, "commit-1"); st != outboxPending {
+		t.Errorf("ENVÍO PERDIDO: el sello de espejo pisó una pendiente local con el mismo contenido (quedó %q)", st)
+	}
+	if it := reclamarUna(t, e, "commit-1"); it.Content != commit {
+		t.Errorf("el push iba a subir %q en vez de lo que se capturó acá", it.Content)
 	}
 }
 
