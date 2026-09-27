@@ -31,19 +31,30 @@ type viajeAnotado struct {
 	v       memory.Viaje
 }
 
-// engineQueAnotaViajes envuelve un engine real y anota cada RegistrarViaje antes de delegarlo. Así
-// la prueba distingue «no se llamó» de «se llamó con ceros», que en la tabla se leen igual.
+// engineQueAnotaViajes envuelve un engine real y anota cada viaje registrado antes de delegarlo —el
+// de la subida por RegistrarViaje y el de la bajada por RegistrarBajada, que lo suma junto con la
+// edad de la bajada—. Así la prueba distingue «no se llamó» de «se llamó con ceros», que en la
+// tabla se leen igual.
 type engineQueAnotaViajes struct {
 	memory.StorageBackend
 	mu     sync.Mutex
 	viajes []viajeAnotado
 }
 
-func (e *engineQueAnotaViajes) RegistrarViaje(sentido string, v memory.Viaje) error {
+func (e *engineQueAnotaViajes) anotar(sentido string, v memory.Viaje) {
 	e.mu.Lock()
 	e.viajes = append(e.viajes, viajeAnotado{sentido, v})
 	e.mu.Unlock()
+}
+
+func (e *engineQueAnotaViajes) RegistrarViaje(sentido string, v memory.Viaje) error {
+	e.anotar(sentido, v)
 	return e.StorageBackend.RegistrarViaje(sentido, v)
+}
+
+func (e *engineQueAnotaViajes) RegistrarBajada(v memory.Viaje, u memory.UltimaBajada) error {
+	e.anotar(memory.ViajeBajada, v)
+	return e.StorageBackend.RegistrarBajada(v, u)
 }
 
 func (e *engineQueAnotaViajes) anotados(sentido string) []memory.Viaje {
@@ -190,10 +201,10 @@ func centralQueSirvePull(n int) *httptest.Server {
 // TestLaBajadaRegistraSuViaje: una página que llega bien deja un viaje de bajada con sus filas, la
 // página y los bytes.
 //
-// Sabotaje: que drainInboundOnce no registre el viaje.
+// Sabotaje: que la bajada registre un viaje en cero en vez del que hizo.
 // arnes: archivo="internal/mcp/scheduler.go"
-// arnes: de="s.engine.RegistrarViaje(memory.ViajeBajada, viaje)"
-// arnes: a="error(nil)"
+// arnes: de="s.engine.RegistrarBajada(v, u)"
+// arnes: a="s.engine.RegistrarBajada(memory.Viaje{}, u)"
 func TestLaBajadaRegistraSuViaje(t *testing.T) {
 	central := centralQueSirvePull(2)
 	defer central.Close()

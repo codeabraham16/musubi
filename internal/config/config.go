@@ -975,6 +975,13 @@ type FleetConfig struct {
 	// ProbeMinutes es cada cuánto el cerebro sale a MEDIR los dispositivos sin agente (Tier B por
 	// SSH, Tier C por ADB). 0 ⇒ default (5 min). NEGATIVO ⇒ desactivado.
 	//
+	// NEGATIVO APAGA MÁS QUE EL SONDEO, y conviene saberlo antes de ponerlo (A136): es el intervalo
+	// del barrido de flota ENTERO, así que con él dejan de correr también las políticas de
+	// auto-heal (el inventario lo dice: `inerte_por: barrido_apagado`), la poda de las salidas de
+	// comandos y de los cooldowns, el abandono de las rotaciones de token vencidas y la vida de red.
+	// Lo que NO apaga son los techos de las sesiones de shell: tienen su propio reloj
+	// (RunTechosDeShell), porque un techo que se apaga con la sonda no es un techo.
+	//
 	// Este número no gobierna sólo el gasto de red: de él SE DERIVA el umbral de «en línea» de
 	// esas máquinas (3 × intervalo, ver umbralEnLineaPara). Son la misma cosa mirada dos veces —
 	// un dispositivo que se visita cada 5 min no puede tener datos más frescos que 5 min, y dar
