@@ -656,7 +656,7 @@ func TestBuildTurnRecallPasaLaConfigDeProduccion(t *testing.T) {
 	}}
 	llamadas := 0
 
-	buildTurnRecall(store, "s1", "el prompt del turno", 250, false, memCfg, embebedorDePrueba{&llamadas})
+	buildTurnRecall(store, parametrosDelTurno{sesion: "s1", prompt: "el prompt del turno", presupuesto: 250, memCfg: memCfg, embebedor: embebedorDePrueba{&llamadas}})
 
 	if store.lastOpts.VectorFloor != memCfg.VectorFloor {
 		t.Errorf("VectorFloor: el hook pasó %v y el yaml declara %v", store.lastOpts.VectorFloor, memCfg.VectorFloor)
@@ -688,7 +688,7 @@ func TestBuildTurnRecallDegradaSinEmbebedor(t *testing.T) {
 		Count: 1,
 		Items: []memory.RecallItem{{ID: "a", Gist: "algo", ContentHash: "h"}},
 	}}
-	out := buildTurnRecall(store, "s1", "el prompt", 250, false, memCfg, nil)
+	out := buildTurnRecall(store, parametrosDelTurno{sesion: "s1", prompt: "el prompt", presupuesto: 250, memCfg: memCfg})
 	if out == "" {
 		t.Error("sin embebedor el recall léxico tiene que seguir devolviendo memoria")
 	}

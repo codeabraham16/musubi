@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"musubi/internal/transcripts"
 )
 
 // LAS PRUEBAS DE `musubi uso-agente` LEEN FIXTURES, NUNCA LOS TRANSCRIPTS REALES.
@@ -105,17 +107,17 @@ func escribirTranscript(t *testing.T, raiz, rel string, registros ...map[string]
 // decide si eso es un fallo.
 func medirFixture(t *testing.T, raiz string) (principal, subagentes *MedicionUso, inf InformeUso) {
 	t.Helper()
-	inf, err := medirUsoAgente(raiz, ventanaUso{}, nil)
+	inf, err := medirUsoAgente(raiz, transcripts.Ventana{}, nil)
 	if err != nil {
 		t.Fatalf("medirUsoAgente: %v", err)
 	}
 	return inf.Principal.MedicionUso, inf.Subagentes.MedicionUso, inf
 }
 
-// Sabotaje que la hace fallar: sacar la deduplicación por uuid.
-// arnes: archivo="cmd/musubi/uso_agente.go"
-// arnes: de="\t\tif l.vistos[reg.UUID] {\n"
-// arnes: a="\t\tif false && l.vistos[reg.UUID] {\n"
+// Sabotaje que la hace fallar: sacar la deduplicación por uuid del lector compartido.
+// arnes: archivo="internal/transcripts/formato.go"
+// arnes: de="\t\t\t} else if reg.UUID != \"\" && vistos[reg.UUID] {\n"
+// arnes: a="\t\t\t} else if false && reg.UUID != \"\" && vistos[reg.UUID] {\n"
 //
 // Sabotaje que la hace fallar: sacar la deduplicación de cada tool_use por su id.
 // arnes: archivo="cmd/musubi/uso_agente.go"
@@ -159,12 +161,12 @@ func TestUsoAgenteNoCuentaDosVecesLoQueLaReanudacionReescribe(t *testing.T) {
 }
 
 // Sabotaje que la hace fallar: no excluir el journal.jsonl de los workflows.
-// arnes: archivo="cmd/musubi/uso_agente.go"
-// arnes: de="\t\tif d.Name() == journalDeWorkflow {\n"
-// arnes: a="\t\tif false && d.Name() == journalDeWorkflow {\n"
+// arnes: archivo="internal/transcripts/recorrer.go"
+// arnes: de="\t\tif d.Name() == JournalDeWorkflow {\n"
+// arnes: a="\t\tif false && d.Name() == JournalDeWorkflow {\n"
 //
 // Sabotaje que la hace fallar: no reconocer la carpeta de subagentes.
-// arnes: archivo="cmd/musubi/uso_agente.go"
+// arnes: archivo="internal/transcripts/recorrer.go"
 // arnes: de="\t\tif parte == \"subagents\" {\n"
 // arnes: a="\t\tif parte == \"subagentes\" {\n"
 func TestUsoAgenteSeparaPrincipalesDeSubagentesYSaltaElJournal(t *testing.T) {
@@ -214,7 +216,7 @@ func TestUsoAgenteSeparaPrincipalesDeSubagentesYSaltaElJournal(t *testing.T) {
 // Sabotaje que la hace fallar: contar el texto dentro de un tool_result como inyección de hook.
 // arnes: archivo="cmd/musubi/uso_agente.go"
 // arnes: de="\t\tif !l.busquedas[b.ToolUseID] {\n"
-// arnes: a="\t\tif txt, _ := decodificarContenido(b.Content); txt != \"\" {\n\t\t\tsumarBloques(l.m.Bloques, txt)\n\t\t}\n\t\tif !l.busquedas[b.ToolUseID] {\n"
+// arnes: a="\t\tif txt, _ := transcripts.DecodificarContenido(b.Content); txt != \"\" {\n\t\t\tsumarBloques(l.m.Bloques, txt)\n\t\t}\n\t\tif !l.busquedas[b.ToolUseID] {\n"
 func TestUsoAgenteElTextoDeUnToolResultNoEsUnaInyeccion(t *testing.T) {
 	// El agente lee detect.go, un grep devuelve el encabezado, un informe lo cita: el texto
 	// «[Musubi — …]» llega DENTRO de un tool_result y nadie se lo inyectó. Medido el 2026-09-25:
@@ -403,7 +405,7 @@ func TestUsoAgenteCuentaLasSkillsDeMusubiPorNombreDerivado(t *testing.T) {
 // arnes: a="\tif false {\n"
 //
 // Sabotaje que la hace fallar: contar los registros de antes de la ventana.
-// arnes: archivo="cmd/musubi/uso_agente.go"
+// arnes: archivo="internal/transcripts/recorrer.go"
 // arnes: de="\tif v.hayDesde && t.Before(v.desde) {\n"
 // arnes: a="\tif false && v.hayDesde && t.Before(v.desde) {\n"
 func TestUsoAgenteVentanaSinTranscriptsDiceSinMedir(t *testing.T) {
@@ -483,11 +485,11 @@ func TestUsoAgenteVentanaSinTranscriptsDiceSinMedir(t *testing.T) {
 
 // EL NOMBRE DE UNA CARPETA DE PROYECTO SE FIJA CON LO MEDIDO, NO CON LA FUNCIÓN. Los tres casos son
 // carpetas reales de esta máquina (2026-09-25) junto a la ruta de trabajo que las generó: la regla
-// es un hecho del formato de Claude Code, y derivar el esperado de carpetaDeProyecto dejaría a la
+// es un hecho del formato de Claude Code, y derivar el esperado de CarpetaDeProyecto dejaría a la
 // prueba midiendo a la función contra sí misma.
 //
 // Sabotaje que la hace fallar: dejar pasar los caracteres que no son letras ni dígitos.
-// arnes: archivo="cmd/musubi/uso_agente.go"
+// arnes: archivo="internal/transcripts/recorrer.go"
 // arnes: de="\t\tb.WriteByte('-')\n"
 // arnes: a="\t\tb.WriteRune(r)\n"
 func TestUsoAgenteNombraLaCarpetaComoClaudeCode(t *testing.T) {
@@ -497,8 +499,8 @@ func TestUsoAgenteNombraLaCarpetaComoClaudeCode(t *testing.T) {
 		"/tmp/claude-1000/musubi-e2e-DH14gM":                        "-tmp-claude-1000-musubi-e2e-DH14gM",
 	}
 	for ruta, quiere := range medidas {
-		if got := carpetaDeProyecto(ruta); got != quiere {
-			t.Errorf("carpetaDeProyecto(%q) = %q, Claude Code la llamó %q", ruta, got, quiere)
+		if got := transcripts.CarpetaDeProyecto(ruta); got != quiere {
+			t.Errorf("CarpetaDeProyecto(%q) = %q, Claude Code la llamó %q", ruta, got, quiere)
 		}
 	}
 }
@@ -515,18 +517,18 @@ func TestUsoAgenteNombraLaCarpetaComoClaudeCode(t *testing.T) {
 // de arriba. `-tmpxyz` comparte el prefijo sin colgar de la temporal, y tiene que medirse.
 //
 // Sabotaje que la hace fallar: no excluir ninguna carpeta.
-// arnes: archivo="cmd/musubi/uso_agente.go"
-// arnes: de="\t\t\tif filepath.Dir(ruta) == filepath.Clean(dir) && excluida(d.Name(), exclusiones) {\n"
+// arnes: archivo="internal/transcripts/recorrer.go"
+// arnes: de="\t\t\tif filepath.Dir(ruta) == filepath.Clean(dir) && Excluida(d.Name(), exclusiones) {\n"
 // arnes: a="\t\t\tif false {\n"
 //
 // Sabotaje que la hace fallar: excluir la temporal pero no lo que cuelga de ella.
-// arnes: archivo="cmd/musubi/uso_agente.go"
+// arnes: archivo="internal/transcripts/recorrer.go"
 // arnes: de="\t\tfor _, patron := range []string{base, base + \"-*\"} {\n"
 // arnes: a="\t\tfor _, patron := range []string{base} {\n"
 //
 // Sabotaje que la hace fallar: no poner las exclusiones por defecto.
 // arnes: archivo="cmd/musubi/uso_agente.go"
-// arnes: de="\t\texclusiones = append(exclusionesPorDefecto(), exclusiones...)\n"
+// arnes: de="\t\texclusiones = append(transcripts.ExclusionesPorDefecto(), exclusiones...)\n"
 // arnes: a="\t\texclusiones = append([]string{}, exclusiones...)\n"
 //
 // Sabotaje que la hace fallar: que --incluir-temporales no las incluya.
@@ -535,7 +537,7 @@ func TestUsoAgenteNombraLaCarpetaComoClaudeCode(t *testing.T) {
 // arnes: a="\tif !*conTemporales || true {\n"
 //
 // Sabotaje que la hace fallar: que la carpeta pedida pueda excluirse a sí misma.
-// arnes: archivo="cmd/musubi/uso_agente.go"
+// arnes: archivo="internal/transcripts/recorrer.go"
 // arnes: de="\t\t\tif ruta == dir {\n"
 // arnes: a="\t\t\tif false {\n"
 func TestUsoAgenteExcluyeLasCarpetasDeExperimento(t *testing.T) {

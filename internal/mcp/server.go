@@ -264,9 +264,11 @@ type McpServer struct {
 	// flotaBusy garantiza UN barrido de flota en vuelo. Con 40 máquinas por SSH, dos barridos
 	// solapados son 80 conexiones simultáneas contra la red de alguien (I5).
 	flotaBusy atomic.Bool
-	// ultimoDisparo lleva el cooldown por (política × máquina): "<politica>\x00<device_id>" ->
-	// time.Time. En memoria a propósito y anotado como tal: un reinicio del cerebro rearma los
-	// cooldowns, y el caso malo (reiniciar justo después de un disparo) es acotado y benigno.
+	// ultimoDisparo lleva el cooldown por (política × máquina × alcance), con la clave de
+	// fleet.Politica.ClaveDeCooldown -> time.Time. Es el camino CALIENTE y no el único: cada disparo
+	// se escribe también en fleet_policy_state y el arranque lo vuelve a sembrar desde ahí
+	// (cargarCooldowns), así que un reinicio ya no rearma los cooldowns (A24). Este comentario decía
+	// lo contrario —«en memoria a propósito, un reinicio los rearma»— desde antes de A24 (A131·T4).
 	ultimoDisparo sync.Map
 	// avisosDados evita repetir en cada tick un aviso de configuración que no es un evento sino
 	// un ESTADO (una política sin principal, un rechazo de compuerta). Clave -> true; se borra

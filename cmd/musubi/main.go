@@ -200,6 +200,7 @@ func printUsage() {
 
 	section("Medición")
 	cmd("uso-agente [--desde F] [--hasta F]", "Lee los transcripts de Claude Code: ¿el agente USA las tools y skills de Musubi? (sólo lectura; --dir, --json, --excluir; las carpetas temporales no se miden salvo --incluir-temporales)")
+	cmd("uso-agente --contexto [--desde F]", "Lo que Musubi puso en el contexto, ¿se repite, se pierde o descarrila? M1-M7 de las sesiones principales (sólo lectura; mismos flags)")
 
 	section("Ingesta")
 	cmd("ingest [--as ...] [--lang ...] [--json] <url>", "Convierte un link (video/red social/artículo) en texto; --save lo guarda en memoria")

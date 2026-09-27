@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"musubi/internal/memory"
+	"musubi/internal/transcripts"
 )
 
 // tareas.go — MUSUBI LE DEJA TRABAJO AL AGENTE, Y EL AGENTE LO HACE SOLO.
@@ -38,7 +39,7 @@ import (
 //     bypassPermissions.
 //   - Si el subagente no está instalado: sin quién lo haga, el aviso mandaría al agente a un callejón.
 //   - En un turno que no escribió la persona: una notificación de una tarea de fondo o un mensaje de
-//     otra sesión (prefijosDeTurnoAjeno).
+//     otra sesión (transcripts.EsDeSistema).
 //
 // POSTEAR ES POR PROYECTO, AVISAR ES POR SESIÓN. El trabajo nuevo entra al tablero a lo sumo cada
 // intervaloDeTareas por proyecto, y eso es lo que acota el costo. El aviso sale una vez por intervalo
@@ -71,33 +72,21 @@ const (
 // sin pedirle confirmación a la persona. Son nombres del formato de otro programa: se clavan.
 var modosQueCorrenSolos = map[string]bool{"auto": true, "bypassPermissions": true}
 
-// prefijosDeTurnoAjeno son los comienzos del texto de un turno que NO escribió la persona, tal como
-// le llega AL HOOK: crudo, antes de que Claude Code lo presente. Son hechos de su formato, medidos
-// el 2026-09-26 en los `queued_command` de los transcripts de esta máquina: `<task-notification>`
-// (1035: terminó una tarea de fondo), `<cross-session-message` (168: un mensaje de otra sesión) y
-// `<agent-message` (6: un subagente entrega su informe).
+// esTurnoDeLaPersona dice si el turno lo escribió la persona: lo contrario de
+// transcripts.EsDeSistema, que tiene LA tabla de los prompts ajenos. Acá había otra, y las dos
+// discrepaban en cinco prefijos: el medidor contaba como pedido de la persona un `<agent-message>`
+// que este aviso ya trataba como ajeno, y con la compuerta del recall leyendo EsDeSistema el mismo
+// hook iba a tener dos definiciones de «lo escribió la persona».
 //
 // LA PRIMERA MEDICIÓN MIRÓ LO QUE NO VE EL HOOK. El transcript guarda el turno de otra sesión ya
 // presentado («Another Claude session sent a message…»), y ése fue el prefijo que se clavó; el
-// hook recibe el crudo, así que un informe de subagente se leyó como turno de la persona y se llevó
-// el aviso. Se conserva la forma presentada por si algún camino la entrega así.
-//
-// Se clavan: si Claude Code los cambia, el aviso vuelve a salir también en esos turnos, que es como
-// era antes, no un daño.
-var prefijosDeTurnoAjeno = []string{"<task-notification>", "<cross-session-message", "<agent-message", "Another Claude session"}
-
-// esTurnoDeLaPersona dice si el turno lo escribió la persona.
+// hook recibe el crudo (`<cross-session-message`, `<agent-message`), así que un informe de
+// subagente se leyó como turno de la persona y se llevó el aviso. La tabla tiene las dos formas.
 //
 // En un turno ajeno el agente está en medio de otra cosa —procesando lo que terminó una tarea suya—
 // y el aviso compite con eso: el 2026-09-26 el primero cayó en uno así y el agente siguió de largo.
 func esTurnoDeLaPersona(prompt string) bool {
-	p := strings.TrimSpace(prompt)
-	for _, pre := range prefijosDeTurnoAjeno {
-		if strings.HasPrefix(p, pre) {
-			return false
-		}
-	}
-	return true
+	return !transcripts.EsDeSistema(prompt)
 }
 
 // almacenDeTareas es lo que el productor necesita de la memoria. *memory.DbEngine lo satisface.
