@@ -23,9 +23,9 @@ type failingIngestEngine struct {
 	failID string
 }
 
-func (f *failingIngestEngine) IngestShared(o memory.SharedObs) (bool, error) {
+func (f *failingIngestEngine) IngestShared(o memory.SharedObs) (memory.Ingesta, error) {
 	if o.ID == f.failID {
-		return false, fmt.Errorf("simulado: fallo transitorio al ingerir %s", o.ID)
+		return memory.Ingesta{}, fmt.Errorf("simulado: fallo transitorio al ingerir %s", o.ID)
 	}
 	return f.DbEngine.IngestShared(o)
 }

@@ -56,11 +56,11 @@ func TestIngestSharedNoLoop(t *testing.T) {
 	e := newTestEngine(t)
 
 	o := SharedObs{ID: "central-1", TopicKey: "t/x", Content: "decision del central", Importance: 1, MemType: "semantic", Author: "ana", ProjectID: "acme"}
-	inserted, err := e.IngestShared(o)
+	ing, err := e.IngestShared(o)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !inserted {
+	if !ing.Insertada {
 		t.Error("primer ingest debía insertar (inserted=true)")
 	}
 
@@ -90,11 +90,11 @@ func TestIngestSharedNoLoop(t *testing.T) {
 	}
 
 	// Idempotente: re-ingerir la misma no duplica ni inserta.
-	inserted2, err := e.IngestShared(o)
+	ing2, err := e.IngestShared(o)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inserted2 {
+	if ing2.Insertada {
 		t.Error("re-ingest de la misma id debía ser update (inserted=false)")
 	}
 	var count int

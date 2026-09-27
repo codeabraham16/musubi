@@ -380,9 +380,11 @@ type Insighter interface {
 type OutboxStore interface {
 	BackfillOutbox() (int, error)
 	ClaimOutboxBatch(limit, leaseSeconds int) ([]OutboxItem, error)
-	MarkOutboxSent(obsID string) error
-	MarkOutboxRetry(obsID string, backoffSeconds int, errMsg string) error
-	MarkOutboxDead(obsID, errMsg string) error
+	// Las marcas llevan el hash de lo que se empujó (OutboxItem.Hash): una edición local que llegó
+	// mientras viajaba no queda enviada, reprogramada ni muerta por el resultado de la versión vieja.
+	MarkOutboxSent(obsID, hash string) error
+	MarkOutboxRetry(obsID, hash string, backoffSeconds int, errMsg string) error
+	MarkOutboxDead(obsID, hash, errMsg string) error
 	OutboxStats() (pending, sent, dead int, err error)
 	// ReclamarBajada y AvanzarCursorBajada son el lease y el cursor monótono de la BAJADA: el mismo
 	// resguardo que ClaimOutboxBatch le da a la subida, que la bajada no tenía (ver bajada_lease.go).
@@ -397,8 +399,9 @@ type OutboxStore interface {
 	// ctx (aislamiento T17-19) con rowid > afterRowID, paginada. La corre el central en un pull.
 	ListSharedForPull(ctx context.Context, afterRowID int64, limit int) ([]SharedObs, error)
 	// IngestShared persiste una obs 'shared' bajada del central (sync ENTRANTE C5.3) SIN encolarla
-	// en el outbox local (anti-loop). UPSERT idempotente por id. Devuelve si insertó una fila nueva.
-	IngestShared(o SharedObs) (inserted bool, err error)
+	// en el outbox local (anti-loop). UPSERT idempotente por id. Devuelve si insertó una fila nueva y
+	// si conservó una edición local sin salir, rebote o choque (ver Ingesta).
+	IngestShared(o SharedObs) (Ingesta, error)
 	OutboxHealth() (OutboxHealthReport, error)
 	// OutboxHealthCtx es OutboxHealth acotado al proyecto del ctx: lo que muestra musubi_sync_status,
 	// que también sirve el central a credenciales de otros proyectos (ver outbox.go).

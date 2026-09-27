@@ -69,6 +69,18 @@ func (e *engineQueAnotaViajes) anotados(sentido string) []memory.Viaje {
 	return out
 }
 
+// hashReclamado es el Hash con que obsID salió en un claim: lo que el drain le pasa a las marcas.
+func hashReclamado(t *testing.T, items []memory.OutboxItem, obsID string) string {
+	t.Helper()
+	for _, it := range items {
+		if it.ObsID == obsID {
+			return it.Hash
+		}
+	}
+	t.Fatalf("el claim no trajo %s: %+v", obsID, items)
+	return ""
+}
+
 // serverQueAnotaViajes arma un server sobre un engine real envuelto, con el sync apuntando a url.
 func serverQueAnotaViajes(t *testing.T, url string, teamMode bool) (*McpServer, *engineQueAnotaViajes) {
 	t.Helper()
@@ -310,10 +322,11 @@ func TestSyncStatusAcotadoAlProyecto(t *testing.T) {
 	if err := engine.SaveObservationTypedFrom("web", "", "web-shared", "web/t", "VICTIM compartida de web", 1, "semantic", memory.ScopeShared, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.ClaimOutboxBatch(50, 60); err != nil {
+	reclamadas, err := engine.ClaimOutboxBatch(50, 60)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := engine.MarkOutboxSent("web-shared"); err != nil {
+	if err := engine.MarkOutboxSent("web-shared", hashReclamado(t, reclamadas, "web-shared")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -350,13 +363,14 @@ func TestSyncStatusNoMuestraElOutboxAjeno(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := engine.ClaimOutboxBatch(50, 60); err != nil {
+	reclamadas, err := engine.ClaimOutboxBatch(50, 60)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := engine.MarkOutboxSent("web-enviada"); err != nil {
+	if err := engine.MarkOutboxSent("web-enviada", hashReclamado(t, reclamadas, "web-enviada")); err != nil {
 		t.Fatal(err)
 	}
-	if err := engine.MarkOutboxDead("web-muerta", "rechazo permanente de la nota VICTIM de web"); err != nil {
+	if err := engine.MarkOutboxDead("web-muerta", hashReclamado(t, reclamadas, "web-muerta"), "rechazo permanente de la nota VICTIM de web"); err != nil {
 		t.Fatal(err)
 	}
 

@@ -433,12 +433,24 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 		lastOK := cur
 		failed := false
 		for _, o := range items {
-			if _, ierr := s.engine.IngestShared(o); ierr != nil {
+			ing, ierr := s.engine.IngestShared(o)
+			if ierr != nil {
 				logx.Error("inbound: no se pudo ingerir obs shared; NO se avanza el cursor más allá (se reintenta en el próximo tick)", "id", o.ID, "rowid", o.RowID, "error", ierr)
 				failed = true
 				break
 			}
 			ingeridas++
+			// Una edición local sin salir que la bajada NO pisó (ver memory.Ingesta). Van al viaje del
+			// tick para contarlas por separado: el rebote es el eco de lo propio; el choque, otro
+			// contenido cruzado con el de acá (memory.Ingesta dice qué cuenta y qué no), y se loguea con
+			// su id para poder ir a mirar cuál fue.
+			if ing.Rebote {
+				viaje.Rebotes++
+			}
+			if ing.Choque {
+				viaje.Choques++
+				logx.Info("inbound: choque — se conservó una edición local sin salir; el central tenía otra versión", "id", o.ID)
+			}
 			if o.RowID > lastOK {
 				lastOK = o.RowID
 			}
@@ -561,7 +573,7 @@ func (s *McpServer) drainOutboxOnce(ctx context.Context) {
 		perr := s.syncClient.Push(item)
 		if perr == nil {
 			aceptadas++
-			if merr := s.engine.MarkOutboxSent(item.ObsID); merr != nil {
+			if merr := s.engine.MarkOutboxSent(item.ObsID, item.Hash); merr != nil {
 				logx.Error("drain: no se pudo marcar como enviado", "obs_id", item.ObsID, "error", merr)
 			}
 			continue
@@ -574,7 +586,7 @@ func (s *McpServer) drainOutboxOnce(ctx context.Context) {
 		// memoria shared en un corte de minutos. Lo genuinamente atascado se ve por
 		// musubi_sync_status y se rescata con musubi_sync_requeue.
 		if errors.Is(perr, errPermanent) {
-			if merr := s.engine.MarkOutboxDead(item.ObsID, perr.Error()); merr != nil {
+			if merr := s.engine.MarkOutboxDead(item.ObsID, item.Hash, perr.Error()); merr != nil {
 				logx.Error("drain: no se pudo marcar como dead", "obs_id", item.ObsID, "error", merr)
 			}
 			continue
@@ -582,7 +594,7 @@ func (s *McpServer) drainOutboxOnce(ctx context.Context) {
 		// Transitorio: reprogramar con backoff exponencial + jitter (attempts sólo alimenta
 		// el backoff y la observabilidad; ya no dispara dead).
 		backoff := backoffSeconds(item.Attempts+1, s.syncCfg.BackoffBaseSeconds, s.syncCfg.BackoffMaxSeconds)
-		if merr := s.engine.MarkOutboxRetry(item.ObsID, backoff, perr.Error()); merr != nil {
+		if merr := s.engine.MarkOutboxRetry(item.ObsID, item.Hash, backoff, perr.Error()); merr != nil {
 			logx.Error("drain: no se pudo reprogramar el reintento", "obs_id", item.ObsID, "error", merr)
 		}
 	}
