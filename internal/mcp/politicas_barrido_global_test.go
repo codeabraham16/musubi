@@ -462,8 +462,10 @@ func TestElValorCeroDelBarridoNoDiceQueActuaria(t *testing.T) {
 // vuelve sin barrer. Eso supone que alguien LO ARRANCA, y lo que cumple esa suposición es UNA línea
 // de ListenAndServeHTTP: `go s.RunFlotaScheduler(ctx)`. Si se perdiera en un refactor del arranque,
 // el inventario seguiría diciendo `puede_actuar: true` —el barrido figura encendido— y no actuaría
-// ninguna política, ni se cerraría ninguna shell vencida. Es la forma que ya custodia
-// TestRevocarSurteEfectoSinReiniciarElServidor con el watch del registro, una línea más arriba.
+// ninguna política. (Las shells vencidas ya no cuelgan de esta línea: desde A136 las cierra su
+// propio vigía, que custodia TestElServidorAplicaLosTechosDeShellConOSinBarrido.) Es la forma
+// que ya custodia TestRevocarSurteEfectoSinReiniciarElServidor con el watch del registro, una línea
+// más arriba.
 //
 // Se arranca el servidor entero —loopback, puerto efímero, principals.yaml en disco— con una
 // política cuya condición se cumple y un sondeo de 100 ms, y se exige que la política actúe.
@@ -499,11 +501,12 @@ func TestElServidorArrancaElBarridoQueElInventarioDaPorCorriendo(t *testing.T) {
 		// ListenAndServeHTTP no espera a la goroutine del barrido. Antes de que el cleanup de
 		// newTestServer cierre la base se deja pasar más de un tick y se espera a que flotaBusy baje.
 		// NO es una garantía, y queda dicho (segunda vuelta de la revisión de A132): tras el cancel,
-		// el select de RunFlotaScheduler puede elegir un tick pendiente, y el barrido escribe
-		// —cerrarShellsVencidas— ANTES de levantar flotaBusy. Un barrido que llegue tarde recibe
-		// «sql: database is closed» y lo loguea; no rompe esta prueba (medido: 40/40, y 100/100 con
-		// GOMAXPROCS=1 y la CPU cargada, sin una sola línea así). Cerrarlo del todo pide que
-		// ListenAndServeHTTP espere a sus goroutines al volver.
+		// el select de RunFlotaScheduler todavía puede elegir un tick pendiente, y un barrido que
+		// arranque después de esta espera no se ve. Desde A136 el tramo es más angosto —el barrido ya
+		// no cierra shells, que era lo que escribía ANTES de levantar flotaBusy—, pero sigue abierto.
+		// El que llegue tarde recibe «sql: database is closed» y lo loguea; no rompe esta prueba.
+		// Cerrarlo del todo pide que ListenAndServeHTTP espere también al barrido, que tarda lo que
+		// tarden sus sondas SSH (al vigía de las shells sí lo espera).
 		time.Sleep(3 * sondeoCortoDePrueba)
 		for fin := time.Now().Add(esperaDelScheduler); s.flotaBusy.Load() && time.Now().Before(fin); {
 			time.Sleep(10 * time.Millisecond)

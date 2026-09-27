@@ -174,7 +174,9 @@ func (e *DbEngine) BitacoraDeShell(projectID, deviceID string, tope int) ([]flee
 //
 // El estado se DERIVA al leer, así que esto no cambia ninguna decisión: existe para que la
 // bitácora no quede llena de filas «activas» de hace tres días, que es cómo una tabla de
-// auditoría deja de ser legible. Cuelga del barrido de flota.
+// auditoría deja de ser legible. La llama el vigía de los techos de shell (RunTechosDeShell, en
+// mcp) en cada pasada, y NO el barrido de flota, así que apagar el sondeo no la apaga. Su primera
+// pasada, al arrancar, cierra lo que dejó abierto un reinicio.
 func (e *DbEngine) CerrarSesionesShellVencidas(ahora time.Time) (int64, error) {
 	rows, err := e.db.Query(`SELECT ` + columnasShell + ` FROM shell_sessions WHERE cerrada IS NULL`)
 	if err != nil {
