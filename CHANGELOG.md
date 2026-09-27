@@ -8,6 +8,20 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Cada resumen de la conversación conserva lo que el agente no puede perder.** Antes de que Claude
+  Code compacte, el hook `PreCompact` le pasa al resumen las instrucciones de Musubi: conservar
+  textuales las reglas, decisiones y pedidos de la persona (marcando los que no se cumplieron), el
+  estado del trabajo (ramas, commits, PRs, despliegues, máquinas, cómo se verificó cada cosa, qué
+  quedó a medias y el próximo paso), los errores caros con su solución y los ids de memoria de
+  Musubi; y no copiar salidas largas de comandos, porque el resumen se relee en cada pedido
+  siguiente. Es la otra mitad del ahorro: con la ventana de compactación puesta, la conversación se
+  resume más seguido, y cada resumen es un punto donde se podía perder algo. El canal está medido:
+  en PreCompact, la salida estándar de un hook que termina bien se agrega a las instrucciones del
+  resumen (el envelope JSON con additionalContext, en cambio, se descarta; por eso este hook estuvo
+  tres semanas mudo, y por eso `precompact` había quedado como un shim que no imprimía nada).
+  Compactando una sesión de prueba con una palabra testigo, el resumen registró la instrucción. Lo
+  registran el plugin, `musubi setup` y `provision`; si el proyecto ya corre el hook desde su propio
+  settings, el del plugin se calla.
 - **El ahorro de tokens viene con la instalación: `musubi agente instalar` resume la conversación a
   los 400k.** Deja `autoCompactWindow: 400000` en el settings de Claude Code, junto a los permisos.
   Medido el 2026-09-26 sobre 14 días de transcripts propios (16.433 respuestas de la API): el 68 %

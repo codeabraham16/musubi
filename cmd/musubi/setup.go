@@ -236,6 +236,11 @@ func setupProjectWith(exeOverride, agent string) {
 		} else {
 			printOK("Hook Stop en .claude/settings.json (captura de commits: red de seguridad)")
 		}
+		if err := writePreCompactHook(root, exePath); err != nil {
+			printWarn(fmt.Sprintf("No se pudo registrar el hook PreCompact: %v", err))
+		} else {
+			printOK("Hook PreCompact en .claude/settings.json (el resumen conserva reglas, decisiones y estado del trabajo)")
+		}
 	} else {
 		printInfo(fmt.Sprintf("%s no tiene sistema de hooks; se registró solo el servidor MCP.", target.Name))
 	}
@@ -416,6 +421,31 @@ func writeCaptureHook(root, exePath string) error {
 		Timeout: 10,
 	}
 	merged, err := bootstrap.MergeClaudeSettings(existing, "Stop", "", hook)
+	if err != nil {
+		return fmt.Errorf("error al mergear settings.json: %w", err)
+	}
+	return os.WriteFile(settingsPath, merged, 0644)
+}
+
+// writePreCompactHook inyecta (idempotente) el hook PreCompact en {root}/.claude/settings.json:
+// antes de que Claude Code compacte la conversación, Musubi le pasa al resumen qué tiene que
+// conservar (precompact.go). Sin matcher: vale para la compactación automática y para /compact.
+func writePreCompactHook(root, exePath string) error {
+	claudeDir := filepath.Join(root, config.ClaudeDir)
+	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+		return fmt.Errorf("no se pudo crear %s: %w", claudeDir, err)
+	}
+	settingsPath := filepath.Join(claudeDir, config.ClaudeSettingsFile)
+	existing, err := os.ReadFile(settingsPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("error al leer %s: %w", settingsPath, err)
+	}
+	hook := bootstrap.HookCommand{
+		Type:    "command",
+		Command: hookExeCommand(exePath, "precompact --hook-mode"),
+		Timeout: 10,
+	}
+	merged, err := bootstrap.MergeClaudeSettings(existing, "PreCompact", "", hook)
 	if err != nil {
 		return fmt.Errorf("error al mergear settings.json: %w", err)
 	}
