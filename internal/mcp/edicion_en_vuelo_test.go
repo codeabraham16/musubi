@@ -209,7 +209,8 @@ func archivarHaceCuarentaDias(t *testing.T, dir, id string) {
 // el hash de la versión purgada y en la observación el de la que bajó. Con las marcas contra lo
 // encolado, el push salía bien, la marca no aplicaba y la fila se volvía a empujar en cada lease,
 // para siempre (medido en la revisión: 4 saves en 4 ticks; main, 1). Con las marcas contra lo que la
-// base tiene, sale una vez y queda 'sent'.
+// base tiene, sale una vez y queda 'sent'. La prueba pide a lo sumo un save y nada pendiente, no ese
+// save: sellar 'espejo' la huérfana al re-entregarse lo ahorraría, y sería una mejora, no un rojo.
 //
 // Sabotaje: que las marcas vuelvan a comparar contra lo encolado.
 // arnes: archivo="internal/memory/outbox.go"
@@ -253,8 +254,9 @@ func TestUnaHuerfanaReentregadaSaleUnaSolaVez(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(guardados) != 1 || pending != 0 || sent != 1 {
-		t.Errorf("DERIVA SIN FIN: en dos ticks el central recibió %d saves %q y el outbox quedó pending=%d sent=%d dead=%d; esperaba 1 save y la fila 'sent'",
+	if len(guardados) > 1 || pending != 0 || dead != 0 {
+		t.Errorf("DERIVA SIN FIN: en dos ticks el central recibió %d saves %q y el outbox quedó pending=%d sent=%d dead=%d; esperaba a lo sumo un save y la fila cerrada",
 			len(guardados), guardados, pending, sent, dead)
 	}
+	t.Logf("saves=%q · outbox pending=%d sent=%d dead=%d", guardados, pending, sent, dead)
 }
