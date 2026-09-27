@@ -36,7 +36,9 @@ func TestPerturbarConsultaPorClase(t *testing.T) {
 
 	orig := terminosComoTexto(q)
 	for _, clase := range ClasesDeTipeo {
-		if PerturbarConsulta(q, clase, 7) != PerturbarConsulta(q, clase, 7) {
+		// Dos llamadas separadas: comparar la expresión consigo misma la marca staticcheck (SA4000).
+		primera, segunda := PerturbarConsulta(q, clase, 7), PerturbarConsulta(q, clase, 7)
+		if primera != segunda {
 			t.Errorf("%s: la misma entrada dio dos salidas: no es determinista", clase)
 		}
 		if PerturbarConsulta(q, clase, 7) == PerturbarConsulta(q, clase, 8) {
