@@ -114,6 +114,11 @@ func (e *DbEngine) SetLedgerPrefixes(p []string) { e.ledgerPrefixes = p }
 // histórico porque un engine con "" sólo compara contra vectores con model_id "".
 func (e *DbEngine) SetVectorModelID(modelID string) { e.vectorModelID = modelID }
 
+// VectorModelID devuelve la procedencia con la que este engine escribe y lee los vectores ("" sin
+// embedder nombrado). Existe para el banco (recalleval): un brazo que modela el hook sin embebedor
+// tiene que poder correr el motor en ese estado y devolverlo como estaba.
+func (e *DbEngine) VectorModelID() string { return e.vectorModelID }
+
 // contextoDeCierre devuelve un ctx que se cancela cuando el engine se cierra (Close). Si el engine
 // ya está cerrado, lo devuelve cancelado. Lo usan las corridas de fondo que llaman a algo lento
 // (el embebedor) para no retener el apagado mientras terminan un pedido que ya nadie va a usar.
