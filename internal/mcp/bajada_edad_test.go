@@ -99,10 +99,35 @@ func proximaEnSegundos(linea string) int {
 	return n
 }
 
+// edadEnSegundos saca el N de « · última hace N s». -1 si la línea no lo trae en segundos.
+func edadEnSegundos(linea string) int {
+	const marca = " · última hace "
+	i := strings.Index(linea, marca)
+	if i < 0 {
+		return -1
+	}
+	numero, resto, ok := strings.Cut(linea[i+len(marca):], " ")
+	if !ok || !strings.HasPrefix(resto, "s ") {
+		return -1
+	}
+	n, err := strconv.Atoi(numero)
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
 // TestSyncStatusDiceLaEdadDeLaBajada: la línea «bajada» dice cuándo bajó por última vez, si trajo
 // algo y cuándo se espera la próxima —un tick, 30 s sin config—. Antes del primer Pull, «nunca»;
-// después de una página sin filas, «vacía»; después de una con dos, «2 filas». Lo lee de la meta
-// que anota el dueño del candado, no de la memoria del proceso que contesta.
+// después de una página sin filas, «vacía»; después de una con dos, «2 filas». Y la edad es la del
+// Pull que acaba de volver: «hace 0 s», con hasta 2 s para el commit del tick y el redondeo a
+// segundos. Lo lee de la meta que anota el dueño del candado, no de la memoria del proceso que
+// contesta.
+//
+// Sabotaje: que la meta anote un instante viejo y no el del tick que volvió.
+// arnes: archivo="internal/mcp/scheduler.go"
+// arnes: de="u := memory.UltimaBajada{Unix: ahora.Unix(), Filas:"
+// arnes: a="u := memory.UltimaBajada{Unix: ahora.Unix() - 7200, Filas:"
 //
 // Sabotaje: que el defer de drainInboundOnce no anote la bajada.
 // arnes: archivo="internal/mcp/scheduler.go"
@@ -143,6 +168,9 @@ func TestSyncStatusDiceLaEdadDeLaBajada(t *testing.T) {
 	if n := proximaEnSegundos(l); n < 20 || n > 30 {
 		t.Errorf("la próxima tenía que caer a ~30 s (un tick sin config), vino %d:\n%s", n, l)
 	}
+	if n := edadEnSegundos(l); n < 0 || n > 2 {
+		t.Errorf("recién volvió el Pull: la edad tenía que ser «hace 0 s» (hasta 2 s), vino %d:\n%s", n, l)
+	}
 	t.Logf("después de una bajada vacía: %s", l)
 
 	filas.Store(2)
@@ -150,6 +178,9 @@ func TestSyncStatusDiceLaEdadDeLaBajada(t *testing.T) {
 	l, _ = lineaDeBajada(t, textoDeSyncStatus(t, s))
 	if !strings.Contains(l, " · última hace ") || !strings.Contains(l, " (2 filas), próxima en ~") {
 		t.Errorf("después de bajar dos filas la línea tenía que decir «última hace … (2 filas), próxima en ~…»:\n%s", l)
+	}
+	if n := edadEnSegundos(l); n < 0 || n > 2 {
+		t.Errorf("recién volvió el Pull con dos filas: la edad tenía que ser «hace 0 s» (hasta 2 s), vino %d:\n%s", n, l)
 	}
 	t.Logf("después de una bajada con dos filas: %s", l)
 }
