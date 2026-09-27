@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -197,13 +198,19 @@ func (e *DbEngine) loadOutboxPayloads(ids []string, attemptsByID map[string]int)
 }
 
 // MarkOutboxSent marca la fila 'sent' tras una entrega exitosa (R13). No se re-entrega.
+//
+// Deja escrito además QUÉ salió y CUÁNDO (migración v58): sent_hash es el hash que esta máquina
+// entregó por última vez y sent_at la hora de esa entrega. «Enviadas en 24 h» se cuenta con sent_at
+// y no con el estado, porque el estado lo mueven otros caminos (una edición local la devuelve a
+// 'pending'); la hora de la última salida no la escribe nadie más que esta marca.
 func (e *DbEngine) MarkOutboxSent(obsID string) error {
 	// Fencing por estado (auditoría #13c): una marca sólo aplica a una fila NO terminal (pending/claimed),
 	// nunca a una 'sent'/'dead'. Sin esto, con dos drainers solapados por vencimiento de lease, un ciclo
 	// rezagado podía re-marcar una fila que otro ya resolvió (p. ej. un MarkRetry tardío revivía un 'sent'
 	// a 'pending' = phantom pending). Excluir los estados terminales corta esa resurrección.
 	if _, err := e.db.Exec(`
-		UPDATE outbox SET status = 'sent', last_error = NULL, updated_at = datetime('now')
+		UPDATE outbox SET status = 'sent', last_error = NULL, updated_at = datetime('now'),
+			sent_hash = enqueued_hash, sent_at = datetime('now')
 		WHERE obs_id = ? AND status IN ('pending','claimed')`, obsID); err != nil {
 		return fmt.Errorf("error al marcar outbox como enviado: %w", err)
 	}
@@ -322,6 +329,76 @@ func (e *DbEngine) OutboxHealth() (OutboxHealthReport, error) {
 		 ORDER BY updated_at DESC LIMIT 1`, outboxSent,
 	).Scan(&last); err != nil && err != sql.ErrNoRows {
 		return h, fmt.Errorf("error al leer el último error del outbox: %w", err)
+	}
+	if last.Valid {
+		h.LastError = last.String
+	}
+	return h, nil
+}
+
+// OutboxHealthCtx es OutboxHealth ACOTADO al proyecto del ctx, para musubi_sync_status.
+//
+// El outbox no tiene project_id: el proyecto de cada fila es el de su observación, así que el
+// recorte va por JOIN, con la misma scopeClause que el resto de las lecturas. Sin él, en un nodo
+// que sirve a credenciales de varios proyectos, una credencial leía los conteos del outbox ajeno y
+// el TEXTO de su último error, que puede nombrar la nota rechazada. Hoy es latente —el central es
+// nodo terminal y su outbox está vacío— pero la tool ya se declara aislada.
+//
+// Sin recorte (el daemon local, sin credencial, o un admin federado) delega en OutboxHealth tal
+// cual: el JOIN dejaría afuera las filas cuya observación se borró, y eso le cambiaría los números
+// a quien hoy los mira.
+func (e *DbEngine) OutboxHealthCtx(ctx context.Context) (OutboxHealthReport, error) {
+	scope, args := projectScopeFrom(ctx).scopeClause("o")
+	if scope == "" {
+		return e.OutboxHealth()
+	}
+	var h OutboxHealthReport
+	const desde = ` FROM outbox b JOIN observations o ON o.id = b.obs_id WHERE 1 = 1`
+	rows, err := e.db.QueryContext(ctx, `SELECT b.status, COUNT(*)`+desde+scope+` GROUP BY b.status`, args...)
+	if err != nil {
+		return h, fmt.Errorf("error al consultar el outbox del proyecto: %w", err)
+	}
+	for rows.Next() {
+		var status string
+		var n int
+		if err := rows.Scan(&status, &n); err != nil {
+			rows.Close()
+			return h, fmt.Errorf("error al escanear el outbox del proyecto: %w", err)
+		}
+		switch status {
+		case outboxPending, outboxClaimed:
+			h.Pending += n
+		case outboxSent:
+			h.Sent += n
+		case outboxDead:
+			h.Dead += n
+		case outboxEspejo:
+			h.Espejo += n
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return h, fmt.Errorf("error al recorrer el outbox del proyecto: %w", err)
+	}
+	rows.Close()
+
+	var age sql.NullInt64
+	if err := e.db.QueryRowContext(ctx,
+		`SELECT CAST(strftime('%s','now') - strftime('%s', MIN(b.created_at)) AS INTEGER)`+desde+
+			` AND b.status IN (?, ?)`+scope, append([]interface{}{outboxPending, outboxClaimed}, args...)...,
+	).Scan(&age); err != nil && err != sql.ErrNoRows {
+		return h, fmt.Errorf("error al calcular la antigüedad del outbox del proyecto: %w", err)
+	}
+	if age.Valid && age.Int64 > 0 {
+		h.OldestPendingAgeSec = age.Int64
+	}
+
+	var last sql.NullString
+	if err := e.db.QueryRowContext(ctx,
+		`SELECT b.last_error`+desde+` AND b.last_error IS NOT NULL AND b.status != ?`+scope+
+			` ORDER BY b.updated_at DESC LIMIT 1`, append([]interface{}{outboxSent}, args...)...,
+	).Scan(&last); err != nil && err != sql.ErrNoRows {
+		return h, fmt.Errorf("error al leer el último error del outbox del proyecto: %w", err)
 	}
 	if last.Valid {
 		h.LastError = last.String

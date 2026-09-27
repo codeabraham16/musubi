@@ -63,3 +63,45 @@ func ConfigHibrida() Config {
 func ConfigProduccion() Config {
 	return Config{Name: "produccion", Opts: OptsDeProduccion(), UseVector: true}
 }
+
+// ConfigTurno es el ranker del HOOK por turno (UserPromptSubmit), donde ocurre casi todo el recall
+// del sistema: las opciones salen de memory.OpcionesDeRecallDelTurno —la misma función que llama
+// buildTurnRecall— y el banco corre con SU pool (PoolDelTurno), no con el corpus entero.
+//
+// POR QUÉ NO SE ARMA DESDE OptsDeProduccion. Esas son las opciones de la tool musubi_recall, y el
+// hook corre otras: RankedFTS encendido (filtra stopwords) y el pool clavado en 50. Medir el hook
+// con las de la tool es medir un ranker que el hook no corre, y los gates que decidan encender algo
+// en el hook (el corrector, el vector del turno) se tienen que medir contra éste.
+//
+// EL MOTOR DEL HOOK, NO SÓLO SUS OPCIONES. El hook de hoy corre sin embebedor: la guarda de
+// latencia (embedderCaroDeConstruir, cmd/musubi/embed.go) no le deja construirlo cuando la tabla
+// está presente, así que no hay vector de consulta y el motor queda sin procedencia de vectores.
+// Eso apaga, además del pool vectorial, a MMR: con MMRLambda 0,75 en las opciones, el hook no
+// diversifica. SinEmbebedor pone al motor del banco en ese mismo estado (ver Config.SinEmbebedor).
+// El día que el hook construya su embebedor (ola2/vector-en-el-turno), el brazo que lo mide es
+// ConfigTurnoHibrido.
+func ConfigTurno() Config {
+	return ConfigTurnoCon(config.Default().Memory)
+}
+
+// ConfigTurnoCon es ConfigTurno para la config de un proyecto (su yaml) en vez de la de fábrica: el
+// mismo motor sin embebedor y el mismo pool, con las opciones que la fuente única traduce de m.
+func ConfigTurnoCon(m config.MemoryConfig) Config {
+	return Config{
+		Name:         "turno",
+		Opts:         memory.OpcionesDeRecallDelTurno(m, memory.AlcanceDelTurno{}),
+		PoolDelTurno: true,
+		SinEmbebedor: true,
+	}
+}
+
+// ConfigTurnoHibrido es el hook con su embebedor construido, que es lo que evalúa
+// ola2/vector-en-el-turno: el prompt lleva vector y el motor lee con la procedencia del embebedor,
+// así que, con las opciones de fábrica, TAMBIÉN corre MMR. Encender el vector en el turno enciende
+// las dos cosas juntas; el banco que decide tiene que medirlas juntas (y por separado, bajando
+// MMRLambda a 1 en un brazo aparte).
+func ConfigTurnoHibrido() Config {
+	c := ConfigTurno()
+	c.Name, c.SinEmbebedor, c.UseVector = "turno-hibrido", false, true
+	return c
+}

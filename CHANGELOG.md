@@ -38,6 +38,109 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   secreto. Este cambio NO enciende el vector en el hook: eso es `ola2/vector-en-el-turno`, que
   depende del banco con forma de prompt. El job `recall-gate` suma las tres comparaciones contra
   POTION real.
+- **El banco corre el ranker del hook —sus opciones, su pool y su motor— y mide el tipeo por
+  clase.** El recall por turno (el hook UserPromptSubmit, donde ocurre casi todo el recall) armaba
+  sus opciones a mano, y el banco de `recalleval` armaba las suyas por su lado: sin `RankedFTS`, con
+  el pool subido al corpus entero (hasta 3.155 candidatos, el vectorial incluido, contra los 50 que
+  rankea el hook) y sobre un motor que SÍ diversificaba. El hook no: con la tabla estática presente
+  no construye el embebedor, así que su motor queda sin procedencia de vectores y MMR no encuentra
+  con qué medir redundancia, aunque `mmr_lambda` valga 0,75. O sea que el banco medía un ranker que
+  el hook no corre, y contra ése se iban a decidir el corrector de tipeo y el vector en el turno.
+
+  `memory.OpcionesDeRecallDelTurno(memCfg, alcance)` pasa a ser la única fuente de las opciones
+  del hook: la llaman `buildTurnRecall` y el brazo nuevo del banco, `recalleval.ConfigTurno`, que
+  corre con `Config.PoolDelTurno` (respeta el pool de las opciones y mide las @k dentro de él) y
+  con `Config.SinEmbebedor` (el motor en el estado del hook: `SeedEngine` estampa los vectores con
+  nombre, como el backfill, y el brazo los lee sin procedencia). `ConfigTurnoHibrido` es el hook
+  con su embebedor construido, que enciende el vector y MMR juntos. `AlcanceDelTurno` nace con
+  `ProjectScope` y `Federate` en su valor cero, que es el recall federado de hoy, y
+  `buildTurnRecall` recibe un struct de parámetros en vez de siete posicionales, para que los
+  frentes que siguen le agreguen campos sin romper la firma. **No cambia el ranking**: la salida
+  del hook es la misma, byte a byte.
+
+  `recalleval.PerturbarConsulta(q, clase, semilla)` mete un tipeo determinista en cada término de
+  5 runas o más, por clase: transposición, falta y sobra —las que va a arreglar el corrector— y
+  sustitución, que a propósito no toca, para que el banco no mida al corrector con el mismo error
+  que sabe arreglar. La letra de más imita la del dueño: en sus prompts es casi siempre una letra
+  ajena en el medio de la palabra, y sólo ~1 de cada 6 una repetida. Sobre `golden.json`, un tipeo
+  en el término más largo casi no mueve el MRR (0,722 → 0,694): la consulta es un OR y basta un
+  término vivo. Tipear todos lo baja a 0,500 (0,583 en «falta», porque sacar la última letra deja
+  un prefijo que el match por raíz encuentra igual).
+
+  `TestTipeoFixtureReal` corre lo mismo sobre una copia de la memoria real, sin gate, y es la línea
+  base del frente búsqueda. Medida sobre la base de davantis-1 (3.194 docs, 88 consultas, MRR /
+  R@10): el hook como corre hoy, 0,391 / 0,351 limpio; con un tipeo, de 0,309 a 0,324 según la
+  clase; con todos los términos tipeados, de 0,144 a 0,187. Para decidir el vector en el turno,
+  los cuatro brazos con el pool de 50: léxico sin MMR (el hook) 0,391 / 0,351 · léxico con MMR
+  0,354 / 0,212 · híbrido con MMR 0,392 / 0,273 · híbrido sin MMR 0,418 / 0,354. O sea que
+  encender el embebedor tal cual (vector y MMR juntos) deja el MRR igual y baja el R@10, y el
+  vector sin MMR sube el MRR sin perder R@10; la caída de R@10 por MMR está inflada por el
+  etiquetado por topic (ver `mmr_real_test.go`), así que es una cota. El mismo léxico con el pool
+  al corpus da 0,414 / 0,388: el pool de 50 del hook le cuesta 0,023 de MRR.
+
+  *Guardas nuevas, con 21 sabotajes corridos en rojo. `TestLaSalidaDelHookEsLaDeAntesDelRefactor`
+  corre el hook entero sobre un motor real con el literal de antes congelado y con la fuente única,
+  y exige los mismos bytes; aparte, sobre una copia de la base, el binario de main y el de esta rama
+  dieron la misma salida en 30 de 30 turnos, y un control con el pool en 20 dio distinta en 15 de
+  15. `TestBuildTurnRecallUsaLasOpcionesDelTurno` y `TestElBrazoDelTurnoTraduceElYaml` fijan con
+  valores escritos cómo el hook y el banco traducen un yaml que no es el de fábrica.
+  `TestElBancoCorreElMotorDelHook` exige que, con vectores sembrados, el brazo del hook dé el mismo
+  orden que sin MMR, y que el mismo brazo con embebedor lo cambie. `TestElBancoCorreElPoolDelTurno`,
+  que el banco le pida a Recall el pool del hook y con el motor en el estado de cada brazo.
+  `TestPerturbarConsultaPorClase` (64 semillas), `TestSobraMezclaLetraAjenaYRepetida` y
+  `TestLaPerturbacionMueveElDorado`, que el instrumento meta el error que dice, con la mezcla del
+  dueño, y mueva el dorado (−0,10 de MRR o más en cada clase). `TestConfigsNoDivergenDeProduccion`
+  suma las filas del brazo del turno.*
+- **`musubi uso-agente --contexto`: medir si lo que Musubi pone en el contexto se repite, se pierde
+  o descarrila.** Es el instrumento del frente arranque de la ola 2, y entra antes que cualquier
+  arreglo para tener el antes y el después con la MISMA regla: hasta hoy esos números salían de un
+  python suelto sobre los transcripts. Mide, sólo en las sesiones principales (las hijas se cuentan
+  y no se miden): M1, los turnos de continuación («sigue», «go», «si hazlo») que recibieron
+  «memoria relevante», con dos clasificadores —la lista que va a usar la compuerta del hook y el
+  largo, que no depende de ella—; M1s, los avisos del sistema (`<task-notification>`, un mensaje de
+  otra sesión) que recibieron memoria, contando sólo los que ve el hook —los registros de un
+  slash-command no pasan por él y se informan aparte—; M2, las compactaciones seguidas de un
+  arranque de Musubi; M3, los ids repetidos dentro de una ventana de contexto; M5, los ids de una
+  ventana anterior que volvieron tras compactar; M7, el eco —un bloque de Musubi posterior a una
+  compactación que repite un pedido del dueño—, salteando la línea con que el corrector de tipeo
+  avisa lo que corrigió. `/resume` y los forks salen «sin medir», como el alcance entero cuando no
+  hay transcripts en la ventana: nunca 0. Los tramos de registros que Claude Code reescribe NO son
+  reanudaciones: los 67 de la historia de Musubi y Altura están pegados a una compactación.
+
+  Sobre los transcripts de Musubi y Altura en davantis-1 desde el 09-14 (2026-09-27 00:03 UTC): M1
+  76/130 por lista y 125/203 por largo; M1s 123/340, con 73 registros de slash-command aparte; M2
+  0/31; M3 173/2.480 (7,0 %); M5 630/1.515, en 21 de las 31 compactaciones; M7 0/585. Contra el
+  python de la línea base, los dos sobre la foto de las 22:37 UTC: M3 da 44 allá y 173 acá porque
+  el python no alimenta la ventana con lo inyectado ANTES del 09-14 en una ventana que seguía
+  abierta ese día (con ese estado da 173, igual); M1 por lista da 78/123 allá y 76/129 acá porque el
+  python le anotaba a un «sigue» la memoria de un aviso o de un pedido encolado que llegó detrás, y
+  no contaba como turno el «sigue» encolado. M5 se mide sólo en las ventanas que abre una
+  compactación de la ventana pedida.
+
+  **La línea base de M1 por lista no está congelada.** La toma la lista de
+  `transcripts.EsPedidoDeContinuacion`, que es la de la línea base en python; el contrato del frente
+  pide que la compuerta del hook use `memory.TerminosDeConsulta`, que llega con el PR 2. Si el PR 2
+  cambia la regla, M1 por lista se vuelve a tomar con la regla final ANTES de instalar la ventana
+  V1, o el antes y el después medirían con dos listas. M1 por largo no depende de la lista.
+
+  **El lector de transcripts pasa a `internal/transcripts`**, que ahora comparten `uso-agente`,
+  `--contexto`, el aviso de tareas del hook del turno y, en los PR que siguen, la compuerta del
+  recall, el banco de búsqueda y la métrica de proyecto: un solo parser (con la deduplicación por
+  uuid), un solo recorrido (fuera el `journal.jsonl` y las carpetas de experimento, sesiones hijas
+  por la carpeta `subagents/`), UNA tabla de los prompts que no escribió la persona —el aviso de
+  tareas tenía la suya y discrepaban en cinco prefijos—, un solo `EsPedidoDeContinuacion`, y un
+  lector por turno. El lector aprende además algo que el de `uso-agente` no sabía: un prompt que
+  llega con el agente trabajando —el dueño escribe, o termina una tarea de fondo— se entrega como
+  adjunto `queued_command` y no como registro `user` (35 pedidos y 117 avisos desde el 09-14), y el
+  hook del turno corre para él; sin contarlo, su memoria se le anotaba al turno anterior. Si Claude
+  Code lo escribe además como registro `user`, es un solo turno. `uso-agente` da los mismos números
+  que antes, byte a byte.
+
+  *Dieciséis guardas nuevas con su sabotaje corrido (47 de 47 en rojo, entre ellos los
+  diez que una revisión adversarial dejó verdes), una que lee la salida real del hook del turno
+  para que el medidor no pueda perder su bloque en silencio, y las 11 directivas de
+  `uso_agente_test.go` que apuntaban al código mudado se reescribieron y se re-corrieron. No cambia
+  ninguna tool: no hay goldens.*
 - **Antes de tocar un agente a mano, se declara la ventana: el runbook trae la receta.** El
   2026-09-20, en la migración a TLS, se tocó a mano la tarea del agente de `gio` y
   `AgenteCaidoConMaquinaViva` sonó 50 minutos. Fue la única ventana de trabajo leída como caída en
@@ -356,6 +459,74 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **El contador de enviadas cuenta lo que salió de acá, y el sync lleva la cuenta de lo que mueve.**
+  Desde #656 el pull sella 'espejo' lo que baja, y ese sello pisaba también las filas 'sent': cada
+  nota propia que volvía en la bajada dejaba de contar como enviada. Medido el 2026-09-26 en
+  davantis-1: 312 'sent', la última del 22/09 —con el central registrando 196 saves de esta PC el
+  25/09—, y 308 de esas 312 retiradas en el central. 'sent' contaba justo lo que ya no volvía.
+
+  Ahora una 'sent' que rebota sigue 'sent' (sin tocarle `updated_at`), y `MarkOutboxSent` graba
+  `sent_hash` (qué contenido entregó esta máquina) y `sent_at` (cuándo). Los dos drains registran
+  al final de cada tick lo que movieron en la tabla nueva `sync_viajes` —filas, posts, bytes, por
+  día y sentido—, y SÓLO si el tick salió a la red. La subida no escribe si no mandó nada o si
+  ningún POST tuvo respuesta. La bajada escribe una vez por tick en que un Pull volvió bien, aunque
+  la página venga vacía —así cuenta los pulls—, y no escribe en un tick salteado: sin el candado,
+  cediendo tras un fallo o con el Pull fallido. Eso lo decide una sola variable, `salioALaRed`, que
+  se pone en true tras cada Pull sin error. `musubi_sync_status` suma tres
+  líneas: enviadas en 24 h y 7 d (por `sent_at`), el volumen de la subida y el de la bajada (una
+  sola línea «bajada», que el PR de la edad de la bajada completa), y lo que no viaja con su motivo
+  —locales, en cuarentena, y de un LLM ya corroboradas que siguen locales—. El JSON conserva sus
+  claves y agrega `viajes`. Todo lo que cuenta observaciones —el outbox con el texto de su último
+  error, lo que no viaja y las enviadas— va acotado al proyecto de la credencial, porque el central
+  también sirve la tool y un conteo del vecino es información del vecino: por eso
+  `musubi_sync_status` deja de figurar entre las lecturas «sin datos de proyecto» y pasa a tener su
+  prueba de aislamiento. No cambia la descripción ni el esquema de ninguna tool.
+
+  `bytes_cable` y `bytes_crudos` cuentan SÓLO lo que viajó con filas —los POST aceptados y las
+  páginas que trajeron algo—; las páginas vacías de la bajada (`vacias`, `bytes_vacias`) y los POST
+  rechazados de la subida (`rechazados`, `bytes_rechazados`) van en columnas aparte, y `posts` sigue
+  contando toda página que volvió bien, vacía o no. Mezclados, `SUM(bytes_cable)/SUM(filas)` medía
+  el ritmo de los sondeos y no el peso de una nota: una página vacía pesa 135 B, hay ~2.700 por día
+  y por base, y con un día de davantis-altura el «peso por nota» daba ~21.263 B contra una nota real
+  de 2.903 B. Separados, la misma consulta da los 2.903 B (medido contra el handler real del central
+  con 30 ticks vacíos y una nota), y el costo del sondeo queda medido aparte para el frente que baja
+  el ritmo de los pulls. La verificación de V1, sobre una copia de la base:
+  `SELECT sentido, SUM(bytes_cable)*1.0/SUM(filas), SUM(posts), SUM(vacias), SUM(bytes_vacias),
+  SUM(rechazados), SUM(bytes_rechazados) FROM sync_viajes WHERE dia >= date('now','-6 day') GROUP BY 1`.
+
+  ⚠️ **TRAE MIGRACIÓN (v58), LA ÚNICA DE LA OLA 2: hay que cerrar TODAS las sesiones y actualizar
+  el binario de CADA máquina antes de volver a abrir las bases.** Es `readCompatible` (una tabla
+  nueva y dos `ADD COLUMN` nullables), así que un binario anterior que abre la base migrada entra en
+  SÓLO LECTURA en vez de caerse: medido sobre la copia, el binario de `3fd81c33` sirve
+  `musubi_sync_status` y `musubi_search_keyword` y rechaza `musubi_save_observation` con -32005.
+  Pero un proceso viejo que YA estaba corriendo cuando otro migró la base sigue escribiendo —medido:
+  un daemon de `3fd81c33` guardó una nota después de la migración— y mientras viva hace lo de antes:
+  no graba `sent_at`, no registra viajes y vuelve a convertir en 'espejo' lo enviado que rebota. No
+  rompe nada; subcuenta. Y el escalón de sólo lectura lo tiene el daemon, no los hooks: `turn`,
+  `detect`, `capture` y `precheck` de un binario viejo no abren la base migrada y callan hasta que
+  se actualiza. Por eso se cierran todas las sesiones: en davantis-1 son los daemons, los
+  `musubi cerebro` y el agente, en la base de Musubi y en la de altura-erp.
+
+  Lo que ya quedó sellado 'espejo' no se rellena: la base no dice cuáles de esas filas salieron de
+  acá ni cuándo, y un `sent_at` inventado sería justo la clase de dato que este arreglo viene a
+  sacar. El contador cuenta desde el despliegue.
+  Los bytes van sin comprimir en los dos sentidos (cable = crudos) hasta los PR de compresión; si
+  algún día el transporte de Go descomprime solo una página de la bajada, se cuentan sus crudos y
+  no se inventa el cable.
+
+  *Diecinueve guardas nuevas, con su sabotaje corrido y rojo. `TestElRebotePreservaElEnviado`,
+  `TestLaEntregaDejaQueSalioYCuando`, `TestLosViajesSeSumanPorDiaYSentido`,
+  `TestLoQueNoViajaSeCuentaUnaSolaVez` (las tres categorías son disjuntas),
+  `TestUnBinarioAnteriorLeeLaBaseDelContador` (la v57 abre la v58 como legible),
+  `TestLasEnviadasRespetanSuVentana`, `TestHoyYSieteDiasSonDiasDeLaTabla`,
+  `TestUnaPropuestaDescartadaNoCuentaComoCuarentena` y `TestUnaMuertaQueRebotaQuedaEspejo` en
+  `internal/memory`; `TestSyncStatusCuentaLoDeHoy`, `TestUnaSubidaQueNoSalioNoRegistraViaje`,
+  `TestLaBajadaRegistraSuViaje`, `TestUnaBajadaQueNoSalioNoRegistraViaje`,
+  `TestSyncStatusAcotadoAlProyecto` y `TestSyncStatusNoMuestraElOutboxAjeno` (el vecino ve ceros,
+  el admin federado ve el dato), `TestLaBajadaPorNotaNoCuentaElSondeo` (la métrica da el peso de la
+  nota con treinta sondeos alrededor), `TestLosBytesDeLaSubidaSonLosQueRecibeElCentral` y
+  `TestLosBytesDeLaBajadaSonLosDelCuerpoServido` (bytes exactos contra un central de prueba) y
+  `TestLaLineaDeLaBajadaEsUnaSola` en `internal/mcp`.*
 - **El mapa publicado describe el commit, no el disco: lo que git ignora ya no sube al central.**
   El índice lee el disco y el central guarda la foto con la etiqueta de un commit. #647 frenaba lo
   modificado y lo sin trackear, pero `git status` no lista los **ignorados**, y `walkSourceTree` no

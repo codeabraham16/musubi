@@ -210,6 +210,14 @@ func (e *DbEngine) IngestShared(o SharedObs) (inserted bool, err error) {
 	// todavía no salió, y sellarla como espejo la mataría en silencio. Sobre 'sent'/'dead'/'espejo'
 	// sí escribe, que son estados terminales donde el sello sólo agrega información.
 	//
+	// UNA 'sent' QUE REBOTA SIGUE 'sent'. Lo que esta máquina entregó vuelve en la bajada, y el
+	// sello lo convertía en 'espejo': el contador de enviadas terminaba contando sólo lo que el
+	// central había retirado y ya no bajaba (308 de 312 en davantis-1, 2026-09-26). 'sent' dice
+	// «salió de acá» y 'espejo' dice «vino de afuera»; el rebote no cambia de dónde salió. Tampoco
+	// se le toca updated_at (ni sent_at, que este UPSERT no nombra): bajar no es entregar.
+	// enqueued_hash sí se refresca, igual que en las demás: es contra lo que enqueueOutboxTx mide
+	// una edición local.
+	//
 	// ⚠️ Lo que este arreglo NO toca: el UPSERT de arriba igual pisa el CONTENIDO local con el del
 	// central (último que escribe gana). Eso es el diseño declarado del enlace, no un descuido de
 	// acá, y cambiarlo es otra discusión.
@@ -217,8 +225,9 @@ func (e *DbEngine) IngestShared(o SharedObs) (inserted bool, err error) {
 		INSERT INTO outbox (obs_id, enqueued_hash, status, attempts, next_attempt_at, created_at, updated_at)
 		VALUES (?, ?, 'espejo', 0, datetime('now'), datetime('now'), datetime('now'))
 		ON CONFLICT(obs_id) DO UPDATE SET
-			status = 'espejo', attempts = 0, last_error = NULL,
-			enqueued_hash = excluded.enqueued_hash, updated_at = datetime('now')
+			status = CASE WHEN outbox.status = 'sent' THEN 'sent' ELSE 'espejo' END, attempts = 0, last_error = NULL,
+			enqueued_hash = excluded.enqueued_hash,
+			updated_at = CASE WHEN outbox.status = 'sent' THEN outbox.updated_at ELSE datetime('now') END
 		WHERE outbox.status NOT IN ('pending','claimed')`,
 		o.ID, hash); err != nil {
 		return false, fmt.Errorf("error al sellar como espejo la obs bajada %s: %w", o.ID, err)

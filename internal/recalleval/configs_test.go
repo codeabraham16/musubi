@@ -51,4 +51,24 @@ func TestConfigsNoDivergenDeProduccion(t *testing.T) {
 		t.Errorf("ConfigHibrida: UseVector=%v VectorFloor=%v (esperaba true y %v)",
 			h.UseVector, h.Opts.VectorFloor, m.VectorFloor)
 	}
+
+	// EL BRAZO DEL TURNO, con las mismas filas. Sus opciones salen de la fuente única del hook
+	// (TestConfigDelBancoEsLaDelHook), pero esa fuente también podría divergir del yaml: acá se ve.
+	// CandidatePool y TokenBudget no tienen fila a propósito: el hook nunca los tomó de memory.* (el
+	// pool es el del motor y el presupuesto es loop.recall_budget).
+	tu := ConfigTurno().Opts
+	for _, c := range []struct {
+		campo       string
+		banco, prod any
+	}{
+		{"Stemming", tu.Stemming, m.RecallStemming},
+		{"Cooccurrence", tu.Cooccurrence, m.RecallCooccurrence},
+		{"GraphCentrality", tu.GraphCentrality, m.RecallGraphCentrality},
+		{"VectorFloor", tu.VectorFloor, m.VectorFloor},
+		{"MMRLambda", tu.MMRLambda, m.MMRLambda},
+	} {
+		if c.banco != c.prod {
+			t.Errorf("turno · %s: el banco mide %v y producción declara %v", c.campo, c.banco, c.prod)
+		}
+	}
 }

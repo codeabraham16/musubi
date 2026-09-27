@@ -1,21 +1,18 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
-	"time"
+
+	"musubi/internal/transcripts"
 )
 
 // uso_agente.go implementa `musubi uso-agente`: un medidor de SÓLO LECTURA sobre los transcripts de
@@ -36,45 +33,15 @@ import (
 //     que significa «no sé» se lee igual que «medí y no hubo», y es la forma en que este repo más
 //     veces se engañó a sí mismo.
 //
-// EL FORMATO DE LOS TRANSCRIPTS NO ESTÁ DOCUMENTADO, y lo que sigue se midió leyendo los 3.652
-// `.jsonl` de esta máquina (2026-09-25, Claude Code 2.1.2xx):
-//
-//   - Cada línea es un registro con `type`, `uuid`, `timestamp` (siempre UTC con `Z`) y, según el
-//     tipo, `message` o `attachment`.
-//   - LOS REGISTROS SE REESCRIBEN AL REANUDAR UNA SESIÓN: 50.285 uuid repetidos DENTRO del mismo
-//     archivo, ninguno entre archivos distintos (0 de 451.748). Sin deduplicar por `uuid` y cada
-//     `tool_use` por su `id`, las llamadas del hilo principal a Musubi daban 1.243 en vez de 791.
-//   - Lo que inyecta un hook llega como `attachment` de tipo `hook_additional_context`, con los
-//     bloques «[Musubi — X]» adentro de `content`. El mismo texto puede aparecer DENTRO de un
-//     `tool_result` —por ejemplo, cuando el agente lee `detect.go`— y eso NO es una inyección: el
-//     agente leyó código, nadie le habló (629 encabezados así, ver `usuario`).
-//   - Las carpetas de proyecto empiezan con `-` (`-home-davantis-musubi`), así que un glob
-//     `*/*.jsonl` da cero. Se camina el árbol.
-//   - Los subagentes viven bajo una carpeta `subagents/`; los de un workflow, además, en
-//     `subagents/workflows/wf_*/`, junto a un `journal.jsonl` que es la bitácora del workflow y NO
-//     un transcript (112 medidos): se excluye por nombre.
-//   - Cada carpeta de proyecto es la ruta de trabajo con todo carácter que no sea letra o dígito
-//     ASCII cambiado por `-` (`/home/davantis/.cache/x` → `-home-davantis--cache-x`). Por eso las
-//     carpetas de experimento se reconocen por el nombre: ver exclusionesPorDefecto.
+// EL FORMATO DE LOS TRANSCRIPTS —y cómo se leen, se deduplican y se recorren— vive en
+// internal/transcripts, el lector único que este comando comparte con `--contexto`
+// (uso_agente_contexto.go), el hook del turno y el banco de búsqueda. Acá queda lo propio de medir
+// el uso: la atribución de cada llamada y lo que el agente tenía a la vista.
 
-// Tipos de adjunto de Claude Code que este comando lee. Son strings del formato de OTRO programa y
-// por eso van con nombre: si Claude Code los renombra, se cambian acá y en ningún otro lado.
 const (
-	adjuntoHook           = "hook_additional_context"
-	adjuntoInstrucciones  = "mcp_instructions_delta"
-	adjuntoDiferidasDelta = "deferred_tools_delta"
-	adjuntoDiferidasLista = "deferred_tools_record"
-	adjuntoListadoSkills  = "skill_listing"
-
-	// journalDeWorkflow es la bitácora de un workflow: vive entre los transcripts y no es uno.
-	journalDeWorkflow = "journal.jsonl"
-
 	estadoMedido   = "medido"
 	estadoSinMedir = "sin medir"
 )
-
-// reBloqueMusubi encuentra el encabezado de cada bloque que un hook de Musubi inyecta.
-var reBloqueMusubi = regexp.MustCompile(`\[Musubi — ([^\]]+)\]`)
 
 // reNombreTool encuentra los nombres pelados de tools de Musubi en un texto (`musubi_recall`).
 //
@@ -164,58 +131,6 @@ func alcanceUso(m *MedicionUso, quien string) AlcanceUso {
 	return AlcanceUso{Estado: estadoMedido, MedicionUso: m}
 }
 
-// ventanaUso es el intervalo de días pedido. `hasta` es EXCLUSIVO: el día siguiente al pedido a las
-// 00:00, así `--hasta 2026-09-20` incluye todo el 20.
-//
-// LOS DÍAS SON UTC, como los timestamps de los transcripts. Interpretarlos en la hora local haría
-// que la misma línea de comandos midiera ventanas distintas en davantis-1 y en la laptop.
-type ventanaUso struct {
-	desde, hasta       time.Time
-	hayDesde, hayHasta bool
-}
-
-func parsearVentanaUso(desde, hasta string) (ventanaUso, error) {
-	var v ventanaUso
-	if desde != "" {
-		t, err := time.Parse("2006-01-02", desde)
-		if err != nil {
-			return v, fmt.Errorf("--desde %q no es una fecha AAAA-MM-DD", desde)
-		}
-		v.desde, v.hayDesde = t, true
-	}
-	if hasta != "" {
-		t, err := time.Parse("2006-01-02", hasta)
-		if err != nil {
-			return v, fmt.Errorf("--hasta %q no es una fecha AAAA-MM-DD", hasta)
-		}
-		v.hasta, v.hayHasta = t.AddDate(0, 0, 1), true
-	}
-	if v.hayDesde && v.hayHasta && !v.desde.Before(v.hasta) {
-		return v, fmt.Errorf("--hasta %s es anterior a --desde %s: la ventana queda vacía", hasta, desde)
-	}
-	return v, nil
-}
-
-// ubicar dice si un registro con ese timestamp CUENTA (cae adentro de la ventana) y si ya quedó
-// DESPUÉS de ella. Un registro de antes de la ventana no cuenta pero sí alimenta el estado —una
-// tool cargada ayer sigue cargada hoy—; uno de después no hace nada.
-func (v ventanaUso) ubicar(ts string) (cuenta, despues bool) {
-	if !v.hayDesde && !v.hayHasta {
-		return true, false
-	}
-	t, err := time.Parse(time.RFC3339Nano, ts)
-	if err != nil {
-		return false, false
-	}
-	if v.hayHasta && !t.Before(v.hasta) {
-		return false, true
-	}
-	if v.hayDesde && t.Before(v.desde) {
-		return false, false
-	}
-	return true, false
-}
-
 // esServidorMusubi dice si un nombre de servidor MCP es de Musubi, en las dos formas en que Claude
 // Code lo escribe: el que va en el nombre de una tool (`musubi`, `plugin_<plugin>_musubi`) y el que
 // va en el adjunto de instrucciones (`musubi`, `plugin:<plugin>:musubi`).
@@ -268,124 +183,23 @@ func skillsDeMusubi() []string {
 	return out
 }
 
-// registroTranscript es una línea de un transcript, con sólo los campos que este comando lee.
-// `content` y `toolUseResult` quedan crudos porque su forma depende del tipo de registro.
-type registroTranscript struct {
-	Type          string             `json:"type"`
-	UUID          string             `json:"uuid"`
-	Timestamp     string             `json:"timestamp"`
-	IsMeta        bool               `json:"isMeta"`
-	Message       *mensajeTranscript `json:"message"`
-	Attachment    *adjuntoTranscript `json:"attachment"`
-	ToolUseResult json.RawMessage    `json:"toolUseResult"`
-}
-
-type mensajeTranscript struct {
-	Content json.RawMessage `json:"content"`
-}
-
-// bloqueMensaje es un elemento de `message.content`: texto, tool_use, tool_result o, adentro del
-// resultado de un ToolSearch, un tool_reference.
-type bloqueMensaje struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text"`
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Input     json.RawMessage `json:"input"`
-	ToolUseID string          `json:"tool_use_id"`
-	Content   json.RawMessage `json:"content"`
-	ToolName  string          `json:"tool_name"`
-}
-
-type adjuntoTranscript struct {
-	Type       string          `json:"type"`
-	Content    json.RawMessage `json:"content"`
-	AddedNames []string        `json:"addedNames"`
-	Names      []string        `json:"names"`
-	Entries    []struct {
-		Name string `json:"name"`
-	} `json:"entries"`
-}
-
-// decodificarContenido lee un `content` que puede ser un string o una lista de bloques —las dos
-// formas aparecen, en el prompt y en un tool_result—. Devuelve el texto (los bloques `text` unidos)
-// y los bloques, si los había.
-func decodificarContenido(raw json.RawMessage) (string, []bloqueMensaje) {
-	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 {
-		return "", nil
-	}
-	switch raw[0] {
-	case '"':
-		var s string
-		_ = json.Unmarshal(raw, &s)
-		return s, nil
-	case '[':
-		var bloques []bloqueMensaje
-		if json.Unmarshal(raw, &bloques) != nil {
-			return "", nil
-		}
-		var partes []string
-		for _, b := range bloques {
-			if b.Type == "text" {
-				partes = append(partes, b.Text)
-			}
-		}
-		return strings.Join(partes, "\n"), bloques
-	}
-	return "", nil
-}
-
-// textosDelAdjunto lee el `content` de un adjunto de hook: una lista de strings (así llegaron los
-// 2.542 medidos) o, por las dudas, un string suelto.
-func textosDelAdjunto(raw json.RawMessage) []string {
-	var lista []string
-	if json.Unmarshal(raw, &lista) == nil {
-		return lista
-	}
-	var uno string
-	if json.Unmarshal(raw, &uno) == nil {
-		return []string{uno}
-	}
-	return nil
-}
-
 // sumarBloques cuenta cada encabezado «[Musubi — X]» de un texto.
 func sumarBloques(bloques map[string]int, texto string) {
-	for _, m := range reBloqueMusubi.FindAllStringSubmatch(texto, -1) {
-		bloques[strings.TrimSpace(m[1])]++
+	for _, nombre := range transcripts.BloquesDeMusubi(texto) {
+		bloques[nombre]++
 	}
-}
-
-// esPrompt dice si un registro `user` abre un turno: lo escribió una persona (o el orquestador, en
-// un subagente), no es meta y no trae el resultado de una tool.
-func esPrompt(reg *registroTranscript, texto string, bloques []bloqueMensaje) bool {
-	if reg.IsMeta {
-		return false
-	}
-	if bloques == nil {
-		return strings.TrimSpace(texto) != ""
-	}
-	hayContenido := false
-	for _, b := range bloques {
-		switch b.Type {
-		case "tool_result":
-			return false
-		case "text", "image":
-			hayContenido = true
-		}
-	}
-	return hayContenido
 }
 
 // lectorTranscript recorre UN transcript en orden y lleva el estado que hace falta para atribuir
 // cada llamada: qué cargó ToolSearch, qué nombró cada hook y qué nombró el prompt del turno.
+//
+// LO REESCRITO AL REANUDAR NO LLEGA: transcripts.Leer pasa cada uuid una sola vez. Lo que sí se
+// deduplica acá es la misma llamada escrita otra vez bajo un uuid NUEVO (mismo id de tool_use).
 type lectorTranscript struct {
 	m      *MedicionUso
-	v      ventanaUso
+	v      transcripts.Ventana
 	skills map[string]bool
 
-	vistos          map[string]bool // uuid de registros ya procesados
 	llamadasVistas  map[string]bool // id de tool_use ya contados
 	busquedas       map[string]bool // id de ToolSearch esperando su resultado
 	cargadas        map[string]bool // nombres completos que un ToolSearch devolvió
@@ -396,23 +210,17 @@ type lectorTranscript struct {
 	enVentana, aLaVista, instrucciones, skillsEnListado bool
 }
 
-func nuevoLectorTranscript(m *MedicionUso, v ventanaUso, skills map[string]bool) *lectorTranscript {
+func nuevoLectorTranscript(m *MedicionUso, v transcripts.Ventana, skills map[string]bool) *lectorTranscript {
 	return &lectorTranscript{
 		m: m, v: v, skills: skills,
-		vistos: map[string]bool{}, llamadasVistas: map[string]bool{}, busquedas: map[string]bool{},
+		llamadasVistas: map[string]bool{}, busquedas: map[string]bool{},
 		cargadas: map[string]bool{}, nombradasTurno: map[string]bool{}, nombradasSesion: map[string]bool{},
 		nombradasPrompt: map[string]bool{},
 	}
 }
 
-func (l *lectorTranscript) registro(reg *registroTranscript) {
-	if reg.UUID != "" {
-		if l.vistos[reg.UUID] {
-			return // reescrito al reanudar la sesión: ya se contó
-		}
-		l.vistos[reg.UUID] = true
-	}
-	cuenta, despues := l.v.ubicar(reg.Timestamp)
+func (l *lectorTranscript) registro(reg *transcripts.Registro) {
+	cuenta, despues := l.v.Ubicar(reg.Timestamp)
 	if despues {
 		return
 	}
@@ -429,13 +237,13 @@ func (l *lectorTranscript) registro(reg *registroTranscript) {
 	}
 }
 
-func (l *lectorTranscript) adjunto(a *adjuntoTranscript, cuenta bool) {
+func (l *lectorTranscript) adjunto(a *transcripts.Adjunto, cuenta bool) {
 	if a == nil {
 		return
 	}
 	switch a.Type {
-	case adjuntoHook:
-		for _, texto := range textosDelAdjunto(a.Content) {
+	case transcripts.AdjuntoHook:
+		for _, texto := range transcripts.TextosDelAdjunto(a.Content) {
 			for _, n := range reNombreTool.FindAllString(texto, -1) {
 				l.nombradasTurno[n] = true
 				l.nombradasSesion[n] = true
@@ -444,25 +252,25 @@ func (l *lectorTranscript) adjunto(a *adjuntoTranscript, cuenta bool) {
 				sumarBloques(l.m.Bloques, texto)
 			}
 		}
-	case adjuntoInstrucciones:
+	case transcripts.AdjuntoInstrucciones:
 		for _, n := range a.AddedNames {
 			if esServidorMusubi(n) {
 				l.instrucciones = true
 			}
 		}
-	case adjuntoDiferidasDelta:
+	case transcripts.AdjuntoDiferidasDelta:
 		for _, n := range a.AddedNames {
 			if _, ok := toolDeMusubi(n); ok {
 				l.aLaVista = true
 			}
 		}
-	case adjuntoDiferidasLista:
+	case transcripts.AdjuntoDiferidasLista:
 		for _, e := range a.Entries {
 			if _, ok := toolDeMusubi(e.Name); ok {
 				l.aLaVista = true
 			}
 		}
-	case adjuntoListadoSkills:
+	case transcripts.AdjuntoListadoSkills:
 		for _, n := range a.Names {
 			if l.skills[nombreDeSkill(n)] {
 				l.skillsEnListado = true
@@ -471,12 +279,12 @@ func (l *lectorTranscript) adjunto(a *adjuntoTranscript, cuenta bool) {
 	}
 }
 
-func (l *lectorTranscript) usuario(reg *registroTranscript) {
+func (l *lectorTranscript) usuario(reg *transcripts.Registro) {
 	if reg.Message == nil {
 		return
 	}
-	texto, bloques := decodificarContenido(reg.Message.Content)
-	if esPrompt(reg, texto, bloques) {
+	texto, bloques := transcripts.DecodificarContenido(reg.Message.Content)
+	if transcripts.EsPrompt(reg, texto, bloques) {
 		// Turno nuevo: lo que un hook nombró en el anterior ya no es «de este turno».
 		l.nombradasTurno = map[string]bool{}
 		l.nombradasPrompt = map[string]bool{}
@@ -508,7 +316,7 @@ func (l *lectorTranscript) usuario(reg *registroTranscript) {
 // `tool_reference` en el contenido del resultado y `toolUseResult.matches` en el registro. Se unen.
 func toolsCargadas(contenido, resultado json.RawMessage) []string {
 	var out []string
-	_, bloques := decodificarContenido(contenido)
+	_, bloques := transcripts.DecodificarContenido(contenido)
 	for _, b := range bloques {
 		if b.Type == "tool_reference" && b.ToolName != "" {
 			out = append(out, b.ToolName)
@@ -523,11 +331,11 @@ func toolsCargadas(contenido, resultado json.RawMessage) []string {
 	return out
 }
 
-func (l *lectorTranscript) asistente(reg *registroTranscript, cuenta bool) {
+func (l *lectorTranscript) asistente(reg *transcripts.Registro, cuenta bool) {
 	if reg.Message == nil {
 		return
 	}
-	_, bloques := decodificarContenido(reg.Message.Content)
+	_, bloques := transcripts.DecodificarContenido(reg.Message.Content)
 	for _, b := range bloques {
 		if b.Type != "tool_use" {
 			continue
@@ -608,79 +416,6 @@ func (l *lectorTranscript) cerrar() {
 	}
 }
 
-// esDeSubagente dice si un transcript es de un subagente: vive bajo una carpeta `subagents/`.
-func esDeSubagente(rel string) bool {
-	for _, parte := range strings.Split(filepath.ToSlash(rel), "/") {
-		if parte == "subagents" {
-			return true
-		}
-	}
-	return false
-}
-
-// carpetaDeProyecto es el nombre de la carpeta donde Claude Code guarda los transcripts de una ruta
-// de trabajo: cada carácter que no es letra ni dígito ASCII pasa a `-`. Es un hecho del formato de
-// OTRO programa, medido en las 49 carpetas de esta máquina: `/home/davantis/.cache/x` da
-// `-home-davantis--cache-x`, y el `_` de `wf_31193ce6` también pasa a `-`.
-func carpetaDeProyecto(ruta string) string {
-	var b strings.Builder
-	for _, r := range ruta {
-		if r < 128 && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
-			b.WriteRune(r)
-			continue
-		}
-		b.WriteByte('-')
-	}
-	return b.String()
-}
-
-// exclusionesPorDefecto son las carpetas de proyecto de la carpeta TEMPORAL del sistema: la de
-// `os.TempDir()` y todas las que cuelgan de ella.
-//
-// UNA SESIÓN QUE TRABAJA EN UNA CARPETA TEMPORAL ES UN EXPERIMENTO, no trabajo: una prueba de
-// conducta con `claude -p` en un mktemp, que por diseño arranca vacía. Medida junto a las reales las
-// contamina, y en la dirección que más engaña: el 2026-09-25, las invocaciones de skills y las
-// llamadas sin ToolSearch que el medidor contaba venían TODAS de carpetas de experimento, y en los
-// proyectos reales eran cero.
-//
-// SE DERIVA DE `os.TempDir()` y no se escribe `-tmp-*`: en Windows la temporal es
-// `C:\Users\…\Temp` y en macOS cuelga de `/var/folders`, y un patrón clavado al Linux de hoy no
-// excluiría nada allá. Se prueba también la ruta con los enlaces resueltos, porque la sesión guarda
-// la carpeta como la ve el proceso: en macOS `/var` es un enlace a `/private/var`.
-//
-// Los experimentos que corren FUERA de la temporal no se pueden reconocer desde acá: van con
-// `--excluir`.
-func exclusionesPorDefecto() []string {
-	var out []string
-	visto := map[string]bool{}
-	tmp := filepath.Clean(os.TempDir())
-	rutas := []string{tmp}
-	if real, err := filepath.EvalSymlinks(tmp); err == nil {
-		rutas = append(rutas, real)
-	}
-	for _, r := range rutas {
-		base := carpetaDeProyecto(r)
-		for _, patron := range []string{base, base + "-*"} {
-			if !visto[patron] {
-				visto[patron] = true
-				out = append(out, patron)
-			}
-		}
-	}
-	return out
-}
-
-// excluida dice si una carpeta de proyecto cae en alguna exclusión. Los patrones ya se validaron al
-// leer los argumentos: acá un error de patrón no puede pasar, y si pasara no excluye.
-func excluida(nombre string, exclusiones []string) bool {
-	for _, patron := range exclusiones {
-		if ok, _ := path.Match(patron, nombre); ok {
-			return true
-		}
-	}
-	return false
-}
-
 // listaDePatrones es un flag que se puede repetir: `--excluir a --excluir b`.
 type listaDePatrones []string
 
@@ -694,22 +429,13 @@ func (l *listaDePatrones) Set(v string) error {
 	return nil
 }
 
-// medirUsoAgente camina `dir`, lee cada transcript y arma el informe. No escribe nada.
-//
-// `exclusiones` se comparan contra el nombre de cada carpeta de proyecto —las hijas DIRECTAS de
-// `dir`—, y una que cae se saltea entera y se cuenta. Sólo las hijas directas: más abajo están las
-// carpetas de cada sesión, que se llaman con un uuid, y un patrón pensado para proyectos no tiene
-// nada que decir de ellas.
-func medirUsoAgente(dir string, v ventanaUso, exclusiones []string) (InformeUso, error) {
-	inf := InformeUso{Dir: dir, SkillsDeMusubi: skillsDeMusubi(), Exclusiones: exclusiones}
+// medirUsoAgente camina `dir` con transcripts.Recorrer, lee cada transcript y arma el informe. No
+// escribe nada.
+func medirUsoAgente(dir string, v transcripts.Ventana, exclusiones []string) (InformeUso, error) {
+	inf := InformeUso{Dir: dir, SkillsDeMusubi: skillsDeMusubi(), Exclusiones: exclusiones,
+		Desde: v.Desde(), Hasta: v.Hasta()}
 	if inf.Exclusiones == nil {
 		inf.Exclusiones = []string{}
-	}
-	if v.hayDesde {
-		inf.Desde = v.desde.Format("2006-01-02")
-	}
-	if v.hayHasta {
-		inf.Hasta = v.hasta.AddDate(0, 0, -1).Format("2006-01-02")
 	}
 	skills := map[string]bool{}
 	for _, s := range inf.SkillsDeMusubi {
@@ -717,91 +443,28 @@ func medirUsoAgente(dir string, v ventanaUso, exclusiones []string) (InformeUso,
 	}
 	principal, subagentes := nuevaMedicionUso(), nuevaMedicionUso()
 
-	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
-		return inf, fmt.Errorf("no puedo leer la carpeta de transcripts %s: %v", dir, err)
-	}
-	err := filepath.WalkDir(dir, func(ruta string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			// La carpeta pedida no se excluye a sí misma. Con `--dir .` su nombre es «.», que un
-			// `--excluir '*'` alcanza, y el informe diría que no hubo nada que medir.
-			if ruta == dir {
-				return nil
-			}
-			if filepath.Dir(ruta) == filepath.Clean(dir) && excluida(d.Name(), exclusiones) {
-				inf.CarpetasExcluidas++
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), ".jsonl") {
-			return nil
-		}
-		if d.Name() == journalDeWorkflow {
-			inf.JournalExcluidos++
-			return nil
-		}
-		inf.Archivos++
-		// UN ARCHIVO QUE NO CAMBIÓ DESDE ANTES DE LA VENTANA NO PUEDE TENER REGISTROS ADENTRO DE ELLA:
-		// cada registro se escribe en o después de su timestamp, y una reescritura al reanudar
-		// también mueve el mtime. Saltearlo no cambia el resultado y ahorra leer gigas.
-		if v.hayDesde {
-			if info, ierr := d.Info(); ierr == nil && info.ModTime().Before(v.desde) {
-				inf.SalteadosPorFecha++
-				return nil
-			}
-		}
-		rel, _ := filepath.Rel(dir, ruta)
+	rec, err := transcripts.Recorrer(dir, v, exclusiones, func(a transcripts.Archivo) error {
 		m := principal
-		if esDeSubagente(rel) {
+		if a.Subagente {
 			m = subagentes
 		}
-		ilegibles, lerr := leerTranscript(ruta, nuevoLectorTranscript(m, v, skills))
-		inf.LineasIlegibles += ilegibles
-		return lerr
+		l := nuevoLectorTranscript(m, v, skills)
+		lec, lerr := transcripts.Leer(a.Ruta, l.registro)
+		inf.LineasIlegibles += lec.Ilegibles
+		if lerr != nil {
+			return lerr
+		}
+		l.cerrar()
+		return nil
 	})
+	inf.Archivos, inf.JournalExcluidos = rec.Archivos, rec.JournalExcluidos
+	inf.SalteadosPorFecha, inf.CarpetasExcluidas = rec.SalteadosPorFecha, rec.CarpetasExcluidas
 	if err != nil {
 		return inf, err
 	}
 	inf.Principal = alcanceUso(principal, "sesión principal")
 	inf.Subagentes = alcanceUso(subagentes, "subagente")
 	return inf, nil
-}
-
-// leerTranscript pasa cada línea de un archivo por el lector. Devuelve cuántas no eran JSON: la
-// última línea de un transcript que se está escribiendo puede estar cortada, y eso se CUENTA y se
-// informa en vez de tirarlo en silencio.
-func leerTranscript(ruta string, l *lectorTranscript) (int, error) {
-	f, err := os.Open(ruta)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-	ilegibles := 0
-	r := bufio.NewReaderSize(f, 1<<20)
-	for {
-		// ReadBytes y no un Scanner: hay líneas de decenas de MB (un tool_result con un archivo
-		// entero) y el Scanner corta en 64 KB por defecto.
-		linea, rerr := r.ReadBytes('\n')
-		if len(bytes.TrimSpace(linea)) > 0 {
-			var reg registroTranscript
-			if json.Unmarshal(linea, &reg) != nil {
-				ilegibles++
-			} else {
-				l.registro(&reg)
-			}
-		}
-		if errors.Is(rerr, io.EOF) {
-			break
-		}
-		if rerr != nil {
-			return ilegibles, fmt.Errorf("leer %s: %w", ruta, rerr)
-		}
-	}
-	l.cerrar()
-	return ilegibles, nil
 }
 
 // dirTranscriptsPorDefecto es donde Claude Code guarda los transcripts: `$CLAUDE_CONFIG_DIR/projects`
@@ -835,6 +498,8 @@ func usoAgente(args []string, out, errOut io.Writer) int {
 	fl.Var(&excluir, "excluir", "patrón (glob) de carpetas de proyecto a no medir; se puede repetir")
 	conTemporales := fl.Bool("incluir-temporales", false,
 		"medir también las carpetas de la temporal del sistema, que por defecto se excluyen (son experimentos)")
+	contexto := fl.Bool("contexto", false,
+		"medir si el contexto se repite, se pierde o descarrila (M1-M7; ver uso_agente_contexto.go)")
 	if err := fl.Parse(args); err != nil {
 		return 2
 	}
@@ -842,7 +507,7 @@ func usoAgente(args []string, out, errOut io.Writer) int {
 		fmt.Fprintf(errOut, "musubi uso-agente: argumento de más: %q\n", fl.Arg(0))
 		return 2
 	}
-	v, err := parsearVentanaUso(*desde, *hasta)
+	v, err := transcripts.ParsearVentana(*desde, *hasta)
 	if err != nil {
 		fmt.Fprintln(errOut, "musubi uso-agente:", err)
 		return 2
@@ -855,7 +520,10 @@ func usoAgente(args []string, out, errOut io.Writer) int {
 	}
 	exclusiones := []string(excluir)
 	if !*conTemporales {
-		exclusiones = append(exclusionesPorDefecto(), exclusiones...)
+		exclusiones = append(transcripts.ExclusionesPorDefecto(), exclusiones...)
+	}
+	if *contexto {
+		return usoAgenteContexto(*dir, v, exclusiones, *comoJSON, out, errOut)
 	}
 	inf, err := medirUsoAgente(*dir, v, exclusiones)
 	if err != nil {
