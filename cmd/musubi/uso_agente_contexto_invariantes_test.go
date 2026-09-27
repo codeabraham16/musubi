@@ -84,7 +84,7 @@ func TestMedirContextoResumeSaleSinMedir(t *testing.T) {
 // Sabotaje que la hace fallar: que el aviso de tareas vuelva a tener su propia tabla de prefijos.
 // arnes: archivo="cmd/musubi/tareas.go"
 // arnes: de="\treturn !transcripts.EsDeSistema(prompt)\n"
-// arnes: a="\treturn !strings.HasPrefix(strings.TrimSpace(prompt), \"<task-notification>\")\n"
+// arnes: a="\treturn !strings.HasPrefix(strings.TrimSpace(prompt), \"<task-notification>\") || transcripts.EsDeSistema(\"\")\n"
 func TestUnSoloClasificadorDePromptHumano(t *testing.T) {
 	// El hook del turno decide dos veces si un prompt lo escribió la persona: para el recall
 	// (EsDeSistema, que también usa el medidor) y para el aviso de tareas. Eran dos tablas y
