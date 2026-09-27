@@ -486,6 +486,9 @@ type pullPayload struct {
 // tools/call remoto de musubi_sync_pull con el cursor afterRowID. Devuelve los items + el cursor
 // siguiente. Cualquier fallo (red, HTTP, JSON-RPC) devuelve error: el scheduler entrante lo trata
 // como transitorio (reintenta en el próximo tick) — es best-effort, no rompe nada.
+//
+// La página se pide comprimida y se descomprime acá, para que sync_viajes vea los dos tamaños: el
+// del cable y el crudo (ver el Accept-Encoding de abajo).
 func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int64, string, error) {
 	reqBody := struct {
 		JsonRpc string `json:"jsonrpc"`
@@ -510,6 +513,13 @@ func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int6
 		return nil, afterRowID, "", fmt.Errorf("%w: construir pull: %v", errPermanent, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// GZIP SE PIDE A MANO, y no por lo que ahorra —eso el transporte de Go ya lo negocia solo— sino
+	// para poder MEDIRLO. Si el pedido no trae Accept-Encoding, el transporte lo agrega por su cuenta
+	// y descomprime sin avisar (resp.Uncompressed): el cuerpo llega en claro y el tamaño del cable se
+	// pierde, así que sync_viajes contaría como cable los bytes ya descomprimidos. Nombrado acá, el
+	// transporte no toca el cuerpo y la descompresión es de este código, que cuenta antes y después.
+	// Un central que no comprime contesta como siempre, y cable y crudos dan el mismo número.
+	req.Header.Set("Accept-Encoding", "gzip")
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
@@ -521,8 +531,26 @@ func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int6
 	if resp.StatusCode != http.StatusOK {
 		return nil, afterRowID, "", fmt.Errorf("%w: pull HTTP %d", errTransient, resp.StatusCode)
 	}
+	// Dos lectores contados, uno encima del otro: `cable` cuenta lo que viajó y `contado`, lo que se
+	// leyó ya descomprimido. Con un cuerpo en claro, `contado` lee a través de `cable` y los dos dan
+	// lo mismo.
+	cable := &lectorContado{r: resp.Body}
+	contado := &lectorContado{r: cable}
+	switch enc := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding"))); enc {
+	case "", "identity":
+	case "gzip":
+		zr, zerr := gzip.NewReader(cable)
+		if zerr != nil {
+			return nil, afterRowID, "", fmt.Errorf("%w: el central dijo gzip y la página no lo es: %v", errTransient, zerr)
+		}
+		defer zr.Close()
+		contado = &lectorContado{r: zr}
+	default:
+		// Sólo se pidió gzip. Otra codificación no es algo que el decoder JSON pueda leer, y dejar
+		// que lo intente daría un error de sintaxis que no nombra la causa.
+		return nil, afterRowID, "", fmt.Errorf("%w: el central contestó con Content-Encoding %q, que no se pidió", errTransient, enc)
+	}
 	var rpcResp syncRPCResponse
-	contado := &lectorContado{r: resp.Body}
 	if err := json.NewDecoder(contado).Decode(&rpcResp); err != nil {
 		return nil, afterRowID, "", fmt.Errorf("%w: decodificar pull: %v", errTransient, err)
 	}
@@ -549,24 +577,21 @@ func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int6
 	if err := json.Unmarshal([]byte(toolResult.Content[0].Text), &pl); err != nil {
 		return nil, afterRowID, "", fmt.Errorf("%w: pull payload inválido: %v", errPermanent, err)
 	}
-	// La página llegó bien: su cuerpo cuenta para sync_viajes.
+	// La página llegó bien: su cuerpo cuenta para sync_viajes. Primero lo descomprimido, que al
+	// terminar arrastra hasta el final lo que quedaba en el cable; después el cable.
 	n := contado.terminar()
+	enCable := cable.terminar()
 	if len(pl.Items) == 0 {
 		// Una página VACÍA es el sondeo de un tick sin novedades: el régimen normal, miles por día
 		// y por base, ~135 B cada una. Va aparte del cable de las páginas con filas, o
-		// bytes_cable/filas mediría el ritmo de los pulls y no el peso de una nota. No la alcanza
-		// ningún umbral de compresión, así que lo leído es lo que viajó.
+		// bytes_cable/filas mediría el ritmo de los pulls y no el peso de una nota. Se cuenta lo que
+		// viajó; con ese tamaño el central no la comprime (umbralCompresionRespuesta).
 		c.trafico.vacias.Add(1)
-		c.trafico.bytesVacias.Add(n)
+		c.trafico.bytesVacias.Add(enCable)
 		return pl.Items, pl.NextCursor, pl.Alcance, nil
 	}
-	// Si el transporte de Go la descomprimió solo (resp.Uncompressed), el tamaño del cable se
-	// perdió en el camino y no se inventa: se cuentan sólo los crudos. Hoy no pasa —el central
-	// contesta sin comprimir—; el PR de la bajada comprimida tiene que medirlo.
+	c.trafico.bajadaCable.Add(enCable)
 	c.trafico.bajadaCrudos.Add(n)
-	if !resp.Uncompressed {
-		c.trafico.bajadaCable.Add(n)
-	}
 	return pl.Items, pl.NextCursor, pl.Alcance, nil
 }
 
