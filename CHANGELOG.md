@@ -754,8 +754,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   central adelantado) se recorta a la llegada, y la marca nunca retrocede. La lógica vive en
   `assets/src/latido.mjs`, sin DOM: la recorren `node --test` y
   `TestElLatidoAguantaLaBajadaEspaciadaYSeApagaConUnCorte`, que la ejecuta en node contra el tope y
-  el lease que salen de la config, con seis sabotajes mecanizados. Sólo el panel: no cambia ninguna
-  tool ni el sync, y viaja con el próximo despliegue del central.
+  el tick de la config (el lease sale del tick con la fórmula de `leaseBajadaSegundos`), con seis
+  sabotajes mecanizados. Sólo el panel: no cambia ninguna tool ni el sync. Al panel del central
+  (`musubi-dashboard`) llega con su próximo despliegue, y a un `musubi dashboard` local, con el
+  binario de esa máquina.
 - **El índice del delta desaloja primero a las sesiones sin turnos: una sesión interactiva que
   espera un workflow ya no pierde su delta ni sus pedidos cuando arrancan las hijas.** El índice
   `loop_delta_sessions` acota a 32 las sesiones que conservan su delta
