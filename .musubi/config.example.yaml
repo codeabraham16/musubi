@@ -166,6 +166,10 @@ mode: local # local | team
 #   # Cada cuánto el cerebro sale a MEDIR los dispositivos sin agente (Tier B por SSH, Tier C por
 #   # ADB). Default 5 min; negativo lo desactiva.
 #   #
+#   # Ojo: negativo apaga el barrido de flota ENTERO, no sólo el sondeo. Dejan de correr también las
+#   # políticas de auto-heal, la poda de salidas y cooldowns, el abandono de rotaciones vencidas y la
+#   # vida de red. Los techos de las sesiones de shell NO: tienen su propio reloj.
+#   #
 #   # Este número no gobierna sólo el gasto de red: de él SE DERIVA el umbral de «en línea» de esas
 #   # máquinas (3 × intervalo). Un dispositivo que se visita cada 5 min no puede tener datos más
 #   # frescos que 5 min, y darlo por caído a los 90 s —lo que se hacía antes de S10— pintaba de rojo

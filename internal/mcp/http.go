@@ -916,6 +916,25 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 	// (30 s) y la del sondeo es la del gasto de SSH (5 min). No-op si el empuje está apagado, que
 	// es el default.
 	go s.RunEmpujeOTLP(ctx)
+	// LOS TECHOS DE LAS SHELLS, EN SU PROPIO RELOJ (A136): cierran las sesiones vencidas aunque el
+	// barrido de flota esté apagado, que antes las dejaba abiertas para siempre. Es el ÚNICO de
+	// estos que el servidor ESPERA al volver, y su pasada es corta: escribe en la base, así que
+	// cuando esto vuelve no puede quedar nada suyo escribiendo. Quien llama puede cerrarla enseguida:
+	// las pruebas lo hacen siempre, y `musubi serve` al apagarse (si esto vuelve con error sale con
+	// os.Exit, sin cerrar nada). El barrido no se espera: uno en vuelo tarda lo que tarden sus
+	// sondas SSH. Corre con un contexto propio para poder pararlo también cuando el servidor se cae
+	// solo, sin que nadie haya cancelado `ctx`. TestElServidorEsperaAlVigiaDeShellsAlApagarse mide las
+	// dos salidas, con la pasada al arrancar frenada, y la pasada de un tick cuando lo apagan.
+	ctxTechos, cancelarTechos := context.WithCancel(ctx)
+	techosListos := make(chan struct{})
+	go func() {
+		defer close(techosListos)
+		s.RunTechosDeShell(ctxTechos)
+	}()
+	esperarTechos := func() {
+		cancelarTechos()
+		<-techosListos
+	}
 	serveErr := make(chan error, 1)
 	go func() {
 		if useTLS {
@@ -933,10 +952,13 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 		// Señal (SIGINT/SIGTERM en el caller): shutdown graceful, drena lo en curso.
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		return srv.Shutdown(shutdownCtx)
+		err := srv.Shutdown(shutdownCtx)
+		esperarTechos()
+		return err
 	case err := <-serveErr:
 		// ListenAndServe(TLS) retornó por sí solo (típicamente un fallo de bind). El
 		// goroutine no queda colgado: ya envió a serveErr (buffer 1) y termina.
+		esperarTechos()
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}

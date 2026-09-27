@@ -493,6 +493,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **Las sesiones de shell vencidas se cierran aunque el barrido de la flota esté apagado.** Con
+  `fleet.probe_minutes` negativo el cerebro dejaba de cerrarlas. En una máquina sin agente, el `ssh`
+  de una sesión vencida seguía vivo, y la bitácora la mostraba activa. Ahora las cierra un vigía
+  propio, una vez por minuto, que no depende del sondeo. Además, el doc de `probe_minutes` dice qué
+  apaga de verdad un valor negativo: el barrido entero, con las políticas y la poda.
 - **«sigue» y los avisos del sistema no son una consulta: el hook del turno ya no busca memoria con
   ellos.** El recall por turno usaba el prompt como consulta fuera lo que fuera. Con «sigue» traía
   cualquier nota que dijera «sigue», y con un `<task-notification>` buscaba con el texto del aviso

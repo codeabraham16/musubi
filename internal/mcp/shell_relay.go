@@ -18,6 +18,7 @@ package mcp
 // ────────────────────────────────────────────────────────────────────────────────────────────
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -91,7 +92,8 @@ func (r *registroDeShells) quitar(id string) (fleet.CanalInteractivo, bool) {
 	return c, ok
 }
 
-// vivas devuelve los ids de las sesiones en curso, para que el barrido pueda matar las vencidas.
+// vivas devuelve los ids de las sesiones en curso, para que el vigía de los techos
+// (RunTechosDeShell) pueda matar las vencidas.
 func (r *registroDeShells) vivas() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -362,7 +364,8 @@ func (s *McpServer) cerrarShell(id string, estado fleet.EstadoShell, motivo stri
 	}
 }
 
-// cerrarShellsVencidas mata las que algún techo alcanzó. Cuelga del barrido de flota (S10).
+// cerrarShellsVencidas mata las que algún techo alcanzó. La corre su propio vigía,
+// RunTechosDeShell (A136), y no el barrido de flota.
 //
 // LOS TECHOS LOS APLICA EL CEREBRO Y NO LA MÁQUINA REMOTA (T5). Si dependieran del otro lado, una
 // máquina comprometida se los saltearía — y el otro lado es justamente aquél del que uno se está
@@ -392,6 +395,72 @@ func (s *McpServer) cerrarShellsVencidas(ahora time.Time) int {
 		logx.Warn("shell: no se pudieron cerrar las sesiones vencidas", "error", err)
 	}
 	return n
+}
+
+// cadenciaTechosDeShell es cada cuánto el cerebro cierra las shells que un techo ya mató.
+//
+// Un minuto: los techos son de 15 min (ShellInactividadMax) y 2 h (ShellVidaMax), así que un
+// minuto de atraso a lo sumo no cambia lo que protegen. Cada pasada lee la fila de cada canal vivo y
+// además recorre la tabla de sesiones buscando las abiertas: `cerrada IS NULL` no tiene índice, y la
+// bitácora no se poda. Con la bitácora de hoy es nada; si una pasada empieza a pesar, es lo primero
+// que hay que mirar. Es `var` y no `const` para que las pruebas del vigía la muevan: casi todas la
+// achican para no esperar un minuto por tick, y la del reinicio la estira a una hora para que no
+// llegue ningún tick. No la toca nadie en producción.
+//
+// Lo que tarda el vigía en volver a pasar se le SUMA a cada techo, así que la cadencia no pasa de un
+// décimo del techo más corto. Lo custodian dos pruebas: TestElVigiaDeShellsPasaMuchoMasSeguidoQueElTechoMasCorto
+// acota el valor —es la única que ve el de producción—, y TestElVigiaPasaAlRitmoDeSuCadencia exige
+// que el reloj del vigía sea éste: uno que lo ignore, o que vaya 3,6 veces más lento o más, cae.
+var cadenciaTechosDeShell = time.Minute
+
+// RunTechosDeShell es el VIGÍA de los techos de las sesiones de shell: una pasada al arrancar y
+// otra cada cadenciaTechosDeShell, hasta que ctx se cancela. Pensado para su propia goroutine; lo
+// lanza ListenAndServeHTTP.
+//
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// POR QUÉ TIENE SU PROPIO RELOJ (A136)
+//
+// Vivía adentro del barrido de flota, primero, antes de las salidas tempranas: un barrido en vuelo,
+// la lista de proyectos ilegible, el contexto cancelado. Eso lo protegía de lo que pasa ADENTRO del
+// barrido, pero no de que el barrido NO CORRA: con `fleet.probe_minutes` negativo RunFlotaScheduler
+// vuelve al instante, y ninguna sesión vencida se cerraba nunca. El 410 de autorizarShell rechaza
+// cada pedido sobre una sesión vencida pero NO mata su canal, y en una Tier B el canal es el `ssh`
+// que sostiene el cerebro: el proceso remoto seguía vivo aunque el operador siguiera pidiendo, y la
+// bitácora mostraba la sesión «activa». Un techo que se apaga porque la sonda está apagada no es un
+// techo, así que no pregunta por el intervalo de sondeo, ni por `flotaBusy`, ni por la lista de
+// proyectos: lo custodia TestLosTechosDeShellSeAplicanAunqueElSondeoNoCorra, un mundo por cada una.
+//
+// LA PASADA AL ARRANCAR cierra lo que un reinicio dejó abierto sin esperar el primer tick
+// (TestLaPasadaAlArrancarCierraLasFilasDeUnReinicio). Y NO HAY PASADA FINAL al cancelar: correría
+// con la base por cerrarse; lo que quede vencido lo cierra la pasada del próximo arranque.
+//
+// CADA PASADA CORRE EN ESTA GOROUTINE, la del arranque y las de cada tick: cuando esto vuelve no
+// queda ninguna en curso, y eso es lo que ListenAndServeHTTP espera antes de volver
+// (TestElServidorEsperaAlVigiaDeShellsAlApagarse frena una de cada una).
+func (s *McpServer) RunTechosDeShell(ctx context.Context) {
+	s.aplicarTechosDeShell()
+	t := time.NewTicker(cadenciaTechosDeShell)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.aplicarTechosDeShell()
+		}
+	}
+}
+
+// aplicarTechosDeShell es UNA pasada del vigía: cierra las shells vencidas y lo dice si cerró
+// alguna. Puede correr con un barrido de flota en vuelo: lee y escribe la base, mata canales
+// —cerrarShell es idempotente— y no abre ninguna de las conexiones SSH que `flotaBusy` acota.
+//
+// Mira la hora EN CADA PASADA: con una tomada al arrancar, o atrasada, lo que vence mientras corre
+// no vence nunca (TestElVigiaCierraLaSesionCuandoVenceYNoAntes).
+func (s *McpServer) aplicarTechosDeShell() {
+	if n := s.cerrarShellsVencidas(time.Now()); n > 0 {
+		logx.Info("shell: sesiones cerradas por vencimiento", "sesiones", n)
+	}
 }
 
 // principalDeRequest resuelve el bearer con la MISMA regla que /mcp y /metrics.
