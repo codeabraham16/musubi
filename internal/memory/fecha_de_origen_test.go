@@ -108,6 +108,11 @@ func TestUnaFilaSinFechaNoCortaLaPagina(t *testing.T) {
 // layout de la columna en UTC. La normalización no es cosmética: el SQL compara created_at como
 // texto, y la madrugada escrita con la T de RFC3339 ordenaba después que la noche del mismo día.
 //
+// Y no sólo la de una nota vieja: la de hace tres minutos (el tráfico vivo) y la de hace dos días
+// (lo que se perdió una laptop apagada) también se conservan. Esas dos custodian el `ahora` con
+// que la llamada real juzga si una fecha viene del futuro: corrido hacia atrás, una fecha reciente
+// pasa por futura y cae a la de la bajada, y las de junio ni se enteran.
+//
 // Sabotaje: el INSERT no escribe la fecha (la fila toma la de la bajada, como antes).
 // arnes: archivo="internal/memory/inboundsync.go"
 // arnes: de="author, created_at, sync_seq)"
@@ -117,13 +122,22 @@ func TestUnaFilaSinFechaNoCortaLaPagina(t *testing.T) {
 // arnes: archivo="internal/memory/inboundsync.go"
 // arnes: de="return sql.NullString{String: t.Format(sqliteTimeLayout), Valid: true}"
 // arnes: a="return sql.NullString{String: cruda, Valid: true}"
+//
+// Sabotaje: la llamada real juzga el futuro con un `ahora` corrido 30 días atrás.
+// arnes: archivo="internal/memory/inboundsync.go"
+// arnes: de="fechaDeOrigen(o.CreatedAt, time.Now())"
+// arnes: a="fechaDeOrigen(o.CreatedAt, time.Now().AddDate(0, 0, -30))"
 func TestIngestSharedUsaLaFechaDeOrigen(t *testing.T) {
 	e := newTestEngine(t)
+	hace3m := time.Now().UTC().Add(-3 * time.Minute).Format(sqliteTimeLayout)
+	hace2d := time.Now().UTC().Add(-2 * 24 * time.Hour).Format(sqliteTimeLayout)
 	casos := []struct{ id, llega, guardada string }{
 		{"canonica", "2026-06-29 10:11:12", "2026-06-29 10:11:12"},
 		{"rfc3339", "2026-06-29T10:11:12Z", "2026-06-29 10:11:12"},
 		{"con-zona", "2026-06-29T07:11:12-03:00", "2026-06-29 10:11:12"},
 		{"con-fraccion", "2026-06-29T10:11:12.987654Z", "2026-06-29 10:11:12"},
+		{"hace-3-minutos", hace3m, hace3m},
+		{"hace-2-dias", hace2d, hace2d},
 	}
 	for _, c := range casos {
 		if _, err := e.IngestShared(SharedObs{ID: c.id, TopicKey: "t/fecha", Content: "nota " + c.id, Importance: 1, CreatedAt: c.llega}); err != nil {

@@ -1387,8 +1387,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   *Pruebas: seis en `internal/memory` (`fecha_de_origen_test.go`); dos en `internal/mcp`
   (`fecha_viaja_test.go`), con el JSON de la respuesta y los dos sentidos de la convivencia; y la
   e2e `TestLaNotaBajadaConservaSuEdad` en `cmd/musubi`, con el central real detrás de un
-  `httptest`, el cliente de sync real y el hook del turno. Quince sabotajes corridos, los quince
-  rojos; trece quedan como directivas `arnes:`.*
+  `httptest`, el cliente de sync real y el hook del turno. Dieciséis sabotajes corridos, los
+  dieciséis rojos; catorce quedan como directivas `arnes:`.*
 
 ## [0.141.0] - 2026-09-14
 
