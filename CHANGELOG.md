@@ -683,6 +683,45 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **El índice del delta desaloja primero a las sesiones sin turnos: una sesión interactiva que
+  espera un workflow ya no pierde su delta ni sus pedidos cuando arrancan las hijas.** El índice
+  `loop_delta_sessions` acota a 32 las sesiones que conservan su delta
+  (`loop_delta_injected:<sesión>`) y sus pedidos (`loop_pedidos:<sesión>`), y desalojaba por LRU a
+  secas. Desde la compuerta del turno, un «sigue» o un aviso del sistema no refrescan la marca: una
+  interactiva que espera un workflow quedaba como la más vieja cuando sus hijas sembraban el delta
+  al arrancar, y perdía el delta —su próximo pedido le repetía memoria que ya tenía— y los pedidos.
+  Ahora el índice sabe qué sesiones tuvieron un turno (el recall del turno o un pedido sustantivo), y
+  al pasar de 32 salen primero las que no, de la más vieja a la más nueva, y recién después, por LRU,
+  las que sí. «Turno» es pegajoso: la siembra del priming al compactar no lo baja. La sesión que se
+  anota no compite contra sí misma: con el índice lleno de sesiones con turno, la siembra de una
+  nueva desaloja a la más vieja con turno, como main. En la base de esta PC, 29 de las 32 entradas
+  del índice eran siembras, y sólo 3 eran de sesiones con turnos.
+
+  **El turno va en una clave aparte, `loop_delta_con_turno`, y el índice conserva su forma
+  `{id: unix}`**, por los binarios viejos que comparten la base: decodifican el índice en un
+  `map[string]int64` ignorando el error, y una marca con otra forma les llegaría como 0 —la más vieja
+  de todas—, así que desalojarían primero justo a las interactivas. Probado en los dos sentidos
+  contra una copia congelada del código de main: lo que escribió un binario viejo se lee acá entero
+  y sin turnos, y la sesión que guarda un pedido recupera el suyo; lo que escribe esta rama lo lee
+  un binario viejo sin error ni ceros. Un binario viejo sigue desalojando por LRU, y sin candado,
+  hasta que se actualice.
+
+  **Una transacción para el leer-modificar-escribir** (`DbEngine.MetaEnTransaccion`, BEGIN
+  IMMEDIATE como `LedgerAdd`): el delta, el índice, las claves de las desalojadas y los pedidos van
+  juntos. Sin ella, dos hooks a la vez podían dejar a una sesión fuera del índice con su delta y sus
+  pedidos sin poda. La prueba no depende del reloj: en el instante del medio, una sonda con
+  busy_timeout 0 dice si el otro escritor tiene que esperar. Un engine en sólo lectura no la abre
+  (`ErrMetaSoloLectura`).
+
+  **Escrituras por turno**, contadas con el motor real sobre una copia de la base de esta PC: el
+  primer turno sustantivo de una sesión escribe 9 claves de meta tomando 6 veces el candado (main: 8
+  y 8) —la de más es `loop_delta_con_turno`, una vez por sesión—; los siguientes, 6 y 5 (main: 6 y
+  6); el pedido repetido, 5 y 4 (main: 5 y 5); «sigue», 3 y 3, como antes. La latencia del hook no
+  se distingue del ruido. En la corrida final, sobre el commit y con otras suites corriendo en
+  paralelo en la misma máquina (dos copias de la base, 8 rondas intercaladas), cada pedido
+  sustantivo en una sesión nueva (el peor caso: anota la sesión, desaloja y escribe la clave de
+  turnos) dio p50 761,1 → 707,5 ms y p95 3.665,5 → 4.393,4 ms, y «sigue» y los avisos, que corren
+  el mismo código en los dos binarios, difirieron hasta 1.921 ms en su p95.
 - **Las sesiones de shell vencidas se cierran aunque el barrido de la flota esté apagado.** Con
   `fleet.probe_minutes` negativo el cerebro dejaba de cerrarlas. En una máquina sin agente, el `ssh`
   de una sesión vencida seguía vivo, y la bitácora la mostraba activa. Ahora las cierra un vigía
