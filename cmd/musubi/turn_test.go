@@ -194,7 +194,7 @@ func TestTurnDeltaReinjectsChanged(t *testing.T) {
 		Count: 1,
 		Items: []memory.RecallItem{{ID: "x1", TopicKey: "t", Gist: "versión vieja", ContentHash: "h1"}},
 	}}
-	in := `{"prompt":"q","session_id":"s1"}`
+	in := `{"prompt":"qué sabemos","session_id":"s1"}`
 	turnOutput(store, deltaLoop(), pipeOff(), maOff(), config.MemoryConfig{}, strings.NewReader(in)) // inyecta x1
 
 	// La memoria cambió (otro hash): debe re-inyectarse marcada como actualizada.
@@ -210,9 +210,9 @@ func TestTurnDeltaResetsOnNewSession(t *testing.T) {
 		Count: 1,
 		Items: []memory.RecallItem{{ID: "x1", TopicKey: "t", Gist: "memoria", ContentHash: "h1"}},
 	}}
-	turnOutput(store, deltaLoop(), pipeOff(), maOff(), config.MemoryConfig{}, strings.NewReader(`{"prompt":"q","session_id":"s1"}`))
+	turnOutput(store, deltaLoop(), pipeOff(), maOff(), config.MemoryConfig{}, strings.NewReader(`{"prompt":"qué sabemos","session_id":"s1"}`))
 	// Nueva sesión: el delta se reinicia, debe volver a inyectar.
-	out := turnOutput(store, deltaLoop(), pipeOff(), maOff(), config.MemoryConfig{}, strings.NewReader(`{"prompt":"q","session_id":"s2"}`))
+	out := turnOutput(store, deltaLoop(), pipeOff(), maOff(), config.MemoryConfig{}, strings.NewReader(`{"prompt":"qué sabemos","session_id":"s2"}`))
 	if !strings.Contains(out, "x1") {
 		t.Errorf("una sesión nueva debe reiniciar el delta y re-inyectar, obtuve: %q", out)
 	}
@@ -223,7 +223,7 @@ func TestTurnDeltaDisabledReinjectsEveryTurn(t *testing.T) {
 		Count: 1,
 		Items: []memory.RecallItem{{ID: "x1", TopicKey: "t", Gist: "memoria", ContentHash: "h1"}},
 	}}
-	in := `{"prompt":"q","session_id":"s1"}`
+	in := `{"prompt":"qué sabemos","session_id":"s1"}`
 	// defaultLoop tiene DeltaInjection=false: ambos turnos re-inyectan.
 	turnOutput(store, defaultLoop(), pipeOff(), maOff(), config.MemoryConfig{}, strings.NewReader(in))
 	out := turnOutput(store, defaultLoop(), pipeOff(), maOff(), config.MemoryConfig{}, strings.NewReader(in))

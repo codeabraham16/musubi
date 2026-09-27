@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +16,8 @@ import (
 	"musubi/internal/embedding"
 	"musubi/internal/logx"
 	"musubi/internal/memory"
+	"musubi/internal/redact"
+	"musubi/internal/transcripts"
 )
 
 // turn.go implementa el comando 'musubi turn --hook-mode': la inyección de
@@ -109,9 +112,23 @@ func turnOutputConTareas(store turnStore, loopCfg config.LoopConfig, pipeCfg con
 	}
 	in := readTurnInput(stdin)
 	prompt := in.Prompt
+	// EL ORDEN DE LO QUE SIGUE ES UN CONTRATO ENTRE FRENTES DE LA OLA 2, y cada paso tiene dueño:
+	//
+	//  1. Prompt vacío → silencio: nada de lo que sigue tiene con qué trabajar.
+	//  2. Acá va la marca de actividad para la bajada del sync (feat/bajada-con-ritmo), con TODO
+	//     prompt no vacío, sea de continuación o del sistema: en esos turnos la persona está
+	//     trabajando, y una marca puesta detrás de la compuerta dormiría la bajada justo entonces.
+	//  3. La compuerta: un pedido de continuación («sigue», «go», «si hazlo») o un aviso del sistema
+	//     (<task-notification>, un mensaje de otra sesión) no es una consulta. No busca memoria ni
+	//     se guarda como pedido de la sesión (ver esUnaConsulta).
+	//  4. El recall y recordarPedido, sólo con un pedido humano y sustantivo.
+	//
+	// Los demás bloques (presupuesto, brevedad, bajá lo durable, fase, lote, conflictos, captura,
+	// tareas y el gate de revisión) no miran la compuerta, y su orden en la salida no cambia.
 	if prompt == "" {
 		return ""
 	}
+	esConsulta := esUnaConsulta(prompt)
 	budget := memCfg.SessionTokenBudget
 	brevity := memCfg.BrevityMode
 
@@ -135,7 +152,7 @@ func turnOutputConTareas(store turnStore, loopCfg config.LoopConfig, pipeCfg con
 	if maCfg.Enabled {
 		blocks = append(blocks, accountedBlock{"turn_batch", buildTurnBatch(store, in.SessionID)})
 	}
-	if loopCfg.PerTurnRecall {
+	if loopCfg.PerTurnRecall && esConsulta {
 		blocks = append(blocks, accountedBlock{"turn_recall", buildTurnRecall(store, parametrosDelTurno{
 			sesion:      in.SessionID,
 			prompt:      prompt,
@@ -144,6 +161,9 @@ func turnOutputConTareas(store turnStore, loopCfg config.LoopConfig, pipeCfg con
 			memCfg:      memCfg,
 			embebedor:   embedder,
 		})})
+		// DESPUÉS del recall, a propósito: el recall ya anotó la sesión en el índice del delta
+		// (saveDeltaState), así que recordarPedido casi nunca tiene que volver a escribirlo.
+		recordarPedido(store, in.SessionID, prompt, time.Now())
 	}
 	// SurfaceConflicts es independiente del recall: si hay relaciones sin resolver,
 	// conviene avisarlas aunque el recall por turno esté apagado.
@@ -636,9 +656,29 @@ func clearDeltaState(store metaStore, sessionID string) {
 }
 
 // registrarSesionDelta anota la última escritura de la sesión y, si hay más de maxDeltaSessions,
-// vacía el delta de las más viejas. Leer-modificar-escribir sin candado: dos hooks de sesiones
-// distintas a la vez pueden perder una entrada del índice, y lo único que cuesta es que esa clave
-// no se pode; el delta de cada sesión vive en su propia clave y no se pisa.
+// vacía el delta de las más viejas, y también sus pedidos (recordarPedido): el índice es la única
+// poda de las claves por sesión del turno.
+//
+// LEER-MODIFICAR-ESCRIBIR SIN CANDADO, y desde que el índice poda también los pedidos, perder una
+// actualización cuesta más que una clave sin podar. Con dos hooks de sesiones distintas a la vez:
+// (a) uno escribe el índice que leyó antes de que el otro anotara su sesión, y esa sesión queda
+// afuera con sus pedidos —texto de sus prompts— sin poda, para siempre si no vuelve a anotarse (un
+// recall suyo con resultados, o un pedido sustantivo suyo, aunque lo repita); (b) uno desaloja a la
+// sesión más vieja justo cuando ésta guarda un pedido nuevo, y se lo borra: hasta su próximo pedido,
+// una compactación no tendría consulta. El delta de cada sesión vive en su propia clave y no se
+// pisa. Lo de fondo —el índice y los pedidos en UNA transacción, como LedgerAdd— es de
+// fix/delta-no-desaloja-interactivas, que reescribe esta función.
+//
+// QUIÉN REFRESCA LA MARCA CAMBIÓ CON LA COMPUERTA DEL TURNO (esUnaConsulta). Antes, cada turno cuyo
+// recall traía algo re-anotaba la sesión con la hora (saveDeltaState), también un «sigue» o un aviso
+// del sistema; ahora esos turnos no buscan, y la marca de una sesión interactiva se queda en la de su
+// último pedido sustantivo con resultados, o en la de su arranque (el priming siembra el delta). Con
+// delta_injection apagado ya era así, porque el recall no anota, y recordarPedido la anota sólo si
+// falta. Una sesión que espera un workflow entre avisos y «sigue» puede ser la más vieja cuando
+// arrancan sus hijas, y perder el delta (su próximo pedido le repite memoria que ya tiene en
+// contexto) y los pedidos. Con las llegadas reales de la semana del 09-19 al 09-26 hubo un desalojo
+// de una sesión principal con cada régimen: hoy no muerde. Lo neutraliza
+// fix/delta-no-desaloja-interactivas, que desaloja primero a las sesiones sin turnos.
 func registrarSesionDelta(store metaStore, sessionID string, ahora int64) {
 	sesiones := map[string]int64{}
 	if raw, ok, _ := store.GetMeta(metaDeltaSessions); ok && raw != "" {
@@ -662,12 +702,143 @@ func registrarSesionDelta(store metaStore, sessionID string, ahora int64) {
 		})
 		for _, p := range ps[:len(ps)-maxDeltaSessions] {
 			_ = store.SetMeta(deltaKey(p.id), "")
+			olvidarPedidos(store, p.id)
 			delete(sesiones, p.id)
 		}
 	}
 	if data, err := json.Marshal(sesiones); err == nil {
 		_ = store.SetMeta(metaDeltaSessions, string(data))
 	}
+}
+
+// esUnaConsulta dice si el prompt es un pedido de la persona que dice QUÉ: ni un aviso del sistema
+// ni un pedido de continuación. Sólo ése busca memoria y se guarda como pedido de la sesión.
+//
+// POR QUÉ. El recall usaba el prompt como consulta fuera lo que fuera. Con «sigue» traía cualquier
+// nota que dijera «sigue», y con un <task-notification> buscaba con el texto del aviso: uno trajo
+// architecture/notifications porque el aviso decía «notification». Medido el 2026-09-26 sobre
+// Musubi y Altura desde el 09-14: 76 de 130 turnos de continuación y 128 de 356 avisos recibieron
+// memoria. Ver `musubi uso-agente --contexto`, M1 y M1s.
+//
+// LOS DOS CLASIFICADORES SON LOS DEL MEDIDOR (internal/transcripts), a propósito: M1 y M1s se
+// cuentan con estas mismas funciones, así que lo que la compuerta calla es exactamente lo que el
+// medidor tiene que dejar de ver con memoria. Y «qué es un término» es el del recall
+// (memory.TerminosDeConsulta): un prompt que pasa la compuerta le deja al recall algo que buscar.
+func esUnaConsulta(prompt string) bool {
+	if transcripts.EsDeSistema(prompt) {
+		return false
+	}
+	return !transcripts.EsPedidoDeContinuacion(prompt)
+}
+
+// Los pedidos de la sesión: lo último que la persona pidió, para volver a buscar memoria sobre eso
+// después de una compactación (lo va a leer feat/memoria-tras-compactar, sin mostrarlos: el resumen
+// de Claude Code ya los trae textuales). Sólo pedidos humanos y sustantivos, que son los que dicen
+// en qué se está trabajando: un «sigue» o un aviso del sistema no lo dicen.
+const (
+	metaPedidos = "loop_pedidos" // prefijo: loop_pedidos:<session_id> -> JSON [{t, texto}], el último al final
+	maxPedidos  = 3
+	// maxRunasDePedido acota cada pedido guardado. Es una consulta, no un documento: con 200 runas
+	// entra el pedido entero en casi todos los casos, y un prompt pegado de miles no infla la meta.
+	maxRunasDePedido = 200
+)
+
+// marcaDelRedactor es la marca con la que internal/redact tapa cada secreto: «[REDACTED:<tipo>]».
+var marcaDelRedactor = regexp.MustCompile(`\[REDACTED:[^\]]*\]`)
+
+// pedidoDeSesion es un pedido guardado: cuándo (unix) y qué, ya redactado y truncado.
+type pedidoDeSesion struct {
+	T     int64  `json:"t"`
+	Texto string `json:"texto"`
+}
+
+// pedidosKey es la clave de meta de los pedidos de UNA sesión.
+func pedidosKey(sessionID string) string {
+	return metaPedidos + sepDeltaKey + sessionID
+}
+
+// leerPedidos devuelve los pedidos guardados de la sesión, del más viejo al último. Un valor
+// ilegible o vacío se lee como «ninguno».
+func leerPedidos(store metaStore, sessionID string) []pedidoDeSesion {
+	raw, ok, _ := store.GetMeta(pedidosKey(sessionID))
+	if !ok || raw == "" {
+		return nil
+	}
+	var ps []pedidoDeSesion
+	if json.Unmarshal([]byte(raw), &ps) != nil {
+		return nil
+	}
+	return ps
+}
+
+// recordarPedido guarda el prompt como el último pedido de la sesión, con tope maxPedidos.
+//
+// PASA POR EL REDACTOR ANTES DEL TRUNCADO, en ese orden: la persona pega comandos y rutas en sus
+// prompts, la meta termina en los backups de la base, y un secreto cortado a la mitad por el
+// truncado ya no lo reconoce nadie.
+//
+// CADA SECRETO QUEDA COMO «…», NO COMO LA MARCA DEL REDACTOR. El pedido es la consulta con la que
+// feat/memoria-tras-compactar vuelve a buscar memoria, y «[REDACTED:high-entropy]» le sumaría
+// «REDACTED», «high» y «entropy», términos que el prompt no tenía; «…» no tiene letras ni dígitos, y
+// memory.TerminosDeConsulta no ve nada en él. En la historia de Musubi y Altura, 6 de los 3.408
+// pedidos que se guardarían llevaban una marca dentro de las 200 runas.
+//
+// ES UNA ESCRITURA MÁS POR TURNO sobre una base con _txlock=immediate que comparten varios daemons,
+// así que no escribe si no cambió nada: el mismo pedido repetido no se vuelve a guardar.
+func recordarPedido(store metaStore, sessionID, prompt string, ahora time.Time) {
+	if sessionID == "" {
+		return // sin sesión no hay a qué compactación devolvérselo
+	}
+	texto, _ := redact.Redact(prompt)
+	texto = marcaDelRedactor.ReplaceAllLiteralString(texto, "…")
+	if r := []rune(texto); len(r) > maxRunasDePedido {
+		texto = string(r[:maxRunasDePedido])
+	}
+	ps := leerPedidos(store, sessionID)
+	// LA PODA ES LA DEL ÍNDICE DEL DELTA (registrarSesionDelta), y una sesión que nunca escribió su
+	// delta no está en él: el recall no trajo nada, o delta_injection está apagado. Sin anotarla,
+	// sus pedidos no se podarían nunca. Se mira ANTES de la salida por el pedido repetido: una
+	// carrera entre dos hooks puede sacar a la sesión del índice con sus pedidos adentro (ver
+	// registrarSesionDelta), y repetir el pedido es una ocasión de volver a anotarla.
+	if !sesionEnElIndice(store, sessionID) {
+		registrarSesionDelta(store, sessionID, ahora.Unix())
+	}
+	if n := len(ps); n > 0 && ps[n-1].Texto == texto {
+		return
+	}
+	ps = append(ps, pedidoDeSesion{T: ahora.Unix(), Texto: texto})
+	if len(ps) > maxPedidos {
+		ps = ps[len(ps)-maxPedidos:]
+	}
+	data, err := json.Marshal(ps)
+	if err != nil {
+		return
+	}
+	_ = store.SetMeta(pedidosKey(sessionID), string(data))
+}
+
+// olvidarPedidos vacía los pedidos de una sesión que salió del índice. Sólo escribe si había algo:
+// la mayoría de las sesiones que se desalojan son hijas de un workflow y nunca guardaron un pedido,
+// y escribir un vacío por cada una sería una fila y una escritura por nada.
+func olvidarPedidos(store metaStore, sessionID string) {
+	if raw, ok, _ := store.GetMeta(pedidosKey(sessionID)); ok && raw != "" {
+		_ = store.SetMeta(pedidosKey(sessionID), "")
+	}
+}
+
+// sesionEnElIndice dice si la sesión ya está en el índice del delta. Mira sólo la clave, sin leer el
+// valor, para no depender de su forma.
+func sesionEnElIndice(store metaStore, sessionID string) bool {
+	raw, ok, _ := store.GetMeta(metaDeltaSessions)
+	if !ok || raw == "" {
+		return false
+	}
+	var idx map[string]json.RawMessage
+	if json.Unmarshal([]byte(raw), &idx) != nil {
+		return false
+	}
+	_, esta := idx[sessionID]
+	return esta
 }
 
 // formatDeltaGists arma el bloque de gists del turno, marcando como "actualizado"

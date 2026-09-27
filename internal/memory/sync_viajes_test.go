@@ -48,7 +48,7 @@ func TestElRebotePreservaElEnviado(t *testing.T) {
 	if _, err := e.ClaimOutboxBatch(50, 60); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.MarkOutboxSent("mia-1"); err != nil {
+	if err := e.MarkOutboxSent("mia-1", encolado(t, e, "mia-1")); err != nil {
 		t.Fatal(err)
 	}
 	// La entrega se lleva a un pasado fijo: así un «datetime('now')» del rebote se vería distinto.
@@ -98,10 +98,11 @@ func TestElRebotePreservaElEnviado(t *testing.T) {
 // sent_at no hay «enviadas en 24 h», y sin sent_hash el PR siguiente no puede separar un rebote
 // propio de un choque con otra máquina.
 //
-// Sabotaje: que la marca deje las dos columnas como estaban (NULL).
+// Sabotaje: que la marca deje las dos columnas como estaban (NULL). El `?` se conserva para que la
+// sentencia siga recibiendo los mismos argumentos y el rojo sea de la guarda, no de SQLite.
 // arnes: archivo="internal/memory/outbox.go"
-// arnes: de="sent_hash = enqueued_hash, sent_at = datetime('now')"
-// arnes: a="sent_hash = sent_hash, sent_at = sent_at"
+// arnes: de="sent_hash = ?, sent_at = datetime('now')"
+// arnes: a="sent_hash = CASE WHEN ? IS NULL THEN sent_hash ELSE sent_hash END, sent_at = sent_at"
 func TestLaEntregaDejaQueSalioYCuando(t *testing.T) {
 	e := newTestEngine(t)
 	const contenido = "una nota compartida que sale en este tick"
@@ -111,7 +112,7 @@ func TestLaEntregaDejaQueSalioYCuando(t *testing.T) {
 	if _, err := e.ClaimOutboxBatch(50, 60); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.MarkOutboxSent("sale-1"); err != nil {
+	if err := e.MarkOutboxSent("sale-1", encolado(t, e, "sale-1")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -211,7 +212,7 @@ func TestLasEnviadasRespetanSuVentana(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"hoy", "hace-3", "hace-10"} {
-		if err := e.MarkOutboxSent(id); err != nil {
+		if err := e.MarkOutboxSent(id, encolado(t, e, id)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -314,7 +315,7 @@ func TestUnaMuertaQueRebotaQuedaEspejo(t *testing.T) {
 	if _, err := e.ClaimOutboxBatch(50, 60); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.MarkOutboxDead("muerta-1", "rechazo de prueba"); err != nil {
+	if err := e.MarkOutboxDead("muerta-1", encolado(t, e, "muerta-1"), "rechazo de prueba"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.IngestShared(SharedObs{

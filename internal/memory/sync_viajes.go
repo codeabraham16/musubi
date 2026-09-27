@@ -44,9 +44,13 @@ const (
 //   - Rechazados / BytesRechazados: los POST de la subida que el central contestó sin aceptar la
 //     nota (4xx, 5xx, un error JSON-RPC) y el cuerpo que viajó igual. Mismo motivo: un corte del
 //     central reintentado N veces no es peso de nota.
-//   - SinCambios, Rebotes, Choques: nacen en cero. Los llenan los PR siguientes de la ola (el
-//     central que no re-guarda lo que ya tiene, y el pull que distingue un rebote propio de un
-//     choque con otra máquina). Están en la tabla desde ya para no pedir otra migración.
+//   - Rebotes, Choques: sólo en la bajada, filas (ya contadas en Filas) que encontraron acá una
+//     edición local sin salir con otro contenido y NO la pisaron. Rebote si el contenido que bajó es
+//     lo que esta máquina entregó por última vez; choque si no. Choques no es cota de nada: cuenta de
+//     más la re-entrega de una versión de base ajena, y de menos un cambio ajeno de sólo metadatos,
+//     que cae en rebotes (ver memory.Ingesta).
+//   - SinCambios: nace en cero. Lo llena un PR siguiente de la ola (el central que no re-guarda lo
+//     que ya tiene). Está en la tabla desde ya para no pedir otra migración.
 type Viaje struct {
 	Filas           int64 `json:"filas"`
 	Posts           int64 `json:"posts"`

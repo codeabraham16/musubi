@@ -3,6 +3,8 @@ package transcripts
 import (
 	"strings"
 	"unicode"
+
+	"musubi/internal/memory"
 )
 
 // Origen dice quién escribió el texto que abrió un turno.
@@ -113,12 +115,6 @@ var palabrasDeContinuacion = conjunto(`
 	procede avanza espera revisa vale claro correcto exacto tambien porfa favor me te lo le les se
 	mi tu yo vos nos ahora igual asi mas pero muy que como esta estan hay`)
 
-// vaciasDeContinuacion son las palabras vacías que tampoco dicen qué: artículos, preposiciones y
-// sus pares en inglés.
-var vaciasDeContinuacion = conjunto(`
-	el la los las un una unos unas de del al en con por para que como su sus
-	the an of in on at to for with and or is are be by as it`)
-
 func conjunto(s string) map[string]bool {
 	m := map[string]bool{}
 	for _, w := range strings.Fields(s) {
@@ -127,7 +123,7 @@ func conjunto(s string) map[string]bool {
 	return m
 }
 
-// plegarAcentos le saca a una palabra en minúsculas las tildes y la diéresis de las vocales:
+// plegarAcentos le saca a un texto en minúsculas las tildes y la diéresis de las vocales:
 // «continúa», «seguí» y «mirá» se comparan como «continua», «segui» y «mira».
 var plegarAcentos = strings.NewReplacer(
 	"á", "a", "à", "a", "ä", "a", "â", "a",
@@ -137,51 +133,26 @@ var plegarAcentos = strings.NewReplacer(
 	"ú", "u", "ù", "u", "ü", "u", "û", "u",
 )
 
-// palabras parte un texto en tramos de letras o de dígitos, en minúsculas y sin acentos: «abc123»
-// son dos palabras, y el guion bajo corta.
-func palabras(s string) []string {
-	var out []string
-	var b strings.Builder
-	clase := 0 // 0 nada, 1 letras, 2 dígitos
-	cortar := func() {
-		if b.Len() > 0 {
-			out = append(out, plegarAcentos.Replace(b.String()))
-			b.Reset()
-		}
-	}
-	for _, r := range strings.ToLower(s) {
-		c := 0
-		switch {
-		case unicode.IsLetter(r) || unicode.IsMark(r):
-			c = 1
-		case unicode.IsDigit(r):
-			c = 2
-		}
-		if c != clase {
-			cortar()
-			clase = c
-		}
-		if c != 0 {
-			b.WriteRune(r)
-		}
-	}
-	cortar()
-	return out
-}
-
-// EsPedidoDeContinuacion dice si un prompt pide seguir sin decir qué: sacando las palabras de la
-// lista y las vacías, no queda ninguna palabra de 2 runas o más. «sigue» y «si hazlo» lo son;
-// «hazlo global» y «mira en git», no. Un prompt sin texto (una imagen sola) no lo es: no pide
-// seguir, trae otra cosa.
+// EsPedidoDeContinuacion dice si un prompt pide seguir sin decir qué: de los términos de la
+// consulta (memory.TerminosDeConsulta, en minúsculas y sin acentos) no queda ninguno fuera de la
+// lista. «sigue» y «si hazlo» lo son; «hazlo global» y «mira en git», no. Un prompt sin texto (una
+// imagen sola) no lo es: no pide seguir, trae otra cosa.
 //
 // ES DETERMINISTA Y SIN MODELO, y el hook del turno y el medidor lo comparten: si la compuerta
 // usara una lista y el medidor otra, el número de después diría cuánto se parecen las listas.
+//
+// «QUÉ ES UN TÉRMINO» LO DICE EL RECALL, NO ESTE ARCHIVO. Acá vivía una copia de sus stopwords y un
+// tokenizador propio que partía «v2» en «v» y «2»: la compuerta callaba un prompt que el recall
+// habría buscado por «v2». Con la definición del recall, si la compuerta deja pasar un prompt es
+// porque al recall le queda al menos un término con señal, y nunca busca sin ninguno (ver
+// memory.rankedTerms: sin términos, busca memoria al azar).
 func EsPedidoDeContinuacion(prompt string) bool {
 	if strings.TrimSpace(prompt) == "" {
 		return false
 	}
-	for _, w := range palabras(prompt) {
-		if len([]rune(w)) > 1 && !palabrasDeContinuacion[w] && !vaciasDeContinuacion[w] {
+	consulta := plegarAcentos.Replace(strings.ToLower(prompt))
+	for _, t := range memory.TerminosDeConsulta(consulta) {
+		if !palabrasDeContinuacion[t] {
 			return false
 		}
 	}

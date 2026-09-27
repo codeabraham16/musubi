@@ -162,7 +162,11 @@ func TestSyncStatusAndRequeueHandlers(t *testing.T) {
 	if _, e := call(t, s, "musubi_save_observation", map[string]interface{}{"id": "h1", "topic_key": "t", "content": "x", "scope": "shared"}); e != nil {
 		t.Fatalf("save shared: %+v", e)
 	}
-	if err := s.engine.MarkOutboxDead("h1", "rechazado"); err != nil {
+	reclamadas, err := s.engine.ClaimOutboxBatch(50, 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.engine.MarkOutboxDead("h1", hashReclamado(t, reclamadas, "h1"), "rechazado"); err != nil {
 		t.Fatal(err)
 	}
 	res, e = call(t, s, "musubi_sync_status", map[string]interface{}{})
