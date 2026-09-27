@@ -24,6 +24,17 @@ const metaBajadaLease = "sync:inbound_lease"
 // rompería eso: el que lee no tiene cómo saber que el tercero dejó de ser la próxima.
 const MetaUltimaBajada = "sync:inbound_ultima"
 
+// MetaDespertarBajada es la marca de ACTIVIDAD de esta base para el ritmo de la bajada: el instante
+// (unix, en segundos) del último turno de cualquier terminal que trabaje sobre ella, o del último
+// arranque de un daemon. La escriben el hook del turno —con todo prompt no vacío— y
+// RunInboundScheduler al arrancar, y la lee sólo el dueño del candado, que NO mira el valor: mira si
+// CAMBIÓ desde la última vez que la leyó (ver mcp.hayActividadLocal). Así un reloj que salta, o un
+// valor que no es un número, despierta una vez y no traba nada.
+//
+// VA EN LA BASE por lo mismo que MetaUltimaBajada: el dueño del candado casi nunca es el daemon de
+// la terminal donde se está trabajando, así que la señal tiene que cruzar de proceso.
+const MetaDespertarBajada = "sync:inbound_despertar"
+
 // formaDeLaUltimaBajada son los campos que este binario escribe en MetaUltimaBajada, en orden.
 const formaDeLaUltimaBajada = "unix|filas|proxima_unix|con_filas|paginas_del_dia"
 

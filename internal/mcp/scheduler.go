@@ -232,11 +232,21 @@ func (s *McpServer) leaseBajadaSegundos() int {
 // ENTRANTE, C5.3b): el espejo de RunOutboxScheduler en sentido de bajada. Solo corre si hay sync
 // configurado (syncClient) Y el proyecto está en team mode (memory.team_mode) — un proyecto local no
 // baja nada. Preserva local-first: baja a la DB local, el recall sigue offline y rápido.
+//
+// AL ARRANCAR, ANTES DEL PRIMER TICK: anota la marca de actividad y baja una vez. Un daemon que
+// arranca es una terminal que se abrió o que reinició su MCP, o sea alguien trabajando: la marca
+// despierta al dueño del candado —casi nunca este proceso— en su próximo tick, aunque esté
+// espaciado (ver bajada_ritmo.go), y el pull de acá baja ya si el dueño es éste, en vez de esperar
+// un tick entero con la memoria de la sesión anterior.
 func (s *McpServer) RunInboundScheduler(ctx context.Context, interval time.Duration) {
 	if interval <= 0 || s.syncClient == nil || !s.memory.TeamMode {
 		return
 	}
 	s.intervaloBajada.Store(int64(interval))
+	if err := s.engine.SetMeta(memory.MetaDespertarBajada, strconv.FormatInt(time.Now().Unix(), 10)); err != nil {
+		logx.Error("inbound: no se pudo anotar la marca de actividad al arrancar", "error", err)
+	}
+	s.drainInboundOnce(ctx) // pull al arrancar
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -290,15 +300,22 @@ func (s *McpServer) tickBajada() time.Duration {
 // `salioALaRed`, así que la escribe únicamente el dueño del candado y únicamente cuando un Pull
 // volvió bien: un tick salteado no escribe nada, igual que antes.
 //
-// La próxima es un tick base porque hoy la bajada no espacia sus pedidos. Si algún día espacia,
-// la próxima tiene que salir del ritmo, o musubi_sync_status prometería un pedido que no va a haber.
+// LA PRÓXIMA ES LA QUE VA A HABER DE VERDAD: la que dice el ritmo (ver bajada_ritmo.go), que es
+// también quien se entera acá de cómo volvió la bajada. Con un tick fijo, después de una vacía
+// musubi_sync_status prometería un pedido a los 30 s que el ritmo no va a hacer hasta los 60, y a
+// partir de ahí la línea diría «y no se anotó otra» con la bajada sana. Lo que la próxima no puede
+// saber es un despertar que llegue después: eso lo agrega la línea, que lee la marca (ver
+// describirUltimaBajada).
 //
 // Las páginas con filas salen del mismo viaje que va a sync_viajes —las que llegaron menos las
 // vacías—: así una página que trajo filas y no pudo ingerir ninguna no se anota como una bajada
-// vacía (ver memory.UltimaBajada).
+// vacía (ver memory.UltimaBajada), y tampoco espacia la bajada.
 func (s *McpServer) anotarUltimaBajada(v memory.Viaje) {
 	ahora := time.Now()
-	u := memory.UltimaBajada{Unix: ahora.Unix(), Filas: v.Filas, ProximaUnix: ahora.Add(s.tickBajada()).Unix(), ConFilas: v.Posts - v.Vacias}
+	u := memory.UltimaBajada{Unix: ahora.Unix(), Filas: v.Filas, ConFilas: v.Posts - v.Vacias}
+	tick := s.tickBajada()
+	ticks := s.ritmoBajada.anotar(u.ConFilas, tick)
+	u.ProximaUnix = ahora.Add(time.Duration(ticks) * tick).Unix()
 	if err := s.engine.RegistrarBajada(v, u); err != nil {
 		logx.Error("inbound: no se pudo registrar el viaje ni la edad de la bajada", "error", err)
 	}
@@ -317,8 +334,8 @@ func (s *McpServer) anotarUltimaBajada(v memory.Viaje) {
 // de las páginas con filas y, aparte, los de las vacías. En la misma transacción anota la última
 // bajada, que es la edad que muestra musubi_sync_status (anotarUltimaBajada). `salioALaRed` es la
 // ÚNICA señal de eso y el defer es el único lugar que la lee: un tick salteado (candado de otro,
-// cesión tras fallar, Pull fallido) no escribe nada, y lo que se quiera anotar por cada bajada real
-// se cuelga de esta misma variable en vez de repetir la condición en cada return.
+// cesión tras fallar, el ritmo, Pull fallido) no escribe nada, y lo que se quiera anotar por cada
+// bajada real se cuelga de esta misma variable en vez de repetir la condición en cada return.
 func (s *McpServer) drainInboundOnce(ctx context.Context) {
 	ingeridas := 0
 	salioALaRed := false
@@ -359,6 +376,17 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 		// semántico. Si el cursor avanzó desde la última vez que lo miró, vectoriza él. Cuesta una
 		// lectura local por tick y cero tráfico al central.
 		s.vectorizarSiBajoOtro()
+		// Y el ritmo vuelve a la base: si este proceso toma el candado más adelante, baja en ese tick
+		// (ver ritmoBajada.cedido).
+		s.ritmoBajada.cedido()
+		return
+	}
+	// EL RITMO (ver bajada_ritmo.go): una bajada vacía espacia la siguiente, y la actividad sobre esta
+	// base la despierta. El corte va DESPUÉS de reclamar, así el dueño renueva el candado en cada tick
+	// aunque no salga a la red —si no, el lease vencería en la espera, otro proceso lo tomaría y los
+	// dos volverían a alternarse—, y ANTES de leer el cursor, así un tick salteado cuesta el reclamo y
+	// una lectura de la marca, nada más.
+	if !s.ritmoBajada.tocaIr(s.hayActividadLocal()) {
 		return
 	}
 	var cur int64

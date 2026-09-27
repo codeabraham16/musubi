@@ -209,8 +209,9 @@ func (s *McpServer) edadDeLaBajada(r memory.ResumenDelSync, ahora time.Time) str
 	if err != nil {
 		return " · última: no se pudo leer (" + strconv.Quote(err.Error()) + ")"
 	}
-	// El tick es el de ESTE proceso, que sobre la misma base tiene la misma config que el dueño.
-	return describirUltimaBajada(raw, hay, r, ahora, s.porQueNoBaja(), s.tickBajada())
+	// El tick es el de ESTE proceso, que sobre la misma base tiene la misma config que el dueño. La
+	// marca de actividad se lee DESPUÉS de la meta, por lo mismo que la meta después de los viajes.
+	return describirUltimaBajada(raw, hay, r, ahora, s.porQueNoBaja(), s.tickBajada(), s.despertarAnotado())
 }
 
 // porQueNoBaja es por qué ESTE proceso no corre la bajada —la misma condición con la que se apaga
@@ -228,9 +229,10 @@ func (s *McpServer) porQueNoBaja() string {
 
 // describirUltimaBajada es edadDeLaBajada sin la base: raw y hay son la meta tal como se leyó, r el
 // volumen de sync_viajes, noBaja el motivo por el que este proceso no corre la bajada ("" si la
-// corre) y tick el intervalo de la bajada, que es el margen antes de dar la próxima por vencida.
+// corre), tick el intervalo de la bajada, que es el margen antes de dar la próxima por vencida, y
+// despertar la última marca de actividad (unix; 0 si no hay, ver McpServer.despertarAnotado).
 // Devuelve el final de la línea, que empieza con « · » y nunca trae un salto de línea.
-func describirUltimaBajada(raw string, hay bool, r memory.ResumenDelSync, ahora time.Time, noBaja string, tick time.Duration) string {
+func describirUltimaBajada(raw string, hay bool, r memory.ResumenDelSync, ahora time.Time, noBaja string, tick time.Duration, despertar int64) string {
 	if !hay {
 		switch {
 		case r.UltimoDiaConBajada != "":
@@ -268,8 +270,18 @@ func describirUltimaBajada(raw string, hay bool, r memory.ResumenDelSync, ahora 
 		return " · última anotada hace " + edad + " (" + que + "), pero después bajó un binario anterior a esta versión, que no la anota"
 	}
 	linea := " · última hace " + edad + " (" + que + "), "
+	// UNA MARCA DE ACTIVIDAD POSTERIOR A LA ÚLTIMA BAJADA LA ADELANTA. La próxima se anotó con el ritmo
+	// de ese momento —hasta el tope, con la bajada espaciada—, y un turno que llegó después despierta
+	// al dueño en su próximo tick: a más tardar un tick después de la marca. Sin esto la línea decía
+	// «próxima en ~4 min» durante el turno mismo que la estaba pidiendo, que ya escribió la marca.
+	despierta := despertar > u.Unix && despertar+int64(tick/time.Second) < u.ProximaUnix
+	if despierta {
+		u.ProximaUnix = despertar + int64(tick/time.Second)
+	}
 	falta := u.ProximaUnix - ahora.Unix()
 	switch {
+	case falta >= 0 && despierta:
+		return linea + "próxima en ≤" + duracionLegible(falta) + " (hubo actividad después de la última)"
 	case falta >= 0:
 		return linea + "próxima en ~" + duracionLegible(falta)
 	case -falta <= int64(tick/time.Second):
