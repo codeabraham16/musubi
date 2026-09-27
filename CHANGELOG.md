@@ -25,7 +25,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   y `bytes_crudos` el JSON de las notas, así que `SUM(bytes_cable)/SUM(bytes_crudos)` es lo que
   ahorró la compresión; un POST rechazado suma su cable a `bytes_rechazados`. Las pruebas corren
   contra el handler real del central: guarda exactamente el texto, la cabecera viaja, una nota chica
-  va en claro y los contadores cuadran byte a byte con lo que el central recibió, reintento incluido
+  va en claro y una de 610 B de JSON ya viaja comprimida (así el umbral queda fijado de los dos
+  lados), y los contadores cuadran byte a byte con lo que el central recibió, reintento incluido
   (la misma nota vuelve a cruzar con los mismos bytes).
 
   **Sólo cliente: no hace falta desplegar el central.** Descomprime todo POST a `/mcp` desde #306

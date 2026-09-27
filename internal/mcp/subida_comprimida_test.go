@@ -150,7 +150,8 @@ func guardarCompartidas(t *testing.T, nodo *McpServer, notas map[string]string) 
 
 // TestLaSubidaComprimidaLlegaEnteraAlCentralReal: una nota del tamaño de la media viaja con
 // Content-Encoding: gzip y el central guarda EXACTAMENTE su texto; una nota chica viaja en claro,
-// sin cabecera. Las dos quedan enviadas.
+// sin cabecera; y una apenas por encima del umbral, de ~600 B de JSON, ya viaja comprimida. La
+// chica fija el umbral desde abajo y la justa desde arriba. Las tres quedan enviadas.
 //
 // Sabotaje que la pone roja: que ninguna nota se comprima.
 // arnes: archivo="internal/mcp/syncclient.go"
@@ -162,23 +163,37 @@ func guardarCompartidas(t *testing.T, nodo *McpServer, notas map[string]string) 
 // arnes: de="if viajaComprimida {"
 // arnes: a="if false && viajaComprimida {"
 //
-// Sabotaje que la pone roja: comprimir también las notas chicas.
+// Sabotaje que la pone roja: comprimir también las notas chicas (cae por la chica).
 // arnes: archivo="internal/mcp/syncclient.go"
 // arnes: de="const umbralCompresionSubida = 512"
 // arnes: a="const umbralCompresionSubida = 0"
+// arnes: colision_ok="TestLaSubidaComprimidaLlegaEnteraAlCentralReal"
+//
+// Sabotaje que la pone roja: subir el umbral por prudencia a 1 KiB (cae por la justa, que vuelve a
+// viajar en claro). Pisa la línea del sabotaje anterior a propósito: son las dos puntas del mismo
+// umbral, y cada una cae por una nota distinta.
+// arnes: archivo="internal/mcp/syncclient.go"
+// arnes: de="const umbralCompresionSubida = 512"
+// arnes: a="const umbralCompresionSubida = 1024"
+// arnes: colision_ok="TestLaSubidaComprimidaLlegaEnteraAlCentralReal"
 func TestLaSubidaComprimidaLlegaEnteraAlCentralReal(t *testing.T) {
 	nodo, _, mirador, central := subidaContraCentralReal(t, nil)
 	notas := map[string]string{
 		"grande": textoDeNota("grande", 25),
-		"chica":  "una nota corta que no vale la pena comprimir",
+		"justa": "Una nota de tamaño justo: pasa apenas los 512 B de JSON del umbral de la subida, así que " +
+			"tiene que viajar comprimida aunque sea corta. Si alguien sube el umbral por prudencia, a 1 KiB " +
+			"como el del grafo o a 2 KiB, vuelve a viajar en claro y esta prueba lo dice. En la base real, " +
+			"una de cada trece notas pesa entre 512 B y 1 KiB de JSON, y con el umbral en 2 KiB viajaría " +
+			"en claro casi un tercio.",
+		"chica": "una nota corta que no vale la pena comprimir",
 	}
 	guardarCompartidas(t, nodo, notas)
 
 	nodo.drainOutboxOnce(context.Background())
 
-	grande, chica := mirador.visto("grande"), mirador.visto("chica")
-	if len(grande) != 1 || len(chica) != 1 {
-		t.Fatalf("esperaba un POST por nota; llegaron %d de la grande y %d de la chica (un cuerpo ilegible llega sin id)", len(grande), len(chica))
+	grande, justa, chica := mirador.visto("grande"), mirador.visto("justa"), mirador.visto("chica")
+	if len(grande) != 1 || len(justa) != 1 || len(chica) != 1 {
+		t.Fatalf("esperaba un POST por nota; llegaron %d de la grande, %d de la justa y %d de la chica (un cuerpo ilegible llega sin id)", len(grande), len(justa), len(chica))
 	}
 	if g := grande[0]; g.encoding != "gzip" || g.cable >= g.crudo {
 		t.Errorf("la nota grande (%d B de JSON) viajó con Content-Encoding %q y %d B en el cable; esperaba gzip y menos bytes que el JSON", g.crudo, g.encoding, g.cable)
@@ -186,10 +201,18 @@ func TestLaSubidaComprimidaLlegaEnteraAlCentralReal(t *testing.T) {
 	if c := chica[0]; c.crudo > umbralCompresionSubida || c.encoding != "" || c.cable != c.crudo {
 		t.Errorf("la nota chica (%d B de JSON, umbral %d) viajó con Content-Encoding %q y %d B en el cable; esperaba en claro", c.crudo, umbralCompresionSubida, c.encoding, c.cable)
 	}
+	// El largo de la justa se exige contra los números y no contra la constante: lo que se prueba
+	// es la constante.
+	if j := justa[0]; j.crudo <= 512 || j.crudo >= 1024 {
+		t.Fatalf("precondición: la nota justa tenía que pesar entre 513 y 1.023 B de JSON y pesó %d: ajustá su texto", j.crudo)
+	}
+	if j := justa[0]; j.encoding != "gzip" || j.cable >= j.crudo {
+		t.Errorf("la nota justa (%d B de JSON, apenas por encima de 512) viajó con Content-Encoding %q y %d B en el cable: el umbral de la subida dejó de ser 512", j.crudo, j.encoding, j.cable)
+	}
 
 	// EL CENTRAL GUARDÓ LA NOTA, NO OTRA COSA. Es la mitad que la cabecera no prueba: un gzip
 	// mal armado o un cuerpo cortado llegan con la cabecera puesta igual.
-	obs, err := central.GetObservations([]string{"grande", "chica"})
+	obs, err := central.GetObservations([]string{"grande", "justa", "chica"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,8 +225,8 @@ func TestLaSubidaComprimidaLlegaEnteraAlCentralReal(t *testing.T) {
 			t.Errorf("el central guardó para %q %d B que no son la nota (%d B)", id, len(guardadas[id]), len(texto))
 		}
 	}
-	if p, sent, dead := statsOf(t, nodo); p != 0 || sent != 2 || dead != 0 {
-		t.Errorf("outbox tras el drain: pending=%d sent=%d dead=%d; esperaba las dos enviadas", p, sent, dead)
+	if p, sent, dead := statsOf(t, nodo); p != 0 || sent != 3 || dead != 0 {
+		t.Errorf("outbox tras el drain: pending=%d sent=%d dead=%d; esperaba las tres enviadas", p, sent, dead)
 	}
 }
 
