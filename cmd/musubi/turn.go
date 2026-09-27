@@ -136,7 +136,14 @@ func turnOutputConTareas(store turnStore, loopCfg config.LoopConfig, pipeCfg con
 		blocks = append(blocks, accountedBlock{"turn_batch", buildTurnBatch(store, in.SessionID)})
 	}
 	if loopCfg.PerTurnRecall {
-		blocks = append(blocks, accountedBlock{"turn_recall", buildTurnRecall(store, in.SessionID, prompt, loopCfg.RecallBudget, loopCfg.DeltaInjection, memCfg, embedder)})
+		blocks = append(blocks, accountedBlock{"turn_recall", buildTurnRecall(store, parametrosDelTurno{
+			sesion:      in.SessionID,
+			prompt:      prompt,
+			presupuesto: loopCfg.RecallBudget,
+			delta:       loopCfg.DeltaInjection,
+			memCfg:      memCfg,
+			embebedor:   embedder,
+		})})
 	}
 	// SurfaceConflicts es independiente del recall: si hay relaciones sin resolver,
 	// conviene avisarlas aunque el recall por turno esté apagado.
@@ -495,36 +502,36 @@ const (
 // mucho más dura que los 30 s que se da la tool musubi_recall.
 const turnEmbedTimeout = 2 * time.Second
 
+// parametrosDelTurno es lo que buildTurnRecall necesita saber del turno. Es un struct y no una lista
+// posicional porque varios frentes le van a agregar datos (el proyecto propio, el corrector, el
+// vector): con una firma posicional cada campo nuevo rompía a todos los callers y a sus pruebas, y
+// con un struct el que no conoce el campo nuevo lo deja en su valor cero, que es la conducta de hoy.
+type parametrosDelTurno struct {
+	sesion      string
+	prompt      string
+	presupuesto int  // techo de tokens del bloque (loop.recall_budget)
+	delta       bool // inyectar sólo lo nuevo o modificado respecto de lo ya inyectado en la sesión
+	memCfg      config.MemoryConfig
+	embebedor   embedding.Provider // nil ⇒ recall sólo léxico
+}
+
 // buildTurnRecall hace un recall read-only acotado al prompt y formatea los gists.
-// Con deltaEnabled, inyecta SOLO la memoria nueva o modificada respecto de lo ya
+// Con delta, inyecta SOLO la memoria nueva o modificada respecto de lo ya
 // inyectado en la sesión (cache-considerate): si no hay nada nuevo, devuelve ""
 // (bloque silencioso). Contabiliza en el ledger solo lo que realmente inyecta.
-func buildTurnRecall(store turnStore, sessionID, prompt string, budget int, deltaEnabled bool, memCfg config.MemoryConfig, embedder embedding.Provider) string {
-	// Propagar los toggles semánticos model-free (Stemming/Cooccurrence/GraphCentrality)
-	// que la tool musubi_recall ya usa: sin esto, la superficie MÁS caliente (recall por
-	// turno) corría léxico puro, ignorando los puentes deploy↔despliegue / morfología /
-	// centralidad que el proyecto construyó. Mismos tokens, más relevancia.
-	opts := memory.RecallOptions{
-		TokenBudget:     budget,
-		NoBump:          true,
-		RankedFTS:       true, // filtrar stopwords: es la superficie más caliente, evita ruido
-		Stemming:        memCfg.RecallStemming,
-		Cooccurrence:    memCfg.RecallCooccurrence,
-		GraphCentrality: memCfg.RecallGraphCentrality,
-		// LOS DOS QUE FALTABAN, Y NO ERAN UN OLVIDO MENOR. Esta función pasaba seis campos y
-		// ninguno de los dos que deciden calidad, así que quedaban en el CERO DE GO: MMRLambda 0
-		// apaga MMR por completo (diversify retorna sin tocar nada) y VectorFloor 0 deja entrar al
-		// RRF cualquier vecino vectorial sin importar su coseno. O sea que la diversidad calibrada
-		// sobre 94.830 pares reales estaba apagada en CADA turno, y el yaml no aplicaba donde
-		// ocurre el 99% de los recalls del sistema.
-		VectorFloor: memCfg.VectorFloor,
-		MMRLambda:   memCfg.MMRLambda,
-	}
-	// ProjectScope NO se setea acá, y es una decisión, no un descuido. scope.go declara que el
+func buildTurnRecall(store turnStore, p parametrosDelTurno) string {
+	sessionID, prompt, embedder := p.sesion, p.prompt, p.embebedor
+	// Las opciones salen de UN solo lugar, el mismo que usa el banco (recalleval.ConfigTurno): si
+	// el hook y el banco las armaran cada uno por su lado, el banco mediría un ranker que el hook no
+	// corre. Ver memory.OpcionesDeRecallDelTurno.
+	//
+	// El alcance va en su valor cero, y es una decisión, no un descuido. scope.go declara que el
 	// stdio local es uno de los casos FEDERADOS por diseño ("Federate o ProjectID vacío ⇒ sin
 	// filtro: stdio local, bearer legacy, admin"). Acotar el hook por turno a un proyecto le
 	// escondería al agente la memoria del resto del acervo, que es justo lo que un workspace local
 	// quiere ver. El aislamiento multi-tenant es del borde MCP con credencial, no de este hook.
+	opts := memory.OpcionesDeRecallDelTurno(p.memCfg, memory.AlcanceDelTurno{})
+	opts.TokenBudget = p.presupuesto
 
 	// LA SEÑAL VECTORIAL, con el techo de latencia puesto. El backfill embebe el content completo,
 	// así que la consulta tiene con qué compararse. Medido sobre el corpus real (1953 docs, 85
@@ -557,7 +564,7 @@ func buildTurnRecall(store turnStore, sessionID, prompt string, budget int, delt
 	items := res.Items
 	var updated []bool
 
-	if deltaEnabled {
+	if p.delta {
 		seen := loadDeltaState(store, sessionID)
 		var keep []memory.RecallItem
 		for _, it := range res.Items {
