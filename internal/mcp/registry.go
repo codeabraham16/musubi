@@ -1048,7 +1048,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Properties: map[string]Property{},
 				},
 			},
-			handler:  noCtx(s.toolSyncStatus),
+			handler:  s.toolSyncStatus,
 			readOnly: true,
 		},
 		{

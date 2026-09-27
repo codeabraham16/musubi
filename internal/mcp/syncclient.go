@@ -57,6 +57,9 @@ type SyncClient struct {
 	url   string
 	token string
 	http  *http.Client
+	// trafico cuenta los bytes que viajaron por sentido; los drains registran la diferencia de
+	// cada tick en sync_viajes (ver sync_viajes.go).
+	trafico traficoDelSync
 }
 
 // NewSyncClient construye el cliente desde la config. Resuelve el token con
@@ -241,7 +244,20 @@ func (c *SyncClient) Push(item memory.OutboxItem) error {
 		return fmt.Errorf("%w: %v", errTransient, err)
 	}
 	defer resp.Body.Close()
-	return classifyResponse(resp)
+	// El central contestó, así que el cuerpo viajó entero: el POST cuenta para sync_viajes aunque
+	// la respuesta sea un rechazo.
+	c.trafico.subidaPosts.Add(1)
+	if rechazo := classifyResponse(resp); rechazo != nil {
+		// Viajó y le costó al central, pero no dejó ninguna nota: sus bytes van APARTE. Sumados al
+		// cable de las aceptadas, un corte reintentado N veces se leería como notas más pesadas.
+		c.trafico.rechazados.Add(1)
+		c.trafico.bytesRechazados.Add(int64(len(payload)))
+		return rechazo
+	}
+	// Hoy va sin comprimir, así que cable y crudos son el mismo número.
+	c.trafico.subidaCable.Add(int64(len(payload)))
+	c.trafico.subidaCrudos.Add(int64(len(payload)))
+	return nil
 }
 
 // PushGraph empuja el grafo de código COMPLETO de un proyecto al central (Track 20 · F6): un
@@ -506,7 +522,8 @@ func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int6
 		return nil, afterRowID, "", fmt.Errorf("%w: pull HTTP %d", errTransient, resp.StatusCode)
 	}
 	var rpcResp syncRPCResponse
-	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
+	contado := &lectorContado{r: resp.Body}
+	if err := json.NewDecoder(contado).Decode(&rpcResp); err != nil {
 		return nil, afterRowID, "", fmt.Errorf("%w: decodificar pull: %v", errTransient, err)
 	}
 	if rpcResp.Error != nil {
@@ -531,6 +548,24 @@ func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int6
 	var pl pullPayload
 	if err := json.Unmarshal([]byte(toolResult.Content[0].Text), &pl); err != nil {
 		return nil, afterRowID, "", fmt.Errorf("%w: pull payload inválido: %v", errPermanent, err)
+	}
+	// La página llegó bien: su cuerpo cuenta para sync_viajes.
+	n := contado.terminar()
+	if len(pl.Items) == 0 {
+		// Una página VACÍA es el sondeo de un tick sin novedades: el régimen normal, miles por día
+		// y por base, ~135 B cada una. Va aparte del cable de las páginas con filas, o
+		// bytes_cable/filas mediría el ritmo de los pulls y no el peso de una nota. No la alcanza
+		// ningún umbral de compresión, así que lo leído es lo que viajó.
+		c.trafico.vacias.Add(1)
+		c.trafico.bytesVacias.Add(n)
+		return pl.Items, pl.NextCursor, pl.Alcance, nil
+	}
+	// Si el transporte de Go la descomprimió solo (resp.Uncompressed), el tamaño del cable se
+	// perdió en el camino y no se inventa: se cuentan sólo los crudos. Hoy no pasa —el central
+	// contesta sin comprimir—; el PR de la bajada comprimida tiene que medirlo.
+	c.trafico.bajadaCrudos.Add(n)
+	if !resp.Uncompressed {
+		c.trafico.bajadaCable.Add(n)
 	}
 	return pl.Items, pl.NextCursor, pl.Alcance, nil
 }
