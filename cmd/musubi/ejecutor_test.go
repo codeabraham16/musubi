@@ -54,11 +54,13 @@ func TestUnExitDistintoDeCeroEsResultadoNoError(t *testing.T) {
 // F7 — NO hay shell implícito. `echo $HOME` con argv debe imprimir la cadena literal, no
 // expandirla: si expandiera, el comando registrado en la bitácora no sería el comando corrido.
 //
-// Sabotaje: pasar el argv por `sh -c`.
+// Sabotaje: pasar el argv por `sh -c`. La línea se arma con un bucle y no con `strings.Join`:
+// ejecutor.go no importa `strings`, y con el Join el sabotaje no compilaba — el arnés lo marcaba
+// «sin veredicto» y esta guarda quedaba sin medir (A131, 2026-09-26).
 // arnes: colision_ok="TestElTimeoutMataElComando"
 // arnes: archivo="cmd/musubi/ejecutor.go"
 // arnes: de="\tcmd := exec.CommandContext(ctx, argv[0], argv[1:]...)\n\t// WaitDelay: sin esto el timeout no libera al agente."
-// arnes: a="\tcmd := exec.CommandContext(ctx, \"sh\", \"-c\", strings.Join(argv, \" \"))\n\t// WaitDelay: sin esto el timeout no libera al agente."
+// arnes: a="\tlineaDeShell := argv[0]\n\tfor _, parteDelArgv := range argv[1:] {\n\t\tlineaDeShell += \" \" + parteDelArgv\n\t}\n\tcmd := exec.CommandContext(ctx, \"sh\", \"-c\", lineaDeShell)\n\t// WaitDelay: sin esto el timeout no libera al agente."
 func TestNoHayShellImplicito(t *testing.T) {
 	res := ejecutar(comandoRecibido{ID: "x", Argv: []string{"echo", "$HOME y *"}, TimeoutSeg: 5}, "", "")
 	if res.Error != "" {

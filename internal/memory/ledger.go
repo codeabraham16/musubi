@@ -78,6 +78,11 @@ type ledgerStore struct {
 // armar sesiones «de ayer» sin esperar un día.
 var relojLedger = time.Now
 
+// ledgerEntreLeerYEscribir existe SÓLO para que una prueba pueda frenar una suma entre la lectura y
+// la escritura, con la transacción abierta, y medir que otra terminal no se cuela en el medio
+// (TestLedgerDosTerminalesALaVezNoSePisan). En producción no hace nada.
+var ledgerEntreLeerYEscribir = func(sessionID string) {}
+
 // sesionesRecientesProtegidas es cuántas de las últimas sesiones que escribieron no se desalojan
 // nunca, además de la recién escrita. inactivaTras es cuánto tiempo sin escribir hace que una sesión
 // se considere cerrada. Ver podar.
@@ -418,6 +423,7 @@ func (e *DbEngine) LedgerAdd(sessionID, surface string, tokens int) (TokenLedger
 	if err != nil {
 		return TokenLedger{}, err
 	}
+	ledgerEntreLeerYEscribir(sessionID)
 	destino := st.destinoDe(sessionID)
 	l := st.de(destino)
 	l.Total += tokens
