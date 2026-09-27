@@ -122,6 +122,14 @@ type RecallItem struct {
 	// Author es la atribución por PERSONA (C5.1): quién aportó la memoria. omitempty ⇒ no ensucia
 	// la respuesta cuando no hay atribución (captura local/legacy/stdio).
 	Author string `json:"author,omitempty"`
+	// ProjectID es el PROYECTO DE ORIGEN de la nota: de qué repo salió. Es la tercera atribución y
+	// no se confunde con las otras dos: Author dice QUIÉN la escribió (la credencial) y Provenance
+	// QUÉ CLASE DE PROCESO la generó; ninguna de las dos dice DE QUÉ PROYECTO habla. Sin esto, el
+	// recall federado —el del hook, el del stdio local— mezclaba notas de otro repo con las propias
+	// sin que nada lo dijera. El candidato ya lo traía desde los tres pools; se perdía en
+	// packByBudget, que es el único lugar donde nace un RecallItem.
+	// omitempty ⇒ una nota sin atribuir devuelve exactamente lo de siempre.
+	ProjectID string `json:"project_id,omitempty"`
 	// ContentHash es maquinaria server-side (la inyección diferencial la consume in-process
 	// en Go): json:"-" para NO enviar 64 hex de ruido al modelo en la respuesta del tool.
 	ContentHash string `json:"-"`
@@ -359,6 +367,7 @@ func packByBudget(ranked []scoredCandidate, budget, gistMax int) RecallResult {
 			FullTokens:  c.fullTokens,
 			CreatedAt:   c.createdAt,
 			Author:      c.author,
+			ProjectID:   c.projectID,
 			ContentHash: c.contentHash,
 			Provenance:  stampProvenance(c.provenance),
 		})

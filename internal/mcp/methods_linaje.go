@@ -18,9 +18,9 @@ import (
 // del despliegue: expand_count > 0 sobre topic_key LIKE 'ingested/%' en musubi-design.
 
 // expandItem es una observación expandida con su linaje. Los dos van embebidos, así que el JSON queda
-// plano —id, topic_key, content, created_at y, si hay, salio_de / destilado_en— y un item sin aristas
-// sale byte a byte igual que antes. La respuesta sigue siendo un array: el cuerpo (musubi-body) la
-// decodifica sin modo estricto y los campos nuevos le pasan de largo.
+// plano —id, topic_key, content, created_at, project_id y, si hay, salio_de / destilado_en— y un item
+// sin aristas sale byte a byte igual que sin linaje. La respuesta sigue siendo un array: el cuerpo
+// (musubi-body) la decodifica sin modo estricto y los campos nuevos le pasan de largo.
 type expandItem struct {
 	memory.Observation
 	memory.Linaje

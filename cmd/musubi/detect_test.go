@@ -120,7 +120,7 @@ func TestPrimingSeedsDeltaState(t *testing.T) {
 			{ID: "b", TopicKey: "t", Gist: "dos", ContentHash: "h2"},
 		},
 	}
-	if buildPrimingContext(store, 300, "s1") == "" {
+	if buildPrimingContext(store, 300, "s1", "") == "" {
 		t.Fatal("esperaba bloque de priming")
 	}
 	// El priming debe sembrar el estado del delta con lo que inyectó, para que el
