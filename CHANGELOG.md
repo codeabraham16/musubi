@@ -561,6 +561,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   nota con treinta sondeos alrededor), `TestLosBytesDeLaSubidaSonLosQueRecibeElCentral` y
   `TestLosBytesDeLaBajadaSonLosDelCuerpoServido` (bytes exactos contra un central de prueba) y
   `TestLaLineaDeLaBajadaEsUnaSola` en `internal/mcp`.*
+- **El inventario de la flota ya no dice que una política actuaría cuando el barrido no la va a visitar.**
+  Había dos casos en que `musubi_fleet_list` publicaba `puede_actuar: true` y la política no corría
+  nunca:
+  - el barrido apagado (`fleet.probe_minutes` negativo);
+  - el proyecto de la máquina fuera del tope de proyectos que recorre cada barrido (64).
+
+  Ahora dice `inerte_por: barrido_apagado` o `inerte_por: fuera_del_barrido`, calculado con las mismas
+  funciones que deciden el barrido, y el panel explica los dos casos. Si la lista de proyectos del
+  barrido no se puede leer, la tool devuelve error en vez de un veredicto inventado.
 - **El mapa publicado describe el commit, no el disco: lo que git ignora ya no sube al central.**
   El índice lee el disco y el central guarda la foto con la etiqueta de un commit. #647 frenaba lo
   modificado y lo sin trackear, pero `git status` no lista los **ignorados**, y `walkSourceTree` no
