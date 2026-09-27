@@ -31,7 +31,7 @@ func TestElCerebroDeclaraSiPuedeCompararVersiones(t *testing.T) {
 
 	dump := func(version string) string {
 		var b strings.Builder
-		renderFlota(&b, s.engine, nil, time.Now(), s.sondaIntervalo, version, nil, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
+		renderFlota(&b, s.engine, nil, time.Now(), s.sondaIntervalo, version, nil, nil, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
 		return b.String()
 	}
 

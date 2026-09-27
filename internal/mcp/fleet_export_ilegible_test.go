@@ -127,7 +127,7 @@ func TestUnPedazoDeLaFlotaQueNoSePudoLeerNoSeInformaComoSinRecorte(t *testing.T)
 			restaurar := logx.Capturar(&log)
 			var b strings.Builder
 			renderFlota(&b, eng, ptrPrincipal(principalDePrometheus()), ahora,
-				s.sondaIntervalo, versionDePrueba, nil, s.techoServiciosPorProyecto, aprobacionesPorProyectoDefault)
+				s.sondaIntervalo, versionDePrueba, nil, nil, s.techoServiciosPorProyecto, aprobacionesPorProyectoDefault)
 			restaurar()
 			salida := b.String()
 
@@ -220,7 +220,7 @@ func TestElProyectoQueSeApagoEnteroYNoSeDejaLeerLoDeclara(t *testing.T) {
 	// resto de la prueba midiendo el vacío y pasando en verde por el motivo equivocado.
 	var sano strings.Builder
 	renderFlota(&sano, s.engine, ptrPrincipal(principalDePrometheus()), ahora,
-		s.sondaIntervalo, versionDePrueba, nil, s.techoServiciosPorProyecto, aprobacionesPorProyectoDefault)
+		s.sondaIntervalo, versionDePrueba, nil, nil, s.techoServiciosPorProyecto, aprobacionesPorProyectoDefault)
 	if !strings.Contains(sano.String(), nombreBajaReciente+`{project="sola",device="pc-sola"}`) {
 		t.Fatalf("el montaje no produce la baja que esta prueba necesita medir; sin eso, romper la "+
 			"lectura no prueba nada:\n%s", sano.String())
@@ -232,7 +232,7 @@ func TestElProyectoQueSeApagoEnteroYNoSeDejaLeerLoDeclara(t *testing.T) {
 	restaurar := logx.Capturar(&log)
 	var b strings.Builder
 	renderFlota(&b, eng, ptrPrincipal(principalDePrometheus()), ahora,
-		s.sondaIntervalo, versionDePrueba, nil, s.techoServiciosPorProyecto, aprobacionesPorProyectoDefault)
+		s.sondaIntervalo, versionDePrueba, nil, nil, s.techoServiciosPorProyecto, aprobacionesPorProyectoDefault)
 	restaurar()
 	salida := b.String()
 
@@ -285,7 +285,7 @@ func TestConTodoLegibleElExportDeclaraQueNoHuboNadaIlegible(t *testing.T) {
 
 	var b strings.Builder
 	renderFlota(&b, s.engine, ptrPrincipal(principalDePrometheus()), ahora,
-		s.sondaIntervalo, versionDePrueba, nil, s.techoServiciosPorProyecto, aprobacionesPorProyectoDefault)
+		s.sondaIntervalo, versionDePrueba, nil, nil, s.techoServiciosPorProyecto, aprobacionesPorProyectoDefault)
 	if !strings.Contains(b.String(), nombreExportTruncado+`{kind="unreadable"} 0`) {
 		t.Errorf("con todo legible la serie tiene que decir 0 —una medición— y no desaparecer:\n%s", bloqueDeTruncado(b.String()))
 	}

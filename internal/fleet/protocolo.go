@@ -256,4 +256,21 @@ type CuerpoLatido struct {
 	// cuando no lo sabe, y un agente viejo no lo manda: los dos casos llegan como "" y se tratan
 	// igual, que es lo correcto. Un puntero agregaría una distinción sin consecuencia.
 	TokenFuente string `json:"token_fuente,omitempty"`
+	// EnviadoMs es la hora del RELOJ DE PARED de la máquina al mandar este latido, en
+	// milisegundos Unix (A133). El cerebro le resta su propia hora de llegada y obtiene cuánto se
+	// corrió ese reloj: desde que A131 recorta a la llegada la `tomada` futura de la muestra, es
+	// la única señal que lo mide.
+	//
+	// ES UN ENTERO Y NO UN time.Time, y no es estilo: `time.Time.MarshalJSON` FALLA con un año
+	// fuera de [0, 9999], y `latir` manda el latido SIN CUERPO cuando la serialización falla. Un
+	// reloj absurdo —justo lo que esto existe para ver— se llevaría puestos la muestra, el
+	// inventario y el autorreporte. Un int64 se serializa con cualquier valor.
+	//
+	// SE TOMA AL FINAL, después de la sonda de alcance y de la enumeración de servicios, y NO se
+	// reusa `Muestra.Tomada`: ésa se fija antes de todo lo lento (hasta 3 s de sonda, ~3 s de WMI
+	// en Windows), y la demora del propio agente se leería como desfase.
+	//
+	// `omitempty`: 0 es «no lo dijo», igual que un agente viejo que no manda el campo. Ningún
+	// reloj vivo marca el 1 de enero de 1970, así que no hay un 0 medido con el que confundirlo.
+	EnviadoMs int64 `json:"enviado_ms,omitempty"`
 }

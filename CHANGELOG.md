@@ -8,6 +8,43 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El reloj de cada máquina se ve: el agente manda su hora y el cerebro publica cuánto está
+  corrido (A133).** El latido lleva `enviado_ms` (capver 4): la hora del reloj del agente en
+  milisegundos Unix, sellada justo antes de mandarlo, después de lo lento, que es la enumeración
+  de servicios (~3 s de WMI en Windows cada vez que vence su caché) y la sonda de alcance. El
+  cerebro le resta la hora de llegada, que toma al recibir el latido y antes de tocar la base
+  (una base lenta se leería como un reloj atrasado), y guarda el desfase con su signo —positivo
+  es un reloj ADELANTADO— en memoria, por máquina, vigente 90 s.
+
+  Se ve en tres lugares, y en los tres sólo si hay una medición vigente:
+  - `musubi_fleet_clock_offset_seconds{project,device}` en el `/metrics` del cerebro. Viaja sólo
+    por el scrape, como las otras series que mide el cerebro, y no por el empuje OTLP.
+  - `reloj_desfase_s` en `musubi_fleet_list`.
+  - La alerta `RelojDesfasado` (warning): más de 30 s para cualquier lado durante 15 min, callada
+    si la máquina está caída o en mantenimiento. Su runbook es `deploy/RUNBOOK.md#relojdesfasado`.
+
+  Un latido sin hora (un agente anterior al capver 4, o un cuerpo que no se pudo leer) BORRA la
+  medición anterior, y uno rechazado (token revocado) no la toca. Sin medición no hay serie: un 0
+  diría «reloj perfecto» sobre una máquina que no se midió.
+
+  **El umbral de 30 s no está medido: es un default.** Desde unos 30 s empiezan a fallar los
+  códigos TOTP; con minutos, Kerberos (tolera 5) y los certificados recién emitidos.
+
+  **Lo que la medición no separa:** el tiempo que el latido tarda en viajar se lee como atraso,
+  así que el desfase sale corrido hacia abajo por la latencia de ida. En el tailnet son
+  milisegundos, tres órdenes por debajo del umbral. Y si se corre TODA la flota junta, el reloj
+  que se corrió es el del cerebro.
+
+  **Viaja como entero y no como fecha.** Un `time.Time` fuera de los años 0 a 9999 hace fallar el
+  `json.Marshal` del latido entero, y el agente lo mandaría sin cuerpo: sin versión, sin muestra y
+  sin inventario. La máquina con el reloj más roto sería justo la que no se ve. Un reloj absurdo
+  viaja entero y se mide saturado (±292 años), sin desbordar.
+
+  **Despliegue: primero el cerebro.** Un agente capver 4 contra el cerebro de hoy sigue latiendo:
+  el cerebro ignora `enviado_ms` y le contesta la nota «capver 4 fuera de la banda del cerebro
+  (1..3)», sin medir nada. Un agente capver 3 contra el cerebro nuevo queda dentro de la banda y
+  no tiene serie. La alerta pide desplegar los DOS archivos de reglas juntos: `musubi-alerts.yml`
+  custodia que el de flota tenga 42 reglas.
 - **La bajada viaja comprimida: el central contesta con gzip a quien lo pide, y el sync mide el
   cable de verdad.** `writeHTTPJSON` comprime la respuesta de `/mcp` cuando el pedido NOMBRA gzip
   en `Accept-Encoding` (sin `q=0`; un `*` a secas no alcanza) y el cuerpo pasa de 1 KiB, y la marca

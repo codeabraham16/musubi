@@ -165,7 +165,11 @@ type McpServer struct {
 	// rotación: es un dato de segundos que se puede volver a medir, y una escritura por máquina y
 	// por tick es exactamente lo que la Ola 0 sacó del camino caliente.
 	vidaDeRed sync.Map
-	engine    memory.StorageBackend
+	// relojes guarda, en memoria, cuánto se corrió el reloj de cada máquina que late (A133, ver
+	// reloj.go). En memoria por lo mismo que vidaDeRed: se vuelve a medir en cada latido, y
+	// escribirlo en la base sería una escritura más por máquina cada 30 s.
+	relojes sync.Map
+	engine  memory.StorageBackend
 	// duenoBajada identifica a ESTE proceso ante el candado de la bajada (ver
 	// memory.ReclamarBajada). Es uno por servidor y no el PID: dos servidores en el mismo proceso
 	// —las pruebas— tienen que poder competir por el candado como dos terminales de verdad.
