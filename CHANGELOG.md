@@ -8,6 +8,51 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Cada nota dice de qué proyecto viene.** El recall es federado a propósito: el hook del turno,
+  el priming de arranque y la tool por stdio traen memoria de todos los proyectos del acervo. Lo que
+  faltaba era decirlo. El candidato traía su `project_id` y el empaquetado lo tiraba, así que una
+  nota de Altura le llegaba al agente de Musubi igual que una propia. Ahora:
+
+  - Cada item de `musubi_recall` y cada observación de `musubi_memory_expand` llevan `project_id`.
+    La clave se omite si la nota no tiene proyecto.
+  - En los dos hooks, la viñeta de una nota de otro proyecto arranca con `[de altura] `.
+  - El encabezado suma una sola frase («Las viñetas con [de X] son de OTRO proyecto…»), y sólo cuando
+    alguna viñeta quedó marcada. Un bloque sin notas ajenas sale igual que antes, byte a byte.
+
+  El criterio de «ajena» es uno solo, `memory.MismoProyecto`, con igualdad exacta como la muralla
+  (`scopeClause` y `filterCandidatesByProject`):
+  - una nota sin proyecto nunca es ajena;
+  - sin proyecto propio no se marca nada;
+  - el proyecto propio es el de `resolveProjectID`, el mismo con el que el daemon estampa cada nota.
+
+  No se normaliza. Medido: ningún `project_id` de `observations` tiene dos variantes de mayúsculas
+  o espacios, ni en davantis-1 ni en el central ni en altura-erp.
+
+  El nombre pasa por `EnUnaLinea(…, 40)`: llega por el sync como cualquier columna, así que no puede
+  abrir un renglón propio en el bloque. El hook sigue federado: no se esconde ni se topa nada.
+
+  Medido el 2026-09-27 sobre una copia de la base de davantis-1, con el binario de main y el de esta
+  rama y 7 consultas:
+
+  | Superficie | main | esta rama | Además |
+  |---|---|---|---|
+  | Hook | 0 de 24 viñetas ajenas marcadas | 24 de 24 | 0 marcadas entre las 56 propias |
+  | `musubi_recall` | 0 de 176 items ajenos con su `project_id` | 176 de 176 | altura 167, crm 8, musubi-design 1; las 315 propias dicen `musubi` |
+  | `musubi_memory_expand` | 0 de 40 | 40 de 40 | |
+
+  «el fichaje del kiosko no anda» sigue trayendo 11 de 11 notas de altura, ahora marcadas.
+
+  Lo que cuesta:
+  - la frase, 26 tokens (`EstimateTokens`);
+  - cada `[de altura] `, 4;
+  - el bloque del kiosko pasa de 542 a 601 tokens (+236 bytes).
+
+  Lo que marca es el `project_id`. Una nota de Altura guardada con el proyecto `musubi` sale sin
+  marca, y eso no lo arregla este cambio.
+
+  **El central devuelve `project_id` recién cuando corre esta versión.** Hasta su deploy, las tools
+  servidas por el cerebro central (`musubi-cerebro`) no traen la clave, sin romper nada. No cambia
+  el esquema ni la descripción de ninguna tool, no hay goldens que regenerar y no trae migración.
 - **La subida viaja comprimida: una nota cruza la red en el 55 % de sus bytes, sin tocar el
   central.** `SyncClient.Push` comprime con gzip el POST de toda nota que pasa de 512 B y lo manda
   con `Content-Encoding: gzip`. Medido el 2026-09-26 con las 3.569 notas compartidas de una copia de

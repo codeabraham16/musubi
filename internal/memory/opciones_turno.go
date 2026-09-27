@@ -8,9 +8,10 @@ import "musubi/internal/config"
 //
 // SU VALOR CERO ES EL COMPORTAMIENTO DE HOY, y es un contrato con los PR que vienen: ProjectScope
 // vacío y Federate en false dan el recall federado histórico (scope.go: «Federate o ProjectID vacío
-// ⇒ sin filtro»), bit a bit. El frente «proyecto» le va a agregar el tope de ajenos
-// (TopeOtrosProyectos) y va a llenar estos campos; hasta entonces nadie los llena y el hook sigue
-// viendo todo el acervo, que es lo que un workspace local quiere ver.
+// ⇒ sin filtro»), bit a bit. Nadie los llena y el hook sigue viendo todo el acervo, que es lo que un
+// workspace local quiere ver. El frente «proyecto» de la ola 2 decidió NO llenarlos ni agregar un
+// tope de ajenos: marca en la viñeta de qué proyecto es cada nota (marcaDeProyecto, cmd/musubi) y el
+// recall sigue federado.
 type AlcanceDelTurno struct {
 	ProjectScope string
 	Federate     bool

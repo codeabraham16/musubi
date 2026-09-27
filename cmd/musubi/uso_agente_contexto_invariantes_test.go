@@ -116,8 +116,8 @@ func TestUnSoloClasificadorDePromptHumano(t *testing.T) {
 // Sabotaje que la hace fallar: que el hook del turno cambie el título del bloque y el medidor no se
 // entere (M1 y M1s caerían a 0 en silencio, y el «después» se leería como un éxito).
 // arnes: archivo="cmd/musubi/turn.go"
-// arnes: de="\theader := encabezadoDeMemoria(\"[Musubi — memoria relevante] Contexto de fondo"
-// arnes: a="\theader := encabezadoDeMemoria(\"[Musubi — memoria pertinente] Contexto de fondo"
+// arnes: de="\ttitulo := \"[Musubi — memoria relevante] Contexto de fondo"
+// arnes: a="\ttitulo := \"[Musubi — memoria pertinente] Contexto de fondo"
 func TestMedirContextoReconoceElBloqueRealDelHook(t *testing.T) {
 	// El medidor reconoce el recall del turno por su título. En vez de copiar el literal, esta prueba
 	// le pasa la salida REAL del hook: si el hook cambia el título o el formato de los ids, falla acá.
