@@ -2,8 +2,11 @@ package memory
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // sync_viajes.go es el INSTRUMENTO del sync: lo que movió cada tick, sumado por día y sentido
@@ -70,13 +73,66 @@ type Viaje struct {
 // Un sentido desconocido es un error y no un default: la tabla lo rechazaría igual por el CHECK,
 // pero con un mensaje de SQLite que no dice quién lo mandó.
 func (e *DbEngine) RegistrarViaje(sentido string, v Viaje) error {
+	return sumarViaje(e.db, "", sentido, v)
+}
+
+// RegistrarBajada es RegistrarViaje para un tick de BAJADA que salió a la red, y además anota la
+// última bajada (MetaUltimaBajada) en la MISMA transacción. La llama el dueño del candado desde el
+// defer de drainInboundOnce, y lo que escribe es lo que muestra la línea «bajada» de
+// musubi_sync_status: el volumen sale de sync_viajes y la edad, de la meta.
+//
+// VAN JUNTAS POR DOS RAZONES, y cada una alcanzaba sola:
+//   - Es UN commit por tick y no dos. La base la comparten varios daemons que escriben (seis en
+//     davantis-1), el DSN lleva `_txlock=immediate` y el WAL corre con `synchronous` en FULL: cada
+//     commit toma el candado de escritura y hace un fsync (ver latido.go, que juntó lo del latido
+//     por lo mismo). La meta suma una fila a una transacción que ya existía, no una transacción.
+//   - Las dos fuentes no quedan desparejas por un fallo a mitad de camino: si una se escribe, la
+//     otra también. Por eso musubi_sync_status puede leer «hay viajes de bajada y ninguna meta»
+//     como lo que es —los bajó un binario anterior, que registra el viaje y no la edad— en vez de
+//     afirmar «nunca» con filas bajadas hoy.
+//
+// Y EL DÍA DEL VIAJE SALE DEL INSTANTE DE LA META, no de date('now'): así los dos caen en el mismo
+// día UTC aunque el tick cruce la medianoche. Con dos relojes, un viaje de las 00:00:00 quedaría en
+// un día y su meta de las 23:59:59 en el anterior, y el estado leería «bajó hoy un binario que no
+// anota la edad» durante un tick por día.
+//
+// Las páginas de ese día se leen DESPUÉS de sumar las del tick y en la misma transacción
+// (UltimaBajada.PaginasDelDia): con eso el estado ve a un binario que bajó sin anotar el mismo día
+// de la meta, que por día no se distingue.
+func (e *DbEngine) RegistrarBajada(v Viaje, u UltimaBajada) error {
+	tx, err := e.db.Begin()
+	if err != nil {
+		return fmt.Errorf("error al abrir la transacción de la bajada: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	dia := time.Unix(u.Unix, 0).UTC().Format(time.DateOnly)
+	if err := sumarViaje(tx, dia, ViajeBajada, v); err != nil {
+		return err
+	}
+	if err := tx.QueryRow(`SELECT posts FROM sync_viajes WHERE dia = ? AND sentido = ?`, dia, ViajeBajada).Scan(&u.PaginasDelDia); err != nil {
+		return fmt.Errorf("error al leer las páginas del día de la bajada: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT INTO meta (key, value, updated_at) VALUES (?, ?, datetime('now'))
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+		MetaUltimaBajada, u.Valor()); err != nil {
+		return fmt.Errorf("error al anotar la última bajada: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("error al commitear la bajada: %w", err)
+	}
+	return nil
+}
+
+// sumarViaje es el UPSERT de sync_viajes, sobre la base o sobre una transacción. dia es el día UTC
+// en la forma de date(); vacío es el de SQLite ahora mismo, que es lo que usa RegistrarViaje.
+func sumarViaje(x execQuerier, dia, sentido string, v Viaje) error {
 	if sentido != ViajeSubida && sentido != ViajeBajada {
 		return fmt.Errorf("sentido de viaje desconocido %q: es %q o %q", sentido, ViajeSubida, ViajeBajada)
 	}
-	if _, err := e.db.Exec(`
+	if _, err := x.Exec(`
 		INSERT INTO sync_viajes (dia, sentido, filas, posts, bytes_cable, bytes_crudos, vacias, bytes_vacias,
 			rechazados, bytes_rechazados, sin_cambios, rebotes, choques)
-		VALUES (date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (COALESCE(NULLIF(?, ''), date('now')), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(dia, sentido) DO UPDATE SET
 			filas            = sync_viajes.filas            + excluded.filas,
 			posts            = sync_viajes.posts            + excluded.posts,
@@ -89,7 +145,7 @@ func (e *DbEngine) RegistrarViaje(sentido string, v Viaje) error {
 			sin_cambios      = sync_viajes.sin_cambios      + excluded.sin_cambios,
 			rebotes          = sync_viajes.rebotes          + excluded.rebotes,
 			choques          = sync_viajes.choques          + excluded.choques`,
-		sentido, v.Filas, v.Posts, v.BytesCable, v.BytesCrudos, v.Vacias, v.BytesVacias,
+		dia, sentido, v.Filas, v.Posts, v.BytesCable, v.BytesCrudos, v.Vacias, v.BytesVacias,
 		v.Rechazados, v.BytesRechazados, v.SinCambios, v.Rebotes, v.Choques); err != nil {
 		return fmt.Errorf("error al registrar el viaje de %s: %w", sentido, err)
 	}
@@ -123,6 +179,12 @@ type ResumenDelSync struct {
 	BajadaHoy Viaje    `json:"bajada_hoy"`
 	Bajada7d  Viaje    `json:"bajada_7d"`
 	NoViajan  NoViajan `json:"no_viajan"`
+	// UltimoDiaConBajada y PaginasDeEseDia son el último día (UTC) con páginas de bajada en
+	// sync_viajes y cuántas tuvo, SIN la ventana de la semana. La edad de la bajada los compara con
+	// la meta (MetaUltimaBajada) para ver si después bajó alguien que no la anota. No van en el
+	// JSON, que lleva el volumen: la edad va sólo en el texto de musubi_sync_status.
+	UltimoDiaConBajada string `json:"-"`
+	PaginasDeEseDia    int64  `json:"-"`
 }
 
 // ResumenDelSync junta los contadores nuevos del sync. Sólo lee.
@@ -167,6 +229,13 @@ func (e *DbEngine) ResumenDelSync(ctx context.Context) (ResumenDelSync, error) {
 		if err := sumar(c.sentido, c.desde, c.v); err != nil {
 			return r, fmt.Errorf("error al sumar los viajes de %s: %w", c.sentido, err)
 		}
+	}
+	// Sin fila no es un error: esta base nunca registró una bajada (el central, o un nodo nuevo).
+	switch err := e.db.QueryRowContext(ctx, `SELECT dia, posts FROM sync_viajes
+		WHERE sentido = ? AND posts > 0 ORDER BY dia DESC LIMIT 1`, ViajeBajada).Scan(&r.UltimoDiaConBajada, &r.PaginasDeEseDia); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return r, fmt.Errorf("error al leer el último día con bajadas: %w", err)
 	}
 
 	// Las tres categorías son disjuntas por construcción: la cuarentena exige quarantined=1 y las
