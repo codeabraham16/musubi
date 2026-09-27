@@ -169,8 +169,8 @@ func (l *lectorQueCuenta) Leidos() int64 { return l.leidos.Load() }
 // Sabotaje: devolver 400 ante un JSON roto → un agente con el colector roto desaparece del
 // inventario, que es justo cuando más querés verlo.
 // arnes: archivo="internal/mcp/fleet_http.go"
-// arnes: de="\t\tmuestraJSON, notaMuestra, notaServicios, notaProtocolo := s.leerCuerpoDelLatido(r, d)\n"
-// arnes: a="\t\tmuestraJSON, notaMuestra, notaServicios, notaProtocolo := s.leerCuerpoDelLatido(r, d)\n\t\tif strings.Contains(notaMuestra, \"JSON inválido\") {\n\t\t\thttp.Error(w, notaMuestra, http.StatusBadRequest)\n\t\t\treturn\n\t\t}\n"
+// arnes: de="\t\tmuestraJSON, notaMuestra, notaServicios, notaProtocolo, enviadoMs := s.leerCuerpoDelLatido(r, d)\n"
+// arnes: a="\t\tmuestraJSON, notaMuestra, notaServicios, notaProtocolo, enviadoMs := s.leerCuerpoDelLatido(r, d)\n\t\tif strings.Contains(notaMuestra, \"JSON inválido\") {\n\t\t\thttp.Error(w, notaMuestra, http.StatusBadRequest)\n\t\t\treturn\n\t\t}\n"
 func TestUnCuerpoInvalidoNoTumbaElLatido(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 

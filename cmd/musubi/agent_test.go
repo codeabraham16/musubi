@@ -530,6 +530,15 @@ func clavesPermitidasDelLatido() map[string]bool {
 		// y hacer sonar `DosAgentesSobreLaMismaMaquina` SOBRE SÍ MISMA. Es una falsa alarma
 		// auto-infligida, no una suplantación: no hay ninguna otra fila que pueda alcanzar.
 		"emisor": true,
+		// `enviado_ms` entra tras el mismo examen (A133), y la respuesta vuelve a ser la misma: NO
+		// dice quién es esta máquina. Es la hora de SU reloj al mandar el latido —un número, sin
+		// nada de la máquina adentro—, y lo único que el cerebro hace con ella es restarle su hora
+		// de llegada y anotar el desfase en la fila del TOKEN.
+		//
+		// El techo, escrito: una máquina comprometida puede mandar una hora falsa y hacer sonar
+		// `RelojDesfasado` SOBRE SÍ MISMA, o callarla con la hora del cerebro. Desorienta sobre su
+		// propio reloj, igual que puede mentir en su muestra; no alcanza ninguna otra fila.
+		"enviado_ms": true,
 	}
 }
 

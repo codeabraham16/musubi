@@ -35,7 +35,7 @@ func TestLosServiciosDeUnaMaquinaQueNoVeoNoSeExportan(t *testing.T) {
 	// bob ve SÓLO `nas`.
 	bob := principalDeFlota("bob", "casa", map[fleet.Cap][]string{fleet.CapMetrics: {"nas"}})
 	var b strings.Builder
-	renderFlota(&b, s.engine, bob, time.Now(), s.sondaIntervalo, versionDePrueba, nil, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
+	renderFlota(&b, s.engine, bob, time.Now(), s.sondaIntervalo, versionDePrueba, nil, nil, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
 	salida := b.String()
 
 	if !strings.Contains(salida, `service="samba"`) {
@@ -152,7 +152,7 @@ func TestElScrapeYElEmpujeExportanLosMismosServicios(t *testing.T) {
 	p := ptrPrincipal(principalDePrometheus())
 
 	var b strings.Builder
-	renderFlota(&b, s.engine, p, ahora, s.sondaIntervalo, versionDePrueba, nil, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
+	renderFlota(&b, s.engine, p, ahora, s.sondaIntervalo, versionDePrueba, nil, nil, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
 	delScrape := b.String()
 
 	cuerpo, _, _, err := armarPayloadOTLP(s.engine, p, ahora, s.sondaIntervalo, versionDePrueba, serviciosPorProyectoDefault)

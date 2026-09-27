@@ -71,6 +71,8 @@ var pinesDelCuerpoLatido = map[int]string{
 	2: "65eb52424c6bdb8d2b77ff474ca71dd1b8bdd16304ea3fd0f8d7284baff52097",
 	// 3 · 2026-09-11 · El latido lleva `emisor`, el identificador opaco del PROCESO que late.
 	3: "f718b53cd8125a572a0fc96575679d0ee3ffc0b27ab4053043026f0c05180750",
+	// 4 · 2026-09-27 · El latido lleva `enviado_ms`, la hora del reloj del agente al mandarlo (A133).
+	4: "d24f37fad2ba6eda3c57c7fe8e548f235e2bdeec69d400722fb6edddb0e68333",
 }
 
 // pinesDeLaRespuesta es LA VUELTA DEL CABLE: lo que el cerebro le contesta al agente.
@@ -85,6 +87,8 @@ var pinesDeLaRespuesta = map[int]string{
 	// repite a propósito: sin una entrada para el capver vigente, la guarda se queda comparando
 	// contra la del capver anterior y un cambio futuro de la vuelta pasaría desapercibido.
 	3: "75b412b4124f13ac0b2fc548e578308852ec8209bf209acf83cfac84d7056e76",
+	// 4 · Tampoco cambió: `enviado_ms` también viaja sólo de ida.
+	4: "75b412b4124f13ac0b2fc548e578308852ec8209bf209acf83cfac84d7056e76",
 }
 
 // loQueLlevaCadaRawMessage dice qué viaja ADENTRO de un campo declarado `json.RawMessage`.

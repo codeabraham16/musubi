@@ -125,6 +125,34 @@ func (sc ProjectScope) scopeClause(alias string) (string, []interface{}) {
 	return fmt.Sprintf(" AND (%s = ? OR %s IS NULL OR %s = '')", col, col, col), []interface{}{sc.ProjectID}
 }
 
+// MismoProyecto dice si una nota es del proyecto propio. Es el ÚNICO criterio de «mismo proyecto»
+// del lado de Go, y REPLICA el de la muralla: scopeClause en SQL y filterCandidatesByProject en el
+// recall. Quien necesite decidir si una nota es ajena —la marca de la viñeta, y después el corrector
+// de tipeo y el tope del turno— pregunta acá, y no escribe su propia comparación.
+//
+// La regla, idéntica a la de scopeClause:
+//
+//   - IGUALDAD EXACTA, byte a byte. La columna es TEXT sin COLLATE, así que el `=` de SQLite es
+//     binario: «Musubi» y «musubi» son dos proyectos para la muralla, y lo son también acá.
+//   - Una nota SIN ATRIBUIR (project_id nulo o vacío) cuenta como propia: la muralla la deja ver a
+//     todos, y marcarla como ajena sería afirmar algo que la fila no dice.
+//   - Con propio VACÍO no hay nada ajeno: sin saber cuál es el proyecto propio no se puede afirmar
+//     que una nota sea de otro. Es el mismo caso que el scope vacío de scopeClause, que no filtra.
+//
+// POR QUÉ NO EqualFold NI TrimSpace. Porque serían DOS criterios: una nota «Musubi» saldría sin
+// marca en la viñeta y a la vez la muralla la filtraría como ajena. Normalizar las dos puntas
+// (TRIM + COLLATE NOCASE en scopeClause) movería la frontera entre tenants del central, que es
+// otro cambio y otro PR. Y la medición no lo pide: el 2026-09-27, en observations —la única tabla
+// que llega a estas viñetas— hubo CERO proyectos escritos con otra capitalización o con espacios
+// (base local 3846 filas y 5 proyectos, central 5258 y 5, altura-erp 848). La única variante que
+// existe está en code_memory («Musubi» 8 filas contra «musubi» 296, base local), que no pasa por acá.
+func MismoProyecto(propio, deLaNota string) bool {
+	if propio == "" {
+		return true // sin proyecto propio no hay nada ajeno, igual que el scope vacío no filtra
+	}
+	return deLaNota == "" || deLaNota == propio
+}
+
 // normalizeScope acota un scope al conjunto válido. Vacío o desconocido ⇒ 'local' (el
 // default privado), de modo que la columna NOT NULL siempre reciba un valor sano y un
 // scope ausente conserve el comportamiento previo.

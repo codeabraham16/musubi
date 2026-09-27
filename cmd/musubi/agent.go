@@ -269,6 +269,11 @@ var nuevoTimer = time.NewTimer
 // generador real pasa casi siempre, y «casi siempre» en CI es un flaky con nombre propio.
 var azarDelAgente = rand.Float64
 
+// relojDelLatido es de dónde sale la hora de envío del latido (A133): el reloj de pared de esta
+// máquina. Es `var` por la misma razón que nuevoTimer: para que una prueba le ponga un reloj
+// absurdo —el año 10000— sin tener que cambiarle la hora al sistema.
+var relojDelLatido = time.Now
+
 var (
 	emisorUnaVez sync.Once
 	emisorValor  string
@@ -592,6 +597,15 @@ func latir(base, token, fuenteDelToken string, m *fleet.Muestra) resultadoLatido
 	//
 	// `omitempty`: una máquina sana no agrega un solo byte al latido.
 	carga.ServiciosError = motivoDeEnumeracionFallida()
+	// LA HORA DE ENVÍO SE SELLA ACÁ, EN LA ÚLTIMA LÍNEA ANTES DE SERIALIZAR (A133). El cerebro
+	// la resta de su hora de llegada y lee el resultado como el desfase del reloj de esta máquina,
+	// así que todo lo que el agente tarde DESPUÉS del sello se lee como reloj atrasado. Por eso no
+	// se reusa `m.Tomada`: la muestra se toma antes de la sonda de alcance (hasta 3 s) y de la
+	// enumeración de servicios (~3 s de WMI en Windows, cada vez que vence su caché).
+	//
+	// Y va como entero de milisegundos: una fecha en el año 10000 no se puede serializar, y el
+	// `if` de abajo mandaría el latido sin cuerpo justo cuando el reloj está más roto.
+	carga.EnviadoMs = relojDelLatido().UnixMilli()
 	var cuerpo io.Reader
 	if b, err := json.Marshal(carga); err == nil {
 		cuerpo = bytes.NewReader(b)

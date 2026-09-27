@@ -78,7 +78,7 @@ func TestUnaPaginaLlenaDeAprobacionesInvisiblesNoSaleComoUnCeroMudo(t *testing.T
 	sembrarPendientes(t, s, "casa", reservada.ID, techo+1, ahora)
 
 	var b strings.Builder
-	renderFlota(&b, s.engine, acotado, ahora, s.sondaIntervalo, versionDePrueba, nil, serviciosPorProyectoDefault, techo)
+	renderFlota(&b, s.engine, acotado, ahora, s.sondaIntervalo, versionDePrueba, nil, nil, serviciosPorProyectoDefault, techo)
 	salida := b.String()
 
 	// El 0 sigue siendo lo correcto para esta credencial: no ve ninguna de esas solicitudes. Lo
@@ -96,7 +96,7 @@ func TestUnaPaginaLlenaDeAprobacionesInvisiblesNoSaleComoUnCeroMudo(t *testing.T
 
 	// ── LA OTRA DIRECCIÓN: con la página a medio llenar, la dimensión NO se enciende.
 	var holgado strings.Builder
-	renderFlota(&holgado, s.engine, acotado, ahora, s.sondaIntervalo, versionDePrueba, nil, serviciosPorProyectoDefault, techo+10)
+	renderFlota(&holgado, s.engine, acotado, ahora, s.sondaIntervalo, versionDePrueba, nil, nil, serviciosPorProyectoDefault, techo+10)
 	if u := kindsEnUno(holgado.String()); tieneKind(u, "approvals") {
 		t.Errorf("con techo %d y sólo %d pendientes la página NO volvió llena, y el export igual dice que recortó: "+
 			"una dimensión que avisa siempre no avisa nunca. kinds en 1: %v", techo+10, techo+1, u)

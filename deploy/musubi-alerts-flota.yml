@@ -850,6 +850,35 @@ groups:
           nota: "Media hora sin que el emisor se estabilice no es un reinicio: son dos procesos pisándose. Mirá si quedó un `musubi agent` a mano además del servicio, una segunda instalación, o un zombi de `musubi.exe.viejo` (deploy/matar-zombis-agente.sh). Dos agentes duplican los comandos que ejecuta la máquina y hacen que el inventario se pise."
           ausente_en: "tier=B — la serie mide qué proceso late por la máquina, y un Tier B no late: lo sondea el cerebro. No puede haber dos agentes pisándose donde no corre ninguno."
 
+      # --- EL RELOJ DE LA MÁQUINA SE CORRIÓ (A133) ---
+      #
+      # El desfase lo mide el CEREBRO: la hora que el agente pone al mandar el latido, menos la
+      # hora a la que llega. Hasta A131 un reloj adelantado se notaba de rebote —la antigüedad de
+      # la muestra daba negativa— y A131 lo tapó a propósito, recortando la `tomada` futura a la
+      # llegada. Desde entonces un reloj corrido no se veía en ningún lado.
+      #
+      # LA SERIE TIENE SIGNO Y EL `abs` ES DE LA ALERTA: el runbook necesita saber para qué lado se
+      # corrió, y la serie lo conserva. El viaje de red corre el valor unos milisegundos hacia
+      # abajo, lejísimos de los 30 s del umbral; a partir de ahí los códigos TOTP, que cambian cada
+      # 30 s, empiezan a fallar.
+      #
+      # `for: 15m`: un reloj que se corrió no se arregla solo, y quince minutos dejan pasar un
+      # salto de un momento —una máquina que vuelve de suspender y todavía no sincronizó—. Con
+      # las dos guardas de siempre, aunque la de `device_up` sobra casi siempre: la serie
+      # desaparece sola a los 90 s de que la máquina deja de latir.
+      - alert: RelojDesfasado
+        expr: >-
+          abs(musubi_fleet_clock_offset_seconds) > 30
+          unless on(project, device) (musubi_fleet_device_up == 0)
+          unless on(project, device) (musubi_fleet_device_maintenance == 1)
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "El reloj de {{ $labels.device }} está corrido {{ $value | printf \"%.0f\" }} s respecto del cerebro."
+          nota: "La serie `musubi_fleet_clock_offset_seconds` dice para qué lado: positiva es un reloj ADELANTADO. Si se corrió TODA la flota junta, el reloj que se corrió es el del cerebro. Desde unos 30 s empiezan a fallar los códigos TOTP; con minutos, Kerberos (tolera 5) y los certificados recién emitidos. Y en cualquier caso desordena los logs entre máquinas."
+          runbook: "deploy/RUNBOOK.md#relojdesfasado"
+          ausente_en: "tier=B — un Tier B no corre nuestro agente, así que nadie manda su hora y la serie no existe. Lo mismo un agente anterior al capver 4."
+
       - alert: MaquinaNoPuedeEnumerar
         # EL `device_up == 0` NO ES OPCIONAL, y lo cazó `TestNingunaAlertaDeMuestraDisparaSobreUnaMaquinaCaida`
         # cuando esta alerta se escribió sin él: la serie se CONGELA cuando la máquina muere, así

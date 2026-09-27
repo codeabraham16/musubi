@@ -44,6 +44,11 @@ type Observation struct {
 	TopicKey  string `json:"topic_key"`
 	Content   string `json:"content"`
 	CreatedAt string `json:"created_at"`
+	// ProjectID es el proyecto de origen, el mismo dato que RecallItem.ProjectID: quien expande una
+	// nota que el recall le mostró como ajena tiene que seguir viendo que es ajena. Lo llena la
+	// hidratación por id (hydrateByIDs); los demás caminos que devuelven Observation no lo leen
+	// todavía y lo dejan vacío, que con omitempty es exactamente la respuesta de antes.
+	ProjectID string `json:"project_id,omitempty"`
 }
 
 type SearchResult struct {
