@@ -110,7 +110,6 @@ func TestSyncStatusDiceLaEdadDeLaBajada(t *testing.T) {
 
 	s.drainInboundOnce(context.Background()) // una página sin filas
 	l, _ := lineaDeBajada(t, textoDeSyncStatus(t, s))
-	t.Logf("después de una bajada vacía: %s", l)
 	if !strings.Contains(l, " · última hace ") || !strings.Contains(l, " (vacía), próxima en ~") {
 		t.Errorf("después de una bajada vacía la línea tenía que decir «última hace … (vacía), próxima en ~…»:\n%s", l)
 	}
@@ -119,14 +118,15 @@ func TestSyncStatusDiceLaEdadDeLaBajada(t *testing.T) {
 	if n := proximaEnSegundos(l); n < 20 || n > 30 {
 		t.Errorf("la próxima tenía que caer a ~30 s (un tick sin config), vino %d:\n%s", n, l)
 	}
+	t.Logf("después de una bajada vacía: %s", l)
 
 	filas.Store(2)
 	s.drainInboundOnce(context.Background()) // una página con dos filas
 	l, _ = lineaDeBajada(t, textoDeSyncStatus(t, s))
-	t.Logf("después de una bajada con dos filas: %s", l)
 	if !strings.Contains(l, " · última hace ") || !strings.Contains(l, " (2 filas), próxima en ~") {
 		t.Errorf("después de bajar dos filas la línea tenía que decir «última hace … (2 filas), próxima en ~…»:\n%s", l)
 	}
+	t.Logf("después de una bajada con dos filas: %s", l)
 }
 
 // TestLaBajadaEnElCentralNoDiceNunca: musubi_sync_status también lo sirve el central, que no baja
@@ -149,10 +149,10 @@ func TestLaBajadaEnElCentralNoDiceNunca(t *testing.T) {
 		engine.SetProjectID("")
 		central := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{})
 		l, _ := lineaDeBajada(t, textoDeSyncStatusComo(t, central, &Principal{Name: "alice", Role: RoleWriter, ProjectID: "crm"}))
-		t.Logf("servido por el central: %s", l)
 		if !strings.Contains(l, " · este proceso no baja (no tiene cliente de sync): ") || strings.Contains(l, "nunca") {
 			t.Errorf("el central tenía que decir que no baja, sin «nunca»:\n%s", l)
 		}
+		t.Logf("servido por el central: %s", l)
 	})
 
 	t.Run("proyecto sin team_mode", func(t *testing.T) {
@@ -194,10 +194,10 @@ func TestLaEdadDeLaBajadaNoContradiceAlVolumen(t *testing.T) {
 			t.Fatal(err)
 		}
 		l, _ := lineaDeBajada(t, textoDeSyncStatus(t, s))
-		t.Logf("viajes sin meta: %s", l)
 		if !strings.Contains(l, " · última: sin anotar (bajó un binario anterior") || strings.Contains(l, "nunca") {
 			t.Errorf("con páginas bajadas hoy y sin meta, la línea no podía decir «nunca»:\n%s", l)
 		}
+		t.Logf("viajes sin meta: %s", l)
 	})
 
 	t.Run("meta de hace tres días y viajes de hoy", func(t *testing.T) {
@@ -257,13 +257,13 @@ func TestLaUltimaBajadaIlegibleNoRompeLaLinea(t *testing.T) {
 				t.Fatal(err)
 			}
 			l, sigue := lineaDeBajada(t, textoDeSyncStatus(t, s))
-			t.Logf("meta %q: %s", c.valor, l)
 			if !strings.Contains(l, " · última: ilegible (\"") {
 				t.Errorf("la meta %q tenía que leerse ilegible, entre comillas:\n%s", c.valor, l)
 			}
 			if !strings.HasPrefix(sigue, "no viajan: ") {
 				t.Errorf("la línea «bajada» se partió: la que le sigue es %q y tenía que ser «no viajan:»", sigue)
 			}
+			t.Logf("meta %q: %s", c.valor, l)
 		})
 	}
 }
@@ -284,8 +284,8 @@ func TestLaProximaVencidaSeDiceComoTal(t *testing.T) {
 		t.Fatal(err)
 	}
 	l, _ := lineaDeBajada(t, textoDeSyncStatus(t, s))
-	t.Logf("próxima vencida: %s", l)
 	if !strings.HasSuffix(l, " · última hace 10 min (1 fila), la próxima se esperaba hace 9 min") {
 		t.Errorf("con la próxima vencida hace 9 min la línea tenía que decirlo:\n%s", l)
 	}
+	t.Logf("próxima vencida: %s", l)
 }

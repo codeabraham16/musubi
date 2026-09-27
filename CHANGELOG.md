@@ -8,6 +8,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **`musubi_sync_status` dice cuándo bajó por última vez, si trajo algo y cuándo es la próxima.**
+  La línea «bajada» contaba el volumen (`sync_viajes`) pero no la edad, y el frente que va a
+  espaciar la bajada necesita verla desde la máquina, sin entrar al central. Ahora la misma línea
+  termina en `· última hace 12 s (vacía), próxima en ~18 s`, o `(2 filas)`, o `· última: nunca`.
+
+  Lo anota sólo el dueño del candado, desde el defer que ya existía en `drainInboundOnce` y sólo si
+  el tick salió a la red, en la meta `sync:inbound_ultima` = `unix|filas|proxima_unix`; la próxima
+  es un tick base, porque la bajada todavía no espacia. Y se lee sólo de ahí, nunca de la memoria
+  del proceso que contesta: sobre una base corren varios daemons (seis en davantis-1) y baja uno.
+  La meta va en la MISMA transacción que suma el viaje (`RegistrarBajada`), así que no agrega
+  commits. Medido contando los commits en el WAL de una base de prueba, con los ticks a más de un
+  segundo (SQLite no escribe la página si el valor no cambia, y en producción cambia en cada tick):
+  un tick que sale a la red sigue haciendo 2 commits si baja vacío y 5 si baja dos filas, igual que
+  antes, con una página más (4 KiB) en el WAL. Con la meta en su propia transacción eran 3 y 6: un
+  candado de escritura y un fsync más por tick, sobre una base que comparten los daemons.
+
+  La línea no contradice al volumen, que sigue saliendo de `sync_viajes`. Con viajes de bajada y sin
+  meta —o con viajes de un día posterior al de la meta— dice que bajó un binario anterior a esta
+  versión, que registra el viaje y no la edad, en vez de «nunca» al lado de las páginas de hoy. En
+  el central, que también sirve la tool y no baja, dice «este proceso no baja (no tiene cliente de
+  sync)» y no «nunca», que se leería «tu máquina nunca bajó»; lo mismo en un proyecto sin
+  team_mode. Una meta cortada sale `ilegible`, entre comillas y escapada, sin partir la línea; y si
+  la próxima ya pasó, dice «la próxima se esperaba hace…». No cambia el esquema ni la descripción de
+  ninguna tool y no trae migración: viaja en la V1 con el resto de la ola.
 - **El vector de una consulta, sin cargar la tabla: ~25 ms y 16 MB para un prompt corto, en vez de
   1,4-2,8 s y 854 MB.**
   El hook por turno corre sin vector porque armar el embebedor estático cuesta más de un segundo

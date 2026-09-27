@@ -86,8 +86,8 @@ func (e *DbEngine) RegistrarViaje(sentido string, v Viaje) error {
 //     afirmar «nunca» con filas bajadas hoy.
 //
 // Y EL DÍA DEL VIAJE SALE DEL INSTANTE DE LA META, no de date('now'): así los dos caen en el mismo
-// día UTC aunque el tick cruce la medianoche. Con dos relojes, el viaje de las 00:00:00 quedaba en
-// un día y la meta de las 23:59:59 en el anterior, y el estado leía «bajó hoy un binario que no
+// día UTC aunque el tick cruce la medianoche. Con dos relojes, un viaje de las 00:00:00 quedaría en
+// un día y su meta de las 23:59:59 en el anterior, y el estado leería «bajó hoy un binario que no
 // anota la edad» durante un tick por día.
 func (e *DbEngine) RegistrarBajada(v Viaje, u UltimaBajada) error {
 	tx, err := e.db.Begin()
