@@ -16,10 +16,10 @@ import (
 // arnes: de="if err := sumarViaje(tx, dia, ViajeBajada, v); err != nil {"
 // arnes: a="if err := sumarViaje(tx, dia, ViajeBajada, v); err != nil || tx.Commit() != nil {"
 //
-// Sabotaje: que el viaje vaya al día de SQLite y no al de la meta.
+// Sabotaje: que el viaje vaya al día de ahora, el de date('now'), y no al de la meta.
 // arnes: archivo="internal/memory/sync_viajes.go"
 // arnes: de="dia := time.Unix(u.Unix, 0).UTC().Format(time.DateOnly)"
-// arnes: a="dia := time.Time{}.Format(\"\")"
+// arnes: a="dia := time.Now().UTC().Format(time.DateOnly)"
 //
 // Sabotaje: que la meta no anote las páginas que ese día tenía sync_viajes.
 // arnes: archivo="internal/memory/sync_viajes.go"
