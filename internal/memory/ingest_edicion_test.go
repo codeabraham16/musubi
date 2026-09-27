@@ -98,11 +98,11 @@ func TestUnaEdicionBajadaInvalidaElVectorViejo(t *testing.T) {
 func TestUnaReentregaSinCambioDeContenidoConservaElVector(t *testing.T) {
 	e := ingestadaConVector(t, "alfa original")
 
-	inserto, err := e.IngestShared(SharedObs{ID: "c1", TopicKey: "t/a", Content: "alfa original", Importance: 5})
+	ing, err := e.IngestShared(SharedObs{ID: "c1", TopicKey: "t/a", Content: "alfa original", Importance: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inserto {
+	if ing.Insertada {
 		t.Error("IngestShared reportó una fila nueva al re-entregar c1")
 	}
 	if n, err := e.countStaleEmbeddings(); err != nil || n != 0 {

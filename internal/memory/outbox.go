@@ -49,6 +49,13 @@ const (
 // para la observabilidad, SIN UN ROUND-TRIP EXTRA a la DB. No corta nada: una fila muere sólo por
 // un fallo PERMANENTE, y eso lo decide el código de error. La regla está escrita una sola vez, en
 // config.SyncConfig.MaxAttempts.
+//
+// Hash es el content_hash de ESTE Content, leído en el mismo SELECT que el payload, y lo que el
+// drain le devuelve a las marcas (MarkOutboxSent/Retry/Dead). No viaja: dice QUÉ versión salió, y
+// con eso una marca no confunde la versión que empujó con una edición local que llegó mientras
+// viajaba. Se lee junto con el contenido y no de enqueued_hash porque tiene que nombrar lo que se
+// empujó: el claim y la carga del payload son dos sentencias, y una edición entre las dos cambia el
+// contenido que sale.
 type OutboxItem struct {
 	ObsID      string
 	TopicKey   string
@@ -57,6 +64,7 @@ type OutboxItem struct {
 	MemType    string
 	ProjectID  string
 	Attempts   int
+	Hash       string
 }
 
 // enqueueOutboxTx encola (o re-encola) la observación obsID en el outbox, DENTRO de la tx
@@ -169,7 +177,8 @@ func (e *DbEngine) loadOutboxPayloads(ids []string, attemptsByID map[string]int)
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	q := `SELECT id, topic_key, content, COALESCE(importance, 1.0), COALESCE(mem_type, ''), COALESCE(project_id, '')
+	q := `SELECT id, topic_key, content, COALESCE(importance, 1.0), COALESCE(mem_type, ''), COALESCE(project_id, ''),
+			COALESCE(content_hash, '')
 		FROM observations WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 	rows, err := e.db.Query(q, args...)
 	if err != nil {
@@ -179,7 +188,7 @@ func (e *DbEngine) loadOutboxPayloads(ids []string, attemptsByID map[string]int)
 	byID := make(map[string]OutboxItem, len(ids))
 	for rows.Next() {
 		var it OutboxItem
-		if err := rows.Scan(&it.ObsID, &it.TopicKey, &it.Content, &it.Importance, &it.MemType, &it.ProjectID); err != nil {
+		if err := rows.Scan(&it.ObsID, &it.TopicKey, &it.Content, &it.Importance, &it.MemType, &it.ProjectID, &it.Hash); err != nil {
 			return nil, fmt.Errorf("error al escanear payload del outbox: %w", err)
 		}
 		it.Attempts = attemptsByID[it.ObsID]
@@ -199,19 +208,32 @@ func (e *DbEngine) loadOutboxPayloads(ids []string, attemptsByID map[string]int)
 
 // MarkOutboxSent marca la fila 'sent' tras una entrega exitosa (R13). No se re-entrega.
 //
+// hash es el de lo que SALIÓ (OutboxItem.Hash). La fila queda 'sent' sólo si eso es lo que sigue
+// encolado: una edición local que llegó mientras el push viajaba ya la devolvió a 'pending' con otro
+// enqueued_hash (enqueueOutboxTx), y marcarla 'sent' daba por entregada una versión que nunca salió
+// —medido: claim de v1, edición v2, 200 de v1, y la fila en 'sent' con 0 filas por reenviar—. Así
+// queda 'pending' y la versión nueva sale en el próximo tick.
+//
 // Deja escrito además QUÉ salió y CUÁNDO (migración v58): sent_hash es el hash que esta máquina
 // entregó por última vez y sent_at la hora de esa entrega. «Enviadas en 24 h» se cuenta con sent_at
 // y no con el estado, porque el estado lo mueven otros caminos (una edición local la devuelve a
 // 'pending'); la hora de la última salida no la escribe nadie más que esta marca.
-func (e *DbEngine) MarkOutboxSent(obsID string) error {
+//
+// ESO SE ANOTA AUNQUE LA FILA NO QUEDE 'sent', y es a propósito: la versión vieja SÍ salió, y el
+// central la va a devolver en la bajada. IngestShared distingue ese rebote propio de un choque con
+// otra máquina comparando contra sent_hash; si la entrega en vuelo no se anotara, el rebote más
+// común —el de la versión que viajaba mientras se editaba— se contaría como choque.
+func (e *DbEngine) MarkOutboxSent(obsID, hash string) error {
 	// Fencing por estado (auditoría #13c): una marca sólo aplica a una fila NO terminal (pending/claimed),
 	// nunca a una 'sent'/'dead'. Sin esto, con dos drainers solapados por vencimiento de lease, un ciclo
 	// rezagado podía re-marcar una fila que otro ya resolvió (p. ej. un MarkRetry tardío revivía un 'sent'
 	// a 'pending' = phantom pending). Excluir los estados terminales corta esa resurrección.
 	if _, err := e.db.Exec(`
-		UPDATE outbox SET status = 'sent', last_error = NULL, updated_at = datetime('now'),
-			sent_hash = enqueued_hash, sent_at = datetime('now')
-		WHERE obs_id = ? AND status IN ('pending','claimed')`, obsID); err != nil {
+		UPDATE outbox SET
+			status = CASE WHEN enqueued_hash = ? THEN 'sent' ELSE status END,
+			last_error = NULL, updated_at = datetime('now'),
+			sent_hash = ?, sent_at = datetime('now')
+		WHERE obs_id = ? AND status IN ('pending','claimed')`, hash, hash, obsID); err != nil {
 		return fmt.Errorf("error al marcar outbox como enviado: %w", err)
 	}
 	return nil
@@ -219,7 +241,10 @@ func (e *DbEngine) MarkOutboxSent(obsID string) error {
 
 // MarkOutboxRetry devuelve la fila a 'pending' tras un fallo transitorio (R11): incrementa
 // attempts y posterga next_attempt_at backoffSeconds al futuro (backoff), guardando el error.
-func (e *DbEngine) MarkOutboxRetry(obsID string, backoffSeconds int, errMsg string) error {
+//
+// Sólo si lo que falló (hash) es lo que sigue encolado: una edición que llegó mientras viajaba ya
+// dejó la fila 'pending' para salir YA, y el backoff y el intento fallido son de la versión vieja.
+func (e *DbEngine) MarkOutboxRetry(obsID, hash string, backoffSeconds int, errMsg string) error {
 	if backoffSeconds < 0 {
 		backoffSeconds = 0
 	}
@@ -230,7 +255,7 @@ func (e *DbEngine) MarkOutboxRetry(obsID string, backoffSeconds int, errMsg stri
 		    next_attempt_at = datetime('now', '+' || ? || ' seconds'),
 		    last_error = ?,
 		    updated_at = datetime('now')
-		WHERE obs_id = ? AND status IN ('pending','claimed')`, backoffSeconds, errMsg, obsID); err != nil {
+		WHERE obs_id = ? AND status IN ('pending','claimed') AND enqueued_hash = ?`, backoffSeconds, errMsg, obsID, hash); err != nil {
 		return fmt.Errorf("error al reprogramar reintento en outbox: %w", err)
 	}
 	return nil
@@ -238,10 +263,13 @@ func (e *DbEngine) MarkOutboxRetry(obsID string, backoffSeconds int, errMsg stri
 
 // MarkOutboxDead manda la fila a dead-letter (R12): fallo permanente o tope de reintentos.
 // No se reintenta automáticamente; queda como registro de auditoría con last_error.
-func (e *DbEngine) MarkOutboxDead(obsID, errMsg string) error {
+//
+// Sólo si lo rechazado (hash) es lo que sigue encolado: el central rechazó la versión que viajaba,
+// no la edición que llegó después, y matarla acá la dejaba sin salir nunca.
+func (e *DbEngine) MarkOutboxDead(obsID, hash, errMsg string) error {
 	if _, err := e.db.Exec(`
 		UPDATE outbox SET status = 'dead', last_error = ?, updated_at = datetime('now')
-		WHERE obs_id = ? AND status IN ('pending','claimed')`, errMsg, obsID); err != nil {
+		WHERE obs_id = ? AND status IN ('pending','claimed') AND enqueued_hash = ?`, errMsg, obsID, hash); err != nil {
 		return fmt.Errorf("error al marcar outbox como dead: %w", err)
 	}
 	return nil

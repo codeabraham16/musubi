@@ -30,6 +30,14 @@ func outboxRow(t *testing.T, e *DbEngine, obsID string) (status string, attempts
 	return status, attempts, hash
 }
 
+// encolado es el hash que la fila de obsID tiene encolado ahora: el que una marca tiene que nombrar
+// para aplicarse, igual que el OutboxItem.Hash con que el drain la reclamó.
+func encolado(t *testing.T, e *DbEngine, obsID string) string {
+	t.Helper()
+	_, _, h := outboxRow(t, e, obsID)
+	return h
+}
+
 // --- T1.1: migración v11 ---
 
 func TestMigrationV11OutboxSchema(t *testing.T) {
@@ -347,7 +355,7 @@ func TestReSaveSameContentNoDuplicate(t *testing.T) {
 	}
 	_, _, hash1 := outboxRow(t, e, "s1")
 	// Marcar como sent para verificar que un re-save con MISMO contenido no la re-encola.
-	if err := e.MarkOutboxSent("s1"); err != nil {
+	if err := e.MarkOutboxSent("s1", hash1); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.SaveObservationTyped("s1", "t", "contenido original", 1.0, "", ScopeShared, nil); err != nil {
@@ -518,7 +526,7 @@ func TestMarksSentRetryDead(t *testing.T) {
 	}
 
 	// Retry: incrementa attempts, posterga y vuelve a pending.
-	if err := e.MarkOutboxRetry("m1", 120, "boom transitorio"); err != nil {
+	if err := e.MarkOutboxRetry("m1", encolado(t, e, "m1"), 120, "boom transitorio"); err != nil {
 		t.Fatal(err)
 	}
 	status, attempts, _ := outboxRow(t, e, "m1")
@@ -535,7 +543,7 @@ func TestMarksSentRetryDead(t *testing.T) {
 	}
 
 	// Otro retry incrementa de nuevo.
-	if err := e.MarkOutboxRetry("m1", 0, "otra vez"); err != nil {
+	if err := e.MarkOutboxRetry("m1", encolado(t, e, "m1"), 0, "otra vez"); err != nil {
 		t.Fatal(err)
 	}
 	if _, attempts, _ := outboxRow(t, e, "m1"); attempts != 2 {
@@ -543,7 +551,7 @@ func TestMarksSentRetryDead(t *testing.T) {
 	}
 
 	// Dead: pasa a dead con last_error.
-	if err := e.MarkOutboxDead("m1", "fallo permanente"); err != nil {
+	if err := e.MarkOutboxDead("m1", encolado(t, e, "m1"), "fallo permanente"); err != nil {
 		t.Fatal(err)
 	}
 	if status, _, _ := outboxRow(t, e, "m1"); status != outboxDead {
@@ -554,7 +562,7 @@ func TestMarksSentRetryDead(t *testing.T) {
 	if err := e.SaveObservationTyped("m2", "t", "para sent", 1.0, "", ScopeShared, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.MarkOutboxSent("m2"); err != nil {
+	if err := e.MarkOutboxSent("m2", encolado(t, e, "m2")); err != nil {
 		t.Fatal(err)
 	}
 	if status, _, _ := outboxRow(t, e, "m2"); status != outboxSent {
@@ -569,10 +577,10 @@ func TestOutboxStats(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := e.MarkOutboxSent("a"); err != nil {
+	if err := e.MarkOutboxSent("a", encolado(t, e, "a")); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.MarkOutboxDead("b", "x"); err != nil {
+	if err := e.MarkOutboxDead("b", encolado(t, e, "b"), "x"); err != nil {
 		t.Fatal(err)
 	}
 	pending, sent, dead, err := e.OutboxStats()
@@ -639,18 +647,18 @@ func TestOutboxMarkDoesNotResurrectTerminal(t *testing.T) {
 	if _, err := e.ClaimOutboxBatch(10, 60); err != nil { // pending -> claimed
 		t.Fatal(err)
 	}
-	if err := e.MarkOutboxSent("x"); err != nil { // claimed -> sent (ciclo B, entrega OK)
+	if err := e.MarkOutboxSent("x", encolado(t, e, "x")); err != nil { // claimed -> sent (ciclo B, entrega OK)
 		t.Fatal(err)
 	}
 	// Ciclo A rezagado: su intento falló y llama a retry TARDE. No debe revivir el 'sent'.
-	if err := e.MarkOutboxRetry("x", 30, "fallo tardío del ciclo viejo"); err != nil {
+	if err := e.MarkOutboxRetry("x", encolado(t, e, "x"), 30, "fallo tardío del ciclo viejo"); err != nil {
 		t.Fatal(err)
 	}
 	if status, _, _ := outboxRow(t, e, "x"); status != outboxSent {
 		t.Fatalf("un retry rezagado no debe resucitar un 'sent'; estado quedó %q (esperaba sent)", status)
 	}
 	// Idem para dead.
-	if err := e.MarkOutboxDead("x", "tardío"); err != nil {
+	if err := e.MarkOutboxDead("x", encolado(t, e, "x"), "tardío"); err != nil {
 		t.Fatal(err)
 	}
 	if status, _, _ := outboxRow(t, e, "x"); status != outboxSent {
@@ -666,10 +674,10 @@ func TestRequeueDeadOutbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Simular un dead con attempts y last_error.
-	if err := e.MarkOutboxRetry("d1", 0, "boom"); err != nil {
+	if err := e.MarkOutboxRetry("d1", encolado(t, e, "d1"), 0, "boom"); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.MarkOutboxDead("d1", "fallo permanente"); err != nil {
+	if err := e.MarkOutboxDead("d1", encolado(t, e, "d1"), "fallo permanente"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -705,10 +713,10 @@ func TestOutboxHealth(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := e.MarkOutboxSent("s"); err != nil {
+	if err := e.MarkOutboxSent("s", encolado(t, e, "s")); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.MarkOutboxDead("d", "el central rechazó"); err != nil {
+	if err := e.MarkOutboxDead("d", encolado(t, e, "d"), "el central rechazó"); err != nil {
 		t.Fatal(err)
 	}
 

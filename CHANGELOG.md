@@ -527,6 +527,37 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   Los bytes van sin comprimir en los dos sentidos (cable = crudos) hasta los PR de compresión; si
   algún día el transporte de Go descomprime solo una página de la bajada, se cuentan sus crudos y
   no se inventa el cable.
+- **Una edición local ya no se pierde por el push ni por el pull.**
+  Dos pérdidas, medidas en main y ninguna con un error a la vista. Por el PUSH: el drain reclama v1,
+  se edita v2 mientras v1 viaja, el central acepta v1 y `MarkOutboxSent`, que miraba sólo el estado,
+  dejaba la fila 'sent' con v2 adentro: v2 no salía nunca. Por el PULL: con v2 'pending', la bajada
+  trae otra versión de la misma id y el UPSERT de `IngestShared` le pisaba el contenido; como el
+  payload del envío se arma desde `observations`, el push siguiente subía la versión del central.
+  Reproducido con dos procesos sobre una misma base contra un central que devuelve lo que se le sube
+  (`TestUnaEdicionEnVueloLlegaAlCentral`): en main el central y esta máquina terminan con v1 y el
+  outbox dice `sent=1`; con este arreglo los dos terminan con v2.
+
+  `OutboxItem` lleva el `Hash` del contenido que se empuja, leído en el mismo SELECT del payload, y
+  las tres marcas lo reciben. `MarkOutboxSent(id, hash)` deja la fila 'sent' sólo si ese hash sigue
+  encolado; `MarkOutboxRetry` y `MarkOutboxDead` sólo aplican a esa versión, así una edición que
+  llegó en vuelo no hereda el backoff ni el dead-letter de la vieja. `MarkOutboxSent` anota igual
+  `sent_hash` y `sent_at` de lo que salió aunque la fila quede 'pending', porque la versión vieja SÍ
+  salió y va a volver en la bajada. `IngestShared` lee la fila de outbox en su transacción: si está
+  'pending' o 'claimed' con otro hash no escribe NADA —ni el contenido ni el tema, la importancia o
+  el tipo, ni toca el vector— y la edición local sale entera en el próximo tick, donde gana por ser
+  la última. Y lo cuenta en el viaje de la bajada (`sync_viajes`): `rebotes` si lo que bajó es lo que
+  esta máquina entregó por última vez (`sent_hash`), `choques` si no; cada choque se loguea con su id.
+  `choques` es una COTA SUPERIOR de las ediciones simultáneas: también cae ahí la re-entrega de la
+  versión de base de una nota que bajó de otra máquina y se editó acá, porque ese hash no se guarda.
+  Con ese número se decide si vale guardar las dos versiones.
+
+  Sin migración (usa el `sent_hash` de v58) y sin cambios en tools ni en el central: el arreglo es
+  del cliente y viaja con el binario de cada máquina. Cambian dos firmas internas: `IngestShared`
+  devuelve `memory.Ingesta` en vez de un bool, y las marcas del outbox reciben el hash. Lo que NO
+  arregla: dos drainers que empujan versiones distintas de la misma nota a la vez —en davantis-1 hay
+  varios daemons por base— pueden llegar al central en orden invertido y dejar la vieja; eso es del
+  envío doble, que ataca `fix/sync-drain-sin-doble-push`. Las ediciones simultáneas desde dos
+  máquinas siguen siendo «gana la última»: se cuentan, no se guardan las dos.
 
   *Diecinueve guardas nuevas, con su sabotaje corrido y rojo. `TestElRebotePreservaElEnviado`,
   `TestLaEntregaDejaQueSalioYCuando`, `TestLosViajesSeSumanPorDiaYSentido`,

@@ -1,0 +1,318 @@
+package memory
+
+import "testing"
+
+// UNA EDICIÓN LOCAL NO SE PIERDE POR EL PUSH NI POR EL PULL (ola 2, frente sync).
+//
+// Dos pérdidas, medidas en main antes de este arreglo, y ninguna con un error a la vista:
+//   - Por el PUSH: claim de v1, edición local v2 mientras v1 viaja, 200 del central por v1.
+//     MarkOutboxSent miraba sólo el estado y dejaba la fila 'sent' con v2 adentro: 0 filas por
+//     reenviar, y v2 no salía nunca.
+//   - Por el PULL: v2 'pending' y baja otra versión de la misma id. El UPSERT de IngestShared le
+//     pisaba el contenido, y como el payload del envío se arma desde observations, el push siguiente
+//     subía la versión del central. El sello de #656 salvaba el estado de la fila, no la edición.
+//
+// Las pruebas de acá fijan el arreglo en el engine; el caso entero —dos procesos sobre una misma
+// base contra un central que devuelve lo que se le sube— está en internal/mcp
+// (TestUnaEdicionEnVueloLlegaAlCentral).
+
+const (
+	versionQueViaja = "la nota tal como salio al central"
+	versionEditada  = "la nota editada aca mientras la otra viajaba"
+)
+
+// reclamada guarda contenido como 'shared' y lo reclama, como hace el drain al empezar un tick.
+func reclamada(t *testing.T, e *DbEngine, id, contenido string) OutboxItem {
+	t.Helper()
+	if err := e.SaveObservationTyped(id, "t/x", contenido, 1, "semantic", ScopeShared, nil); err != nil {
+		t.Fatal(err)
+	}
+	return reclamarUna(t, e, id)
+}
+
+// reclamarUna reclama y devuelve el ítem de id; falla si el claim no lo trae.
+func reclamarUna(t *testing.T, e *DbEngine, id string) OutboxItem {
+	t.Helper()
+	items, err := e.ClaimOutboxBatch(50, 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range items {
+		if it.ObsID == id {
+			return it
+		}
+	}
+	t.Fatalf("el claim no trajo %s (trajo %+v)", id, items)
+	return OutboxItem{}
+}
+
+// editar guarda una versión nueva de id por el camino de siempre (re-encola si cambió el hash).
+func editar(t *testing.T, e *DbEngine, id, contenido string) {
+	t.Helper()
+	if err := e.SaveObservationTyped(id, "t/x", contenido, 1, "semantic", ScopeShared, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// contenidoDe lee el contenido guardado de id.
+func contenidoDe(t *testing.T, e *DbEngine, id string) string {
+	t.Helper()
+	var c string
+	if err := e.db.QueryRow(`SELECT content FROM observations WHERE id = ?`, id).Scan(&c); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// TestEdicionEnVueloNoQuedaEnviada: claim de v1, edición v2 mientras viaja, el central acepta v1.
+// La fila queda 'pending' y el próximo claim trae v2; recién la entrega de v2 la deja 'sent'.
+//
+// Sabotaje: marcar 'sent' sin mirar qué versión salió.
+// arnes: archivo="internal/memory/outbox.go"
+// arnes: de="status = CASE WHEN enqueued_hash = ? THEN 'sent' ELSE status END,"
+// arnes: a="status = CASE WHEN 1 OR enqueued_hash = ? THEN 'sent' ELSE status END,"
+//
+// Sabotaje: que el claim no traiga el hash de lo que empuja (ninguna marca vuelve a aplicar).
+// arnes: archivo="internal/memory/outbox.go"
+// arnes: de="COALESCE(content_hash, '')"
+// arnes: a="''"
+func TestEdicionEnVueloNoQuedaEnviada(t *testing.T) {
+	e := newTestEngine(t)
+	v1 := reclamada(t, e, "vuela-1", versionQueViaja)
+	if v1.Content != versionQueViaja || v1.Hash != ContentHash(versionQueViaja) {
+		t.Fatalf("precondición: el claim tenía que traer v1 con el hash de ESE contenido, trajo %q / %q", v1.Content, v1.Hash)
+	}
+
+	editar(t, e, "vuela-1", versionEditada) // llega mientras v1 viaja
+	if err := e.MarkOutboxSent("vuela-1", v1.Hash); err != nil { // el 200 de v1
+		t.Fatal(err)
+	}
+	if st, _, _ := outboxRow(t, e, "vuela-1"); st != outboxPending {
+		t.Fatalf("EDICIÓN PERDIDA: la entrega de v1 dejó la fila %q con v2 adentro; esperaba %q", st, outboxPending)
+	}
+
+	v2 := reclamarUna(t, e, "vuela-1")
+	if v2.Content != versionEditada || v2.Hash != ContentHash(versionEditada) {
+		t.Fatalf("el tick siguiente tenía que llevar v2 con su hash, lleva %q / %q", v2.Content, v2.Hash)
+	}
+	if err := e.MarkOutboxSent("vuela-1", v2.Hash); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := outboxRow(t, e, "vuela-1"); st != outboxSent {
+		t.Errorf("la entrega de v2 tenía que dejarla 'sent', quedó %q", st)
+	}
+	if _, sentHash, _, _ := sentDe(t, e, "vuela-1"); sentHash == nil || *sentHash != v2.Hash {
+		t.Errorf("sent_hash=%v, esperaba el de v2 (%s)", textoONulo(sentHash), v2.Hash)
+	}
+}
+
+// TestUnReintentoViejoNoFrenaLaEdicion: v1 falla por algo transitorio DESPUÉS de que llegó v2. El
+// backoff y el intento fallido son de v1: v2 no los hereda y sale ya, en el próximo claim.
+//
+// Sabotaje: reprogramar sin mirar qué versión falló.
+// arnes: archivo="internal/memory/outbox.go"
+// arnes: de="AND enqueued_hash = ?`, backoffSeconds, errMsg, obsID, hash)"
+// arnes: a="AND (enqueued_hash = ? OR 1)`, backoffSeconds, errMsg, obsID, hash)"
+func TestUnReintentoViejoNoFrenaLaEdicion(t *testing.T) {
+	e := newTestEngine(t)
+	v1 := reclamada(t, e, "vuela-2", versionQueViaja)
+	editar(t, e, "vuela-2", versionEditada)
+
+	if err := e.MarkOutboxRetry("vuela-2", v1.Hash, 3600, "timeout de v1"); err != nil {
+		t.Fatal(err)
+	}
+	if st, attempts, _ := outboxRow(t, e, "vuela-2"); st != outboxPending || attempts != 0 {
+		t.Errorf("v2 heredó el fallo de v1: status=%q attempts=%d; esperaba pending/0", st, attempts)
+	}
+	if v2 := reclamarUna(t, e, "vuela-2"); v2.Content != versionEditada {
+		t.Errorf("el claim trajo %q; esperaba v2", v2.Content)
+	}
+}
+
+// TestUnRechazoViejoNoMataLaEdicion: el central rechaza v1 para siempre DESPUÉS de que llegó v2. Lo
+// rechazado es v1; v2 no va a dead-letter y sale en el próximo claim.
+//
+// Sabotaje: mandar a dead-letter sin mirar qué versión rechazó el central.
+// arnes: archivo="internal/memory/outbox.go"
+// arnes: de="AND enqueued_hash = ?`, errMsg, obsID, hash)"
+// arnes: a="AND (enqueued_hash = ? OR 1)`, errMsg, obsID, hash)"
+func TestUnRechazoViejoNoMataLaEdicion(t *testing.T) {
+	e := newTestEngine(t)
+	v1 := reclamada(t, e, "vuela-3", versionQueViaja)
+	editar(t, e, "vuela-3", versionEditada)
+
+	if err := e.MarkOutboxDead("vuela-3", v1.Hash, "el central rechazó v1"); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := outboxRow(t, e, "vuela-3"); st != outboxPending {
+		t.Fatalf("v2 murió por el rechazo de v1: status=%q; esperaba %q", st, outboxPending)
+	}
+	if v2 := reclamarUna(t, e, "vuela-3"); v2.Content != versionEditada {
+		t.Errorf("el claim trajo %q; esperaba v2", v2.Content)
+	}
+}
+
+// TestElReboteDeLoQueViajabaNoEsChoque: v1 salió mientras se editaba v2, y el central la devuelve.
+// Es el rebote más común —la versión que viajaba vuelve en la bajada— y NO es un choque con otra
+// máquina. Para distinguirlo, la entrega de v1 tiene que quedar anotada en sent_hash aunque la fila
+// siga 'pending' por v2.
+//
+// Sabotaje: anotar la entrega sólo si la fila queda 'sent' (la variante que no anota lo que viajaba).
+// arnes: archivo="internal/memory/outbox.go"
+// arnes: de="WHERE obs_id = ? AND status IN ('pending','claimed')`, hash, hash, obsID)"
+// arnes: a="WHERE obs_id = ? AND status IN ('pending','claimed') AND enqueued_hash = ?`, hash, hash, obsID, hash)"
+func TestElReboteDeLoQueViajabaNoEsChoque(t *testing.T) {
+	e := newTestEngine(t)
+	v1 := reclamada(t, e, "vuela-4", versionQueViaja)
+	editar(t, e, "vuela-4", versionEditada)
+	if err := e.MarkOutboxSent("vuela-4", v1.Hash); err != nil {
+		t.Fatal(err)
+	}
+
+	ing, err := e.IngestShared(SharedObs{
+		ID: "vuela-4", TopicKey: "t/x", Content: versionQueViaja,
+		Importance: 1, MemType: "semantic", Author: "davantis-mando-admin", ProjectID: "acme",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ing != (Ingesta{Rebote: true}) {
+		t.Errorf("el rebote de la versión que viajaba se contó %+v; esperaba sólo Rebote", ing)
+	}
+	if c := contenidoDe(t, e, "vuela-4"); c != versionEditada {
+		t.Errorf("EDICIÓN PERDIDA: el rebote de v1 pisó v2, quedó %q", c)
+	}
+}
+
+// TestPullNoPisaUnaEdicionPendiente: v1 enviada, edición local v2 'pending' —con otro tema, otra
+// importancia, otro tipo y su vector—, y la bajada devuelve v1. No se pisa NADA de la edición: el
+// contenido, los metadatos y el vector siguen siendo los de v2, el claim trae v2 entera, y se cuenta
+// como rebote.
+//
+// Sabotaje: pisar como antes aunque haya una edición local sin salir.
+// arnes: archivo="internal/memory/inboundsync.go"
+// arnes: de="enVuelo := existia && (estado == outboxPending || estado == outboxClaimed)"
+// arnes: a="enVuelo := existia && (estado == outboxPending || estado == outboxClaimed) && false"
+//
+// Sabotaje: la variante que conserva el contenido pero toma tema, importancia y tipo de lo que bajó.
+// arnes: archivo="internal/memory/inboundsync.go"
+// arnes: de="\t\tif entregado.Valid"
+// arnes: a="\t\tif _, err := tx.Exec(`UPDATE observations SET topic_key = ?, importance = ?, mem_type = CASE WHEN ? != '' THEN ? ELSE mem_type END WHERE id = ?`, o.TopicKey, o.Importance, memType, memType, o.ID); err != nil {\n\t\t\treturn Ingesta{}, err\n\t\t}\n\t\tif err := tx.Commit(); err != nil {\n\t\t\treturn Ingesta{}, err\n\t\t}\n\t\tif entregado.Valid"
+//
+// Sabotaje: no reconocer el rebote (todo lo conservado se cuenta como choque).
+// arnes: archivo="internal/memory/inboundsync.go"
+// arnes: de="entregado.Valid && entregado.String == hash"
+// arnes: a="entregado.Valid && entregado.String == \"\""
+func TestPullNoPisaUnaEdicionPendiente(t *testing.T) {
+	e := newTestEngine(t)
+	if err := e.SaveObservationTyped("mia-2", "t/a", versionQueViaja, 1, "semantic", ScopeShared, nil); err != nil {
+		t.Fatal(err)
+	}
+	v1 := reclamarUna(t, e, "mia-2")
+	if err := e.MarkOutboxSent("mia-2", v1.Hash); err != nil {
+		t.Fatal(err)
+	}
+	vector := []float32{0, 1, 0}
+	if err := e.SaveObservationTyped("mia-2", "t/b", versionEditada, 3, "procedural", ScopeShared, vector); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := outboxRow(t, e, "mia-2"); st != outboxPending {
+		t.Fatalf("precondición: la edición tenía que dejar la fila pending, quedó %q", st)
+	}
+
+	// El central devuelve v1: el rebote de lo que esta máquina subió.
+	ing, err := e.IngestShared(SharedObs{
+		ID: "mia-2", TopicKey: "t/a", Content: versionQueViaja,
+		Importance: 1, MemType: "semantic", Author: "davantis-mando-admin", ProjectID: "acme",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ing != (Ingesta{Rebote: true}) {
+		t.Errorf("IngestShared devolvió %+v; esperaba sólo Rebote (lo que bajó es lo que salió de acá)", ing)
+	}
+
+	var contenido, tema, tipo string
+	var importancia float64
+	if err := e.db.QueryRow(`SELECT content, topic_key, importance, COALESCE(mem_type,'') FROM observations WHERE id = 'mia-2'`).
+		Scan(&contenido, &tema, &importancia, &tipo); err != nil {
+		t.Fatal(err)
+	}
+	if contenido != versionEditada {
+		t.Fatalf("EDICIÓN PERDIDA: el pull pisó el contenido local, quedó %q", contenido)
+	}
+	if tema != "t/b" || importancia != 3 || tipo != "procedural" {
+		t.Errorf("el pull mezcló la edición con lo que bajó: tema=%q importancia=%v tipo=%q; esperaba t/b, 3, procedural", tema, importancia, tipo)
+	}
+	if v := vectorGuardado(t, e, "mia-2"); len(v) != 3 || v[1] != 1 {
+		t.Errorf("el pull tocó el vector de la edición local: %v", v)
+	}
+	v2 := reclamarUna(t, e, "mia-2")
+	if v2.Content != versionEditada || v2.TopicKey != "t/b" || v2.Importance != 3 {
+		t.Errorf("el próximo push lleva %+v; esperaba v2 entera", v2)
+	}
+}
+
+// TestUnChoqueSeCuentaAparte: lo que baja distinto de la edición local Y de lo que esta máquina
+// entregó es un choque —otra máquina editó la misma nota—, y se conserva la local igual. También
+// lo es cuando la nota nunca salió de acá (sent_hash vacío).
+//
+// Sabotaje: contar el choque como rebote.
+// arnes: archivo="internal/memory/inboundsync.go"
+// arnes: de="return Ingesta{Choque: true}, nil"
+// arnes: a="return Ingesta{Rebote: true}, nil"
+func TestUnChoqueSeCuentaAparte(t *testing.T) {
+	e := newTestEngine(t)
+	v1 := reclamada(t, e, "mia-3", versionQueViaja)
+	if err := e.MarkOutboxSent("mia-3", v1.Hash); err != nil {
+		t.Fatal(err)
+	}
+	editar(t, e, "mia-3", versionEditada)
+
+	ajena := SharedObs{ID: "mia-3", TopicKey: "t/x", Content: "la version que escribio gio", Importance: 1, MemType: "semantic", Author: "gio", ProjectID: "acme"}
+	ing, err := e.IngestShared(ajena)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ing != (Ingesta{Choque: true}) {
+		t.Errorf("una versión ajena contra una edición local se contó %+v; esperaba sólo Choque", ing)
+	}
+	if c := contenidoDe(t, e, "mia-3"); c != versionEditada {
+		t.Errorf("EDICIÓN PERDIDA: el choque pisó la edición local, quedó %q", c)
+	}
+
+	// Nunca salió de acá: no hay entrega con la que confundirla.
+	if err := e.SaveObservationTyped("nunca-1", "t/x", "escrita aca, sin salir todavia", 1, "semantic", ScopeShared, nil); err != nil {
+		t.Fatal(err)
+	}
+	ajena.ID = "nunca-1"
+	if ing, err := e.IngestShared(ajena); err != nil || ing != (Ingesta{Choque: true}) {
+		t.Errorf("una versión ajena contra una nota que nunca salió dio %+v (err %v); esperaba sólo Choque", ing, err)
+	}
+}
+
+// TestLaMismaVersionNoEsChoque: la misma nota capturada en dos máquinas —id determinístico, mismo
+// contenido— baja idéntica mientras la de acá todavía no salió. No hay edición que conservar ni nada
+// que contar: acá está lo mismo que bajó.
+//
+// Sabotaje: conservar toda fila en vuelo, sin comparar el hash.
+// arnes: archivo="internal/memory/inboundsync.go"
+// arnes: de="if enVuelo && encolado != hash {"
+// arnes: a="if enVuelo {"
+func TestLaMismaVersionNoEsChoque(t *testing.T) {
+	e := newTestEngine(t)
+	const commit = "feat: la misma captura en las dos maquinas"
+	if err := e.SaveObservationTyped("commit-1", "git-commit", commit, 1, "episodic", ScopeShared, nil); err != nil {
+		t.Fatal(err)
+	}
+	ing, err := e.IngestShared(SharedObs{
+		ID: "commit-1", TopicKey: "git-commit", Content: commit,
+		Importance: 1, MemType: "episodic", Author: "davantis-2", ProjectID: "acme",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ing != (Ingesta{}) {
+		t.Errorf("la misma versión bajada contra una pendiente idéntica dio %+v; esperaba ni rebote ni choque", ing)
+	}
+}
