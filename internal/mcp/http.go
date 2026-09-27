@@ -19,7 +19,6 @@ package mcp
 // compartido) ya deja ese cambio listo.
 
 import (
-	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/subtle"
@@ -34,7 +33,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"musubi/internal/config"
@@ -661,7 +659,7 @@ func writeHTTPJSON(w http.ResponseWriter, r *http.Request, resp JsonRpcResponse)
 	w.Header().Add("Vary", "Accept-Encoding")
 	grande := len(data) > umbralCompresionRespuesta
 	if grande && aceptaGzip(r.Header.Get("Accept-Encoding")) {
-		if comprimido, ok := comprimirGzip(data); ok {
+		if comprimido, err := comprimirGzip(data); err == nil {
 			w.Header().Set("Content-Encoding", "gzip")
 			data = comprimido
 		}
@@ -692,27 +690,6 @@ func aceptaGzip(h string) bool {
 		return true
 	}
 	return false
-}
-
-// escritoresGzip recicla los compresores. Un gzip.Writer nuevo reserva sus tablas en la primera
-// escritura, y desde este cambio se comprime casi toda respuesta grande del central: medido, sin el
-// pool cada respuesta comprimida reservaba 796 KB para el recolector, y con él, 40 KB.
-var escritoresGzip = sync.Pool{New: func() any { return gzip.NewWriter(io.Discard) }}
-
-// comprimirGzip comprime un cuerpo entero en memoria. false si algo falló: el que llama manda el
-// cuerpo en claro, que siempre es una respuesta válida.
-func comprimirGzip(data []byte) ([]byte, bool) {
-	zw := escritoresGzip.Get().(*gzip.Writer)
-	defer escritoresGzip.Put(zw)
-	var buf bytes.Buffer
-	zw.Reset(&buf)
-	if _, err := zw.Write(data); err != nil {
-		return nil, false
-	}
-	if err := zw.Close(); err != nil {
-		return nil, false
-	}
-	return buf.Bytes(), true
 }
 
 // resolveServiceAuth resuelve el token (desde la env var nombrada) y si el bind es
