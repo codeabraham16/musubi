@@ -16,6 +16,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -400,4 +401,93 @@ func TestLasRespuestasComprimidasNoSeMezclan(t *testing.T) {
 	if comprimidas.Load() == 0 {
 		t.Fatalf("precondición: ninguna de las %d respuestas salió comprimida; sin compresión, la prueba no mira el pool", total)
 	}
+}
+
+// centralQueContesta sirve siempre el mismo cuerpo en /mcp, con el Content-Encoding que se le diga
+// ("" = ninguno): un central de mentira para ver qué hace el Pull con lo que el real no manda.
+func centralQueContesta(t *testing.T, contentEncoding string, cuerpo []byte) string {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if contentEncoding != "" {
+			w.Header().Set("Content-Encoding", contentEncoding)
+		}
+		_, _ = w.Write(cuerpo)
+	}))
+	t.Cleanup(ts.Close)
+	return ts.URL
+}
+
+// paginaConUnaNota arma la respuesta de musubi_sync_pull —la misma forma que la de toolSyncPull— con
+// una sola nota de `peso` bytes de contenido y el cursor en 8.
+func paginaConUnaNota(t *testing.T, peso int) []byte {
+	t.Helper()
+	contenido := strings.Repeat("la bajada se lee acotada. ", peso/26+1)[:peso]
+	nota := memory.SharedObs{RowID: 8, ID: "nota-grande", TopicKey: "sync/tope", Content: contenido, Importance: 1, MemType: "semantic"}
+	pl, err := json.Marshal(map[string]interface{}{"items": []memory.SharedObs{nota}, "next_cursor": 8, "alcance": ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(JsonRpcResponse{JsonRpc: "2.0", ID: "pull", Result: textResult(string(pl))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// TestLaBajadaNoDescomprimeSinTope: el Pull lee la página ACOTADA. Una página comprimida que en claro
+// pasa del tope se corta ahí y vuelve como un fallo permanente que nombra el tope, sin avanzar el
+// cursor ni contar nada para sync_viajes; en claro, lo mismo. Y el tope de producción no corta una
+// página real: la misma página de 1 MiB, con el tope de NewSyncClient, llega entera.
+//
+// Lo que se custodia es la memoria del daemon. Sin tope, ~64 KB de cable se expanden a 64 MiB y el
+// decoder los junta enteros (448 MiB reservados, medido en la revisión); con 1 MB serían ~7 GiB. El
+// tope de la prueba es de 64 KiB y la página de 1 MiB para no fabricar los 64 MiB de verdad: lo que
+// importa es que el lector corta, no dónde.
+//
+// Sabotaje: descomprimir sin tope.
+// arnes: archivo="internal/mcp/sync_viajes.go"
+// arnes: de="return io.LimitReader(claro, tope+1), nil"
+// arnes: a="return claro, nil"
+func TestLaBajadaNoDescomprimeSinTope(t *testing.T) {
+	const peso, tope = 1 << 20, 64 << 10
+	pagina := paginaConUnaNota(t, peso)
+	var comprimida bytes.Buffer
+	zw := gzip.NewWriter(&comprimida)
+	if _, err := zw.Write(pagina); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	bomba := centralQueContesta(t, "gzip", comprimida.Bytes())
+
+	// El tope de producción deja pasar la página entera: es una página válida, y 1 MiB está lejos de 64.
+	items, next, _, err := clienteDelSyncContra(t, bomba).Pull(7, 50)
+	if err != nil || len(items) != 1 || len(items[0].Content) != peso || next != 8 {
+		t.Fatalf("precondición: con el tope de producción la página de %d B tenía que llegar entera; err=%v, %d ítems, cursor %d", peso, err, len(items), next)
+	}
+
+	for _, caso := range []struct{ forma, url string }{
+		{"comprimida", bomba},
+		{"en claro", centralQueContesta(t, "", pagina)},
+	} {
+		c := clienteDelSyncContra(t, caso.url)
+		c.topePagina = tope
+		items, next, _, err := c.Pull(7, 50)
+		if err == nil {
+			t.Errorf("%s: una página de %d B en claro pasó con un tope de %d B (trajo %d ítems): se leyó sin tope", caso.forma, len(pagina), tope, len(items))
+			continue
+		}
+		if !errors.Is(err, errPermanent) || !strings.Contains(err.Error(), bytesLegibles(tope)) {
+			t.Errorf("%s: el error no es el del tope (permanente, nombrando %s): %v", caso.forma, bytesLegibles(tope), err)
+		}
+		if items != nil || next != 7 {
+			t.Errorf("%s: una página cortada devolvió %d ítems y el cursor %d; esperaba nada y el 7 de antes", caso.forma, len(items), next)
+		}
+		if f := c.foto().bajada; f != (memory.Viaje{}) {
+			t.Errorf("%s: una página cortada contó para sync_viajes: %+v", caso.forma, f)
+		}
+	}
+	t.Logf("la página: %d B en claro, %d B comprimida", len(pagina), comprimida.Len())
 }

@@ -57,6 +57,13 @@ type SyncClient struct {
 	url   string
 	token string
 	http  *http.Client
+	// topePagina es cuánto puede pesar en claro una página de la bajada (ver paginaEnClaro). Lo pone
+	// NewSyncClient: el mismo maxDecodedBody (64 MiB) con el que el central acota un cuerpo que le
+	// llega comprimido, y es holgadísimo. Medido el 2026-09-27 en el central: la nota compartida más
+	// grande pesa 58.466 B, y las 50 más grandes juntas —la peor página posible con el batch_size de
+	// producción— 642.551 B de contenido; las 200 más grandes, 1.597.445 B. Las pruebas lo bajan para
+	// no tener que fabricar 64 MiB.
+	topePagina int64
 	// trafico cuenta los bytes que viajaron por sentido; los drains registran la diferencia de
 	// cada tick en sync_viajes (ver sync_viajes.go).
 	trafico traficoDelSync
@@ -116,6 +123,8 @@ func NewSyncClient(cfg config.SyncConfig) (*SyncClient, error) {
 		// Push, PushGraph, Pull, PushFlota y callCentral —por donde pasa todo el arsenal— salen
 		// por este mismo c.http: son los cinco `c.http.Do` del paquete, y no hay otro constructor.
 		http: cerebro.Cliente(nombre, time.Duration(timeout)*time.Second, nil),
+		// La página de la bajada se lee con el mismo tope que el central le pone a lo que descomprime.
+		topePagina: maxDecodedBody,
 	}, nil
 }
 
@@ -487,8 +496,8 @@ type pullPayload struct {
 // siguiente. Cualquier fallo (red, HTTP, JSON-RPC) devuelve error: el scheduler entrante lo trata
 // como transitorio (reintenta en el próximo tick) — es best-effort, no rompe nada.
 //
-// La página se pide comprimida y se descomprime acá, para que sync_viajes vea los dos tamaños: el
-// del cable y el crudo (ver el Accept-Encoding de abajo).
+// La página se pide comprimida y se descomprime acá, acotada (paginaEnClaro), para que sync_viajes
+// vea los dos tamaños: el del cable y el crudo (ver el Accept-Encoding de abajo).
 func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int64, string, error) {
 	reqBody := struct {
 		JsonRpc string `json:"jsonrpc"`
@@ -532,26 +541,24 @@ func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int6
 		return nil, afterRowID, "", fmt.Errorf("%w: pull HTTP %d", errTransient, resp.StatusCode)
 	}
 	// Dos lectores contados, uno encima del otro: `cable` cuenta lo que viajó y `contado`, lo que se
-	// leyó ya descomprimido. Con un cuerpo en claro, `contado` lee a través de `cable` y los dos dan
-	// lo mismo.
+	// leyó ya descomprimido y acotado (paginaEnClaro). Con un cuerpo en claro, `contado` lee a través
+	// de `cable` y los dos dan lo mismo.
 	cable := &lectorContado{r: resp.Body}
-	contado := &lectorContado{r: cable}
-	switch enc := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding"))); enc {
-	case "", "identity":
-	case "gzip":
-		zr, zerr := gzip.NewReader(cable)
-		if zerr != nil {
-			return nil, afterRowID, "", fmt.Errorf("%w: el central dijo gzip y la página no lo es: %v", errTransient, zerr)
-		}
-		defer zr.Close()
-		contado = &lectorContado{r: zr}
-	default:
-		// Sólo se pidió gzip. Otra codificación no es algo que el decoder JSON pueda leer, y dejar
-		// que lo intente daría un error de sintaxis que no nombra la causa.
-		return nil, afterRowID, "", fmt.Errorf("%w: el central contestó con Content-Encoding %q, que no se pidió", errTransient, enc)
+	claro, err := paginaEnClaro(cable, resp.Header.Get("Content-Encoding"), c.topePagina)
+	if err != nil {
+		return nil, afterRowID, "", err
 	}
+	contado := &lectorContado{r: claro}
 	var rpcResp syncRPCResponse
 	if err := json.NewDecoder(contado).Decode(&rpcResp); err != nil {
+		// Con más del tope leído, el decoder falló porque la página se cortó ahí. Es PERMANENTE, como
+		// un payload inválido: reintentar el mismo cursor trae la misma página, y ninguna real se le
+		// acerca (ver topePagina). El drain no distingue la clase —cede y reintenta en dos ticks—,
+		// pero el error dice qué pasó en vez de un «unexpected EOF» que se lee como un corte de red.
+		if contado.n > c.topePagina {
+			return nil, afterRowID, "", fmt.Errorf("%w: la página del central pasa de %s en claro; se cortó ahí sin leer el resto",
+				errPermanent, bytesLegibles(c.topePagina))
+		}
 		return nil, afterRowID, "", fmt.Errorf("%w: decodificar pull: %v", errTransient, err)
 	}
 	if rpcResp.Error != nil {

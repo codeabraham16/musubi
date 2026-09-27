@@ -22,7 +22,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   lo negocia solo— sino por la medida: cuando el pedido no trae `Accept-Encoding`, el transporte lo
   agrega y descomprime sin avisar, y `sync_viajes` habría contado como cable los bytes ya
   descomprimidos. Ahora `bytes_cable` es lo que viajó y `bytes_crudos` lo descomprimido; contra un
-  central que no comprime, los dos dan lo mismo.
+  central que no comprime, los dos dan lo mismo. Y lo lee ACOTADO: una página que en claro pasa de
+  64 MiB —el mismo tope que el central le pone a lo que descomprime— se corta ahí y vuelve como un
+  fallo permanente, en vez de juntarse entera en memoria (sin tope, ~64 KB de cable eran 64 MiB y
+  448 MiB reservados). Ninguna página real se le acerca: las 50 notas más grandes del central suman
+  642.551 B.
 
   Ningún cliente que hoy le habla al `/mcp` del central se rompe, y está probado uno por uno: el
   sync, el canal `musubi cerebro` y el relay del panel (`musubi dashboard`, por donde llegan el CRM
