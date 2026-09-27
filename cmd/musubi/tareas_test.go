@@ -443,9 +443,9 @@ func TestElHookDelTurnoLeDejaLasTareasAlAgente(t *testing.T) {
 //
 // Sabotaje que la hace fallar: reconocer sólo la forma presentada del turno de otra sesión, no la
 // cruda que recibe el hook.
-// arnes: archivo="cmd/musubi/tareas.go"
-// arnes: de="var prefijosDeTurnoAjeno = []string{\"<task-notification>\", \"<cross-session-message\", \"<agent-message\", \"Another Claude session\"}\n"
-// arnes: a="var prefijosDeTurnoAjeno = []string{\"<task-notification>\", \"Another Claude session\"}\n"
+// arnes: archivo="internal/transcripts/prompts.go"
+// arnes: de="\t{prefijo: \"<cross-session-message\", loVeElHook: true},\n\t{prefijo: \"<agent-message\", loVeElHook: true},\n"
+// arnes: a=""
 //
 // Sabotaje que la hace fallar: un solo aviso por proyecto, no por sesión.
 // arnes: archivo="cmd/musubi/tareas.go"

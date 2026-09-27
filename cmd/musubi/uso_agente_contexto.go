@@ -26,8 +26,9 @@ import (
 //     DOS clasificadores: la lista de transcripts.EsPedidoDeContinuacion, que es la que va a usar
 //     la compuerta del hook, y el largo (≤3 palabras), que no depende de ella: medida sólo con la
 //     lista, la compuerta se mediría a sí misma.
-//   - M1s: avisos del sistema (<task-notification>, <command-…>) que recibieron memoria: el hook
-//     los trata como un pedido y busca con el texto del aviso.
+//   - M1s: avisos del sistema (<task-notification>, un mensaje de otra sesión) que recibieron
+//     memoria: el hook los trata como un pedido y busca con el texto del aviso. Sólo cuenta los que
+//     el hook ve: los registros de un slash-command no pasan por él y se informan aparte.
 //   - M2: compactaciones seguidas de un bloque de Musubi del SessionStart antes del próximo pedido.
 //     Hoy el hook de arranque sólo escucha «startup», así que tras compactar Musubi calla.
 //   - M3: ids de memoria repetidos DENTRO de una misma ventana de contexto: ya estaban a la vista.
@@ -119,13 +120,16 @@ type MedicionContexto struct {
 	Transcripts      int            `json:"transcripts"`
 	PromptsPorOrigen map[string]int `json:"prompts_por_origen"`
 
-	M1            MedidaM1       `json:"m1_continuacion_con_memoria"`
-	M1s           ConteoDeTurnos `json:"m1s_avisos_del_sistema_con_memoria"`
-	M2            MedidaM2       `json:"m2_compactacion_con_arranque"`
-	M3            MedidaM3       `json:"m3_repetidos_en_la_ventana"`
-	M5            MedidaM5       `json:"m5_reinyectados_tras_compactar"`
-	M7            MedidaM7       `json:"m7_eco_tras_compactar"`
-	Reanudaciones Reanudaciones  `json:"reanudaciones"`
+	M1  MedidaM1       `json:"m1_continuacion_con_memoria"`
+	M1s ConteoDeTurnos `json:"m1s_avisos_del_sistema_con_memoria"`
+	// AvisosQueElHookNoVe son los registros de un slash-command (`<command-…>`, `<local-command-…>`):
+	// avisos del sistema que no pasan por el hook del turno y por eso quedan fuera de M1s.
+	AvisosQueElHookNoVe int           `json:"avisos_que_el_hook_no_ve"`
+	M2                  MedidaM2      `json:"m2_compactacion_con_arranque"`
+	M3                  MedidaM3      `json:"m3_repetidos_en_la_ventana"`
+	M5                  MedidaM5      `json:"m5_reinyectados_tras_compactar"`
+	M7                  MedidaM7      `json:"m7_eco_tras_compactar"`
+	Reanudaciones       Reanudaciones `json:"reanudaciones"`
 }
 
 // AlcanceContexto es la medición de las sesiones principales. El puntero nil es «sin medir»: ver
@@ -298,7 +302,13 @@ func medirSesionContexto(s transcripts.Sesion, v transcripts.Ventana, m *Medicio
 					sumarTurno(&m.M1.PorLargo)
 				}
 			case transcripts.OrigenSistema:
-				sumarTurno(&m.M1s)
+				// Sólo los avisos que el hook ve: un slash-command no pasa por él y no puede recibir
+				// memoria, así que en el denominador bajaría la tasa con cada /model.
+				if transcripts.LoVeElHook(t.Prompt) {
+					sumarTurno(&m.M1s)
+				} else {
+					m.AvisosQueElHookNoVe++
+				}
 			}
 		}
 		// El pedido entra DESPUÉS de mirar sus propias inyecciones: el eco es repetir un pedido
@@ -425,7 +435,8 @@ func imprimirContexto(w io.Writer, inf InformeContexto) {
 	fila("      por la lista («sigue», «go», «dale»…)", conteo(m.M1.PorLista))
 	fila("      por el largo (≤3 palabras)", conteo(m.M1.PorLargo))
 	fila("      referencia: pedidos sustantivos", conteo(m.M1.Sustantivos))
-	fila("M1s avisos del sistema que recibieron memoria", conteo(m.M1s))
+	fila("M1s avisos del sistema que recibieron memoria (los que ve el hook)", conteo(m.M1s))
+	fila("      slash-commands, que el hook no ve (fuera de M1s)", fmt.Sprintf("%d", m.AvisosQueElHookNoVe))
 	fila("M2  compactaciones seguidas de un arranque de Musubi (meta ≥95 %)", fraccion(m.M2.ConArranque, m.M2.Compactaciones))
 	fila("M3  ids repetidos dentro de una ventana de contexto (meta <1 %)", fraccion(m.M3.Repetidos, m.M3.IDs))
 	fila("M5  ids de ventanas anteriores que volvieron tras compactar", fraccion(m.M5.Reinyectados, m.M5.IDs))

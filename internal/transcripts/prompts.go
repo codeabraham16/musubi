@@ -22,28 +22,66 @@ const (
 	OrigenInterno Origen = "interno"
 )
 
-// prefijosDeSistema son los comienzos de un prompt que no escribió una persona. Medido el
-// 2026-09-26 sobre los transcripts de Musubi y Altura desde el 09-14: 474 prompts humanos, 192
-// `<task-notification>` (el aviso de una tarea de fondo que terminó), 38 `<command-…>` y 35
-// `<local-command-…>`. Los avisos disparan el hook del turno como si fueran un pedido (128 de los
-// 192), y el recall busca memoria con el texto del aviso como consulta: uno trajo
-// architecture/notifications porque el aviso decía «notification».
-var prefijosDeSistema = []string{"<task-notification", "<command-", "<local-command", "<system-reminder"}
+// avisoDeSistema es un comienzo de prompt que no escribió la persona.
+type avisoDeSistema struct {
+	prefijo string
+	// loVeElHook dice si el hook del turno lo recibe. Los registros de un slash-command que Claude
+	// Code resuelve sin el modelo NO: medido el 2026-09-26 en las sesiones principales de Musubi y
+	// Altura, de toda la historia, 0 de 296 `<command-…>` y 1 de 283 `<local-command-…>` tienen un
+	// bloque del hook detrás, contra 613 de 930 `<task-notification>`.
+	loVeElHook bool
+}
+
+// avisosDeSistema es LA tabla de los prompts que no escribió la persona. La leen EsDeSistema —el
+// medidor y la compuerta del hook del turno— y el aviso de tareas (cmd/musubi/tareas.go): eran dos
+// tablas, discrepaban en cinco prefijos, y el mismo hook tenía dos definiciones de «lo escribió la
+// persona».
+//
+// Son hechos del formato de Claude Code, medidos el 2026-09-26: `<task-notification` (terminó una
+// tarea de fondo: 192 desde el 09-14 en Musubi y Altura, y el recall buscaba con el texto del aviso
+// —uno trajo architecture/notifications porque el aviso decía «notification»—), `<cross-session-
+// message` (un mensaje de otra sesión: 168 en los `queued_command` de la máquina), `<agent-message`
+// (un subagente entrega su informe: 6), la forma presentada del mensaje de otra sesión («Another
+// Claude session…»), `<system-reminder`, y los registros de un slash-command (`<command-…>` 38 y
+// `<local-command-…>` 35 desde el 09-14). Se comparan tal como le llegan al hook: crudos.
+var avisosDeSistema = []avisoDeSistema{
+	{prefijo: "<task-notification", loVeElHook: true},
+	{prefijo: "<cross-session-message", loVeElHook: true},
+	{prefijo: "<agent-message", loVeElHook: true},
+	{prefijo: "Another Claude session", loVeElHook: true},
+	{prefijo: "<system-reminder", loVeElHook: true},
+	{prefijo: "<command-", loVeElHook: false},
+	{prefijo: "<local-command", loVeElHook: false},
+}
+
+// avisoDe devuelve el aviso con que empieza un prompt, sin contar los espacios iniciales.
+func avisoDe(prompt string) (avisoDeSistema, bool) {
+	p := strings.TrimLeftFunc(prompt, unicode.IsSpace)
+	for _, a := range avisosDeSistema {
+		if strings.HasPrefix(p, a.prefijo) {
+			return a, true
+		}
+	}
+	return avisoDeSistema{}, false
+}
 
 // EsDeSistema dice si un prompt es un aviso del sistema y no un pedido: empieza, sin contar los
-// espacios iniciales, con `<task-notification`, `<command-`, `<local-command` o `<system-reminder`.
+// espacios iniciales, con alguno de los prefijos de avisosDeSistema.
 //
 // MIRA EL TEXTO Y NO EL `origin` DEL TRANSCRIPT a propósito: el hook del turno recibe sólo el
 // texto del prompt, y el medidor tiene que clasificar con el MISMO criterio que la compuerta que
 // mide, o mediría otra cosa.
 func EsDeSistema(prompt string) bool {
-	p := strings.TrimLeftFunc(prompt, unicode.IsSpace)
-	for _, pre := range prefijosDeSistema {
-		if strings.HasPrefix(p, pre) {
-			return true
-		}
-	}
-	return false
+	_, es := avisoDe(prompt)
+	return es
+}
+
+// LoVeElHook dice si el hook del turno recibe este prompt: todo pedido de la persona y todo aviso
+// salvo los registros de un slash-command (ver avisoDeSistema.loVeElHook). Un prompt que el hook no
+// ve no puede recibir memoria, y contarlo en un denominador bajaría la tasa con cada slash-command.
+func LoVeElHook(prompt string) bool {
+	a, es := avisoDe(prompt)
+	return !es || a.loVeElHook
 }
 
 // ClasificarPrompt dice quién escribió el texto de un registro que EsPrompt ya aceptó.

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"musubi/internal/transcripts"
 )
 
 // Las pruebas de este archivo salen de la revisión adversarial de `uso-agente --contexto`
@@ -61,5 +63,63 @@ func TestMedirContextoResumeSaleSinMedir(t *testing.T) {
 		if strings.HasPrefix(strings.TrimSpace(l), "resume") && !strings.Contains(l, "sin medir") {
 			t.Errorf("la tabla dice %q: quería «sin medir»", l)
 		}
+	}
+}
+
+// Sabotaje que la hace fallar: que el aviso de tareas vuelva a tener su propia tabla de prefijos.
+// arnes: archivo="cmd/musubi/tareas.go"
+// arnes: de="\treturn !transcripts.EsDeSistema(prompt)\n"
+// arnes: a="\treturn !strings.HasPrefix(strings.TrimSpace(prompt), \"<task-notification>\")\n"
+func TestUnSoloClasificadorDePromptHumano(t *testing.T) {
+	// El hook del turno decide dos veces si un prompt lo escribió la persona: para el recall
+	// (EsDeSistema, que también usa el medidor) y para el aviso de tareas. Eran dos tablas y
+	// discrepaban en estos cinco; ninguno lo escribe la persona.
+	for _, c := range []struct {
+		prompt  string
+		sistema bool
+	}{
+		{"<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>", true},
+		{"<cross-session-message from=\"otra\">hola</cross-session-message>", true},
+		{"<agent-message>informe del subagente</agent-message>", true},
+		{"Another Claude session sent a message: hola", true},
+		{"<command-name>/model</command-name>", true},
+		{"<local-command-stdout>Set model</local-command-stdout>", true},
+		{"<system-reminder>x</system-reminder>", true},
+		{"armá el deploy del central con la receta", false},
+		{"sigue", false},
+	} {
+		if got := transcripts.EsDeSistema(c.prompt); got != c.sistema {
+			t.Errorf("transcripts.EsDeSistema(%.40q) = %v, quería %v", c.prompt, got, c.sistema)
+		}
+		if ajeno := !esTurnoDeLaPersona(c.prompt); ajeno != c.sistema {
+			t.Errorf("esTurnoDeLaPersona(%.40q) dice ajeno=%v, y EsDeSistema dice %v: dos criterios de «lo "+
+				"escribió la persona» en el mismo hook", c.prompt, ajeno, c.sistema)
+		}
+	}
+}
+
+// Sabotaje que la hace fallar: contar en M1s los avisos que el hook no ve.
+// arnes: archivo="cmd/musubi/uso_agente_contexto.go"
+// arnes: de="\t\t\t\tif transcripts.LoVeElHook(t.Prompt) {\n"
+// arnes: a="\t\t\t\tif true || transcripts.LoVeElHook(t.Prompt) {\n"
+func TestMedirContextoM1sSoloCuentaLoQueVeElHook(t *testing.T) {
+	// Un slash-command deja dos registros (`<command-name>` y `<local-command-stdout>`) que el hook
+	// del turno nunca ve: 0 de 296 y 1 de 283 con un bloque detrás en los reales. No pueden recibir
+	// memoria, así que no van al denominador; se informan aparte.
+	raiz := t.TempDir()
+	dia := "2026-09-20"
+	escribirTranscript(t, raiz, "-home-x/s1.jsonl",
+		fxPrompt("p0", fxTS(dia, 1), "<task-notification>\n<summary>Monitor event</summary>"),
+		fxHook("h0", fxTS(dia, 2), "UserPromptSubmit", "[Musubi — memoria relevante] Contexto.\n- n [id:9]"),
+		fxPrompt("c1", fxTS(dia, 3), "<command-name>/model</command-name>"),
+		fxPrompt("c2", fxTS(dia, 4), "<local-command-stdout>Set model</local-command-stdout>"),
+	)
+	m := medirContextoFixture(t, raiz)
+	if m.M1s != (ConteoDeTurnos{Turnos: 1, ConMemoria: 1, IDs: 1}) || m.AvisosQueElHookNoVe != 2 {
+		t.Errorf("M1s = %+v y fuera del hook %d: quería el aviso de la tarea (1/1) y los 2 registros del "+
+			"slash-command aparte", m.M1s, m.AvisosQueElHookNoVe)
+	}
+	if n := m.PromptsPorOrigen[string(transcripts.OrigenSistema)]; n != 3 {
+		t.Errorf("prompts del sistema = %d, quería 3: el conteo por origen no cambia", n)
 	}
 }

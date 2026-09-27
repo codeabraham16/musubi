@@ -49,8 +49,8 @@ func fxBorde(uuid, ts string) map[string]any {
 
 // Sabotaje que la hace fallar: no reconocer el aviso de una tarea de fondo.
 // arnes: archivo="internal/transcripts/prompts.go"
-// arnes: de="var prefijosDeSistema = []string{\"<task-notification\", "
-// arnes: a="var prefijosDeSistema = []string{\"<task-notificacion\", "
+// arnes: de="\t{prefijo: \"<task-notification\", loVeElHook: true},\n"
+// arnes: a="\t{prefijo: \"<task-notificacion\", loVeElHook: true},\n"
 //
 // Sabotaje que la hace fallar: no saltear los espacios del comienzo.
 // arnes: archivo="internal/transcripts/prompts.go"
