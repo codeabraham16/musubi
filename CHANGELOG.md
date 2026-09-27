@@ -26,7 +26,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - el proyecto propio es el de `resolveProjectID`, el mismo con el que el daemon estampa cada nota.
 
   No se normaliza. Medido: ningún `project_id` de `observations` tiene dos variantes de mayúsculas
-  o espacios, ni en davantis-1 ni en el central ni en altura-erp.
+  o espacios, ni en davantis-1 ni en el central ni en altura-erp. Alias, en cambio, hay uno:
+  altura-erp declara `project_id: altura`, pero 3 notas locales de ese mismo repo (sobre su CI, del
+  2026-09-21) están estampadas `altura-erp`, así que salen como `[de altura-erp]` aunque son
+  propias. Re-estamparlas con `altura` cambia datos: lo decide el dueño, no el código.
 
   El nombre pasa por `EnUnaLinea(…, 40)`: llega por el sync como cualquier columna, así que no puede
   abrir un renglón propio en el bloque. El hook sigue federado: no se esconde ni se topa nada.
