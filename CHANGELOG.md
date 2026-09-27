@@ -732,6 +732,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **El latido del riel en vivo ya no dice «sin sondeo» con el sistema sano.** El pie del riel contaba
+  los sondeos del último minuto y con cero apagaba la lámpara. Con la bajada espaciada una máquina
+  quieta pide cada 300 s, y hasta ~450 s cuando el candado cambia de dueño porque el anterior murió
+  sin soltarlo (tope + lease + tick): con los 3 sondeadores que el central vio en 24 h (medido el
+  2026-09-27), la ventana de un minuto la apagaba el 51,6 % del tiempo (simulado con fases al azar;
+  el 80 % con un solo sondeador). Ahora sigue prendida mientras el último sondeo tenga 10 min o
+  menos, y el texto dice hace cuánto llegó: «sondeo · hace 40s», o «sin sondeo desde hace 12m».
+
+  **El umbral de 10 min le gana al peor hueco sano por 150 s**, y a cambio un corte real apaga la
+  lámpara a los 10 min del último sondeo y no al minuto. Esa rapidez la devuelve el texto, que da la
+  antigüedad desde el primer segundo, y un enlace caído lo sigue diciendo en el acto el encabezado
+  del riel. En el ledger del central (24 h) los huecos entre sondeos dan p50 10 s, p95 30 s y máximo
+  200 s: con 10 min la lámpara no se habría apagado ninguna vez, y con un minuto, el 0,29 % del
+  tiempo. Ese número es bajo porque los clientes todavía no tienen el ritmo: el 51,6 % de arriba es
+  lo que viene cuando lo tengan.
+
+  **La hora del sondeo es la del evento (`at`) y no la de su llegada.** El relay re-manda su backlog
+  al abrir la página y al reconectar, y estampados al llegar, sondeos de hace horas prendían la
+  lámpara un minuto —con el umbral nuevo habrían sido diez—. Un `at` del futuro (el reloj del
+  central adelantado) se recorta a la llegada, y la marca nunca retrocede. La lógica vive en
+  `assets/src/latido.mjs`, sin DOM: la recorren `node --test` y
+  `TestElLatidoAguantaLaBajadaEspaciadaYSeApagaConUnCorte`, que la ejecuta en node contra el tope y
+  el lease que salen de la config, con seis sabotajes mecanizados. Sólo el panel: no cambia ninguna
+  tool ni el sync, y viaja con el próximo despliegue del central.
 - **El índice del delta desaloja primero a las sesiones sin turnos: una sesión interactiva que
   espera un workflow ya no pierde su delta ni sus pedidos cuando arrancan las hijas.** El índice
   `loop_delta_sessions` acota a 32 las sesiones que conservan su delta

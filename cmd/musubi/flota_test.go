@@ -277,9 +277,13 @@ func TestSePuedeLlegarALaFlotaYVolverSinEscribirLaURL(t *testing.T) {
 // NEGATIVA y mira dos literales, `/api/flota` y `politicas_activas`. Un enlace de navegación puro
 // mete `/flota` y no `/api/flota`, así que pasa por debajo. Lo que la guarda custodia de verdad no
 // es que el bundle no NAVEGUE a la flota, es que no hable con su RUTA DE DATOS.
+//
+// El ancla es el cierre del IIFE, `})();`, que aparece una sola vez en el bundle. La anterior,
+// `requestAnimationFrame(u_);})();`, llevaba un nombre MINIFICADO y dejó de existir en cuanto una
+// reconstrucción (la del latido) renombró `u_`: cualquier cambio en src/ puede mover esos nombres.
 // arnes: archivo="cmd/musubi/assets/dashboard.bundle.js"
-// arnes: de="requestAnimationFrame(u_);})();"
-// arnes: a="requestAnimationFrame(u_);})();\nfetch(\"/api/flota\").then(r=>r.json());"
+// arnes: de="})();"
+// arnes: a="})();\nfetch(\"/api/flota\").then(r=>r.json());"
 func TestElBundleWebGLNoSabeNadaDeLaFlota(t *testing.T) {
 	b := string(assetsFS(t, "assets/dashboard.bundle.js"))
 	if strings.Contains(b, "/api/flota") || strings.Contains(b, "politicas_activas") {
