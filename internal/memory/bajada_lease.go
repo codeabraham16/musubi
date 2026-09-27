@@ -74,8 +74,17 @@ func LeerUltimaBajada(v string) (UltimaBajada, error) {
 		n[i] = x
 	}
 	u := UltimaBajada{Unix: n[0], Filas: n[1], ProximaUnix: n[2], ConFilas: n[3], PaginasDelDia: n[4]}
-	if u.Unix <= 0 || u.Filas < 0 || u.ProximaUnix < u.Unix || u.ConFilas < 0 || u.PaginasDelDia < 0 {
-		return UltimaBajada{}, fmt.Errorf("la última bajada %q es imposible: un instante no positivo, un conteo negativo o la próxima antes que la última", v)
+	imposible := ""
+	switch {
+	case u.Unix <= 0:
+		imposible = "un instante no positivo"
+	case u.ProximaUnix < u.Unix:
+		imposible = "la próxima antes que la última"
+	case u.Filas < 0 || u.ConFilas < 0 || u.PaginasDelDia < 0:
+		imposible = "un conteo negativo"
+	}
+	if imposible != "" {
+		return UltimaBajada{}, fmt.Errorf("la última bajada %q es imposible: %s", v, imposible)
 	}
 	return u, nil
 }

@@ -391,9 +391,10 @@ func TestLaEdadDeLaBajadaNoContradiceAlVolumen(t *testing.T) {
 	})
 }
 
-// TestLaUltimaBajadaIlegibleNoRompeLaLinea: una meta sin la forma unix|filas|proxima —un apagón deja
-// escrituras cortadas— o con valores imposibles se dice ilegible, y va entre comillas y escapada: un
-// salto de línea adentro partiría la línea «bajada» en dos.
+// TestLaUltimaBajadaIlegibleNoRompeLaLinea: una meta sin la forma de memory.MetaUltimaBajada —un
+// apagón deja escrituras cortadas— o con valores imposibles se dice ilegible, y va entre comillas y
+// escapada: un salto de línea adentro partiría la línea «bajada» en dos. Un instante en cero no se
+// lee «bajó el 1 de enero de 1970» («última hace 20723 d»), ni una cuenta negativa como una bajada.
 //
 // Sabotaje: mostrar el valor crudo, sin escapar.
 // arnes: archivo="internal/mcp/sync_viajes.go"
@@ -402,12 +403,24 @@ func TestLaEdadDeLaBajadaNoContradiceAlVolumen(t *testing.T) {
 //
 // Sabotaje: aceptar una próxima anterior a la última.
 // arnes: archivo="internal/memory/bajada_lease.go"
-// arnes: de="u.Unix <= 0 || u.Filas < 0 || u.ProximaUnix < u.Unix"
-// arnes: a="u.Unix <= 0 || u.Filas < 0"
+// arnes: de="\tcase u.ProximaUnix < u.Unix:"
+// arnes: a="\tcase false && u.ProximaUnix < u.Unix:"
+//
+// Sabotaje: aceptar un instante en cero, que se leería «bajó el 1 de enero de 1970».
+// arnes: archivo="internal/memory/bajada_lease.go"
+// arnes: de="\tcase u.Unix <= 0:"
+// arnes: a="\tcase false && u.Unix <= 0:"
+//
+// Sabotaje: aceptar una cuenta negativa de filas o de páginas.
+// arnes: archivo="internal/memory/bajada_lease.go"
+// arnes: de="\tcase u.Filas < 0 || u.ConFilas < 0 || u.PaginasDelDia < 0:"
+// arnes: a="\tcase false && (u.Filas < 0 || u.ConFilas < 0 || u.PaginasDelDia < 0):"
 func TestLaUltimaBajadaIlegibleNoRompeLaLinea(t *testing.T) {
 	for _, c := range []struct{ nombre, valor string }{
 		{"cortada con un salto de línea", "1758900000|dos\nfilas"},
 		{"la próxima antes que la última", "1758900000|2|1758800000|1|1"},
+		{"el instante en cero", "0|0|0|0|0"},
+		{"filas negativas", "1758900000|-1|1758900030|0|1"},
 	} {
 		t.Run(c.nombre, func(t *testing.T) {
 			s, eng := serverQueAnotaViajes(t, "http://127.0.0.1:1", true)
