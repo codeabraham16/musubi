@@ -1361,16 +1361,25 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   aparte.
 
   **Lo que cambia además, y conviene saberlo antes de V3.** El olvido cuenta la edad desde
-  `last_accessed` o, si la nota nunca se leyó, desde `created_at`. Una nota vieja que baja por
-  primera vez puede archivarse en el primer mantenimiento. Medido en el central: de sus 3.237 notas
-  shared visibles, un cliente NUEVO que las baje todas archivaría 1.005 (31 %) con los valores por
-  defecto; hoy, ninguna, porque nacen con edad cero. Y restar la fecha local de la del central deja
-  de medir la demora del sync en las filas nuevas; para eso está `sync_viajes`.
+  `last_accessed` o, si la nota nunca se leyó, desde `created_at`. Con la fecha viaja la edad de la
+  nota pero no su acceso: la fila bajada llega con `access_count` 0 y `last_accessed` NULL, sin los
+  14 días de gracia de `MinAgeDays` (`decay_min_age_days`), así que una nota vieja que baja por
+  primera vez puede archivarse en el primer mantenimiento. Medido el 2026-09-27 con el `Decay` real
+  sobre las 3.237 notas shared visibles del central (exportadas en sólo lectura): un cliente NUEVO
+  que las baje todas archivaría 1.007 (31,1 %) con los valores por defecto, y el central, con la
+  misma fórmula y sus accesos, mantiene vivas 1.003 de esas 1.007; hoy, ninguna, porque nacen con
+  edad cero. Ningún camino automático la revive: el `ON CONFLICT DO UPDATE` no nombra `archived`,
+  así que una re-entrega la deja archivada. Y con la config que escribe `musubi init`
+  (`purge_archived_after_days: 90`), a los 90 días de archivada se borra para siempre. davantis-1
+  no lo sufre, porque ya tiene las 3.237 y no inserta ninguna fila nueva de ellas; la laptop no se
+  midió. Y restar la fecha local de la del central deja de medir la demora del sync en las filas
+  nuevas; para eso está `sync_viajes`.
 
-  **Despliegue:** la fecha viaja recién con el central nuevo (ventana V3). Un cliente viejo contra
-  el central nuevo ignora la clave, como toda clave que no conoce, y guarda la fecha de la bajada.
-  Un cliente nuevo contra el central de hoy no la recibe y hace lo mismo. Cada cliente necesita el
-  binario nuevo (V1 davantis-1, V2 la laptop).
+  **Despliegue:** la fecha viaja recién con el central nuevo (ventana V3), y V3 queda atada a lo
+  que el dueño decida sobre el olvido del párrafo anterior. Un cliente viejo contra el central
+  nuevo ignora la clave, como toda clave que no conoce, y guarda la fecha de la bajada. Un cliente
+  nuevo contra el central de hoy no la recibe y hace lo mismo. Cada cliente necesita el binario
+  nuevo (V1 davantis-1, V2 la laptop).
 
   *Pruebas: seis en `internal/memory` (`fecha_de_origen_test.go`); dos en `internal/mcp`
   (`fecha_viaja_test.go`), con el JSON de la respuesta y los dos sentidos de la convivencia; y la
