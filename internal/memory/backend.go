@@ -385,6 +385,11 @@ type OutboxStore interface {
 	MarkOutboxSent(obsID, hash string) error
 	MarkOutboxRetry(obsID, hash string, backoffSeconds int, errMsg string) error
 	MarkOutboxDead(obsID, hash, errMsg string) error
+	// ReclamoVigente es lo que el drain pregunta antes de cada push: si la fila sigue reclamada por el
+	// claim que trajo el ítem y con el mismo contenido. HayOutboxPorSubir es el sondeo entre ticks. Las
+	// dos son lecturas: ninguna toma el candado de escritura (ver outbox.go).
+	ReclamoVigente(obsID, hash, reclamo string) (bool, error)
+	HayOutboxPorSubir() (bool, error)
 	OutboxStats() (pending, sent, dead int, err error)
 	// ReclamarBajada y AvanzarCursorBajada son el lease y el cursor monótono de la BAJADA: el mismo
 	// resguardo que ClaimOutboxBatch le da a la subida, que la bajada no tenía (ver bajada_lease.go).

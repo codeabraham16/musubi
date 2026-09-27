@@ -67,10 +67,9 @@ func contenidoDe(t *testing.T, e *DbEngine, id string) string {
 // TestEdicionEnVueloNoQuedaEnviada: claim de v1, edición v2 mientras viaja, el central acepta v1.
 // La fila queda 'pending' y el próximo claim trae v2; recién la entrega de v2 la deja 'sent'.
 //
-// Sabotaje: marcar 'sent' sin mirar qué versión salió.
-// arnes: archivo="internal/memory/outbox.go"
-// arnes: de="status = CASE WHEN ? = `+hashActual+` THEN 'sent' ELSE status END,"
-// arnes: a="status = CASE WHEN 1 OR ? = `+hashActual+` THEN 'sent' ELSE status END,"
+// Acá la fila ya no está 'claimed' cuando vuelve el 200 —la edición la devolvió a la cola—, así que
+// la protegen dos cosas a la vez: el estado y el hash. La guarda del hash solo está en
+// TestUnaEntregaTardiaNoCierraElReclamoDeOtro, y la del estado solo en TestUnaReclamadaNoLaPisaElPull.
 //
 // Sabotaje: que el claim no traiga el hash de lo que empuja (ninguna marca vuelve a aplicar).
 // arnes: archivo="internal/memory/outbox.go"
@@ -160,8 +159,8 @@ func TestUnRechazoViejoNoMataLaEdicion(t *testing.T) {
 //
 // Sabotaje: anotar la entrega sólo si la fila queda 'sent' (la variante que no anota lo que viajaba).
 // arnes: archivo="internal/memory/outbox.go"
-// arnes: de="WHERE obs_id = ? AND status IN ('pending','claimed')`, hash, hash, hash, hash, hash, obsID)"
-// arnes: a="WHERE obs_id = ? AND status IN ('pending','claimed') AND ? = `+hashActual, hash, hash, hash, hash, hash, obsID, hash)"
+// arnes: de="WHERE obs_id = ? AND status IN ('pending','claimed')`, hash, hash, hash, hash, hash, hash, obsID)"
+// arnes: a="WHERE obs_id = ? AND status IN ('pending','claimed') AND ? = `+hashActual, hash, hash, hash, hash, hash, hash, obsID, hash)"
 func TestElReboteDeLoQueViajabaNoEsChoque(t *testing.T) {
 	e := newTestEngine(t)
 	v1 := reclamada(t, e, "vuela-4", versionQueViaja)
@@ -495,15 +494,63 @@ func TestUnExitoViejoNoBorraElErrorNuevo(t *testing.T) {
 	}
 }
 
+// TestUnaEntregaTardiaNoCierraElReclamoDeOtro: dos drainers. A lleva v1; se edita v2; B reclama v2 y
+// todavía no volvió. Recién ahí le llega a A el 200 de v1: la fila está 'claimed' —por B— pero con
+// otro contenido, y no se cierra. Si se cerrara y B fallara, el reintento de v2 ya no encontraría una
+// fila abierta que reprogramar: v2 no saldría nunca.
+//
+// Sabotaje: marcar 'sent' sin mirar qué versión salió.
+// arnes: archivo="internal/memory/outbox.go"
+// arnes: de="status = CASE WHEN status = 'claimed' AND ? = `+hashActual+` THEN 'sent' ELSE status END,"
+// arnes: a="status = CASE WHEN status = 'claimed' AND (1 OR ? = `+hashActual+`) THEN 'sent' ELSE status END,"
+// arnes: colision_ok="TestUnaReclamadaNoLaPisaElPull"
+func TestUnaEntregaTardiaNoCierraElReclamoDeOtro(t *testing.T) {
+	e := newTestEngine(t)
+	a := reclamada(t, e, "tardia-1", versionQueViaja)
+	editar(t, e, "tardia-1", versionEditada)
+	b := reclamarUna(t, e, "tardia-1")
+	if b.Content != versionEditada {
+		t.Fatalf("precondición: B tenía que reclamar v2, reclamó %q", b.Content)
+	}
+	if err := e.MarkOutboxSent("tardia-1", a.Hash); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := outboxRow(t, e, "tardia-1"); st != outboxClaimed {
+		t.Fatalf("el 200 tardío de v1 cerró la fila que B tiene reclamada con v2: quedó %q", st)
+	}
+	if err := e.MarkOutboxRetry("tardia-1", b.Hash, 0, "timeout de v2"); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := outboxRow(t, e, "tardia-1"); st != outboxPending {
+		t.Errorf("el fallo de v2 tenía que dejarla en la cola, quedó %q", st)
+	}
+}
+
 // TestUnaReclamadaNoLaPisaElPull: una edición local que un drain ya reclamó ('claimed') tampoco la
 // pisa el pull. Es un drainer que se llevó v2 y todavía no la empujó, o que murió antes de hacerlo y
 // la fila espera a que venza su lease: ni el rebote de v1 ni una versión ajena reemplazan a v2, y lo
 // que sale es v2.
 //
+// Y sale DESPUÉS de la ajena. La versión de gio llegó al central más tarde que el push de v2 que ya
+// estaba en vuelo; si el 200 de ese push cerrara la fila, quedaría v2 acá y la de gio allá para
+// siempre. El choque devuelve la reclamada a la cola, la marca no cierra una 'pending', y v2 vuelve a
+// subir: gana la última.
+//
 // Sabotaje: que la conservación deje de mirar las filas 'claimed'.
 // arnes: archivo="internal/memory/inboundsync.go"
 // arnes: de="|| estado == outboxClaimed)"
 // arnes: a="|| false)"
+//
+// Sabotaje: que el choque sobre la reclamada no la devuelva a la cola.
+// arnes: archivo="internal/memory/inboundsync.go"
+// arnes: de="if err := volverASubirTrasUnChoque(tx, o.ID); err != nil {"
+// arnes: a="if err := error(nil); err != nil {"
+//
+// Sabotaje: que la marca de entrega cierre también una 'pending' con el mismo contenido.
+// arnes: archivo="internal/memory/outbox.go"
+// arnes: de="status = CASE WHEN status = 'claimed' AND ? = `+hashActual+` THEN 'sent' ELSE status END,"
+// arnes: a="status = CASE WHEN ? = `+hashActual+` THEN 'sent' ELSE status END,"
+// arnes: colision_ok="TestUnaEntregaTardiaNoCierraElReclamoDeOtro"
 func TestUnaReclamadaNoLaPisaElPull(t *testing.T) {
 	e := newTestEngine(t)
 	v1 := reclamada(t, e, "reclamada-1", versionQueViaja)
@@ -532,8 +579,18 @@ func TestUnaReclamadaNoLaPisaElPull(t *testing.T) {
 	if err := e.MarkOutboxSent("reclamada-1", v2.Hash); err != nil {
 		t.Fatal(err)
 	}
+	if st, _, _ := outboxRow(t, e, "reclamada-1"); st != outboxPending {
+		t.Fatalf("DIVERGENCIA: el 200 de v2 cerró la fila después del choque —acá v2, en el central la de gio—; quedó %q", st)
+	}
+	otra := reclamarUna(t, e, "reclamada-1")
+	if otra.Content != versionEditada {
+		t.Fatalf("lo que vuelve a subir tras el choque tenía que ser v2, es %q", otra.Content)
+	}
+	if err := e.MarkOutboxSent("reclamada-1", otra.Hash); err != nil {
+		t.Fatal(err)
+	}
 	if st, _, _ := outboxRow(t, e, "reclamada-1"); st != outboxSent {
-		t.Errorf("la entrega de v2 tenía que dejarla 'sent', quedó %q", st)
+		t.Errorf("la entrega de la segunda subida tenía que dejarla 'sent', quedó %q", st)
 	}
 }
 

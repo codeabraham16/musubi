@@ -189,14 +189,22 @@ func (e *DbEngine) IngestShared(o SharedObs) (Ingesta, error) {
 	// dice qué hay acá: comparar contra él contaba un rebote o un choque cada vez que bajaba justo lo
 	// que ya estaba. Con el mismo contenido no hay nada que conservar y sigue el camino de siempre.
 	//
-	// ⚠️ LO QUE ESTO NO CIERRA, y queda para fix/sync-drain-sin-doble-push. Una 'claimed' cuya
-	// entrega el central YA confirmó, pero que el drain todavía no marcó, se conserva igual que una
-	// edición sin salir: si en esa ventana (~un RTT más la espera del candado) baja una versión ajena
-	// más nueva, se conserva la local, el cursor pasa la ajena y la marca deja la fila 'sent'. Acá
-	// queda la local y en el central la ajena, sin push ni pull que lo cierre; main convergía porque
-	// el pull pisaba la reclamada. El cliente no sabe si su push ya se confirmó, así que no se arregla
-	// acá: la salida que propuso la revisión es que un Choque conservado sobre una 'claimed' deje la
-	// fila para volver a subir la local (gana la última) en vez de que la marca la cierre 'sent'.
+	// UN CHOQUE SOBRE UNA 'claimed' LA DEVUELVE A LA COLA. Una 'claimed' cuya entrega el central YA
+	// confirmó, pero que el drain todavía no marcó, se conserva igual que una edición sin salir: si en
+	// esa ventana (~un RTT más la espera del candado) baja una versión ajena más nueva, se conserva la
+	// local y el cursor pasa la ajena. Si después la marca la cerraba 'sent', quedaba la local acá y la
+	// ajena en el central, sin push ni pull que lo cerrara; main convergía porque el pull pisaba la
+	// reclamada. El cliente no sabe si su push ya se confirmó, así que no lo decide acá: deja la fila
+	// 'pending' (volverASubirTrasUnChoque) y la versión local vuelve a subir, que es lo que la deja
+	// última en el central.
+	//
+	// La señal es el ESTADO, y no enqueued_hash, porque las marcas ya no miran lo encolado sino
+	// hashActual, el content_hash de la observación: el choque no cambia el contenido de acá, así que
+	// ningún hash distingue esta fila de una entrega limpia. Lo que la marca sí mira es si la fila sigue
+	// 'claimed': MarkOutboxSent sólo cierra 'sent' una reclamada, y sobre una 'pending' con el mismo
+	// contenido suelta el lease para que vuelva a salir. No la pisa porque no escribe 'pending' ni
+	// 'sent' sobre ella: la deja como la encontró. Sólo en el choque: un rebote es lo que salió de acá,
+	// y cerrar esa fila es lo correcto.
 	var estado string
 	var entregado sql.NullString
 	switch err := tx.QueryRow(`SELECT status, sent_hash FROM outbox WHERE obs_id = ?`, o.ID).
@@ -210,6 +218,14 @@ func (e *DbEngine) IngestShared(o SharedObs) (Ingesta, error) {
 	if enVuelo && otroContenido {
 		if entregado.Valid && entregado.String == hash {
 			return Ingesta{Rebote: true}, nil
+		}
+		if estado == outboxClaimed {
+			if err := volverASubirTrasUnChoque(tx, o.ID); err != nil {
+				return Ingesta{}, err
+			}
+			if err := tx.Commit(); err != nil {
+				return Ingesta{}, fmt.Errorf("error al commitear el choque sobre la reclamada %s: %w", o.ID, err)
+			}
 		}
 		return Ingesta{Choque: true}, nil
 	}

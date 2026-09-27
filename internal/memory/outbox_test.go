@@ -39,6 +39,17 @@ func encolado(t *testing.T, e *DbEngine, obsID string) string {
 	return h
 }
 
+// reclamarTodo reclama lo que haya por subir, como hace el drain antes de empujar. La marca de
+// entrega sólo cierra una fila RECLAMADA (MarkOutboxSent): una 'pending' es algo que alguien devolvió
+// a la cola después del claim —una edición, o un choque conservado sobre la reclamada— y la marca la
+// respeta. Marcar una 'pending' que nadie reclamó es un camino que el drain no recorre.
+func reclamarTodo(t *testing.T, e *DbEngine) {
+	t.Helper()
+	if _, err := e.ClaimOutboxBatch(50, 60); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // --- T1.1: migración v11 ---
 
 func TestMigrationV11OutboxSchema(t *testing.T) {
@@ -356,6 +367,7 @@ func TestReSaveSameContentNoDuplicate(t *testing.T) {
 	}
 	_, _, hash1 := outboxRow(t, e, "s1")
 	// Marcar como sent para verificar que un re-save con MISMO contenido no la re-encola.
+	reclamarTodo(t, e)
 	if err := e.MarkOutboxSent("s1", hash1); err != nil {
 		t.Fatal(err)
 	}
@@ -563,6 +575,7 @@ func TestMarksSentRetryDead(t *testing.T) {
 	if err := e.SaveObservationTyped("m2", "t", "para sent", 1.0, "", ScopeShared, nil); err != nil {
 		t.Fatal(err)
 	}
+	reclamarTodo(t, e)
 	if err := e.MarkOutboxSent("m2", encolado(t, e, "m2")); err != nil {
 		t.Fatal(err)
 	}
@@ -578,6 +591,7 @@ func TestOutboxStats(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	reclamarTodo(t, e)
 	if err := e.MarkOutboxSent("a", encolado(t, e, "a")); err != nil {
 		t.Fatal(err)
 	}
@@ -714,6 +728,7 @@ func TestOutboxHealth(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	reclamarTodo(t, e)
 	if err := e.MarkOutboxSent("s", encolado(t, e, "s")); err != nil {
 		t.Fatal(err)
 	}

@@ -562,6 +562,42 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **La subida al central no manda dos veces la misma nota ni espera al tick.** Con varios daemons
+  sobre una base (seis en davantis-1), el drain reclamaba `batch_size` (50) filas con UN lease de
+  60 s y las empujaba de a una. Con ~3,5 s por nota en el central, 50 no entraban en el lease: vencía
+  a mitad de la lista y otro daemon volvía a reclamar —y a subir— las que el primero todavía tenía en
+  la mano (116 saves por 95 notas, medido el 2026-09-25). Y una nota escrita por otro proceso —un
+  hook, la captura— esperaba al tick siguiente: 22 s de mediana con el intervalo de 30 s.
+
+  Ahora `drainOutboxOnce` reclama sublotes de `max(1, lease_seconds/10)` filas (seis con el
+  default), cada uno con su lease fresco, y repite hasta vaciar la cola o hasta el 80 % del
+  intervalo; el tick sigue dejando UN solo viaje de subida en `sync_viajes`. Antes de cada push
+  pregunta con una lectura (`ReclamoVigente`) si la fila sigue reclamada por ESE claim y con el mismo
+  contenido: si otro drainer la reclamó o se editó, el payload viejo no sale, y la v1 de un drainer
+  no llega al central después de la v2 del otro. El lease se escribe con milisegundos:
+  `datetime('now', '+1 seconds')` trunca al segundo, y un lease de 1 s duraba entre cero y un
+  segundo. Entre ticks, `RunOutboxScheduler` mira cada 2 s si hay algo que un claim tomaría
+  (`HayOutboxPorSubir`: una lectura sobre `idx_outbox_claim`, sin red y sin el candado de escritura)
+  y, si hay, drena.
+
+  Y un choque de la bajada sobre una fila que se está subiendo ya no la deja cerrada con cada lado
+  con su versión: la conservación la devuelve a 'pending', `MarkOutboxSent` sólo cierra una
+  'claimed' con el mismo contenido, y sobre la 'pending' suelta el lease para que la local vuelva a
+  subir en el drain siguiente: gana la última. La señal es el ESTADO de la fila y no
+  `enqueued_hash`, porque las marcas ya comparan contra `observations.content_hash`.
+
+  Medido contra un central de juguete que embebe 35 ms por nota, de a una. Envíos por nota, en
+  escala 1/60 de producción (lease 1 s, intervalo 500 ms), dos corridas: con dos daemons 1,05 y
+  1,08 en main, 1,00 en la rama; con seis, 2,94 y 2,84 en main (84 y 70 de 95 notas subidas más de
+  una vez), 1,00 en la rama. Una nota escrita por otro proceso, con el intervalo de 30 s: mediana
+  16,8 s en main (máximo 24,5 s) y 2,2 s en la rama (máximo 2,6 s). La ráfaga de 95 notas con
+  drenes seguidos no se hace más lenta: 1.210 filas/min en main y 1.248 en la rama (medianas de
+  tres). El sondeo, sobre una copia de la base de davantis-1: entre 47 y 237 µs de media, tres por
+  segundo con seis daemons, y contesta igual con el candado de escritura tomado por otro proceso.
+
+  **Sólo cliente: el central no cambia.** Queda abierto un caso: si la edición cae MIENTRAS v1 está
+  en vuelo, otro drainer puede subir v2 a la par y el orden lo decide el central; cerrarlo pide un
+  save condicional del lado del central.
 - **Las sesiones de shell vencidas se cierran aunque el barrido de la flota esté apagado.** Con
   `fleet.probe_minutes` negativo el cerebro dejaba de cerrarlas. En una máquina sin agente, el `ssh`
   de una sesión vencida seguía vivo, y la bitácora la mostraba activa. Ahora las cierra un vigía
