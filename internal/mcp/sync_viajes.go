@@ -160,14 +160,14 @@ func lineasDelViaje(r memory.ResumenDelSync, teamMode bool, edad string) string 
 //
 // Y NO PUEDE CONTRADECIR AL VOLUMEN, que sale de sync_viajes (r) y comparte transacción con la meta
 // (memory.RegistrarBajada). Un binario de esta versión nunca deja una fuente sin la otra, así que
-// si hay viajes de bajada sin meta —o viajes de un día posterior al de la meta—, los bajó un
-// binario anterior, que registra el viaje y no la edad. La línea dice eso y no «nunca» al lado de
-// las filas bajadas hoy.
+// si hay viajes de bajada sin meta —o más páginas que las que la meta anotó, un día posterior o el
+// mismo día—, los bajó un binario anterior, que registra el viaje y no la edad. La línea dice eso y
+// no «nunca» al lado de las filas bajadas hoy.
 //
 // EL ORDEN DE LECTURA ES PARTE DEL CONTRATO: el llamador toma `ahora` ANTES de leer sync_viajes, y
 // la meta se lee acá, DESPUÉS. Así la meta es por lo menos tan nueva como los viajes que se leyeron,
 // y un tick que se escribe entre las dos lecturas —o que cruza la medianoche UTC— no se confunde
-// con un binario viejo.
+// con un binario viejo: deja la meta con un día posterior al último leído, o con más páginas.
 func (s *McpServer) edadDeLaBajada(r memory.ResumenDelSync, ahora time.Time) string {
 	raw, hay, err := s.engine.GetMeta(memory.MetaUltimaBajada)
 	if err != nil {
@@ -195,8 +195,9 @@ func (s *McpServer) porQueNoBaja() string {
 func describirUltimaBajada(raw string, hay bool, r memory.ResumenDelSync, ahora time.Time, noBaja string) string {
 	if !hay {
 		switch {
-		case r.Bajada7d.Posts > 0:
-			// Hubo bajadas y ninguna anotó su edad: un binario de esta versión no deja eso.
+		case r.UltimoDiaConBajada != "":
+			// Hubo bajadas —cualquier día, no sólo en la semana— y ninguna anotó su edad: un binario
+			// de esta versión no deja eso.
 			return " · última: sin anotar (bajó un binario anterior a esta versión, que registra el viaje y no la edad)"
 		case noBaja != "":
 			// El central, o un nodo sin sync. «Nunca» sería cierto de ESTE proceso y se leería «tu
@@ -225,7 +226,7 @@ func describirUltimaBajada(raw string, hay bool, r memory.ResumenDelSync, ahora 
 		que = strconv.FormatInt(u.ConFilas, 10) + " páginas con filas y 0 ingeridas"
 	}
 	edad := duracionLegible(max(ahora.Unix()-u.Unix, 0))
-	if bajoDespuesSinAnotar(r, u, ahora) {
+	if bajoDespuesSinAnotar(r, u) {
 		return " · última anotada hace " + edad + " (" + que + "), pero después bajó un binario anterior a esta versión, que no la anota"
 	}
 	linea := " · última hace " + edad + " (" + que + "), "
@@ -237,18 +238,25 @@ func describirUltimaBajada(raw string, hay bool, r memory.ResumenDelSync, ahora 
 	return linea + "próxima en ~" + duracionLegible(falta)
 }
 
-// bajoDespuesSinAnotar dice si sync_viajes tiene bajadas de un día POSTERIOR al de la meta, o sea
-// de un binario que no la anota. Los viajes van por día UTC y se comparan por día: hay viajes hoy y
-// la meta es de un día anterior, o hay viajes en la semana y la meta es de antes de la semana.
-// Dentro del mismo día no se distingue; ahí la meta envejece y la línea dice «la próxima se
-// esperaba hace…».
-func bajoDespuesSinAnotar(r memory.ResumenDelSync, u memory.UltimaBajada, ahora time.Time) bool {
+// bajoDespuesSinAnotar dice si sync_viajes tiene bajadas que la meta no anotó, o sea de un binario
+// que no la anota. Se compara contra el ÚLTIMO día con bajadas y no contra las cubetas de hoy y de
+// la semana, que dejaban afuera los días del medio: una meta de hace tres días con bajadas de ayer
+// y ninguna hoy se leía «última hace 3 d».
+//
+// Hoy no es transicional: en davantis-1 se instalan binarios nuevos sin cerrar las sesiones, así que
+// sobre la misma base bajan a la vez daemons que anotan la edad y otros que sólo registran el viaje.
+func bajoDespuesSinAnotar(r memory.ResumenDelSync, u memory.UltimaBajada) bool {
 	dia := time.Unix(u.Unix, 0).UTC().Format(time.DateOnly)
-	hoy := ahora.UTC()
-	if r.BajadaHoy.Posts > 0 && dia < hoy.Format(time.DateOnly) {
-		return true
+	if r.UltimoDiaConBajada != dia {
+		// Un día POSTERIOR con bajadas las hizo alguien que no anota. Uno anterior —o ninguno— es
+		// una meta más nueva que lo leído de sync_viajes: un tick que se anotó entre las dos lecturas.
+		return r.UltimoDiaConBajada > dia
 	}
-	return r.Bajada7d.Posts > 0 && dia < hoy.AddDate(0, 0, -6).Format(time.DateOnly)
+	// El MISMO día: la meta anotó cuántas páginas tenía ese día contando las suyas, y si ahora hay
+	// más, las sumó después alguien que no anota. Iguales es el caso sano; menos, otra vez un tick
+	// que se anotó entre las dos lecturas.
+	despues := r.PaginasDeEseDia - u.PaginasDelDia
+	return despues > 0
 }
 
 // duracionLegible escribe unos segundos en s, min, h o d, sin decimales: la línea de la bajada

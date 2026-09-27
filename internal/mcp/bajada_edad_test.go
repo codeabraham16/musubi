@@ -232,23 +232,29 @@ func TestLaBajadaEnElCentralNoDiceNunca(t *testing.T) {
 
 // TestLaEdadDeLaBajadaNoContradiceAlVolumen: la edad sale de la meta y el volumen de sync_viajes, y
 // un binario anterior a esta versión escribe el segundo sin la primera. La línea no dice «nunca» al
-// lado de las páginas de hoy, ni «última hace 3 d» con bajadas más nuevas: dice que bajó un binario
-// que no anota la edad.
+// lado de páginas bajadas, ni «última hace 3 d» con bajadas más nuevas: dice que bajó un binario que
+// no anota la edad. Se compara contra el ÚLTIMO día con bajadas, sin ventana, y el mismo día contra
+// las páginas que la meta anotó: las cubetas de hoy y de la semana dejaban afuera los días del medio.
 //
 // Sabotaje: que sin meta diga «nunca» aunque haya viajes de bajada.
 // arnes: archivo="internal/mcp/sync_viajes.go"
-// arnes: de="\t\tcase r.Bajada7d.Posts > 0:"
-// arnes: a="\t\tcase false && r.Bajada7d.Posts > 0:"
+// arnes: de="\t\tcase r.UltimoDiaConBajada != \"\":"
+// arnes: a="\t\tcase false && r.UltimoDiaConBajada != \"\":"
 //
-// Sabotaje: que no compare el día de la meta con el de los viajes de hoy.
+// Sabotaje: que no compare el día de la meta con el último día con bajadas.
 // arnes: archivo="internal/mcp/sync_viajes.go"
-// arnes: de="if r.BajadaHoy.Posts > 0 && dia < hoy.Format(time.DateOnly) {"
-// arnes: a="if false && r.BajadaHoy.Posts > 0 && dia < hoy.Format(time.DateOnly) {"
+// arnes: de="return r.UltimoDiaConBajada > dia"
+// arnes: a="return false"
 //
-// Sabotaje: que no compare el día de la meta con el de los viajes de la semana.
+// Sabotaje: que el mismo día no compare las páginas con las que la meta anotó.
 // arnes: archivo="internal/mcp/sync_viajes.go"
-// arnes: de="return r.Bajada7d.Posts > 0 && dia < hoy.AddDate(0, 0, -6).Format(time.DateOnly)"
-// arnes: a="return false && r.Bajada7d.Posts > 0 && dia < hoy.AddDate(0, 0, -6).Format(time.DateOnly)"
+// arnes: de="despues := r.PaginasDeEseDia - u.PaginasDelDia"
+// arnes: a="despues := int64(0)"
+//
+// Sabotaje: que el mismo día con las mismas páginas —el caso sano— se lea como un binario anterior.
+// arnes: archivo="internal/mcp/sync_viajes.go"
+// arnes: de="return despues > 0"
+// arnes: a="return despues >= 0"
 func TestLaEdadDeLaBajadaNoContradiceAlVolumen(t *testing.T) {
 	const dia = int64(24 * 3600)
 	ahora := time.Now().Unix()
@@ -266,6 +272,21 @@ func TestLaEdadDeLaBajadaNoContradiceAlVolumen(t *testing.T) {
 		t.Logf("viajes sin meta: %s", l)
 	})
 
+	t.Run("viajes de hace diez días, fuera de la semana, y ninguna meta", func(t *testing.T) {
+		s, eng, db := serverConLaBase(t, "http://127.0.0.1:1", true)
+		hace10 := memory.UltimaBajada{Unix: ahora - 10*dia, ProximaUnix: ahora - 10*dia + 30}
+		if err := eng.StorageBackend.RegistrarBajada(memory.Viaje{Posts: 2, Vacias: 2}, hace10); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`DELETE FROM meta WHERE key = ?`, memory.MetaUltimaBajada); err != nil {
+			t.Fatal(err)
+		}
+		l, _ := lineaDeBajada(t, textoDeSyncStatus(t, s))
+		if !strings.Contains(l, " · última: sin anotar (bajó un binario anterior") || strings.Contains(l, "nunca") {
+			t.Errorf("con páginas bajadas hace diez días y sin meta, la línea no podía decir «nunca»:\n%s", l)
+		}
+	})
+
 	t.Run("meta de hace tres días y viajes de hoy", func(t *testing.T) {
 		s, eng := serverQueAnotaViajes(t, "http://127.0.0.1:1", true)
 		vieja := memory.UltimaBajada{Unix: ahora - 3*dia, ProximaUnix: ahora - 3*dia + 30}
@@ -281,20 +302,60 @@ func TestLaEdadDeLaBajadaNoContradiceAlVolumen(t *testing.T) {
 		}
 	})
 
-	t.Run("meta de hace nueve días y viajes de la semana", func(t *testing.T) {
-		s, eng := serverQueAnotaViajes(t, "http://127.0.0.1:1", true)
-		// RegistrarBajada deja el viaje en el día de su instante: hace tres días.
-		hace3 := memory.UltimaBajada{Unix: ahora - 3*dia, ProximaUnix: ahora - 3*dia + 30}
-		if err := eng.StorageBackend.RegistrarBajada(memory.Viaje{Posts: 2, Vacias: 2}, hace3); err != nil {
+	// anotadaYDespues deja la meta de un tick de hace metaHace días y, además, las páginas de otro
+	// de hace viajesHace días que NO la anotó: registra los dos y devuelve la meta a la del primero,
+	// que es lo que queda cuando el segundo es de un binario anterior. El segundo trae MENOS páginas
+	// que las que anotó el primero, para que un día posterior no se detecte por las páginas.
+	anotadaYDespues := func(t *testing.T, eng *engineQueAnotaViajes, metaHace, viajesHace int64) {
+		t.Helper()
+		anotada := memory.UltimaBajada{Unix: ahora - metaHace*dia, ProximaUnix: ahora - metaHace*dia + 30}
+		if err := eng.StorageBackend.RegistrarBajada(memory.Viaje{Posts: 5, Vacias: 5}, anotada); err != nil {
 			t.Fatal(err)
 		}
-		vieja := memory.UltimaBajada{Unix: ahora - 9*dia, ProximaUnix: ahora - 9*dia + 30}
-		if err := eng.SetMeta(memory.MetaUltimaBajada, vieja.Valor()); err != nil {
+		meta, _, err := eng.GetMeta(memory.MetaUltimaBajada)
+		if err != nil {
 			t.Fatal(err)
+		}
+		sinAnotar := memory.UltimaBajada{Unix: ahora - viajesHace*dia, ProximaUnix: ahora - viajesHace*dia + 30}
+		if err := eng.StorageBackend.RegistrarBajada(memory.Viaje{Posts: 2, Vacias: 2}, sinAnotar); err != nil {
+			t.Fatal(err)
+		}
+		if err := eng.SetMeta(memory.MetaUltimaBajada, meta); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		nombre               string
+		metaHace, viajesHace int64
+	}{
+		{"meta de hace tres días y viajes de ayer, ninguno hoy", 3, 1},
+		{"meta de hace nueve días y viajes de la semana", 9, 3},
+		{"meta en el borde de la semana y viajes del día siguiente", 6, 5},
+		{"meta y viajes fuera de la semana", 10, 8},
+		{"el mismo día de la meta, más páginas que las que anotó", 2, 2},
+	} {
+		t.Run(c.nombre, func(t *testing.T) {
+			s, eng := serverQueAnotaViajes(t, "http://127.0.0.1:1", true)
+			anotadaYDespues(t, eng, c.metaHace, c.viajesHace)
+			l, _ := lineaDeBajada(t, textoDeSyncStatus(t, s))
+			quiero := " · última anotada hace " + strconv.FormatInt(c.metaHace, 10) + " d (vacía), pero después bajó un binario anterior"
+			if !strings.Contains(l, quiero) {
+				t.Errorf("la meta es de hace %d d y hay páginas de hace %d d que no anotó: la línea tenía que decir %q:\n%s", c.metaHace, c.viajesHace, quiero, l)
+			}
+		})
+	}
+
+	t.Run("el mismo día con las páginas que anotó: el caso sano", func(t *testing.T) {
+		s, eng := serverQueAnotaViajes(t, "http://127.0.0.1:1", true)
+		u := memory.UltimaBajada{Unix: ahora - 2*dia, ProximaUnix: ahora - 2*dia + 30}
+		for i := 0; i < 2; i++ { // dos ticks del mismo día, los dos de un binario que anota
+			if err := eng.StorageBackend.RegistrarBajada(memory.Viaje{Posts: 1, Vacias: 1}, u); err != nil {
+				t.Fatal(err)
+			}
 		}
 		l, _ := lineaDeBajada(t, textoDeSyncStatus(t, s))
-		if !strings.Contains(l, " · última anotada hace 9 d (vacía), pero después bajó un binario anterior") {
-			t.Errorf("con bajadas de la semana y la meta de hace nueve días, la línea tenía que decir que bajó un binario que no la anota:\n%s", l)
+		if !strings.Contains(l, " · última hace 2 d (vacía), ") || strings.Contains(l, "binario anterior") {
+			t.Errorf("dos ticks del mismo día que anotaron la edad no son un binario anterior:\n%s", l)
 		}
 	})
 }
@@ -315,7 +376,7 @@ func TestLaEdadDeLaBajadaNoContradiceAlVolumen(t *testing.T) {
 func TestLaUltimaBajadaIlegibleNoRompeLaLinea(t *testing.T) {
 	for _, c := range []struct{ nombre, valor string }{
 		{"cortada con un salto de línea", "1758900000|dos\nfilas"},
-		{"la próxima antes que la última", "1758900000|2|1758800000|1"},
+		{"la próxima antes que la última", "1758900000|2|1758800000|1|1"},
 	} {
 		t.Run(c.nombre, func(t *testing.T) {
 			s, eng := serverQueAnotaViajes(t, "http://127.0.0.1:1", true)

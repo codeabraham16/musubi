@@ -20,6 +20,11 @@ import (
 // arnes: archivo="internal/memory/sync_viajes.go"
 // arnes: de="dia := time.Unix(u.Unix, 0).UTC().Format(time.DateOnly)"
 // arnes: a="dia := time.Time{}.Format(\"\")"
+//
+// Sabotaje: que la meta no anote las páginas que ese día tenía sync_viajes.
+// arnes: archivo="internal/memory/sync_viajes.go"
+// arnes: de="Scan(&u.PaginasDelDia)"
+// arnes: a="Scan(new(int64))"
 func TestLaBajadaSumaElViajeYLaEdadEnUnaTransaccion(t *testing.T) {
 	haceDosDias := time.Now().Add(-48 * time.Hour)
 	u := UltimaBajada{Unix: haceDosDias.Unix(), Filas: 2, ProximaUnix: haceDosDias.Unix() + 30}
@@ -30,8 +35,11 @@ func TestLaBajadaSumaElViajeYLaEdadEnUnaTransaccion(t *testing.T) {
 		if err := e.RegistrarBajada(Viaje{Filas: 2, Posts: 1, BytesCable: 900, BytesCrudos: 900}, u); err != nil {
 			t.Fatal(err)
 		}
-		if v, ok, err := e.GetMeta(MetaUltimaBajada); err != nil || !ok || v != u.Valor() {
-			t.Errorf("la meta quedó %q (ok=%v, err=%v); esperaba %q", v, ok, err, u.Valor())
+		// La meta lleva las páginas que el día tenía DESPUÉS de sumar las de este tick.
+		quiero := u
+		quiero.PaginasDelDia = 1
+		if v, ok, err := e.GetMeta(MetaUltimaBajada); err != nil || !ok || v != quiero.Valor() {
+			t.Errorf("la meta quedó %q (ok=%v, err=%v); esperaba %q", v, ok, err, quiero.Valor())
 		}
 		var dia string
 		var filas, posts int64
@@ -40,6 +48,15 @@ func TestLaBajadaSumaElViajeYLaEdadEnUnaTransaccion(t *testing.T) {
 		}
 		if dia != diaDeLaMeta || filas != 2 || posts != 1 {
 			t.Errorf("el viaje quedó en %s con filas=%d posts=%d; esperaba el día de la meta (%s) con filas=2 posts=1", dia, filas, posts, diaDeLaMeta)
+		}
+		// Y un segundo tick del mismo día anota las de los dos: es lo que deja ver, ese mismo día,
+		// páginas que sumó alguien que no anota.
+		if err := e.RegistrarBajada(Viaje{Posts: 2, Vacias: 2}, u); err != nil {
+			t.Fatal(err)
+		}
+		quiero.PaginasDelDia = 3
+		if v, _, err := e.GetMeta(MetaUltimaBajada); err != nil || v != quiero.Valor() {
+			t.Errorf("tras el segundo tick del día la meta quedó %q (err=%v); esperaba %q", v, err, quiero.Valor())
 		}
 	})
 
@@ -72,7 +89,7 @@ func TestLaBajadaSumaElViajeYLaEdadEnUnaTransaccion(t *testing.T) {
 // arnes: de="if len(partes) < len(n) {"
 // arnes: a="if len(partes) != len(n) {"
 func TestLaUltimaBajadaToleraLosCamposDeMas(t *testing.T) {
-	u := UltimaBajada{Unix: 1758900000, Filas: 2, ProximaUnix: 1758900030, ConFilas: 1}
+	u := UltimaBajada{Unix: 1758900000, Filas: 2, ProximaUnix: 1758900030, ConFilas: 1, PaginasDelDia: 40}
 	if got, err := LeerUltimaBajada(u.Valor()); err != nil || got != u {
 		t.Fatalf("la vuelta no cierra: %q se leyó %+v (err=%v); esperaba %+v", u.Valor(), got, err, u)
 	}

@@ -14,12 +14,12 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   termina en `· última hace 12 s (vacía), próxima en ~18 s`, o `(2 filas)`, o `· última: nunca`.
 
   Lo anota sólo el dueño del candado, desde el defer que ya existía en `drainInboundOnce` y sólo si
-  el tick salió a la red, en la meta `sync:inbound_ultima` = `unix|filas|proxima_unix|con_filas`;
-  la próxima es un tick base, porque la bajada todavía no espacia. La forma crece sólo agregando
-  campos al final: un binario lee los que conoce e ignora los de más, así que el que va a espaciar
-  la bajada puede sumar los suyos sin que un binario anterior la lea `ilegible`. Y se lee sólo de
-  ahí, nunca de la memoria del proceso que contesta: sobre una base corren varios daemons (seis en
-  davantis-1) y baja uno.
+  el tick salió a la red, en la meta `sync:inbound_ultima` =
+  `unix|filas|proxima_unix|con_filas|paginas_del_dia`; la próxima es un tick base, porque la bajada
+  todavía no espacia. La forma crece sólo agregando campos al final: un binario lee los que conoce e
+  ignora los de más, así que el que va a espaciar la bajada puede sumar los suyos sin que un binario
+  anterior la lea `ilegible`. Y se lee sólo de ahí, nunca de la memoria del proceso que contesta:
+  sobre una base corren varios daemons (seis en davantis-1) y baja uno.
   La meta va en la MISMA transacción que suma el viaje (`RegistrarBajada`), así que no agrega
   commits. Medido contando los commits en el WAL de una base de prueba, con los ticks a más de un
   segundo (SQLite no escribe la página si el valor no cambia, y en producción cambia en cada tick):
@@ -31,9 +31,13 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   sin páginas con filas, no una sin filas ingeridas: una página que trajo filas y no pudo ingerir
   ninguna —una fila que la base rechaza, que vuelve primera en cada tick, o un `SQLITE_BUSY`— sale
   `(1 página con filas y 0 ingeridas)` y no `(vacía)`, que al lado de `0 vacías` se contradecía y,
-  con la edad fresca, tapaba la bajada atascada. Con viajes de bajada y sin
-  meta —o con viajes de un día posterior al de la meta— dice que bajó un binario anterior a esta
-  versión, que registra el viaje y no la edad, en vez de «nunca» al lado de las páginas de hoy. En
+  con la edad fresca, tapaba la bajada atascada. Con viajes de bajada y sin meta, o con más páginas
+  que las que la meta anotó, dice que bajó un binario anterior a esta versión, que registra el viaje
+  y no la edad, en vez de «nunca» al lado de las páginas de hoy o de «última hace 3 d» con bajadas
+  de ayer. Compara contra el último día con bajadas, sin ventana, y el mismo día contra las páginas
+  que ese día tenía `sync_viajes` al anotar, leídas en la misma transacción: no es sólo la
+  transición, porque en davantis-1 se instalan binarios sin cerrar las sesiones y sobre la misma
+  base bajan a la vez daemons que anotan y otros que no. En
   el central, que también sirve la tool y no baja, dice «este proceso no baja (no tiene cliente de
   sync)» y no «nunca», que se leería «tu máquina nunca bajó»; lo mismo en un proyecto sin
   team_mode. Una meta cortada sale `ilegible`, entre comillas y escapada, sin partir la línea; y si

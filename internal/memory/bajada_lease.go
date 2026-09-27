@@ -25,25 +25,31 @@ const metaBajadaLease = "sync:inbound_lease"
 const MetaUltimaBajada = "sync:inbound_ultima"
 
 // formaDeLaUltimaBajada son los campos que este binario escribe en MetaUltimaBajada, en orden.
-const formaDeLaUltimaBajada = "unix|filas|proxima_unix|con_filas"
+const formaDeLaUltimaBajada = "unix|filas|proxima_unix|con_filas|paginas_del_dia"
 
 // UltimaBajada es lo que guarda MetaUltimaBajada: cuándo volvió el último Pull (Unix, en segundos),
 // cuántas filas se ingirieron en ese tick (Filas: las mismas que ese tick sumó a sync_viajes),
-// cuándo espera el dueño volver a salir a la red (ProximaUnix) y cuántas páginas del tick trajeron
-// filas (ConFilas: las páginas del viaje menos las vacías, la misma cuenta que hace sync_viajes).
+// cuándo espera el dueño volver a salir a la red (ProximaUnix), cuántas páginas del tick trajeron
+// filas (ConFilas: las páginas del viaje menos las vacías, la misma cuenta que hace sync_viajes) y
+// cuántas páginas de bajada tenía sync_viajes en el día de Unix al anotar, las de este tick
+// incluidas (PaginasDelDia).
 //
 // UNA BAJADA VACÍA ES ConFilas EN CERO, NO Filas EN CERO. Una página que trae filas y no puede
 // ingerir ninguna —una fila «veneno» que esta base rechaza, o un SQLITE_BUSY— deja Filas en 0 y el
 // cursor quieto, y la misma fila vuelve primera en el tick siguiente. Con Filas sola eso se leía
 // «(vacía)» al lado de un sync_viajes que cuenta esa página como página con filas, y tapaba justo
 // la bajada atascada.
+//
+// PaginasDelDia la completa RegistrarBajada adentro de la transacción —lo que traiga del llamador
+// se pisa—, y es lo que deja ver un binario que baja SIN anotar la edad el MISMO día de la meta: si
+// ese día sync_viajes tiene más páginas que las anotadas, las sumó alguien después y no anotó.
 type UltimaBajada struct {
-	Unix, Filas, ProximaUnix, ConFilas int64
+	Unix, Filas, ProximaUnix, ConFilas, PaginasDelDia int64
 }
 
 // Valor es la forma en que se guarda (formaDeLaUltimaBajada).
 func (u UltimaBajada) Valor() string {
-	campos := []int64{u.Unix, u.Filas, u.ProximaUnix, u.ConFilas}
+	campos := []int64{u.Unix, u.Filas, u.ProximaUnix, u.ConFilas, u.PaginasDelDia}
 	partes := make([]string, len(campos))
 	for i, n := range campos {
 		partes[i] = strconv.FormatInt(n, 10)
@@ -56,7 +62,7 @@ func (u UltimaBajada) Valor() string {
 // se leería «bajó el 1 de enero de 1970», y un apagón en esta PC deja escrituras cortadas.
 func LeerUltimaBajada(v string) (UltimaBajada, error) {
 	partes := strings.Split(strings.TrimSpace(v), "|")
-	var n [4]int64
+	var n [5]int64
 	if len(partes) < len(n) {
 		return UltimaBajada{}, fmt.Errorf("la última bajada %q no tiene la forma %s", v, formaDeLaUltimaBajada)
 	}
@@ -67,8 +73,8 @@ func LeerUltimaBajada(v string) (UltimaBajada, error) {
 		}
 		n[i] = x
 	}
-	u := UltimaBajada{Unix: n[0], Filas: n[1], ProximaUnix: n[2], ConFilas: n[3]}
-	if u.Unix <= 0 || u.Filas < 0 || u.ProximaUnix < u.Unix || u.ConFilas < 0 {
+	u := UltimaBajada{Unix: n[0], Filas: n[1], ProximaUnix: n[2], ConFilas: n[3], PaginasDelDia: n[4]}
+	if u.Unix <= 0 || u.Filas < 0 || u.ProximaUnix < u.Unix || u.ConFilas < 0 || u.PaginasDelDia < 0 {
 		return UltimaBajada{}, fmt.Errorf("la última bajada %q es imposible: un instante no positivo, un conteo negativo o la próxima antes que la última", v)
 	}
 	return u, nil

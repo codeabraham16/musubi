@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -89,6 +91,10 @@ func (e *DbEngine) RegistrarViaje(sentido string, v Viaje) error {
 // día UTC aunque el tick cruce la medianoche. Con dos relojes, un viaje de las 00:00:00 quedaría en
 // un día y su meta de las 23:59:59 en el anterior, y el estado leería «bajó hoy un binario que no
 // anota la edad» durante un tick por día.
+//
+// Las páginas de ese día se leen DESPUÉS de sumar las del tick y en la misma transacción
+// (UltimaBajada.PaginasDelDia): con eso el estado ve a un binario que bajó sin anotar el mismo día
+// de la meta, que por día no se distingue.
 func (e *DbEngine) RegistrarBajada(v Viaje, u UltimaBajada) error {
 	tx, err := e.db.Begin()
 	if err != nil {
@@ -98,6 +104,9 @@ func (e *DbEngine) RegistrarBajada(v Viaje, u UltimaBajada) error {
 	dia := time.Unix(u.Unix, 0).UTC().Format(time.DateOnly)
 	if err := sumarViaje(tx, dia, ViajeBajada, v); err != nil {
 		return err
+	}
+	if err := tx.QueryRow(`SELECT posts FROM sync_viajes WHERE dia = ? AND sentido = ?`, dia, ViajeBajada).Scan(&u.PaginasDelDia); err != nil {
+		return fmt.Errorf("error al leer las páginas del día de la bajada: %w", err)
 	}
 	if _, err := tx.Exec(`INSERT INTO meta (key, value, updated_at) VALUES (?, ?, datetime('now'))
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
@@ -166,6 +175,12 @@ type ResumenDelSync struct {
 	BajadaHoy Viaje    `json:"bajada_hoy"`
 	Bajada7d  Viaje    `json:"bajada_7d"`
 	NoViajan  NoViajan `json:"no_viajan"`
+	// UltimoDiaConBajada y PaginasDeEseDia son el último día (UTC) con páginas de bajada en
+	// sync_viajes y cuántas tuvo, SIN la ventana de la semana. La edad de la bajada los compara con
+	// la meta (MetaUltimaBajada) para ver si después bajó alguien que no la anota. No van en el
+	// JSON, que lleva el volumen: la edad va sólo en el texto de musubi_sync_status.
+	UltimoDiaConBajada string `json:"-"`
+	PaginasDeEseDia    int64  `json:"-"`
 }
 
 // ResumenDelSync junta los contadores nuevos del sync. Sólo lee.
@@ -210,6 +225,13 @@ func (e *DbEngine) ResumenDelSync(ctx context.Context) (ResumenDelSync, error) {
 		if err := sumar(c.sentido, c.desde, c.v); err != nil {
 			return r, fmt.Errorf("error al sumar los viajes de %s: %w", c.sentido, err)
 		}
+	}
+	// Sin fila no es un error: esta base nunca registró una bajada (el central, o un nodo nuevo).
+	switch err := e.db.QueryRowContext(ctx, `SELECT dia, posts FROM sync_viajes
+		WHERE sentido = ? AND posts > 0 ORDER BY dia DESC LIMIT 1`, ViajeBajada).Scan(&r.UltimoDiaConBajada, &r.PaginasDeEseDia); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return r, fmt.Errorf("error al leer el último día con bajadas: %w", err)
 	}
 
 	// Las tres categorías son disjuntas por construcción: la cuarentena exige quarantined=1 y las
