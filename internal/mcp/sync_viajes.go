@@ -173,7 +173,8 @@ func (s *McpServer) edadDeLaBajada(r memory.ResumenDelSync, ahora time.Time) str
 	if err != nil {
 		return " · última: no se pudo leer (" + strconv.Quote(err.Error()) + ")"
 	}
-	return describirUltimaBajada(raw, hay, r, ahora, s.porQueNoBaja())
+	// El tick es el de ESTE proceso, que sobre la misma base tiene la misma config que el dueño.
+	return describirUltimaBajada(raw, hay, r, ahora, s.porQueNoBaja(), s.tickBajada())
 }
 
 // porQueNoBaja es por qué ESTE proceso no corre la bajada —la misma condición con la que se apaga
@@ -190,9 +191,10 @@ func (s *McpServer) porQueNoBaja() string {
 }
 
 // describirUltimaBajada es edadDeLaBajada sin la base: raw y hay son la meta tal como se leyó, r el
-// volumen de sync_viajes y noBaja el motivo por el que este proceso no corre la bajada ("" si la
-// corre). Devuelve el final de la línea, que empieza con « · » y nunca trae un salto de línea.
-func describirUltimaBajada(raw string, hay bool, r memory.ResumenDelSync, ahora time.Time, noBaja string) string {
+// volumen de sync_viajes, noBaja el motivo por el que este proceso no corre la bajada ("" si la
+// corre) y tick el intervalo de la bajada, que es el margen antes de dar la próxima por vencida.
+// Devuelve el final de la línea, que empieza con « · » y nunca trae un salto de línea.
+func describirUltimaBajada(raw string, hay bool, r memory.ResumenDelSync, ahora time.Time, noBaja string, tick time.Duration) string {
 	if !hay {
 		switch {
 		case r.UltimoDiaConBajada != "":
@@ -231,11 +233,19 @@ func describirUltimaBajada(raw string, hay bool, r memory.ResumenDelSync, ahora 
 	}
 	linea := " · última hace " + edad + " (" + que + "), "
 	falta := u.ProximaUnix - ahora.Unix()
-	if falta < 0 {
-		// Nadie anotó otra bajada desde entonces: no hay un proceso bajando, o sus Pull fallan.
-		return linea + "la próxima se esperaba hace " + duracionLegible(-falta)
+	switch {
+	case falta >= 0:
+		return linea + "próxima en ~" + duracionLegible(falta)
+	case -falta <= int64(tick/time.Second):
+		// UN TICK DE GRACIA. La próxima sale del FIN del Pull anterior y la meta nueva se escribe al
+		// FIN del siguiente, así que con el dueño sano la próxima vence un rato cada vez que un Pull
+		// tarda más que el anterior (varias páginas, una espera del busy_timeout) o el candado cambia
+		// de dueño, que tickea en otra fase. Eso es ruido y no una alarma: la próxima es ahora.
+		return linea + "próxima: ahora"
 	}
-	return linea + "próxima en ~" + duracionLegible(falta)
+	// Pasado el tick, lo que se sabe es que nadie anotó otra: nadie baja, sus Pull fallan, o uno
+	// tarda más de un tick de lo que tardó el anterior.
+	return linea + "la próxima se esperaba hace " + duracionLegible(-falta)
 }
 
 // bajoDespuesSinAnotar dice si sync_viajes tiene bajadas que la meta no anotó, o sea de un binario

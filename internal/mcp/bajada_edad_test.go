@@ -395,14 +395,14 @@ func TestLaUltimaBajadaIlegibleNoRompeLaLinea(t *testing.T) {
 	}
 }
 
-// TestLaProximaVencidaSeDiceComoTal: si la próxima prevista ya pasó, nadie anotó una bajada desde
-// entonces —no hay un proceso bajando, o sus Pull fallan— y la línea lo dice, en vez de prometer
-// «próxima en ~-570 s».
+// TestLaProximaVencidaSeDiceComoTal: si la próxima prevista ya pasó hace más de un tick, nadie anotó
+// una bajada desde entonces —nadie baja, sus Pull fallan, o uno tarda mucho más que el anterior— y
+// la línea lo dice, en vez de prometer «próxima en ~-570 s».
 //
 // Sabotaje: tratar una próxima vencida como futura.
 // arnes: archivo="internal/mcp/sync_viajes.go"
-// arnes: de="\tif falta < 0 {"
-// arnes: a="\tif false && falta < 0 {"
+// arnes: de="\tcase falta >= 0:"
+// arnes: a="\tcase true:"
 func TestLaProximaVencidaSeDiceComoTal(t *testing.T) {
 	s, eng := serverQueAnotaViajes(t, "http://127.0.0.1:1", true)
 	ahora := time.Now().Unix()
@@ -415,4 +415,41 @@ func TestLaProximaVencidaSeDiceComoTal(t *testing.T) {
 		t.Errorf("con la próxima vencida hace 9 min la línea tenía que decirlo:\n%s", l)
 	}
 	t.Logf("próxima vencida: %s", l)
+}
+
+// TestLaProximaDentroDeUnTickNoEsUnaAlarma: la próxima sale del FIN del Pull anterior y la meta
+// nueva se escribe al FIN del siguiente, así que vence un rato con el dueño sano cada vez que un
+// Pull tarda más que el anterior o el candado cambia de dueño, que tickea en otra fase. Dentro de un
+// tick la línea no dice «se esperaba», que se lee como alarma: dice que la próxima es ahora. Pasado
+// el tick, sí lo dice. El margen es el tick de la bajada y no una constante: con 60 s, 45 s de
+// atraso todavía no alarman.
+//
+// Sabotaje: que no haya margen y una próxima vencida hace unos segundos ya sea una alarma.
+// arnes: archivo="internal/mcp/sync_viajes.go"
+// arnes: de="\tcase -falta <= int64(tick/time.Second):"
+// arnes: a="\tcase false && -falta <= int64(tick/time.Second):"
+func TestLaProximaDentroDeUnTickNoEsUnaAlarma(t *testing.T) {
+	ahora := time.Now().Unix()
+	for _, c := range []struct {
+		nombre      string
+		vencidaHace int64
+		alarma      bool
+	}{
+		{"vencida hace 10 s, dentro del tick", 10, false},
+		{"vencida hace 45 s, dentro de un tick de 60 s", 45, false},
+		{"vencida hace 90 s, pasado el tick", 90, true},
+	} {
+		t.Run(c.nombre, func(t *testing.T) {
+			s, eng := serverQueAnotaViajes(t, "http://127.0.0.1:1", true)
+			s.intervaloBajada.Store(int64(60 * time.Second))
+			u := memory.UltimaBajada{Unix: ahora - c.vencidaHace - 60, ProximaUnix: ahora - c.vencidaHace}
+			if err := eng.SetMeta(memory.MetaUltimaBajada, u.Valor()); err != nil {
+				t.Fatal(err)
+			}
+			l, _ := lineaDeBajada(t, textoDeSyncStatus(t, s))
+			if alarma := strings.Contains(l, "la próxima se esperaba"); alarma != c.alarma || (!c.alarma && !strings.HasSuffix(l, ", próxima: ahora")) {
+				t.Errorf("con la próxima vencida hace %d s y un tick de 60 s, ¿alarma? tenía que ser %v:\n%s", c.vencidaHace, c.alarma, l)
+			}
+		})
+	}
 }

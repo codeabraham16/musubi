@@ -41,7 +41,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   el central, que también sirve la tool y no baja, dice «este proceso no baja (no tiene cliente de
   sync)» y no «nunca», que se leería «tu máquina nunca bajó»; lo mismo en un proyecto sin
   team_mode. Una meta cortada sale `ilegible`, entre comillas y escapada, sin partir la línea; y si
-  la próxima ya pasó, dice «la próxima se esperaba hace…». No cambia el esquema ni la descripción de
+  la próxima ya pasó hace más de un tick, dice «la próxima se esperaba hace…». Dentro del tick dice
+  `próxima: ahora`: la próxima sale del fin del Pull anterior, así que vence un rato con el dueño
+  sano cada vez que un Pull tarda más que el anterior o el candado cambia de dueño, y eso no es una
+  alarma. No cambia el esquema ni la descripción de
   ninguna tool y no trae migración: viaja en la V1 con el resto de la ola.
 - **El vector de una consulta, sin cargar la tabla: ~25 ms y 16 MB para un prompt corto, en vez de
   1,4-2,8 s y 854 MB.**
