@@ -184,10 +184,18 @@ func TestCadaFrenoSeCuentaEnCadaTickYSeAvisaUnaVezPorEpisodio(t *testing.T) {
 	for _, f := range filas {
 		cubiertos[f.freno] = true
 	}
+	// LOS FRENOS DEL BARRIDO GLOBAL NO TIENEN FILA ACÁ, y cuáles son se deriva, no se lista (A132).
+	// El tick de esta tabla es aplicarPoliticas, que por diseño corre DESPUÉS de esas compuertas: con
+	// el barrido apagado o el tenant fuera del tope no hay tick que contar ni aviso por política que
+	// dar, y una fila con un tick falso mediría una función que el barrido no llama. Los compara
+	// contra el scheduler y el barrido REALES la tabla de
+	// TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice, que no exceptúa ninguno, y el
+	// episodio del recorte lo mide TestElBarridoDeLaFlotaAvisaCuandoDejaTenantsAfueraYSeRearma.
+	delBarrido := frenosDelBarridoGlobal(t)
 	var sinFila []string
 	for freno, nombreConst := range declarados {
 		// sinFreno es el estado SANO, no una compuerta: lo ejercita el arreglo de cada fila.
-		if freno != sinFreno && !cubiertos[freno] {
+		if freno != sinFreno && !cubiertos[freno] && !delBarrido[freno] {
 			sinFila = append(sinFila, nombreConst+" ("+strconv.Quote(string(freno))+")")
 		}
 	}

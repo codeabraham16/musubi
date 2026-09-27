@@ -202,9 +202,20 @@ func (s *McpServer) toolFleetList(ctx context.Context, raw json.RawMessage) (int
 	// falla el panel y la acción se contradirían (lo mide
 	// TestConLasVentanasIlegiblesElInventarioDiceLoQueHaceElBarrido). Sin políticas no hay nada que
 	// decidir y no se consulta.
+	//
+	// Y EL ESTADO DEL BARRIDO, IGUAL Y POR LO MISMO (A132): si corre y qué tenants recorre, con las
+	// funciones con las que decide el scheduler (barridoVigente). Si su lista no se puede leer, la
+	// tool devuelve error y no un inventario: con esa falla el barrido tampoco corre, así que un
+	// `puede_actuar`, dijera lo que dijera, sería inventado (lo mide
+	// TestConLaListaDelBarridoIlegibleElInventarioNoDaUnVeredicto).
 	var enMantenimiento map[string]bool
+	var barrido barridoDePoliticas
 	if len(s.politicas) > 0 {
 		enMantenimiento = s.ventanasParaPoliticas(ahora, "tool", "musubi_fleet_list")
+		var err error
+		if barrido, err = s.barridoVigente(); err != nil {
+			return nil, rpcErrorf(codeInternalError, "no se pudo leer qué proyectos barre el cerebro, y sin eso no hay cómo decir si sus políticas actuarían: %v", err)
+		}
 	}
 	filas := make([]map[string]interface{}, 0)
 	enLinea := 0
@@ -381,7 +392,7 @@ func (s *McpServer) toolFleetList(ctx context.Context, raw json.RawMessage) (int
 					fila["no_alcanza"] = caidos
 				}
 			}
-			if detalle, total := s.politicasSobre(p, d, enMantenimiento[d.ID]); total > 0 {
+			if detalle, total := s.politicasSobre(p, d, barrido, enMantenimiento[d.ID]); total > 0 {
 				fila["politicas_activas"] = total
 				if detalle != nil {
 					fila["politicas"] = detalle

@@ -275,17 +275,28 @@ func avisarDeInterpretes(reg *PrincipalRegistry) {
 	}
 }
 
-// RunFlotaScheduler corre el barrido en un ticker hasta que ctx se cancela. interval<=0 lo
-// desactiva. Pensado para su propia goroutine; bloquea hasta la cancelación.
+// RunFlotaScheduler corre el barrido en un ticker hasta que ctx se cancela, cada `s.sondaIntervalo`
+// (lo fija ConfigurarFlota). Con el barrido apagado (barridoApagado) vuelve al instante. Pensado
+// para su propia goroutine; bloquea hasta la cancelación.
+//
+// EL INTERVALO NO ES UN PARÁMETRO, Y ES A PROPÓSITO (A132). El inventario contesta `puede_actuar`
+// sabiendo si este bucle volvería al arrancar, y lo sabe preguntándole a barridoApagado sobre el
+// MISMO campo que se lee acá. Cuando el intervalo llegaba como argumento, quien arrancaba el
+// scheduler podía pasarle un número distinto del que mira el inventario —dos fuentes para una sola
+// decisión—, y el panel diría «actuaría» de un barrido que nunca arrancó. Sin parámetro no hay
+// segundo número que pasar.
+//
+// Lo que el inventario NO puede saber es si alguien lo arrancó: eso es una línea de
+// ListenAndServeHTTP, y la custodia TestElServidorArrancaElBarridoQueElInventarioDaPorCorriendo.
 //
 // NO TOMA dispatchMu, por el mismo motivo que RunOutboxScheduler: el barrido hace I/O de red
 // (segundos por máquina) y tomar el candado global congelaría todas las tools mientras un router
 // se toma sus quince segundos para no contestar.
-func (s *McpServer) RunFlotaScheduler(ctx context.Context, interval time.Duration) {
-	if interval <= 0 {
+func (s *McpServer) RunFlotaScheduler(ctx context.Context) {
+	if s.barridoApagado() {
 		return
 	}
-	t := time.NewTicker(interval)
+	t := time.NewTicker(s.sondaIntervalo)
 	defer t.Stop()
 	for {
 		select {
@@ -295,6 +306,18 @@ func (s *McpServer) RunFlotaScheduler(ctx context.Context, interval time.Duratio
 			s.barrerFlotaUnaVez(ctx)
 		}
 	}
+}
+
+// barridoApagado contesta si el barrido de la flota está apagado. Con `fleet.probe_minutes`
+// negativo, EffectiveProbeInterval da 0 y RunFlotaScheduler vuelve sin barrer: no se sondea a nadie
+// y NINGUNA política actúa, en ninguna máquina.
+//
+// Es LA condición, y tiene dos lectores: RunFlotaScheduler, para no arrancar, y el inventario
+// (barridoVigente → porQueNoActuaria), para decir `inerte_por: barrido_apagado`. Si cada uno
+// escribiera la suya, el día que una cambiara el panel contradiría a lo que hace el cerebro, que es
+// la forma de A131 del lado del barrido (A132).
+func (s *McpServer) barridoApagado() bool {
+	return s.sondaIntervalo <= 0
 }
 
 // proyectosParaVigilar acota cuántos tenants se BARREN por tick. Es el mismo número que
@@ -317,21 +340,40 @@ func (s *McpServer) RunFlotaScheduler(ctx context.Context, interval time.Duratio
 // export ya no mueve esto— y que cuando corta, SE DICE.
 const proyectosParaVigilar = 64
 
-// proyectosAVigilar lista los tenants del barrido y AVISA cuando el techo los recorta.
+// proyectosDelBarrido es LA lista de tenants que recorre un barrido: los que tienen máquinas
+// activas, en orden de project_id, cortada en proyectosParaVigilar. Devuelve además si el corte
+// dejó a alguien afuera.
+//
+// NO AVISA, y por eso existe aparte de proyectosAVigilar (A132). La leen dos lados: el barrido, que
+// decide con ella qué tenants sondea y sobre cuáles corren las políticas, y el inventario, que con
+// ella dice `inerte_por: fuera_del_barrido` de una máquina cuyo tenant quedó afuera. Si el
+// inventario llamara al envoltorio, dispararía el aviso de recorte de un barrido que no corrió; y
+// si armara su propia lista, el día que el tope o el orden cambiaran de un solo lado, el panel diría
+// «actuaría» de una máquina que ningún barrido visita.
+func (s *McpServer) proyectosDelBarrido() ([]string, bool, error) {
+	// Se pide UNO MÁS que el techo para poder distinguir «entra justo» de «hay más».
+	proyectos, err := s.engine.ProyectosConDevices(proyectosParaVigilar + 1)
+	if err != nil {
+		return nil, false, err
+	}
+	recorto := len(proyectos) > proyectosParaVigilar
+	if recorto {
+		proyectos = proyectos[:proyectosParaVigilar]
+	}
+	return proyectos, recorto, nil
+}
+
+// proyectosAVigilar es proyectosDelBarrido más su AVISO, y la llaman los barridos: son ellos los que
+// dejan tenants afuera de verdad.
 //
 // El recorte era mudo en los dos barridos: los tenants que quedaban afuera no se sondeaban y sus
 // políticas no corrían, o sea que sus máquinas no estaban «vigiladas en amarillo», estaban sin
 // vigilar y en verde. El aviso usa avisoMientras, así que se dice una vez y se rearma solo cuando
 // la flota vuelve a entrar en el techo.
 func (s *McpServer) proyectosAVigilar(barrido string) ([]string, error) {
-	// Se pide UNO MÁS que el techo para poder distinguir «entra justo» de «hay más».
-	proyectos, err := s.engine.ProyectosConDevices(proyectosParaVigilar + 1)
+	proyectos, recorto, err := s.proyectosDelBarrido()
 	if err != nil {
 		return nil, err
-	}
-	recorto := len(proyectos) > proyectosParaVigilar
-	if recorto {
-		proyectos = proyectos[:proyectosParaVigilar]
 	}
 	s.avisoMientras("barrido_truncado:"+barrido, recorto, func() {
 		logx.Error("flota: hay más tenants con máquinas de los que entran en un barrido; los que quedan afuera NO se vigilan y NO se reparan, y desde afuera eso se ve igual que todo bien",
