@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -741,6 +742,9 @@ const (
 	maxRunasDePedido = 200
 )
 
+// marcaDelRedactor es la marca con la que internal/redact tapa cada secreto: «[REDACTED:<tipo>]».
+var marcaDelRedactor = regexp.MustCompile(`\[REDACTED:[^\]]*\]`)
+
 // pedidoDeSesion es un pedido guardado: cuándo (unix) y qué, ya redactado y truncado.
 type pedidoDeSesion struct {
 	T     int64  `json:"t"`
@@ -772,6 +776,12 @@ func leerPedidos(store metaStore, sessionID string) []pedidoDeSesion {
 // prompts, la meta termina en los backups de la base, y un secreto cortado a la mitad por el
 // truncado ya no lo reconoce nadie.
 //
+// CADA SECRETO QUEDA COMO «…», NO COMO LA MARCA DEL REDACTOR. El pedido es la consulta con la que
+// feat/memoria-tras-compactar vuelve a buscar memoria, y «[REDACTED:high-entropy]» le sumaría
+// «REDACTED», «high» y «entropy», términos que el prompt no tenía; «…» no tiene letras ni dígitos, y
+// memory.TerminosDeConsulta no ve nada en él. En la historia de Musubi y Altura, 6 de los 3.408
+// pedidos que se guardarían llevaban una marca dentro de las 200 runas.
+//
 // ES UNA ESCRITURA MÁS POR TURNO sobre una base con _txlock=immediate que comparten varios daemons,
 // así que no escribe si no cambió nada: el mismo pedido repetido no se vuelve a guardar.
 func recordarPedido(store metaStore, sessionID, prompt string, ahora time.Time) {
@@ -779,6 +789,7 @@ func recordarPedido(store metaStore, sessionID, prompt string, ahora time.Time) 
 		return // sin sesión no hay a qué compactación devolvérselo
 	}
 	texto, _ := redact.Redact(prompt)
+	texto = marcaDelRedactor.ReplaceAllLiteralString(texto, "…")
 	if r := []rune(texto); len(r) > maxRunasDePedido {
 		texto = string(r[:maxRunasDePedido])
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -205,10 +206,11 @@ func TestElPedidoSustantivoSeRecuerdaPorSesion(t *testing.T) {
 		t.Errorf("el pedido repetido se guardó dos veces: %+v", ps)
 	}
 
-	// El secreto no llega a la meta, y el largo queda acotado.
+	// El secreto no llega a la meta (queda «…»: ver TestLaMarcaDelRedactorNoEntraALaConsulta), y el
+	// largo queda acotado.
 	secreto := "ghp_" + strings.Repeat("a1B2c3D4e5", 4)
 	turno("A", "hacé el push con el token "+secreto+" al mirror")
-	if got := ultimo("A"); strings.Contains(got, secreto) || !strings.Contains(got, "[REDACTED") {
+	if got := ultimo("A"); strings.Contains(got, secreto) || !strings.Contains(got, "…") {
 		t.Errorf("el pedido se guardó sin redactar: %q", got)
 	}
 	largo := "migrá la tabla " + strings.Repeat("ñandú ", 100)
@@ -220,10 +222,15 @@ func TestElPedidoSustantivoSeRecuerdaPorSesion(t *testing.T) {
 	// Primero el redactor y después el truncado. Al revés, un secreto que cruza la runa
 	// maxRunasDePedido le llega cortado al redactor, que ya no lo reconoce (la regla de ghp_ pide 20
 	// caracteres, y el catch-all de entropía otros tantos), y el trozo queda en claro. Es sintético.
+	// La cola va larga a propósito: con el secreto ya tapado el pedido tiene que seguir pasándose del
+	// tope, o el truncado —y su sabotaje— no corre.
 	cruza := "ghp_" + strings.Repeat("Zq9Xw2Lm7Kp4", 3)
-	pedido := strings.Repeat("revisá el mirror ", 11) + "con " + cruza + " y seguí"
+	pedido := strings.Repeat("revisá el mirror ", 11) + "con " + cruza + " y seguí con el certificado del tailnet"
 	if desde := len([]rune(pedido[:strings.Index(pedido, cruza)])); desde >= maxRunasDePedido || desde+len(cruza) <= maxRunasDePedido {
 		t.Fatalf("CONTROL: el secreto tiene que cruzar la runa %d, y va de la %d a la %d", maxRunasDePedido, desde, desde+len(cruza))
+	}
+	if n := len([]rune(pedido)) - len(cruza) + len([]rune("…")); n <= maxRunasDePedido {
+		t.Fatalf("CONTROL: con el secreto tapado el pedido tiene que seguir pasándose de %d runas, y queda en %d", maxRunasDePedido, n)
 	}
 	turno("A", pedido)
 	if got := ultimo("A"); strings.Contains(got, "ghp_") {
@@ -264,6 +271,29 @@ func TestElPedidoSinSesionNoSeGuarda(t *testing.T) {
 	recordarPedido(store, "", "revisá el TLS del cerebro", time.Unix(1_800_000_000, 0))
 	if len(store.meta) != 0 {
 		t.Errorf("sin sesión, recordarPedido escribió en la meta: %v", store.meta)
+	}
+}
+
+// TestLaMarcaDelRedactorNoEntraALaConsulta: el pedido guardado es la consulta con la que
+// feat/memoria-tras-compactar vuelve a buscar memoria, así que cada secreto queda como «…», que no
+// tiene términos, y no como «[REDACTED:<tipo>]», que le sumaría «REDACTED» y las palabras del tipo.
+// Los términos del pedido guardado tienen que ser los del prompt sin el secreto. Es sintético.
+//
+// Sabotaje: el pedido se guarda con la marca del redactor adentro.
+// arnes: archivo="cmd/musubi/turn.go"
+// arnes: de="\ttexto = marcaDelRedactor.ReplaceAllLiteralString(texto, \"…\")\n"
+// arnes: a="\ttexto = marcaDelRedactor.ReplaceAllString(texto, \"$0\")\n"
+func TestLaMarcaDelRedactorNoEntraALaConsulta(t *testing.T) {
+	store := &fakeTurnStore{meta: map[string]string{}}
+	secreto := "ghp_" + strings.Repeat("a1B2c3D4e5", 4)
+	recordarPedido(store, "S", "rotá el token "+secreto+" del mirror", time.Unix(1_800_000_000, 0))
+	ps := leerPedidos(store, "S")
+	if len(ps) != 1 || strings.Contains(ps[0].Texto, secreto) {
+		t.Fatalf("el pedido tenía que guardarse, y sin el secreto: %+v", ps)
+	}
+	got, want := memory.TerminosDeConsulta(ps[0].Texto), memory.TerminosDeConsulta("rotá el token del mirror")
+	if !slices.Equal(got, want) {
+		t.Errorf("el pedido guardado %q le da a la consulta los términos %q; tenían que ser los del prompt sin el secreto, %q", ps[0].Texto, got, want)
 	}
 }
 

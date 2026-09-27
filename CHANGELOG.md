@@ -508,8 +508,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   **El pedido sustantivo se guarda por sesión**, para que feat/memoria-tras-compactar vuelva a
   buscar memoria sobre él después de compactar, sin mostrarlo: la meta `loop_pedidos:<sesión>`
   guarda los tres últimos (`[{t, texto}]`), pasados por `internal/redact` antes de truncarlos a
-  200 runas, y no escribe si el pedido es el mismo que el último. Un «sigue» o un aviso no lo
-  pisan. Se poda con el índice del delta: cuando una sesión sale de `loop_delta_sessions`, sus
+  200 runas, y no escribe si el pedido es el mismo que el último. Cada secreto queda como «…» y no
+  como `[REDACTED:<tipo>]`: el pedido va a ser una consulta, y la marca le sumaría «REDACTED» y las
+  palabras del tipo (6 de los 3.408 pedidos de la historia llevaban una). Un «sigue» o un aviso no
+  lo pisan. Se poda con el índice del delta: cuando una sesión sale de `loop_delta_sessions`, sus
   pedidos se vacían (sin escribir nada si no tenía), y una sesión que guardó un pedido sin haber
   escrito su delta se anota en el índice para que la poda la alcance; también cuando repite el
   pedido, porque dos hooks a la vez pueden sacarla del índice con el pedido adentro. Hasta que
@@ -528,9 +530,9 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   compuerta, «sigue» y el aviso sí traían memoria), `TestUnPromptSinTerminosNoBuscaMemoriaAlAzar`,
   `TestElPedidoSustantivoSeRecuerdaPorSesion` (también el pedido repetido, que no escribe, y un
   secreto que cruza la runa 200, que no deja un trozo en claro), `TestElPedidoSinSesionNoSeGuarda`,
-  `TestLosPedidosSePodanConElDelta`, `TestElPedidoRepetidoVuelveAlIndice`,
-  `TestTerminosDeConsultaYElFallbackDelRecall`, y la tabla de
-  `TestLaListaDeContinuacionNoSeComeElContenido` con filas reales. 21 sabotajes, todos rojos.
+  `TestLaMarcaDelRedactorNoEntraALaConsulta`, `TestLosPedidosSePodanConElDelta`,
+  `TestElPedidoRepetidoVuelveAlIndice`, `TestTerminosDeConsultaYElFallbackDelRecall`, y la tabla
+  de `TestLaListaDeContinuacionNoSeComeElContenido` con filas reales. 22 sabotajes, todos rojos.
   Cuatro pruebas del delta usaban «q» como prompt: una runa, sin término; ahora usan «qué
   sabemos». No cambia la descripción ni el esquema de ninguna tool.*
 - **El contador de enviadas cuenta lo que salió de acá, y el sync lleva la cuenta de lo que mueve.**
