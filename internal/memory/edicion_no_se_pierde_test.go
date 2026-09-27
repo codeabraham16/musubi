@@ -69,8 +69,8 @@ func contenidoDe(t *testing.T, e *DbEngine, id string) string {
 //
 // Sabotaje: marcar 'sent' sin mirar qué versión salió.
 // arnes: archivo="internal/memory/outbox.go"
-// arnes: de="status = CASE WHEN enqueued_hash = ? THEN 'sent' ELSE status END,"
-// arnes: a="status = CASE WHEN 1 OR enqueued_hash = ? THEN 'sent' ELSE status END,"
+// arnes: de="status = CASE WHEN ? = `+hashActual+` THEN 'sent' ELSE status END,"
+// arnes: a="status = CASE WHEN 1 OR ? = `+hashActual+` THEN 'sent' ELSE status END,"
 //
 // Sabotaje: que el claim no traiga el hash de lo que empuja (ninguna marca vuelve a aplicar).
 // arnes: archivo="internal/memory/outbox.go"
@@ -112,8 +112,8 @@ func TestEdicionEnVueloNoQuedaEnviada(t *testing.T) {
 //
 // Sabotaje: reprogramar sin mirar qué versión falló.
 // arnes: archivo="internal/memory/outbox.go"
-// arnes: de="AND enqueued_hash = ?`, backoffSeconds, errMsg, obsID, hash)"
-// arnes: a="AND (enqueued_hash = ? OR 1)`, backoffSeconds, errMsg, obsID, hash)"
+// arnes: de="AND ? = `+hashActual, backoffSeconds, errMsg, obsID, hash)"
+// arnes: a="AND (1 OR ? = `+hashActual+`)`, backoffSeconds, errMsg, obsID, hash)"
 func TestUnReintentoViejoNoFrenaLaEdicion(t *testing.T) {
 	e := newTestEngine(t)
 	v1 := reclamada(t, e, "vuela-2", versionQueViaja)
@@ -135,8 +135,8 @@ func TestUnReintentoViejoNoFrenaLaEdicion(t *testing.T) {
 //
 // Sabotaje: mandar a dead-letter sin mirar qué versión rechazó el central.
 // arnes: archivo="internal/memory/outbox.go"
-// arnes: de="AND enqueued_hash = ?`, errMsg, obsID, hash)"
-// arnes: a="AND (enqueued_hash = ? OR 1)`, errMsg, obsID, hash)"
+// arnes: de="AND ? = `+hashActual, errMsg, obsID, hash)"
+// arnes: a="AND (1 OR ? = `+hashActual+`)`, errMsg, obsID, hash)"
 func TestUnRechazoViejoNoMataLaEdicion(t *testing.T) {
 	e := newTestEngine(t)
 	v1 := reclamada(t, e, "vuela-3", versionQueViaja)
@@ -160,8 +160,8 @@ func TestUnRechazoViejoNoMataLaEdicion(t *testing.T) {
 //
 // Sabotaje: anotar la entrega sólo si la fila queda 'sent' (la variante que no anota lo que viajaba).
 // arnes: archivo="internal/memory/outbox.go"
-// arnes: de="WHERE obs_id = ? AND status IN ('pending','claimed')`, hash, hash, obsID)"
-// arnes: a="WHERE obs_id = ? AND status IN ('pending','claimed') AND enqueued_hash = ?`, hash, hash, obsID, hash)"
+// arnes: de="WHERE obs_id = ? AND status IN ('pending','claimed')`, hash, hash, hash, hash, obsID)"
+// arnes: a="WHERE obs_id = ? AND status IN ('pending','claimed') AND ? = `+hashActual, hash, hash, hash, hash, obsID, hash)"
 func TestElReboteDeLoQueViajabaNoEsChoque(t *testing.T) {
 	e := newTestEngine(t)
 	v1 := reclamada(t, e, "vuela-4", versionQueViaja)
@@ -296,10 +296,10 @@ func TestUnChoqueSeCuentaAparte(t *testing.T) {
 // contenido— baja idéntica mientras la de acá todavía no salió. No hay edición que conservar ni nada
 // que contar: acá está lo mismo que bajó.
 //
-// Sabotaje: conservar toda fila en vuelo, sin comparar el hash.
+// Sabotaje: conservar toda fila en vuelo, sin comparar el contenido.
 // arnes: archivo="internal/memory/inboundsync.go"
-// arnes: de="if enVuelo && encolado != hash {"
-// arnes: a="if enVuelo {"
+// arnes: de="if enVuelo && otroContenido {"
+// arnes: a="if enVuelo && (otroContenido || true) {"
 func TestLaMismaVersionNoEsChoque(t *testing.T) {
 	e := newTestEngine(t)
 	const commit = "feat: la misma captura en las dos maquinas"
@@ -315,5 +315,121 @@ func TestLaMismaVersionNoEsChoque(t *testing.T) {
 	}
 	if ing != (Ingesta{}) {
 		t.Errorf("la misma versión bajada contra una pendiente idéntica dio %+v; esperaba ni rebote ni choque", ing)
+	}
+}
+
+// huerfanaReentregada deja una fila con DERIVA —el hash encolado ya no es el de la observación— por
+// el camino de producción que encontró la revisión: una 'shared' que nunca salió, archivada hace más
+// que la ventana y purgada por la retención con su fila de outbox todavía 'pending' (el outbox no
+// tiene FK), y el central que re-entrega esa id con otro contenido. IngestShared la inserta y el
+// sello respeta la 'pending': queda encolado el hash de la versión purgada y en la observación el de
+// la que bajó. Devuelve lo que bajó.
+func huerfanaReentregada(t *testing.T, e *DbEngine, id string) SharedObs {
+	t.Helper()
+	if err := e.SaveObservationTyped(id, "t/x", "la version de aca, que nunca salio", 1, "semantic", ScopeShared, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`UPDATE observations SET archived = 1, archived_at = datetime('now', '-40 day') WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := e.PurgeArchived(30); err != nil || n != 1 {
+		t.Fatalf("la retención tenía que purgar %s: n=%d err=%v", id, n, err)
+	}
+	bajada := SharedObs{ID: id, TopicKey: "t/x", Content: "la version que el central re-entrega de " + id,
+		Importance: 1, MemType: "semantic", Author: "gio", ProjectID: "acme"}
+	if _, err := e.IngestShared(bajada); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, h := outboxRow(t, e, id); st != outboxPending || h == ContentHash(bajada.Content) {
+		t.Fatalf("precondición: la fila de %s tenía que seguir 'pending' con el hash de la versión purgada; quedó %q", id, st)
+	}
+	return bajada
+}
+
+// TestUnaFilaConDerivaSeCierraConLaEntrega: una fila en vuelo con deriva se cierra con la primera
+// entrega de lo que la base tiene, como en main, en vez de re-empujarse cada lease para siempre. Las
+// tres marcas comparan contra el content_hash de la observación (hashActual), no contra lo encolado.
+// La otra fuente de deriva —un binario anterior que baja otra versión encima de una edición
+// pendiente— deja la fila igual que la huérfana de acá. Una fila vieja sin content_hash también se
+// cierra: hashActual lee el NULL como la cadena vacía, igual que el payload.
+//
+// Y mientras dura, que baje justo lo que ya hay no es rebote ni choque: la conservación compara el
+// contenido de acá, no el hash encolado, que en esta fila no dice qué hay.
+//
+// Sabotaje: no re-sellar enqueued_hash al quedar 'sent' (re-guardar lo mismo la vuelve a encolar).
+// arnes: archivo="internal/memory/outbox.go"
+// arnes: de="enqueued_hash = CASE WHEN ? = `+hashActual+` THEN ? ELSE enqueued_hash END,"
+// arnes: a="enqueued_hash = CASE WHEN ? = `+hashActual+` THEN COALESCE(enqueued_hash, ?) ELSE enqueued_hash END,"
+//
+// Sabotaje: conservar comparando contra el hash encolado, como antes de este arreglo.
+// arnes: archivo="internal/memory/inboundsync.go"
+// arnes: de="otroContenido := previo != clean"
+// arnes: a="var encoladoAhora string\n\t_ = tx.QueryRow(`SELECT COALESCE(enqueued_hash, \x27\x27) FROM outbox WHERE obs_id = ?`, o.ID).Scan(&encoladoAhora)\n\totroContenido := encoladoAhora != hash"
+func TestUnaFilaConDerivaSeCierraConLaEntrega(t *testing.T) {
+	e := newTestEngine(t)
+	bajada := huerfanaReentregada(t, e, "deriva-1")
+
+	// El central la vuelve a entregar tal cual mientras la fila sigue con deriva.
+	ing, err := e.IngestShared(bajada)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ing != (Ingesta{}) {
+		t.Errorf("la re-entrega de lo que ya está acá se contó %+v; esperaba ni rebote ni choque", ing)
+	}
+
+	it := reclamarUna(t, e, "deriva-1")
+	if it.Content != bajada.Content || it.Hash != ContentHash(bajada.Content) {
+		t.Fatalf("el claim tenía que llevar lo que la base tiene, con su hash; lleva %q / %q", it.Content, it.Hash)
+	}
+	if err := e.MarkOutboxSent("deriva-1", it.Hash); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := outboxRow(t, e, "deriva-1"); st != outboxSent {
+		t.Fatalf("DERIVA SIN FIN: la entrega de lo que la base tiene dejó la fila %q; esperaba %q (si no, vuelve a salir en cada lease)", st, outboxSent)
+	}
+	// La marca re-selló el hash: re-guardar el mismo contenido no la vuelve a poner a la cola.
+	if err := e.SaveObservationTyped("deriva-1", bajada.TopicKey, bajada.Content, 1, "semantic", ScopeShared, nil); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := outboxRow(t, e, "deriva-1"); st != outboxSent {
+		t.Errorf("re-guardar el mismo contenido la volvió a encolar (%q): la entrega no re-selló enqueued_hash", st)
+	}
+
+	// Las otras dos marcas también aplican sobre una fila con deriva.
+	huerfanaReentregada(t, e, "deriva-2")
+	it = reclamarUna(t, e, "deriva-2")
+	if err := e.MarkOutboxRetry("deriva-2", it.Hash, 3600, "timeout del central"); err != nil {
+		t.Fatal(err)
+	}
+	if st, attempts, _ := outboxRow(t, e, "deriva-2"); st != outboxPending || attempts != 1 {
+		t.Errorf("el reintento no aplicó sobre la fila con deriva: status=%q attempts=%d; esperaba pending/1 (sin él, sale cada lease y sin backoff)", st, attempts)
+	}
+	huerfanaReentregada(t, e, "deriva-3")
+	it = reclamarUna(t, e, "deriva-3")
+	if err := e.MarkOutboxDead("deriva-3", it.Hash, "el central la rechaza para siempre"); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := outboxRow(t, e, "deriva-3"); st != outboxDead {
+		t.Errorf("el rechazo no aplicó sobre la fila con deriva: status=%q; esperaba %q (sin él, sale cada lease y la rechazan cada vez)", st, outboxDead)
+	}
+
+	// Y una fila vieja sin content_hash, de las que el doctor cuenta para reparar: el ítem sale con
+	// Hash vacío, y la marca la cierra porque hashActual lee el NULL igual que el payload.
+	if err := e.SaveObservationTyped("sin-hash", "t/x", "una nota de antes de los digests", 1, "semantic", ScopeShared, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`UPDATE observations SET content_hash = NULL WHERE id = 'sin-hash'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.Exec(`UPDATE outbox SET enqueued_hash = NULL WHERE obs_id = 'sin-hash'`); err != nil {
+		t.Fatal(err)
+	}
+	it = reclamarUna(t, e, "sin-hash")
+	if err := e.MarkOutboxSent("sin-hash", it.Hash); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := outboxRow(t, e, "sin-hash"); st != outboxSent {
+		t.Errorf("DERIVA SIN FIN: una fila sin content_hash quedó %q tras entregarse; esperaba %q", st, outboxSent)
 	}
 }

@@ -2,12 +2,15 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"musubi/internal/config"
 	"musubi/internal/embedding"
@@ -184,4 +187,74 @@ func TestUnaEdicionEnVueloLlegaAlCentral(t *testing.T) {
 	t.Logf("saves que recibió el central, en orden: %q", guardados)
 	t.Logf("central=%q · local=%q · outbox pending=%d sent=%d dead=%d · bajada de hoy: filas=%d rebotes=%d choques=%d",
 		enElCentral, obs[0].Content, pending, sent, dead, r.BajadaHoy.Filas, r.BajadaHoy.Rebotes, r.BajadaHoy.Choques)
+}
+
+// archivarHaceCuarentaDias archiva id con una fecha vieja, para que la retención la purgue ya. El
+// motor no expone archivar con fecha, así que va directo a la base.
+func archivarHaceCuarentaDias(t *testing.T, dir, id string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(dir, config.DirName, config.DBFile)+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE observations SET archived = 1, archived_at = datetime('now', '-40 day') WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestUnaHuerfanaReentregadaSaleUnaSolaVez: la DERIVA de punta a punta, con el drain de verdad. Una
+// 'shared' que nunca salió se archiva y la retención la purga con su fila de outbox todavía
+// 'pending' (el outbox no tiene FK); el central re-entrega esa id con otro contenido. Queda encolado
+// el hash de la versión purgada y en la observación el de la que bajó. Con las marcas contra lo
+// encolado, el push salía bien, la marca no aplicaba y la fila se volvía a empujar en cada lease,
+// para siempre (medido en la revisión: 4 saves en 4 ticks; main, 1). Con las marcas contra lo que la
+// base tiene, sale una vez y queda 'sent'.
+//
+// Sabotaje: que las marcas vuelvan a comparar contra lo encolado.
+// arnes: archivo="internal/memory/outbox.go"
+// arnes: de="const hashActual = `(SELECT COALESCE(o.content_hash, \x27\x27) FROM observations o WHERE o.id = outbox.obs_id)`"
+// arnes: a="const hashActual = `outbox.enqueued_hash`"
+func TestUnaHuerfanaReentregadaSaleUnaSolaVez(t *testing.T) {
+	dir := memtest.DirSembrado(t)
+	e, err := memory.NewDbEngine(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.Close() })
+	central := newCentralConMemoria()
+	srv := httptest.NewServer(central)
+	defer srv.Close()
+	// Lease de 1 s: lo que tarda en volver a reclamarse una fila que la marca no cerró.
+	s := NewMcpServer(e, t.TempDir(), embedding.NoopProvider{}, WithMemory(config.MemoryConfig{TeamMode: true}))
+	s.SetSyncClient(newTestSyncClient(t, srv.URL), config.SyncConfig{BatchSize: 50, LeaseSeconds: 1, BackoffBaseSeconds: 1, BackoffMaxSeconds: 5})
+	ctx := context.Background()
+
+	if err := e.SaveObservationTyped("vieja", "t/x", "la version de aca, que nunca salio", 1, "semantic", memory.ScopeShared, nil); err != nil {
+		t.Fatal(err)
+	}
+	archivarHaceCuarentaDias(t, dir, "vieja")
+	if n, err := e.PurgeArchived(30); err != nil || n != 1 {
+		t.Fatalf("la retención tenía que purgar la archivada: n=%d err=%v", n, err)
+	}
+	if _, err := e.IngestShared(memory.SharedObs{RowID: 9, ID: "vieja", TopicKey: "t/x", Content: "la version que el central re-entrega",
+		Importance: 1, MemType: "semantic", Author: "gio", ProjectID: "acme"}); err != nil {
+		t.Fatal(err)
+	}
+
+	s.drainOutboxOnce(ctx)
+	time.Sleep(1100 * time.Millisecond) // vence el lease
+	s.drainOutboxOnce(ctx)
+
+	central.mu.Lock()
+	guardados := append([]string(nil), central.guardados...)
+	central.mu.Unlock()
+	pending, sent, dead, err := e.OutboxStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(guardados) != 1 || pending != 0 || sent != 1 {
+		t.Errorf("DERIVA SIN FIN: en dos ticks el central recibió %d saves %q y el outbox quedó pending=%d sent=%d dead=%d; esperaba 1 save y la fila 'sent'",
+			len(guardados), guardados, pending, sent, dead)
+	}
 }

@@ -30,8 +30,9 @@ func outboxRow(t *testing.T, e *DbEngine, obsID string) (status string, attempts
 	return status, attempts, hash
 }
 
-// encolado es el hash que la fila de obsID tiene encolado ahora: el que una marca tiene que nombrar
-// para aplicarse, igual que el OutboxItem.Hash con que el drain la reclamó.
+// encolado es el hash que la fila de obsID tiene encolado ahora. Sin deriva es también el
+// content_hash de la observación —contra lo que compara una marca (hashActual)— y el OutboxItem.Hash
+// con que el drain la reclamó, así que sirve para nombrarle a una marca la versión que salió.
 func encolado(t *testing.T, e *DbEngine, obsID string) string {
 	t.Helper()
 	_, _, h := outboxRow(t, e, obsID)

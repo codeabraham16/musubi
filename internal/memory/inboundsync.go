@@ -165,12 +165,12 @@ func (e *DbEngine) IngestShared(o SharedObs) (Ingesta, error) {
 	}
 
 	// UNA EDICIÓN LOCAL SIN SALIR NO LA PISA EL PULL. Si la fila de outbox está 'pending' o 'claimed'
-	// con otro hash que el que baja, acá hay una versión que el central todavía no tiene, y el UPSERT
-	// de abajo la reemplazaba por la del central: el payload del envío se arma desde observations,
-	// así que el push siguiente subía la versión del central y la edición se perdía en los dos lados
-	// sin un error. Medido en main: nota enviada (v1), edición local (v2, 'pending'), bajada de v1
-	// ⇒ el claim devolvía «version del CENTRAL». El sello de #656 ya salvaba el ESTADO de la fila;
-	// esto salva la edición.
+	// y lo que hay acá es otro contenido que el que baja, acá hay una versión que el central todavía
+	// no tiene, y el UPSERT de abajo la reemplazaba por la del central: el payload del envío se arma
+	// desde observations, así que el push siguiente subía la versión del central y la edición se
+	// perdía en los dos lados sin un error. Medido en main: nota enviada (v1), edición local (v2,
+	// 'pending'), bajada de v1 ⇒ el claim devolvía «version del CENTRAL». El sello de #656 ya salvaba
+	// el ESTADO de la fila; esto salva la edición.
 	//
 	// No se escribe NADA: ni el contenido ni topic_key, importance o mem_type. La edición local es
 	// una unidad y sale entera en el próximo tick, donde gana por ser la última; tomar los metadatos
@@ -178,18 +178,21 @@ func (e *DbEngine) IngestShared(o SharedObs) (Ingesta, error) {
 	// ANTERIOR) y el push subiría esa mezcla. Tampoco se toca el vector, que es el del contenido que
 	// queda, ni el sello, que ya respeta una 'pending'/'claimed'.
 	//
-	// Con el mismo hash no hay nada que conservar (acá está lo mismo que bajó) y sigue el camino de
-	// siempre.
-	var estado, encolado string
+	// Lo que decide es el CONTENIDO de acá contra el que baja —lo que el UPSERT pisaría— y no
+	// outbox.enqueued_hash. En una fila con deriva (ver hashActual en outbox.go) el hash encolado no
+	// dice qué hay acá: comparar contra él contaba un rebote o un choque cada vez que bajaba justo lo
+	// que ya estaba. Con el mismo contenido no hay nada que conservar y sigue el camino de siempre.
+	var estado string
 	var entregado sql.NullString
-	switch err := tx.QueryRow(`SELECT status, COALESCE(enqueued_hash, ''), sent_hash FROM outbox WHERE obs_id = ?`, o.ID).
-		Scan(&estado, &encolado, &entregado); {
+	switch err := tx.QueryRow(`SELECT status, sent_hash FROM outbox WHERE obs_id = ?`, o.ID).
+		Scan(&estado, &entregado); {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
 		return Ingesta{}, fmt.Errorf("error al leer el outbox de %s: %w", o.ID, err)
 	}
+	otroContenido := previo != clean
 	enVuelo := existia && (estado == outboxPending || estado == outboxClaimed)
-	if enVuelo && encolado != hash {
+	if enVuelo && otroContenido {
 		if entregado.Valid && entregado.String == hash {
 			return Ingesta{Rebote: true}, nil
 		}
