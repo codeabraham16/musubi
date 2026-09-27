@@ -234,7 +234,9 @@ const hashActual = `(SELECT COALESCE(o.content_hash, '') FROM observations o WHE
 //
 // Al quedar 'sent' re-sella enqueued_hash con lo que salió, que es contra lo que enqueueOutboxTx
 // mide la próxima edición: si quedaba el de una deriva, re-guardar el mismo contenido la volvía a
-// encolar y la subía otra vez.
+// encolar y la subía otra vez. Y borra last_error sólo entonces: si lo que salió era otra versión,
+// el error es de la que sigue pendiente —con dos drainers, el intento fallido de v2 llega antes que
+// el 200 tardío de v1— y es lo que musubi_sync_status muestra de lo que está trabado.
 //
 // Deja escrito además QUÉ salió y CUÁNDO (migración v58): sent_hash es el hash que esta máquina
 // entregó por última vez y sent_at la hora de esa entrega. «Enviadas en 24 h» se cuenta con sent_at
@@ -254,9 +256,10 @@ func (e *DbEngine) MarkOutboxSent(obsID, hash string) error {
 		UPDATE outbox SET
 			status = CASE WHEN ? = `+hashActual+` THEN 'sent' ELSE status END,
 			enqueued_hash = CASE WHEN ? = `+hashActual+` THEN ? ELSE enqueued_hash END,
-			last_error = NULL, updated_at = datetime('now'),
+			last_error = CASE WHEN ? = `+hashActual+` THEN NULL ELSE last_error END,
+			updated_at = datetime('now'),
 			sent_hash = ?, sent_at = datetime('now')
-		WHERE obs_id = ? AND status IN ('pending','claimed')`, hash, hash, hash, hash, obsID); err != nil {
+		WHERE obs_id = ? AND status IN ('pending','claimed')`, hash, hash, hash, hash, hash, obsID); err != nil {
 		return fmt.Errorf("error al marcar outbox como enviado: %w", err)
 	}
 	return nil

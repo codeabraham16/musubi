@@ -160,8 +160,8 @@ func TestUnRechazoViejoNoMataLaEdicion(t *testing.T) {
 //
 // Sabotaje: anotar la entrega sólo si la fila queda 'sent' (la variante que no anota lo que viajaba).
 // arnes: archivo="internal/memory/outbox.go"
-// arnes: de="WHERE obs_id = ? AND status IN ('pending','claimed')`, hash, hash, hash, hash, obsID)"
-// arnes: a="WHERE obs_id = ? AND status IN ('pending','claimed') AND ? = `+hashActual, hash, hash, hash, hash, obsID, hash)"
+// arnes: de="WHERE obs_id = ? AND status IN ('pending','claimed')`, hash, hash, hash, hash, hash, obsID)"
+// arnes: a="WHERE obs_id = ? AND status IN ('pending','claimed') AND ? = `+hashActual, hash, hash, hash, hash, hash, obsID, hash)"
 func TestElReboteDeLoQueViajabaNoEsChoque(t *testing.T) {
 	e := newTestEngine(t)
 	v1 := reclamada(t, e, "vuela-4", versionQueViaja)
@@ -431,5 +431,41 @@ func TestUnaFilaConDerivaSeCierraConLaEntrega(t *testing.T) {
 	}
 	if st, _, _ := outboxRow(t, e, "sin-hash"); st != outboxSent {
 		t.Errorf("DERIVA SIN FIN: una fila sin content_hash quedó %q tras entregarse; esperaba %q", st, outboxSent)
+	}
+}
+
+// TestUnExitoViejoNoBorraElErrorNuevo: dos drainers sobre la misma base, como los varios daemons por
+// base de davantis-1. A lleva v1; se edita v2; B reclama v2 y falla por algo transitorio; recién ahí
+// le llega a A el 200 de v1. La fila sigue 'pending' por v2, y el error de v2 —lo que
+// musubi_sync_status muestra de lo que está trabado— sigue ahí: el 200 era de otra versión.
+//
+// Sabotaje: que la entrega de otra versión borre el último error, como antes.
+// arnes: archivo="internal/memory/outbox.go"
+// arnes: de="last_error = CASE WHEN ? = `+hashActual+` THEN NULL ELSE last_error END,"
+// arnes: a="last_error = CASE WHEN ? IS NULL THEN NULL ELSE NULL END,"
+func TestUnExitoViejoNoBorraElErrorNuevo(t *testing.T) {
+	e := newTestEngine(t)
+	a := reclamada(t, e, "dos-drainers", versionQueViaja)
+	editar(t, e, "dos-drainers", versionEditada)
+	b := reclamarUna(t, e, "dos-drainers")
+	if b.Content != versionEditada {
+		t.Fatalf("precondición: B tenía que reclamar v2, reclamó %q", b.Content)
+	}
+	if err := e.MarkOutboxRetry("dos-drainers", b.Hash, 30, "timeout de v2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.MarkOutboxSent("dos-drainers", a.Hash); err != nil {
+		t.Fatal(err)
+	}
+
+	if st, attempts, _ := outboxRow(t, e, "dos-drainers"); st != outboxPending || attempts != 1 {
+		t.Errorf("la fila tenía que seguir pendiente por v2 con su intento fallido; quedó %q con attempts=%d", st, attempts)
+	}
+	h, err := e.OutboxHealth()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.LastError != "timeout de v2" {
+		t.Errorf("el 200 tardío de v1 borró el error de v2, que sigue sin salir: last_error=%q", h.LastError)
 	}
 }
