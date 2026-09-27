@@ -9,7 +9,6 @@ package mcp
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -290,20 +289,6 @@ func (c *SyncClient) Push(item memory.OutboxItem) error {
 	c.trafico.subidaCable.Add(int64(len(payload)))
 	c.trafico.subidaCrudos.Add(crudo)
 	return nil
-}
-
-// comprimirGzip comprime un cuerpo con gzip al nivel por defecto. La salida es determinista —el
-// encabezado va sin fecha ni nombre—, así que un reintento manda exactamente los mismos bytes.
-func comprimirGzip(cuerpo []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-	if _, err := zw.Write(cuerpo); err != nil {
-		return nil, err
-	}
-	if err := zw.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }
 
 // PushGraph empuja el grafo de código COMPLETO de un proyecto al central (Track 20 · F6): un
