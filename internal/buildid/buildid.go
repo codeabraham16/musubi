@@ -62,7 +62,15 @@ import (
 //	    escribió después del incidente de la línea anterior.
 //	    `CapverMin` NO se mueve: un agente en 1 o en 2 sigue siendo atendido y su serie de emisor
 //	    simplemente se omite — ausente no es cero.
-const Capver = 3
+//	4 · 2026-09-27 · El latido lleva `enviado_ms`: la hora del reloj de pared del agente al
+//	    mandarlo, en milisegundos Unix (A133). El cerebro le resta su hora de llegada y publica
+//	    el desfase del reloj de cada máquina. Hacía falta desde A131, que recorta a la llegada la
+//	    `tomada` futura de la muestra: con eso `antiguedad_s` dejó de dar negativa, y un reloj
+//	    adelantado ya no se notaba en ningún lado. Viaja como ENTERO y no como fecha, porque una
+//	    fecha fuera de los años 0 a 9999 no se serializa y el latido saldría sin cuerpo.
+//	    `CapverMin` NO se mueve: un agente en 1, 2 o 3 sigue siendo atendido, y su serie de
+//	    desfase no existe — ausente no es cero.
+const Capver = 4
 
 // CapverConInventarioExplicado es el capver desde el cual un agente SABE contar lo que no mandó y
 // SABE decir por qué no pudo enumerar — o sea desde el cual `servicios_omitidos` y

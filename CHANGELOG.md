@@ -56,6 +56,79 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   **El central devuelve `project_id` recién cuando corre esta versión.** Hasta su deploy, las tools
   servidas por el cerebro central (`musubi-cerebro`) no traen la clave, sin romper nada. No cambia
   el esquema ni la descripción de ninguna tool, no hay goldens que regenerar y no trae migración.
+- **El reloj de cada máquina se ve: el agente manda su hora y el cerebro publica cuánto está
+  corrido (A133).** El latido lleva `enviado_ms` (capver 4): la hora del reloj del agente en
+  milisegundos Unix, sellada justo antes de mandarlo, después de lo lento, que es la enumeración
+  de servicios (~3 s de WMI en Windows cada vez que vence su caché) y la sonda de alcance. El
+  cerebro le resta la hora de llegada, que toma al recibir el latido y antes de tocar la base
+  (una base lenta se leería como un reloj atrasado), y guarda el desfase con su signo —positivo
+  es un reloj ADELANTADO— en memoria, por máquina, vigente 90 s.
+
+  Se ve en tres lugares, y en los tres sólo si hay una medición vigente:
+  - `musubi_fleet_clock_offset_seconds{project,device}` en el `/metrics` del cerebro. Viaja sólo
+    por el scrape, como las otras series que mide el cerebro, y no por el empuje OTLP.
+  - `reloj_desfase_s` en `musubi_fleet_list`.
+  - La alerta `RelojDesfasado` (warning): más de 30 s para cualquier lado durante 15 min, callada
+    si la máquina está caída o en mantenimiento. Su runbook es `deploy/RUNBOOK.md#relojdesfasado`.
+
+  Un latido sin hora (un agente anterior al capver 4, o un cuerpo que no se pudo leer) BORRA la
+  medición anterior, y uno rechazado (token revocado) no la toca. Sin medición no hay serie: un 0
+  diría «reloj perfecto» sobre una máquina que no se midió.
+
+  **El umbral de 30 s no está medido: es un default.** Desde unos 30 s empiezan a fallar los
+  códigos TOTP; con minutos, Kerberos (tolera 5) y los certificados recién emitidos.
+
+  **Lo que la medición no separa:** el tiempo que el latido tarda en viajar se lee como atraso,
+  así que el desfase sale corrido hacia abajo por la latencia de ida. En el tailnet son
+  milisegundos, tres órdenes por debajo del umbral. Y si se corre TODA la flota junta, el reloj
+  que se corrió es el del cerebro.
+
+  **Viaja como entero y no como fecha.** Un `time.Time` fuera de los años 0 a 9999 hace fallar el
+  `json.Marshal` del latido entero, y el agente lo mandaría sin cuerpo: sin versión, sin muestra y
+  sin inventario. La máquina con el reloj más roto sería justo la que no se ve. Un reloj absurdo
+  viaja entero y se mide saturado (±292 años), sin desbordar.
+
+  **Despliegue: primero el cerebro.** Un agente capver 4 contra el cerebro de hoy sigue latiendo:
+  el cerebro ignora `enviado_ms` y le contesta la nota «capver 4 fuera de la banda del cerebro
+  (1..3)», sin medir nada. Un agente capver 3 contra el cerebro nuevo queda dentro de la banda y
+  no tiene serie. La alerta pide desplegar los DOS archivos de reglas juntos: `musubi-alerts.yml`
+  custodia que el de flota tenga 42 reglas.
+- **La bajada viaja comprimida: el central contesta con gzip a quien lo pide, y el sync mide el
+  cable de verdad.** `writeHTTPJSON` comprime la respuesta de `/mcp` cuando el pedido NOMBRA gzip
+  en `Accept-Encoding` (sin `q=0`; un `*` a secas no alcanza) y el cuerpo pasa de 1 KiB, y la marca
+  con `Content-Encoding: gzip`; toda respuesta declara `Vary: Accept-Encoding`. Sin perilla nueva.
+  Medido en el cliente del sync con las páginas reales de una copia de la base de davantis-1: 2.989
+  notas en 60 páginas de 50 pasan de 9.215.027 B a 3.586.916 B en el cable, el **38,9 %** (por
+  página, entre 27 % y 45 %; por nota, de 3.082 B a 1.200 B). Comprimir una página de ~160 KB
+  cuesta menos de 1 ms, y un pool de compresores evita reservar ~800 KB por respuesta. La página
+  vacía de un tick sin novedades (~140 B) queda debajo del umbral y viaja como antes.
+
+  `SyncClient.Pull` pide gzip A MANO y descomprime él. No es por el ahorro —el transporte de Go ya
+  lo negocia solo— sino por la medida: cuando el pedido no trae `Accept-Encoding`, el transporte lo
+  agrega y descomprime sin avisar, y `sync_viajes` habría contado como cable los bytes ya
+  descomprimidos. Ahora `bytes_cable` es lo que viajó y `bytes_crudos` lo descomprimido; contra un
+  central que no comprime, los dos dan lo mismo. Y lo lee ACOTADO: una página que en claro pasa de
+  64 MiB —el mismo tope que el central le pone a lo que descomprime— se corta ahí y vuelve como un
+  fallo permanente, en vez de juntarse entera en memoria (sin tope, ~64 KB de cable eran 64 MiB y
+  448 MiB reservados). Ninguna página real se le acerca: las 50 notas más grandes del central suman
+  642.551 B.
+
+  Ningún cliente que hoy le habla al `/mcp` del central se rompe. Probados contra el handler real:
+  el sync, el canal `musubi cerebro` y el relay del panel (`musubi dashboard`, por donde llegan el
+  CRM y el navegador) son Go, y piden gzip y lo descomprimen solos, igual que el `fetch` de Node,
+  `requests` y `httpx`; curl sin `--compressed` (`musubi-tool.sh`), `urllib` y el `http.request` de
+  Node no lo piden y reciben el cuerpo en claro de siempre. El adjudicador B1 (Claude Code con un
+  servidor `type: http`) NO se probó: corre Claude Code nativo 2.1.218, un ELF con Bun 1.4.0
+  adentro —el Node del server no interviene—, y que su `fetch` pide `gzip, deflate, br, zstd` y
+  descomprime solo sale de leer el binario, no de una corrida. La prueba es su primera corrida
+  después de V3. El gateway de Telegram, los puentes de WhatsApp y altura-voz no le hablan al
+  `/mcp` del central. El stream del panel (`/api/stream`) no pasa por acá y sale en claro
+  aunque se pida gzip: un stream comprimido no llega hasta que el compresor suelta un bloque.
+
+  **Despliegue:** la bajada viaja comprimida recién con el central nuevo (ventana V3). Un cliente
+  nuevo contra el central de hoy recibe en claro y cuenta cable = crudos. Un cliente viejo contra el
+  central nuevo recibe comprimido y lo descomprime su transporte; si su binario es de entre #693 y
+  este cambio, anota los crudos de la bajada pero no su cable hasta que se actualice.
 - **La subida viaja comprimida: una nota cruza la red en el 55 % de sus bytes, sin tocar el
   central.** `SyncClient.Push` comprime con gzip el POST de toda nota que pasa de 512 B y lo manda
   con `Content-Encoding: gzip`. Medido el 2026-09-26 con las 3.569 notas compartidas de una copia de

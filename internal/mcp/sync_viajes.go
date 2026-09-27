@@ -1,9 +1,11 @@
 package mcp
 
 import (
+	"compress/gzip"
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -108,6 +110,40 @@ func (l *lectorContado) Read(p []byte) (int, error) {
 func (l *lectorContado) terminar() int64 {
 	_, _ = io.Copy(io.Discard, l)
 	return l.n
+}
+
+// paginaEnClaro devuelve el cuerpo de una página de la bajada tal como se lee: descomprimido si
+// viajó con gzip y, en las dos formas, ACOTADO a tope+1 bytes. El byte de más distingue «entró
+// justo» de «se pasó», igual que en readRequestBody: si el decoder falla con más del tope leído, la
+// página se cortó ahí.
+//
+// SIN TOPE, DESCOMPRIMIR ES UNA BOMBA. Medido en la revisión: ~64 KB de cable se expandían a 64 MiB
+// y el decoder JSON los juntaba enteros antes de rechazar la página, con 448 MiB reservados. Con 1 MB
+// de cable serían unos 7 GiB: el daemon de la laptop (7,6 GB) muere por memoria, y otra vez en cada
+// tick. Hace falta un central comprometido o alguien que conteste en su lugar (una central_url
+// http:// con allow_insecure_token), pero el central ya se cuida así en el sentido contrario, y la
+// bajada se descomprime acá. En claro no hay amplificación —lo que se lee es lo que viajó—, pero
+// una página de más del tope tampoco es una página real, y acotar las dos formas en el mismo lugar
+// deja una sola cosa que vigilar.
+//
+// Vive al lado de lectorContado porque es la otra mitad de la medida: `cable` cuenta lo que viajó,
+// y lo que devuelve esto es lo que se cuenta como crudos.
+func paginaEnClaro(cable io.Reader, contentEncoding string, tope int64) (io.Reader, error) {
+	claro := cable
+	switch enc := strings.ToLower(strings.TrimSpace(contentEncoding)); enc {
+	case "", "identity":
+	case "gzip":
+		zr, err := gzip.NewReader(cable)
+		if err != nil {
+			return nil, fmt.Errorf("%w: el central dijo gzip y la página no lo es: %v", errTransient, err)
+		}
+		claro = zr
+	default:
+		// Sólo se pidió gzip. Otra codificación no es algo que el decoder JSON pueda leer, y dejar
+		// que lo intente daría un error de sintaxis que no nombra la causa.
+		return nil, fmt.Errorf("%w: el central contestó con Content-Encoding %q, que no se pidió", errTransient, enc)
+	}
+	return io.LimitReader(claro, tope+1), nil
 }
 
 // bytesLegibles escribe un tamaño en B, KiB o MiB con un decimal.
