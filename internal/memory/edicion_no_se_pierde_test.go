@@ -74,17 +74,18 @@ func contenidoDe(t *testing.T, e *DbEngine, id string) string {
 //
 // Sabotaje: que el claim no traiga el hash de lo que empuja (ninguna marca vuelve a aplicar).
 // arnes: archivo="internal/memory/outbox.go"
-// arnes: de="COALESCE(content_hash, '')"
-// arnes: a="''"
+// arnes: de="COALESCE(content_hash, \x27\x27)"
+// arnes: a="\x27\x27"
 func TestEdicionEnVueloNoQuedaEnviada(t *testing.T) {
 	e := newTestEngine(t)
 	v1 := reclamada(t, e, "vuela-1", versionQueViaja)
 	if v1.Content != versionQueViaja || v1.Hash != ContentHash(versionQueViaja) {
-		t.Fatalf("precondición: el claim tenía que traer v1 con el hash de ESE contenido, trajo %q / %q", v1.Content, v1.Hash)
+		t.Fatalf("el claim tenía que traer v1 con el hash de ESE contenido, trajo %q / %q", v1.Content, v1.Hash)
 	}
 
-	editar(t, e, "vuela-1", versionEditada) // llega mientras v1 viaja
-	if err := e.MarkOutboxSent("vuela-1", v1.Hash); err != nil { // el 200 de v1
+	// La edición llega mientras v1 viaja, y después el central contesta 200 por v1.
+	editar(t, e, "vuela-1", versionEditada)
+	if err := e.MarkOutboxSent("vuela-1", v1.Hash); err != nil {
 		t.Fatal(err)
 	}
 	if st, _, _ := outboxRow(t, e, "vuela-1"); st != outboxPending {
@@ -197,7 +198,7 @@ func TestElReboteDeLoQueViajabaNoEsChoque(t *testing.T) {
 // Sabotaje: la variante que conserva el contenido pero toma tema, importancia y tipo de lo que bajó.
 // arnes: archivo="internal/memory/inboundsync.go"
 // arnes: de="\t\tif entregado.Valid"
-// arnes: a="\t\tif _, err := tx.Exec(`UPDATE observations SET topic_key = ?, importance = ?, mem_type = CASE WHEN ? != '' THEN ? ELSE mem_type END WHERE id = ?`, o.TopicKey, o.Importance, memType, memType, o.ID); err != nil {\n\t\t\treturn Ingesta{}, err\n\t\t}\n\t\tif err := tx.Commit(); err != nil {\n\t\t\treturn Ingesta{}, err\n\t\t}\n\t\tif entregado.Valid"
+// arnes: a="\t\tif _, err := tx.Exec(`UPDATE observations SET topic_key = ?, importance = ?, mem_type = CASE WHEN ? != \x27\x27 THEN ? ELSE mem_type END WHERE id = ?`, o.TopicKey, o.Importance, memType, memType, o.ID); err != nil {\n\t\t\treturn Ingesta{}, err\n\t\t}\n\t\tif err := tx.Commit(); err != nil {\n\t\t\treturn Ingesta{}, err\n\t\t}\n\t\tif entregado.Valid"
 //
 // Sabotaje: no reconocer el rebote (todo lo conservado se cuenta como choque).
 // arnes: archivo="internal/memory/inboundsync.go"

@@ -167,10 +167,6 @@ func TestUnaEdicionEnVueloLlegaAlCentral(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("saves que recibió el central, en orden: %q", guardados)
-	t.Logf("central=%q · local=%q · outbox pending=%d sent=%d dead=%d · bajada de hoy: filas=%d rebotes=%d choques=%d",
-		enElCentral, obs[0].Content, pending, sent, dead, r.BajadaHoy.Filas, r.BajadaHoy.Rebotes, r.BajadaHoy.Choques)
-
 	if enElCentral != v2 {
 		t.Errorf("EDICIÓN PERDIDA: el central terminó con %q; esperaba v2", enElCentral)
 	}
@@ -184,4 +180,8 @@ func TestUnaEdicionEnVueloLlegaAlCentral(t *testing.T) {
 		t.Errorf("sync_viajes cuenta rebotes=%d choques=%d; esperaba 1 y 0 (v1 volvió mientras v2 esperaba, y no la escribió nadie más)",
 			r.BajadaHoy.Rebotes, r.BajadaHoy.Choques)
 	}
+	// Lo que pasó, también en verde (con -v): es la medición del caso, no sólo su veredicto.
+	t.Logf("saves que recibió el central, en orden: %q", guardados)
+	t.Logf("central=%q · local=%q · outbox pending=%d sent=%d dead=%d · bajada de hoy: filas=%d rebotes=%d choques=%d",
+		enElCentral, obs[0].Content, pending, sent, dead, r.BajadaHoy.Filas, r.BajadaHoy.Rebotes, r.BajadaHoy.Choques)
 }
