@@ -562,11 +562,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   transacción: si está 'pending' o 'claimed' y lo que hay acá es otro contenido que el que baja, no
   escribe NADA —ni el contenido ni el tema, la importancia o el tipo, ni toca el vector— y la
   edición local sale entera en el próximo tick, donde gana por ser la última. Y lo cuenta en el
-  viaje de la bajada (`sync_viajes`): `rebotes` si lo que bajó es lo que esta máquina entregó por
-  última vez (`sent_hash`), `choques` si no; cada choque se loguea con su id. `choques` es una COTA
-  SUPERIOR de las ediciones simultáneas: también cae ahí la re-entrega de la versión de base de una
-  nota que bajó de otra máquina y se editó acá, porque ese hash no se guarda. Con ese número se
-  decide si vale guardar las dos versiones.
+  viaje de la bajada (`sync_viajes`): `rebotes` si el contenido que bajó es lo que esta máquina
+  entregó por última vez (`sent_hash`), `choques` si no; cada choque se loguea con su id. `choques`
+  cuenta las ediciones de contenido que se cruzaron con una de acá, y NO es cota de nada, porque se
+  equivoca para los dos lados. De más: la re-entrega de la versión de base de una nota que bajó de
+  otra máquina y se editó acá, porque ese hash no se guarda. De menos: un cambio ajeno de SÓLO
+  metadatos (tema, importancia, tipo) sobre la versión que esta máquina entregó, mientras acá espera
+  una edición, baja con el contenido de `sent_hash`: cuenta como rebote, no entra, y el push de la
+  edición local lo pisa en el central. Separarlo del rebote común —el de una edición que acá también
+  cambió los metadatos— pide saber qué metadatos salieron, y eso no se guarda: `sent_hash` es sólo
+  del contenido, y guardarlos sería otra columna y otra migración. Con ese número se decide si vale
+  guardar las dos versiones.
 
   Las marcas comparan contra lo que la observación tiene, y no contra lo encolado
   (`outbox.enqueued_hash`), porque las dos columnas pueden no coincidir en una fila en vuelo, y

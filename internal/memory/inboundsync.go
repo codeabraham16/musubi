@@ -43,12 +43,18 @@ type SharedObs struct {
 // outbox en 'pending' o 'claimed'— con otro contenido que el que bajó. En los dos casos se conserva
 // la local, que sale en el próximo tick y en el central gana por ser la última; lo que cambia es de
 // dónde vino lo que bajó:
-//   - Rebote: es lo que esta máquina entregó por última vez (outbox.sent_hash). El central
-//     devuelve lo que se le subió, y eso no es un conflicto con nadie.
-//   - Choque: cualquier otra cosa. Es una COTA SUPERIOR de las ediciones simultáneas entre dos
-//     máquinas: también cae acá la re-entrega de la versión que bajó de otra máquina y que se editó
-//     acá (sent_hash sólo anota lo que salió de esta máquina, y el hash de la versión de base no se
-//     guarda en ningún lado). Con este número el dueño decide si vale guardar las dos versiones.
+//   - Rebote: el CONTENIDO que bajó es lo que esta máquina entregó por última vez
+//     (outbox.sent_hash). El central devuelve lo que se le subió, y eso no es un conflicto con nadie.
+//   - Choque: cualquier otro contenido. Cuenta las ediciones de contenido que se cruzaron con una de
+//     acá, y NO es cota de nada, porque se equivoca para los dos lados. Cuenta de más la re-entrega
+//     de la versión de base de una nota que bajó de otra máquina y se editó acá: sent_hash sólo anota
+//     lo que salió de esta máquina, y el hash de esa base no se guarda. Y cuenta de menos un cambio
+//     ajeno de SÓLO metadatos (tema, importancia, tipo) sobre la versión que esta máquina entregó,
+//     mientras acá espera una edición: baja con el contenido de sent_hash, así que es un Rebote, no
+//     entra, y el push de la edición local lo pisa en el central. Separarlo del rebote común —el de
+//     una edición que acá también cambió los metadatos— pide saber qué metadatos salieron, y eso no
+//     se guarda: sent_hash es sólo del contenido, y guardarlos sería una columna y una migración.
+//     Con este número el dueño decide si vale guardar las dos versiones.
 //
 // A lo sumo uno de los dos es true, y ninguno si la fila se pisó o se insertó como siempre.
 type Ingesta struct {

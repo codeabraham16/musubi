@@ -416,8 +416,9 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 			}
 			ingeridas++
 			// Una edición local sin salir que la bajada NO pisó (ver memory.Ingesta). Van al viaje del
-			// tick para contarlas por separado: el rebote es el eco de lo propio; el choque, la cota de
-			// las ediciones simultáneas, y se loguea con su id para poder ir a mirar cuál fue.
+			// tick para contarlas por separado: el rebote es el eco de lo propio; el choque, otro
+			// contenido cruzado con el de acá (memory.Ingesta dice qué cuenta y qué no), y se loguea con
+			// su id para poder ir a mirar cuál fue.
 			if ing.Rebote {
 				viaje.Rebotes++
 			}

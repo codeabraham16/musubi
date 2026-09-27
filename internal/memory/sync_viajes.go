@@ -44,9 +44,10 @@ const (
 //     nota (4xx, 5xx, un error JSON-RPC) y el cuerpo que viajó igual. Mismo motivo: un corte del
 //     central reintentado N veces no es peso de nota.
 //   - Rebotes, Choques: sólo en la bajada, filas (ya contadas en Filas) que encontraron acá una
-//     edición local sin salir con otro contenido y NO la pisaron. Rebote si lo que bajó es lo que
-//     esta máquina entregó por última vez; choque si no (ver memory.Ingesta, que dice por qué el
-//     choque es una cota superior).
+//     edición local sin salir con otro contenido y NO la pisaron. Rebote si el contenido que bajó es
+//     lo que esta máquina entregó por última vez; choque si no. Choques no es cota de nada: cuenta de
+//     más la re-entrega de una versión de base ajena, y de menos un cambio ajeno de sólo metadatos,
+//     que cae en rebotes (ver memory.Ingesta).
 //   - SinCambios: nace en cero. Lo llena un PR siguiente de la ola (el central que no re-guarda lo
 //     que ya tiene). Está en la tabla desde ya para no pedir otra migración.
 type Viaje struct {
