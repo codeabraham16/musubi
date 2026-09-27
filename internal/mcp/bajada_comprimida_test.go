@@ -22,6 +22,8 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -311,5 +313,91 @@ func TestElStreamDelPanelNoSeComprime(t *testing.T) {
 	linea, err := bufio.NewReader(resp.Body).ReadString('\n')
 	if err != nil || linea != "event: backlog\n" {
 		t.Fatalf("el primer frame del stream no se lee en claro: %q (err=%v)", linea, err)
+	}
+}
+
+// cuerpoPropio es un texto de ~8 KiB que sólo puede ser de la llamada (g, i): si una respuesta se
+// mezcla con otra, descomprimida ya no es la suya.
+func cuerpoPropio(g, i int) string {
+	var b strings.Builder
+	for k := 0; b.Len() < 8<<10; k++ {
+		fmt.Fprintf(&b, "respuesta %d de la goroutina %d, línea %d: %x. ", i, g, k, (g*7919+i*104729+k*31)%65521)
+	}
+	return b.String()
+}
+
+// TestLasRespuestasComprimidasNoSeMezclan: el central comprime respuestas CONCURRENTES —el sync de
+// varias máquinas, las sesiones de `musubi cerebro` y el adjudicador le pegan a la vez— reciclando
+// los compresores (escritoresGzip), y cada respuesta tiene que llevar SU cuerpo. El pool comparte el
+// compresor y nunca el destino. Si un refactor comparte lo que no debe, en serie todo sigue andando
+// y en producción dos principals reciben cuerpos cruzados: memoria de un tenant en la respuesta de
+// otro. Medido en la revisión con un buffer compartido: 1.652 de 1.920 respuestas salieron con un
+// cuerpo que no era el suyo, y las pruebas en serie seguían verdes.
+//
+// No necesita -race para morder (esta PC no tiene cgo): cada respuesta, descomprimida si viajó
+// comprimida, se compara con su propio JSON. Un pánico adentro del compresor también cuenta como
+// respuesta rota. Una que salió en claro porque comprimir falló NO está rota —es la salida que
+// promete comprimirGzip— mientras lleve su cuerpo.
+//
+// Sabotaje: devolver el compresor al pool antes de usarlo.
+// arnes: archivo="internal/mcp/gzip.go"
+// arnes: de="defer escritoresGzip.Put(zw)"
+// arnes: a="escritoresGzip.Put(zw)"
+func TestLasRespuestasComprimidasNoSeMezclan(t *testing.T) {
+	const goroutinas, llamadas = 32, 60
+	var rotas, comprimidas atomic.Int64
+	var primera sync.Once
+	var ejemplo string
+	responder := func(g, i int) {
+		defer func() {
+			if p := recover(); p != nil {
+				rotas.Add(1)
+				primera.Do(func() { ejemplo = fmt.Sprintf("la llamada %d-%d entró en pánico: %v", g, i, p) })
+			}
+		}()
+		resp := JsonRpcResponse{JsonRpc: "2.0", ID: fmt.Sprintf("%d-%d", g, i), Result: textResult(cuerpoPropio(g, i))}
+		propio, err := json.Marshal(resp)
+		if err != nil {
+			panic(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, mcpHTTPPath, nil)
+		req.Header.Set("Accept-Encoding", "gzip")
+		rec := httptest.NewRecorder()
+		writeHTTPJSON(rec, req, resp)
+		llego := rec.Body.Bytes()
+		if rec.Header().Get("Content-Encoding") == "gzip" {
+			comprimidas.Add(1)
+			zr, zerr := gzip.NewReader(bytes.NewReader(llego))
+			if zerr == nil {
+				llego, zerr = io.ReadAll(zr)
+			}
+			err = zerr
+		}
+		if err != nil || !bytes.Equal(llego, propio) {
+			rotas.Add(1)
+			primera.Do(func() {
+				ejemplo = fmt.Sprintf("la llamada %d-%d leyó %d B (Content-Encoding %q, err=%v) y su JSON son %d B",
+					g, i, len(llego), rec.Header().Get("Content-Encoding"), err, len(propio))
+			})
+		}
+	}
+	var wg sync.WaitGroup
+	for g := 0; g < goroutinas; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < llamadas; i++ {
+				responder(g, i)
+			}
+		}(g)
+	}
+	wg.Wait()
+	total := goroutinas * llamadas
+	if n := rotas.Load(); n > 0 {
+		t.Errorf("%d de %d respuestas escritas en paralelo llegaron con un cuerpo ajeno o roto (%d salieron comprimidas); por ejemplo, %s",
+			n, total, comprimidas.Load(), ejemplo)
+	}
+	if comprimidas.Load() == 0 {
+		t.Fatalf("precondición: ninguna de las %d respuestas salió comprimida; sin compresión, la prueba no mira el pool", total)
 	}
 }
