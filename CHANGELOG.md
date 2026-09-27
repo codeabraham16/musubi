@@ -490,6 +490,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   130 de continuación y los 356 avisos dejan de buscar, y ningún pedido sustantivo se calla. Los 34
   prompts distintos que la compuerta calla son del tipo «continua», «mira», «como va?», «que
   sigue?», «si hazlo y sigue» o «ya está listo,»: seguir o preguntar el estado, sin decir de qué.
+  Un efecto de costado, escrito en `registrarSesionDelta`: como esos turnos ya no buscan, tampoco
+  refrescan la marca de la sesión en el índice del delta, y una sesión que espera un workflow entre
+  avisos y «sigue» puede ser la más vieja cuando arrancan sus hijas. Con las llegadas reales del
+  09-19 al 09-26 no cambió ningún desalojo; lo cierra fix/delta-no-desaloja-interactivas.
 
   **«Qué es un término» lo dice el recall, y hay uno solo: `memory.TerminosDeConsulta`**, que usan
   el recall (`rankedTerms`), la compuerta y, en el PR que sigue, el corrector de tipeo. La lista
