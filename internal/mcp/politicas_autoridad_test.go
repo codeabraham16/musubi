@@ -5,6 +5,7 @@ package mcp
 // sumar un caso más a la lista.
 
 import (
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -117,9 +118,56 @@ func frenosDeclarados(t *testing.T) map[frenoDePolitica]string {
 		}
 	}
 	// PISO: cero constantes no es «no hay frenos», es que el tipo se renombró y esta guarda quedó
-	// mirando al aire. Hoy son siete.
+	// mirando al aire. Hoy son nueve, más sinFreno.
 	if len(out) < 5 {
 		t.Fatalf("encontré %d constantes de frenoDePolitica en politicas.go y son al menos cinco: el tipo cambió de nombre o de forma y la cobertura de la tabla dejó de medirse", len(out))
+	}
+	return out
+}
+
+// frenosDelBarridoGlobal devuelve los frenos que decide el barrido GLOBAL (A132): los que devuelve
+// (barridoDePoliticas).frenoSobre, leídos de su AST. No es una lista escrita acá: un freno global
+// nuevo entra por nacer en esa función, y sale si deja de devolverlo.
+func frenosDelBarridoGlobal(t *testing.T) map[frenoDePolitica]bool {
+	t.Helper()
+	porNombre := map[string]frenoDePolitica{}
+	for valor, nombre := range frenosDeclarados(t) {
+		porNombre[nombre] = valor
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "politicas.go", nil, 0)
+	if err != nil {
+		t.Fatalf("no se pudo parsear politicas.go: %v", err)
+	}
+	out := map[frenoDePolitica]bool{}
+	for _, decl := range f.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok || fd.Name.Name != "frenoSobre" || fd.Recv == nil || len(fd.Recv.List) != 1 {
+			continue
+		}
+		if recv, ok := fd.Recv.List[0].Type.(*ast.Ident); !ok || recv.Name != "barridoDePoliticas" {
+			continue
+		}
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			ret, ok := n.(*ast.ReturnStmt)
+			if !ok {
+				return true
+			}
+			for _, r := range ret.Results {
+				if id, ok := r.(*ast.Ident); ok {
+					if v, es := porNombre[id.Name]; es && v != sinFreno {
+						out[v] = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	// PISO: cero no es «no hay frenos globales», es que frenoSobre se mudó o cambió de forma y la
+	// excepción dejó de derivarse de su fuente.
+	if len(out) == 0 {
+		t.Fatal("no encontré ningún freno devuelto por (barridoDePoliticas).frenoSobre en politicas.go: la " +
+			"excepción de los frenos globales dejó de derivarse de su fuente")
 	}
 	return out
 }
@@ -155,15 +203,26 @@ func frenosDeclarados(t *testing.T) map[frenoDePolitica]string {
 // ventana de mantenimiento. Ésa no es autoridad —la mira aplicarPoliticas antes de llegar a
 // autoridadDePolitica— y era el hermano que había quedado afuera del indicador: medido en la
 // revisión de A131, con una ventana abierta el inventario decía `puede_actuar: true` sin
-// `inerte_por` y el barrido contaba `mantenimiento` sin actuar. En cada fila se afirman TRES
-// cosas, y ninguna alcanza sola:
+// `inerte_por` y el barrido contaba `mantenimiento` sin actuar. Y el estado GLOBAL del barrido
+// (A132): apagado y encendido, y el tenant de la máquina fuera del tope, justo adentro, o adentro
+// con el tope recortando a otro. Esas cinco filas no pasan por aplicarPoliticas —que por diseño
+// corre DESPUÉS de esas compuertas— sino por el scheduler y el barrido REALES: RunFlotaScheduler con
+// el intervalo que dejó ConfigurarFlota, y barrerFlotaUnaVez sobre tenants de verdad alrededor de
+// casa. Las que actúan son los espejos: sin ellas, un scheduler o un barrido que decidieran con su
+// propia regla quedarían en verde. Y a las dos del scheduler se les mide además el CICLO DE VIDA:
+// apagado tiene que volver solo, y encendido tiene que seguir barriendo después de actuar (la
+// revisión de A132 midió los dos huecos, cada uno en verde con la suite entera). En cada fila se
+// afirman TRES cosas, y ninguna alcanza sola:
 //
 //  1. la ACCIÓN contra un HECHO escrito en la fila (¿encoló o no?). Con la decisión en una sola
 //     función, un defecto adentro de ella engaña al indicador y a la acción por igual; sólo un
 //     hecho independiente lo ve.
 //  2. el INDICADOR contra la acción: `puede_actuar == actuó`, e `inerte_por` igual a la compuerta
-//     que la fila dice que frena. Es lo que cualquier compuerta agregada de un solo lado pone en
-//     rojo, sea cual sea. Se mira dos veces, y en este orden: porQueNoActuaria directo, y
+//     que la fila dice que frena. Es lo que pone en rojo una compuerta agregada de un solo lado,
+//     SI los fixtures de la tabla la atraviesan: una que dependa de algo que ninguna fila arma no
+//     se ve. La revisión de A132 midió una así —«no aplicar políticas en un tenant cuya sonda
+//     falló»— en verde con la suite entera: todas las máquinas de la tabla son Tier A, y ahí la
+//     sonda no corre ni falla. Se mira dos veces, y en este orden: porQueNoActuaria directo, y
 //     después lo que publica musubi_fleet_list. Así un indicador mal calculado y un inventario
 //     que no le pasa la ventana caen en líneas distintas, y el arnés no los cuenta como uno.
 //  3. la MÉTRICA: el resultado contado es el de la fila y ningún otro, recorriendo
@@ -205,8 +264,66 @@ func frenosDeclarados(t *testing.T) map[frenoDePolitica]string {
 // conjunto viene por id): el indicador la sabría anteponer, y nunca le llegaría. Un `false` fijo
 // sería el sabotaje obvio y no compila —deja la variable sin usar—, así que su rojo no probaría nada.
 // arnes: archivo="internal/mcp/methods_fleet.go"
-// arnes: de="s.politicasSobre(p, d, enMantenimiento[d.ID])"
-// arnes: a="s.politicasSobre(p, d, enMantenimiento[d.Name])"
+// arnes: de="s.politicasSobre(p, d, barrido, enMantenimiento[d.ID])"
+// arnes: a="s.politicasSobre(p, d, barrido, enMantenimiento[d.Name])"
+//
+// Sabotaje: que el inventario deje de anteponer el barrido APAGADO (A132): barridoVigente arma la
+// lista de tenants aunque el scheduler no vaya a arrancar. Cae la fila del barrido apagado: el
+// inventario dice `puede_actuar: true` y el scheduler real vuelve sin barrer.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="\tif s.barridoApagado() {\n\t\treturn barridoDePoliticas{apagado: true}, nil\n\t}\n"
+// arnes: a=""
+//
+// Sabotaje: el espejo, del lado que actúa: que el scheduler decida con su PROPIA regla —un umbral
+// escrito a mano— en vez de barridoApagado. Cae la fila del barrido encendido: con un sondeo de
+// 100 ms el inventario dice que actuaría y el scheduler vuelve sin arrancar.
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\tif s.barridoApagado() {\n\t\treturn\n\t}\n"
+// arnes: a="\tif s.sondaIntervalo < time.Second {\n\t\treturn\n\t}\n"
+// arnes: colision_ok="TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice"
+//
+// Sabotaje: con el barrido apagado, que el scheduler NO VUELVA —que se quede vivo hasta que lo
+// cancelen—. Es la forma mínima de la mutación que midió la revisión de A132: el «arreglo» que
+// invita el pánico de un ticker en 0 es seguir corriendo con el intervalo por default, que
+// actuaría a los 5 min, y ninguna espera de la prueba llega a verlo actuar. Cae SÓLO porque la
+// fila exige que el scheduler VUELVA SOLO. La primera versión del sabotaje escribía
+// `s.sondaIntervalo`, que es el campo que lee el inventario, así que además rompía el indicador,
+// y sin la aserción del ciclo de vida seguía en rojo por esa otra línea: no probaba que la aserción
+// sirviera (segunda vuelta de la revisión). Pisa el mismo `if` que el sabotaje de arriba, y los dos
+// caen en filas distintas: éste en la del apagado, aquél en la del encendido.
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\tif s.barridoApagado() {\n\t\treturn\n\t}\n"
+// arnes: a="\tif s.barridoApagado() {\n\t\t<-ctx.Done()\n\t\treturn\n\t}\n"
+// arnes: colision_ok="TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice"
+//
+// Sabotaje: un Timer donde va el Ticker. El scheduler barre UNA vez, actúa, y no vuelve a barrer
+// nunca, con el inventario diciendo que actuaría: cae porque la fila del encendido exige que siga
+// barriendo después del primer comando (revisión de A132).
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\tt := time.NewTicker(s.sondaIntervalo)\n"
+// arnes: a="\tt := time.NewTimer(s.sondaIntervalo)\n"
+//
+// Sabotaje: que el indicador deje de mirar el TOPE del barrido: frenoSobre sin la rama de
+// `fuera_del_barrido`. Cae la fila del tenant afuera: casa es el tenant 65, figura
+// `puede_actuar: true`, y el barrido real no la visita.
+// arnes: archivo="internal/mcp/politicas.go"
+// arnes: de="\tif !b.proyectos[proyecto] {\n\t\treturn frenoFueraDelBarrido\n\t}\n"
+// arnes: a=""
+//
+// Sabotaje: el espejo del tope, del lado que actúa: que el barrido recorte con su propia cuenta, uno
+// menos que la lista que lee el inventario. Cae la fila del tenant justo adentro: casa es el 64, el
+// inventario dice que actuaría y el barrido real la deja afuera.
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\tproyectos, recorto, err := s.proyectosDelBarrido()\n"
+// arnes: a="\tproyectos, recorto, err := s.proyectosDelBarrido()\n\tproyectos = proyectos[:min(len(proyectos), proyectosParaVigilar-1)]\n"
+//
+// Sabotaje: que el barrido trate «hubo recorte» como «el último se va», y recorra otro en su lugar.
+// Sólo lo ve la celda en que el tope recorta Y casa queda adentro, como el tenant 64 de 65: casa
+// figura `puede_actuar: true` y el barrido no la visita (revisión de A132; hasta ahí la tabla
+// armaba el borde sin recorte, y ésta quedaba en verde).
+// arnes: archivo="internal/mcp/scheduler_flota.go"
+// arnes: de="\treturn proyectos, nil\n}\n\n// barrerFlotaUnaVez hace UN barrido completo"
+// arnes: a="\tif recorto {\n\t\tproyectos[proyectosParaVigilar-1] = proyectos[0]\n\t}\n\treturn proyectos, nil\n}\n\n// barrerFlotaUnaVez hace UN barrido completo"
 func TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice(t *testing.T) {
 	type fila struct {
 		caso          string
@@ -216,10 +333,14 @@ func TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice(t *testing.T) 
 		grado         fleet.Consentimiento // "" = no se declara
 		preguntar     bool
 		mantenimiento bool // una ventana abierta sobre la máquina mientras se mide
-		actua         bool
-		freno         frenoDePolitica
-		resultado     string // de resultadosDePolitica; "" = no se cuenta nada
-		porque        string
+		// barrido es el estado GLOBAL que se arma, y con él el lado de acción que lo mide (A132):
+		// "" = aplicarPoliticas sobre casa; "apagado" / "encendido" = el scheduler REAL con ese
+		// sondeo; "fuera" / "dentro" = barrerFlotaUnaVez con casa como tenant 65 / 64.
+		barrido   string
+		actua     bool
+		freno     frenoDePolitica
+		resultado string // de resultadosDePolitica; "" = no se cuenta nada
+		porque    string
 	}
 	execSobre := func(sel ...string) func(*Principal) {
 		return func(p *Principal) { p.Fleet = map[fleet.Cap][]string{fleet.CapExec: sel, fleet.CapMetrics: {"*"}} }
@@ -292,6 +413,23 @@ func TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice(t *testing.T) 
 		{caso: "ventana de mantenimiento abierta, todo lo demás concedido", mantenimiento: true,
 			actua: false, freno: frenoMantenimiento, resultado: "mantenimiento",
 			porque: "la ventana frena el auto-heal (Ola 1), y un inventario que no lo dice convierte una ventana olvidada en una alarma apagada con el panel en verde"},
+
+		// ── El barrido global: si corre, y sobre qué tenants (A132) ──
+		{caso: "barrido apagado (probe_minutes negativo), todo lo demás concedido", barrido: "apagado",
+			actua: false, freno: frenoBarridoApagado, resultado: "",
+			porque: "con el barrido apagado RunFlotaScheduler tiene que volver solo, sin evaluar ninguna política: no se cuenta nada"},
+		{caso: "barrido encendido: el scheduler real actúa", barrido: "encendido",
+			actua: true, freno: sinFreno, resultado: "ok",
+			porque: "es el espejo del apagado con el MISMO scheduler, que además tiene que seguir barriendo: sin él, uno que decidiera con su propia regla quedaría en verde"},
+		{caso: "el tenant de la máquina queda fuera del tope del barrido", barrido: "fuera",
+			actua: false, freno: frenoFueraDelBarrido, resultado: "",
+			porque: "un tenant que no entra en proyectosParaVigilar no se barre, así que sus políticas no llegan a evaluarse"},
+		{caso: "el tenant de la máquina entra justo en el tope", barrido: "dentro",
+			actua: true, freno: sinFreno, resultado: "ok",
+			porque: "es el espejo en el borde: casa es el tenant 64 y el barrido real la visita; sin él, un barrido que recortara uno menos quedaría en verde"},
+		{caso: "el tope recorta a otro y la máquina queda adentro", barrido: "dentro-recortando",
+			actua: true, freno: sinFreno, resultado: "ok",
+			porque: "casa es el tenant 64 de 65: el tope recorta al de atrás, no a casa; un lado que leyera «hubo recorte» como «casa quedó afuera» sólo cae acá"},
 	}
 
 	// LA TABLA RECORRE EL CONJUNTO ENTERO, derivado de su fuente.
@@ -343,26 +481,72 @@ func TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice(t *testing.T) 
 					t.Fatalf("AbrirMantenimiento: %v", err)
 				}
 			}
+			// EL ESTADO GLOBAL DEL BARRIDO (A132), armado con lo mismo que lo decide en producción: el
+			// intervalo, por ConfigurarFlota; el tope, con tenants reales que ordenan antes que casa.
+			switch f.barrido {
+			case "apagado", "encendido":
+				pm := -1.0 // negativo: el apagado explícito de EffectiveProbeInterval
+				if f.barrido == "encendido" {
+					pm = sondeoCortoDePrueba.Minutes()
+				}
+				if err := s.ConfigurarFlota(config.FleetConfig{ProbeMinutes: pm, Policies: []config.PolicyConfig{politicaDeMemoria()}}); err != nil {
+					t.Fatalf("ConfigurarFlota(probe_minutes=%v): %v", pm, err)
+				}
+			case "fuera":
+				tenantsAlrededorDeCasa(t, s, proyectosParaVigilar, 0, ahora)
+			case "dentro":
+				tenantsAlrededorDeCasa(t, s, proyectosParaVigilar-1, 0, ahora)
+			case "dentro-recortando":
+				tenantsAlrededorDeCasa(t, s, proyectosParaVigilar-1, 1, ahora)
+			}
 			latir(t, s, d.ID, muestraSana(95, ahora), ahora) // 95 % de RAM: la condición se cumple
 			d, _, _ = s.engine.DevicePorNombre("casa", "pc-gio")
 
 			// 1. LO QUE VE UNA PERSONA, antes de que nada dispare.
 			puede, inertePor, visible := politicaEnElInventario(t, s)
-			// 2. LO QUE PASA: la cola de la máquina, no el contador de acciones.
+			// 2. LO QUE PASA: la cola de la máquina, no el contador de acciones. Las filas del barrido
+			// global actúan por el camino ENTERO que las decide; las demás, por aplicarPoliticas.
 			antes := comandosDePolitica(t, s)
-			s.aplicarPoliticas("casa", ahora)
+			var como comoCorrioElScheduler
+			switch f.barrido {
+			case "apagado", "encendido":
+				como = correrElSchedulerReal(t, s, antes)
+			case "fuera", "dentro", "dentro-recortando":
+				s.barrerFlotaUnaVez(context.Background())
+			default:
+				s.aplicarPoliticas("casa", ahora)
+			}
 			actuo := comandosDePolitica(t, s) > antes
 
 			if actuo != f.actua {
 				t.Errorf("la política actuó=%v y la fila dice actuó=%v: %s", actuo, f.actua, f.porque)
 			}
+			// EL CICLO DE VIDA DEL SCHEDULER, no sólo la cola (revisión de A132). «No encoló nada en
+			// diez segundos» no es «no actuaría»: uno que siguiera corriendo con otro intervalo actuaría
+			// a los cinco minutos. Y «actuó» no es «está barriendo»: uno que barre una vez y se queda
+			// quieto también actuó.
+			switch f.barrido {
+			case "apagado":
+				if !como.volvioSolo {
+					t.Errorf("con el barrido apagado el scheduler real NO volvió solo: sigue corriendo, así que actuaría " +
+						"en su próximo tick con el inventario diciendo `barrido_apagado`")
+				}
+			case "encendido":
+				if como.volvioSolo {
+					t.Errorf("con el barrido encendido el scheduler real volvió solo: nadie barre, y el inventario dice que actuaría")
+				}
+				if !como.siguioBarriendo {
+					t.Errorf("con el barrido encendido el scheduler real no volvió a barrer después del primer comando: " +
+						"actuó una vez y se quedó quieto, y el inventario sigue diciendo que actuaría")
+				}
+			}
 			// EL INDICADOR, PRIMERO DIRECTO Y DESPUÉS POR EL INVENTARIO. Son dos fallas distintas y el
 			// rojo tiene que decir cuál es: si miente porQueNoActuaria, cae acá; si acierta y el
 			// inventario igual dice otra cosa, la falla es de quien se lo pasa (musubi_fleet_list, que
-			// le da la ventana), y cae más abajo. Las ventanas se leen como las lee musubi_fleet_list:
-			// no se le pasa la fila.
+			// le da la ventana), y cae más abajo. Las ventanas y el barrido se leen como los lee
+			// musubi_fleet_list: no se le pasa la fila.
 			enVentana := s.ventanasParaPoliticas(time.Now())[d.ID]
-			if got := s.porQueNoActuaria(s.politicas[0], d, enVentana); (got == sinFreno) != actuo || got != f.freno {
+			if got := s.porQueNoActuaria(s.politicas[0], d, barridoDelInventario(t, s), enVentana); (got == sinFreno) != actuo || got != f.freno {
 				t.Errorf("el indicador dice freno=%q y la política actuó=%v; la fila dice %q: el `puede_actuar` "+
 					"se calcula distinto de lo que decide la acción (%s)", got, actuo, f.freno, f.porque)
 			}
@@ -408,9 +592,10 @@ func TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice(t *testing.T) 
 			if (f.freno == frenoSinExec || f.freno == frenoAllowlist || f.freno == frenoSinPrincipal) && persona {
 				t.Errorf("LA FILA ESTÁ MAL ESCRITA: dice %q, pero su principal como persona SÍ podría", f.freno)
 			}
-			if (f.freno == frenoConsentimientoPide || f.freno == frenoConsentimientoProhibido || f.freno == frenoMantenimiento) && !persona {
-				t.Errorf("LA FILA NO MIDE EL EJE: dice %q, pero ya la frenaría la compuerta de la persona; el grado "+
-					"o la ventana tienen que ser lo ÚNICO que la frena", f.freno)
+			if (f.freno == frenoConsentimientoPide || f.freno == frenoConsentimientoProhibido || f.freno == frenoMantenimiento ||
+				f.freno == frenoBarridoApagado || f.freno == frenoFueraDelBarrido) && !persona {
+				t.Errorf("LA FILA NO MIDE EL EJE: dice %q, pero ya la frenaría la compuerta de la persona; el grado, "+
+					"la ventana o el barrido tienen que ser lo ÚNICO que la frena", f.freno)
 			}
 		})
 	}
@@ -641,7 +826,7 @@ func TestElDetalleDeUnaPoliticaLoVeSoloQuienPuedeEjecutarEnEsaMaquina(t *testing
 			if fuente := PuedeSobreDevice(c.p, c.maquina, fleet.CapExec); fuente != c.ve {
 				t.Fatalf("LA FILA ESTÁ MAL ESCRITA: dice ve=%v y PuedeSobreDevice dice %v; la regla del detalle es la compuerta", c.ve, fuente)
 			}
-			detalle, total := s.politicasSobre(c.p, c.maquina, false)
+			detalle, total := s.politicasSobre(c.p, c.maquina, barridoDelInventario(t, s), false)
 			if total != 1 {
 				t.Errorf("politicas_activas = %d: el CONTEO se muestra a cualquiera que vea la máquina, y sin él "+
 					"alguien la ve cambiar sin ninguna pista de por qué", total)

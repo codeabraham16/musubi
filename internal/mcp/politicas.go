@@ -122,6 +122,66 @@ func (s *McpServer) ventanasParaPoliticas(ahora time.Time, contexto ...any) map[
 	return en
 }
 
+// barridoDePoliticas es lo que el barrido GLOBAL decide antes de mirar una sola política: si corre,
+// y qué tenants recorre. Lo arma barridoVigente UNA vez por inventario y lo lee porQueNoActuaria,
+// que lo antepone a la ventana y a la autoridad (A132).
+type barridoDePoliticas struct {
+	// apagado: el barrido no corre (barridoApagado), y entonces la lista ni se lee.
+	apagado bool
+	// proyectos: los tenants que recorre el barrido, tal como los devuelve proyectosDelBarrido.
+	proyectos map[string]bool
+}
+
+// frenoSobre contesta, para el tenant de una máquina, si el barrido la deja afuera antes de que
+// ninguna política llegue a evaluarse, y por qué: apagado primero —no corre para nadie— y después
+// fuera del tope. sinFreno si el barrido la visita.
+//
+// El valor cero dice «fuera del barrido» de todas: sólo barridoVigente sabe armar uno, y un
+// llamador que se olvide de pedirlo ve políticas inertes, no políticas que dicen actuar.
+func (b barridoDePoliticas) frenoSobre(proyecto string) frenoDePolitica {
+	if b.apagado {
+		return frenoBarridoApagado
+	}
+	if !b.proyectos[proyecto] {
+		return frenoFueraDelBarrido
+	}
+	return sinFreno
+}
+
+// barridoVigente contesta, AHORA, lo que el scheduler decidiría en su próximo tick: si corre, y
+// sobre qué tenants. Es para el inventario (toolFleetList → politicasSobre → porQueNoActuaria).
+//
+// NO DECIDE NADA PROPIO: pregunta con las MISMAS dos funciones que usa el barrido —barridoApagado,
+// que es lo que mira RunFlotaScheduler para no arrancar, y proyectosDelBarrido, que es la lista con
+// su tope que recorre barrerFlotaUnaVez—. A132 era justamente eso: el indicador suponía que el
+// barrido corría sobre el tenant de la máquina, y con el barrido apagado o el tenant fuera del tope
+// decía `puede_actuar: true` de una política que no iba a correr. Una copia del intervalo o del
+// tope acá volvería a abrir la misma grieta el día que el original cambie.
+//
+// Si la lista no se puede leer devuelve el error y no un estado: con esa misma falla el barrido no
+// corre sobre nadie (barrerFlotaUnaVez vuelve antes de aplicar políticas), así que ni «se barre
+// todo» ni «no se barre nada» serían la respuesta de un indicador; quien llama lo dice como error.
+//
+// Lo custodian las filas del barrido global de TestLaPoliticaActuaDondeSuPrincipalPodriaYElInventarioLoDice,
+// que comparan el inventario contra el scheduler y el barrido REALES: apagado (el scheduler tiene
+// que volver solo), encendido (tiene que seguir barriendo), y el tenant fuera del tope, justo
+// adentro, y adentro con el tope recortando a otro. Que la respuesta no se quede vieja cuando un
+// tenant vuelve a entrar lo mide TestUnTenantQueVuelveAEntrarAlTopeSeVeYActua.
+func (s *McpServer) barridoVigente() (barridoDePoliticas, error) {
+	if s.barridoApagado() {
+		return barridoDePoliticas{apagado: true}, nil
+	}
+	proyectos, _, err := s.proyectosDelBarrido()
+	if err != nil {
+		return barridoDePoliticas{}, err
+	}
+	barridos := make(map[string]bool, len(proyectos))
+	for _, p := range proyectos {
+		barridos[p] = true
+	}
+	return barridoDePoliticas{proyectos: barridos}, nil
+}
+
 // evaluarPolitica decide y, si corresponde, actúa sobre UNA máquina. Devuelve si actuó.
 //
 // El orden de las guardas es de más barato a más caro, pero sobre todo es de más específico a más
@@ -417,8 +477,9 @@ func (s *McpServer) actuarSiCorresponde(pol fleet.Politica, d fleet.Device, valo
 type frenoDePolitica string
 
 const (
-	// sinFreno: ninguna compuerta de ESTE par (política × máquina) frena. No es «va a actuar»: la
-	// condición, el cooldown y el estado global del barrido quedan afuera (ver porQueNoActuaria).
+	// sinFreno: ninguna compuerta frena, ni las del barrido global ni las de ESTE par (política ×
+	// máquina). No es «va a actuar»: la condición y lo que la rodea —la muestra fresca, el
+	// cooldown— quedan afuera (ver porQueNoActuaria).
 	sinFreno frenoDePolitica = ""
 	// frenoSinRegistro: no hay registro de principals, así que no hay a quién nombrar.
 	frenoSinRegistro frenoDePolitica = "sin_registro"
@@ -436,6 +497,14 @@ const (
 	// autoridadDePolitica —no es autoridad sino una pausa, y el barrido la mira antes de llegar
 	// ahí—; lo antepone porQueNoActuaria, en el mismo orden en que la frena aplicarPoliticas.
 	frenoMantenimiento frenoDePolitica = "mantenimiento"
+	// frenoBarridoApagado: el barrido de la flota está apagado (`fleet.probe_minutes` negativo), así
+	// que ninguna política actúa en ninguna máquina. No es de este par sino del cerebro entero, y
+	// por eso va primero: mientras dure, ninguna otra compuerta llega a preguntarse (A132).
+	frenoBarridoApagado frenoDePolitica = "barrido_apagado"
+	// frenoFueraDelBarrido: el tenant de la máquina no entra en el tope de tenants que recorre un
+	// barrido (proyectosParaVigilar), así que sus políticas no corren. Lo decide la misma lista que
+	// usa el barrido, proyectosDelBarrido, antes que la ventana y que la autoridad (A132).
+	frenoFueraDelBarrido frenoDePolitica = "fuera_del_barrido"
 )
 
 // autoridadDePolitica es LA cadena de AUTORIDAD de una política sobre una máquina, entera y en
@@ -445,13 +514,13 @@ const (
 //
 // LO QUE NO ESTÁ ACÁ, Y POR QUÉ. La ventana de mantenimiento también frena a una política, pero no
 // es autoridad: es una pausa que el barrido consulta UNA vez por proyecto, en aplicarPoliticas,
-// antes de llegar a esta función (preguntarla acá sería una consulta por política × máquina). El
-// inventario la antepone en el mismo orden en porQueNoActuaria, así que `puede_actuar` sí la ve.
-// Lo que queda fuera de los dos son DOS cosas, con su porqué en el doc de porQueNoActuaria: la
-// CONDICIÓN y lo que la rodea —la muestra fresca, el cooldown—, porque el indicador contesta
-// justamente «si la condición se cumpliera»; y el estado GLOBAL del barrido —apagado, o un
-// proyecto que no entra en su tope—, porque no es una compuerta de política × máquina sino del
-// cerebro entero.
+// antes de llegar a esta función (preguntarla acá sería una consulta por política × máquina). Y
+// antes que la ventana está el estado GLOBAL del barrido —apagado, o un proyecto que no entra en su
+// tope—, que ni siquiera es de política × máquina sino del cerebro entero. El inventario antepone
+// las dos cosas, en ese orden, en porQueNoActuaria, así que `puede_actuar` las ve (A131 y A132).
+// Lo que queda fuera de todos es la CONDICIÓN y lo que la rodea —la muestra fresca, el
+// cooldown—, porque el indicador contesta justamente «si la condición se cumpliera»; el porqué, en
+// el doc de porQueNoActuaria.
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════
 // POR QUÉ ES UNA FUNCIÓN Y NO DOS COPIAS (A131)
@@ -693,8 +762,10 @@ func (s *McpServer) cargarCooldowns() {
 // hasta que la condición se cumple. Es una alarma apagada, y la única forma de que alguien lo
 // note antes del incidente es decirlo acá. `inerte_por` dice cuál de esas compuertas es. Una
 // máquina en una ventana de mantenimiento cuenta igual: la política no actúa mientras dure, y una
-// ventana olvidada es exactamente una alarma apagada con el panel en verde. Lo que el campo NO
-// cubre —la condición, y el estado global del barrido— está escrito en porQueNoActuaria.
+// ventana olvidada es exactamente una alarma apagada con el panel en verde. Y lo mismo una máquina
+// que el barrido no visita —porque está apagado, o porque su tenant no entra en el tope—: la
+// política figura y no corre nunca (A132). Lo que el campo NO cubre —la condición— está escrito en
+// porQueNoActuaria.
 //
 // QUIÉN VE QUÉ. El detalle exige `exec` sobre esa máquina, la misma regla que la bitácora: saber
 // qué comando corre en un servidor es casi tan revelador como poder correrlo. Pero el CONTEO se
@@ -702,10 +773,10 @@ func (s *McpServer) cargarCooldowns() {
 // ocultarlo del todo dejaría a quien sólo tiene `metrics` viendo cambiar una máquina sin ninguna
 // pista de por qué.
 //
-// `enMantenimiento` lo trae el llamador, leído con ventanasParaPoliticas UNA vez para todo el
-// inventario y no una por máquina.
+// `barrido` y `enMantenimiento` los trae el llamador, leídos con barridoVigente y
+// ventanasParaPoliticas UNA vez para todo el inventario y no una por máquina.
 // ────────────────────────────────────────────────────────────────────────────────────────────
-func (s *McpServer) politicasSobre(p *Principal, d fleet.Device, enMantenimiento bool) (detalle []map[string]interface{}, total int) {
+func (s *McpServer) politicasSobre(p *Principal, d fleet.Device, barrido barridoDePoliticas, enMantenimiento bool) (detalle []map[string]interface{}, total int) {
 	if len(s.politicas) == 0 {
 		return nil, 0
 	}
@@ -723,10 +794,11 @@ func (s *McpServer) politicasSobre(p *Principal, d fleet.Device, enMantenimiento
 		}
 		// puede_actuar contesta por la cadena de AUTORIDAD —autoridadDePolitica, la misma función
 		// que decide en actuarSiCorresponde y no una copia de sus compuertas: la copia que había se
-		// quedó con dos de tres (A131)— más la ventana de mantenimiento, evaluadas ahora contra el
-		// registro vigente y el grado de la máquina. Deja afuera la condición (con la muestra y el
-		// cooldown) y el estado GLOBAL del barrido; el porqué de cada una, en porQueNoActuaria.
-		freno := s.porQueNoActuaria(pol, d, enMantenimiento)
+		// quedó con dos de tres (A131)— más la ventana de mantenimiento y el estado GLOBAL del
+		// barrido (A132), evaluadas ahora contra el registro vigente, el grado de la máquina y el
+		// intervalo y la lista con los que corre el barrido. Deja afuera la condición (con la muestra
+		// y el cooldown); el porqué, en porQueNoActuaria.
+		freno := s.porQueNoActuaria(pol, d, barrido, enMantenimiento)
 		fila := map[string]interface{}{
 			"nombre":       pol.Nombre,
 			"principal":    pol.Principal,
@@ -755,38 +827,36 @@ func (s *McpServer) politicasSobre(p *Principal, d fleet.Device, enMantenimiento
 }
 
 // porQueNoActuaria contesta, para UNA política sobre UNA máquina, «si la condición se cumpliera
-// ahora mismo, ¿alguna compuerta de este par la frenaría?»: devuelve la que la frenaría —la
-// ventana de mantenimiento o la cadena de autoridad—, o sinFreno si ninguna. Es lo que el
-// inventario publica como `puede_actuar` e `inerte_por`, y lo ÚNICO que lo calcula.
+// ahora mismo, ¿alguna compuerta la frenaría?»: devuelve la que la frenaría —el estado global del
+// barrido, la ventana de mantenimiento o la cadena de autoridad—, o sinFreno si ninguna. Es lo que
+// el inventario publica como `puede_actuar` e `inerte_por`, y lo ÚNICO que lo calcula.
 //
 // Un indicador que dijera «sí» donde la política dice «no» sería peor que no tenerlo, porque
-// enseñaría a confiar en él. Por eso no evalúa compuertas propias: antepone la ventana de
-// mantenimiento —en el mismo orden que aplicarPoliticas, que la mira apenas después del alcance—
-// y el resto se lo pregunta a autoridadDePolitica, que es la que decide en actuarSiCorresponde. El
-// alcance no lo repite: quien la llama (politicasSobre) ya descartó las máquinas que la política
-// no alcanza, con la misma función que el barrido.
+// enseñaría a confiar en él. Por eso no evalúa compuertas propias, y las pregunta en el orden en
+// que frenan de verdad: primero el barrido (`barrido`, de barridoVigente, con las mismas funciones
+// que deciden si RunFlotaScheduler arranca y qué tenants recorre barrerFlotaUnaVez), después la
+// ventana de mantenimiento —que aplicarPoliticas mira apenas después del alcance— y el resto se lo
+// pregunta a autoridadDePolitica, que es la que decide en actuarSiCorresponde. El alcance no lo
+// repite: quien la llama (politicasSobre) ya descartó las máquinas que la política no alcanza, con
+// la misma función que el barrido.
 //
 // ════════════════════════════════════════════════════════════════════════════════════════════
 // LO QUE NO CONTESTA, Y POR QUÉ: `puede_actuar: true` NO ES «VA A ACTUAR»
 //
-//   - LA CONDICIÓN Y LO QUE LA RODEA —la muestra fresca, el cooldown— quedan afuera a propósito:
-//     el campo contesta justamente «si la condición se cumpliera», y sin esa suposición diría
-//     «inerte» de toda política sana mientras la máquina esté bien.
-//   - EL ESTADO GLOBAL DEL BARRIDO también queda afuera, y no es un olvido: no es una compuerta de
-//     política × máquina sino del cerebro entero. Con `fleet.probe_minutes` negativo el intervalo
-//     efectivo es 0, RunFlotaScheduler vuelve al instante y NINGUNA política actúa en ninguna
-//     máquina; y un proyecto que no entra en el tope de proyectosAVigilar (proyectosParaVigilar
-//     por barrido, en orden de project_id) no se barre, así que sus políticas tampoco corren. En
-//     los dos casos este indicador sigue diciendo `puede_actuar: true`: supone que el barrido
-//     corre sobre el proyecto de la máquina.
+// LA CONDICIÓN Y LO QUE LA RODEA —la muestra fresca, el cooldown— quedan afuera a propósito: el
+// campo contesta justamente «si la condición se cumpliera», y sin esa suposición diría «inerte»
+// de toda política sana mientras la máquina esté bien.
 //
-// Medido en las revisiones 2 y 3 de A131 con una sonda temporal (sin commitear) sobre esta rama:
-// con el barrido apagado, y con la máquina en un proyecto fuera del tope, el inventario dice
-// `puede_actuar: true` sin `inerte_por` y la política no actúa. Exposición hoy, medida en la
-// revisión 2: 0 —un solo proyecto con máquinas y el sondeo en su default de 5 min—. Publicarlo (un
-// `inerte_por` como `barrido_apagado` o `fuera_del_barrido`, derivado de la MISMA función que
-// decide el barrido y no de una copia del tope) queda como cabo aparte; hasta entonces, lo que
-// vale es esta frontera.
+// EL BARRIDO ERA LO OTRO QUE QUEDABA AFUERA, Y YA NO (A132). Con `fleet.probe_minutes` negativo
+// RunFlotaScheduler vuelve al instante y NINGUNA política actúa en ninguna máquina; y un tenant que
+// no entra en el tope de proyectosParaVigilar no se barre, así que sus políticas tampoco corren. En
+// los dos casos el indicador suponía que el barrido corría sobre el tenant de la máquina y decía
+// `puede_actuar: true` sin `inerte_por`: medido en las revisiones 2 y 3 de A131 con una sonda
+// temporal, y dejado como frontera escrita para que A131 convergiera. Exposición en producción: 0
+// —un solo tenant con máquinas y el sondeo en su default de 5 min—. Ahora son `barrido_apagado` y
+// `fuera_del_barrido`, y van PRIMERO: no son de este par sino del cerebro entero, y mientras
+// frenan ninguna otra compuerta llega a preguntarse. Un freno global informado como
+// `mantenimiento` mandaría a cerrar una ventana que no destraba nada.
 //
 // ERA UNA COPIA DE LAS COMPUERTAS Y SE QUEDÓ CON DOS DE TRES (A131). Decía ser «deliberadamente
 // la MISMA cadena de guardas» que la acción, y A91 le agregó a la acción el eje de
@@ -801,7 +871,10 @@ func (s *McpServer) politicasSobre(p *Principal, d fleet.Device, enMantenimiento
 //
 // Existía también politicaPuedeActuar, un envoltorio de una línea sobre ésta que después de A131
 // sólo llamaban las pruebas; se borró y las pruebas preguntan acá, que es lo que corre.
-func (s *McpServer) porQueNoActuaria(pol fleet.Politica, d fleet.Device, enMantenimiento bool) frenoDePolitica {
+func (s *McpServer) porQueNoActuaria(pol fleet.Politica, d fleet.Device, barrido barridoDePoliticas, enMantenimiento bool) frenoDePolitica {
+	if global := barrido.frenoSobre(d.ProjectID); global != sinFreno {
+		return global
+	}
 	if enMantenimiento {
 		return frenoMantenimiento
 	}

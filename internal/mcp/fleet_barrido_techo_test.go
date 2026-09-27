@@ -68,10 +68,12 @@ func TestElBarridoDeLaFlotaNoCuelgaDelTechoDelExport(t *testing.T) {
 // desde afuera eso es indistinguible de que estén todos bien.
 //
 // Sabotaje que la pone roja: borrar el avisoMientras de proyectosAVigilar, o devolver la lista
-// entera sin marcar el recorte.
+// entera sin marcar el recorte. Desde A132 el recorte lo hace proyectosDelBarrido y `recorto` no
+// tiene otro uso en proyectosAVigilar, así que el sabotaje lo descarta con `_ =`: un `false` pelado
+// lo dejaba sin usar, no compilaba, y el arnés no podía dar veredicto.
 // arnes: archivo="internal/mcp/scheduler_flota.go"
 // arnes: de="\ts.avisoMientras(\"barrido_truncado:\"+barrido, recorto, func() {"
-// arnes: a="\ts.avisoMientras(\"barrido_truncado:\"+barrido, false, func() {"
+// arnes: a="\t_ = recorto\n\ts.avisoMientras(\"barrido_truncado:\"+barrido, false, func() {"
 func TestElBarridoDeLaFlotaAvisaCuandoDejaTenantsAfueraYSeRearma(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()

@@ -32,8 +32,8 @@ func escribirSettingsDePrueba(t *testing.T, ruta, contenido string) {
 
 // LA VENTANA DE COMPACTACIÓN LA PONE MUSUBI, Y LA DE LA PERSONA NO SE TOCA.
 //
-// Resumir la conversación al llegar a 400k en vez de cerca del millón es el ahorro grande (38 % en la
-// simulación sobre 14 días de pedidos reales), y lo pone el instalador en el settings del usuario,
+// Resumir la conversación antes de que llegue cerca del millón es el ahorro grande (46 % a los 250k
+// en la simulación sobre los pedidos reales), y lo pone el instalador en el settings del usuario,
 // donde convive con lo de la persona. Lo que no puede pasar: pisar una ventana que la persona eligió,
 // llevársela al quitar Musubi, olvidar cuál puso Musubi (y no poder cambiarla ni sacarla después), o
 // dejarla en un settings viejo cuando la instalación se muda.
@@ -179,11 +179,11 @@ func TestElInstaladorPoneYSacaElAhorro(t *testing.T) {
 	sinConfig := []string{"CLAUDE_CONFIG_DIR="}
 
 	correrMusubiCon(t, home, home, "", sinConfig, "agente", "instalar", "--dir", plugin)
-	if v, _ := leerVentana(t, settings); v != "400000" {
-		t.Fatalf("instalar dejó la ventana en %q, quería 400000", v)
+	if v, _ := leerVentana(t, settings); v != "250000" {
+		t.Fatalf("instalar dejó la ventana en %q, quería la de por defecto (250000)", v)
 	}
 	out := correrMusubiCon(t, home, home, "", sinConfig, "agente", "estado", "--dir", plugin)
-	if !strings.Contains(out, "Ahorro:") || !strings.Contains(out, "400k") {
+	if !strings.Contains(out, "Ahorro:") || !strings.Contains(out, "250k") {
 		t.Errorf("estado no dice cuándo se resume la conversación:\n%s", out)
 	}
 
