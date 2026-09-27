@@ -1,0 +1,374 @@
+package mcp
+
+import (
+	"bytes"
+	"compress/gzip"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"runtime"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"musubi/internal/embedding"
+	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
+)
+
+// LA SUBIDA VIAJA COMPRIMIDA, Y SYNC_VIAJES DICE CUÁNTO SE AHORRÓ.
+//
+// Push comprime el POST de una nota por encima de umbralCompresionSubida. Estas pruebas corren
+// contra el handler HTTP REAL del central —el mismo readRequestBody que atiende en producción— y
+// miran lo que se rompería sin que nadie lo viera: que el central guarde otra cosa que la nota, que
+// la cabecera no viaje (el central leería el gzip como JSON roto y la nota iría a dead-letter), que
+// una nota chica se comprima igual, y que sync_viajes confunda el cable con el crudo.
+
+// postVisto es un POST tal como llegó al central.
+type postVisto struct {
+	encoding  string
+	cable     int    // lo que cruzó la red
+	enElCable []byte // esos mismos bytes, tal cual: el reintento se compara contra ellos
+	crudo     int    // el JSON que lee el handler, ya descomprimido
+	args      syncSaveArguments
+	rebotado  bool
+}
+
+// primerByteDistinto es la posición del primer byte en que difieren a y b (el largo del más corto
+// si uno es prefijo del otro).
+func primerByteDistinto(a, b []byte) int {
+	for i := 0; i < len(a) && i < len(b); i++ {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return min(len(a), len(b))
+}
+
+// centralQueMira pone delante del handler real un mirador que anota cada POST. A los ids de
+// `rebotar` les contesta 503 las primeras N veces sin dejarlos pasar, que es lo que hace el proxy
+// del tailnet cuando el central no atiende. Todo lo demás sigue al handler real con el cuerpo
+// intacto, comprimido si llegó comprimido.
+type centralQueMira struct {
+	t       *testing.T
+	real    http.Handler
+	mu      sync.Mutex
+	rebotar map[string]int
+	vistos  map[string][]postVisto
+}
+
+func (c *centralQueMira) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	cable, err := io.ReadAll(r.Body)
+	if err != nil {
+		c.t.Errorf("leer el POST: %v", err)
+		return
+	}
+	p := postVisto{encoding: r.Header.Get("Content-Encoding"), cable: len(cable), enElCable: cable}
+	cuerpo := cable
+	if p.encoding == "gzip" {
+		zr, zerr := gzip.NewReader(bytes.NewReader(cable))
+		if zerr != nil {
+			c.t.Errorf("el POST dijo gzip y no lo era: %v", zerr)
+			return
+		}
+		if cuerpo, err = io.ReadAll(zr); err != nil {
+			c.t.Errorf("descomprimir el POST: %v", err)
+			return
+		}
+	}
+	p.crudo = len(cuerpo)
+	var req syncRPCRequest
+	_ = json.Unmarshal(cuerpo, &req) // un cuerpo ilegible queda con id vacío: lo denuncia la prueba
+	p.args = req.Params.Arguments
+
+	c.mu.Lock()
+	id := p.args.ID
+	if c.rebotar[id] > 0 {
+		c.rebotar[id]--
+		p.rebotado = true
+	}
+	c.vistos[id] = append(c.vistos[id], p)
+	c.mu.Unlock()
+
+	if p.rebotado {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(cable))
+	c.real.ServeHTTP(w, r)
+}
+
+// visto devuelve los POST que llegaron para un id, en orden.
+func (c *centralQueMira) visto(id string) []postVisto {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]postVisto(nil), c.vistos[id]...)
+}
+
+// subidaContraCentralReal arma un central real detrás del mirador y un nodo cuyo sync le apunta.
+func subidaContraCentralReal(t *testing.T, rebotar map[string]int) (nodo *McpServer, anota *engineQueAnotaViajes, mirador *centralQueMira, central *memory.DbEngine) {
+	t.Helper()
+	central, err := memory.NewDbEngine(memtest.DirSembrado(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { central.Close() })
+	srv := NewMcpServer(central, t.TempDir(), embedding.NoopProvider{})
+	mirador = &centralQueMira{t: t, real: srv.HTTPHandler(httpOptions{reqTimeout: 10 * time.Second}),
+		rebotar: rebotar, vistos: map[string][]postVisto{}}
+	ts := httptest.NewServer(mirador)
+	t.Cleanup(ts.Close)
+	nodo, anota = serverQueAnotaViajes(t, ts.URL, false)
+	return nodo, anota, mirador, central
+}
+
+// textoDeNota arma un contenido con la forma de una nota real: frases que se parecen sin repetirse,
+// del largo de la nota media del central (~2,6 KB con 25 frases).
+func textoDeNota(tema string, frases int) string {
+	var b strings.Builder
+	for i := 0; i < frases; i++ {
+		fmt.Fprintf(&b, "%s, paso %d: el drain reclamó %d filas, el central tardó %d ms en embeber y quedaron %d pendientes. ",
+			tema, i, (i*7)%50, 1500+i*37, (i*13)%9)
+	}
+	return b.String()
+}
+
+// guardarCompartidas guarda cada nota 'shared' en el nodo, que la encola en el outbox.
+func guardarCompartidas(t *testing.T, nodo *McpServer, notas map[string]string) {
+	t.Helper()
+	for id, texto := range notas {
+		if err := nodo.engine.SaveObservationTyped(id, "t/subida", texto, 1, "semantic", memory.ScopeShared, nil); err != nil {
+			t.Fatalf("guardar %s: %v", id, err)
+		}
+	}
+}
+
+// TestLaSubidaComprimidaLlegaEnteraAlCentralReal: una nota del tamaño de la media viaja con
+// Content-Encoding: gzip y el central guarda EXACTAMENTE su texto; una nota chica viaja en claro,
+// sin cabecera; y una apenas por encima del umbral, de ~600 B de JSON, ya viaja comprimida. La
+// chica fija el umbral desde abajo y la justa desde arriba. Las tres quedan enviadas.
+//
+// Sabotaje que la pone roja: que ninguna nota se comprima.
+// arnes: archivo="internal/mcp/syncclient.go"
+// arnes: de="if len(payload) > umbralCompresionSubida {"
+// arnes: a="if false && len(payload) > umbralCompresionSubida {"
+//
+// Sabotaje que la pone roja: que el cuerpo viaje comprimido y la cabecera no.
+// arnes: archivo="internal/mcp/syncclient.go"
+// arnes: de="if viajaComprimida {"
+// arnes: a="if false && viajaComprimida {"
+//
+// Sabotaje que la pone roja: comprimir también las notas chicas (cae por la chica).
+// arnes: archivo="internal/mcp/syncclient.go"
+// arnes: de="const umbralCompresionSubida = 512"
+// arnes: a="const umbralCompresionSubida = 0"
+// arnes: colision_ok="TestLaSubidaComprimidaLlegaEnteraAlCentralReal"
+//
+// Sabotaje que la pone roja: subir el umbral por prudencia a 1 KiB (cae por la justa, que vuelve a
+// viajar en claro). Pisa la línea del sabotaje anterior a propósito: son las dos puntas del mismo
+// umbral, y cada una cae por una nota distinta.
+// arnes: archivo="internal/mcp/syncclient.go"
+// arnes: de="const umbralCompresionSubida = 512"
+// arnes: a="const umbralCompresionSubida = 1024"
+// arnes: colision_ok="TestLaSubidaComprimidaLlegaEnteraAlCentralReal"
+func TestLaSubidaComprimidaLlegaEnteraAlCentralReal(t *testing.T) {
+	nodo, _, mirador, central := subidaContraCentralReal(t, nil)
+	notas := map[string]string{
+		"grande": textoDeNota("grande", 25),
+		"justa": "Una nota de tamaño justo: pasa apenas los 512 B de JSON del umbral de la subida, así que " +
+			"tiene que viajar comprimida aunque sea corta. Si alguien sube el umbral por prudencia, a 1 KiB " +
+			"como el del grafo o a 2 KiB, vuelve a viajar en claro y esta prueba lo dice. En la base real, " +
+			"una de cada trece notas pesa entre 512 B y 1 KiB de JSON, y con el umbral en 2 KiB viajaría " +
+			"en claro casi un tercio.",
+		"chica": "una nota corta que no vale la pena comprimir",
+	}
+	guardarCompartidas(t, nodo, notas)
+
+	nodo.drainOutboxOnce(context.Background())
+
+	grande, justa, chica := mirador.visto("grande"), mirador.visto("justa"), mirador.visto("chica")
+	if len(grande) != 1 || len(justa) != 1 || len(chica) != 1 {
+		t.Fatalf("esperaba un POST por nota; llegaron %d de la grande, %d de la justa y %d de la chica (un cuerpo ilegible llega sin id)", len(grande), len(justa), len(chica))
+	}
+	if g := grande[0]; g.encoding != "gzip" || g.cable >= g.crudo {
+		t.Errorf("la nota grande (%d B de JSON) viajó con Content-Encoding %q y %d B en el cable; esperaba gzip y menos bytes que el JSON", g.crudo, g.encoding, g.cable)
+	}
+	if c := chica[0]; c.crudo > umbralCompresionSubida || c.encoding != "" || c.cable != c.crudo {
+		t.Errorf("la nota chica (%d B de JSON, umbral %d) viajó con Content-Encoding %q y %d B en el cable; esperaba en claro", c.crudo, umbralCompresionSubida, c.encoding, c.cable)
+	}
+	// El largo de la justa se exige contra los números y no contra la constante: lo que se prueba
+	// es la constante.
+	if j := justa[0]; j.crudo <= 512 || j.crudo >= 1024 {
+		t.Fatalf("precondición: la nota justa tenía que pesar entre 513 y 1.023 B de JSON y pesó %d: ajustá su texto", j.crudo)
+	}
+	if j := justa[0]; j.encoding != "gzip" || j.cable >= j.crudo {
+		t.Errorf("la nota justa (%d B de JSON, apenas por encima de 512) viajó con Content-Encoding %q y %d B en el cable: el umbral de la subida dejó de ser 512", j.crudo, j.encoding, j.cable)
+	}
+
+	// EL CENTRAL GUARDÓ LA NOTA, NO OTRA COSA. Es la mitad que la cabecera no prueba: un gzip
+	// mal armado o un cuerpo cortado llegan con la cabecera puesta igual.
+	obs, err := central.GetObservations([]string{"grande", "justa", "chica"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	guardadas := map[string]string{}
+	for _, o := range obs {
+		guardadas[o.ID] = o.Content
+	}
+	for id, texto := range notas {
+		if guardadas[id] != texto {
+			t.Errorf("el central guardó para %q %d B que no son la nota (%d B)", id, len(guardadas[id]), len(texto))
+		}
+	}
+	if p, sent, dead := statsOf(t, nodo); p != 0 || sent != 3 || dead != 0 {
+		t.Errorf("outbox tras el drain: pending=%d sent=%d dead=%d; esperaba las tres enviadas", p, sent, dead)
+	}
+}
+
+// TestLaSubidaComprimidaCuadraByteAByte: sync_viajes cuenta en el cable lo que CRUZÓ LA RED y en los
+// crudos el JSON de la nota, y un POST rechazado suma su cable aparte. Se mide contra lo que el
+// central recibió de verdad, incluido el reintento de la nota rebotada, que tiene que mandar
+// exactamente los mismos bytes.
+//
+// Sabotaje que la pone roja: contar como crudo lo que viajó por el cable.
+// arnes: archivo="internal/mcp/syncclient.go"
+// arnes: de="c.trafico.subidaCrudos.Add(crudo)"
+// arnes: a="c.trafico.subidaCrudos.Add(int64(len(payload)))\n\t_ = crudo"
+//
+// Sabotaje que la pone roja: contar un rechazo por su JSON y no por su cable.
+// arnes: archivo="internal/mcp/syncclient.go"
+// arnes: de="c.trafico.bytesRechazados.Add(int64(len(payload)))"
+// arnes: a="c.trafico.bytesRechazados.Add(crudo)"
+//
+// Sabotaje que la pone roja: que el reintento mande otros bytes del mismo largo (el MTIME del
+// encabezado gzip toma un valor que cambia de un intento al otro: los POST contados hasta ahí).
+// arnes: archivo="internal/mcp/syncclient.go"
+// arnes: de="payload, viajaComprimida = z, true"
+// arnes: a="z[4] = byte(c.trafico.subidaPosts.Load())\n\t\t\tpayload, viajaComprimida = z, true"
+func TestLaSubidaComprimidaCuadraByteAByte(t *testing.T) {
+	nodo, anota, mirador, central := subidaContraCentralReal(t, map[string]int{"rebotada": 1})
+	guardarCompartidas(t, nodo, map[string]string{
+		"grande":   textoDeNota("grande", 25),
+		"rebotada": textoDeNota("rebotada", 25),
+		"chica":    "una nota corta",
+	})
+
+	nodo.drainOutboxOnce(context.Background())
+
+	grande, chica, rebotada := mirador.visto("grande"), mirador.visto("chica"), mirador.visto("rebotada")
+	if len(grande) != 1 || len(chica) != 1 || len(rebotada) != 1 || !rebotada[0].rebotado {
+		t.Fatalf("precondición: un POST por nota y la rebotada con 503; llegaron %d/%d/%d", len(grande), len(chica), len(rebotada))
+	}
+	if grande[0].encoding != "gzip" || rebotada[0].encoding != "gzip" {
+		t.Fatalf("precondición: las dos grandes tenían que viajar comprimidas (%q, %q)", grande[0].encoding, rebotada[0].encoding)
+	}
+	viajes := anota.anotados(memory.ViajeSubida)
+	if len(viajes) != 1 {
+		t.Fatalf("un tick registró %d viajes de subida; esperaba uno", len(viajes))
+	}
+	v := viajes[0]
+	quiero := memory.Viaje{
+		Filas: 2, Posts: 3, Rechazados: 1,
+		BytesCable:      int64(grande[0].cable + chica[0].cable),
+		BytesCrudos:     int64(grande[0].crudo + chica[0].crudo),
+		BytesRechazados: int64(rebotada[0].cable),
+	}
+	if v != quiero {
+		t.Errorf("sync_viajes no cuadra con lo que recibió el central:\n  anotó  %+v\n  llegó  %+v", v, quiero)
+	}
+
+	// EL REINTENTO: la misma nota, armada con lo que el drain mandó, sale otra vez y ahora pasa.
+	// Tiene que cruzar con los MISMOS bytes —gzip sin fecha en el encabezado— y contar como un POST
+	// aceptado más, sin arrastrar nada del rechazo. Se comparan los bytes y no los largos: lo que
+	// cambie de un intento al otro sin cambiar el largo (una fecha en el encabezado, un contador)
+	// pasaba una comparación de largos.
+	a := rebotada[0].args
+	antes := nodo.syncClient.foto()
+	if err := nodo.syncClient.Push(memory.OutboxItem{ObsID: a.ID, TopicKey: a.TopicKey, Content: a.Content,
+		Importance: a.Importance, MemType: a.MemType, ProjectID: a.ProjectID}); err != nil {
+		t.Fatalf("el reintento de la rebotada falló: %v", err)
+	}
+	rebotada = mirador.visto("rebotada")
+	if len(rebotada) != 2 || rebotada[1].rebotado {
+		t.Fatalf("precondición: el reintento tenía que llegar al handler real; llegaron %d POST de la rebotada", len(rebotada))
+	}
+	if primero, otra := rebotada[0].enElCable, rebotada[1].enElCable; !bytes.Equal(otra, primero) {
+		t.Errorf("el reintento cruzó otros bytes que el primer intento (%d B contra %d, distintos desde el byte %d): la misma nota tiene que viajar igual",
+			len(otra), len(primero), primerByteDistinto(otra, primero))
+	}
+	reintento := nodo.syncClient.subidaDesde(antes)
+	quiero = memory.Viaje{Posts: 1, BytesCable: int64(rebotada[1].cable), BytesCrudos: int64(rebotada[1].crudo)}
+	if reintento != quiero {
+		t.Errorf("el reintento no cuadra:\n  anotó  %+v\n  llegó  %+v", reintento, quiero)
+	}
+	if obs, err := central.GetObservations([]string{"rebotada"}); err != nil || len(obs) != 1 || obs[0].Content != a.Content {
+		t.Errorf("el central no guardó la rebotada tras el reintento (err=%v, %d filas)", err, len(obs))
+	}
+}
+
+// TestLaSubidaNoReservaUnCompresorPorNota: subir una nota comprimida cuesta unos KB de memoria, no
+// un compresor entero. Un gzip.Writer nuevo reserva ~800 KB de tablas en su primera escritura, y
+// en una ráfaga contra un central que contesta rápido —un requeue, un backfill, una tormenta de
+// rechazos— esa basura por nota llevaba el heap del daemon hasta su meta de GC y encadenaba
+// recolecciones (medido en la revisión: 1.500 notas, 1,16 GB reservados y 4 GC; con el pool, 0).
+// comprimirGzip recicla los compresores (gzip.go); esta prueba mira que la subida los aproveche.
+//
+// Se aserta la MEDIANA de lo que reserva cada Push, y no un pico, porque no depende de la máquina:
+// las tablas del compresor tienen tamaño fijo. Medido en davantis-1: con el pool, la nota típica
+// reserva ~15 KB entre cliente y central, y la que se arma un compresor, ~870 KB; el techo de
+// 256 KB queda a 17× de lo primero y a 3× de lo segundo. La mediana además aguanta al pool que se
+// vacía solo —en cada corrida hubo una nota de ~870 KB, la del GC que lo vació— y a -race, donde
+// sync.Pool tira a propósito uno de cada cuatro Put.
+//
+// Sabotaje que la pone roja: comprimir cada nota con un compresor nuevo, sin el pool.
+// arnes: archivo="internal/mcp/gzip.go"
+// arnes: de="zw := escritoresGzip.Get().(*gzip.Writer)"
+// arnes: a="zw := gzip.NewWriter(io.Discard)"
+func TestLaSubidaNoReservaUnCompresorPorNota(t *testing.T) {
+	// Un central que contesta enseguida y no descomprime: lo que se mide es lo que cuesta SUBIR.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":"x","result":{"content":[{"type":"text","text":"ok"}]}}`)
+	}))
+	defer ts.Close()
+	cliente := newTestSyncClient(t, ts.URL)
+	nota := memory.OutboxItem{ObsID: "rafaga", TopicKey: "t/rafaga", Content: textoDeNota("rafaga", 25),
+		Importance: 1, MemType: "semantic"}
+
+	// Las primeras vueltas arman la conexión y le dan al pool su compresor: no son la nota típica
+	// de una ráfaga.
+	antes := cliente.foto()
+	for i := 0; i < 3; i++ {
+		if err := cliente.Push(nota); err != nil {
+			t.Fatalf("subir la nota: %v", err)
+		}
+	}
+	if v := cliente.subidaDesde(antes); v.BytesCable >= v.BytesCrudos {
+		t.Fatalf("precondición: la nota tenía que viajar comprimida (%d B en el cable, %d de JSON); si no, esta prueba no mide el compresor", v.BytesCable, v.BytesCrudos)
+	}
+
+	const notas = 41
+	reservado := make([]uint64, 0, notas)
+	var m0, m1 runtime.MemStats
+	for i := 0; i < notas; i++ {
+		runtime.ReadMemStats(&m0)
+		if err := cliente.Push(nota); err != nil {
+			t.Fatalf("subir la nota: %v", err)
+		}
+		runtime.ReadMemStats(&m1)
+		reservado = append(reservado, m1.TotalAlloc-m0.TotalAlloc)
+	}
+	slices.Sort(reservado)
+	mediana := reservado[notas/2]
+	const techo = 256 << 10
+	if mediana > techo {
+		t.Errorf("la nota típica de una ráfaga reservó %d KB (techo %d KB): cada una se está armando un compresor nuevo en vez de reciclarlo", mediana>>10, techo>>10)
+	}
+	t.Logf("memoria reservada por nota subida, en %d notas: mínimo %d B, mediana %d B, máximo %d B", notas, reservado[0], mediana, reservado[notas-1])
+}

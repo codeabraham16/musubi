@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"musubi/internal/config"
@@ -129,11 +130,27 @@ func TestC3ElCodigoElegidoEsPermanenteParaElCliente(t *testing.T) {
 // única forma de reproducir lo que pasó. La observación entró a la base por un binario que todavía
 // no tenía la guarda, y la guarda de hoy ya no puede impedir que ESA fila exista — sólo puede
 // decidir qué le pasa cuando se la ofrece al central.
+//
+// Y EL CENTRAL LEE EL CUERPO COMO EL DE VERDAD (readRequestBody), comprimido o no. Push comprime
+// toda nota de más de umbralCompresionSubida, y un central que leyera el gzip como JSON contestaría
+// 400 a cualquier fila larga: la mataría sana o envenenada, y el dead=1 de abajo lo daría el central
+// de la prueba y no la guarda. Por eso viaja al lado una fila de CONTROL, sana y larga —viaja
+// comprimida—, que tiene que llegar al central.
+//
+// Sabotaje que la hace fallar: que el central de la prueba deje de descomprimir.
+// arnes: archivo="internal/mcp/culpa_del_llamador_test.go"
+// arnes: de="\t\tcuerpo, err := readRequestBody(w, r)\n"
+// arnes: a="\t\tr.Header.Del(\"Content-Encoding\")\n\t\tcuerpo, err := readRequestBody(w, r)\n"
 func TestC4LaFilaEnvenenadaMuereEnVezDeReintentarseParaSiempre(t *testing.T) {
 	central := newTestServer(t, embedding.NoopProvider{})
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cuerpo, err := readRequestBody(w, r)
+		if err != nil {
+			http.Error(w, "request ilegible", http.StatusBadRequest)
+			return
+		}
 		var req JsonRpcRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.Unmarshal(cuerpo, &req); err != nil {
 			http.Error(w, "request ilegible", http.StatusBadRequest)
 			return
 		}
@@ -171,15 +188,34 @@ func TestC4LaFilaEnvenenadaMuereEnVezDeReintentarseParaSiempre(t *testing.T) {
 	}
 	envenenar(t, dir, id, contenidoConSobre)
 
-	if p, _, _ := statsOf(t, cliente); p != 1 {
-		t.Fatalf("precondición: esperaba 1 pending, hay %d", p)
+	const control = "obs-c4-control"
+	sana := strings.Repeat("Una observación sana y larga, de control: pasa el umbral de la subida y viaja comprimida. ", 8)
+	if err := engine.SaveObservationTyped(control, "t/c4", sana, 1.0, "semantic", memory.ScopeShared, nil); err != nil {
+		t.Fatalf("SaveObservationTyped (control): %v", err)
 	}
 
+	if p, _, _ := statsOf(t, cliente); p != 2 {
+		t.Fatalf("precondición: esperaba 2 pending (la envenenada y la de control), hay %d", p)
+	}
+
+	antes := sc.foto()
 	cliente.drainOutboxOnce(context.Background())
 
+	// LA DE CONTROL PRIMERO: si no llegó, o no llegó comprimida, lo de abajo no prueba la guarda.
+	baseCentral, ok := central.engine.(*memory.DbEngine)
+	if !ok {
+		t.Fatalf("el central de la prueba no corre sobre un *memory.DbEngine (%T)", central.engine)
+	}
+	if obs, err := baseCentral.GetObservations([]string{control}); err != nil || len(obs) != 1 {
+		t.Fatalf("la fila de control, sana y larga, no llegó al central (err=%v, %d filas): el central de esta prueba no leyó lo que Push mandó comprimido, y así mata cualquier fila larga, envenenada o no", err, len(obs))
+	}
+	if v := sc.subidaDesde(antes); v.BytesCable >= v.BytesCrudos {
+		t.Fatalf("precondición: la fila de control tenía que viajar comprimida y viajó en claro (%d B en el cable, %d de JSON): alargala", v.BytesCable, v.BytesCrudos)
+	}
+
 	p, sent, dead := statsOf(t, cliente)
-	if dead != 1 || p != 0 {
-		t.Errorf("tras el drain esperaba dead=1 pending=0, obtuve pending=%d sent=%d dead=%d — una fila que el central nunca va a aceptar quedó viva, y se va a reintentar para siempre", p, sent, dead)
+	if dead != 1 || p != 0 || sent != 1 {
+		t.Errorf("tras el drain esperaba dead=1 pending=0 (y la de control enviada), obtuve pending=%d sent=%d dead=%d — una fila que el central nunca va a aceptar quedó viva, y se va a reintentar para siempre", p, sent, dead)
 	}
 }
 
