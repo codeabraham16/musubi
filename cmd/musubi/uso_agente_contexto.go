@@ -38,8 +38,8 @@ import (
 //     dueño. El resumen de Claude Code ya trae «All user messages»: repetirlos es ruido nuevo. La
 //     línea con que el corrector de tipeo avisa lo que corrigió (transcripts.PrefijoDeCorreccion)
 //     repite un pedazo del prompt a propósito, y se saltea.
-//   - Las reanudaciones, por los tramos que Claude Code reescribe al reanudar. Los forks no dejan
-//     rastro en el transcript: salen «sin medir», nunca 0.
+//   - /resume y los forks salen «sin medir», nunca 0: ninguno deja un rastro propio en el
+//     transcript (ver motivoResumeSinMedir).
 //
 // SIN TRANSCRIPTS EN LA VENTANA EL ALCANCE SALE «SIN MEDIR» Y SIN UNA SOLA CLAVE NUMÉRICA, como en
 // `uso-agente`: un cero que significa «no sé» se lee igual que «medí y no hubo».
@@ -53,8 +53,18 @@ const (
 	largoDeEco  = 40
 )
 
-// motivoForkSinMedir es por qué los forks no tienen número.
-const motivoForkSinMedir = "sin medir: un fork no deja rastro en el transcript (ni el source del SessionStart ni uuids compartidos entre archivos)"
+// Por qué /resume y los forks no tienen número.
+//
+// LA PRIMERA VERSIÓN CONTABA COMO RESUME CADA TRAMO DE REGISTROS REESCRITOS, y no lo es. En la
+// historia entera de Musubi y Altura hay 67 tramos, los 67 sin hueco de tiempo (menos de 5 min) y
+// pegados a una compactación nueva: los reescribe la compactación. Y al revés, las sesiones que se
+// retomaron tras el corte del 2026-09-26 no dejaron tramo. Un hueco de actividad tampoco sirve: una
+// sesión abierta durante el almuerzo deja el mismo. Lo que diría «resume» es el source del
+// SessionStart, y el hook de arranque de Musubi no escucha «resume».
+const (
+	motivoResumeSinMedir = "sin medir: un /resume no deja rastro propio en el transcript (el hook de arranque no escucha «resume», y los tramos reescritos acompañan a la compactación)"
+	motivoForkSinMedir   = "sin medir: un fork no deja rastro en el transcript (ni el source del SessionStart ni uuids compartidos entre archivos)"
+)
 
 // ConteoDeTurnos es cuántos turnos de un tipo hubo y cuántos recibieron «memoria relevante».
 type ConteoDeTurnos struct {
@@ -97,9 +107,10 @@ type MedidaM7 struct {
 	ConEco  int `json:"con_eco_de_un_pedido"`
 }
 
-// Reanudaciones es lo que el transcript deja ver de /resume y de un fork.
+// Reanudaciones es lo que el transcript deja ver de /resume y de un fork: hoy, nada. Los dos salen
+// con el motivo, nunca con un número.
 type Reanudaciones struct {
-	Resume int    `json:"resume"`
+	Resume string `json:"resume"`
 	Fork   string `json:"fork"`
 }
 
@@ -158,7 +169,7 @@ func medirContexto(dir string, v transcripts.Ventana, exclusiones []string) (Inf
 		inf.Exclusiones = []string{}
 	}
 	m := &MedicionContexto{PromptsPorOrigen: map[string]int{},
-		Reanudaciones: Reanudaciones{Fork: motivoForkSinMedir}}
+		Reanudaciones: Reanudaciones{Resume: motivoResumeSinMedir, Fork: motivoForkSinMedir}}
 	rec, err := transcripts.Recorrer(dir, v, exclusiones, func(a transcripts.Archivo) error {
 		if a.Subagente {
 			inf.SubagentesNoMedidos++
@@ -302,11 +313,6 @@ func medirSesionContexto(s transcripts.Sesion, v transcripts.Ventana, m *Medicio
 		}
 	}
 	m.M5.VentanasConReinyeccion += len(conReinyeccion)
-	for _, ts := range s.Reanudaciones {
-		if cuenta, _ := v.Ubicar(ts); cuenta {
-			m.Reanudaciones.Resume++
-		}
-	}
 	return enVentana
 }
 
@@ -425,6 +431,6 @@ func imprimirContexto(w io.Writer, inf InformeContexto) {
 	fila("M5  ids de ventanas anteriores que volvieron tras compactar", fraccion(m.M5.Reinyectados, m.M5.IDs))
 	fila("      compactaciones con alguno de vuelta", fraccion(m.M5.VentanasConReinyeccion, m.M2.Compactaciones))
 	fila("M7  bloques tras compactar que repiten un pedido (meta 0)", fraccion(m.M7.ConEco, m.M7.Bloques))
-	fila("reanudaciones (tramos que Claude Code reescribió al reanudar)", fmt.Sprintf("%d", m.Reanudaciones.Resume))
+	fila("resume", m.Reanudaciones.Resume)
 	fila("forks", m.Reanudaciones.Fork)
 }

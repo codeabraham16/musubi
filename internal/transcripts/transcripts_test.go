@@ -117,18 +117,13 @@ func TestLaListaDeContinuacionNoSeComeElContenido(t *testing.T) {
 // arnes: de="\t\tif t.Compactacion {\n\t\t\tt.Ventana++\n"
 // arnes: a="\t\tif false && t.Compactacion {\n\t\t\tt.Ventana++\n"
 //
-// Sabotaje que la hace fallar: no anotar la reanudación.
-// arnes: archivo="internal/transcripts/formato.go"
-// arnes: de="\t\t\t\t\t\tlec.Reanudaciones = append(lec.Reanudaciones, reg.Timestamp)\n"
-// arnes: a=""
-//
 // Sabotaje que la hace fallar: que el resumen de la compactación pase por un pedido humano.
 // arnes: archivo="internal/transcripts/prompts.go"
 // arnes: de="\tcase reg.IsCompactSummary,\n"
 // arnes: a="\tcase false,\n"
 func TestLeerSesionPartePorTurnosYVentanas(t *testing.T) {
 	// La forma medida: el hook llega DESPUÉS de su prompt, la compactación deja un borde, el resumen
-	// y el `/compact`, y al reanudar se reescriben registros con el mismo uuid.
+	// y el `/compact`, y después se reescriben registros con el mismo uuid.
 	p1 := fxUsuario("u1", "2026-09-20T10:00:00.000Z", "armá el banco con prompts reales")
 	h1 := fxHookDe("h1", "2026-09-20T10:00:01.000Z", "UserPromptSubmit", "[Musubi — memoria relevante]\n- x [id:a1]")
 	llamada := map[string]any{"type": "assistant", "uuid": "a1", "timestamp": "2026-09-20T10:00:02.000Z",
@@ -142,7 +137,7 @@ func TestLeerSesionPartePorTurnosYVentanas(t *testing.T) {
 	resumen["isCompactSummary"] = true
 	ruta := fxEscribir(t,
 		p1, h1, llamada,
-		p1, h1, // la reanudación reescribe lo que ya estaba
+		p1, h1, // Claude Code reescribe lo que ya estaba
 		fxUsuario("u1b", "2026-09-20T10:30:00.000Z", "<task-notification>\n<summary>listo</summary>"),
 		fxBorde("b1", "2026-09-20T11:00:00.000Z"),
 		resumen,
@@ -177,9 +172,6 @@ func TestLeerSesionPartePorTurnosYVentanas(t *testing.T) {
 	}
 	if ll := s.Turnos[0].Llamadas; len(ll) != 2 || string(ll[0].Entrada) == "" || ll[1].Entrada != nil {
 		t.Errorf("llamadas del primer turno = %+v: quería las 2, con la entrada sólo en la tool MCP", ll)
-	}
-	if !reflect.DeepEqual(s.Reanudaciones, []string{"2026-09-20T10:30:00.000Z"}) {
-		t.Errorf("reanudaciones = %v, quería una, fechada en el primer registro nuevo después de lo reescrito", s.Reanudaciones)
 	}
 	if ids := IDsDeMemoria(s.Turnos[4].Inyecciones[0].Texto); !reflect.DeepEqual(ids, []string{"a2"}) {
 		t.Errorf("ids del arranque = %v, quería [a2]", ids)

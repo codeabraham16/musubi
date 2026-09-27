@@ -93,7 +93,7 @@ type Sesion struct {
 	Lectura
 }
 
-// LeerSesion lee un transcript entero por turnos, con lo reescrito al reanudar leído una sola vez.
+// LeerSesion lee un transcript entero por turnos, con lo reescrito leído una sola vez.
 func LeerSesion(ruta string) (Sesion, error) {
 	var s Sesion
 	llamadas := map[string]bool{}

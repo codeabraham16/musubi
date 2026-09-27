@@ -214,7 +214,7 @@ func Recorrer(dir string, v Ventana, exclusiones []string, fn func(Archivo) erro
 		}
 		rec.Archivos++
 		// UN ARCHIVO QUE NO CAMBIÓ DESDE ANTES DE LA VENTANA NO PUEDE TENER REGISTROS ADENTRO DE ELLA:
-		// cada registro se escribe en o después de su timestamp, y una reescritura al reanudar
+		// cada registro se escribe en o después de su timestamp, y una reescritura de registros
 		// también mueve el mtime. Saltearlo no cambia el resultado y ahorra leer gigas.
 		if v.hayDesde {
 			if info, ierr := d.Info(); ierr == nil && info.ModTime().Before(v.desde) {

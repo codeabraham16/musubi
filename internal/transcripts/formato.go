@@ -12,10 +12,11 @@
 //
 //   - Cada línea es un registro con `type`, `uuid`, `timestamp` (siempre UTC con `Z`) y, según el
 //     tipo, `message` o `attachment`.
-//   - LOS REGISTROS SE REESCRIBEN AL REANUDAR UNA SESIÓN: 50.285 uuid repetidos DENTRO del mismo
-//     archivo, ninguno entre archivos distintos (0 de 451.748). Sin deduplicar por `uuid`, cada
-//     reanudación vuelve a contar el pasado entero. Los repetidos llegan en tramos seguidos (23
-//     tramos en la sesión que más se reanudó), y cada tramo es una reanudación.
+//   - LOS REGISTROS SE REESCRIBEN: 50.285 uuid repetidos DENTRO del mismo archivo, ninguno entre
+//     archivos distintos (0 de 451.748). Sin deduplicar por `uuid`, cada tramo reescrito vuelve a
+//     contar el pasado entero. Los repetidos llegan en tramos seguidos, y NO SON REANUDACIONES: los
+//     67 tramos de la historia de Musubi y Altura están pegados a una compactación nueva y no dejan
+//     hueco de tiempo, y una sesión retomada no deja tramo (medido 2026-09-26).
 //   - Lo que inyecta un hook llega como `attachment` de tipo `hook_additional_context`, con el
 //     evento en `hookEvent` y los bloques «[Musubi — X]» adentro de `content`. Llega DESPUÉS del
 //     prompt que lo disparó. El mismo texto puede aparecer DENTRO de un `tool_result` —por
@@ -188,14 +189,10 @@ type Lectura struct {
 	// Ilegibles son las líneas que no eran JSON: la última línea de un transcript que se está
 	// escribiendo puede estar cortada, y eso se CUENTA y se informa en vez de tirarlo en silencio.
 	Ilegibles int
-	// Reanudaciones tiene, por cada tramo de registros reescritos, el timestamp del primer registro
-	// NUEVO que vino después: el momento en que la sesión siguió. Un tramo reescrito al final del
-	// archivo, sin nada nuevo detrás, no deja fecha y no se anota.
-	Reanudaciones []string
 }
 
-// Leer pasa cada registro de un transcript a fn, en orden y UNA SOLA VEZ por uuid: lo que la
-// reanudación reescribe ya se leyó. Un registro sin uuid pasa siempre.
+// Leer pasa cada registro de un transcript a fn, en orden y UNA SOLA VEZ por uuid: lo que Claude
+// Code reescribe ya se leyó. Un registro sin uuid pasa siempre.
 func Leer(ruta string, fn func(*Registro)) (Lectura, error) {
 	var lec Lectura
 	f, err := os.Open(ruta)
@@ -204,7 +201,6 @@ func Leer(ruta string, fn func(*Registro)) (Lectura, error) {
 	}
 	defer f.Close()
 	vistos := map[string]bool{}
-	enReescritura := false
 	r := bufio.NewReaderSize(f, 1<<20)
 	for {
 		// ReadBytes y no un Scanner: hay líneas de decenas de MB (un tool_result con un archivo
@@ -215,14 +211,10 @@ func Leer(ruta string, fn func(*Registro)) (Lectura, error) {
 			if json.Unmarshal(linea, &reg) != nil {
 				lec.Ilegibles++
 			} else if reg.UUID != "" && vistos[reg.UUID] {
-				enReescritura = true // reescrito al reanudar la sesión: ya se leyó
+				// Reescrito: ya se leyó.
 			} else {
 				if reg.UUID != "" {
 					vistos[reg.UUID] = true
-					if enReescritura && reg.Timestamp != "" {
-						lec.Reanudaciones = append(lec.Reanudaciones, reg.Timestamp)
-						enReescritura = false
-					}
 				}
 				fn(&reg)
 			}

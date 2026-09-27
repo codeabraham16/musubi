@@ -28,8 +28,8 @@ func medirContextoFixture(t *testing.T, raiz string) *MedicionContexto {
 	return inf.Principal.MedicionContexto
 }
 
-// Sabotaje que la hace fallar: no recordar los uuid ya leídos, así lo reescrito al reanudar se
-// vuelve a contar.
+// Sabotaje que la hace fallar: no recordar los uuid ya leídos, así lo reescrito se vuelve a
+// contar.
 // arnes: archivo="internal/transcripts/formato.go"
 // arnes: de="\t\t\t\t\tvistos[reg.UUID] = true\n"
 // arnes: a=""
@@ -39,7 +39,7 @@ func medirContextoFixture(t *testing.T, raiz string) *MedicionContexto {
 // arnes: de="\treturn n > 0 && n <= 3\n"
 // arnes: a="\treturn n > 0 && n <= 0\n"
 func TestMedirContextoDeduplicaYCuenta(t *testing.T) {
-	// Un «sigue» con su bloque de memoria, reescrito entero al reanudar, y una compactación que no
+	// Un «sigue» con su bloque de memoria, reescrito entero, y una compactación que no
 	// sigue ningún arranque de Musubi: M1 tiene que dar 1/1 (no 2/2) y M2, 0/1.
 	raiz := t.TempDir()
 	dia := "2026-09-20"
@@ -48,15 +48,15 @@ func TestMedirContextoDeduplicaYCuenta(t *testing.T) {
 		"[Musubi — memoria relevante] Contexto de fondo.\n- (crm) algo al azar [id:7]\n- otra [id:8]")
 	escribirTranscript(t, raiz, "-home-x/s1.jsonl",
 		pedido, memoria,
-		pedido, memoria, // la reanudación
+		pedido, memoria, // reescrito
 		fxBordeDeCompactacion("u-b1", fxTS(dia, 3)),
 		fxPrompt("u-p2", fxTS(dia, 4), "armá el banco con los prompts reales del dueño"),
 	)
 
 	m := medirContextoFixture(t, raiz)
 	if got := m.M1.PorLista; got != (ConteoDeTurnos{Turnos: 1, ConMemoria: 1, IDs: 2}) {
-		t.Errorf("M1 por lista = %+v, quería 1 turno de continuación con memoria y 2 ids: lo reescrito al "+
-			"reanudar se contó otra vez", got)
+		t.Errorf("M1 por lista = %+v, quería 1 turno de continuación con memoria y 2 ids: lo reescrito se "+
+			"contó otra vez", got)
 	}
 	if got := m.M1.PorLargo; got != (ConteoDeTurnos{Turnos: 1, ConMemoria: 1, IDs: 2}) {
 		t.Errorf("M1 por largo = %+v, quería el mismo «sigue» (1 palabra)", got)
@@ -66,9 +66,6 @@ func TestMedirContextoDeduplicaYCuenta(t *testing.T) {
 	}
 	if m.M2 != (MedidaM2{Compactaciones: 1}) {
 		t.Errorf("M2 = %+v, quería 1 compactación y ningún arranque detrás", m.M2)
-	}
-	if m.Reanudaciones.Resume != 1 || m.Reanudaciones.Fork != motivoForkSinMedir {
-		t.Errorf("reanudaciones = %+v, quería 1 resume y el fork sin medir", m.Reanudaciones)
 	}
 }
 
