@@ -171,5 +171,42 @@ func LeerSesion(ruta string) (Sesion, error) {
 		}
 	})
 	s.Lectura = lec
+	s.Turnos = fundirEncoladosRepetidos(s.Turnos)
 	return s, err
+}
+
+// fundirEncoladosRepetidos junta en un turno el prompt que Claude Code escribió DOS veces: como
+// adjunto `queued_command` y como registro `user`, uno detrás del otro y con el mismo texto. Pasa
+// cuando lo encolado no se entregó a mitad del turno y se entregó después como prompt: 5 veces en la
+// historia de Musubi y Altura, ninguna desde el 09-14 (medido 2026-09-26). Contado dos veces, el
+// segundo turno sale siempre «sin memoria» e infla el denominador de M1.
+//
+// SE FUNDEN SÓLO SI EL HOOK DEL TURNO CORRIÓ A LO SUMO UNA VEZ PARA LOS DOS: si corrió dos veces, la
+// persona lo mandó dos veces («go» y otra vez «go» mientras el agente trabajaba) y los dos recibieron
+// lo suyo. Dos registros `user` iguales seguidos son siempre dos pedidos.
+func fundirEncoladosRepetidos(turnos []Turno) []Turno {
+	hooksDelTurno := func(t Turno) int {
+		n := 0
+		for _, in := range t.Inyecciones {
+			if in.Evento == EventoTurno {
+				n++
+			}
+		}
+		return n
+	}
+	out := turnos[:0]
+	for _, t := range turnos {
+		if n := len(out); n > 0 {
+			prev := &out[n-1]
+			if prev.Encolado != t.Encolado && prev.Origen != OrigenApertura && t.Origen != OrigenApertura &&
+				strings.TrimSpace(prev.Prompt) == strings.TrimSpace(t.Prompt) &&
+				hooksDelTurno(*prev)+hooksDelTurno(t) <= 1 {
+				prev.Inyecciones = append(prev.Inyecciones, t.Inyecciones...)
+				prev.Llamadas = append(prev.Llamadas, t.Llamadas...)
+				continue
+			}
+		}
+		out = append(out, t)
+	}
+	return out
 }

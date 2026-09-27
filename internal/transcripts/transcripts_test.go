@@ -234,3 +234,56 @@ func TestUnPromptEncoladoAbreSuTurno(t *testing.T) {
 			"anotó al turno en curso", got, quiero)
 	}
 }
+
+// Sabotaje que la hace fallar: no fundir el prompt encolado que Claude Code escribe además como
+// registro `user`.
+// arnes: archivo="internal/transcripts/turnos.go"
+// arnes: de="\ts.Turnos = fundirEncoladosRepetidos(s.Turnos)\n"
+// arnes: a=""
+//
+// Sabotaje que la hace fallar: fundir aunque el hook haya corrido para los dos.
+// arnes: archivo="internal/transcripts/turnos.go"
+// arnes: de="\t\t\t\thooksDelTurno(*prev)+hooksDelTurno(t) <= 1 {\n"
+// arnes: a="\t\t\t\thooksDelTurno(*prev)+hooksDelTurno(t) <= 2 {\n"
+func TestUnPromptEncoladoQueSeEscribeDosVecesEsUnTurno(t *testing.T) {
+	// Lo encolado que no se entregó a mitad del turno se entrega después como prompt, y Claude Code
+	// lo escribe dos veces: adjunto y registro `user`, seguidos y con el mismo texto. El hook corre
+	// una vez. Pero «go» y otra vez «go» mientras el agente trabaja son DOS pedidos: el hook corrió
+	// para los dos. Y dos registros `user` iguales seguidos son siempre dos.
+	pedido := "revisá también el vector del turno"
+	ruta := fxEscribir(t,
+		fxUsuario("u1", "2026-09-20T10:00:00.000Z", "armá el banco con los prompts reales"),
+		fxEncolado("q1", "2026-09-20T10:00:10.000Z", pedido, false),
+		fxHookDe("h1", "2026-09-20T10:00:11.000Z", "UserPromptSubmit", "[Musubi — memoria relevante]\n- v [id:v1]"),
+		fxUsuario("u2", "2026-09-20T10:03:00.000Z", pedido),
+		fxUsuario("u3", "2026-09-20T10:05:00.000Z", "go"),
+		fxHookDe("h3", "2026-09-20T10:05:01.000Z", "UserPromptSubmit", "[Musubi — memoria relevante]\n- g [id:g1]"),
+		fxEncolado("q4", "2026-09-20T10:05:30.000Z", "go", false),
+		fxHookDe("h4", "2026-09-20T10:05:31.000Z", "UserPromptSubmit", "[Musubi — memoria relevante]\n- g [id:g2]"),
+		fxUsuario("u5", "2026-09-20T10:06:00.000Z", "sigue"),
+		fxUsuario("u6", "2026-09-20T10:06:30.000Z", "sigue"),
+	)
+	s, err := LeerSesion(ruta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type fila struct {
+		Prompt string
+		Iny    int
+	}
+	var got []fila
+	for _, tu := range s.Turnos {
+		got = append(got, fila{tu.Prompt, len(tu.Inyecciones)})
+	}
+	quiero := []fila{
+		{"armá el banco con los prompts reales", 0},
+		{pedido, 1}, // el encolado y su registro `user`: un turno, con su memoria
+		{"go", 1},
+		{"go", 1}, // la persona lo mandó dos veces y el hook corrió dos veces
+		{"sigue", 0},
+		{"sigue", 0}, // dos registros `user`: dos pedidos
+	}
+	if !reflect.DeepEqual(got, quiero) {
+		t.Errorf("turnos (prompt, inyecciones) = %v\nquería %v", got, quiero)
+	}
+}
