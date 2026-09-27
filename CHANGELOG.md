@@ -1330,6 +1330,45 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   puede dar un «no cuadra» falso, que corrige el push siguiente o la higiene de 24 h. Diecinueve
   sabotajes corridos, los diecinueve rojos y cada uno en su aserción; diecisiete quedan como
   directivas `arnes:`.*
+- **Una nota que baja del central conserva la fecha en que nació.** `IngestShared` guardaba cada
+  nota bajada con la fecha de la BAJADA (`CURRENT_TIMESTAMP`): una nota escrita hace tres meses en
+  otra máquina nacía «hoy» acá, y el recall, que ordena la novedad por `created_at`, la trataba como
+  nueva. Medido sobre una copia de la base de davantis-1 contra el central (sólo lectura): 1.858
+  notas bajadas (selladas 'espejo') tienen acá una fecha posterior a la del central. La mediana de
+  la diferencia es de 17 s, pero 186 pasan de un día y 114 de treinta, con un máximo de 73,7 días;
+  y 64 visibles se ven con menos de una semana teniendo entre 62 y 76 días.
+
+  `SharedObs` lleva `created_at`: la fecha tal como la guarda el central («2006-01-02 15:04:05»,
+  UTC). `ListSharedForPull` la lee envuelta en `COALESCE`, porque pelada el driver la convierte y
+  viaja «2026-07-11T20:21:25Z», y un NULL cortaría la página entera. `IngestShared` la usa SÓLO al
+  insertar una fila nueva, normalizada al layout de la columna: SQLite compara estas fechas como
+  texto, y una «T» ordena después de un espacio. Si falta, no se puede leer, viene más de 5 minutos
+  del futuro o es anterior al 2026-01-01, la fila nace con `CURRENT_TIMESTAMP`, como siempre. Una
+  fila que ya estaba conserva la suya: el `ON CONFLICT DO UPDATE` no se tocó. El costo en el cable,
+  medido con las 2.973 notas de la copia en 60 páginas de 50: 39 B por nota en claro (+1,27 %) y
+  7 B con gzip (+0,59 %).
+
+  **Lo que no hace.** No corrige las filas ya bajadas: la reparación con `MIN(created_at)` queda
+  para el dueño. Y la viñeta del hook sigue sin decir la edad de NINGUNA nota, bajada o propia:
+  `gistAge` sólo lee RFC3339 y la base guarda el layout de SQLite. Es otro defecto y va aparte.
+
+  **Lo que cambia además, y conviene saberlo antes de V3.** El olvido cuenta la edad desde
+  `last_accessed` o, si la nota nunca se leyó, desde `created_at`. Una nota vieja que baja por
+  primera vez puede archivarse en el primer mantenimiento. Medido en el central: de sus 3.237 notas
+  shared visibles, un cliente NUEVO que las baje todas archivaría 1.005 (31 %) con los valores por
+  defecto; hoy, ninguna, porque nacen con edad cero. Y restar la fecha local de la del central deja
+  de medir la demora del sync en las filas nuevas; para eso está `sync_viajes`.
+
+  **Despliegue:** la fecha viaja recién con el central nuevo (ventana V3). Un cliente viejo contra
+  el central nuevo ignora la clave, como toda clave que no conoce, y guarda la fecha de la bajada.
+  Un cliente nuevo contra el central de hoy no la recibe y hace lo mismo. Cada cliente necesita el
+  binario nuevo (V1 davantis-1, V2 la laptop).
+
+  *Pruebas: seis en `internal/memory` (`fecha_de_origen_test.go`); dos en `internal/mcp`
+  (`fecha_viaja_test.go`), con el JSON de la respuesta y los dos sentidos de la convivencia; y la
+  e2e `TestLaNotaBajadaConservaSuEdad` en `cmd/musubi`, con el central real detrás de un
+  `httptest`, el cliente de sync real y el hook del turno. Quince sabotajes corridos, los quince
+  rojos; trece quedan como directivas `arnes:`.*
 
 ## [0.141.0] - 2026-09-14
 
