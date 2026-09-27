@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"fmt"
+	"math"
 	"testing"
 )
 
@@ -29,7 +30,8 @@ type valorEnVentana struct{ antes, ahora float64 }
 
 // evaluarEnEscenario evalúa una expresión con valores fijos. Devuelve el valor y si la expresión
 // DEVUELVE ALGO: en PromQL una comparación falsa no da 0, no da nada, y eso es lo que decide si la
-// alerta dispara. Entiende sólo lo que usan estas alertas; el resto es error a propósito.
+// alerta dispara. Entiende sólo lo que usan las alertas que lo llaman —estas y `RelojDesfasado`,
+// en reloj_test.go—; el resto es error a propósito.
 func evaluarEnEscenario(n *nodoProm, esc map[string]valorEnVentana) (float64, bool, error) {
 	switch n.tipo {
 	case "num":
@@ -44,6 +46,17 @@ func evaluarEnEscenario(n *nodoProm, esc map[string]valorEnVentana) (float64, bo
 		}
 		return v.ahora, true, nil
 	case "llamada":
+		// abs, sobre un valor instantáneo: `RelojDesfasado` mira el desfase para los dos lados.
+		if n.nombre == "abs" {
+			if len(n.hijos) != 1 {
+				return 0, false, fmt.Errorf("abs espera un único argumento")
+			}
+			v, hay, err := evaluarEnEscenario(n.hijos[0], esc)
+			if err != nil || !hay {
+				return 0, false, err
+			}
+			return math.Abs(v), true, nil
+		}
 		// delta e idelta, las dos de un GAUGE. increase/rate tratan una bajada como el reinicio de
 		// un contador, y sobre un gauge eso es otra pregunta: si alguien las pone, que se vea acá.
 		if n.nombre != "delta" && n.nombre != "idelta" {
@@ -103,6 +116,29 @@ func evaluarEnEscenario(n *nodoProm, esc map[string]valorEnVentana) (float64, bo
 			return a / b, true, nil
 		}
 		return 0, false, fmt.Errorf("operador %q que no conozco", n.op)
+	case "conjunto":
+		// Sólo `unless`, que es la forma de las guardas de flota: vale el lado izquierdo, salvo que
+		// el derecho devuelva algo. El `on(...)` lo saltea el parser: el escenario es UNA máquina,
+		// así que el emparejamiento es siempre trivial, y un `on(...)` que empareje de más no se ve
+		// acá. Que no quede sólo en `device` lo custodia TestNingunJoinDeFlotaEmparejaSoloPorDevice.
+		//
+		// Los dos lados se evalúan siempre, aunque el izquierdo no dé nada: un escenario que no dice
+		// cuánto vale la serie de la guarda tiene que ser error, no un «se calla» por accidente.
+		if n.op != "unless" {
+			return 0, false, fmt.Errorf("no sé evaluar `%s` en un escenario: enseñáselo a evaluarEnEscenario si el cambio es a propósito", n.op)
+		}
+		a, hayA, err := evaluarEnEscenario(n.hijos[0], esc)
+		if err != nil {
+			return 0, false, err
+		}
+		_, hayB, err := evaluarEnEscenario(n.hijos[1], esc)
+		if err != nil {
+			return 0, false, err
+		}
+		if hayB {
+			return 0, false, nil
+		}
+		return a, hayA, nil
 	}
 	return 0, false, fmt.Errorf("nodo %q que no sé evaluar en un escenario", n.tipo)
 }

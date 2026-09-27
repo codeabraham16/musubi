@@ -44,9 +44,11 @@ func textoDeExpand(t *testing.T, s *McpServer, ids ...string) string {
 }
 
 // TestMemoryExpandTraeElLinaje: expandir una ficha trae de dónde salió, expandir el blob trae qué
-// salió de él, y una nota sin aristas sale con los mismos cuatro campos de siempre AUNQUE viaje en la
-// misma respuesta que una ficha con linaje. Es la compatibilidad con los que ya decodifican la
-// respuesta: el cuerpo, el gateway y los agentes.
+// salió de él, y una nota sin aristas sale con los campos de la observación y NINGUNO de linaje
+// AUNQUE viaje en la misma respuesta que una ficha con linaje. Es la compatibilidad con los que ya
+// decodifican la respuesta: el cuerpo, el gateway y los agentes. Los campos de la observación son
+// los cuatro de siempre más project_id, que esta nota trae porque tiene proyecto; una nota sin
+// atribuir lo omite, y eso lo cuida TestExpandDiceElProyecto en internal/memory.
 //
 // Sabotaje que la hace fallar: la tool devuelve la hidratación sin el linaje.
 // arnes: archivo="internal/mcp/methods.go"
@@ -94,8 +96,8 @@ func TestMemoryExpandTraeElLinaje(t *testing.T) {
 		claves = append(claves, k)
 	}
 	sort.Strings(claves)
-	if got := strings.Join(claves, ","); got != "content,created_at,id,topic_key" {
-		t.Errorf("una nota sin linaje tiene que salir con los cuatro campos de siempre; salió con %s", got)
+	if got := strings.Join(claves, ","); got != "content,created_at,id,project_id,topic_key" {
+		t.Errorf("una nota sin linaje tiene que salir con los campos de la observación y ninguno de linaje; salió con %s", got)
 	}
 }
 

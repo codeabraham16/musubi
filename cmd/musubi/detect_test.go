@@ -32,6 +32,9 @@ func (f *fakeStore) GetMeta(key string) (string, bool, error) {
 	return v, ok, nil
 }
 func (f *fakeStore) SetMeta(key, value string) error { f.meta[key] = value; return nil }
+
+// MetaEnTransaccion corre fn contra el mismo fake: acá no hay otro escritor con quien competir.
+func (f *fakeStore) MetaEnTransaccion(fn func(memory.MetaTx) error) error { return fn(f) }
 func (f *fakeStore) PrimeContext(budget int) (memory.RecallResult, error) {
 	return f.prime, nil
 }
@@ -120,7 +123,7 @@ func TestPrimingSeedsDeltaState(t *testing.T) {
 			{ID: "b", TopicKey: "t", Gist: "dos", ContentHash: "h2"},
 		},
 	}
-	if buildPrimingContext(store, 300, "s1") == "" {
+	if buildPrimingContext(store, 300, "s1", "") == "" {
 		t.Fatal("esperaba bloque de priming")
 	}
 	// El priming debe sembrar el estado del delta con lo que inyectó, para que el

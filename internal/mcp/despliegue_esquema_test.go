@@ -3,6 +3,7 @@ package mcp
 // El guion de redespliegue verificaba la migración contra un número TIPEADO A MANO.
 
 import (
+	"context"
 	"os"
 	"regexp"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"musubi/internal/embedding"
+	"musubi/internal/fleet"
 	"musubi/internal/memory"
 )
 
@@ -205,6 +207,19 @@ func TestConstruirNoIntentaCorrerUnBinarioDeOtraPlataforma(t *testing.T) {
 // arnes: archivo="internal/mcp/fleet_prometheus.go"
 // arnes: de="const nombreVidaDeRed = \"musubi_fleet_net_up\""
 // arnes: a="const nombreVidaDeRed = \"musubi_fleet_device_net_up\""
+//
+// Sabotaje: sacar el desfase del reloj de la lista de series que sólo llegan por el scrape. Sólo
+// lo ve la mitad (2), y sólo si el render emite la serie: por eso la prueba le pasa al render una
+// medición real del reloj.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\tnombreRelojDesfase,\n"
+// arnes: a="\n"
+//
+// Sabotaje: sacar la vida de red de la misma lista. Tampoco la ve la mitad (1), y la (2) sólo
+// porque la prueba siembra una medición por el camino real.
+// arnes: archivo="internal/mcp/fleet_prometheus.go"
+// arnes: de="\tnombreVidaDeRed,\n"
+// arnes: a="\n"
 func TestNingunaSerieDelCerebroCaeEnElDescarteDelScrape(t *testing.T) {
 	promYml, err := leerArchivoDeDespliegue("../../deploy/prometheus/prometheus.yml")
 	if err != nil {
@@ -296,15 +311,25 @@ func TestNingunaSerieDelCerebroCaeEnElDescarteDelScrape(t *testing.T) {
 
 	srv := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()
-	maquinaConMuestra(t, srv, "casa", "pc-gio", *muestraDePrueba(), ahora)
+	d := maquinaConMuestra(t, srv, "casa", "pc-gio", *muestraDePrueba(), ahora)
 	// Sin política sembrada `renderPoliticas` corta antes de emitir, y la serie que esta guarda
 	// dejó pasar durante meses volvería a ser invisible — ahora por falta de datos en vez de por
 	// el patrón. Sembrar es lo que hace que la prueba EJERZA el camino que dice cubrir.
 	srv.metrics.sembrarPoliticas([]string{"nginx-vivo"})
+	// Lo mismo con el reloj (A133): sin una medición, `renderRelojes` no emite nada y una serie
+	// sin declarar pasaría por acá sin que nadie la viera.
+	srv.registrarReloj(d.ID, ahora.Add(2*time.Second).UnixMilli(), ahora)
+	// Y con la vida de red: la serie sólo sale para una máquina que NO late y que el tailnet
+	// contestó, así que sin sembrarla el render nunca la emite y esta mitad no la ve. Así pasó
+	// hasta A133: la prueba renderizaba con `vidaDe` nil, y sacar `nombreVidaDeRed` de
+	// `seriesSoloDelScrape` quedaba en verde.
+	caida := deviceCaido(t, srv, "davantis-1")
+	conTailnet(t, []fleet.ParDeTailnet{{Nombre: "davantis-1", EnLinea: true}}, nil)
+	srv.medirVidaDeRed(context.Background(), []fleet.Device{caida}, ahora)
 
 	var render strings.Builder
 	render.WriteString(srv.metrics.render(srv.engine))
-	renderFlota(&render, srv.engine, ptrPrincipal(principalDePrometheus()), ahora, srv.sondaIntervalo, versionDePrueba, nil, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
+	renderFlota(&render, srv.engine, ptrPrincipal(principalDePrometheus()), ahora, srv.sondaIntervalo, versionDePrueba, srv.vidaDeRedDe, srv.relojDe, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
 	srv.renderEmpuje(&render, ahora)
 
 	// En el formato de exposición el nombre aparece de tres formas: al principio de una muestra,
@@ -336,6 +361,13 @@ func TestNingunaSerieDelCerebroCaeEnElDescarteDelScrape(t *testing.T) {
 	// otro archivo y salir por Fprintf. Si deja de aparecer acá, volvimos al agujero exacto.
 	if !emitidas[nombrePoliticaAcciones] {
 		t.Errorf("%s no aparece en el render: es la única serie de flota sin copia por OTLP, y es la que esta guarda no veía. Si el render dejó de cubrir observability.go, el agujero volvió", nombrePoliticaAcciones)
+	}
+	// Lo mismo con lo sembrado arriba: si la siembra deja de llegar al render, la mitad (2)
+	// vuelve a no ver estas series y sacarlas de la lista pasa en verde otra vez.
+	for _, n := range []string{nombreRelojDesfase, nombreVidaDeRed} {
+		if !emitidas[n] {
+			t.Errorf("%s no aparece en el render: la prueba la siembra para que la mitad (2) la vea. Sin ella, sacarla de seriesSoloDelScrape vuelve a pasar en verde", n)
+		}
 	}
 
 	for n := range emitidas {

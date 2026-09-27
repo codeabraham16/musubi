@@ -101,8 +101,8 @@ func flotaDesdeYAML(t *testing.T, texto string) config.FleetConfig {
 // `serviciosPorProyectoDefault` (o por cualquier otra cosa que no sea el campo).
 // arnes: colision_ok="TestElTechoDeAprobacionesQueCortaEsElDeLaPerillaYNoLaConstante"
 // arnes: archivo="internal/mcp/http.go"
-// arnes: de="\t\trenderFlota(&b, s.engine, quien, ahora, s.sondaIntervalo, s.version, s.vidaDeRedDe, s.techoServiciosPorProyecto, s.techoAprobacionesPorProyecto)"
-// arnes: a="\t\trenderFlota(&b, s.engine, quien, ahora, s.sondaIntervalo, s.version, s.vidaDeRedDe, serviciosPorProyectoDefault, s.techoAprobacionesPorProyecto)"
+// arnes: de="\t\trenderFlota(&b, s.engine, quien, ahora, s.sondaIntervalo, s.version, s.vidaDeRedDe, s.relojDe, s.techoServiciosPorProyecto, s.techoAprobacionesPorProyecto)"
+// arnes: a="\t\trenderFlota(&b, s.engine, quien, ahora, s.sondaIntervalo, s.version, s.vidaDeRedDe, s.relojDe, serviciosPorProyectoDefault, s.techoAprobacionesPorProyecto)"
 func TestLaPerillaGobiernaElMetricsDeVerdadYNoSoloAlRenderFlota(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	ahora := time.Now()

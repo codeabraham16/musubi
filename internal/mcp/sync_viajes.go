@@ -1,9 +1,11 @@
 package mcp
 
 import (
+	"compress/gzip"
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -110,6 +112,40 @@ func (l *lectorContado) terminar() int64 {
 	return l.n
 }
 
+// paginaEnClaro devuelve el cuerpo de una página de la bajada tal como se lee: descomprimido si
+// viajó con gzip y, en las dos formas, ACOTADO a tope+1 bytes. El byte de más distingue «entró
+// justo» de «se pasó», igual que en readRequestBody: si el decoder falla con más del tope leído, la
+// página se cortó ahí.
+//
+// SIN TOPE, DESCOMPRIMIR ES UNA BOMBA. Medido en la revisión: ~64 KB de cable se expandían a 64 MiB
+// y el decoder JSON los juntaba enteros antes de rechazar la página, con 448 MiB reservados. Con 1 MB
+// de cable serían unos 7 GiB: el daemon de la laptop (7,6 GB) muere por memoria, y otra vez en cada
+// tick. Hace falta un central comprometido o alguien que conteste en su lugar (una central_url
+// http:// con allow_insecure_token), pero el central ya se cuida así en el sentido contrario, y la
+// bajada se descomprime acá. En claro no hay amplificación —lo que se lee es lo que viajó—, pero
+// una página de más del tope tampoco es una página real, y acotar las dos formas en el mismo lugar
+// deja una sola cosa que vigilar.
+//
+// Vive al lado de lectorContado porque es la otra mitad de la medida: `cable` cuenta lo que viajó,
+// y lo que devuelve esto es lo que se cuenta como crudos.
+func paginaEnClaro(cable io.Reader, contentEncoding string, tope int64) (io.Reader, error) {
+	claro := cable
+	switch enc := strings.ToLower(strings.TrimSpace(contentEncoding)); enc {
+	case "", "identity":
+	case "gzip":
+		zr, err := gzip.NewReader(cable)
+		if err != nil {
+			return nil, fmt.Errorf("%w: el central dijo gzip y la página no lo es: %v", errTransient, err)
+		}
+		claro = zr
+	default:
+		// Sólo se pidió gzip. Otra codificación no es algo que el decoder JSON pueda leer, y dejar
+		// que lo intente daría un error de sintaxis que no nombra la causa.
+		return nil, fmt.Errorf("%w: el central contestó con Content-Encoding %q, que no se pidió", errTransient, enc)
+	}
+	return io.LimitReader(claro, tope+1), nil
+}
+
 // bytesLegibles escribe un tamaño en B, KiB o MiB con un decimal.
 func bytesLegibles(n int64) string {
 	switch {
@@ -173,8 +209,9 @@ func (s *McpServer) edadDeLaBajada(r memory.ResumenDelSync, ahora time.Time) str
 	if err != nil {
 		return " · última: no se pudo leer (" + strconv.Quote(err.Error()) + ")"
 	}
-	// El tick es el de ESTE proceso, que sobre la misma base tiene la misma config que el dueño.
-	return describirUltimaBajada(raw, hay, r, ahora, s.porQueNoBaja(), s.tickBajada())
+	// El tick es el de ESTE proceso, que sobre la misma base tiene la misma config que el dueño. La
+	// marca de actividad se lee DESPUÉS de la meta, por lo mismo que la meta después de los viajes.
+	return describirUltimaBajada(raw, hay, r, ahora, s.porQueNoBaja(), s.tickBajada(), s.despertarAnotado())
 }
 
 // porQueNoBaja es por qué ESTE proceso no corre la bajada —la misma condición con la que se apaga
@@ -192,9 +229,10 @@ func (s *McpServer) porQueNoBaja() string {
 
 // describirUltimaBajada es edadDeLaBajada sin la base: raw y hay son la meta tal como se leyó, r el
 // volumen de sync_viajes, noBaja el motivo por el que este proceso no corre la bajada ("" si la
-// corre) y tick el intervalo de la bajada, que es el margen antes de dar la próxima por vencida.
+// corre), tick el intervalo de la bajada, que es el margen antes de dar la próxima por vencida, y
+// despertar la última marca de actividad (unix; 0 si no hay, ver McpServer.despertarAnotado).
 // Devuelve el final de la línea, que empieza con « · » y nunca trae un salto de línea.
-func describirUltimaBajada(raw string, hay bool, r memory.ResumenDelSync, ahora time.Time, noBaja string, tick time.Duration) string {
+func describirUltimaBajada(raw string, hay bool, r memory.ResumenDelSync, ahora time.Time, noBaja string, tick time.Duration, despertar int64) string {
 	if !hay {
 		switch {
 		case r.UltimoDiaConBajada != "":
@@ -232,8 +270,18 @@ func describirUltimaBajada(raw string, hay bool, r memory.ResumenDelSync, ahora 
 		return " · última anotada hace " + edad + " (" + que + "), pero después bajó un binario anterior a esta versión, que no la anota"
 	}
 	linea := " · última hace " + edad + " (" + que + "), "
+	// UNA MARCA DE ACTIVIDAD POSTERIOR A LA ÚLTIMA BAJADA LA ADELANTA. La próxima se anotó con el ritmo
+	// de ese momento —hasta el tope, con la bajada espaciada—, y un turno que llegó después despierta
+	// al dueño en su próximo tick: a más tardar un tick después de la marca. Sin esto la línea decía
+	// «próxima en ~4 min» durante el turno mismo que la estaba pidiendo, que ya escribió la marca.
+	despierta := despertar > u.Unix && despertar+int64(tick/time.Second) < u.ProximaUnix
+	if despierta {
+		u.ProximaUnix = despertar + int64(tick/time.Second)
+	}
 	falta := u.ProximaUnix - ahora.Unix()
 	switch {
+	case falta >= 0 && despierta:
+		return linea + "próxima en ≤" + duracionLegible(falta) + " (hubo actividad después de la última)"
 	case falta >= 0:
 		return linea + "próxima en ~" + duracionLegible(falta)
 	case -falta <= int64(tick/time.Second):

@@ -242,6 +242,8 @@ type MetaStore interface {
 	MarkMetaNow(key string) error
 	MaintenanceDue(intervalHours float64) (bool, error)
 	MarkMaintenanceNow() error
+	// MetaEnTransaccion corre un leer-modificar-escribir de la meta en UNA transacción (meta_tx.go).
+	MetaEnTransaccion(fn func(MetaTx) error) error
 }
 
 // TelemetryStore — logs de errores de compilación/test para el bucle de telemetría.
