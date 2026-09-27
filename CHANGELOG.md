@@ -596,10 +596,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   primer turno sustantivo de una sesión escribe 9 claves de meta tomando 6 veces el candado (main: 8
   y 8) —la de más es `loop_delta_con_turno`, una vez por sesión—; los siguientes, 6 y 5 (main: 6 y
   6); el pedido repetido, 5 y 4 (main: 5 y 5); «sigue», 3 y 3, como antes. La latencia del hook no
-  se distingue del ruido: sobre dos copias de la base y 8 rondas intercaladas, cada pedido
+  se distingue del ruido. En la corrida final, sobre el commit y con otras suites corriendo en
+  paralelo en la misma máquina (dos copias de la base, 8 rondas intercaladas), cada pedido
   sustantivo en una sesión nueva (el peor caso: anota la sesión, desaloja y escribe la clave de
-  turnos), p50 499,6 → 515,2 ms y p95 1.232 → 1.095 ms. En la misma corrida, «sigue» y los avisos,
-  que corren el mismo código en los dos binarios, difirieron hasta 930 ms en su p95.
+  turnos) dio p50 761,1 → 707,5 ms y p95 3.665,5 → 4.393,4 ms, y «sigue» y los avisos, que corren
+  el mismo código en los dos binarios, difirieron hasta 1.921 ms en su p95.
 - **Las sesiones de shell vencidas se cierran aunque el barrido de la flota esté apagado.** Con
   `fleet.probe_minutes` negativo el cerebro dejaba de cerrarlas. En una máquina sin agente, el `ssh`
   de una sesión vencida seguía vivo, y la bitácora la mostraba activa. Ahora las cierra un vigía
