@@ -1330,16 +1330,21 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   puede dar un «no cuadra» falso, que corrige el push siguiente o la higiene de 24 h. Diecinueve
   sabotajes corridos, los diecinueve rojos y cada uno en su aserción; diecisiete quedan como
   directivas `arnes:`.*
-- **Una nota que baja del central conserva la fecha en que nació.** `IngestShared` guardaba cada
-  nota bajada con la fecha de la BAJADA (`CURRENT_TIMESTAMP`): una nota escrita hace tres meses en
-  otra máquina nacía «hoy» acá, y el recall, que ordena la novedad por `created_at`, la trataba como
-  nueva. Medido sobre una copia de la base de davantis-1 contra el central (sólo lectura): 1.858
-  notas bajadas (selladas 'espejo') tienen acá una fecha posterior a la del central. La mediana de
-  la diferencia es de 17 s, pero 186 pasan de un día y 114 de treinta, con un máximo de 73,7 días;
-  y 64 visibles se ven con menos de una semana teniendo entre 62 y 76 días.
+- **Una nota que baja del central conserva la fecha en que el central la recibió —la de
+  nacimiento, salvo que la subida se haya demorado—.** `IngestShared` guardaba cada nota bajada
+  con la fecha de la BAJADA (`CURRENT_TIMESTAMP`): una nota escrita hace tres meses en otra máquina
+  nacía «hoy» acá, y el recall, que ordena la novedad por `created_at`, la trataba como nueva.
+  Medido sobre una copia de la base de davantis-1 contra el central (sólo lectura): 1.858 notas
+  bajadas (selladas 'espejo') tienen acá una fecha posterior a la del central. La mediana de la
+  diferencia es de 17 s, pero 186 pasan de un día y 114 de treinta, con un máximo de 73,7 días; y
+  64 visibles se ven con menos de una semana cuando en el central tienen entre 62 y 76 días.
 
   `SharedObs` lleva `created_at`: la fecha tal como la guarda el central («2006-01-02 15:04:05»,
-  UTC). `ListSharedForPull` la lee envuelta en `COALESCE`, porque pelada el driver la convierte y
+  UTC). No siempre es la de nacimiento: la subida no manda la fecha y el central sella la suya al
+  recibir la nota, así que la que tardó en subir trae la de su llegada. Le pasa a todo lo que nació
+  antes que el central, cuyo `created_at` más viejo es del 2026-07-11 20:21:25: una nota de
+  davantis-1 del 2026-06-21 que subió en el backfill del 2026-07-13 viaja con el 2026-07-13.
+  `ListSharedForPull` la lee envuelta en `COALESCE`, porque pelada el driver la convierte y
   viaja «2026-07-11T20:21:25Z», y un NULL cortaría la página entera. `IngestShared` la usa SÓLO al
   insertar una fila nueva, normalizada al layout de la columna: SQLite compara estas fechas como
   texto, y una «T» ordena después de un espacio. Si falta, no se puede leer, viene más de 5 minutos
@@ -1349,8 +1354,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   7 B con gzip (+0,59 %).
 
   **Lo que no hace.** No corrige las filas ya bajadas: la reparación con `MIN(created_at)` queda
-  para el dueño. Y la viñeta del hook sigue sin decir la edad de NINGUNA nota, bajada o propia:
-  `gistAge` sólo lee RFC3339 y la base guarda el layout de SQLite. Es otro defecto y va aparte.
+  para el dueño, y lo que les devolvería es la fecha en que el central las recibió, no la de
+  nacimiento. Lo que nació antes que el central quedaría con la de su subida, que nunca es anterior
+  al 2026-07-11 20:21:25. Y la viñeta del hook sigue sin decir la edad de NINGUNA nota, bajada o
+  propia: `gistAge` sólo lee RFC3339 y la base guarda el layout de SQLite. Es otro defecto y va
+  aparte.
 
   **Lo que cambia además, y conviene saberlo antes de V3.** El olvido cuenta la edad desde
   `last_accessed` o, si la nota nunca se leyó, desde `created_at`. Una nota vieja que baja por

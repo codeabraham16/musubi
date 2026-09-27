@@ -36,11 +36,14 @@ type SharedObs struct {
 	MemType    string  `json:"mem_type"`
 	Author     string  `json:"author"`
 	ProjectID  string  `json:"project_id"`
-	// CreatedAt es la fecha de creación en el ORIGEN, tal como la guarda el central. Sin ella la
-	// nota bajada nacía acá con la fecha de la bajada, y una de hace tres meses entraba «de hoy» al
-	// recall y al priming de cada máquina que la traía. Es OPCIONAL en los dos sentidos del cable:
-	// un central viejo no la manda —llega vacía e IngestShared hace lo de siempre— y un cliente
-	// viejo la ignora, porque decodifica con json.Unmarshal, que no rechaza campos de más.
+	// CreatedAt es la fecha en que el central la recibió —la de nacimiento, salvo que la subida se
+	// haya demorado—, tal como la guarda. La subida no manda la fecha (OutboxItem no la tiene) y el
+	// central sella la suya al guardar, así que una nota que tardó en subir trae la de su llegada:
+	// todo lo que nació antes que el central, y lo que esperó en el outbox de una máquina apagada.
+	// Sin ella la nota bajada nacía acá con la fecha de la bajada, y una de hace tres meses entraba
+	// «de hoy» al recall y al priming de cada máquina que la traía. Es OPCIONAL en los dos sentidos
+	// del cable: un central viejo no la manda —llega vacía e IngestShared hace lo de siempre— y un
+	// cliente viejo la ignora, porque decodifica con json.Unmarshal, que no rechaza campos de más.
 	CreatedAt string `json:"created_at,omitempty"`
 }
 
