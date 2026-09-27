@@ -83,6 +83,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1221,6 +1222,13 @@ func TestNingunCaboVivoTieneEntradaDeCierre(t *testing.T) {
 
 // partesDelRegistro corta el archivo en «lo vivo» (tablas 1 y 2 con su prosa) y «lo cerrado»
 // (sección 3 hasta las reglas).
+//
+// Las dos partes CONSERVAN LA NUMERACIÓN DEL ARCHIVO: lo que queda antes de cada una se cambia
+// por líneas vacías, así que la línea N de una parte es la línea N de ABIERTO.md y ningún
+// consumidor tiene que acordarse de sumar nada. Con el recorte pelado,
+// TestNingunCaboVivoTieneEntradaDeCierre mandó a buscar una fila a la «línea 27 de ABIERTO.md»
+// y estaba en la 735: contaba desde «## 1 ·». Lo cuida
+// TestLasPartesDelRegistroConservanLaNumeracionDelArchivo.
 func partesDelRegistro(t *testing.T, texto string) (vivo, cerrado string) {
 	t.Helper()
 	i1 := regexp.MustCompile(`(?m)^## 1 ·`).FindStringIndex(texto)
@@ -1229,7 +1237,88 @@ func partesDelRegistro(t *testing.T, texto string) (vivo, cerrado string) {
 	if i1 == nil || i3 == nil || i4 == nil || !(i1[0] < i3[0] && i3[0] < i4[0]) {
 		t.Fatalf("no se encontraron las secciones «## 1 ·», «## 3 ·» y «## Cómo se usa» en orden; el barrido no está mirando donde cree")
 	}
-	return texto[i1[0]:i3[0]], texto[i3[0]:i4[0]]
+	conNumeracion := func(desde, hasta int) string {
+		return strings.Repeat("\n", strings.Count(texto[:desde], "\n")) + texto[desde:hasta]
+	}
+	vivo = conNumeracion(i1[0], i3[0])
+	cerrado = conNumeracion(i3[0], i4[0])
+	return vivo, cerrado
+}
+
+// TestLasPartesDelRegistroConservanLaNumeracionDelArchivo: las guardas de la parte viva citan
+// «línea N de ABIERTO.md», y ese N tiene que ser el del archivo. Se midió que no lo era: al
+// sabotear el cierre de A121, TestNingunCaboVivoTieneEntradaDeCierre mandó a buscar la fila a la
+// línea 27 y estaba en la 735.
+//
+// No pregunta por el texto de ningún mensaje. Compara cada parte contra el archivo, línea por
+// línea y en la misma posición, y cada fila que ve el parser contra la línea del archivo que dice
+// ocupar. Un número relativo no pasa por ninguna de las dos.
+//
+// Sabotaje que la hace fallar: devolver la parte viva recortada, sin la numeración del archivo.
+// Los otros dos están adentro, junto a lo que miden: la parte cerrada y el parser.
+// arnes: archivo="internal/mcp/specs_sin_cabos_test.go"
+// arnes: de="\tvivo = conNumeracion(i1[0], i3[0])\n"
+// arnes: a="\tvivo = texto[i1[0]:i3[0]]\n"
+func TestLasPartesDelRegistroConservanLaNumeracionDelArchivo(t *testing.T) {
+	texto := registroDeAbiertos(t)
+	archivo := strings.Split(texto, "\n")
+	vivo, cerrado := partesDelRegistro(t, texto)
+
+	// Nadie cita todavía una línea de la parte cerrada, pero la numeración es de las dos: la
+	// próxima guarda que lo haga no tiene que descubrir que ésa cuenta distinto.
+	//
+	// Sabotaje que la hace fallar: devolver la parte cerrada recortada.
+	// arnes: prueba="TestLasPartesDelRegistroConservanLaNumeracionDelArchivo"
+	// arnes: archivo="internal/mcp/specs_sin_cabos_test.go"
+	// arnes: de="\tcerrado = conNumeracion(i3[0], i4[0])\n"
+	// arnes: a="\tcerrado = texto[i3[0]:i4[0]]\n"
+	for _, parte := range []struct{ nombre, texto string }{{"viva", vivo}, {"cerrada", cerrado}} {
+		comparadas := 0
+		for n, linea := range strings.Split(parte.texto, "\n") {
+			if linea == "" {
+				continue
+			}
+			if n >= len(archivo) || archivo[n] != linea {
+				enElArchivo := "(el archivo no llega hasta ahí)"
+				if n < len(archivo) {
+					enElArchivo = recorte(archivo[n], 100)
+				}
+				t.Fatalf("la línea %d de la parte %s del registro no es la línea %d de ABIERTO.md:\n    en la parte:   %s\n    en el archivo: %s\n"+
+					"  Las guardas citan «línea N de ABIERTO.md» contando sobre la parte. Si la parte no conserva la numeración del archivo, ese N manda a buscar a otro lado.",
+					n+1, parte.nombre, n+1, recorte(linea, 100), enElArchivo)
+			}
+			comparadas++
+		}
+		if comparadas < 20 {
+			t.Fatalf("la parte %s del registro tiene sólo %d líneas con texto y el piso es 20: el corte no está tomando la sección que cree", parte.nombre, comparadas)
+		}
+	}
+
+	// Y las filas que ve el parser: el número que imprimen las guardas sale de acá, no del corte.
+	//
+	// Sabotaje que la hace fallar: que el parser numere las filas desde cero.
+	// arnes: prueba="TestLasPartesDelRegistroConservanLaNumeracionDelArchivo"
+	// arnes: archivo="internal/mcp/specs_sin_cabos_test.go"
+	// arnes: de="\t\t\tf := filaMD{crudas: crudas, linea: j + 1}\n"
+	// arnes: a="\t\t\tf := filaMD{crudas: crudas, linea: j}\n"
+	filas := 0
+	for _, tab := range parseTablasMD(vivo) {
+		for _, f := range tab.filas {
+			if f.linea < 1 || f.linea > len(archivo) || !slices.Equal(celdasDeFila(archivo[f.linea-1]), f.crudas) {
+				enElArchivo := "(el archivo no tiene esa línea)"
+				if f.linea >= 1 && f.linea <= len(archivo) {
+					enElArchivo = recorte(archivo[f.linea-1], 100)
+				}
+				t.Fatalf("la fila **%s** dice estar en la línea %d de ABIERTO.md, y ahí hay otra cosa:\n    %s\n"+
+					"  Ese número es el que imprimen las guardas de la parte viva. Si no apunta a la fila, el mensaje manda a buscar a otro lado.",
+					f.id(), f.linea, enElArchivo)
+			}
+			filas++
+		}
+	}
+	if filas < 20 {
+		t.Fatalf("el parser vio sólo %d filas en la parte viva y el piso es 20: cambió el formato y esta guarda dejó de mirar", filas)
+	}
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════════
@@ -1436,7 +1525,8 @@ func pruebasDelArbol(t *testing.T) map[string]bool {
 var numeroA = regexp.MustCompile(`\bA\d+\b`)
 
 // filasVivas devuelve las filas de las tablas 1 y 2, y las líneas de la parte viva para poder
-// citar prosa que cuelga de una fila.
+// citar prosa que cuelga de una fila. Esas líneas llevan la numeración del archivo (ver
+// partesDelRegistro): la n-ésima es la línea n+1 de ABIERTO.md.
 func filasVivas(t *testing.T, texto string) (map[string]int, []string) {
 	t.Helper()
 	vivo, _ := partesDelRegistro(t, texto)
@@ -1712,7 +1802,7 @@ func TestUnCaboVivoNoApuntaAUnNumeroQueElRegistroNoDefine(t *testing.T) {
 				continue
 			}
 			visto[num] = true
-			t.Errorf("línea %d de la parte viva de ABIERTO.md cita **%s**, que el registro no define en ningún lado.\n    %s\n  O le das su fila en la tabla 1 o 2, o —si se cerró o se convirtió en otro número— decilo donde se cerró: «%s CERRADO», «cierra %s», «(era %s)».",
+			t.Errorf("línea %d de ABIERTO.md cita **%s**, que el registro no define en ningún lado.\n    %s\n  O le das su fila en la tabla 1 o 2, o —si se cerró o se convirtió en otro número— decilo donde se cerró: «%s CERRADO», «cierra %s», «(era %s)».",
 				n+1, num, recortar(linea, 120), num, num, num)
 		}
 	}
