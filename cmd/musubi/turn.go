@@ -684,9 +684,16 @@ func clearDeltaState(store metaStore, sessionID string) {
 // sembraba su delta con la hora de ahora, la interactiva quedaba como la más vieja y perdía el delta
 // (su próximo pedido le repetía memoria que ya tenía en contexto) y los pedidos. Las hijas no tienen
 // turnos: en la base de esta PC, del 09-11 al 09-27, sólo 6 sesiones tuvieron alguno, y 29 de las 32
-// entradas del índice eran siembras del priming. La que se anota compite como las demás: si es una
-// siembra y todas las otras tuvieron turno, sale ella misma, y una hija sin turnos no le quita el
-// lugar a una sesión que los tuvo.
+// entradas del índice eran siembras del priming.
+//
+// LA QUE SE ANOTA NO COMPITE CONTRA SÍ MISMA (sobrantes la saltea), como en main, donde es la más
+// nueva y no sale nunca. Si compitiera, con el índice lleno de sesiones con turno la siembra de una
+// sesión nueva sería la única sin turno y se desalojaría a sí misma en la misma transacción, y su
+// primer pedido le repetiría la memoria del priming: el síntoma que esto arregla. Y el índice llega a
+// ese estado y no vuelve, porque «turno» es pegajoso y nada más poda el índice. Lleno de sesiones con
+// turno, se comporta como el LRU de main entre ellas: la siembra nueva desaloja a la más vieja con
+// turno y, en una ráfaga de hijas, desde la segunda sale la hija anterior, así que la ráfaga le
+// cuesta el lugar a una sola sesión con turno.
 //
 // «TURNO» ES PEGAJOSO: lo pone el recall del turno (saveDeltaState desde buildTurnRecall) o un pedido
 // sustantivo (recordarPedido), y una siembra posterior del priming —el arranque de una compactación
@@ -718,7 +725,7 @@ func registrarSesionDelta(tx memory.MetaTx, sessionID string, ahora int64, turno
 		idx.conTurno[sessionID] = true
 		cambioElTurno = true
 	}
-	for _, id := range idx.sobrantes() {
+	for _, id := range idx.sobrantes(sessionID) {
 		if err := tx.SetMeta(deltaKey(id), ""); err != nil {
 			return err
 		}
@@ -782,14 +789,18 @@ func leerIndiceDelta(tx memory.MetaTx) (indiceDelta, error) {
 
 // sobrantes devuelve, en orden de salida, las sesiones que salen del índice para que queden
 // maxDeltaSessions: primero las que no tuvieron un turno y después las que sí, y en cada grupo de la
-// más vieja a la más nueva (a igual marca, por id, para que el desalojo sea determinista).
-func (idx indiceDelta) sobrantes() []string {
+// más vieja a la más nueva (a igual marca, por id, para que el desalojo sea determinista). propia, la
+// sesión que se está anotando, no está entre las candidatas (ver registrarSesionDelta).
+func (idx indiceDelta) sobrantes(propia string) []string {
 	sobra := len(idx.marca) - maxDeltaSessions
 	if sobra <= 0 {
 		return nil
 	}
 	ids := make([]string, 0, len(idx.marca))
 	for id := range idx.marca {
+		if id == propia {
+			continue // la que se anota no compite contra sí misma
+		}
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool {

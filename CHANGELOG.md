@@ -571,8 +571,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   al arrancar, y perdía el delta —su próximo pedido le repetía memoria que ya tenía— y los pedidos.
   Ahora el índice sabe qué sesiones tuvieron un turno (el recall del turno o un pedido sustantivo), y
   al pasar de 32 salen primero las que no, de la más vieja a la más nueva, y recién después, por LRU,
-  las que sí. «Turno» es pegajoso: la siembra del priming al compactar no lo baja. En la base de
-  esta PC, 29 de las 32 entradas del índice eran siembras, y sólo 3 eran de sesiones con turnos.
+  las que sí. «Turno» es pegajoso: la siembra del priming al compactar no lo baja. La sesión que se
+  anota no compite contra sí misma: con el índice lleno de sesiones con turno, la siembra de una
+  nueva desaloja a la más vieja con turno, como main. En la base de esta PC, 29 de las 32 entradas
+  del índice eran siembras, y sólo 3 eran de sesiones con turnos.
 
   **El turno va en una clave aparte, `loop_delta_con_turno`, y el índice conserva su forma
   `{id: unix}`**, por los binarios viejos que comparten la base: decodifican el índice en un

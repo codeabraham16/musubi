@@ -98,6 +98,94 @@ func TestLaSiembraNoLeBajaElTurno(t *testing.T) {
 	}
 }
 
+// TestLaSiembraNuevaNoSeDesalojaASiMisma: la sesión que se anota no compite contra sí misma. Con el
+// índice lleno de sesiones con turno —y el índice llega a ese estado y no vuelve: «turno» es pegajoso
+// y nada más poda el índice—, la siembra del priming de una sesión nueva desaloja a la más vieja con
+// turno, como el LRU de main, y no a sí misma: su primer turno no le repite lo que ya le dio el
+// priming. Una ráfaga de hijas le cuesta el lugar a UNA sesión con turno: desde la segunda hija sale
+// la hija anterior. Con una sesión con turno menos hay lugar y no sale nadie: es el control de que la
+// prueba mide el desalojo y no otra cosa. La adoptó el corrector de la revisión (H1).
+//
+// Sabotaje: la sesión que se anota vuelve a competir contra sí misma.
+// arnes: archivo="cmd/musubi/turn.go"
+// arnes: de="\t\tif id == propia {\n"
+// arnes: a="\t\tif id == propia && false {\n"
+func TestLaSiembraNuevaNoSeDesalojaASiMisma(t *testing.T) {
+	for _, c := range []struct {
+		nombre   string
+		conTurno int
+		control  bool
+	}{
+		{"control: 31 con turno, hay lugar", maxDeltaSessions - 1, true},
+		{"32 con turno: índice saturado", maxDeltaSessions, false},
+	} {
+		t.Run(c.nombre, func(t *testing.T) {
+			store := &fakeTurnStore{meta: map[string]string{}, recall: memory.RecallResult{
+				Count: 1, Items: []memory.RecallItem{{ID: "p1", TopicKey: "t", Gist: "lo que ya trajo el priming", ContentHash: "h1"}},
+			}}
+			for i := 0; i < c.conTurno; i++ {
+				anotarEn(store, fmt.Sprintf("con-%02d", i), time.Unix(int64(1000+i), 0), true)
+			}
+			// El priming de la sesión nueva siembra su delta con lo que inyectó (detect.go: desdeTurno=false).
+			saveDeltaState(store, "nueva", map[string]string{"p1": "h1"}, false)
+			trasSiembra := store.meta[deltaKey("nueva")]
+			sembrado := loadDeltaState(store, "nueva")["p1"] == "h1"
+			quedaron := slices.Sorted(maps.Keys(indiceDe(t, store).marca))
+
+			// LA MISMA HISTORIA CON EL LRU DE MAIN (76c6bce9): la siembra nueva sobrevive siempre.
+			mainStore := newFakeTurnStore()
+			for i := 0; i < c.conTurno; i++ {
+				mainStore.meta[deltaKey(fmt.Sprintf("con-%02d", i))] = `{"x":"h"}`
+				registrarSesionDeltaDeMain(mainStore, fmt.Sprintf("con-%02d", i), int64(1000+i))
+			}
+			mainStore.meta[deltaKey("nueva")] = `{"p1":"h1"}`
+			registrarSesionDeltaDeMain(mainStore, "nueva", time.Now().Unix())
+			if got := mainStore.meta[deltaKey("nueva")]; got != `{"p1":"h1"}` {
+				t.Fatalf("CONTROL main: la siembra nueva tenía que sobrevivir con el LRU de main, quedó %q", got)
+			}
+			var enMain map[string]int64
+			if err := json.Unmarshal([]byte(mainStore.meta[metaDeltaSessions]), &enMain); err != nil {
+				t.Fatal(err)
+			}
+
+			out := turnOutput(store, deltaLoop(), pipeOff(), maOff(), config.MemoryConfig{},
+				strings.NewReader(`{"session_id":"nueva","prompt":"revisá el TLS del cerebro"}`))
+			repite := strings.Contains(out, "[id:p1]")
+			if c.control {
+				if !sembrado || repite {
+					t.Fatalf("CONTROL: con lugar en el índice la siembra tenía que quedar (quedó: %v) y el turno no repetir p1 (repitió: %v)", sembrado, repite)
+				}
+				return
+			}
+			if !sembrado {
+				t.Errorf("con %d sesiones con turno en el índice, la siembra de «nueva» se desalojó a sí misma en la misma transacción (delta tras la siembra: %q); main la conserva", c.conTurno, trasSiembra)
+			}
+			if repite {
+				t.Errorf("y el primer turno de «nueva» le repitió p1, que ya le había dado el priming:\n%s", out)
+			}
+			if want := slices.Sorted(maps.Keys(enMain)); !slices.Equal(quedaron, want) {
+				t.Errorf("la siembra de «nueva» tenía que desalojar a la más vieja con turno, como main:\nquedaron %v\nen main  %v", quedaron, want)
+			}
+
+			// LA RÁFAGA: la primera hija desaloja a la más vieja con turno y, desde la segunda, sale la
+			// hija anterior. «nueva» ya tuvo su turno, y con ella el índice vuelve a estar lleno de
+			// sesiones con turno.
+			for i := 0; i < 3; i++ {
+				saveDeltaStateEn(store, fmt.Sprintf("z-hija-%02d", i), time.Unix(int64(5000+i), 0))
+			}
+			idx := indiceDe(t, store)
+			for _, s := range []struct {
+				id    string
+				queda bool
+			}{{"con-01", false}, {"con-02", true}, {"nueva", true}, {"z-hija-00", false}, {"z-hija-01", false}, {"z-hija-02", true}} {
+				if _, esta := idx.marca[s.id]; esta != s.queda {
+					t.Errorf("después de una ráfaga de 3 hijas, %q en el índice: %v; tenía que ser %v (índice: %v)", s.id, esta, s.queda, slices.Sorted(maps.Keys(idx.marca)))
+				}
+			}
+		})
+	}
+}
+
 // TestUnIndiceDeUnBinarioViejoConvive: los binarios viejos comparten la base hasta que se
 // actualizan, y el índice va y viene entre los dos. En las dos direcciones:
 //
