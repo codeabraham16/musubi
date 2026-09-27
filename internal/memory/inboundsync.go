@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"musubi/internal/redact"
 )
@@ -35,6 +36,12 @@ type SharedObs struct {
 	MemType    string  `json:"mem_type"`
 	Author     string  `json:"author"`
 	ProjectID  string  `json:"project_id"`
+	// CreatedAt es la fecha de creación en el ORIGEN, tal como la guarda el central. Sin ella la
+	// nota bajada nacía acá con la fecha de la bajada, y una de hace tres meses entraba «de hoy» al
+	// recall y al priming de cada máquina que la traía. Es OPCIONAL en los dos sentidos del cable:
+	// un central viejo no la manda —llega vacía e IngestShared hace lo de siempre— y un cliente
+	// viejo la ignora, porque decodifica con json.Unmarshal, que no rechaza campos de más.
+	CreatedAt string `json:"created_at,omitempty"`
 }
 
 // Ingesta es lo que IngestShared hizo con una fila bajada del central.
@@ -111,7 +118,13 @@ func (e *DbEngine) ListSharedForPull(ctx context.Context, afterRowID int64, limi
 	// Se pagina por sync_seq (no por rowid): sync_seq SUBE también en un UPDATE (auditoría #4), así que
 	// una edición de una obs shared ya sincronizada se re-entrega; y es estable ante VACUUM (rowid no).
 	// El valor de sync_seq viaja en el campo RowID (es el cursor del protocolo; ver SharedObs).
-	q := `SELECT sync_seq, id, topic_key, content, importance, COALESCE(mem_type,''), COALESCE(author,''), COALESCE(project_id,'')
+	//
+	// La fecha va envuelta y no pelada, y no es estilo. El driver convierte una columna DATETIME
+	// pelada al leerla (sale «2026-07-11T20:21:25Z»), y adentro de una expresión la entrega tal como
+	// está guardada («2026-07-11 20:21:25»): viaja la forma guardada, que es la que el cliente
+	// escribe. Y un NULL no corta la página —Scan de NULL a string es un error, y una página que no
+	// se lee deja sin bajar todo lo que venía detrás—: viaja vacío y el cliente pone la suya.
+	q := `SELECT sync_seq, id, topic_key, content, importance, COALESCE(mem_type,''), COALESCE(author,''), COALESCE(project_id,''), COALESCE(created_at,'')
 		FROM observations
 		WHERE ` + visibleObsPredicate + ` AND scope = 'shared' AND sync_seq > ?` + scopeSQL + `
 		ORDER BY sync_seq ASC
@@ -129,7 +142,7 @@ func (e *DbEngine) ListSharedForPull(ctx context.Context, afterRowID int64, limi
 	var out []SharedObs
 	for rows.Next() {
 		var o SharedObs
-		if err := rows.Scan(&o.RowID, &o.ID, &o.TopicKey, &o.Content, &o.Importance, &o.MemType, &o.Author, &o.ProjectID); err != nil {
+		if err := rows.Scan(&o.RowID, &o.ID, &o.TopicKey, &o.Content, &o.Importance, &o.MemType, &o.Author, &o.ProjectID, &o.CreatedAt); err != nil {
 			return nil, fmt.Errorf("error al escanear shared para pull: %w", err)
 		}
 		out = append(out, o)
@@ -139,8 +152,9 @@ func (e *DbEngine) ListSharedForPull(ctx context.Context, afterRowID int64, limi
 
 // IngestShared persiste una observación 'shared' bajada del central (sync ENTRANTE) SIN encolarla en
 // el outbox local — la clave ANTI-LOOP: lo que bajé del central no debe re-subirse (si pasara por el
-// enqueue normal, rebotaría). UPSERT por id (idempotente: re-ingerir la misma no duplica; el UPSERT
-// preserva created_at y las stats de acceso). Preserva el project_id y el author de ORIGEN. Redacta
+// enqueue normal, rebotaría). UPSERT por id (idempotente: re-ingerir la misma no duplica). Una fila
+// NUEVA nace con la fecha de ORIGEN (ver fechaDeOrigen); una que ya estaba conserva la suya y sus
+// stats de acceso. Preserva el project_id y el author de ORIGEN. Redacta
 // el contenido por defensa en profundidad (el central ya redacta al ingerir; el borde a shared es
 // donde vive la garantía). No indexa vector en este primitivo mínimo (ingest léxico; el FTS lo
 // mantienen los triggers AFTER INSERT/UPDATE). Devuelve si insertó una fila nueva (vs. update) y si
@@ -236,9 +250,18 @@ func (e *DbEngine) IngestShared(o SharedObs) (Ingesta, error) {
 	// día se quiere limpiar el pasado, el lugar es una reparación explícita sobre las filas
 	// existentes —que además tiene que devolverle a cada una la importance que declaró— y no un
 	// rechazo en el camino de relay.
+	//
+	// LA FECHA ES LA DEL ORIGEN, Y SÓLO AL INSERTAR. Una fila nueva toma o.CreatedAt normalizada
+	// (fechaDeOrigen); si no sirve —vacía porque el central es viejo, ilegible, del futuro o anterior
+	// a Musubi— el INSERT cae a CURRENT_TIMESTAMP, que es el default de la columna y la conducta de
+	// siempre. Hace falta nombrarlo: con la columna en la lista, un NULL se guarda NULL y el DEFAULT
+	// no corre. El DO UPDATE no nombra la fecha, a propósito: una fila que ya estaba conserva la
+	// suya, y eso cubre a la nota creada ACÁ que vuelve del central con la fecha en que el central
+	// la recibió, que es posterior. Por lo mismo, las filas que ya bajaron con la fecha de la bajada
+	// no se reparan re-entregándolas: esa reparación la decide el dueño.
 	_, err = tx.Exec(`INSERT INTO observations
-		(id, topic_key, content, gist, content_hash, tokens, importance, mem_type, scope, project_id, author, sync_seq)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'shared', ?, ?, (SELECT IFNULL(MAX(sync_seq),0)+1 FROM observations))
+		(id, topic_key, content, gist, content_hash, tokens, importance, mem_type, scope, project_id, author, created_at, sync_seq)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'shared', ?, ?, COALESCE(?, CURRENT_TIMESTAMP), (SELECT IFNULL(MAX(sync_seq),0)+1 FROM observations))
 		ON CONFLICT(id) DO UPDATE SET
 			topic_key=excluded.topic_key,
 			content=excluded.content,
@@ -248,7 +271,7 @@ func (e *DbEngine) IngestShared(o SharedObs) (Ingesta, error) {
 			importance=excluded.importance,
 			mem_type=CASE WHEN excluded.mem_type != '' THEN excluded.mem_type ELSE observations.mem_type END,
 			sync_seq=(SELECT IFNULL(MAX(sync_seq),0)+1 FROM observations)`,
-		o.ID, o.TopicKey, clean, gist, hash, tokens, o.Importance, memType, o.ProjectID, o.Author)
+		o.ID, o.TopicKey, clean, gist, hash, tokens, o.Importance, memType, o.ProjectID, o.Author, fechaDeOrigen(o.CreatedAt, time.Now()))
 	if err != nil {
 		return Ingesta{}, fmt.Errorf("error al ingerir observación shared: %w", err)
 	}
@@ -321,4 +344,40 @@ func (e *DbEngine) IngestShared(o SharedObs) (Ingesta, error) {
 		e.index.Remove(o.ID)
 	}
 	return Ingesta{Insertada: !existia}, nil
+}
+
+// toleranciaDeReloj es cuánto puede venir del FUTURO una fecha de origen y aceptarse igual. La
+// selló el reloj de otra máquina y se compara contra el de ésta: son dos relojes. Medido el
+// 2026-09-27 desde davantis-1 contra el central, la laptop y la pi: menos de medio segundo de
+// diferencia, y eso con el viaje de ssh adentro. Cinco minutos son cientos de veces eso, y es el
+// margen que Kerberos tolera por defecto entre relojes. Más allá no es desfase sino un reloj roto,
+// y una nota «de mañana» no tiene edad hasta que mañana llegue: el recall la cuenta de cero días.
+const toleranciaDeReloj = 5 * time.Minute
+
+// pisoDeFechaDeOrigen es la fecha más vieja que se le cree a una nota. Todo created_at de una base
+// de Musubi lo selló un CURRENT_TIMESTAMP al guardarse —los únicos INSERT a observations son el de
+// saveObservation, que no la nombra, y el de IngestShared—, así que ninguna nota legítima es anterior
+// al primer commit del proyecto (2026-06-13). Lo de antes es un centinela (el cero de Go, 1601, 1970,
+// 1980) o un reloj que todavía no tenía hora, como el de una Raspberry sin RTC que arranca en 1970
+// hasta que llega el NTP: ahí la fecha de la bajada es mejor estimación que la de origen.
+var pisoDeFechaDeOrigen = time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+// fechaDeOrigen normaliza la fecha de creación que trae una nota bajada al layout de la columna:
+// 'YYYY-MM-DD HH:MM:SS' en UTC, el mismo de CURRENT_TIMESTAMP. No es cosmético: el SQL compara
+// created_at como TEXTO —contra datetime('now', …) y en los ORDER BY—, y una fecha con la T de
+// RFC3339 ordena después que cualquier hora del mismo día escrita con espacio ('T' > ' '), así que
+// una nota de la madrugada pasaría por más nueva que una de la noche. Devuelve NULL, y el INSERT cae
+// al default, si la fecha no se puede leer, si viene del futuro más allá de toleranciaDeReloj o si
+// es anterior al piso.
+func fechaDeOrigen(cruda string, ahora time.Time) sql.NullString {
+	t, ok := parseObsTime(cruda)
+	switch {
+	case !ok:
+		return sql.NullString{}
+	case t.After(ahora.Add(toleranciaDeReloj)):
+		return sql.NullString{}
+	case t.Before(pisoDeFechaDeOrigen):
+		return sql.NullString{}
+	}
+	return sql.NullString{String: t.Format(sqliteTimeLayout), Valid: true}
 }
