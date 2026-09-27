@@ -69,6 +69,57 @@ func TestPerturbarConsultaPorClase(t *testing.T) {
 	}
 }
 
+// TestSobraMezclaLetraAjenaYRepetida: la letra de más es la de los tipeos del dueño. En sus prompts
+// (3.407, clasificados en la revisión de este banco) la letra de más es una letra AJENA en el medio
+// en la gran mayoría de los casos y una REPETIDA en ~16-18 %. La primera versión sólo repetía, que
+// para el corrector es la forma fácil. Acá se exige la mezcla (repetidas entre el 10 y el 25 %; una «ajena»
+// igual a su vecina cuenta como repetida) y que la ajena nunca vaya antes de la primera letra ni al
+// final.
+//
+// Sabotaje: «sobra» vuelve a repetir siempre.
+// arnes: archivo="internal/recalleval/perturbar.go"
+// arnes: de="\t\tif (h>>32)%sobraCadaCuantasRepite == 0 {"
+// arnes: a="\t\tif true {"
+func TestSobraMezclaLetraAjenaYRepetida(t *testing.T) {
+	palabras := []string{"información", "raspberry", "fichaje", "kiosko", "memoria", "terminal"}
+	repetidas, ajenas := 0, 0
+	for _, pal := range palabras {
+		w := []rune(pal)
+		for semilla := uint64(1); semilla <= 300; semilla++ {
+			b := []rune(PerturbarConsulta(pal, TipeoSobra, semilla))
+			if len(b) != len(w)+1 {
+				t.Fatalf("%q → %q: «sobra» tiene que agregar exactamente una letra", pal, string(b))
+			}
+			// j: dónde entró la letra de más (la primera posición cuyo borrado devuelve la palabra).
+			j := -1
+			for k := range b {
+				if string(b[:k])+string(b[k+1:]) == pal {
+					j = k
+					break
+				}
+			}
+			if j < 0 {
+				t.Fatalf("%q → %q: sacando una letra no vuelve la palabra", pal, string(b))
+			}
+			// Repetida: la letra de más es igual a la que le sigue (j es la primera de las dos).
+			if j+1 < len(b) && b[j] == b[j+1] {
+				repetidas++
+				continue
+			}
+			ajenas++
+			if j == 0 || j == len(b)-1 {
+				t.Errorf("%q → %q: la letra ajena entró en la punta (posición %d)", pal, string(b), j)
+			}
+		}
+	}
+	total := repetidas + ajenas
+	frac := float64(repetidas) / float64(total)
+	t.Logf("sobra: %d repetidas y %d ajenas de %d (%.1f %% repetidas)", repetidas, ajenas, total, 100*frac)
+	if frac < 0.10 || frac > 0.25 {
+		t.Errorf("sobra: %.1f %% de letras repetidas; los tipeos del dueño tienen ~16-18 %% (se acepta 10-25 %%)", 100*frac)
+	}
+}
+
 // terminosComoTexto devuelve los términos de q con el mismo corte que usa la perturbación.
 func terminosComoTexto(q string) []string {
 	r := []rune(q)

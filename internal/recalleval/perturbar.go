@@ -36,7 +36,9 @@ const (
 	TipeoTransposicion ClaseDeTipeo = "transposicion"
 	// TipeoFalta saca una letra: información → infrmación.
 	TipeoFalta ClaseDeTipeo = "falta"
-	// TipeoSobra repite una letra: información → inforrmación.
+	// TipeoSobra mete una letra de más: casi siempre una AJENA a sus vecinas en el medio de la
+	// palabra (información → infortmación) y 1 de cada sobraCadaCuantasRepite veces una repetida
+	// (información → inforrmación). La mezcla sale de los tipeos del dueño: ver tipear.
 	TipeoSobra ClaseDeTipeo = "sobra"
 	// TipeoSustitucion cambia una letra por otra: información → infprmación.
 	TipeoSustitucion ClaseDeTipeo = "sustitucion"
@@ -48,8 +50,13 @@ var ClasesDeTipeo = []ClaseDeTipeo{TipeoTransposicion, TipeoFalta, TipeoSobra, T
 // minRunasPerturbables es el largo mínimo de un término para recibir un tipeo.
 const minRunasPerturbables = 5
 
-// alfabetoDeSustitucion son las letras con las que TipeoSustitucion reemplaza.
+// alfabetoDeSustitucion son las letras con las que TipeoSustitucion reemplaza y con las que
+// TipeoSobra mete la letra ajena.
 const alfabetoDeSustitucion = "abcdefghijklmnopqrstuvwxyz"
+
+// sobraCadaCuantasRepite: 1 de cada 6 letras de más (~17 %) es una letra repetida; las otras son
+// ajenas. Ver tipear.
+const sobraCadaCuantasRepite = 6
 
 // PerturbarConsulta devuelve q con UN error de la clase pedida en CADA término perturbable (todo
 // letras, 5 runas o más). Lo que no es término —espacios, signos— se copia tal cual. La posición
@@ -170,10 +177,32 @@ func tipear(w []rune, clase ClaseDeTipeo, h uint64) []rune {
 		out = append(out, w[:k]...)
 		return append(out, w[k+1:]...)
 	case TipeoSobra:
+		// LA MEZCLA SALE DE LOS TIPEOS DEL DUEÑO, no de lo cómodo. Clasificados 3.407 prompts suyos
+		// (23.558 términos de 5 letras o más) contra el vocabulario del índice, en la revisión del
+		// PR que trajo este banco: de las letras de más, ~16-18 % son una letra REPETIDA (tiennes,
+		// primeero, y también la primera: ppodemos) y el resto una letra AJENA, casi siempre en el
+		// medio (altuira, pontencia, estaoy). Las «ajenas al final» (propones, dices) eran casi todas
+		// palabras válidas y no se imitan. La primera versión sólo repetía, que es la forma fácil:
+		// con la letra repetida hay dos borrados que devuelven la palabra y ninguno cae en otra
+		// palabra válida, así que el banco le habría regalado la clase al corrector.
+		if (h>>32)%sobraCadaCuantasRepite == 0 {
+			// Repetida: w[k] dos veces, con k en [0, n-1]. Repetir la primera no la cambia.
+			k := int(h % uint64(n))
+			out = append(out, w[:k+1]...)
+			out = append(out, w[k])
+			return append(out, w[k+1:]...)
+		}
+		// Ajena: una letra distinta de sus dos vecinas, antes de w[k] con k en [1, n-1]: ni antes
+		// de la primera ni al final.
 		k := 1 + int(h%uint64(n-1))
-		out = append(out, w[:k+1]...)
-		out = append(out, w[k])
-		return append(out, w[k+1:]...)
+		alfa := []rune(alfabetoDeSustitucion)
+		i := int((h / uint64(n)) % uint64(len(alfa)))
+		for alfa[i] == unicode.ToLower(w[k-1]) || alfa[i] == unicode.ToLower(w[k]) {
+			i = (i + 1) % len(alfa)
+		}
+		out = append(out, w[:k]...)
+		out = append(out, alfa[i])
+		return append(out, w[k:]...)
 	case TipeoSustitucion:
 		k := 1 + int(h%uint64(n-1))
 		alfa := []rune(alfabetoDeSustitucion)
