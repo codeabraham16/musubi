@@ -268,6 +268,12 @@ func (s *McpServer) SoltarBajada() {
 
 // cesionTrasFallo es cuánto deja de reclamar la bajada un proceso cuyo Pull falló: dos ticks.
 func (s *McpServer) cesionTrasFallo() time.Duration {
+	return 2 * s.tickBajada()
+}
+
+// tickBajada es el intervalo de la bajada: el real del scheduler si ya arrancó, el de la config si
+// no, y 30 s si tampoco hay.
+func (s *McpServer) tickBajada() time.Duration {
 	tick := time.Duration(s.intervaloBajada.Load())
 	if tick <= 0 {
 		tick = time.Duration(s.syncCfg.DrainIntervalSeconds) * time.Second
@@ -275,7 +281,23 @@ func (s *McpServer) cesionTrasFallo() time.Duration {
 	if tick <= 0 {
 		tick = 30 * time.Second
 	}
-	return 2 * tick
+	return tick
+}
+
+// anotarUltimaBajada registra el viaje de un tick que SALIÓ A LA RED y anota cuándo volvió, cuántas
+// filas trajo y cuándo se espera la próxima (memory.MetaUltimaBajada), las dos cosas en UNA
+// transacción (ver memory.RegistrarBajada). La llama sólo el defer de drainInboundOnce y sólo con
+// `salioALaRed`, así que la escribe únicamente el dueño del candado y únicamente cuando un Pull
+// volvió bien: un tick salteado no escribe nada, igual que antes.
+//
+// La próxima es un tick base porque hoy la bajada no espacia sus pedidos. Si algún día espacia,
+// la próxima tiene que salir del ritmo, o musubi_sync_status prometería un pedido que no va a haber.
+func (s *McpServer) anotarUltimaBajada(v memory.Viaje) {
+	ahora := time.Now()
+	u := memory.UltimaBajada{Unix: ahora.Unix(), Filas: v.Filas, ProximaUnix: ahora.Add(s.tickBajada()).Unix()}
+	if err := s.engine.RegistrarBajada(v, u); err != nil {
+		logx.Error("inbound: no se pudo registrar el viaje ni la edad de la bajada", "error", err)
+	}
 }
 
 // drainInboundOnce baja páginas de memoria shared del central desde el cursor guardado y las ingiere
@@ -288,10 +310,11 @@ func (s *McpServer) cesionTrasFallo() time.Duration {
 //
 // Y si SALIÓ A LA RED —al menos un Pull volvió sin error—, registra el viaje en sync_viajes: las
 // páginas que llegaron (vacías incluidas: es el contador de pulls), las filas ingeridas, los bytes
-// de las páginas con filas y, aparte, los de las vacías. `salioALaRed` es la ÚNICA señal de eso y
-// el defer es el único lugar que la lee: un tick salteado (candado de otro, cesión tras fallar,
-// Pull fallido) no escribe nada, y lo que se quiera anotar por cada bajada real se cuelga de esta
-// misma variable en vez de repetir la condición en cada return.
+// de las páginas con filas y, aparte, los de las vacías. En la misma transacción anota la última
+// bajada, que es la edad que muestra musubi_sync_status (anotarUltimaBajada). `salioALaRed` es la
+// ÚNICA señal de eso y el defer es el único lugar que la lee: un tick salteado (candado de otro,
+// cesión tras fallar, Pull fallido) no escribe nada, y lo que se quiera anotar por cada bajada real
+// se cuelga de esta misma variable en vez de repetir la condición en cada return.
 func (s *McpServer) drainInboundOnce(ctx context.Context) {
 	ingeridas := 0
 	salioALaRed := false
@@ -306,9 +329,7 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 			viaje.Filas = int64(ingeridas)
 			viaje.BytesCable, viaje.BytesCrudos = t.BytesCable, t.BytesCrudos
 			viaje.Vacias, viaje.BytesVacias = t.Vacias, t.BytesVacias
-			if rerr := s.engine.RegistrarViaje(memory.ViajeBajada, viaje); rerr != nil {
-				logx.Error("inbound: no se pudo registrar el viaje de la bajada", "error", rerr)
-			}
+			s.anotarUltimaBajada(viaje)
 		}
 	}()
 	// CEDER DESPUÉS DE FALLAR. Soltar el candado tras un Pull fallido no alcanzaba: si el Pull muere

@@ -3,7 +3,9 @@ package mcp
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"sync/atomic"
+	"time"
 
 	"musubi/internal/memory"
 )
@@ -122,9 +124,10 @@ func bytesLegibles(n int64) string {
 
 // lineasDelViaje arma las tres líneas que musubi_sync_status suma al resumen del outbox.
 //
-// La de «bajada» es UNA sola a propósito: el frente que mide la edad de la bajada le agrega «última
-// hace…, próxima en…» a esta misma línea, en vez de abrir otra que pueda contradecirla.
-func lineasDelViaje(r memory.ResumenDelSync, teamMode bool) string {
+// La de «bajada» es UNA sola a propósito: lleva el volumen (sync_viajes) y, al final, `edad`
+// —cuándo bajó por última vez y cuándo se espera la próxima, ver edadDeLaBajada—, en vez de abrir
+// otra línea que pueda contradecirla.
+func lineasDelViaje(r memory.ResumenDelSync, teamMode bool, edad string) string {
 	// El cable que se muestra es el de lo que viajó CON FILAS; lo rechazado y las páginas vacías van
 	// entre paréntesis, con su cuenta y su peso, porque son otro costo (ver memory.Viaje).
 	s := fmt.Sprintf("\nsubida: %d enviadas en 24 h y %d en 7 d · hoy %d filas en %d posts (%d rechazados, %s), %s en el cable (%s crudos) · 7 d %d filas en %d posts (%d rechazados), %s en el cable",
@@ -135,6 +138,7 @@ func lineasDelViaje(r memory.ResumenDelSync, teamMode bool) string {
 	s += fmt.Sprintf("\nbajada: hoy %d filas en %d páginas (%d vacías, %s), %s en el cable · 7 d %d filas en %d páginas (%d vacías, %s), %s en el cable",
 		r.BajadaHoy.Filas, r.BajadaHoy.Posts, r.BajadaHoy.Vacias, bytesLegibles(r.BajadaHoy.BytesVacias), bytesLegibles(r.BajadaHoy.BytesCable),
 		r.Bajada7d.Filas, r.Bajada7d.Posts, r.Bajada7d.Vacias, bytesLegibles(r.Bajada7d.BytesVacias), bytesLegibles(r.Bajada7d.BytesCable))
+	s += edad
 
 	// POR QUÉ no viaja cada cosa, y no sólo cuántas. El motivo de las locales depende del proyecto:
 	// el scope por defecto lo decide memory.team_mode, sin mirar la nota.
@@ -145,4 +149,112 @@ func lineasDelViaje(r memory.ResumenDelSync, teamMode bool) string {
 	s += fmt.Sprintf("\nno viajan: %d locales (%s), %d en cuarentena (propuestas de un LLM sin corroborar), %d de un LLM ya corroboradas que siguen locales (nada las promueve)",
 		r.NoViajan.Locales, motivoLocales, r.NoViajan.EnCuarentena, r.NoViajan.LLMCorroboradasLocales)
 	return s
+}
+
+// edadDeLaBajada completa la línea «bajada» de musubi_sync_status: cuándo bajó por última vez, si
+// trajo algo y cuándo se espera la próxima.
+//
+// LEE SÓLO LA META (memory.MetaUltimaBajada), NUNCA EL ESTADO DE ESTE PROCESO. Sobre una base
+// corren varios daemons y baja uno, el dueño del candado; el que contesta casi nunca es ése, y
+// musubi_sync_status también lo sirve el central, que no baja nunca.
+//
+// Y NO PUEDE CONTRADECIR AL VOLUMEN, que sale de sync_viajes (r) y comparte transacción con la meta
+// (memory.RegistrarBajada). Un binario de esta versión nunca deja una fuente sin la otra, así que
+// si hay viajes de bajada sin meta —o viajes de un día posterior al de la meta—, los bajó un
+// binario anterior, que registra el viaje y no la edad. La línea dice eso y no «nunca» al lado de
+// las filas bajadas hoy.
+//
+// EL ORDEN DE LECTURA ES PARTE DEL CONTRATO: el llamador toma `ahora` ANTES de leer sync_viajes, y
+// la meta se lee acá, DESPUÉS. Así la meta es por lo menos tan nueva como los viajes que se leyeron,
+// y un tick que se escribe entre las dos lecturas —o que cruza la medianoche UTC— no se confunde
+// con un binario viejo.
+func (s *McpServer) edadDeLaBajada(r memory.ResumenDelSync, ahora time.Time) string {
+	raw, hay, err := s.engine.GetMeta(memory.MetaUltimaBajada)
+	if err != nil {
+		return " · última: no se pudo leer (" + strconv.Quote(err.Error()) + ")"
+	}
+	return describirUltimaBajada(raw, hay, r, ahora, s.porQueNoBaja())
+}
+
+// porQueNoBaja es por qué ESTE proceso no corre la bajada —la misma condición con la que se apaga
+// RunInboundScheduler—, o "" si la corre, tenga o no el candado. Es configuración y no estado: no
+// dice nada de cuándo bajó nadie, y edadDeLaBajada la usa sólo cuando no hay ningún registro.
+func (s *McpServer) porQueNoBaja() string {
+	switch {
+	case s.syncClient == nil:
+		return "no tiene cliente de sync"
+	case !s.memory.TeamMode:
+		return "el proyecto no está en team_mode"
+	}
+	return ""
+}
+
+// describirUltimaBajada es edadDeLaBajada sin la base: raw y hay son la meta tal como se leyó, r el
+// volumen de sync_viajes y noBaja el motivo por el que este proceso no corre la bajada ("" si la
+// corre). Devuelve el final de la línea, que empieza con « · » y nunca trae un salto de línea.
+func describirUltimaBajada(raw string, hay bool, r memory.ResumenDelSync, ahora time.Time, noBaja string) string {
+	if !hay {
+		switch {
+		case r.Bajada7d.Posts > 0:
+			// Hubo bajadas y ninguna anotó su edad: un binario de esta versión no deja eso.
+			return " · última: sin anotar (bajó un binario anterior a esta versión, que registra el viaje y no la edad)"
+		case noBaja != "":
+			// El central, o un nodo sin sync. «Nunca» sería cierto de ESTE proceso y se leería «tu
+			// máquina nunca bajó», que es justo lo que no puede decir.
+			return " · este proceso no baja (" + noBaja + "): la bajada de una máquina la informa el daemon de esa máquina"
+		}
+		return " · última: nunca"
+	}
+	u, err := memory.LeerUltimaBajada(raw)
+	if err != nil {
+		// Entre comillas y escapado: un valor cortado con un salto de línea partiría la línea en dos.
+		return " · última: ilegible (" + strconv.Quote(recortarConMarca(raw, 40)) + ")"
+	}
+	que := "vacía"
+	switch {
+	case u.Filas == 1:
+		que = "1 fila"
+	case u.Filas > 1:
+		que = strconv.FormatInt(u.Filas, 10) + " filas"
+	}
+	edad := duracionLegible(max(ahora.Unix()-u.Unix, 0))
+	if bajoDespuesSinAnotar(r, u, ahora) {
+		return " · última anotada hace " + edad + " (" + que + "), pero después bajó un binario anterior a esta versión, que no la anota"
+	}
+	linea := " · última hace " + edad + " (" + que + "), "
+	falta := u.ProximaUnix - ahora.Unix()
+	if falta < 0 {
+		// Nadie anotó otra bajada desde entonces: no hay un proceso bajando, o sus Pull fallan.
+		return linea + "la próxima se esperaba hace " + duracionLegible(-falta)
+	}
+	return linea + "próxima en ~" + duracionLegible(falta)
+}
+
+// bajoDespuesSinAnotar dice si sync_viajes tiene bajadas de un día POSTERIOR al de la meta, o sea
+// de un binario que no la anota. Los viajes van por día UTC y se comparan por día: hay viajes hoy y
+// la meta es de un día anterior, o hay viajes en la semana y la meta es de antes de la semana.
+// Dentro del mismo día no se distingue; ahí la meta envejece y la línea dice «la próxima se
+// esperaba hace…».
+func bajoDespuesSinAnotar(r memory.ResumenDelSync, u memory.UltimaBajada, ahora time.Time) bool {
+	dia := time.Unix(u.Unix, 0).UTC().Format(time.DateOnly)
+	hoy := ahora.UTC()
+	if r.BajadaHoy.Posts > 0 && dia < hoy.Format(time.DateOnly) {
+		return true
+	}
+	return r.Bajada7d.Posts > 0 && dia < hoy.AddDate(0, 0, -6).Format(time.DateOnly)
+}
+
+// duracionLegible escribe unos segundos en s, min, h o d, sin decimales: la línea de la bajada
+// quiere el orden de magnitud, no un cronómetro.
+func duracionLegible(seg int64) string {
+	switch {
+	case seg < 120:
+		return strconv.FormatInt(seg, 10) + " s"
+	case seg < 2*3600:
+		return strconv.FormatInt(seg/60, 10) + " min"
+	case seg < 48*3600:
+		return strconv.FormatInt(seg/3600, 10) + " h"
+	default:
+		return strconv.FormatInt(seg/86400, 10) + " d"
+	}
 }

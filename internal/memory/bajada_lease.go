@@ -9,6 +9,50 @@ import (
 // metaBajadaLease es la fila de `meta` que dice qué proceso está bajando memoria del central.
 const metaBajadaLease = "sync:inbound_lease"
 
+// MetaUltimaBajada es la fila de `meta` con la última bajada que SALIÓ A LA RED, en la forma
+// «unix|filas|proxima_unix» (ver UltimaBajada). La escribe sólo el dueño del candado, al final de
+// un tick en que algún Pull volvió bien y en la misma transacción que suma ese viaje a sync_viajes
+// (RegistrarBajada), y la lee musubi_sync_status.
+//
+// VA EN LA BASE Y NO EN LA MEMORIA DEL PROCESO porque sobre una misma base corren varios daemons
+// —seis en davantis-1— y baja uno solo, el que tiene el candado. El agente le pregunta al SUYO, que
+// casi nunca es ése: lo que dijera la memoria del que contesta sería el estado de uno que no baja.
+const MetaUltimaBajada = "sync:inbound_ultima"
+
+// UltimaBajada es lo que guarda MetaUltimaBajada: cuándo volvió el último Pull (Unix, en segundos),
+// cuántas filas se ingirieron en ese tick (Filas: las mismas que ese tick sumó a sync_viajes, y 0 es
+// una bajada vacía) y cuándo espera el dueño volver a salir a la red (ProximaUnix).
+type UltimaBajada struct {
+	Unix, Filas, ProximaUnix int64
+}
+
+// Valor es la forma en que se guarda: «unix|filas|proxima_unix».
+func (u UltimaBajada) Valor() string {
+	return strconv.FormatInt(u.Unix, 10) + "|" + strconv.FormatInt(u.Filas, 10) + "|" + strconv.FormatInt(u.ProximaUnix, 10)
+}
+
+// LeerUltimaBajada es la inversa de Valor. Un valor sin esa forma es un ERROR y no un cero: un cero
+// se leería «bajó el 1 de enero de 1970», y un apagón en esta PC deja escrituras cortadas.
+func LeerUltimaBajada(v string) (UltimaBajada, error) {
+	partes := strings.Split(strings.TrimSpace(v), "|")
+	if len(partes) != 3 {
+		return UltimaBajada{}, fmt.Errorf("la última bajada %q no tiene la forma unix|filas|proxima_unix", v)
+	}
+	var n [3]int64
+	for i, p := range partes {
+		x, err := strconv.ParseInt(p, 10, 64)
+		if err != nil {
+			return UltimaBajada{}, fmt.Errorf("la última bajada %q no tiene la forma unix|filas|proxima_unix: %w", v, err)
+		}
+		n[i] = x
+	}
+	u := UltimaBajada{Unix: n[0], Filas: n[1], ProximaUnix: n[2]}
+	if u.Unix <= 0 || u.Filas < 0 || u.ProximaUnix < u.Unix {
+		return UltimaBajada{}, fmt.Errorf("la última bajada %q es imposible: un instante no positivo, filas negativas o la próxima antes que la última", v)
+	}
+	return u, nil
+}
+
 // ReclamarBajada intenta quedarse con la bajada de esta base durante leaseSeconds. Devuelve true si
 // el candado es de quien llama —estaba libre, vencido, o ya era suyo— y false si lo tiene otro
 // proceso vivo. Un valor que no tiene la forma dueño|vence cuenta como libre: una escritura cortada

@@ -408,6 +408,9 @@ type OutboxStore interface {
 	// lo lee junto con las enviadas por sent_at y lo que no viaja, acotado al proyecto del ctx (ver
 	// sync_viajes.go).
 	RegistrarViaje(sentido string, v Viaje) error
+	// RegistrarBajada es RegistrarViaje para la bajada, con la última bajada (MetaUltimaBajada) en
+	// la MISMA transacción: es la edad que muestra musubi_sync_status (ver sync_viajes.go).
+	RegistrarBajada(v Viaje, u UltimaBajada) error
 	ResumenDelSync(ctx context.Context) (ResumenDelSync, error)
 }
 
