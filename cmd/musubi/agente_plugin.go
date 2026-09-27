@@ -87,16 +87,18 @@ func dirConfigDeClaude() (string, error) {
 // runAgente implementa `musubi agente <instalar|estado|quitar> [--dir RUTA]`.
 func runAgente(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "uso: musubi agente <instalar|estado|quitar> [--dir RUTA] [--settings RUTA] [--sin-permisos] [--flota-sin-preguntar]")
+		fmt.Fprintln(os.Stderr, "uso: musubi agente <instalar|estado|quitar> [--dir RUTA] [--settings RUTA] [--sin-permisos] [--flota-sin-preguntar] [--compactar-en TOKENS]")
 		os.Exit(2)
 	}
 	accion := args[0]
 	fs := flag.NewFlagSet("agente "+accion, flag.ExitOnError)
 	dirF := fs.String("dir", "", "carpeta del plugin (default: ~/.claude/skills/musubi)")
-	settingsF := fs.String("settings", "", "settings.json de Claude Code donde van los permisos (default: ~/.claude/settings.json)")
+	settingsF := fs.String("settings", "", "settings.json de Claude Code donde van los permisos y el ahorro (default: ~/.claude/settings.json)")
 	sinPermisos := fs.Bool("sin-permisos", false, "instalar sin tocar los permisos de Claude Code")
 	flotaSinPreguntar := fs.Bool("flota-sin-preguntar", false,
 		"permitir también, sin preguntar, las tools que actúan sobre otras máquinas de la flota o sobre credenciales")
+	compactarEn := fs.Int("compactar-en", ventanaDeCompactacionPorDefecto,
+		"resumir la conversación al llegar a estos tokens (autoCompactWindow); 0 no pone ninguna")
 	_ = fs.Parse(args[1:])
 	dir := *dirF
 	if dir == "" {
@@ -106,6 +108,15 @@ func runAgente(args []string) {
 			os.Exit(1)
 		}
 		dir = d
+	}
+	settings := *settingsF
+	if settings == "" {
+		s, err := settingsPorDefecto()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "musubi agente: no sé dónde está el settings.json de Claude Code: %v\n", err)
+			os.Exit(1)
+		}
+		settings = s
 	}
 	switch accion {
 	case "instalar":
@@ -123,13 +134,6 @@ func runAgente(args []string) {
 		}
 		fmt.Printf("Plugin de Musubi instalado en %s.\n", dir)
 		if !*sinPermisos {
-			settings := *settingsF
-			if settings == "" {
-				if settings, err = settingsPorDefecto(); err != nil {
-					fmt.Fprintf(os.Stderr, "musubi agente: no sé dónde está el settings.json de Claude Code: %v\n", err)
-					os.Exit(1)
-				}
-			}
 			p, err := instalarPermisos(dir, settings, *flotaSinPreguntar)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "musubi agente: el plugin quedó instalado, pero no pude poner los permisos: %v\n", err)
@@ -141,6 +145,16 @@ func runAgente(args []string) {
 			}
 			fmt.Println(".")
 		}
+		a, propia, err := instalarAhorro(dir, settings, *compactarEn)
+		switch {
+		case err != nil:
+			fmt.Fprintf(os.Stderr, "musubi agente: el plugin quedó instalado, pero no pude poner el ahorro de tokens: %v\n", err)
+			os.Exit(1)
+		case propia != "":
+			fmt.Printf("Ahorro: respeté tu ventana de compactación (%s) en %s.\n", propia, settings)
+		case a.Ventana > 0:
+			fmt.Printf("Ahorro: la conversación se resume al llegar a %s tokens (autoCompactWindow en %s).\n", enMiles(a.Ventana), settings)
+		}
 		fmt.Println("Claude Code lo carga solo en la próxima sesión (musubi@skills-dir); en una sesión abierta, /reload-plugins.")
 		fmt.Println("Donde un repo ya conecta Musubi por su .mcp.json, el plugin se hace a un lado y ese repo sigue como estaba.")
 	case "estado":
@@ -150,9 +164,14 @@ func runAgente(args []string) {
 		} else {
 			fmt.Println("Permisos: Musubi no puso ninguno (cada llamada puede pedir confirmación).")
 		}
+		fmt.Println(estadoDelAhorro(dir, settings))
 	case "quitar":
 		if err := quitarPermisos(dir); err != nil {
 			fmt.Fprintf(os.Stderr, "musubi agente: no pude sacar los permisos que había puesto: %v\n", err)
+			os.Exit(1)
+		}
+		if err := quitarAhorro(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "musubi agente: no pude sacar el ahorro de tokens que había puesto: %v\n", err)
 			os.Exit(1)
 		}
 		if err := quitarPlugin(dir); err != nil {

@@ -38,6 +38,20 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   secreto. Este cambio NO enciende el vector en el hook: eso es `ola2/vector-en-el-turno`, que
   depende del banco con forma de prompt. El job `recall-gate` suma las tres comparaciones contra
   POTION real.
+- **El ahorro de tokens viene con la instalación: `musubi agente instalar` resume la conversación a
+  los 400k.** Deja `autoCompactWindow: 400000` en el settings de Claude Code, junto a los permisos.
+  Medido el 2026-09-26 sobre 14 días de transcripts propios (16.433 respuestas de la API): el 68 %
+  del gasto era RELEER la conversación. Con el modelo de 1M, la sesión crecía hasta cerca del millón
+  antes de resumirse, con una mediana de 434k tokens por pedido y un 68 % del costo en pedidos de más
+  de 400k. Simulado sobre los pedidos de los últimos 4 días, ya con Opus 5.5, el ahorro es de 38 % a
+  los 400k, 42 % a los 300k y 48 % a los 200k. El default es 400k: saca casi todo lo que sacan los
+  topes más chicos con la mitad de las compactaciones. La simulación no cuenta los archivos que el
+  agente vuelve a leer después de un resumen, así que el ahorro real es algo menor. Verificado en el
+  binario 2.1.283: `/context` pasa de «/ 1m» a «/ 400k». Igual que con los permisos, sólo se toca lo
+  que Musubi puso: una ventana propia de la persona se respeta, la de Musubi queda anotada en el
+  plugin (`.musubi-ahorro.json`), reinstalar la actualiza, `quitar` la saca, y si la persona la
+  cambia a mano deja de ser de Musubi. `--compactar-en N` elige otro tamaño y `--compactar-en 0` no
+  pone ninguna. `musubi agente estado` dice qué ventana rige y de quién es.
 - **El banco corre el ranker del hook —sus opciones, su pool y su motor— y mide el tipeo por
   clase.** El recall por turno (el hook UserPromptSubmit, donde ocurre casi todo el recall) armaba
   sus opciones a mano, y el banco de `recalleval` armaba las suyas por su lado: sin `RankedFTS`, con
