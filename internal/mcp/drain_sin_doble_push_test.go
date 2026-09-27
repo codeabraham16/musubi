@@ -277,69 +277,152 @@ func TestUnPayloadViejoNoLlegaDespuesDelNuevo(t *testing.T) {
 	t.Logf("saves en orden: %q", guardados)
 }
 
-// TestUnChoqueSobreLaReclamadaVuelveASubirLaLocal: el push de la versión de esta máquina está en
-// vuelo y la bajada trae una versión que gio guardó en el central DESPUÉS. La conservación deja acá la
-// local (choque); el 200 del push no cierra la fila, y la local vuelve a subir en el drain siguiente:
-// el central y esta máquina terminan con la misma, la última. En main la fila quedaba 'sent' y cada
-// lado con la suya, sin push ni pull que lo arreglara.
+// capturarClaims guarda lo que devolvió cada claim del drain, para preguntarle a la base por ESE
+// reclamo mientras el push todavía viaja.
+type capturarClaims struct {
+	memory.StorageBackend
+	mu    sync.Mutex
+	items []memory.OutboxItem
+}
+
+func (c *capturarClaims) ClaimOutboxBatch(limit, leaseSeconds int) ([]memory.OutboxItem, error) {
+	items, err := c.StorageBackend.ClaimOutboxBatch(limit, leaseSeconds)
+	c.mu.Lock()
+	c.items = append(c.items, items...)
+	c.mu.Unlock()
+	return items, err
+}
+
+// reclamoDe devuelve el último ítem reclamado de id con ese contenido.
+func (c *capturarClaims) reclamoDe(id, contenido string) (memory.OutboxItem, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := len(c.items) - 1; i >= 0; i-- {
+		if it := c.items[i]; it.ObsID == id && it.Content == contenido {
+			return it, true
+		}
+	}
+	return memory.OutboxItem{}, false
+}
+
+// TestUnChoqueTardioNoPisaLaVersionMasNueva: dos máquinas de verdad, M y G, cada una con su base,
+// contra un mismo central de juguete:
 //
-// El choque que devuelve la fila a la cola ya lo custodia TestUnaReclamadaNoLaPisaElPull (internal/
-// memory) con ese mismo corte; lo que ésta mira además es CUÁNDO vuelve a subir: el 200 del push en
-// vuelo suelta el lease que el choque conservó, y la local sale en el drain siguiente, no dentro de
-// un minuto (lease_seconds=60).
+//  1. v0 está en todos lados.
+//  2. M edita v1 y la empuja. El central la GUARDA y, antes de contestar, G guarda v3 y la sube: v3
+//     llega al central DESPUÉS que v1, es la escritura más nueva.
+//  3. Con el push de v1 todavía sin marcar ('claimed'), la bajada de M trae v3: choque.
+//  4. Unos ticks más de cada lado.
 //
-// Sabotaje: que el 200 sobre la fila devuelta a la cola no suelte el lease.
-// arnes: archivo="internal/memory/outbox.go"
-// arnes: de="next_attempt_at = CASE WHEN status = 'pending' AND ? = `+hashActual+` THEN `+ahoraMs+` ELSE next_attempt_at END,"
-// arnes: a="next_attempt_at = CASE WHEN 0 AND ? = `+hashActual+` THEN `+ahoraMs+` ELSE next_attempt_at END,"
-func TestUnChoqueSobreLaReclamadaVuelveASubirLaLocal(t *testing.T) {
-	const mia, deGio = "la version de esta maquina", "la version que gio guardo despues en el central"
-	daemon := dosEnginesSobreUnaBase(t, 1)[0]
+// Gana la última, que es lo que decidió el dueño —esta ola sólo cuenta rebotes y choques—: el
+// central y G terminan con v3, y el choque queda contado en la bajada de M. M se queda con v1 hasta
+// su próxima edición; es la divergencia conocida que cierra #15, y acá va sólo al log, sin afirmarla.
+//
+// Mira DOS capas, porque cada una sola deja a v3 en el central. La primera es que el choque no toque
+// el outbox: se afirma DURANTE el vuelo, con el reclamo de v1 todavía vigente. La segunda es que la
+// marca cierre la fila con el 200 de v1, aunque haya quedado 'pending' con el mismo contenido
+// (TestUnaEntregaTardiaCierraLaMismaVersion, internal/memory). Con las dos al revés —la fila devuelta
+// a la cola y una marca que sólo cierra una 'claimed'— v1 volvía a subir, pisaba a v3 en el central, G
+// bajaba v1, y v3 se perdía en las tres máquinas. Por eso el sabotaje de abajo, que devuelve la fila a
+// la cola y nada más, se ve en la afirmación del medio y no en la del final.
+//
+// Sabotaje: que el choque sobre una reclamada la devuelva a la cola para volver a subir la local.
+// arnes: archivo="internal/memory/inboundsync.go"
+// arnes: de="\t\t\treturn Ingesta{Rebote: true}, nil\n\t\t}\n"
+// arnes: a="\t\t\treturn Ingesta{Rebote: true}, nil\n\t\t}\n\t\tif estado == outboxClaimed {\n\t\t\tif _, err := tx.Exec(`UPDATE outbox SET status = \x27pending\x27, updated_at = datetime(\x27now\x27) WHERE obs_id = ? AND status = \x27claimed\x27`, o.ID); err != nil {\n\t\t\t\treturn Ingesta{}, err\n\t\t\t}\n\t\t\tif err := tx.Commit(); err != nil {\n\t\t\t\treturn Ingesta{}, err\n\t\t\t}\n\t\t}\n"
+func TestUnChoqueTardioNoPisaLaVersionMasNueva(t *testing.T) {
+	const id = "nota-compartida"
+	const v0 = "v0: la nota como estaba en todos lados"
+	const v1 = "v1: la edicion de M, que llega primero al central"
+	const v3 = "v3: la edicion de G, que llega al central DESPUES que v1"
+
 	central := newCentralConMemoria()
 	srv := httptest.NewServer(central)
 	defer srv.Close()
-	s := drainerContra(t, daemon, srv.URL, config.SyncConfig{BatchSize: 50, LeaseSeconds: 60, BackoffBaseSeconds: 5, BackoffMaxSeconds: 300})
 	ctx := context.Background()
-	guardarShared(t, daemon, "choque-1", mia)
+	cfg := config.SyncConfig{BatchSize: 50, LeaseSeconds: 60, BackoffBaseSeconds: 5, BackoffMaxSeconds: 300}
+	eM := dosEnginesSobreUnaBase(t, 1)[0]
+	eG := dosEnginesSobreUnaBase(t, 1)[0]
+	capM := &capturarClaims{StorageBackend: eM}
+	m := drainerContra(t, capM, srv.URL, cfg)
+	g := drainerContra(t, eG, srv.URL, cfg)
 
+	// (1) v0 en todos lados.
+	guardarShared(t, eM, id, v0)
+	m.drainOutboxOnce(ctx)
+	g.drainInboundOnce(ctx)
+	m.drainInboundOnce(ctx)
+	if got := contenidoEn(t, eG, id); got != v0 {
+		t.Fatalf("precondición: G tenía que bajar v0, tiene %q", got)
+	}
+
+	// (2)-(3)
+	guardarShared(t, eM, id, v1)
 	var disparado atomic.Bool
+	var vigente, reclamado bool
+	var errVigente error
 	central.mu.Lock()
 	central.mientrasViaja = func(content string) {
-		if content != mia || !disparado.CompareAndSwap(false, true) {
+		if content != v1 || !disparado.CompareAndSwap(false, true) {
 			return
 		}
-		func() {
-			central.mu.Lock()
-			central.seq++
-			nueva := central.notas["choque-1"]
-			nueva.RowID, nueva.Content, nueva.Author = central.seq, deGio, "gio"
-			central.notas["choque-1"] = nueva
-			central.mu.Unlock()
-			s.drainInboundOnce(ctx) // baja la de gio con el push de la mía en vuelo
-		}()
+		guardarShared(t, eG, id, v3)
+		g.drainOutboxOnce(ctx)  // v3 llega al central después que v1
+		m.drainInboundOnce(ctx) // M baja v3 con v1 todavía reclamada: choque
+		var it memory.OutboxItem
+		if it, reclamado = capM.reclamoDe(id, v1); reclamado {
+			vigente, errVigente = eM.ReclamoVigente(it.ObsID, it.Hash, it.Reclamo)
+		}
 	}
 	central.mu.Unlock()
+	m.drainOutboxOnce(ctx)
+	central.mu.Lock()
+	central.mientrasViaja = nil
+	central.mu.Unlock()
+	if !disparado.Load() || !reclamado {
+		t.Fatal("el push de v1 no pasó por el central: la prueba no reprodujo nada")
+	}
+	if errVigente != nil || !vigente {
+		t.Errorf("EL CHOQUE TOCÓ EL OUTBOX: con v1 en vuelo, el choque le sacó la fila a su drain (vigente=%v, err %v); tenía que contarse y nada más", vigente, errVigente)
+	}
 
-	s.drainOutboxOnce(ctx) // sube la mía; en vuelo, choque con la de gio
-	s.drainOutboxOnce(ctx) // la mía vuelve a subir
+	// (4) Unos ticks más de cada lado, hasta que no quede nada por mover.
+	for i := 0; i < 3; i++ {
+		m.drainOutboxOnce(ctx)
+		g.drainOutboxOnce(ctx)
+		m.drainInboundOnce(ctx)
+		g.drainInboundOnce(ctx)
+	}
 
 	central.mu.Lock()
-	enElCentral := central.notas["choque-1"].Content
+	enCentral := central.notas[id].Content
 	central.mu.Unlock()
-	obs, err := daemon.GetObservations([]string{"choque-1"})
+	enM, enG := contenidoEn(t, eM, id), contenidoEn(t, eG, id)
+	if enCentral != v3 || enG != v3 {
+		t.Errorf("GANÓ LA PRIMERA: v3 llegó al central después que v1 y quedó pisada: central=%q, G=%q", enCentral, enG)
+	}
+	r, err := eM.ResumenDelSync(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.BajadaHoy.Choques < 1 {
+		t.Errorf("la bajada de M no contó el choque (choques=%d)", r.BajadaHoy.Choques)
+	}
+	if pending, sent, dead, err := eM.OutboxStats(); err != nil || pending != 0 || sent != 1 || dead != 0 {
+		t.Errorf("outbox de M pending=%d sent=%d dead=%d (err %v); esperaba 0/1/0", pending, sent, dead, err)
+	}
+	// M se queda con v1 hasta su próxima edición: la divergencia conocida, que cierra #15.
+	t.Logf("saves en orden: %q · central=%q · G=%q · M=%q (#15)", guardadosDe(central), enCentral, enG, enM)
+}
+
+// contenidoEn lee el contenido que la base de e tiene para id.
+func contenidoEn(t *testing.T, e *memory.DbEngine, id string) string {
+	t.Helper()
+	obs, err := e.GetObservations([]string{id})
 	if err != nil || len(obs) != 1 {
-		t.Fatalf("leer la nota local: %v (%d filas)", err, len(obs))
+		t.Fatalf("leer %s: %v (%d filas)", id, err, len(obs))
 	}
-	if enElCentral != obs[0].Content {
-		t.Errorf("DIVERGENCIA: el central quedó con %q y esta máquina con %q", enElCentral, obs[0].Content)
-	}
-	if obs[0].Content != mia {
-		t.Errorf("la conservación tenía que dejar acá la local, quedó %q", obs[0].Content)
-	}
-	if pending, sent, dead, err := daemon.OutboxStats(); err != nil || pending != 0 || sent != 1 || dead != 0 {
-		t.Errorf("outbox pending=%d sent=%d dead=%d (err %v); esperaba 0/1/0", pending, sent, dead, err)
-	}
-	t.Logf("saves en orden: %q · central=%q · local=%q", guardadosDe(central), enElCentral, obs[0].Content)
+	return obs[0].Content
 }
 
 // contarViajes cuenta los viajes de subida que el drain registra.

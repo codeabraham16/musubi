@@ -98,25 +98,6 @@ func enqueueOutboxTx(tx *sql.Tx, obsID string) error {
 	return nil
 }
 
-// volverASubirTrasUnChoque devuelve a 'pending' una fila RECLAMADA sobre la que la bajada conservó la
-// versión local frente a una ajena (Ingesta.Choque). Corre dentro de la transacción de IngestShared.
-//
-// El caso: el push de v1 está en vuelo —o el central ya lo confirmó y el drain todavía no marcó— y
-// baja v3, que otra máquina guardó en el central después. La conservación deja v1 acá, el cursor pasa
-// v3, y si la marca cerrara la fila 'sent' quedaría v1 acá y v3 allá para siempre. Con la fila en
-// 'pending', la marca no la cierra (ver MarkOutboxSent) y v1 vuelve a subir: gana la última.
-//
-// No toca next_attempt_at: la fila conserva el lease del push en vuelo, así que ningún otro drainer
-// la sube mientras tanto. Lo suelta la marca de ese push al volver; si el drainer murió, lo suelta el
-// vencimiento del lease, como a cualquier reclamada.
-func volverASubirTrasUnChoque(tx *sql.Tx, obsID string) error {
-	if _, err := tx.Exec(`UPDATE outbox SET status = 'pending', updated_at = datetime('now')
-		WHERE obs_id = ? AND status = 'claimed'`, obsID); err != nil {
-		return fmt.Errorf("error al devolver a la cola la reclamada %s tras un choque: %w", obsID, err)
-	}
-	return nil
-}
-
 // BackfillOutbox siembra idempotentemente una fila pending por cada observación 'shared'
 // que todavía no tiene fila de outbox. Es la red de seguridad para las 'shared' creadas en
 // F1 antes de que existiera el outbox (R4), y para las promovidas mientras el sync estaba
@@ -346,18 +327,11 @@ const hashActual = `(SELECT COALESCE(o.content_hash, '') FROM observations o WHE
 // otra máquina comparando contra sent_hash; si la entrega en vuelo no se anotara, el rebote más
 // común —el de la versión que viajaba mientras se editaba— se contaría como choque.
 //
-// Y SÓLO CIERRA UNA FILA QUE SIGUE 'claimed'. Mientras el push viajaba, dos cosas la pueden haber
-// devuelto a 'pending' para decir «esto tiene que volver a salir»: una edición local (que además
-// cambia el hash, y ya no cerraba) y un CHOQUE conservado sobre la reclamada (ver
-// volverASubirTrasUnChoque), que NO cambia nada que la marca pudiera comparar: el contenido de acá
-// sigue siendo el que salió. Cerrarla ahí dejaba acá la versión local y en el central la ajena que
-// llegó después, sin push ni pull que lo arreglara. Por eso la señal es el ESTADO y no un hash: la
-// marca respeta un 'pending' que no puso ella.
-//
-// Una fila que queda 'pending' con el mismo contenido que salió es ese choque, que conservó el lease
-// del push para que ningún otro drainer la subiera mientras viajaba. Ya volvió el 200: se suelta el
-// lease (next_attempt_at = ahora) y la versión local vuelve a subir en el drain siguiente, que es lo
-// que la deja última en el central.
+// Cierra también una fila 'pending' con el MISMO contenido que salió, y es a propósito: esa versión
+// ya está en el central. Se llega ahí sin error de nadie: al drainer se le venció el lease con el
+// push en vuelo, otro la reclamó y su intento falló (MarkOutboxRetry la dejó 'pending' con backoff),
+// y recién después volvió este 200. Dejarla abierta la subía otra vez igual: un save de más en el
+// central, un embedding de más y un eco para todas las máquinas.
 func (e *DbEngine) MarkOutboxSent(obsID, hash string) error {
 	// Fencing por estado (auditoría #13c): una marca sólo aplica a una fila NO terminal (pending/claimed),
 	// nunca a una 'sent'/'dead'. Sin esto, con dos drainers solapados por vencimiento de lease, un ciclo
@@ -365,13 +339,12 @@ func (e *DbEngine) MarkOutboxSent(obsID, hash string) error {
 	// a 'pending' = phantom pending). Excluir los estados terminales corta esa resurrección.
 	if _, err := e.db.Exec(`
 		UPDATE outbox SET
-			status = CASE WHEN status = 'claimed' AND ? = `+hashActual+` THEN 'sent' ELSE status END,
-			next_attempt_at = CASE WHEN status = 'pending' AND ? = `+hashActual+` THEN `+ahoraMs+` ELSE next_attempt_at END,
+			status = CASE WHEN ? = `+hashActual+` THEN 'sent' ELSE status END,
 			enqueued_hash = CASE WHEN ? = `+hashActual+` THEN ? ELSE enqueued_hash END,
 			last_error = CASE WHEN ? = `+hashActual+` THEN NULL ELSE last_error END,
 			updated_at = datetime('now'),
 			sent_hash = ?, sent_at = datetime('now')
-		WHERE obs_id = ? AND status IN ('pending','claimed')`, hash, hash, hash, hash, hash, hash, obsID); err != nil {
+		WHERE obs_id = ? AND status IN ('pending','claimed')`, hash, hash, hash, hash, hash, obsID); err != nil {
 		return fmt.Errorf("error al marcar outbox como enviado: %w", err)
 	}
 	return nil

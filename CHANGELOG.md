@@ -580,11 +580,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   (`HayOutboxPorSubir`: una lectura sobre `idx_outbox_claim`, sin red y sin el candado de escritura)
   y, si hay, drena.
 
-  Y un choque de la bajada sobre una fila que se está subiendo ya no la deja cerrada con cada lado
-  con su versión: la conservación la devuelve a 'pending', `MarkOutboxSent` sólo cierra una
-  'claimed' con el mismo contenido, y sobre la 'pending' suelta el lease para que la local vuelva a
-  subir en el drain siguiente: gana la última. La señal es el ESTADO de la fila y no
-  `enqueued_hash`, porque las marcas ya comparan contra `observations.content_hash`.
+  Un choque de la bajada sobre una fila que se está subiendo se cuenta y no toca el outbox: el
+  central se queda con la versión más nueva, y la máquina que tenía la suya en vuelo se queda con la
+  suya hasta su próxima edición. Es una divergencia conocida que esta ola sólo cuenta; cerrarla es
+  #15.
 
   Medido contra un central de juguete que embebe 35 ms por nota, de a una. Envíos por nota, en
   escala 1/60 de producción (lease 1 s, intervalo 500 ms), dos corridas: con dos daemons 1,05 y
