@@ -442,6 +442,8 @@ func (s *McpServer) toolPromote(ctx context.Context, raw json.RawMessage) (inter
 // Recibe el ctx porque TODO lo que cuenta sobre observaciones —el outbox, lo que no viaja, las
 // enviadas— va acotado al proyecto de la credencial: el central también sirve esta tool.
 func (s *McpServer) toolSyncStatus(ctx context.Context, _ json.RawMessage) (interface{}, *RpcError) {
+	// La hora va ANTES de leer sync_viajes, y la última bajada se lee DESPUÉS: ver edadDeLaBajada.
+	ahora := time.Now()
 	sctx := s.scopedCtx(ctx)
 	h, err := s.engine.OutboxHealthCtx(sctx)
 	if err != nil {
@@ -468,7 +470,7 @@ func (s *McpServer) toolSyncStatus(ctx context.Context, _ json.RawMessage) (inte
 	if h.Espejo > 0 {
 		summary += fmt.Sprintf("; %d bajadas del central y NO re-subidas (espejo)", h.Espejo)
 	}
-	summary += lineasDelViaje(r, s.memory.TeamMode)
+	summary += lineasDelViaje(r, s.memory.TeamMode, s.edadDeLaBajada(r, ahora))
 	if h.LastError != "" {
 		summary += "\nÚltimo error: " + h.LastError
 	}

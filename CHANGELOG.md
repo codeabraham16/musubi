@@ -44,6 +44,47 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   nuevo contra el central de hoy recibe en claro y cuenta cable = crudos. Un cliente viejo contra el
   central nuevo recibe comprimido y lo descomprime su transporte; si su binario es de entre #693 y
   este cambio, anota los crudos de la bajada pero no su cable hasta que se actualice.
+- **`musubi_sync_status` dice cuándo bajó por última vez, si trajo algo y cuándo es la próxima.**
+  La línea «bajada» contaba el volumen (`sync_viajes`) pero no la edad, y el frente que va a
+  espaciar la bajada necesita verla desde la máquina, sin entrar al central. Ahora la misma línea
+  termina en `· última hace 12 s (vacía), próxima en ~18 s`, o `(2 filas)`, o `· última: nunca`.
+
+  Lo anota sólo el dueño del candado, desde el defer que ya existía en `drainInboundOnce` y sólo si
+  el tick salió a la red, en la meta `sync:inbound_ultima` =
+  `unix|filas|proxima_unix|con_filas|paginas_del_dia`; la próxima es un tick base, porque la bajada
+  todavía no espacia. La forma crece sólo agregando campos al final: un binario lee los que conoce e
+  ignora los de más, así que el que va a espaciar la bajada puede sumar los suyos sin que un binario
+  anterior la lea `ilegible`. Y se lee sólo de ahí, nunca de la memoria del proceso que contesta:
+  sobre una base corren varios daemons (seis en davantis-1) y baja uno.
+  La meta va en la MISMA transacción que suma el viaje (`RegistrarBajada`), así que no agrega
+  commits. Medido contando los commits en el WAL de una base de prueba, con los ticks a más de un
+  segundo (SQLite no escribe la página si el valor no cambia, y en producción cambia en cada tick):
+  un tick que sale a la red sigue haciendo 2 commits si baja vacío y 5 si baja dos filas, igual que
+  antes, con una página más (4 KiB) en el WAL. Con la meta en su propia transacción eran 3 y 6: un
+  candado de escritura y un fsync más por tick, sobre una base que comparten los daemons.
+
+  La línea no contradice al volumen, que sigue saliendo de `sync_viajes`. Una bajada vacía es una
+  sin páginas con filas, no una sin filas ingeridas: una página que trajo filas y no pudo ingerir
+  ninguna —una fila que la base rechaza, que vuelve primera en cada tick, o un `SQLITE_BUSY`— sale
+  `(1 página con filas y 0 ingeridas)` y no `(vacía)`, que al lado de `0 vacías` se contradecía y,
+  con la edad fresca, tapaba la bajada atascada. Con viajes de bajada y sin meta, o con más páginas
+  que las que la meta anotó, dice que bajó un binario anterior a esta versión, que registra el viaje
+  y no la edad, en vez de «nunca» al lado de las páginas de hoy o de «última hace 3 d» con bajadas
+  de ayer. Compara contra el último día con bajadas, sin ventana, y el mismo día contra las páginas
+  que ese día tenía `sync_viajes` al anotar, leídas en la misma transacción: no es sólo la
+  transición, porque en davantis-1 se instalan binarios sin cerrar las sesiones y sobre la misma
+  base bajan a la vez daemons que anotan y otros que no. En el central, que también sirve la tool y
+  no baja, dice «este proceso no baja (no tiene cliente de sync)» y no «nunca», que se leería «tu
+  máquina nunca bajó»; lo mismo en un proyecto sin team_mode. Una meta cortada o imposible (un
+  instante en cero, una cuenta negativa) sale `ilegible`, entre comillas y escapada, sin partir la
+  línea. Si la próxima ya pasó hace más de un tick, dice `y no se anotó otra: la próxima se esperaba
+  30 s después`, y no «hace…»: con las dos duraciones casi iguales, «última hace 3 d, la próxima se
+  esperaba hace 2 d» se leía como un día entre las dos. Dentro del tick dice `próxima: ahora`: la
+  próxima sale del fin del Pull anterior, así que vence un rato con el dueño sano cada vez que un
+  Pull tarda más que el anterior o el candado cambia de dueño, y eso no es una alarma. Las
+  duraciones van redondeadas a la unidad más cercana (dos días y 23 horas son `3 d`, no `2 d`). No
+  cambia el esquema ni la descripción de ninguna tool y no trae migración: viaja en la V1 con el
+  resto de la ola.
 - **Cada resumen de la conversación conserva lo que el agente no puede perder.** Antes de que Claude
   Code compacte, el hook `PreCompact` le pasa al resumen las instrucciones de Musubi: conservar
   textuales las reglas, decisiones y pedidos de la persona (marcando los que no se cumplieron), el
@@ -529,6 +570,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **Las sesiones de shell vencidas se cierran aunque el barrido de la flota esté apagado.** Con
+  `fleet.probe_minutes` negativo el cerebro dejaba de cerrarlas. En una máquina sin agente, el `ssh`
+  de una sesión vencida seguía vivo, y la bitácora la mostraba activa. Ahora las cierra un vigía
+  propio, una vez por minuto, que no depende del sondeo. Además, el doc de `probe_minutes` dice qué
+  apaga de verdad un valor negativo: el barrido entero, con las políticas y la poda.
 - **«sigue» y los avisos del sistema no son una consulta: el hook del turno ya no busca memoria con
   ellos.** El recall por turno usaba el prompt como consulta fuera lo que fuera. Con «sigue» traía
   cualquier nota que dijera «sigue», y con un `<task-notification>` buscaba con el texto del aviso
