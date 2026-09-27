@@ -589,12 +589,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   envío doble, que ataca `fix/sync-drain-sin-doble-push`. Las ediciones simultáneas desde dos
   máquinas siguen siendo «gana la última»: se cuentan, no se guardan las dos.
 
-  *Doce guardas nuevas, con su sabotaje corrido y rojo. `TestEdicionEnVueloNoQuedaEnviada`,
+  *Catorce guardas nuevas, con su sabotaje corrido y rojo. `TestEdicionEnVueloNoQuedaEnviada`,
   `TestUnReintentoViejoNoFrenaLaEdicion`, `TestUnRechazoViejoNoMataLaEdicion`,
   `TestUnExitoViejoNoBorraElErrorNuevo` (una marca de la versión vieja no toca la edición que llegó
   en vuelo, ni su último error), `TestElReboteDeLoQueViajabaNoEsChoque`,
   `TestPullNoPisaUnaEdicionPendiente` (ni el contenido, ni los metadatos, ni el vector),
-  `TestUnChoqueSeCuentaAparte`, `TestLaMismaVersionNoEsChoque` y
+  `TestUnaReclamadaNoLaPisaElPull` y `TestUnaHuerfanaRecibeLoQueBaja` (las otras dos mitades de la
+  conservación: una fila 'claimed' se conserva, una huérfana no), `TestUnChoqueSeCuentaAparte`,
+  `TestLaMismaVersionNoEsChoque` y
   `TestUnaFilaConDerivaSeCierraConLaEntrega` (las tres marcas aplican sobre una fila con deriva, y
   la entrega re-sella lo encolado) en `internal/memory`; `TestUnaEdicionEnVueloLlegaAlCentral` (el
   caso entero, con dos procesos sobre una base), `TestUnaHuerfanaReentregadaSaleUnaSolaVez` (la

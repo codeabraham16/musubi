@@ -190,10 +190,12 @@ func TestElReboteDeLoQueViajabaNoEsChoque(t *testing.T) {
 // contenido, los metadatos y el vector siguen siendo los de v2, el claim trae v2 entera, y se cuenta
 // como rebote.
 //
-// Sabotaje: pisar como antes aunque haya una edición local sin salir.
+// Sabotaje: que la conservación deje de mirar las filas 'pending' (el pull pisa como antes la
+// edición que espera salir). Las otras dos mitades de la condición tienen su propia guarda:
+// TestUnaReclamadaNoLaPisaElPull y TestUnaHuerfanaRecibeLoQueBaja.
 // arnes: archivo="internal/memory/inboundsync.go"
-// arnes: de="enVuelo := existia && (estado == outboxPending || estado == outboxClaimed)"
-// arnes: a="enVuelo := existia && (estado == outboxPending || estado == outboxClaimed) && false"
+// arnes: de="(estado == outboxPending ||"
+// arnes: a="(false ||"
 //
 // Sabotaje: la variante que conserva el contenido pero toma tema, importancia y tipo de lo que bajó.
 // arnes: archivo="internal/memory/inboundsync.go"
@@ -334,13 +336,10 @@ func TestLaMismaVersionNoEsChoque(t *testing.T) {
 	}
 }
 
-// huerfanaReentregada deja una fila con DERIVA —el hash encolado ya no es el de la observación— por
-// el camino de producción que encontró la revisión: una 'shared' que nunca salió, archivada hace más
-// que la ventana y purgada por la retención con su fila de outbox todavía 'pending' (el outbox no
-// tiene FK), y el central que re-entrega esa id con otro contenido. IngestShared la inserta y el
-// sello respeta la 'pending': queda encolado el hash de la versión purgada y en la observación el de
-// la que bajó. Devuelve lo que bajó.
-func huerfanaReentregada(t *testing.T, e *DbEngine, id string) SharedObs {
+// dejarHuerfana guarda id como una 'shared' que nunca salió, la archiva hace más que la ventana y deja
+// que la retención la purgue con su fila de outbox todavía 'pending' (el outbox no tiene FK).
+// Devuelve la versión que el central re-entrega de esa id, sin ingerirla.
+func dejarHuerfana(t *testing.T, e *DbEngine, id string) SharedObs {
 	t.Helper()
 	if err := e.SaveObservationTyped(id, "t/x", "la version de aca, que nunca salio", 1, "semantic", ScopeShared, nil); err != nil {
 		t.Fatal(err)
@@ -351,8 +350,18 @@ func huerfanaReentregada(t *testing.T, e *DbEngine, id string) SharedObs {
 	if n, err := e.PurgeArchived(30); err != nil || n != 1 {
 		t.Fatalf("la retención tenía que purgar %s: n=%d err=%v", id, n, err)
 	}
-	bajada := SharedObs{ID: id, TopicKey: "t/x", Content: "la version que el central re-entrega de " + id,
+	return SharedObs{ID: id, TopicKey: "t/x", Content: "la version que el central re-entrega de " + id,
 		Importance: 1, MemType: "semantic", Author: "gio", ProjectID: "acme"}
+}
+
+// huerfanaReentregada deja una fila con DERIVA —el hash encolado ya no es el de la observación— por
+// el camino de producción que encontró la revisión: una huérfana (dejarHuerfana) que el central
+// re-entrega con otro contenido. IngestShared la inserta y el sello respeta la 'pending': queda
+// encolado el hash de la versión purgada y en la observación el de la que bajó. Devuelve lo que
+// bajó.
+func huerfanaReentregada(t *testing.T, e *DbEngine, id string) SharedObs {
+	t.Helper()
+	bajada := dejarHuerfana(t, e, id)
 	if _, err := e.IngestShared(bajada); err != nil {
 		t.Fatal(err)
 	}
@@ -483,5 +492,76 @@ func TestUnExitoViejoNoBorraElErrorNuevo(t *testing.T) {
 	}
 	if h.LastError != "timeout de v2" {
 		t.Errorf("el 200 tardío de v1 borró el error de v2, que sigue sin salir: last_error=%q", h.LastError)
+	}
+}
+
+// TestUnaReclamadaNoLaPisaElPull: una edición local que un drain ya reclamó ('claimed') tampoco la
+// pisa el pull. Es un drainer que se llevó v2 y todavía no la empujó, o que murió antes de hacerlo y
+// la fila espera a que venza su lease: ni el rebote de v1 ni una versión ajena reemplazan a v2, y lo
+// que sale es v2.
+//
+// Sabotaje: que la conservación deje de mirar las filas 'claimed'.
+// arnes: archivo="internal/memory/inboundsync.go"
+// arnes: de="|| estado == outboxClaimed)"
+// arnes: a="|| false)"
+func TestUnaReclamadaNoLaPisaElPull(t *testing.T) {
+	e := newTestEngine(t)
+	v1 := reclamada(t, e, "reclamada-1", versionQueViaja)
+	if err := e.MarkOutboxSent("reclamada-1", v1.Hash); err != nil {
+		t.Fatal(err)
+	}
+	editar(t, e, "reclamada-1", versionEditada)
+	v2 := reclamarUna(t, e, "reclamada-1") // un drain se lleva v2
+	if st, _, _ := outboxRow(t, e, "reclamada-1"); st != outboxClaimed {
+		t.Fatalf("precondición: la fila tenía que quedar 'claimed', quedó %q", st)
+	}
+
+	rebote := SharedObs{ID: "reclamada-1", TopicKey: "t/x", Content: versionQueViaja,
+		Importance: 1, MemType: "semantic", Author: "davantis-mando-admin", ProjectID: "acme"}
+	if ing, err := e.IngestShared(rebote); err != nil || ing != (Ingesta{Rebote: true}) {
+		t.Errorf("el rebote de v1 sobre la reclamada dio %+v (err %v); esperaba sólo Rebote", ing, err)
+	}
+	ajena := rebote
+	ajena.Content, ajena.Author = "la version que escribio gio", "gio"
+	if ing, err := e.IngestShared(ajena); err != nil || ing != (Ingesta{Choque: true}) {
+		t.Errorf("una versión ajena sobre la reclamada dio %+v (err %v); esperaba sólo Choque", ing, err)
+	}
+	if c := contenidoDe(t, e, "reclamada-1"); c != versionEditada {
+		t.Fatalf("EDICIÓN PERDIDA: el pull pisó la versión que el drain se llevó, quedó %q", c)
+	}
+	if err := e.MarkOutboxSent("reclamada-1", v2.Hash); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := outboxRow(t, e, "reclamada-1"); st != outboxSent {
+		t.Errorf("la entrega de v2 tenía que dejarla 'sent', quedó %q", st)
+	}
+}
+
+// TestUnaHuerfanaRecibeLoQueBaja: una fila de outbox 'pending' cuya observación ya no existe —la
+// purgó la retención; el outbox no tiene FK— no es una edición local, porque acá no hay nada que
+// conservar. Lo que baja se inserta como siempre y no se cuenta rebote ni choque. Sin mirar si la
+// observación existe, «acá no hay nada» era otro contenido que el que baja: se contaba un choque y la
+// nota del central no entraba nunca.
+//
+// La fila de outbox sigue 'pending' con el hash de la versión purgada, y sale UNA vez con lo que
+// bajó (la cierra la marca contra hashActual; ver TestUnaHuerfanaReentregadaSaleUnaSolaVez en
+// internal/mcp), como en main. Sellarla 'espejo' acá ahorraría ese push, y queda para otro PR.
+//
+// Sabotaje: conservar aunque la observación no exista.
+// arnes: archivo="internal/memory/inboundsync.go"
+// arnes: de="enVuelo := existia && ("
+// arnes: a="enVuelo := ("
+func TestUnaHuerfanaRecibeLoQueBaja(t *testing.T) {
+	e := newTestEngine(t)
+	bajada := dejarHuerfana(t, e, "huerfana-1")
+	ing, err := e.IngestShared(bajada)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ing != (Ingesta{Insertada: true}) {
+		t.Errorf("la re-entrega de una huérfana dio %+v; esperaba sólo Insertada (acá no había nada que conservar)", ing)
+	}
+	if c := contenidoDe(t, e, "huerfana-1"); c != bajada.Content {
+		t.Errorf("la nota del central no entró: quedó %q", c)
 	}
 }
