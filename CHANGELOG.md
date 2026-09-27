@@ -43,8 +43,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
   Lo anota sólo el dueño del candado, desde el defer que ya existía en `drainInboundOnce` y sólo si
   el tick salió a la red, en la meta `sync:inbound_ultima` =
-  `unix|filas|proxima_unix|con_filas|paginas_del_dia`; la próxima es un tick base, porque la bajada
-  todavía no espacia. La forma crece sólo agregando campos al final: un binario lee los que conoce e
+  `unix|filas|proxima_unix|con_filas|paginas_del_dia`; la próxima es la real, la del ritmo que
+  espacia la bajada. La forma crece sólo agregando campos al final: un binario lee los que conoce e
   ignora los de más, así que el que va a espaciar la bajada puede sumar los suyos sin que un binario
   anterior la lea `ilegible`. Y se lee sólo de ahí, nunca de la memoria del proceso que contesta:
   sobre una base corren varios daemons (seis en davantis-1) y baja uno.
