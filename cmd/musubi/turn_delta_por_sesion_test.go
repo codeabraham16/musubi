@@ -68,7 +68,7 @@ func TestElArranqueDeOtraSesionNoBorraElDelta(t *testing.T) {
 		Count: 1,
 		Items: []memory.RecallItem{{ID: "x1", TopicKey: "t", Gist: "memoria", ContentHash: "h1"}},
 	}}
-	in := `{"prompt":"q","session_id":"s1"}`
+	in := `{"prompt":"qué sabemos","session_id":"s1"}`
 	turno := func() string {
 		return turnOutput(turnos, deltaLoop(), pipeOff(), maOff(), config.MemoryConfig{}, strings.NewReader(in))
 	}

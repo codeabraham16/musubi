@@ -879,25 +879,47 @@ var ftsStopwords = map[string]bool{
 	"by": true, "as": true, "it": true,
 }
 
-// rankedTerms extrae los términos "con señal" de q: descarta stopwords (es/en) y tokens de
-// una sola runa (p. ej. la 'N'/'1' de 'N+1'), preservando entidades cortas como 'Go'/'DB'/
-// 'API' (>= 2 runas y no stopwords). Si tras filtrar no queda nada (consulta toda de ruido),
-// devuelve los términos crudos para no perder recall. Proxy de IDF, determinista.
-func rankedTerms(q string) []string {
-	fields := strings.FieldsFunc(q, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
-	terms := make([]string, 0, len(fields))
-	for _, f := range fields {
+// TerminosDeConsulta es LA definición de «qué es un término» de una consulta: los tramos de letras
+// y dígitos de q, de 2 runas o más, que no son una stopword (es/en). Preserva entidades cortas como
+// 'Go'/'DB'/'API' y descarta la 'N'/'1' de 'N+1'. Los devuelve tal como vienen (el FTS no distingue
+// mayúsculas). Una consulta toda de ruido da nil.
+//
+// ES UNA SOLA A PROPÓSITO. La leen el recall (rankedTerms), la compuerta del hook del turno
+// (transcripts.EsPedidoDeContinuacion: continuación es «ningún término fuera de la lista») y el
+// corrector de tipeo. Con dos definiciones, un prompt podía pasar la compuerta por una palabra que
+// el recall descarta, y entonces el recall buscaba sin términos (ver rankedTerms).
+func TerminosDeConsulta(q string) []string {
+	var terms []string
+	for _, f := range camposDeConsulta(q) {
 		if len([]rune(f)) <= 1 || ftsStopwords[strings.ToLower(f)] {
 			continue
 		}
 		terms = append(terms, f)
 	}
-	if len(terms) == 0 {
-		return fields // fallback: no perder recall si todo era ruido
-	}
 	return terms
+}
+
+// camposDeConsulta parte q en tramos de letras y dígitos: todo lo demás corta.
+func camposDeConsulta(q string) []string {
+	return strings.FieldsFunc(q, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+}
+
+// rankedTerms extrae los términos "con señal" de q (TerminosDeConsulta). Si tras filtrar no queda
+// nada (consulta toda de ruido), devuelve los tramos crudos para no perder recall. Proxy de IDF,
+// determinista.
+//
+// ESE FALLBACK ES DEL RECALL Y NO DE LA DEFINICIÓN DE TÉRMINO, y conviene saber qué produce: con
+// «de la» el MATCH es "de" OR "la" (con stemming, prefijos: medio corpus), y una consulta sin un
+// solo tramo («?», «👍») ni siquiera llega al FTS: recallCandidates cae a las notas más recientes.
+// Las dos cosas son memoria al azar. Por eso la compuerta del hook del turno no le pasa al recall
+// un prompt sin términos: lo trata como un pedido de continuación.
+func rankedTerms(q string) []string {
+	if terms := TerminosDeConsulta(q); len(terms) > 0 {
+		return terms
+	}
+	return camposDeConsulta(q) // fallback: no perder recall si todo era ruido
 }
 
 // buildFTSQueryRanked arma un MATCH de FTS5 con los términos con señal (sin stopwords ni
