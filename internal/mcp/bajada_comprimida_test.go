@@ -112,9 +112,10 @@ func gunzip(t *testing.T, b []byte) []byte {
 }
 
 // TestRespuestaGzipSoloSiSeAcepta: la página de la bajada sale comprimida SÓLO si el pedido nombra
-// gzip, y descomprimida es la misma página, byte a byte. Sin la cabecera, con «gzip;q=0», con un q
-// que no es un qvalue («gzip;q=NaN») o con un «*» a secas, sale en claro. Y una respuesta chica —la página vacía de un tick sin novedades— no se
-// comprime aunque se pida.
+// gzip, y descomprimida es la misma página, byte a byte. Sin la cabecera, con «gzip;q=0» (con o sin
+// espacio antes del q), con un q que no es un qvalue («gzip;q=NaN») o con un «*» a secas, sale en
+// claro. Una respuesta chica —la página vacía de un tick sin novedades— no se comprime aunque se
+// pida. Y toda respuesta declara Vary: Accept-Encoding, también la que salió en claro.
 //
 // Lo que importa de verdad es la mitad negativa: el /mcp del central tiene más clientes que el sync
 // (el canal de las sesiones, el panel, los bots del server), y uno que no pidió gzip y lo recibe no
@@ -144,6 +145,16 @@ func gunzip(t *testing.T, b []byte) []byte {
 // arnes: archivo="internal/mcp/http.go"
 // arnes: de="grande := len(data) > umbralCompresionRespuesta"
 // arnes: a="grande := len(data) >= 0"
+//
+// Sabotaje: declarar Vary sólo a quien nombra gzip (la respuesta en claro se queda sin él).
+// arnes: archivo="internal/mcp/http.go"
+// arnes: de="w.Header().Add(\"Vary\", \"Accept-Encoding\")"
+// arnes: a="if strings.Contains(r.Header.Get(\"Accept-Encoding\"), \"gzip\") {\n\t\tw.Header().Add(\"Vary\", \"Accept-Encoding\")\n\t}"
+//
+// Sabotaje: no recortar el espacio antes del q, y leer «gzip; q=0» como un sí.
+// arnes: archivo="internal/mcp/http.go"
+// arnes: de="if !ok || !strings.EqualFold(strings.TrimSpace(k), \"q\") {"
+// arnes: a="if !ok || !strings.EqualFold(k, \"q\") {"
 func TestRespuestaGzipSoloSiSeAcepta(t *testing.T) {
 	ts, _ := centralConNotas(t)
 	pagina := fmt.Sprintf(pedidoDePull, 0)
@@ -159,6 +170,11 @@ func TestRespuestaGzipSoloSiSeAcepta(t *testing.T) {
 	}
 	if len(claro) <= umbralCompresionRespuesta {
 		t.Fatalf("precondición: la página pesa %d B, no pasa el umbral de %d; la prueba no probaría la compresión", len(claro), umbralCompresionRespuesta)
+	}
+	// Vary va también en claro: la forma de la respuesta DEPENDE de ese header aunque esta vez no se
+	// haya comprimido, y un intermediario que guarde respuestas tiene que saberlo.
+	if !strings.Contains(resp.Header.Get("Vary"), "Accept-Encoding") {
+		t.Errorf("la respuesta en claro no declara Vary: Accept-Encoding (vino %q)", resp.Header.Get("Vary"))
 	}
 
 	// Con la cabecera: comprimida, más chica, y descomprimida es LA MISMA página.
@@ -183,10 +199,10 @@ func TestRespuestaGzipSoloSiSeAcepta(t *testing.T) {
 		t.Errorf("con gzip entre varias codificaciones, Content-Encoding = %q; esperaba gzip", resp.Header.Get("Content-Encoding"))
 	}
 
-	// «gzip;q=0» es un NO explícito, y un «*» a secas no nombra gzip: los dos, en claro. Un q que no es
-	// un qvalue del RFC tampoco dice que sí: strconv.ParseFloat lee «NaN», «+Inf» y los floats
-	// hexadecimales, y `NaN <= 0` da false.
-	for _, acepta := range []string{"gzip;q=0, identity", "*", "gzip;q=NaN", "gzip;q=+Inf", "gzip;q=0x1p-2"} {
+	// «gzip;q=0» es un NO explícito, también con el espacio que el RFC permite antes del q, y un «*» a
+	// secas no nombra gzip: todos en claro. Un q que no es un qvalue del RFC tampoco dice que sí:
+	// strconv.ParseFloat lee «NaN», «+Inf» y los floats hexadecimales, y `NaN <= 0` da false.
+	for _, acepta := range []string{"gzip;q=0, identity", "gzip; q=0", "*", "gzip;q=NaN", "gzip;q=+Inf", "gzip;q=0x1p-2"} {
 		resp, b := postComoViaja(t, ts.URL, pagina, acepta)
 		if ce := resp.Header.Get("Content-Encoding"); ce != "" || !bytes.Equal(b, claro) {
 			t.Errorf("con Accept-Encoding %q la respuesta vino con Content-Encoding %q (%d B; en claro son %d): quien no pidió gzip lo recibió",
@@ -497,4 +513,32 @@ func TestLaBajadaNoDescomprimeSinTope(t *testing.T) {
 		}
 	}
 	t.Logf("la página: %d B en claro, %d B comprimida", len(pagina), comprimida.Len())
+}
+
+// TestLaBajadaRechazaUnaCodificacionQueNoPidio: el Pull pide sólo gzip, así que otra codificación
+// —un proxy que recomprime con brotli, por ejemplo— vuelve como un error transitorio que la NOMBRA,
+// sin ítems, sin avanzar el cursor y sin contar para sync_viajes. Sin ese corte el cuerpo le llega
+// al decoder JSON, que falla igual pero con un error de sintaxis que manda a buscar la causa en otro
+// lado.
+//
+// Sabotaje: pasarle al decoder la codificación que no se pidió.
+// arnes: archivo="internal/mcp/sync_viajes.go"
+// arnes: de="return nil, fmt.Errorf(\"%w: el central contestó con Content-Encoding %q, que no se pidió\", errTransient, enc)"
+// arnes: a="return claro, nil"
+func TestLaBajadaRechazaUnaCodificacionQueNoPidio(t *testing.T) {
+	// Bytes con la forma de un cuerpo brotli: nada que el decoder JSON pueda leer.
+	c := clienteDelSyncContra(t, centralQueContesta(t, "br", []byte{0x1b, 0x03, 0x00, 0xf8, 0xa5, 0x40, 0x42, 0x2a, 0x81}))
+	items, next, _, err := c.Pull(7, 50)
+	if err == nil {
+		t.Fatalf("una página con Content-Encoding br, que no se pidió, pasó: %d ítems", len(items))
+	}
+	if !errors.Is(err, errTransient) || !strings.Contains(err.Error(), `Content-Encoding "br"`) {
+		t.Errorf("el error no nombra la codificación que no se pidió: %v", err)
+	}
+	if items != nil || next != 7 {
+		t.Errorf("devolvió %d ítems y el cursor %d; esperaba nada y el 7 de antes", len(items), next)
+	}
+	if f := c.foto().bajada; f != (memory.Viaje{}) {
+		t.Errorf("una página rechazada contó para sync_viajes: %+v", f)
+	}
 }
