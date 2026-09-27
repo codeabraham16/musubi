@@ -25,8 +25,8 @@ import (
 // ni la verdadera ni «· hoy»: gistAge sólo lee RFC3339 y la base guarda «2006-01-02 15:04:05», así
 // que el sufijo sale vacío en todas las notas (0 de 7.177 viñetas en siete transcripts reales). Eso
 // es un defecto aparte, del formateador, y queda anotado para su propio cambio. Lo que esta prueba
-// sí fija es la edad que la viñeta va a decir cuando gistAge lea el formato de la base: la calcula
-// con el mismo gistAge, sobre la fecha guardada.
+// fija es la fecha GUARDADA, la que gistAge va a leer. La edad que diga la viñeta no la fija
+// todavía ninguna aserción: queda en el log (ver el Logf del final).
 //
 // Sabotaje: la fecha no sale en el JSON del central.
 // arnes: archivo="internal/memory/inboundsync.go"
@@ -88,13 +88,6 @@ func TestLaNotaBajadaConservaSuEdad(t *testing.T) {
 	if obs[0].CreatedAt != origen {
 		t.Errorf("la nota bajada quedó con created_at %q; nació en el central el %q (hace 90 días)", obs[0].CreatedAt, origen)
 	}
-	guardada, err := time.Parse(layout, obs[0].CreatedAt)
-	if err != nil {
-		t.Fatalf("la fecha guardada no tiene el formato de la base: %q", obs[0].CreatedAt)
-	}
-	if edad := gistAge(guardada.Format(time.RFC3339)); edad != " · hace 3m" {
-		t.Errorf("con la fecha guardada, la viñeta diría %q; una nota de hace 90 días dice « · hace 3m»", edad)
-	}
 
 	_, salida := hookAdditionalContext(t, turnoReal(t, local, "s-edad", "¿por qué el kiosko del fichaje F18 queda en blanco?"))
 	var vineta string
@@ -106,5 +99,8 @@ func TestLaNotaBajadaConservaSuEdad(t *testing.T) {
 	if vineta == "" {
 		t.Fatalf("el hook del turno no trajo la nota bajada; la prueba no mide la viñeta:\n%s", salida)
 	}
+	// Cuando se arregle gistAge (que lea el layout de la base), este Logf pasa a ser una aserción
+	// sobre el sufijo « · hace 3m» de la viñeta, entre el gist y el [id:…]. Hoy fijarla fijaría
+	// el defecto: la viñeta sale sin edad.
 	t.Logf("viñeta literal del hook: %s", vineta)
 }
