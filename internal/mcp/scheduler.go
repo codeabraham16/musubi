@@ -605,10 +605,13 @@ func (s *McpServer) vectorizarLoBajado() {
 // shutdown.
 //
 // ANTES DE CADA PUSH se pregunta si la fila sigue siendo de este claim (sigueSiendoMia): si otro
-// drainer la tomó, o se editó y ya no es lo que se tiene en la mano, ese payload no sale. Lo que esto
-// NO cierra: una edición que llega mientras el POST de v1 está en el aire deja la fila 'pending', otro
-// drainer puede subir v2 en paralelo, y el orden en que el central aplica los dos POST ya no es cosa
-// del cliente. Cerrarlo del todo pide un guardado condicional en el central.
+// drainer la tomó, o se editó y ya no es lo que se tiene en la mano, ese payload no sale; y si sigue
+// siendo de este claim, se la suelta para que la versión nueva salga ya. Una edición que llega con el
+// POST de v1 ya en el aire no suelta la fila (enqueueOutboxTx): la suelta la marca de v1 cuando vuelve,
+// y v2 sale detrás. Así el orden en que el central recibe las versiones lo pone el cliente, y otro
+// drainer no sube v2 a la par. Lo que esto NO cierra: un push más largo que su lease. Al vencer, otro
+// drainer la puede reclamar y subir con el primero todavía en el aire; se cierra renovando el lease
+// antes de cada push.
 //
 // El tick deja UN viaje de subida en sync_viajes, con todos sus sublotes sumados.
 //
@@ -652,9 +655,10 @@ func (s *McpServer) drainOutboxOnce(ctx context.Context) {
 
 // sigueSiendoMia pregunta, justo antes del push, si la fila sigue reclamada por el claim que trajo el
 // ítem y con el mismo contenido (ReclamoVigente). Si la respuesta es no, lo que se tiene en la mano
-// es viejo o ajeno: otro drainer la reclamó al vencer el lease, o una edición la devolvió a la cola y
-// la versión nueva sale en el claim siguiente. Si la lectura falla tampoco sale: la fila sigue
-// reclamada y vuelve a salir cuando venza el lease, que es tarde pero no pierde nada.
+// es viejo o ajeno: otro drainer la reclamó al vencer el lease, o una edición la cambió mientras
+// esperaba su turno —la fila sigue reclamada por este claim, y empujarSublote la suelta para que la
+// versión nueva salga en el claim siguiente—. Si la lectura falla tampoco sale, y se intenta soltar
+// igual; si eso tampoco puede, vuelve a salir cuando venza el lease, que es tarde pero no pierde nada.
 func (s *McpServer) sigueSiendoMia(item memory.OutboxItem) bool {
 	vigente, err := s.engine.ReclamoVigente(item.ObsID, item.Hash, item.Reclamo)
 	if err != nil {
@@ -674,6 +678,12 @@ func (s *McpServer) empujarSublote(ctx context.Context, items []memory.OutboxIte
 		default:
 		}
 		if !vigente(item) {
+			// No sale, así que no vuelve ninguna marca que suelte la fila. Si sigue siendo de este
+			// claim —se editó mientras esperaba su turno—, se suelta acá para que la versión nueva
+			// salga ya y no al vencer el lease; si es de otro drainer, el CAS no la toca.
+			if serr := s.engine.SoltarReclamo(item.ObsID, item.Reclamo); serr != nil {
+				logx.Error("drain: no se pudo soltar un reclamo que no salió", "obs_id", item.ObsID, "error", serr)
+			}
 			continue
 		}
 		perr := s.syncClient.Push(item)

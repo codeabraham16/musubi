@@ -173,3 +173,124 @@ func TestUnReclamoTomadoPorOtroNoEsVigente(t *testing.T) {
 		t.Errorf("editada después del claim, la pregunta de B dio %v (err %v); esperaba que no: su payload es viejo", ok, err)
 	}
 }
+
+// TestDosEdicionesEnVueloNoLaVuelvenReclamable: dos ediciones mientras v1 viaja. La fila sigue
+// retenida para el vuelo de v1 también después de la SEGUNDA: ningún claim la toma y el sondeo no la
+// ve, y cuando vuelve el 200 de v1 sale la última. Si la primera edición la dejara 'pending' con el
+// lease puesto —retener por el reloj y no por el estado—, la segunda la encontraba 'pending' y la
+// ponía en hora, y otro daemon subía v3 a la par de v1: el orden en el central volvía a quedar en
+// manos de quién guarda último.
+//
+// Sabotaje: retener por el reloj y no por el estado (la edición la deja 'pending' con el lease puesto).
+// arnes: archivo="internal/memory/outbox.go"
+// arnes: de="status = CASE WHEN outbox.status = \x27claimed\x27 THEN \x27claimed\x27 ELSE \x27pending\x27 END,"
+// arnes: a="status = \x27pending\x27,"
+func TestDosEdicionesEnVueloNoLaVuelvenReclamable(t *testing.T) {
+	const tercera = "la nota editada otra vez con v1 todavia en vuelo"
+	e := newTestEngine(t)
+	v1 := reclamada(t, e, "dos-ediciones", versionQueViaja)
+	editar(t, e, "dos-ediciones", versionEditada)
+	editar(t, e, "dos-ediciones", tercera)
+
+	if hay, err := e.HayOutboxPorSubir(); err != nil || hay {
+		t.Errorf("SUBE A LA PAR: con v1 en vuelo y dos ediciones, el sondeo dio %v (err %v); esperaba que no", hay, err)
+	}
+	items, err := e.ClaimOutboxBatch(50, 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("SUBE A LA PAR: con v1 en vuelo y dos ediciones, otro claim se llevó %q; tenía que esperar la vuelta de v1", items[0].Content)
+	}
+
+	if err := e.MarkOutboxSent("dos-ediciones", v1.Hash); err != nil {
+		t.Fatal(err)
+	}
+	if it := reclamarUna(t, e, "dos-ediciones"); it.Content != tercera {
+		t.Errorf("tras la vuelta de v1 el claim trajo %q; esperaba la última edición", it.Content)
+	}
+}
+
+// TestUnaEdicionNoEsperaElBackoff: lo que retiene una edición es un vuelo VIGENTE, no el estado de la
+// fila ni su turno. v1 falló y espera su backoff; se edita, y v2 sale en el claim siguiente: el
+// backoff era de v1 (R3). Y una reclamada cuyo lease ya venció —el drainer que la llevaba murió— no
+// tiene vuelo que esperar: la edición sale en el claim siguiente, no un lease más tarde.
+//
+// Sabotaje: que la edición respete también el turno de una 'pending' (v2 hereda el backoff de v1).
+// arnes: archivo="internal/memory/outbox.go"
+// arnes: de="next_attempt_at = CASE WHEN outbox.status = \x27claimed\x27 THEN"
+// arnes: a="next_attempt_at = CASE WHEN outbox.status IN (\x27claimed\x27, \x27pending\x27) THEN"
+func TestUnaEdicionNoEsperaElBackoff(t *testing.T) {
+	e := newTestEngine(t)
+	v1 := reclamada(t, e, "backoff-1", versionQueViaja)
+	if err := e.MarkOutboxRetry("backoff-1", v1.Hash, 3600, "timeout de v1"); err != nil {
+		t.Fatal(err)
+	}
+	if hay, err := e.HayOutboxPorSubir(); err != nil || hay {
+		t.Fatalf("precondición: v1 tenía que quedar esperando su backoff; el sondeo dio %v (err %v)", hay, err)
+	}
+	editar(t, e, "backoff-1", versionEditada)
+	items, err := e.ClaimOutboxBatch(50, 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Content != versionEditada {
+		t.Fatalf("LA EDICIÓN ESPERA EL BACKOFF DE V1: el claim trajo %d ítems; esperaba v2, ya", len(items))
+	}
+
+	// La reclamada de un drainer que murió: su lease venció y nadie la va a soltar.
+	reclamada(t, e, "muerta-1", versionQueViaja)
+	vencerLease(t, e, "muerta-1")
+	editar(t, e, "muerta-1", versionEditada)
+	items, err = e.ClaimOutboxBatch(50, 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ObsID != "muerta-1" || items[0].Content != versionEditada {
+		t.Errorf("LA EDICIÓN ESPERA A UN DRAINER MUERTO: con el lease vencido, el claim trajo %d ítems; esperaba la edición de muerta-1", len(items))
+	}
+}
+
+// TestSoltarReclamoSueltaSoloElPropio: la fila que la pregunta de antes del push rechazó por una
+// edición —sigue reclamada por ESTE claim, con el payload viejo en la mano— la suelta el mismo claim,
+// y la edición sale en el claim siguiente sin esperar el lease. Pero sólo si sigue siendo de ese
+// claim: si el lease venció y otro drainer ya la tomó, soltarla le sacaba el reclamo a ése, y lo que
+// lleva podía salir dos veces.
+//
+// Sabotaje: soltar sin mirar de quién es el reclamo.
+// arnes: archivo="internal/memory/outbox.go"
+// arnes: de="next_attempt_at = ?`, obsID, reclamo)"
+// arnes: a="(1 OR next_attempt_at = ?)`, obsID, reclamo)"
+func TestSoltarReclamoSueltaSoloElPropio(t *testing.T) {
+	e := newTestEngine(t)
+	a := reclamada(t, e, "soltar-1", versionQueViaja)
+	editar(t, e, "soltar-1", versionEditada) // se edita mientras espera su turno en el sublote
+	if ok, err := e.ReclamoVigente(a.ObsID, a.Hash, a.Reclamo); err != nil || ok {
+		t.Fatalf("precondición: editada, la pregunta tenía que decir que no; dio %v (err %v)", ok, err)
+	}
+	if hay, err := e.HayOutboxPorSubir(); err != nil || hay {
+		t.Fatalf("precondición: la edición tenía que quedar retenida para este claim; el sondeo dio %v (err %v)", hay, err)
+	}
+	if err := e.SoltarReclamo(a.ObsID, a.Reclamo); err != nil {
+		t.Fatal(err)
+	}
+	if it := reclamarUna(t, e, "soltar-1"); it.Content != versionEditada {
+		t.Errorf("tras soltarla, el claim trajo %q; esperaba la edición", it.Content)
+	}
+
+	// A se colgó más que su lease y B la volvió a tomar. B reclama con otro lease para que las dos
+	// marcas no coincidan aunque caigan en el mismo milisegundo.
+	viejo := reclamada(t, e, "soltar-2", versionQueViaja)
+	vencerLease(t, e, "soltar-2")
+	items, err := e.ClaimOutboxBatch(50, 30)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("claim de B tras vencer el lease: %d ítems, err %v", len(items), err)
+	}
+	b := items[0]
+	if err := e.SoltarReclamo(viejo.ObsID, viejo.Reclamo); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := e.ReclamoVigente(b.ObsID, b.Hash, b.Reclamo); err != nil || !ok {
+		t.Errorf("ENVÍO DOBLE: el reclamo vencido de A soltó el de B, que tiene la fila en vuelo (vigente=%v, err %v)", ok, err)
+	}
+}

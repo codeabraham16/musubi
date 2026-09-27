@@ -573,8 +573,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   default), cada uno con su lease fresco, y repite hasta vaciar la cola o hasta el 80 % del
   intervalo; el tick sigue dejando UN solo viaje de subida en `sync_viajes`. Antes de cada push
   pregunta con una lectura (`ReclamoVigente`) si la fila sigue reclamada por ESE claim y con el mismo
-  contenido: si otro drainer la reclamó o se editó, el payload viejo no sale, y la v1 de un drainer
-  no llega al central después de la v2 del otro. El lease se escribe con milisegundos:
+  contenido: si otro drainer la reclamó o se editó, el payload viejo no sale, y si la fila sigue
+  siendo de ese claim la suelta (`SoltarReclamo`, con un CAS sobre el lease, así que uno ajeno no se
+  toca) para que la versión nueva salga en el claim siguiente y no al vencer el lease. El lease se
+  escribe con milisegundos:
   `datetime('now', '+1 seconds')` trunca al segundo, y un lease de 1 s duraba entre cero y un
   segundo. Entre ticks, `RunOutboxScheduler` mira cada 2 s si hay algo que un claim tomaría
   (`HayOutboxPorSubir`: una lectura sobre `idx_outbox_claim`, sin red y sin el candado de escritura)
@@ -594,9 +596,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   tres). El sondeo, sobre una copia de la base de davantis-1: entre 47 y 237 µs de media, tres por
   segundo con seis daemons, y contesta igual con el candado de escritura tomado por otro proceso.
 
-  **Sólo cliente: el central no cambia.** Queda abierto un caso: si la edición cae MIENTRAS v1 está
-  en vuelo, otro drainer puede subir v2 a la par y el orden lo decide el central; cerrarlo pide un
-  save condicional del lado del central.
+  **Cambia un contrato de #700: una edición que llega mientras su versión anterior viaja ya no sale
+  enseguida.** En #700 la edición devolvía la fila a 'pending' y en hora, y otro daemon sobre la
+  misma base podía reclamarla —con el sondeo, a los 2 s; con su tick, cuando cayera— y subir v2
+  mientras el POST de v1 seguía en el aire. Ganaba la que el central guardara última, y el central
+  embebe antes de guardar: v1 podía quedar allá y bajar a pisar v2 acá. Ahora la edición deja la
+  fila 'claimed' con el lease de ese vuelo —`enqueueOutboxTx` mira el estado, así que una segunda
+  edición en el mismo vuelo la encuentra igual—, y v2 sale cuando vuelve la marca de v1 (el 200, el
+  reintento y el rechazo la sueltan en hora) o cuando vence el lease, lo que llegue primero: unos 3 s
+  más en el caso común, lo que tarda un push en el central (2,98 s de mediana, 8,76 s en el p99). A
+  cambio, el orden en el central lo pone el cliente. Una edición sobre una fila que espera el backoff
+  de un intento fallido sigue saliendo ya: ese backoff era de la versión vieja.
+
+  **Sólo cliente: el central no cambia**, y ya no hace falta un save condicional allá: el caso común
+  se cierra en el cliente. Queda abierto un push más largo que su lease: el lease vence con el POST
+  en el aire, otro daemon reclama la misma fila y la sube otra vez, y si en el medio hubo una
+  edición, v2 sale a la par de v1. En el central, en 30 días, ninguna de 1.984 ventanas de seis
+  saves pasó de 60 s (la más larga, 52,4 s: el 87 % del lease) y el push más largo tardó 12,91 s. Se
+  cierra renovando el lease antes de cada push, y queda para el plan siguiente.
 - **Las sesiones de shell vencidas se cierran aunque el barrido de la flota esté apagado.** Con
   `fleet.probe_minutes` negativo el cerebro dejaba de cerrarlas. En una máquina sin agente, el `ssh`
   de una sesión vencida seguía vivo, y la bitácora la mostraba activa. Ahora las cierra un vigía

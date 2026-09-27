@@ -1,8 +1,11 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"sync"
 	"sync/atomic"
@@ -209,15 +212,22 @@ func TestUnaNotaDeOtroProcesoNoEsperaAlTick(t *testing.T) {
 }
 
 // TestUnPayloadViejoNoLlegaDespuesDelNuevo: A reclama dos notas en el mismo sublote. Mientras empuja
-// la primera, otro proceso edita la segunda, y el daemon B reclama la edición y la sube. Cuando A
-// llega a la segunda tiene en la mano la versión vieja: no la sube. En main la subía, y el central se
-// quedaba con la versión vieja DESPUÉS de la nueva, la fila local 'sent' por la nueva, y la bajada
+// la primera, otro proceso edita la segunda y el daemon B drena. Cuando A llega a la segunda tiene en
+// la mano la versión vieja: no la sube, y la suelta, así que la edición sale en el drain siguiente y
+// no al vencer el lease de A. B no se la pudo llevar antes: la edición cayó sobre una fila que A tenía
+// reclamada, y enqueueOutboxTx la retiene para A. En main B reclamaba la edición y la subía, A subía
+// la vieja DESPUÉS, el central se quedaba con la vieja, la fila local 'sent' por la nueva, y la bajada
 // siguiente pisaba la nueva también acá.
 //
 // Sabotaje: empujar sin preguntar si la fila sigue siendo de este claim.
 // arnes: archivo="internal/mcp/scheduler.go"
 // arnes: de="if !vigente(item) {"
 // arnes: a="if false && !vigente(item) {"
+//
+// Sabotaje: no soltar la que no sale (la edición espera el lease entero de A).
+// arnes: archivo="internal/mcp/scheduler.go"
+// arnes: de="if serr := s.engine.SoltarReclamo(item.ObsID, item.Reclamo); serr != nil {"
+// arnes: a="if serr := s.engine.SoltarReclamo(item.ObsID, \"\"); serr != nil {"
 func TestUnPayloadViejoNoLlegaDespuesDelNuevo(t *testing.T) {
 	engines := dosEnginesSobreUnaBase(t, 3)
 	ea, eb, hook := engines[0], engines[1], engines[2]
@@ -252,24 +262,29 @@ func TestUnPayloadViejoNoLlegaDespuesDelNuevo(t *testing.T) {
 			if err := hook.SaveObservationTyped(otra, "t/x", editada(otra), 1, "semantic", memory.ScopeShared, nil); err != nil {
 				t.Errorf("la edición en vuelo no se pudo guardar: %v", err)
 			}
-			b.drainOutboxOnce(ctx) // B reclama la edición y la sube mientras A tiene la vieja en la mano
+			b.drainOutboxOnce(ctx) // B drena mientras A tiene la vieja en la mano
 		}
 	}
 	central.mu.Unlock()
 
 	a.drainOutboxOnce(ctx)
+	b.drainOutboxOnce(ctx) // el drain siguiente: la edición que A soltó sale ya
 
 	central.mu.Lock()
 	enElCentral := central.notas[otra].Content
 	central.mu.Unlock()
 	guardados := guardadosDe(central)
-	if enElCentral != editada(otra) {
-		t.Errorf("V1 DESPUÉS DE V2: el central terminó con %q para %s; esperaba la edición. Saves en orden: %q", enElCentral, otra, guardados)
-	}
 	for _, c := range guardados {
 		if c == viejas[otra] {
 			t.Errorf("la versión vieja de %s llegó al central (saves en orden: %q)", otra, guardados)
 		}
+	}
+	switch enElCentral {
+	case editada(otra):
+	case viejas[otra]:
+		t.Errorf("V1 DESPUÉS DE V2: el central terminó con la versión vieja de %s. Saves en orden: %q", otra, guardados)
+	default:
+		t.Errorf("LA EDICIÓN NO SALIÓ: el central tiene %q para %s en el drain siguiente; esperaba la edición, que A soltó al no subirla. Saves en orden: %q", enElCentral, otra, guardados)
 	}
 	if pending, sent, dead, err := ea.OutboxStats(); err != nil || pending != 0 || sent != 2 || dead != 0 {
 		t.Errorf("outbox pending=%d sent=%d dead=%d (err %v); esperaba 0/2/0", pending, sent, dead, err)
@@ -522,4 +537,120 @@ func TestElDrainNoPasaDelTick(t *testing.T) {
 		t.Errorf("el drain tardó %v con un tick de 1 s", duro.Round(time.Millisecond))
 	}
 	t.Logf("subió %d de %d en %v", subidas, n, duro.Round(time.Millisecond))
+}
+
+// centralQueEmbebeAntes: el central de verdad embebe ANTES de guardar (toolSaveObservation:
+// embedIfEnabled y después withWriteLock), así que un save lento queda guardado al FINAL de su
+// demora. centralConMemoria guarda al principio; este envoltorio demora el primer save que lleva
+// lento antes de pasárselo.
+type centralQueEmbebeAntes struct {
+	inner  *centralConMemoria
+	lento  string
+	demora time.Duration
+	empezo chan struct{}
+	una    atomic.Bool
+}
+
+func (w *centralQueEmbebeAntes) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
+	body, _ := io.ReadAll(r.Body)
+	if bytes.Contains(body, []byte(w.lento)) && w.una.CompareAndSwap(false, true) {
+		close(w.empezo)
+		time.Sleep(w.demora)
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	w.inner.ServeHTTP(rw, r)
+}
+
+// drainerPaciente es drainerContra con un cliente que espera la respuesta 10 s: el de
+// newTestSyncClient corta a los 2 s, y acá el central tarda 2,6 s en guardar v1.
+func drainerPaciente(t *testing.T, e *memory.DbEngine, url string) *McpServer {
+	t.Helper()
+	t.Setenv("MUSUBI_TEST_TOKEN", "secreto-abc")
+	c, err := NewSyncClient(config.SyncConfig{CentralURL: url, AuthTokenEnv: "MUSUBI_TEST_TOKEN", AllowInsecureToken: true, RequestTimeoutSeconds: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewMcpServer(e, t.TempDir(), embedding.NoopProvider{}, WithMemory(config.MemoryConfig{TeamMode: true}))
+	s.SetSyncClient(c, config.SyncConfig{BatchSize: 50, LeaseSeconds: 60, BackoffBaseSeconds: 5, BackoffMaxSeconds: 300})
+	return s
+}
+
+// unaEdicionConV1EnVuelo: el daemon A empuja v1 y el central tarda 2,6 s en guardarla. Apenas sale el
+// push, el hook guarda v2, y mover(b) es lo que hace el daemon B mientras v1 viaja. Al final, un drain
+// y una bajada más de A, y gana la última: el central y esta base terminan con v2. Devuelve los saves
+// que recibió el central, en orden.
+func unaEdicionConV1EnVuelo(t *testing.T, mover func(ctx context.Context, b *McpServer)) []string {
+	t.Helper()
+	const id = "en-vuelo-1"
+	const v1 = "v1: lo que salio primero"
+	const v2 = "v2: la edicion que el hook guardo con v1 en vuelo"
+	engines := dosEnginesSobreUnaBase(t, 3)
+	ea, eb, hook := engines[0], engines[1], engines[2]
+	central := newCentralConMemoria()
+	lento := &centralQueEmbebeAntes{inner: central, lento: v1, demora: 2600 * time.Millisecond, empezo: make(chan struct{})}
+	srv := httptest.NewServer(lento)
+	defer srv.Close()
+	a, b := drainerPaciente(t, ea, srv.URL), drainerPaciente(t, eb, srv.URL)
+	guardarShared(t, hook, id, v1)
+
+	ctxB, cancelB := context.WithCancel(context.Background())
+	defer cancelB()
+	listo := make(chan struct{})
+	go func() { a.drainOutboxOnce(context.Background()); close(listo) }()
+	select {
+	case <-lento.empezo: // v1 en vuelo
+	case <-time.After(10 * time.Second):
+		t.Fatal("el push de v1 no llegó al central en 10 s: la prueba no reprodujo nada")
+	}
+	guardarShared(t, hook, id, v2)
+	go mover(ctxB, b)
+	<-listo
+	time.Sleep(500 * time.Millisecond) // lo que B tenga en vuelo
+	cancelB()
+	time.Sleep(100 * time.Millisecond)
+
+	ctx := context.Background()
+	a.drainOutboxOnce(ctx)
+	a.drainInboundOnce(ctx)
+	central.mu.Lock()
+	enCentral := central.notas[id].Content
+	central.mu.Unlock()
+	guardados := guardadosDe(central)
+	if local := contenidoEn(t, ea, id); enCentral != v2 || local != v2 {
+		t.Errorf("LA ÚLTIMA NO GANÓ: la última edición era v2 y quedaron central=%q, esta base=%q (saves en orden: %q)", enCentral, local, guardados)
+	}
+	return guardados
+}
+
+// TestUnaEdicionEnVueloNoLaSubeElSondeoALaPar: v1 viaja y el central tarda en guardarla; el hook
+// guarda v2. B corre su scheduler de verdad con un tick de UNA HORA, así que lo único que puede mover
+// v2 mientras v1 viaja es el sondeo de dos segundos. Si la edición soltaba la fila, el sondeo la veía,
+// B subía v2 a la par, el central guardaba v1 DESPUÉS —embebe antes de guardar, y v1 tardó más— y v1
+// bajaba a pisar v2 también acá. Retenida para el vuelo de v1, v2 sale detrás del 200 de v1. Ésta y
+// la de abajo vienen de la revisión adversarial de este arreglo.
+//
+// Sabotaje: que la edición ponga en hora la fila en vuelo (el sondeo de B la ve y la sube a la par).
+// arnes: archivo="internal/memory/outbox.go"
+// arnes: de="THEN outbox.next_attempt_at ELSE"
+// arnes: a="THEN datetime(\x27now\x27) ELSE"
+func TestUnaEdicionEnVueloNoLaSubeElSondeoALaPar(t *testing.T) {
+	g := unaEdicionConV1EnVuelo(t, func(ctx context.Context, b *McpServer) { b.RunOutboxScheduler(ctx, time.Hour) })
+	t.Logf("saves en orden: %q", g)
+}
+
+// TestUnaEdicionEnVueloNoLaSubeUnTickAjenoALaPar: lo mismo con el tick de otro daemon que cae en la
+// ventana —B drena una vez a los 300 ms del vuelo de v1—, que pasa también en main. Y cuando vuelve el
+// 200 de v1, esa marca suelta la fila EN HORA: v2 sale en el drain siguiente de A, no al vencer el
+// lease.
+//
+// Sabotaje: que la vuelta de v1 suelte la fila con el lease puesto (v2 espera el minuto entero).
+// arnes: archivo="internal/memory/outbox.go"
+// arnes: de="ELSE `+ahoraMs+` END,"
+// arnes: a="ELSE next_attempt_at END,"
+func TestUnaEdicionEnVueloNoLaSubeUnTickAjenoALaPar(t *testing.T) {
+	g := unaEdicionConV1EnVuelo(t, func(ctx context.Context, b *McpServer) {
+		time.Sleep(300 * time.Millisecond)
+		b.drainOutboxOnce(ctx)
+	})
+	t.Logf("saves en orden: %q", g)
 }
