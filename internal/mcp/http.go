@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -319,12 +320,12 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 
 		body, err := readRequestBody(w, r)
 		if err != nil {
-			writeHTTPJSON(w, errResponse(nil, rpcErrorf(codeParseError, "%v", err)))
+			writeHTTPJSON(w, r, errResponse(nil, rpcErrorf(codeParseError, "%v", err)))
 			return
 		}
 		var req JsonRpcRequest
 		if jerr := json.Unmarshal(body, &req); jerr != nil {
-			writeHTTPJSON(w, errResponse(nil, rpcErrorf(codeParseError, "Parse error")))
+			writeHTTPJSON(w, r, errResponse(nil, rpcErrorf(codeParseError, "Parse error")))
 			return
 		}
 
@@ -341,7 +342,7 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
-		writeHTTPJSON(w, resp)
+		writeHTTPJSON(w, r, resp)
 	}))))
 
 	// Liveness y readiness: sin auth (los sondea un orquestador/proxy; no exponen secretos).
@@ -620,9 +621,32 @@ func bodyUpdateHandler(dir string) http.HandlerFunc {
 	}
 }
 
+// umbralCompresionRespuesta es a partir de cuántos bytes una respuesta de /mcp viaja comprimida, si
+// el cliente la pidió así. Por debajo gzip no ahorra nada que valga el trabajo: sus ~20 B de
+// cabecera y cola se comen lo que gana en un cuerpo chico. Y deja intacto el régimen normal de la
+// bajada, la página vacía de un tick sin novedades (~140 B, miles por día y por base).
+const umbralCompresionRespuesta = 1 << 10 // 1 KiB
+
 // writeHTTPJSON serializa una respuesta JSON-RPC al ResponseWriter. Reporta fallos de
 // marshal a stderr (nunca corrompe el cuerpo).
-func writeHTTPJSON(w http.ResponseWriter, resp JsonRpcResponse) {
+//
+// COMPRIME SÓLO SI EL PEDIDO LO PIDE, y el pedido es de cada cliente: el /mcp del central lo usan
+// el sync de las máquinas, el canal `musubi cerebro` de las sesiones y clientes que no son Go (el
+// adjudicador B1 es Claude Code; `musubi-tool.sh`, curl). Uno que no manda `Accept-Encoding: gzip`
+// recibe el mismo cuerpo de siempre, así que ninguno que hoy funciona puede romperse por esto. El
+// que lo manda y no sabe leerlo sí se rompería, y por eso la condición es que NOMBRE gzip
+// (aceptaGzip), no que el header exista.
+//
+// La medida es la bajada del sync. Con las páginas reales de una copia de la base de davantis-1
+// (2.989 notas en 60 páginas de 50, ~150 KB cada una) viajaron 3.586.916 B en vez de 9.215.027: el
+// 38,9 %, y ninguna página pasó del 45 %. Comprimir una página cuesta menos de 1 ms. Los clientes Go
+// ya piden gzip solos —el transporte agrega el header y descomprime sin avisar—, así que desde este
+// cambio también les llegan comprimidas las respuestas grandes, como el tools/list y los recall.
+//
+// NO ES UN MIDDLEWARE, A PROPÓSITO. Envolver el mux entero comprimiría también el stream del panel
+// (/api/stream), y un stream comprimido no llega hasta que el compresor suelta un bloque: el feed
+// «en vivo» quedaría mudo minutos. Por acá pasan sólo las respuestas enteras de /mcp.
+func writeHTTPJSON(w http.ResponseWriter, r *http.Request, resp JsonRpcResponse) {
 	w.Header().Set("Content-Type", "application/json")
 	data, err := json.Marshal(resp)
 	if err != nil {
@@ -630,8 +654,53 @@ func writeHTTPJSON(w http.ResponseWriter, resp JsonRpcResponse) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	// Se declara aunque esta vez no se comprima: la forma de la respuesta DEPENDE de ese header, y
+	// eso es lo que Vary le dice a cualquier intermediario que guarde respuestas.
+	w.Header().Add("Vary", "Accept-Encoding")
+	grande := len(data) > umbralCompresionRespuesta
+	if grande && aceptaGzip(r.Header.Get("Accept-Encoding")) {
+		if comprimido, err := comprimirGzip(data); err == nil {
+			w.Header().Set("Content-Encoding", "gzip")
+			data = comprimido
+		}
+	}
 	_, _ = w.Write(data)
 }
+
+// aceptaGzip dice si un Accept-Encoding NOMBRA gzip sin rechazarlo (q=0).
+//
+// Es más estrecha que el estándar, y a propósito: un «*» también admitiría gzip y acá no alcanza.
+// Comprimirle a quien no lo nombró es la única forma en que este cambio podría romper a un cliente;
+// no comprimir no rompe a nadie. Ante la duda —un q que no es un qvalue, por ejemplo—, en claro.
+func aceptaGzip(h string) bool {
+	for _, parte := range strings.Split(h, ",") {
+		nombre, params, _ := strings.Cut(parte, ";")
+		if !strings.EqualFold(strings.TrimSpace(nombre), "gzip") {
+			continue
+		}
+		for _, p := range strings.Split(params, ";") {
+			k, v, ok := strings.Cut(p, "=")
+			if !ok || !strings.EqualFold(strings.TrimSpace(k), "q") {
+				continue
+			}
+			// El peso se lee con la gramática del RFC y no con strconv.ParseFloat, que acepta «NaN»,
+			// «+Inf» y floats hexadecimales: como `NaN <= 0` da false, «gzip;q=NaN» se leía como un sí.
+			v = strings.TrimSpace(v)
+			if !qvalue.MatchString(v) {
+				return false
+			}
+			if strings.Trim(v, "0.") == "" {
+				return false // «0», «0.» o «0.000»: un no explícito
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// qvalue es la gramática del peso de un Accept-Encoding (RFC 9110 §12.4.2): «0» o «1», con hasta
+// tres decimales, y el «1» sólo con ceros.
+var qvalue = regexp.MustCompile(`^(?:0(?:\.[0-9]{0,3})?|1(?:\.0{0,3})?)$`)
 
 // resolveServiceAuth resuelve el token (desde la env var nombrada) y si el bind es
 // loopback, aplicando el gating de seguridad: un bind NO-loopback exige token. Devuelve
