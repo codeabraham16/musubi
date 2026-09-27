@@ -261,6 +261,11 @@ func TestLaBajadaComprimidaTraeLoMismoYMideElCable(t *testing.T) {
 	if crudos != crudosHoy {
 		t.Errorf("los crudos de la página comprimida (%d B) no son los de la misma página en claro (%d B)", crudos, crudosHoy)
 	}
+	// Y el cable es EXACTAMENTE lo que viajó: el cuerpo comprimido que sirve el central para el mismo
+	// pedido, byte a byte (gzip es determinista para la misma entrada).
+	if _, viajo := postComoViaja(t, ts.URL, fmt.Sprintf(pedidoDePull, 0), "gzip"); int64(len(viajo)) != cable {
+		t.Errorf("el cable contó %d B y el central sirvió %d B comprimidos para la misma página", cable, len(viajo))
+	}
 	t.Logf("cliente: %d B en el cable, %d B crudos (%.1f %%)", cable, crudos, 100*float64(cable)/float64(max(crudos, 1)))
 
 	// El drain lo anota así en sync_viajes.
