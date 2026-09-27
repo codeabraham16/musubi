@@ -116,7 +116,7 @@ func TestElBrazoDelTurnoTraduceElYaml(t *testing.T) {
 // Sabotaje: el brazo sin embebedor no le devuelve al motor su procedencia.
 // arnes: archivo="internal/recalleval/harness.go"
 // arnes: de="\t\tdefer m.SetVectorModelID(antes)"
-// arnes: a="\t\tdefer m.SetVectorModelID(\"\")"
+// arnes: a="\t\tdefer m.SetVectorModelID(antes[:0])"
 func TestElBancoCorreElMotorDelHook(t *testing.T) {
 	fx := corpusParaMMR()
 	ctx := context.Background()
