@@ -31,11 +31,23 @@ import (
 
 // postVisto es un POST tal como llegó al central.
 type postVisto struct {
-	encoding string
-	cable    int // lo que cruzó la red
-	crudo    int // el JSON que lee el handler, ya descomprimido
-	args     syncSaveArguments
-	rebotado bool
+	encoding  string
+	cable     int    // lo que cruzó la red
+	enElCable []byte // esos mismos bytes, tal cual: el reintento se compara contra ellos
+	crudo     int    // el JSON que lee el handler, ya descomprimido
+	args      syncSaveArguments
+	rebotado  bool
+}
+
+// primerByteDistinto es la posición del primer byte en que difieren a y b (el largo del más corto
+// si uno es prefijo del otro).
+func primerByteDistinto(a, b []byte) int {
+	for i := 0; i < len(a) && i < len(b); i++ {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return min(len(a), len(b))
 }
 
 // centralQueMira pone delante del handler real un mirador que anota cada POST. A los ids de
@@ -56,7 +68,7 @@ func (c *centralQueMira) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		c.t.Errorf("leer el POST: %v", err)
 		return
 	}
-	p := postVisto{encoding: r.Header.Get("Content-Encoding"), cable: len(cable)}
+	p := postVisto{encoding: r.Header.Get("Content-Encoding"), cable: len(cable), enElCable: cable}
 	cuerpo := cable
 	if p.encoding == "gzip" {
 		zr, zerr := gzip.NewReader(bytes.NewReader(cable))
@@ -209,6 +221,12 @@ func TestLaSubidaComprimidaLlegaEnteraAlCentralReal(t *testing.T) {
 // arnes: archivo="internal/mcp/syncclient.go"
 // arnes: de="c.trafico.bytesRechazados.Add(int64(len(payload)))"
 // arnes: a="c.trafico.bytesRechazados.Add(crudo)"
+//
+// Sabotaje que la pone roja: que el reintento mande otros bytes del mismo largo (el MTIME del
+// encabezado gzip toma un valor que cambia de un intento al otro: los POST contados hasta ahí).
+// arnes: archivo="internal/mcp/syncclient.go"
+// arnes: de="payload, viajaComprimida = z, true"
+// arnes: a="z[4] = byte(c.trafico.subidaPosts.Load())\n\t\t\tpayload, viajaComprimida = z, true"
 func TestLaSubidaComprimidaCuadraByteAByte(t *testing.T) {
 	nodo, anota, mirador, central := subidaContraCentralReal(t, map[string]int{"rebotada": 1})
 	guardarCompartidas(t, nodo, map[string]string{
@@ -243,7 +261,9 @@ func TestLaSubidaComprimidaCuadraByteAByte(t *testing.T) {
 
 	// EL REINTENTO: la misma nota, armada con lo que el drain mandó, sale otra vez y ahora pasa.
 	// Tiene que cruzar con los MISMOS bytes —gzip sin fecha en el encabezado— y contar como un POST
-	// aceptado más, sin arrastrar nada del rechazo.
+	// aceptado más, sin arrastrar nada del rechazo. Se comparan los bytes y no los largos: lo que
+	// cambie de un intento al otro sin cambiar el largo (una fecha en el encabezado, un contador)
+	// pasaba una comparación de largos.
 	a := rebotada[0].args
 	antes := nodo.syncClient.foto()
 	if err := nodo.syncClient.Push(memory.OutboxItem{ObsID: a.ID, TopicKey: a.TopicKey, Content: a.Content,
@@ -252,11 +272,11 @@ func TestLaSubidaComprimidaCuadraByteAByte(t *testing.T) {
 	}
 	rebotada = mirador.visto("rebotada")
 	if len(rebotada) != 2 || rebotada[1].rebotado {
-		t.Fatalf("precondición: el reintento tenía que llegar al handler real; vistos %+v", rebotada)
+		t.Fatalf("precondición: el reintento tenía que llegar al handler real; llegaron %d POST de la rebotada", len(rebotada))
 	}
-	if rebotada[1].cable != rebotada[0].cable || rebotada[1].crudo != rebotada[0].crudo {
-		t.Errorf("el reintento cruzó %d B (%d de JSON) y el primer intento %d B (%d): la misma nota tiene que viajar igual",
-			rebotada[1].cable, rebotada[1].crudo, rebotada[0].cable, rebotada[0].crudo)
+	if primero, otra := rebotada[0].enElCable, rebotada[1].enElCable; !bytes.Equal(otra, primero) {
+		t.Errorf("el reintento cruzó otros bytes que el primer intento (%d B contra %d, distintos desde el byte %d): la misma nota tiene que viajar igual",
+			len(otra), len(primero), primerByteDistinto(otra, primero))
 	}
 	reintento := nodo.syncClient.subidaDesde(antes)
 	quiero = memory.Viaje{Posts: 1, BytesCable: int64(rebotada[1].cable), BytesCrudos: int64(rebotada[1].crudo)}
