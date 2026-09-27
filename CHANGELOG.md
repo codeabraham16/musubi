@@ -1372,8 +1372,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   así que una re-entrega la deja archivada. Y con la config que escribe `musubi init`
   (`purge_archived_after_days: 90`), a los 90 días de archivada se borra para siempre. davantis-1
   no lo sufre, porque ya tiene las 3.237 y no inserta ninguna fila nueva de ellas; la laptop no se
-  midió. Y restar la fecha local de la del central deja de medir la demora del sync en las filas
-  nuevas; para eso está `sync_viajes`.
+  midió. Restar la fecha local de la del central deja de medir la demora del sync en las filas
+  nuevas; para eso está `sync_viajes`. Y el panel deja de hacer brotar casi todo lo que baja: la
+  nota llega con una fecha anterior a la ventana del pulso (desde el sondeo anterior, unos 5 s) y
+  sin `last_accessed`, así que no entra al pulso y aparece con la recarga completa del grafo, sin
+  brote.
 
   **Despliegue:** la fecha viaja recién con el central nuevo (ventana V3), y V3 queda atada a lo
   que el dueño decida sobre el olvido del párrafo anterior. Un cliente viejo contra el central
