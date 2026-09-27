@@ -592,8 +592,12 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   devuelve `memory.Ingesta` en vez de un bool, y las marcas del outbox reciben el hash. Lo que NO
   arregla: dos drainers que empujan versiones distintas de la misma nota a la vez —en davantis-1 hay
   varios daemons por base— pueden llegar al central en orden invertido y dejar la vieja; eso es del
-  envío doble, que ataca `fix/sync-drain-sin-doble-push`. Las ediciones simultáneas desde dos
-  máquinas siguen siendo «gana la última»: se cuentan, no se guardan las dos.
+  envío doble, que ataca `fix/sync-drain-sin-doble-push`. Y con él queda una ventana de un RTT: si
+  el central ya confirmó la entrega de una fila 'claimed' que el drain todavía no marcó, y justo baja
+  una versión ajena más nueva, se conserva la local y la marca la deja 'sent': acá queda la local y
+  en el central la ajena, sin push ni pull que lo cierre (main convergía, porque el pull pisaba la
+  reclamada). El cliente no sabe si su push ya se confirmó, así que va con ese PR. Las ediciones
+  simultáneas desde dos máquinas siguen siendo «gana la última»: se cuentan, no se guardan las dos.
 
   *Catorce guardas nuevas, con su sabotaje corrido y rojo. `TestEdicionEnVueloNoQuedaEnviada`,
   `TestUnReintentoViejoNoFrenaLaEdicion`, `TestUnRechazoViejoNoMataLaEdicion`,
