@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -264,4 +266,66 @@ func TestLaSubidaComprimidaCuadraByteAByte(t *testing.T) {
 	if obs, err := central.GetObservations([]string{"rebotada"}); err != nil || len(obs) != 1 || obs[0].Content != a.Content {
 		t.Errorf("el central no guardó la rebotada tras el reintento (err=%v, %d filas)", err, len(obs))
 	}
+}
+
+// TestLaSubidaNoReservaUnCompresorPorNota: subir una nota comprimida cuesta unos KB de memoria, no
+// un compresor entero. Un gzip.Writer nuevo reserva ~800 KB de tablas en su primera escritura, y
+// en una ráfaga contra un central que contesta rápido —un requeue, un backfill, una tormenta de
+// rechazos— esa basura por nota llevaba el heap del daemon hasta su meta de GC y encadenaba
+// recolecciones (medido en la revisión: 1.500 notas, 1,16 GB reservados y 4 GC; con el pool, 0).
+// comprimirGzip recicla los compresores (gzip.go); esta prueba mira que la subida los aproveche.
+//
+// Se aserta la MEDIANA de lo que reserva cada Push, y no un pico, porque no depende de la máquina:
+// las tablas del compresor tienen tamaño fijo. Medido en davantis-1: con el pool, la nota típica
+// reserva ~15 KB entre cliente y central, y la que se arma un compresor, ~870 KB; el techo de
+// 256 KB queda a 17× de lo primero y a 3× de lo segundo. La mediana además aguanta al pool que se
+// vacía solo —en cada corrida hubo una nota de ~870 KB, la del GC que lo vació— y a -race, donde
+// sync.Pool tira a propósito uno de cada cuatro Put.
+//
+// Sabotaje que la pone roja: comprimir cada nota con un compresor nuevo, sin el pool.
+// arnes: archivo="internal/mcp/gzip.go"
+// arnes: de="zw := escritoresGzip.Get().(*gzip.Writer)"
+// arnes: a="zw := gzip.NewWriter(io.Discard)"
+func TestLaSubidaNoReservaUnCompresorPorNota(t *testing.T) {
+	// Un central que contesta enseguida y no descomprime: lo que se mide es lo que cuesta SUBIR.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"jsonrpc":"2.0","id":"x","result":{"content":[{"type":"text","text":"ok"}]}}`)
+	}))
+	defer ts.Close()
+	cliente := newTestSyncClient(t, ts.URL)
+	nota := memory.OutboxItem{ObsID: "rafaga", TopicKey: "t/rafaga", Content: textoDeNota("rafaga", 25),
+		Importance: 1, MemType: "semantic"}
+
+	// Las primeras vueltas arman la conexión y le dan al pool su compresor: no son la nota típica
+	// de una ráfaga.
+	antes := cliente.foto()
+	for i := 0; i < 3; i++ {
+		if err := cliente.Push(nota); err != nil {
+			t.Fatalf("subir la nota: %v", err)
+		}
+	}
+	if v := cliente.subidaDesde(antes); v.BytesCable >= v.BytesCrudos {
+		t.Fatalf("precondición: la nota tenía que viajar comprimida (%d B en el cable, %d de JSON); si no, esta prueba no mide el compresor", v.BytesCable, v.BytesCrudos)
+	}
+
+	const notas = 41
+	reservado := make([]uint64, 0, notas)
+	var m0, m1 runtime.MemStats
+	for i := 0; i < notas; i++ {
+		runtime.ReadMemStats(&m0)
+		if err := cliente.Push(nota); err != nil {
+			t.Fatalf("subir la nota: %v", err)
+		}
+		runtime.ReadMemStats(&m1)
+		reservado = append(reservado, m1.TotalAlloc-m0.TotalAlloc)
+	}
+	slices.Sort(reservado)
+	mediana := reservado[notas/2]
+	const techo = 256 << 10
+	if mediana > techo {
+		t.Errorf("la nota típica de una ráfaga reservó %d KB (techo %d KB): cada una se está armando un compresor nuevo en vez de reciclarlo", mediana>>10, techo>>10)
+	}
+	t.Logf("memoria reservada por nota subida, en %d notas: mínimo %d B, mediana %d B, máximo %d B", notas, reservado[0], mediana, reservado[notas-1])
 }

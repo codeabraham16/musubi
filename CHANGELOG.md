@@ -14,10 +14,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   la base de davantis-1, empujadas una por una contra el handler HTTP real del central: 10.595.186 B
   de JSON viajaron en 5.846.939 (55,2 %; la nota media, de 3.030 B a 1.672), y las 313 que salieron
   por el outbox de esta PC, en el 55,5 %. Quedan en claro 18 notas por debajo del umbral, que
-  comprimidas ahorrarían 1.980 B (el 0,02 %). Comprimir cuesta ~0,2 ms de CPU por nota (169 µs la
-  de tamaño mediano, 648 µs la del p99 y 3 ms la más grande, de 60 KB) y ~800 KB de memoria que se
-  suelta enseguida, contra los ~3,5 s que el central tarda en embeber cada una: el cambio es por los
-  bytes y NO acelera la subida. Las 73 notas que el central rechazó en esa corrida las rechaza igual
+  comprimidas ahorrarían 1.980 B (el 0,02 %). Comprimir cuesta ~0,1 ms de CPU y ~5 KB de memoria
+  por nota, porque el compresor se recicla de una nota a la otra: armar uno nuevo para cada una
+  reservaba ~800 KB que esperaban al próximo GC, y en una ráfaga contra un central rápido (un
+  requeue, un backfill) llevaban el heap del daemon hasta su meta de GC. Contra los ~3,5 s que el
+  central tarda en embeber cada nota, el cambio es por los bytes y NO acelera la subida. Las 73 notas que el central rechazó en esa corrida las rechaza igual
   en claro: es la guarda del `content` que se comió su sobre (-32602), no la compresión.
 
   `sync_viajes` distingue por fin los dos números de la subida: `bytes_cable` es lo que cruzó la red
