@@ -8,6 +8,32 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **La subida viaja comprimida: una nota cruza la red en el 55 % de sus bytes, sin tocar el
+  central.** `SyncClient.Push` comprime con gzip el POST de toda nota que pasa de 512 B y lo manda
+  con `Content-Encoding: gzip`. Medido el 2026-09-26 con las 3.569 notas compartidas de una copia de
+  la base de davantis-1, empujadas una por una contra el handler HTTP real del central: 10.595.186 B
+  de JSON viajaron en 5.846.939 (55,2 %; la nota media, de 3.030 B a 1.672), y las 313 que salieron
+  por el outbox de esta PC, en el 55,5 %. Quedan en claro 18 notas por debajo del umbral, que
+  comprimidas ahorrarían 1.980 B (el 0,02 %). Comprimir cuesta ~0,2 ms de CPU por nota (169 µs la
+  de tamaño mediano, 648 µs la del p99 y 3 ms la más grande, de 60 KB) y ~800 KB de memoria que se
+  suelta enseguida, contra los ~3,5 s que el central tarda en embeber cada una: el cambio es por los
+  bytes y NO acelera la subida. Las 73 notas que el central rechazó en esa corrida las rechaza igual
+  en claro: es la guarda del `content` que se comió su sobre (-32602), no la compresión.
+
+  `sync_viajes` distingue por fin los dos números de la subida: `bytes_cable` es lo que cruzó la red
+  y `bytes_crudos` el JSON de las notas, así que `SUM(bytes_cable)/SUM(bytes_crudos)` es lo que
+  ahorró la compresión; un POST rechazado suma su cable a `bytes_rechazados`. Las pruebas corren
+  contra el handler real del central: guarda exactamente el texto, la cabecera viaja, una nota chica
+  va en claro y los contadores cuadran byte a byte con lo que el central recibió, reintento incluido
+  (la misma nota vuelve a cruzar con los mismos bytes).
+
+  **Sólo cliente: no hace falta desplegar el central.** Descomprime todo POST a `/mcp` desde #306
+  (agosto), y el de producción corre `0.141.0-main.ac3b0e2`. Por eso Push no copia el resguardo del
+  push del grafo —comprimir sólo por encima de 1 MiB, para no romper un central anterior a #306—: no
+  queda ninguno, y el grafo de este repo (12.241 nodos, muy por encima de 1 MiB) ya le llega
+  comprimido por `tailscale serve` todos los días, el último el 26/09. Un cliente nuevo contra un
+  central anterior a #306 vería cada nota rechazada con -32700 y en dead-letter, de donde la saca
+  `musubi_sync_requeue` una vez actualizado el central. No cambia ninguna tool.
 - **El vector de una consulta, sin cargar la tabla: ~25 ms y 16 MB para un prompt corto, en vez de
   1,4-2,8 s y 854 MB.**
   El hook por turno corre sin vector porque armar el embebedor estático cuesta más de un segundo

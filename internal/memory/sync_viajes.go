@@ -34,7 +34,8 @@ const (
 //   - BytesCable / BytesCrudos: el cuerpo de lo que viajó CON FILAS —los POST aceptados, las
 //     páginas que trajeron algo—, tal como fue por el cable y descomprimido. Así
 //     SUM(bytes_cable)/SUM(filas) es el peso de una nota que viaja, y no el ritmo de los sondeos.
-//     Hoy no se comprime en ningún sentido y valen lo mismo; los PR de compresión los separan.
+//     La subida comprime cada nota de más de 512 B (SyncClient.Push), así que ahí el cable es
+//     ~55 % de los crudos; la bajada todavía viaja en claro y los dos valen lo mismo.
 //   - Vacias / BytesVacias: las páginas de la bajada que volvieron bien SIN filas y lo que pesaron.
 //     Es el costo fijo del sondeo (~135 B por página, miles por día y por base) y se mide aparte:
 //     mezclado con lo anterior, el «peso por nota» medía el ritmo de pulls (medido en la revisión:

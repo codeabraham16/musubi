@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,7 +46,16 @@ func (c *centralStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(delay)
 	}
 
-	body, _ := io.ReadAll(r.Body)
+	// Como el central de verdad (readRequestBody), descomprime lo que llega con Content-Encoding:
+	// gzip. Push comprime toda nota por encima de umbralCompresionSubida; un stub que leyera el gzip
+	// como JSON anotaría un id vacío y el test mediría otra cosa sin ponerse rojo.
+	var lector io.Reader = r.Body
+	if r.Header.Get("Content-Encoding") == "gzip" {
+		if zr, err := gzip.NewReader(r.Body); err == nil {
+			lector = zr
+		}
+	}
+	body, _ := io.ReadAll(lector)
 	var req struct {
 		ID     interface{} `json:"id"`
 		Method string      `json:"method"`
