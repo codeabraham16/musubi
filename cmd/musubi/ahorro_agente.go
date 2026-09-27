@@ -13,8 +13,11 @@ import (
 // DE DÓNDE SALE. Medido el 2026-09-26 sobre 14 días de transcripts: el 68 % del gasto era RELEER la
 // conversación. Cada pedido manda el contexto entero, y con el modelo de 1M la sesión crecía hasta
 // cerca del millón antes de resumirse (mediana: 434k tokens por pedido). Simulado sobre esos mismos
-// pedidos, resumir al llegar a 400k gasta un 38 % menos. Lo que el resumen deja atrás no se pierde:
-// Musubi repone la memoria relevante después de compactar.
+// pedidos, resumir al llegar a 250k gasta un 46 % menos (400k: 38 %). Arrancar una sesión nueva al
+// volver de una pausa larga ahorraría el 54 %, pero Claude Code no deja que nadie la abra solo; 250k
+// es lo que más se le acerca sin quitarle poder al agente: sigue siendo más contexto que el de una
+// sesión normal de Claude, que es de 200k. Lo que el resumen deja atrás no se pierde: Musubi trae la
+// memoria relevante en cada turno.
 //
 // QUÉ SE PONE: `autoCompactWindow`, la ventana con que Claude Code decide cuándo compactar (medido en
 // el binario 2.1.283: `/context` pasa de «/ 1m» a «/ 400k»). Con un modelo de 200k no cambia nada:
@@ -30,9 +33,9 @@ const (
 	marcaDeAhorro = ".musubi-ahorro.json"
 	// claveVentanaDeCompactacion es la clave del settings.json de Claude Code.
 	claveVentanaDeCompactacion = "autoCompactWindow"
-	// ventanaDeCompactacionPorDefecto es la que pone la instalación: la de la simulación, que ahorra
-	// casi todo lo que ahorran topes más chicos con muchas menos compactaciones.
-	ventanaDeCompactacionPorDefecto = 400_000
+	// ventanaDeCompactacionPorDefecto es la que pone la instalación. Más abajo el ahorro casi no crece
+	// (200k: 48 %, 150k: 48 %) y las compactaciones se disparan (54 y 90 en cuatro días, contra 38).
+	ventanaDeCompactacionPorDefecto = 250_000
 )
 
 // ahorroAnotado es lo que queda escrito en marcaDeAhorro.

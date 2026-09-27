@@ -9,14 +9,20 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ### Added
 - **El ahorro de tokens viene con la instalación: `musubi agente instalar` resume la conversación a
-  los 400k.** Deja `autoCompactWindow: 400000` en el settings de Claude Code, junto a los permisos.
+  los 250k.** Deja `autoCompactWindow: 250000` en el settings de Claude Code, junto a los permisos.
   Medido el 2026-09-26 sobre 14 días de transcripts propios (16.433 respuestas de la API): el 68 %
   del gasto era RELEER la conversación. Con el modelo de 1M, la sesión crecía hasta cerca del millón
   antes de resumirse, con una mediana de 434k tokens por pedido y un 68 % del costo en pedidos de más
   de 400k. Simulado sobre los pedidos de los últimos 4 días, ya con Opus 5.5, el ahorro es de 38 % a
-  los 400k, 42 % a los 300k y 48 % a los 200k. El default es 400k: saca casi todo lo que sacan los
-  topes más chicos con la mitad de las compactaciones. La simulación no cuenta los archivos que el
-  agente vuelve a leer después de un resumen, así que el ahorro real es algo menor. Verificado en el
+  los 400k, 42 % a los 300k, 46 % a los 250k y 48 % a los 200k. Arrancar una sesión nueva al volver de
+  una pausa de más de una hora ahorraría el 54 % (cada vuelta reescribe la conversación entera, con la
+  caché ya vencida, a 40 veces el precio de releerla), pero Claude Code no deja que un hook ni un
+  plugin la abran solos, y su compactación en reposo (`tengu_sunny_locket`) está apagada del lado del
+  servidor para esta cuenta. El default queda en 250k: es lo que más se acerca sin quitarle poder al
+  agente —sigue siendo más contexto que una sesión normal de Claude, de 200k—, y más abajo el ahorro
+  casi no crece mientras las compactaciones se disparan (54 y 90 en cuatro días, contra 38). La
+  simulación no cuenta los archivos que el agente vuelve a leer después de un resumen, así que el
+  ahorro real es algo menor. Verificado en el
   binario 2.1.283: `/context` pasa de «/ 1m» a «/ 400k». Igual que con los permisos, sólo se toca lo
   que Musubi puso: una ventana propia de la persona se respeta, la de Musubi queda anotada en el
   plugin (`.musubi-ahorro.json`), reinstalar la actualiza, `quitar` la saca, y si la persona la
