@@ -8,6 +8,56 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **`musubi uso-agente --contexto`: medir si lo que Musubi pone en el contexto se repite, se pierde
+  o descarrila.** Es el instrumento del frente arranque de la ola 2, y entra antes que cualquier
+  arreglo para tener el antes y el después con la MISMA regla: hasta hoy esos números salían de un
+  python suelto sobre los transcripts. Mide, sólo en las sesiones principales (las hijas se cuentan
+  y no se miden): M1, los turnos de continuación («sigue», «go», «si hazlo») que recibieron
+  «memoria relevante», con dos clasificadores —la lista que va a usar la compuerta del hook y el
+  largo, que no depende de ella—; M1s, los avisos del sistema (`<task-notification>`, un mensaje de
+  otra sesión) que recibieron memoria, contando sólo los que ve el hook —los registros de un
+  slash-command no pasan por él y se informan aparte—; M2, las compactaciones seguidas de un
+  arranque de Musubi; M3, los ids repetidos dentro de una ventana de contexto; M5, los ids de una
+  ventana anterior que volvieron tras compactar; M7, el eco —un bloque de Musubi posterior a una
+  compactación que repite un pedido del dueño—, salteando la línea con que el corrector de tipeo
+  avisa lo que corrigió. `/resume` y los forks salen «sin medir», como el alcance entero cuando no
+  hay transcripts en la ventana: nunca 0. Los tramos de registros que Claude Code reescribe NO son
+  reanudaciones: los 67 de la historia de Musubi y Altura están pegados a una compactación.
+
+  Sobre los transcripts de Musubi y Altura en davantis-1 desde el 09-14 (2026-09-27 00:03 UTC): M1
+  76/130 por lista y 125/203 por largo; M1s 123/340, con 73 registros de slash-command aparte; M2
+  0/31; M3 173/2.480 (7,0 %); M5 630/1.515, en 21 de las 31 compactaciones; M7 0/585. Contra el
+  python de la línea base, los dos sobre la foto de las 22:37 UTC: M3 da 44 allá y 173 acá porque
+  el python no alimenta la ventana con lo inyectado ANTES del 09-14 en una ventana que seguía
+  abierta ese día (con ese estado da 173, igual); M1 por lista da 78/123 allá y 76/129 acá porque el
+  python le anotaba a un «sigue» la memoria de un aviso o de un pedido encolado que llegó detrás, y
+  no contaba como turno el «sigue» encolado. M5 se mide sólo en las ventanas que abre una
+  compactación de la ventana pedida.
+
+  **La línea base de M1 por lista no está congelada.** La toma la lista de
+  `transcripts.EsPedidoDeContinuacion`, que es la de la línea base en python; el contrato del frente
+  pide que la compuerta del hook use `memory.TerminosDeConsulta`, que llega con el PR 2. Si el PR 2
+  cambia la regla, M1 por lista se vuelve a tomar con la regla final ANTES de instalar la ventana
+  V1, o el antes y el después medirían con dos listas. M1 por largo no depende de la lista.
+
+  **El lector de transcripts pasa a `internal/transcripts`**, que ahora comparten `uso-agente`,
+  `--contexto`, el aviso de tareas del hook del turno y, en los PR que siguen, la compuerta del
+  recall, el banco de búsqueda y la métrica de proyecto: un solo parser (con la deduplicación por
+  uuid), un solo recorrido (fuera el `journal.jsonl` y las carpetas de experimento, sesiones hijas
+  por la carpeta `subagents/`), UNA tabla de los prompts que no escribió la persona —el aviso de
+  tareas tenía la suya y discrepaban en cinco prefijos—, un solo `EsPedidoDeContinuacion`, y un
+  lector por turno. El lector aprende además algo que el de `uso-agente` no sabía: un prompt que
+  llega con el agente trabajando —el dueño escribe, o termina una tarea de fondo— se entrega como
+  adjunto `queued_command` y no como registro `user` (35 pedidos y 117 avisos desde el 09-14), y el
+  hook del turno corre para él; sin contarlo, su memoria se le anotaba al turno anterior. Si Claude
+  Code lo escribe además como registro `user`, es un solo turno. `uso-agente` da los mismos números
+  que antes, byte a byte.
+
+  *Dieciséis guardas nuevas con su sabotaje corrido (47 de 47 en rojo, entre ellos los
+  diez que una revisión adversarial dejó verdes), una que lee la salida real del hook del turno
+  para que el medidor no pueda perder su bloque en silencio, y las 11 directivas de
+  `uso_agente_test.go` que apuntaban al código mudado se reescribieron y se re-corrieron. No cambia
+  ninguna tool: no hay goldens.*
 - **Antes de tocar un agente a mano, se declara la ventana: el runbook trae la receta.** El
   2026-09-20, en la migración a TLS, se tocó a mano la tarea del agente de `gio` y
   `AgenteCaidoConMaquinaViva` sonó 50 minutos. Fue la única ventana de trabajo leída como caída en
