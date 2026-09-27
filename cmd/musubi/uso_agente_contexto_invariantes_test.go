@@ -15,6 +15,19 @@ import (
 // (2026-09-26): cada una custodia una regla que el instrumento de antes/después no puede perder sin
 // que CI se entere, porque un «después» medido con otra regla no es comparable con el «antes».
 
+func medirContextoDesde(t *testing.T, raiz, desde string) *MedicionContexto {
+	t.Helper()
+	v, err := transcripts.ParsearVentana(desde, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inf, err := medirContexto(raiz, v, nil)
+	if err != nil || inf.Principal.MedicionContexto == nil {
+		t.Fatalf("medirContexto: %v, estado %q", err, inf.Principal.Estado)
+	}
+	return inf.Principal.MedicionContexto
+}
+
 // Sabotaje que la hace fallar: volver a publicar un número de resume.
 // arnes: archivo="cmd/musubi/uso_agente_contexto.go"
 // arnes: de="\t\tReanudaciones: Reanudaciones{Resume: motivoResumeSinMedir, Fork: motivoForkSinMedir}}\n"
@@ -154,4 +167,135 @@ func TestMedirContextoM1sSoloCuentaLoQueVeElHook(t *testing.T) {
 	if n := m.PromptsPorOrigen[string(transcripts.OrigenSistema)]; n != 3 {
 		t.Errorf("prompts del sistema = %d, quería 3: el conteo por origen no cambia", n)
 	}
+}
+
+// Sabotaje que la hace fallar: que lo inyectado ANTES de --desde no alimente la ventana (M3).
+// arnes: archivo="cmd/musubi/uso_agente_contexto.go"
+// arnes: de="\t\t\t\tenLaVentana[id] = true\n"
+// arnes: a="\t\t\t\tif cuenta {\n\t\t\t\t\tenLaVentana[id] = true\n\t\t\t\t}\n"
+//
+// Sabotaje que la hace fallar: contar en el denominador de M3 los ids de antes de --desde.
+// arnes: archivo="cmd/musubi/uso_agente_contexto.go"
+// arnes: de="\t\t\t\tif cuenta {\n\t\t\t\t\tm.M3.IDs++\n"
+// arnes: a="\t\t\t\tif true {\n\t\t\t\t\tm.M3.IDs++\n"
+//
+// Sabotaje que la hace fallar: que el arranque cuente aunque llegue después del próximo pedido (M2).
+// arnes: archivo="cmd/musubi/uso_agente_contexto.go"
+// arnes: de="\t\t\tesperandoArranque = false // llegó el pedido siguiente y el arranque no habló\n"
+// arnes: a=""
+//
+// Sabotaje que la hace fallar: que M1 por largo cuente también los avisos del sistema cortos.
+// arnes: archivo="cmd/musubi/uso_agente_contexto.go"
+// arnes: de="\t\t\t\tif transcripts.LoVeElHook(t.Prompt) {\n\t\t\t\t\tsumarTurno(&m.M1s)\n"
+// arnes: a="\t\t\t\tif esPromptCorto(t.Prompt) {\n\t\t\t\t\tsumarTurno(&m.M1.PorLargo)\n\t\t\t\t}\n\t\t\t\tif transcripts.LoVeElHook(t.Prompt) {\n\t\t\t\t\tsumarTurno(&m.M1s)\n"
+//
+// Sabotaje que la hace fallar: contar en M2, M3 y M7 los hooks que no son de Musubi.
+// arnes: archivo="cmd/musubi/uso_agente_contexto.go"
+// arnes: de="\t\t\tif !in.DeMusubi() || (in.Evento != transcripts.EventoTurno && in.Evento != transcripts.EventoArranque) {\n"
+// arnes: a="\t\t\tif false || (in.Evento != transcripts.EventoTurno && in.Evento != transcripts.EventoArranque) {\n"
+//
+// Sabotaje que la hace fallar: que el pedido del turno cuente como eco de sí mismo (M7).
+// arnes: archivo="cmd/musubi/uso_agente_contexto.go"
+// arnes: de="\t\tmemoria, idsMemoria := false, 0\n"
+// arnes: a="\t\tif t.Origen == transcripts.OrigenHumano {\n\t\t\tif p := []rune(normalizarParaEco(t.Prompt)); len(p) >= minimoDeEco {\n\t\t\t\tif len(p) > largoDeEco {\n\t\t\t\t\tp = p[:largoDeEco]\n\t\t\t\t}\n\t\t\t\tpedidos = append(pedidos, string(p))\n\t\t\t}\n\t\t}\n\t\tmemoria, idsMemoria := false, 0\n"
+//
+// Sabotaje que la hace fallar: buscar el eco sin pasar a minúsculas (M7).
+// arnes: archivo="cmd/musubi/uso_agente_contexto.go"
+// arnes: de="\treturn strings.Join(strings.Fields(strings.ToLower(s)), \" \")\n"
+// arnes: a="\treturn strings.Join(strings.Fields(s), \" \")\n"
+func TestMedirContextoInvariantes(t *testing.T) {
+	dia := "2026-09-20"
+	mem := func(uuid string, seg int, evento, titulo string, ids ...string) map[string]any {
+		texto := titulo + " Contexto de fondo."
+		for _, id := range ids {
+			texto += "\n- gist [id:" + id + "]"
+		}
+		return fxHook(uuid, fxTS(dia, seg), evento, texto)
+	}
+	const recall, arranque = "[Musubi — memoria relevante]", "[Musubi — memoria]"
+
+	t.Run("M3 arrastra la ventana de antes de --desde", func(t *testing.T) {
+		// Lo inyectado ayer sigue en el contexto hoy: el 7 se repite aunque su primera vez sea de
+		// antes de la ventana, y el 7 de ayer no entra al denominador. Es la regla que lleva M3 de
+		// 44 a 173 en los reales.
+		raiz := t.TempDir()
+		escribirTranscript(t, raiz, "-home-x/s1.jsonl",
+			fxPrompt("p1", fxTS("2026-09-20", 1), "armá el deploy del central con la receta"),
+			fxHook("h1", fxTS("2026-09-20", 2), "UserPromptSubmit", recall+" Contexto.\n- a [id:7]"),
+			fxPrompt("p2", fxTS("2026-09-21", 1), "revisá la receta del deploy otra vez"),
+			fxHook("h2", fxTS("2026-09-21", 2), "UserPromptSubmit", recall+" Contexto.\n- a [id:7]\n- b [id:8]"),
+		)
+		if m := medirContextoDesde(t, raiz, "2026-09-21"); m.M3 != (MedidaM3{IDs: 2, Repetidos: 1}) {
+			t.Errorf("M3 desde el 21 = %+v, quería 2 ids y 1 repetido (el 7, que ya estaba desde el 20)", m.M3)
+		}
+	})
+
+	t.Run("M2 corta en el próximo pedido", func(t *testing.T) {
+		// Un arranque que llega DESPUÉS del pedido siguiente no es el arranque de la compactación.
+		raiz := t.TempDir()
+		escribirTranscript(t, raiz, "-home-x/s1.jsonl",
+			fxPrompt("p1", fxTS(dia, 1), "armá el deploy del central con la receta"),
+			fxBordeDeCompactacion("b1", fxTS(dia, 2)),
+			fxPrompt("p2", fxTS(dia, 3), "revisá los números del banco de prompts"),
+			mem("h1", 4, "SessionStart", arranque, "3"),
+		)
+		if m := medirContextoFixture(t, raiz); m.M2 != (MedidaM2{Compactaciones: 1}) {
+			t.Errorf("M2 = %+v, quería 1 compactación y ningún arranque: el de Musubi llegó tras el pedido", m.M2)
+		}
+	})
+
+	t.Run("M1 por largo es sólo de la persona", func(t *testing.T) {
+		raiz := t.TempDir()
+		escribirTranscript(t, raiz, "-home-x/s1.jsonl",
+			fxPrompt("p1", fxTS(dia, 1), "<task-notification>listo</task-notification>"),
+			mem("h1", 2, "UserPromptSubmit", recall, "4"),
+		)
+		m := medirContextoFixture(t, raiz)
+		if m.M1.PorLargo != (ConteoDeTurnos{}) || m.M1s.Turnos != 1 {
+			t.Errorf("M1 por largo = %+v y M1s = %+v: un aviso corto es M1s, no continuación", m.M1.PorLargo, m.M1s)
+		}
+	})
+
+	t.Run("sólo cuentan los bloques de Musubi", func(t *testing.T) {
+		// El SessionStart de otro plugin tras compactar no es un arranque de Musubi, y sus ids no
+		// son memoria de Musubi.
+		raiz := t.TempDir()
+		escribirTranscript(t, raiz, "-home-x/s1.jsonl",
+			fxPrompt("p1", fxTS(dia, 1), "armá el deploy del central con la receta"),
+			fxBordeDeCompactacion("b1", fxTS(dia, 2)),
+			mem("h1", 3, "SessionStart", "[OtroPlugin — arranque]", "9"),
+		)
+		m := medirContextoFixture(t, raiz)
+		if m.M2 != (MedidaM2{Compactaciones: 1}) || m.M3.IDs != 0 || m.M7.Bloques != 0 {
+			t.Errorf("M2 = %+v, M3 = %+v, M7 = %+v: se contó el bloque de otro plugin", m.M2, m.M3, m.M7)
+		}
+	})
+
+	t.Run("el eco es de un pedido viejo", func(t *testing.T) {
+		// El bloque de este mismo turno puede nombrar lo que se acaba de pedir: eso no es eco.
+		raiz := t.TempDir()
+		pedido := "revisá la receta del deploy del central otra vez"
+		escribirTranscript(t, raiz, "-home-x/s1.jsonl",
+			fxPrompt("p1", fxTS(dia, 1), "go"),
+			fxBordeDeCompactacion("b1", fxTS(dia, 2)),
+			fxPrompt("p2", fxTS(dia, 3), pedido),
+			fxHook("h1", fxTS(dia, 4), "UserPromptSubmit", recall+" Contexto.\n- "+pedido+" [id:5]"),
+		)
+		if m := medirContextoFixture(t, raiz); m.M7 != (MedidaM7{Bloques: 1}) {
+			t.Errorf("M7 = %+v, quería 1 bloque sin eco: el pedido del turno contó como eco de sí mismo", m.M7)
+		}
+	})
+
+	t.Run("el eco no mira mayúsculas", func(t *testing.T) {
+		raiz := t.TempDir()
+		escribirTranscript(t, raiz, "-home-x/s1.jsonl",
+			fxPrompt("p1", fxTS(dia, 1), "Armá el DEPLOY del Central con la Receta nueva"),
+			fxBordeDeCompactacion("b1", fxTS(dia, 2)),
+			fxHook("h1", fxTS(dia, 3), "SessionStart",
+				"[Musubi — hilo] Tus últimos pedidos:\n- armá el deploy del central con la receta nueva"),
+		)
+		if m := medirContextoFixture(t, raiz); m.M7 != (MedidaM7{Bloques: 1, ConEco: 1}) {
+			t.Errorf("M7 = %+v, quería 1 bloque con eco: el pedido en mayúsculas se repitió en minúsculas", m.M7)
+		}
+	})
 }

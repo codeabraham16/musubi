@@ -121,6 +121,11 @@ func TestLaListaDeContinuacionNoSeComeElContenido(t *testing.T) {
 // arnes: archivo="internal/transcripts/prompts.go"
 // arnes: de="\tcase reg.IsCompactSummary,\n"
 // arnes: a="\tcase false,\n"
+//
+// Sabotaje que la hace fallar: contar dos veces la misma llamada escrita con otro uuid.
+// arnes: archivo="internal/transcripts/turnos.go"
+// arnes: de="\t\t\t\t\tif llamadas[b.ID] {\n"
+// arnes: a="\t\t\t\t\tif false && llamadas[b.ID] {\n"
 func TestLeerSesionPartePorTurnosYVentanas(t *testing.T) {
 	// La forma medida: el hook llega DESPUÉS de su prompt, la compactación deja un borde, el resumen
 	// y el `/compact`, y después se reescriben registros con el mismo uuid.
@@ -132,11 +137,17 @@ func TestLeerSesionPartePorTurnosYVentanas(t *testing.T) {
 				"input": map[string]any{"ids": []string{"a1"}}},
 			map[string]any{"type": "tool_use", "id": "toolu_2", "name": "Write",
 				"input": map[string]any{"content": "un archivo entero"}}}}}
+	// La misma llamada, escrita otra vez con OTRO uuid: el banco de búsqueda lee las llamadas por
+	// este lector, y una llamada contada dos veces es una búsqueda que el agente no hizo.
+	llamadaOtraVez := map[string]any{"type": "assistant", "uuid": "a1b", "timestamp": "2026-09-20T10:00:02.500Z",
+		"message": map[string]any{"role": "assistant", "content": []any{
+			map[string]any{"type": "tool_use", "id": "toolu_1", "name": "mcp__musubi__musubi_memory_expand",
+				"input": map[string]any{"ids": []string{"a1"}}}}}}
 	// El resumen de una versión nueva que ya no empieza como los viejos: sólo lo marca el campo.
 	resumen := fxUsuario("u2", "2026-09-20T11:00:01.000Z", "Summary: 1. Primary Request and Intent")
 	resumen["isCompactSummary"] = true
 	ruta := fxEscribir(t,
-		p1, h1, llamada,
+		p1, h1, llamada, llamadaOtraVez,
 		p1, h1, // Claude Code reescribe lo que ya estaba
 		fxUsuario("u1b", "2026-09-20T10:30:00.000Z", "<task-notification>\n<summary>listo</summary>"),
 		fxBorde("b1", "2026-09-20T11:00:00.000Z"),
@@ -285,5 +296,40 @@ func TestUnPromptEncoladoQueSeEscribeDosVecesEsUnTurno(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, quiero) {
 		t.Errorf("turnos (prompt, inyecciones) = %v\nquería %v", got, quiero)
+	}
+}
+
+// Sabotaje que la hace fallar: que el resumen viejo, que no traía isCompactSummary, pase por un
+// pedido humano.
+// arnes: archivo="internal/transcripts/prompts.go"
+// arnes: de="\t\tstrings.HasPrefix(p, \"This session is being continued\"),\n"
+// arnes: a=""
+//
+// Sabotaje que la hace fallar: que la marca de una interrupción pase por un pedido humano.
+// arnes: archivo="internal/transcripts/prompts.go"
+// arnes: de="\t\tstrings.HasPrefix(p, \"[Request interrupted\"):\n"
+// arnes: a="\t\tfalse:\n"
+func TestLeerSesionReconoceLoQueEscribeClaudeCode(t *testing.T) {
+	// Las versiones viejas de Claude Code no marcaban el resumen de la compactación con el campo, y
+	// la marca de una interrupción la escribe Claude Code: ninguno es un pedido de la persona, y
+	// contados como tal inflarían los turnos sustantivos de M1.
+	ruta := fxEscribir(t,
+		fxUsuario("u1", "2026-09-20T10:00:00.000Z", "armá el banco con prompts reales"),
+		fxUsuario("u2", "2026-09-20T10:00:05.000Z", "[Request interrupted by user]"),
+		fxBorde("b1", "2026-09-20T11:00:00.000Z"),
+		fxUsuario("u3", "2026-09-20T11:00:01.000Z", "This session is being continued from a previous conversation that ran out of context."),
+		fxUsuario("u4", "2026-09-20T11:05:00.000Z", "sigue"),
+	)
+	s, err := LeerSesion(ruta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []Origen
+	for _, tu := range s.Turnos {
+		got = append(got, tu.Origen)
+	}
+	quiero := []Origen{OrigenHumano, OrigenInterno, OrigenApertura, OrigenInterno, OrigenHumano}
+	if !reflect.DeepEqual(got, quiero) {
+		t.Errorf("orígenes = %v, quería %v", got, quiero)
 	}
 }
