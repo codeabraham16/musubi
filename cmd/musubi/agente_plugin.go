@@ -59,6 +59,7 @@ var ganchosDelAgente = []struct{ evento, matcher, sub string }{
 	{"PreToolUse", "Read", "precheck --hook-mode"},
 	{"PreToolUse", matcherEdicion, "precheck --hook-mode"},
 	{"Stop", "", "capture --hook-mode"},
+	{"PreCompact", "", "precompact --hook-mode"},
 }
 
 // dirDelPlugin es donde se instala: <config de Claude Code>/skills/musubi.
@@ -401,7 +402,7 @@ func elProyectoYaTieneElGancho(dir, sub string) bool {
 	return false
 }
 
-// elPluginCedeElGancho es la pregunta que se hacen los cuatro hooks al arrancar.
+// elPluginCedeElGancho es la pregunta que se hacen los hooks al arrancar.
 func elPluginCedeElGancho(sub string) bool {
 	return corriendoComoPlugin() && elProyectoYaTieneElGancho(carpetaDeLaSesion(), sub)
 }

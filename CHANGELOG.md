@@ -8,6 +8,20 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Cada resumen de la conversación conserva lo que el agente no puede perder.** Antes de que Claude
+  Code compacte, el hook `PreCompact` le pasa al resumen las instrucciones de Musubi: conservar
+  textuales las reglas, decisiones y pedidos de la persona (marcando los que no se cumplieron), el
+  estado del trabajo (ramas, commits, PRs, despliegues, máquinas, cómo se verificó cada cosa, qué
+  quedó a medias y el próximo paso), los errores caros con su solución y los ids de memoria de
+  Musubi; y no copiar salidas largas de comandos, porque el resumen se relee en cada pedido
+  siguiente. Es la otra mitad del ahorro: con la ventana de compactación puesta, la conversación se
+  resume más seguido, y cada resumen es un punto donde se podía perder algo. El canal está medido:
+  en PreCompact, la salida estándar de un hook que termina bien se agrega a las instrucciones del
+  resumen (el envelope JSON con additionalContext, en cambio, se descarta; por eso este hook estuvo
+  tres semanas mudo, y por eso `precompact` había quedado como un shim que no imprimía nada).
+  Compactando una sesión de prueba con una palabra testigo, el resumen registró la instrucción. Lo
+  registran el plugin, `musubi setup` y `provision`; si el proyecto ya corre el hook desde su propio
+  settings, el del plugin se calla.
 - **El vector de una consulta, sin cargar la tabla: ~25 ms y 16 MB para un prompt corto, en vez de
   1,4-2,8 s y 854 MB.**
   El hook por turno corre sin vector porque armar el embebedor estático cuesta más de un segundo
@@ -39,14 +53,20 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   depende del banco con forma de prompt. El job `recall-gate` suma las tres comparaciones contra
   POTION real.
 - **El ahorro de tokens viene con la instalación: `musubi agente instalar` resume la conversación a
-  los 400k.** Deja `autoCompactWindow: 400000` en el settings de Claude Code, junto a los permisos.
+  los 250k.** Deja `autoCompactWindow: 250000` en el settings de Claude Code, junto a los permisos.
   Medido el 2026-09-26 sobre 14 días de transcripts propios (16.433 respuestas de la API): el 68 %
   del gasto era RELEER la conversación. Con el modelo de 1M, la sesión crecía hasta cerca del millón
   antes de resumirse, con una mediana de 434k tokens por pedido y un 68 % del costo en pedidos de más
   de 400k. Simulado sobre los pedidos de los últimos 4 días, ya con Opus 5.5, el ahorro es de 38 % a
-  los 400k, 42 % a los 300k y 48 % a los 200k. El default es 400k: saca casi todo lo que sacan los
-  topes más chicos con la mitad de las compactaciones. La simulación no cuenta los archivos que el
-  agente vuelve a leer después de un resumen, así que el ahorro real es algo menor. Verificado en el
+  los 400k, 42 % a los 300k, 46 % a los 250k y 48 % a los 200k. Arrancar una sesión nueva al volver de
+  una pausa de más de una hora ahorraría el 54 % (cada vuelta reescribe la conversación entera, con la
+  caché ya vencida, a 40 veces el precio de releerla), pero Claude Code no deja que un hook ni un
+  plugin la abran solos, y su compactación en reposo (`tengu_sunny_locket`) está apagada del lado del
+  servidor para esta cuenta. El default queda en 250k: es lo que más se acerca sin quitarle poder al
+  agente —sigue siendo más contexto que una sesión normal de Claude, de 200k—, y más abajo el ahorro
+  casi no crece mientras las compactaciones se disparan (54 y 90 en cuatro días, contra 38). La
+  simulación no cuenta los archivos que el agente vuelve a leer después de un resumen, así que el
+  ahorro real es algo menor. Verificado en el
   binario 2.1.283: `/context` pasa de «/ 1m» a «/ 400k». Igual que con los permisos, sólo se toca lo
   que Musubi puso: una ventana propia de la persona se respeta, la de Musubi queda anotada en el
   plugin (`.musubi-ahorro.json`), reinstalar la actualiza, `quitar` la saca, y si la persona la
@@ -616,6 +636,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   llega: ahora lo custodia `TestLaMismaVersionNoEsChoque`, con una pendiente idéntica a lo que
   baja—, y `TestDrainOfflineFirstRecovery` y `TestDrainPermanentGoesDead` custodian que el drain le
   pase al reintento y al dead-letter el hash de lo que empujó.*
+- **El inventario de la flota ya no dice que una política actuaría cuando el barrido no la va a visitar.**
+  Había dos casos en que `musubi_fleet_list` publicaba `puede_actuar: true` y la política no corría
+  nunca:
+  - el barrido apagado (`fleet.probe_minutes` negativo);
+  - el proyecto de la máquina fuera del tope de proyectos que recorre cada barrido (64).
+
+  Ahora dice `inerte_por: barrido_apagado` o `inerte_por: fuera_del_barrido`, calculado con las mismas
+  funciones que deciden el barrido, y el panel explica los dos casos. Si la lista de proyectos del
+  barrido no se puede leer, la tool devuelve error en vez de un veredicto inventado.
 - **El mapa publicado describe el commit, no el disco: lo que git ignora ya no sube al central.**
   El índice lee el disco y el central guarda la foto con la etiqueta de un commit. #647 frenaba lo
   modificado y lo sin trackear, pero `git status` no lista los **ignorados**, y `walkSourceTree` no

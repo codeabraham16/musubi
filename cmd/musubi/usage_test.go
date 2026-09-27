@@ -14,11 +14,18 @@ func TestUsageDocumentsUserCommands(t *testing.T) {
 	orig := os.Stdout
 	r, w, _ := os.Pipe()
 	os.Stdout = w
+	// La lectura corre EN PARALELO con la escritura. Leer recién después de cerrar colgaba la prueba
+	// en cuanto la ayuda pasaba el buffer del pipe: en el runner de Windows, 4.132 bytes pasaban y
+	// 4.158 dejaron la escritura bloqueada 22 minutos, hasta el timeout de 25 (CI de #697).
+	leido := make(chan []byte, 1)
+	go func() {
+		b, _ := io.ReadAll(r)
+		leido <- b
+	}()
 	printUsage()
 	_ = w.Close()
 	os.Stdout = orig
-	out, _ := io.ReadAll(r)
-	help := string(out)
+	help := string(<-leido)
 
 	// `shell` se agrega acá el mismo día que se cablea: es la razón de ser de esta prueba —
 	// `ingest` y `catalog harvest` vivieron cableados e invisibles hasta que alguien los buscó.
