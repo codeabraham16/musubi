@@ -66,7 +66,7 @@ func TestUnaCredencialVencidaNoActuaPorUnaPolitica(t *testing.T) {
 
 	// ── VIGENTE: el control positivo. Todo lo demás de esta prueba no dice nada sin él.
 	relojDeVencimiento(t, vence.Add(-time.Hour))
-	if s.porQueNoActuaria(politicaDeMemoria2(), d, false) != sinFreno {
+	if s.porQueNoActuaria(politicaDeMemoria2(), d, barridoDelInventario(t, s), false) != sinFreno {
 		t.Fatal("con la credencial VIGENTE el indicador ya dice que no puede actuar: la prueba no ejercita el vencimiento")
 	}
 	if n := s.aplicarPoliticas("casa", ahora); n != 1 {
@@ -80,7 +80,7 @@ func TestUnaCredencialVencidaNoActuaPorUnaPolitica(t *testing.T) {
 	// ── VENCIDA POR UN SEGUNDO. La credencial es la misma, el registro es el mismo, la máquina
 	// es la misma y la concesión sigue puesta: lo ÚNICO que cambió es el reloj.
 	relojDeVencimiento(t, vence.Add(time.Second))
-	if s.porQueNoActuaria(politicaDeMemoria2(), d, false) == sinFreno {
+	if s.porQueNoActuaria(politicaDeMemoria2(), d, barridoDelInventario(t, s), false) == sinFreno {
 		t.Error("el indicador dice que una credencial VENCIDA puede actuar: le enseña a un operador " +
 			"a confiar en un permiso que ya no existe")
 	}
@@ -105,7 +105,7 @@ func TestUnaCredencialVencidaNoActuaPorUnaPolitica(t *testing.T) {
 
 	// ── EL BORDE, EXACTAMENTE EN EL INSTANTE. Va para el lado seguro, igual que en resolve().
 	relojDeVencimiento(t, vence)
-	if s.porQueNoActuaria(politicaDeMemoria2(), d, false) == sinFreno {
+	if s.porQueNoActuaria(politicaDeMemoria2(), d, barridoDelInventario(t, s), false) == sinFreno {
 		t.Error("justo en el instante del vencimiento la política todavía puede actuar: el borde tiene que ir para el lado seguro")
 	}
 }
@@ -315,7 +315,7 @@ func TestElEnvoltorioDeProduccionTampocoDejaActuarAUnaVencida(t *testing.T) {
 
 	// ── VIGENTE: el control positivo. Sin él, todo lo de abajo pasaría con un motor muerto.
 	relojDeVencimiento(t, vence.Add(-time.Hour))
-	if s.porQueNoActuaria(politicaDeMemoria2(), d, false) != sinFreno {
+	if s.porQueNoActuaria(politicaDeMemoria2(), d, barridoDelInventario(t, s), false) != sinFreno {
 		t.Fatal("con la credencial VIGENTE el envoltorio ya dice que no puede actuar: la prueba no ejercita el vencimiento")
 	}
 	if n := s.aplicarPoliticas("casa", ahora); n != 1 {
@@ -328,7 +328,7 @@ func TestElEnvoltorioDeProduccionTampocoDejaActuarAUnaVencida(t *testing.T) {
 
 	// ── VENCIDA. Mismo envoltorio, mismo snapshot, misma máquina: lo único que cambia es el reloj.
 	relojDeVencimiento(t, vence.Add(time.Second))
-	if s.porQueNoActuaria(politicaDeMemoria2(), d, false) == sinFreno {
+	if s.porQueNoActuaria(politicaDeMemoria2(), d, barridoDelInventario(t, s), false) == sinFreno {
 		t.Error("POR EL ENVOLTORIO DE PRODUCCIÓN el indicador dice que una credencial VENCIDA puede actuar")
 	}
 
