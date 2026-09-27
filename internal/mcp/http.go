@@ -978,7 +978,7 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 	// viejas y aplica las políticas. Arranca acá y no en el entrypoint por la misma razón que el
 	// watch del registro: recién acá el registro existe, y una política sin registro no tiene a
 	// quién nombrar. No-op si el intervalo está en 0 (sondeo desactivado a mano).
-	go s.RunFlotaScheduler(ctx, s.sondaIntervalo)
+	go s.RunFlotaScheduler(ctx)
 	// Y EL EMPUJE OTLP (S11), acá y por lo mismo: recién en este punto el registro existe, y un
 	// empujador sin registro no tiene a quién nombrar — y un empujador sin principal exportaría la
 	// telemetría de todos los tenants. En su PROPIO ticker: la cadencia del export es la del scrape
