@@ -80,7 +80,10 @@ func detectOutput(root string, hookMode bool, sessionID string) (string, error) 
 			fmt.Fprintf(os.Stderr, "musubi detect: no se pudieron refrescar los manuales (la sesión sigue): %v\n", rerr)
 		}
 	}
-	return buildHookOutputCon(root, store, cfg.Startup, sessionID, current)
+	// El proyecto de este repo, para marcar en el priming las notas de otro. La MISMA resolución que
+	// el hook del turno y que el daemon al estampar cada nota: ver runTurn.
+	propio := resolveProjectID(cfg, root)
+	return buildHookOutputCon(root, store, cfg.Startup, sessionID, current, propio)
 }
 
 // buildHookOutput arma el additionalContext del SessionStart combinando dos
@@ -92,11 +95,12 @@ func detectOutput(root string, hookMode bool, sessionID string) (string, error) 
 // Si ambas partes quedan vacías, devuelve "" (hook silencioso e idempotente).
 func buildHookOutput(root string, store startupStore, cfg config.StartupConfig, sessionID string) (string, error) {
 	current, _ := detector.DetectStack(root)
-	return buildHookOutputCon(root, store, cfg, sessionID, current)
+	return buildHookOutputCon(root, store, cfg, sessionID, current, "")
 }
 
-// buildHookOutputCon es buildHookOutput con el stack ya detectado.
-func buildHookOutputCon(root string, store startupStore, cfg config.StartupConfig, sessionID string, current []detector.StackResult) (string, error) {
+// buildHookOutputCon es buildHookOutput con el stack ya detectado y el proyecto propio, que el
+// priming usa para marcar las notas de otro proyecto (vacío ⇒ ninguna marca).
+func buildHookOutputCon(root string, store startupStore, cfg config.StartupConfig, sessionID string, current []detector.StackResult, propio string) (string, error) {
 	skillsDir := filepath.Join(root, config.DirName, config.SkillsDir)
 	sentinelPath := filepath.Join(skillsDir, config.SentinelFile)
 	_, sentinelErr := os.Stat(sentinelPath)
@@ -116,7 +120,7 @@ func buildHookOutputCon(root string, store startupStore, cfg config.StartupConfi
 	generation := decideGeneration(root, store, cfg, current, sentinelExists)
 	priming := ""
 	if store != nil && cfg.PrimeMemory {
-		priming = buildPrimingContext(store, cfg.RecallBudget, sessionID)
+		priming = buildPrimingContext(store, cfg.RecallBudget, sessionID, propio)
 	}
 	cognitive := ""
 	if store != nil && cfg.CognitiveBootstrap && bootstrappingAutoconocimiento(store) {
@@ -382,8 +386,9 @@ func assembleHookContext(eventName string, bloques ...string) string {
 }
 
 // buildPrimingContext arma el bloque de "memoria recordada" del proyecto a partir
-// de un recall por presupuesto de tokens. Devuelve "" si no hay memoria.
-func buildPrimingContext(store startupStore, budget int, sessionID string) string {
+// de un recall por presupuesto de tokens. Devuelve "" si no hay memoria. propio sólo decide qué
+// viñetas se marcan como de otro proyecto: el priming trae lo mismo que traía.
+func buildPrimingContext(store startupStore, budget int, sessionID string, propio string) string {
 	res, err := store.PrimeContext(budget)
 	if err != nil || res.Count == 0 {
 		return ""
@@ -402,9 +407,10 @@ func buildPrimingContext(store startupStore, budget int, sessionID string) strin
 
 	// EL MISMO ENCABEZADO QUE EL HOOK POR TURNO, y armado por la MISMA función. Acá había una
 	// copia del texto escrita a mano: las dos decían lo mismo y envejecían por separado, que es
-	// exactamente cómo una advertencia nueva entra en un camino y no en el hermano.
-	header := encabezadoDeMemoria("[Musubi — memoria] Contexto de fondo que Musubi recuerda de este proyecto.")
-	return formatGists(header, res)
+	// exactamente cómo una advertencia nueva entra en un camino y no en el hermano. Lo arma
+	// formatGists, que es quien sabe si alguna viñeta salió marcada como de otro proyecto.
+	titulo := "[Musubi — memoria] Contexto de fondo que Musubi recuerda de este proyecto."
+	return formatGists(titulo, res, propio)
 }
 
 // buildCognitiveContext arma el bloque de autoconocimiento que activa las skills

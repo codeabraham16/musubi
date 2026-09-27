@@ -1752,3 +1752,34 @@ la máquina realmente no está, **o** el cerebro no pudo preguntarle al tailnet.
 si existe la serie: `musubi_fleet_net_up{device="<máquina>"}`. Si **falta**, nadie pudo medir
 —no hay `tailscale` en el cerebro, o esa máquina no está en el tailnet— y la ausencia significa «no
 sé», nunca «no está».
+
+## RelojDesfasado
+
+El reloj de una máquina **se corrió más de 30 s** respecto del cerebro, y sigue así hace 15
+minutos.
+
+Lo mide el cerebro en cada latido: el agente pone su hora al mandarlo (`enviado_ms`) y el cerebro
+le resta la hora a la que llegó. La serie es `musubi_fleet_clock_offset_seconds`, **con signo**:
+
+- **positiva**: el reloj de la máquina va **adelantado**;
+- **negativa**: va **atrasado**.
+
+El viaje de red corre el valor unos milisegundos hacia abajo. Contra 30 s eso no pesa.
+
+1. **Si se corrió TODA la flota junta y para el mismo lado**, el reloj corrido es el del
+   **cerebro**, no el de las máquinas. Mirá primero el server, con los comandos del paso 2.
+2. **En Linux**: `timedatectl` dice si la sincronización está activa (`System clock synchronized:
+   yes`). Cuánto se corrió y contra quién sincroniza lo dice `chronyc tracking` donde corre chrony
+   (Rocky), o `timedatectl timesync-status` donde corre systemd-timesyncd (Mint). Si la
+   sincronización está apagada: `sudo timedatectl set-ntp true`.
+3. **En Windows**: `w32tm /query /status` dice contra quién sincroniza y cuándo fue la última vez.
+   Para forzarla, `w32tm /resync` desde una consola de administrador. Si contesta que el servicio
+   no se inició (`0x80070426`), está parado: `net start w32time`.
+4. **Una máquina que volvió de suspender** puede traer el reloj corrido hasta que sincronice. Si la
+   alerta se apaga sola a los pocos minutos, era eso.
+
+Cuando el reloj vuelve a estar en hora, el siguiente latido lo mide y la alerta se apaga sola.
+
+**Si la máquina no tiene la serie**, nadie midió su reloj: corre un agente anterior al capver 4,
+que no manda su hora, dejó de latir hace más de 90 s, o no tiene agente (Tier B). La ausencia
+significa «no sé», nunca «en hora».

@@ -53,7 +53,7 @@ func TestSiElTailnetVeLaMaquinaLoCaidoEsElAgente(t *testing.T) {
 	}
 
 	var b strings.Builder
-	renderFlota(&b, s.engine, ptrPrincipal(principalDePrometheus()), ahora, s.sondaIntervalo, versionDePrueba, s.vidaDeRedDe, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
+	renderFlota(&b, s.engine, ptrPrincipal(principalDePrometheus()), ahora, s.sondaIntervalo, versionDePrueba, s.vidaDeRedDe, nil, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
 	if !strings.Contains(b.String(), nombreVidaDeRed+`{project="casa",device="davantis-1"} 1`) {
 		t.Fatalf("la serie no dice que la máquina está en la red:\n%s", b.String())
 	}
@@ -69,7 +69,7 @@ func TestSiElTailnetNoLaVeLaSerieDiceCero(t *testing.T) {
 
 	s.medirVidaDeRed(context.Background(), []fleet.Device{d}, ahora)
 	var b strings.Builder
-	renderFlota(&b, s.engine, ptrPrincipal(principalDePrometheus()), ahora, s.sondaIntervalo, versionDePrueba, s.vidaDeRedDe, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
+	renderFlota(&b, s.engine, ptrPrincipal(principalDePrometheus()), ahora, s.sondaIntervalo, versionDePrueba, s.vidaDeRedDe, nil, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
 	if !strings.Contains(b.String(), nombreVidaDeRed+`{project="casa",device="davantis-1"} 0`) {
 		t.Fatalf("la serie no dice que la máquina no está:\n%s", b.String())
 	}
@@ -108,7 +108,7 @@ func TestLoQueNoSePudoMedirNoEmiteSerie(t *testing.T) {
 				t.Fatal("se guardó una medición que no se pudo hacer")
 			}
 			var b strings.Builder
-			renderFlota(&b, s.engine, ptrPrincipal(principalDePrometheus()), ahora, s.sondaIntervalo, versionDePrueba, s.vidaDeRedDe, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
+			renderFlota(&b, s.engine, ptrPrincipal(principalDePrometheus()), ahora, s.sondaIntervalo, versionDePrueba, s.vidaDeRedDe, nil, serviciosPorProyectoDefault, aprobacionesPorProyectoDefault)
 			if strings.Contains(b.String(), nombreVidaDeRed) {
 				t.Fatalf("se emitió la serie sin haber medido: un 0 acá dice «la máquina no está»\n%s", b.String())
 			}

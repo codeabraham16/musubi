@@ -84,10 +84,10 @@ func TestI1UnTopicConSaltoNoConsigueLineaPropiaEnElHook(t *testing.T) {
 // distintos (arranque de sesión y cada turno). Arreglar una y no la otra es el defecto dominante de
 // este repo, y es exactamente lo que esta guarda existe para impedir.
 func TestI2ElFormateadorDelPrimingTampocoDejaEscapar(t *testing.T) {
-	bloque := formatGists(encabezadoDeMemoria("[Musubi — memoria] Contexto."), memory.RecallResult{
+	bloque := formatGists("[Musubi — memoria] Contexto.", memory.RecallResult{
 		Count: 1,
 		Items: []memory.RecallItem{{ID: "x1", TopicKey: topicHostilConSalto, Gist: gistHostilConSalto}},
-	})
+	}, "")
 	lineasDeViñeta(t, bloque)
 }
 
@@ -128,7 +128,7 @@ func TestI4ElPrimingAdvierteLoMismoQueElHook(t *testing.T) {
 
 	priming := buildPrimingContext(
 		&fakeStore{meta: map[string]string{}, prime: memory.RecallResult{Count: 1, Items: []memory.RecallItem{item}}},
-		250, "s1")
+		250, "s1", "")
 	if priming == "" {
 		t.Fatal("el priming no produjo bloque: sin bloque no hay nada que comparar")
 	}
@@ -164,7 +164,7 @@ func TestI4ElPrimingAdvierteLoMismoQueElHook(t *testing.T) {
 // Va en su propia prueba y con este nombre para que nadie lea las guardas de arriba como si
 // cubrieran esto: una garantía estructural y una mitigación no se anuncian juntas.
 func TestI5ElBloqueDeclaraQueLoQueSigueEsMaterialCitado(t *testing.T) {
-	h := encabezadoDeMemoria("[Musubi — memoria relevante] Contexto.")
+	h := encabezadoDeMemoria("[Musubi — memoria relevante] Contexto.", false)
 	for _, quiere := range []string{"CITADO", "no instrucciones", "no una orden"} {
 		if !strings.Contains(h, quiere) {
 			t.Errorf("el preámbulo no dice %q, así que el bloque no distingue dato de instrucción:\n%s", quiere, h)

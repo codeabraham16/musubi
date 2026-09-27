@@ -14,6 +14,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"musubi/internal/buildid"
 	"strings"
 	"time"
@@ -406,6 +407,12 @@ func (s *McpServer) toolFleetList(ctx context.Context, raw json.RawMessage) (int
 			} else {
 				fila["last_seen"] = d.LastSeen.UTC().Format(time.RFC3339)
 				fila["silencio_segundos"] = int(ahora.Sub(d.LastSeen).Seconds())
+			}
+			// CUÁNTO SE CORRIÓ SU RELOJ (A133), en segundos y con signo: positivo es adelantado.
+			// FALTA cuando no se midió —agente anterior al capver 4, máquina sin agente o que dejó
+			// de latir—, y no se escribe en 0: un 0 diría «en hora» de un reloj que nadie miró.
+			if desfase, hay := s.relojDe(d.ID, ahora); hay {
+				fila["reloj_desfase_s"] = math.Round(desfase.Seconds()*1000) / 1000
 			}
 			filas = append(filas, fila)
 		}
