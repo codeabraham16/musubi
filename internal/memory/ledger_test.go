@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestLedgerAddAndStatus(t *testing.T) {
@@ -203,31 +204,99 @@ func TestLedgerDesalojaLaSesionMasVieja(t *testing.T) {
 	}
 }
 
-// La suma corre dentro de una transacción. Sin ella, dos terminales que escriben a la vez leen el
-// mismo valor, suman cada una lo suyo y la segunda escritura pisa a la primera. Con la casilla única
-// eso perdía un incremento; ahora el valor lleva a todas las sesiones, así que pisar cuesta la cuenta
-// entera de otra terminal.
+// DOS TERMINALES QUE ESCRIBEN A LA VEZ NO SE PISAN. La suma corre dentro de una transacción que toma
+// el lock de escritura al nacer (`_txlock=immediate`, database.go), así que la segunda terminal no
+// puede leer el ledger hasta que la primera escribió el suyo. Sin eso, las dos leen el mismo valor,
+// suman cada una lo suyo y la segunda escritura pisa a la primera; y como el valor lleva a TODAS las
+// sesiones, pisar cuesta la cuenta entera de otra terminal.
+//
+// ES DETERMINÍSTICA A PROPÓSITO (A134). La versión anterior eran cuatro goroutines sumando cuarenta
+// veces cada una sobre el MISMO motor, y dependía de que ninguna se quedara sin turno más que el
+// `busy_timeout` (5 s): en un runner de Windows cargado una se quedó (SQLITE_BUSY en el CI de #676),
+// y la prueba contaba esa falta de disponibilidad como «se comió sumas». Tampoco tenía sabotaje:
+// nadie la había visto roja sin la transacción. Ahora hay dos MOTORES sobre la misma base —dos
+// terminales de verdad, cada una con su pool— y el orden se fuerza: A lee y queda frenada con la
+// transacción abierta; B intenta sumar; mientras A está frenada, B no puede terminar; se suelta A, y
+// B lee lo que A escribió. Nada de esto depende de la velocidad de la máquina.
+//
+// Sabotaje: leer el ledger ANTES de abrir la transacción → B lee el valor viejo mientras A está
+// frenada y, al escribir, pisa el incremento de A.
+// arnes: archivo="internal/memory/ledger.go"
+// arnes: de="\ttx, err := e.db.Begin()\n\tif err != nil {\n\t\treturn TokenLedger{}, fmt.Errorf(\"error al abrir la transacción del ledger: %w\", err)\n\t}\n\tdefer func() { _ = tx.Rollback() }()\n\n\tst, err := leerLedgerStoreDe(tx)\n\tif err != nil {\n\t\treturn TokenLedger{}, err\n\t}\n"
+// arnes: a="\tst, err := leerLedgerStoreDe(e.db)\n\tif err != nil {\n\t\treturn TokenLedger{}, err\n\t}\n\ttx, err := e.db.Begin()\n\tif err != nil {\n\t\treturn TokenLedger{}, fmt.Errorf(\"error al abrir la transacción del ledger: %w\", err)\n\t}\n\tdefer func() { _ = tx.Rollback() }()\n"
 func TestLedgerDosTerminalesALaVezNoSePisan(t *testing.T) {
-	e := newTestEngine(t)
-	const porSesion = 40
-	sesiones := []string{"a", "b", "c", "d"}
-	var wg sync.WaitGroup
-	for _, s := range sesiones {
-		wg.Add(1)
-		go func(s string) {
-			defer wg.Done()
-			for i := 0; i < porSesion; i++ {
-				if _, err := e.LedgerAdd(s, "turn_recall", 1); err != nil {
-					t.Errorf("LedgerAdd(%s): %v", s, err)
-					return
-				}
-			}
-		}(s)
+	dir := dirSembrado(t)
+	a, err := NewDbEngine(dir)
+	if err != nil {
+		t.Fatalf("motor A: %v", err)
 	}
-	wg.Wait()
-	for _, s := range sesiones {
-		if l, _ := e.LedgerStatusDe(s); l.Total != porSesion {
-			t.Errorf("sesión %s: quería %d, obtuve %d — una escritura concurrente se comió sumas", s, porSesion, l.Total)
+	t.Cleanup(func() { a.Close() })
+	b, err := NewDbEngine(dir)
+	if err != nil {
+		t.Fatalf("motor B: %v", err)
+	}
+	t.Cleanup(func() { b.Close() })
+
+	// A queda frenada DESPUÉS de leer, con la transacción —y el lock de escritura— tomada.
+	frenada := make(chan struct{})
+	soltar := make(chan struct{})
+	soltarUnaVez := sync.OnceFunc(func() { close(soltar) })
+	var sóloLaPrimera sync.Once
+	anterior := ledgerEntreLeerYEscribir
+	ledgerEntreLeerYEscribir = func(sessionID string) {
+		if sessionID != "terminal-a" {
+			return
+		}
+		sóloLaPrimera.Do(func() {
+			close(frenada)
+			<-soltar
+		})
+	}
+	t.Cleanup(func() { ledgerEntreLeerYEscribir = anterior })
+	t.Cleanup(soltarUnaVez) // si la prueba se corta antes, A no se queda colgada para siempre
+
+	terminoA := make(chan error, 1)
+	go func() {
+		_, err := a.LedgerAdd("terminal-a", "turn_recall", 7)
+		terminoA <- err
+	}()
+	select {
+	case <-frenada:
+	case err := <-terminoA:
+		t.Fatalf("la terminal A terminó sin pasar por el punto entre leer y escribir (err=%v): la prueba no está midiendo nada", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("la terminal A nunca llegó a leer el ledger")
+	}
+
+	terminoB := make(chan error, 1)
+	go func() {
+		_, err := b.LedgerAdd("terminal-b", "turn_recall", 5)
+		terminoB <- err
+	}()
+	// Mientras A está frenada con el lock tomado, B NO puede haber terminado de sumar.
+	select {
+	case err := <-terminoB:
+		soltarUnaVez()
+		t.Fatalf("la terminal B terminó de sumar (err=%v) mientras A estaba frenada entre leer y escribir: "+
+			"la suma no toma el lock de escritura al nacer, y las dos pueden leer el mismo valor", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	soltarUnaVez()
+	if err := <-terminoA; err != nil {
+		t.Fatalf("terminal A: %v", err)
+	}
+	if err := <-terminoB; err != nil {
+		t.Fatalf("terminal B: %v (esperó más que el busy_timeout: la transacción de A no se soltó a tiempo)", err)
+	}
+
+	// Las dos sumas están, y se leen igual desde los dos motores.
+	for nombre, m := range map[string]*DbEngine{"A": a, "B": b} {
+		la, _ := m.LedgerStatusDe("terminal-a")
+		lb, _ := m.LedgerStatusDe("terminal-b")
+		if la.Total != 7 || lb.Total != 5 {
+			t.Errorf("leído desde el motor %s: terminal-a=%d (quería 7) y terminal-b=%d (quería 5): una "+
+				"terminal pisó la cuenta de la otra", nombre, la.Total, lb.Total)
 		}
 	}
 }

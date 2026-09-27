@@ -319,6 +319,14 @@ func TestElArranqueRealNoSirveConUnaPoliticaQueNoPodriaActuar(t *testing.T) {
 // control positivo está adentro del mismo recorrido: las 15 secuencias sin repetidos tienen que
 // arrancar, así que una validación que rechazara todo también se pone roja.
 //
+// (A131·T4) Las homónimas de este recorrido son todas de host y difieren sólo en `run`. El eje del
+// CAMPO en que difieren —`name:` incluido, con los bordes que ConfigurarFlota recorta— lo recorre
+// TestDosPoliticasHomonimasNoArrancanDifieranEnLoQueDifieran, que sabotea este mismo bloque de dos
+// formas: deduplicar por (nombre, servicio) (P2-m10) y deduplicar por el `name:` crudo de la
+// configuración (N1 de la revisión de T4). Son tres `de` sobre el mismo bloque —el de acá y los dos
+// de esa prueba— y se pisan a propósito: cada sabotaje cae en su fila (la posición, el campo
+// `Service`, el campo `Name`).
+//
 // Sabotaje: comparar cada política sólo con la anterior (P2-m11).
 //
 // Y la otra dirección: preguntar por la presencia de la clave en vez de por su valor es la misma
@@ -328,6 +336,7 @@ func TestElArranqueRealNoSirveConUnaPoliticaQueNoPodriaActuar(t *testing.T) {
 // arnes: a="\t\tif len(politicas) > 0 && politicas[len(politicas)-1].Nombre == pol.Nombre {\n"
 // arnes: arreglo_de="\t\tif vistos[pol.Nombre] {\n"
 // arnes: arreglo_a="\t\tif _, repetida := vistos[pol.Nombre]; repetida {\n"
+// arnes: colision_ok="TestDosPoliticasHomonimasNoArrancanDifieranEnLoQueDifieran"
 func TestDosPoliticasHomonimasNoArrancanEnNingunaPosicion(t *testing.T) {
 	nombres := []string{"a", "b", "c"}
 	var secuencias [][]string
