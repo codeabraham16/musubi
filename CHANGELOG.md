@@ -37,15 +37,18 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   de ayer. Compara contra el último día con bajadas, sin ventana, y el mismo día contra las páginas
   que ese día tenía `sync_viajes` al anotar, leídas en la misma transacción: no es sólo la
   transición, porque en davantis-1 se instalan binarios sin cerrar las sesiones y sobre la misma
-  base bajan a la vez daemons que anotan y otros que no. En
-  el central, que también sirve la tool y no baja, dice «este proceso no baja (no tiene cliente de
-  sync)» y no «nunca», que se leería «tu máquina nunca bajó»; lo mismo en un proyecto sin
-  team_mode. Una meta cortada sale `ilegible`, entre comillas y escapada, sin partir la línea; y si
-  la próxima ya pasó hace más de un tick, dice «la próxima se esperaba hace…». Dentro del tick dice
-  `próxima: ahora`: la próxima sale del fin del Pull anterior, así que vence un rato con el dueño
-  sano cada vez que un Pull tarda más que el anterior o el candado cambia de dueño, y eso no es una
-  alarma. No cambia el esquema ni la descripción de
-  ninguna tool y no trae migración: viaja en la V1 con el resto de la ola.
+  base bajan a la vez daemons que anotan y otros que no. En el central, que también sirve la tool y
+  no baja, dice «este proceso no baja (no tiene cliente de sync)» y no «nunca», que se leería «tu
+  máquina nunca bajó»; lo mismo en un proyecto sin team_mode. Una meta cortada o imposible (un
+  instante en cero, una cuenta negativa) sale `ilegible`, entre comillas y escapada, sin partir la
+  línea. Si la próxima ya pasó hace más de un tick, dice `y no se anotó otra: la próxima se esperaba
+  30 s después`, y no «hace…»: con las dos duraciones casi iguales, «última hace 3 d, la próxima se
+  esperaba hace 2 d» se leía como un día entre las dos. Dentro del tick dice `próxima: ahora`: la
+  próxima sale del fin del Pull anterior, así que vence un rato con el dueño sano cada vez que un
+  Pull tarda más que el anterior o el candado cambia de dueño, y eso no es una alarma. Las
+  duraciones van redondeadas a la unidad más cercana (dos días y 23 horas son `3 d`, no `2 d`). No
+  cambia el esquema ni la descripción de ninguna tool y no trae migración: viaja en la V1 con el
+  resto de la ola.
 - **El vector de una consulta, sin cargar la tabla: ~25 ms y 16 MB para un prompt corto, en vez de
   1,4-2,8 s y 854 MB.**
   El hook por turno corre sin vector porque armar el embebedor estático cuesta más de un segundo

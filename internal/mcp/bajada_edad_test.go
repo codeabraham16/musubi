@@ -455,10 +455,66 @@ func TestLaProximaVencidaSeDiceComoTal(t *testing.T) {
 		t.Fatal(err)
 	}
 	l, _ := lineaDeBajada(t, textoDeSyncStatus(t, s))
-	if !strings.HasSuffix(l, " · última hace 10 min (1 fila), la próxima se esperaba hace 9 min") {
+	if !strings.HasSuffix(l, " · última hace 10 min (1 fila), y no se anotó otra: la próxima se esperaba 30 s después") {
 		t.Errorf("con la próxima vencida hace 9 min la línea tenía que decirlo:\n%s", l)
 	}
 	t.Logf("próxima vencida: %s", l)
+}
+
+// TestLaEdadSeRedondeaYNoRepiteLaDuracion: las duraciones de la línea van redondeadas a la unidad
+// más cercana —truncar mentía por casi una unidad entera— y una próxima vencida se dice por cuánto
+// después de la última se esperaba, no por hace cuánto: «última hace 3 d, la próxima se esperaba
+// hace 2 d» por una diferencia de 30 s se leía como un día entre las dos.
+//
+// Sabotaje: truncar los minutos en vez de redondearlos.
+// arnes: archivo="internal/mcp/sync_viajes.go"
+// arnes: de="if m := (seg + 30) / 60; m < 120 {"
+// arnes: a="if m := seg / 60; m < 120 {"
+//
+// Sabotaje: truncar las horas en vez de redondearlas.
+// arnes: archivo="internal/mcp/sync_viajes.go"
+// arnes: de="if h := (seg + 1800) / 3600; h < 48 {"
+// arnes: a="if h := seg / 3600; h < 48 {"
+//
+// Sabotaje: truncar los días en vez de redondearlos.
+// arnes: archivo="internal/mcp/sync_viajes.go"
+// arnes: de="return strconv.FormatInt((seg+43200)/86400, 10) + \" d\""
+// arnes: a="return strconv.FormatInt(seg/86400, 10) + \" d\""
+//
+// Sabotaje: volver a decir hace cuánto se esperaba la próxima.
+// arnes: archivo="internal/mcp/sync_viajes.go"
+// arnes: de="duracionLegible(u.ProximaUnix-u.Unix) + \" después\""
+// arnes: a="\"hace \" + duracionLegible(-falta)"
+func TestLaEdadSeRedondeaYNoRepiteLaDuracion(t *testing.T) {
+	for _, c := range []struct {
+		seg   int64
+		dice  string
+		antes string // lo que decía truncando, para leer la tabla
+	}{
+		{90, "90 s", "90 s"},
+		{599, "10 min", "9 min"},
+		{7169, "119 min", "119 min"},
+		{7170, "2 h", "119 min"},
+		{9000, "3 h", "2 h"},
+		{171000, "2 d", "47 h"},
+		{2*86400 + 23*3600, "3 d", "2 d"},
+	} {
+		if got := duracionLegible(c.seg); got != c.dice {
+			t.Errorf("%d s se escribe %q; esperaba %q (truncando era %q)", c.seg, got, c.dice, c.antes)
+		}
+	}
+
+	s, eng := serverQueAnotaViajes(t, "http://127.0.0.1:1", true)
+	ahora := time.Now().Unix()
+	u := memory.UltimaBajada{Unix: ahora - 3*86400, ProximaUnix: ahora - 3*86400 + 30}
+	if err := eng.StorageBackend.RegistrarBajada(memory.Viaje{Posts: 1, Vacias: 1}, u); err != nil {
+		t.Fatal(err)
+	}
+	l, _ := lineaDeBajada(t, textoDeSyncStatus(t, s))
+	if !strings.HasSuffix(l, " · última hace 3 d (vacía), y no se anotó otra: la próxima se esperaba 30 s después") {
+		t.Errorf("una meta de hace tres días tenía que decir una sola duración y cuánto después se esperaba la próxima:\n%s", l)
+	}
+	t.Logf("meta de hace tres días: %s", l)
 }
 
 // TestLaProximaDentroDeUnTickNoEsUnaAlarma: la próxima sale del FIN del Pull anterior y la meta

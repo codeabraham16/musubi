@@ -244,8 +244,10 @@ func describirUltimaBajada(raw string, hay bool, r memory.ResumenDelSync, ahora 
 		return linea + "próxima: ahora"
 	}
 	// Pasado el tick, lo que se sabe es que nadie anotó otra: nadie baja, sus Pull fallan, o uno
-	// tarda más de un tick de lo que tardó el anterior.
-	return linea + "la próxima se esperaba hace " + duracionLegible(-falta)
+	// tarda más de un tick de lo que tardó el anterior. Se dice CUÁNTO DESPUÉS de la última se
+	// esperaba y no hace cuánto: «última hace 3 d, la próxima se esperaba hace 2 d» por una
+	// diferencia de 30 s se leía como un día entre las dos.
+	return linea + "y no se anotó otra: la próxima se esperaba " + duracionLegible(u.ProximaUnix-u.Unix) + " después"
 }
 
 // bajoDespuesSinAnotar dice si sync_viajes tiene bajadas que la meta no anotó, o sea de un binario
@@ -269,17 +271,19 @@ func bajoDespuesSinAnotar(r memory.ResumenDelSync, u memory.UltimaBajada) bool {
 	return despues > 0
 }
 
-// duracionLegible escribe unos segundos en s, min, h o d, sin decimales: la línea de la bajada
-// quiere el orden de magnitud, no un cronómetro.
+// duracionLegible escribe unos segundos en s, min, h o d, sin decimales y REDONDEADOS a la unidad
+// más cercana: la línea de la bajada quiere el orden de magnitud, no un cronómetro, y truncar mentía
+// por casi una unidad entera (dos días y 23 horas salían «2 d»). La unidad se elige por el valor ya
+// redondeado, así que 1 h 59 min 30 s sale «2 h» y no «120 min».
 func duracionLegible(seg int64) string {
-	switch {
-	case seg < 120:
+	if seg < 120 {
 		return strconv.FormatInt(seg, 10) + " s"
-	case seg < 2*3600:
-		return strconv.FormatInt(seg/60, 10) + " min"
-	case seg < 48*3600:
-		return strconv.FormatInt(seg/3600, 10) + " h"
-	default:
-		return strconv.FormatInt(seg/86400, 10) + " d"
 	}
+	if m := (seg + 30) / 60; m < 120 {
+		return strconv.FormatInt(m, 10) + " min"
+	}
+	if h := (seg + 1800) / 3600; h < 48 {
+		return strconv.FormatInt(h, 10) + " h"
+	}
+	return strconv.FormatInt((seg+43200)/86400, 10) + " d"
 }
