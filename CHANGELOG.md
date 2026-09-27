@@ -732,6 +732,58 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **La subida al central no manda dos veces la misma nota ni espera al tick.** Con varios daemons
+  sobre una base (seis en davantis-1), el drain reclamaba `batch_size` (50) filas con UN lease de
+  60 s y las empujaba de a una. Con ~3,5 s por nota en el central, 50 no entraban en el lease: vencía
+  a mitad de la lista y otro daemon volvía a reclamar —y a subir— las que el primero todavía tenía en
+  la mano (116 saves por 95 notas, medido el 2026-09-25). Y una nota escrita por otro proceso —un
+  hook, la captura— esperaba al tick siguiente: 22 s de mediana con el intervalo de 30 s.
+
+  Ahora `drainOutboxOnce` reclama sublotes de `max(1, lease_seconds/10)` filas (seis con el
+  default), cada uno con su lease fresco, y repite hasta vaciar la cola o hasta el 80 % del
+  intervalo; el tick sigue dejando UN solo viaje de subida en `sync_viajes`. Antes de cada push
+  pregunta con una lectura (`ReclamoVigente`) si la fila sigue reclamada por ESE claim y con el mismo
+  contenido: si otro drainer la reclamó o se editó, el payload viejo no sale, y si la fila sigue
+  siendo de ese claim la suelta (`SoltarReclamo`, con un CAS sobre el lease, así que uno ajeno no se
+  toca) para que la versión nueva salga en el claim siguiente y no al vencer el lease. El lease se
+  escribe con milisegundos:
+  `datetime('now', '+1 seconds')` trunca al segundo, y un lease de 1 s duraba entre cero y un
+  segundo. Entre ticks, `RunOutboxScheduler` mira cada 2 s si hay algo que un claim tomaría
+  (`HayOutboxPorSubir`: una lectura sobre `idx_outbox_claim`, sin red y sin el candado de escritura)
+  y, si hay, drena.
+
+  Un choque de la bajada sobre una fila que se está subiendo se cuenta y no toca el outbox: el
+  central se queda con la versión más nueva, y la máquina que tenía la suya en vuelo se queda con la
+  suya hasta su próxima edición. Es una divergencia conocida que esta ola sólo cuenta; cerrarla es
+  #15.
+
+  Medido contra un central de juguete que embebe 35 ms por nota, de a una. Envíos por nota, en
+  escala 1/60 de producción (lease 1 s, intervalo 500 ms), dos corridas: con dos daemons 1,05 y
+  1,08 en main, 1,00 en la rama; con seis, 2,94 y 2,84 en main (84 y 70 de 95 notas subidas más de
+  una vez), 1,00 en la rama. Una nota escrita por otro proceso, con el intervalo de 30 s: mediana
+  16,8 s en main (máximo 24,5 s) y 2,2 s en la rama (máximo 2,6 s). La ráfaga de 95 notas con
+  drenes seguidos no se hace más lenta: 1.210 filas/min en main y 1.248 en la rama (medianas de
+  tres). El sondeo, sobre una copia de la base de davantis-1: entre 47 y 237 µs de media, tres por
+  segundo con seis daemons, y contesta igual con el candado de escritura tomado por otro proceso.
+
+  **Cambia un contrato de #700: una edición que llega mientras su versión anterior viaja ya no sale
+  enseguida.** En #700 la edición devolvía la fila a 'pending' y en hora, y otro daemon sobre la
+  misma base podía reclamarla —con el sondeo, a los 2 s; con su tick, cuando cayera— y subir v2
+  mientras el POST de v1 seguía en el aire. Ganaba la que el central guardara última, y el central
+  embebe antes de guardar: v1 podía quedar allá y bajar a pisar v2 acá. Ahora la edición deja la
+  fila 'claimed' con el lease de ese vuelo —`enqueueOutboxTx` mira el estado, así que una segunda
+  edición en el mismo vuelo la encuentra igual—, y v2 sale cuando vuelve la marca de v1 (el 200, el
+  reintento y el rechazo la sueltan en hora) o cuando vence el lease, lo que llegue primero: unos 3 s
+  más en el caso común, lo que tarda un push en el central (2,98 s de mediana, 8,76 s en el p99). A
+  cambio, el orden en el central lo pone el cliente. Una edición sobre una fila que espera el backoff
+  de un intento fallido sigue saliendo ya: ese backoff era de la versión vieja.
+
+  **Sólo cliente: el central no cambia**, y ya no hace falta un save condicional allá: el caso común
+  se cierra en el cliente. Queda abierto un push más largo que su lease: el lease vence con el POST
+  en el aire, otro daemon reclama la misma fila y la sube otra vez, y si en el medio hubo una
+  edición, v2 sale a la par de v1. En el central, en 30 días, ninguna de 1.984 ventanas de seis
+  saves pasó de 60 s (la más larga, 52,4 s: el 87 % del lease) y el push más largo tardó 12,91 s. Se
+  cierra renovando el lease antes de cada push, y queda para el plan siguiente.
 - **El índice del delta desaloja primero a las sesiones sin turnos: una sesión interactiva que
   espera un workflow ya no pierde su delta ni sus pedidos cuando arrancan las hijas.** El índice
   `loop_delta_sessions` acota a 32 las sesiones que conservan su delta

@@ -387,6 +387,15 @@ type OutboxStore interface {
 	MarkOutboxSent(obsID, hash string) error
 	MarkOutboxRetry(obsID, hash string, backoffSeconds int, errMsg string) error
 	MarkOutboxDead(obsID, hash, errMsg string) error
+	// ReclamoVigente es lo que el drain pregunta antes de cada push: si la fila sigue reclamada por el
+	// claim que trajo el ítem y con el mismo contenido. HayOutboxPorSubir es el sondeo entre ticks. Las
+	// dos son lecturas: ninguna toma el candado de escritura (ver outbox.go).
+	ReclamoVigente(obsID, hash, reclamo string) (bool, error)
+	HayOutboxPorSubir() (bool, error)
+	// SoltarReclamo devuelve a la cola la fila que la pregunta de antes del push rechazó, si sigue
+	// siendo de ESE claim (CAS sobre el reclamo): la que se editó mientras esperaba su turno, que
+	// sin esto esperaba el lease entero. Ésta sí escribe.
+	SoltarReclamo(obsID, reclamo string) error
 	OutboxStats() (pending, sent, dead int, err error)
 	// ReclamarBajada y AvanzarCursorBajada son el lease y el cursor monótono de la BAJADA: el mismo
 	// resguardo que ClaimOutboxBatch le da a la subida, que la bajada no tenía (ver bajada_lease.go).

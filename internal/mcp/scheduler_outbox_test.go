@@ -69,8 +69,10 @@ func TestDrainSuccessMarksSent(t *testing.T) {
 
 // Escenario: offline-first — central caído deja pending con attempts↑; al volver, sent.
 //
-// Sabotaje: que el drain no le pase al reintento el hash de lo que empujó (la marca no aplica, la
-// fila queda reclamada hasta que vence el lease y no sale al volver el central).
+// Sabotaje: que el drain no le pase al reintento el hash de lo que empujó. La marca no aplica, y como
+// lo que viajaba no es lo que hay, soltarSiViajabaOtra la toma por una edición en vuelo y la devuelve
+// a la cola en hora: sin backoff, sin contar el intento y sin el error, así que un central caído se
+// martilla en cada sondeo y musubi_sync_status no dice por qué está trabada.
 // arnes: archivo="internal/mcp/scheduler.go"
 // arnes: de="s.engine.MarkOutboxRetry(item.ObsID, item.Hash, backoff, perr.Error())"
 // arnes: a="s.engine.MarkOutboxRetry(item.ObsID, \"\", backoff, perr.Error())"
@@ -88,6 +90,11 @@ func TestDrainOfflineFirstRecovery(t *testing.T) {
 	if p, sent, dead := statsOf(t, s); p != 1 || sent != 0 || dead != 0 {
 		t.Fatalf("con central caído esperaba pending=1 sent=0 dead=0, obtuve %d/%d/%d", p, sent, dead)
 	}
+	// El intento fallido queda anotado en la fila: la marca que lo anota es la que pone el backoff, y
+	// el error es lo que musubi_sync_status muestra de lo que está trabado.
+	if h, err := s.engine.OutboxHealth(); err != nil || h.LastError == "" {
+		t.Fatalf("el reintento no quedó anotado: last_error=%q (err %v); esperaba el error del 500", h.LastError, err)
+	}
 
 	// El central vuelve; esperar a que venza el backoff y drenar de nuevo.
 	stub.mu.Lock()
@@ -102,8 +109,9 @@ func TestDrainOfflineFirstRecovery(t *testing.T) {
 
 // Escenario: fallo permanente (400) va directo a dead-letter.
 //
-// Sabotaje: que el drain no le pase a la marca de dead el hash de lo que empujó (la fila queda
-// reclamada en vez de ir a dead-letter).
+// Sabotaje: que el drain no le pase a la marca de dead el hash de lo que empujó (la marca no aplica y
+// soltarSiViajabaOtra devuelve la fila a la cola en vez de a dead-letter: el central la rechaza en
+// cada vuelta).
 // arnes: archivo="internal/mcp/scheduler.go"
 // arnes: de="s.engine.MarkOutboxDead(item.ObsID, item.Hash, perr.Error())"
 // arnes: a="s.engine.MarkOutboxDead(item.ObsID, \"\", perr.Error())"
