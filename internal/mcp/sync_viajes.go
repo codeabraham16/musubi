@@ -216,6 +216,13 @@ func describirUltimaBajada(raw string, hay bool, r memory.ResumenDelSync, ahora 
 		que = "1 fila"
 	case u.Filas > 1:
 		que = strconv.FormatInt(u.Filas, 10) + " filas"
+	case u.ConFilas == 1:
+		// Trajo filas y no entró ninguna (una fila que esta base rechaza, o un SQLITE_BUSY), así que
+		// el cursor no avanzó. sync_viajes la cuenta como página con filas: «vacía» lo contradiría,
+		// y con la edad fresca se leería «no hay nada nuevo» con la bajada atascada.
+		que = "1 página con filas y 0 ingeridas"
+	case u.ConFilas > 1:
+		que = strconv.FormatInt(u.ConFilas, 10) + " páginas con filas y 0 ingeridas"
 	}
 	edad := duracionLegible(max(ahora.Unix()-u.Unix, 0))
 	if bajoDespuesSinAnotar(r, u, ahora) {

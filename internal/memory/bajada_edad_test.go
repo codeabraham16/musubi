@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -59,4 +60,30 @@ func TestLaBajadaSumaElViajeYLaEdadEnUnaTransaccion(t *testing.T) {
 			t.Errorf("la meta no entró y el viaje sí (%d fila/s en sync_viajes): las dos fuentes quedaron desparejas", n)
 		}
 	})
+}
+
+// TestLaUltimaBajadaToleraLosCamposDeMas: la meta crece sólo agregando campos al final —el ritmo de
+// la bajada va a sumar los suyos—, así que un binario lee los que conoce e ignora los que vengan
+// después. Si un campo de más la volviera ilegible, la línea de un binario sobre una base que
+// comparte con otro más nuevo diría «ilegible» en cada tick del nuevo.
+//
+// Sabotaje: exigir exactamente los campos que este binario conoce.
+// arnes: archivo="internal/memory/bajada_lease.go"
+// arnes: de="if len(partes) < len(n) {"
+// arnes: a="if len(partes) != len(n) {"
+func TestLaUltimaBajadaToleraLosCamposDeMas(t *testing.T) {
+	u := UltimaBajada{Unix: 1758900000, Filas: 2, ProximaUnix: 1758900030, ConFilas: 1}
+	if got, err := LeerUltimaBajada(u.Valor()); err != nil || got != u {
+		t.Fatalf("la vuelta no cierra: %q se leyó %+v (err=%v); esperaba %+v", u.Valor(), got, err, u)
+	}
+	for _, deMas := range []string{"|7", "|7|algo que este binario todavía no conoce"} {
+		if got, err := LeerUltimaBajada(u.Valor() + deMas); err != nil || got != u {
+			t.Errorf("la meta %q tenía que leerse %+v ignorando lo de más; salió %+v (err=%v)", u.Valor()+deMas, u, got, err)
+		}
+	}
+	// Uno de MENOS sí es ilegible: falta algo que este binario necesita para no mentir.
+	corta := u.Valor()[:strings.LastIndex(u.Valor(), "|")]
+	if got, err := LeerUltimaBajada(corta); err == nil {
+		t.Errorf("la meta %q tiene un campo de menos y se leyó %+v", corta, got)
+	}
 }

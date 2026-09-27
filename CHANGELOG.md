@@ -14,9 +14,12 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   termina en `· última hace 12 s (vacía), próxima en ~18 s`, o `(2 filas)`, o `· última: nunca`.
 
   Lo anota sólo el dueño del candado, desde el defer que ya existía en `drainInboundOnce` y sólo si
-  el tick salió a la red, en la meta `sync:inbound_ultima` = `unix|filas|proxima_unix`; la próxima
-  es un tick base, porque la bajada todavía no espacia. Y se lee sólo de ahí, nunca de la memoria
-  del proceso que contesta: sobre una base corren varios daemons (seis en davantis-1) y baja uno.
+  el tick salió a la red, en la meta `sync:inbound_ultima` = `unix|filas|proxima_unix|con_filas`;
+  la próxima es un tick base, porque la bajada todavía no espacia. La forma crece sólo agregando
+  campos al final: un binario lee los que conoce e ignora los de más, así que el que va a espaciar
+  la bajada puede sumar los suyos sin que un binario anterior la lea `ilegible`. Y se lee sólo de
+  ahí, nunca de la memoria del proceso que contesta: sobre una base corren varios daemons (seis en
+  davantis-1) y baja uno.
   La meta va en la MISMA transacción que suma el viaje (`RegistrarBajada`), así que no agrega
   commits. Medido contando los commits en el WAL de una base de prueba, con los ticks a más de un
   segundo (SQLite no escribe la página si el valor no cambia, y en producción cambia en cada tick):
@@ -24,7 +27,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   antes, con una página más (4 KiB) en el WAL. Con la meta en su propia transacción eran 3 y 6: un
   candado de escritura y un fsync más por tick, sobre una base que comparten los daemons.
 
-  La línea no contradice al volumen, que sigue saliendo de `sync_viajes`. Con viajes de bajada y sin
+  La línea no contradice al volumen, que sigue saliendo de `sync_viajes`. Una bajada vacía es una
+  sin páginas con filas, no una sin filas ingeridas: una página que trajo filas y no pudo ingerir
+  ninguna —una fila que la base rechaza, que vuelve primera en cada tick, o un `SQLITE_BUSY`— sale
+  `(1 página con filas y 0 ingeridas)` y no `(vacía)`, que al lado de `0 vacías` se contradecía y,
+  con la edad fresca, tapaba la bajada atascada. Con viajes de bajada y sin
   meta —o con viajes de un día posterior al de la meta— dice que bajó un binario anterior a esta
   versión, que registra el viaje y no la edad, en vez de «nunca» al lado de las páginas de hoy. En
   el central, que también sirve la tool y no baja, dice «este proceso no baja (no tiene cliente de

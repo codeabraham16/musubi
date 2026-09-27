@@ -2,14 +2,17 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
 	"musubi/internal/memory/memtest"
@@ -33,6 +36,28 @@ func centralConFilas(filas *atomic.Int64) *httptest.Server {
 		payload := `{"items":[` + strings.Join(items, ",") + `],"next_cursor":` + strconv.Itoa(n) + `}`
 		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"pull","result":{"content":[{"type":"text","text":` + strconv.Quote(payload) + `}]}}`))
 	}))
+}
+
+// serverConLaBase es serverQueAnotaViajes con una conexión cruda a la MISMA base, para armar lo que
+// el engine no deja armar: una fila que la base rechaza, o viajes de un día cualquiera. WAL admite
+// el segundo escritor.
+func serverConLaBase(t *testing.T, url string, teamMode bool) (*McpServer, *engineQueAnotaViajes, *sql.DB) {
+	t.Helper()
+	dir := memtest.DirSembrado(t)
+	real, err := memory.NewDbEngine(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { real.Close() })
+	db, err := sql.Open("sqlite", filepath.Join(dir, config.DirName, config.DBFile)+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatalf("abrir la base cruda: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	eng := &engineQueAnotaViajes{StorageBackend: real}
+	s := NewMcpServer(eng, t.TempDir(), embedding.NoopProvider{}, WithMemory(config.MemoryConfig{TeamMode: teamMode}))
+	s.SetSyncClient(newTestSyncClient(t, url), config.SyncConfig{BatchSize: 50, LeaseSeconds: 60, BackoffBaseSeconds: 5, BackoffMaxSeconds: 300})
+	return s, eng, db
 }
 
 // textoDeSyncStatus llama a musubi_sync_status sin credencial, como un daemon local.
@@ -127,6 +152,47 @@ func TestSyncStatusDiceLaEdadDeLaBajada(t *testing.T) {
 		t.Errorf("después de bajar dos filas la línea tenía que decir «última hace … (2 filas), próxima en ~…»:\n%s", l)
 	}
 	t.Logf("después de una bajada con dos filas: %s", l)
+}
+
+// TestUnaPaginaQueNoEntraNoEsVacia: una página que trae filas y no puede ingerir ninguna —una fila
+// que esta base rechaza; drainInboundOnce no avanza el cursor y la misma fila vuelve primera en cada
+// tick, así que no es un tick: es cada tick— no se anota «(vacía)». sync_viajes la cuenta como
+// página con filas (páginas sin vacías), y la edad dice lo mismo: «(vacía)» al lado de «0 vacías»
+// se contradice, y con la edad fresca se lee «no hay nada nuevo» con la bajada atascada.
+//
+// Sabotaje: que la meta no anote las páginas con filas del tick.
+// arnes: archivo="internal/mcp/scheduler.go"
+// arnes: de="ConFilas: v.Posts - v.Vacias"
+// arnes: a="ConFilas: 0"
+//
+// Sabotaje: que la línea no mire las páginas con filas y vuelva a decir «vacía».
+// arnes: archivo="internal/mcp/sync_viajes.go"
+// arnes: de="\tcase u.ConFilas == 1:"
+// arnes: a="\tcase false && u.ConFilas == 1:"
+func TestUnaPaginaQueNoEntraNoEsVacia(t *testing.T) {
+	var filas atomic.Int64
+	filas.Store(1)
+	central := centralConFilas(&filas)
+	defer central.Close()
+	s, _, db := serverConLaBase(t, central.URL, true)
+	// e1 no entra nunca: la base la rechaza como rechazaría un dato que viola una restricción.
+	if _, err := db.Exec(`CREATE TRIGGER veneno BEFORE INSERT ON observations WHEN NEW.id = 'e1'
+		BEGIN SELECT RAISE(ABORT, 'fila veneno a propósito'); END`); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		s.drainInboundOnce(context.Background())
+	}
+	l, _ := lineaDeBajada(t, textoDeSyncStatus(t, s))
+	// El control: el volumen cuenta tres páginas con filas y ninguna fila. Sin esto la prueba podría
+	// pasar sobre un escenario que no es el que dice.
+	if !strings.Contains(l, "bajada: hoy 0 filas en 3 páginas (0 vacías, ") {
+		t.Fatalf("el escenario no es el de la prueba: tenían que ser tres páginas con filas y ninguna ingerida:\n%s", l)
+	}
+	if strings.Contains(l, "(vacía)") || !strings.Contains(l, " · última hace ") || !strings.Contains(l, " (1 página con filas y 0 ingeridas), ") {
+		t.Errorf("tres ticks con una fila que no entra: la edad tenía que decir «(1 página con filas y 0 ingeridas)» y no «(vacía)»:\n%s", l)
+	}
+	t.Logf("una fila que no entra: %s", l)
 }
 
 // TestLaBajadaEnElCentralNoDiceNunca: musubi_sync_status también lo sirve el central, que no baja
@@ -249,7 +315,7 @@ func TestLaEdadDeLaBajadaNoContradiceAlVolumen(t *testing.T) {
 func TestLaUltimaBajadaIlegibleNoRompeLaLinea(t *testing.T) {
 	for _, c := range []struct{ nombre, valor string }{
 		{"cortada con un salto de línea", "1758900000|dos\nfilas"},
-		{"la próxima antes que la última", "1758900000|2|1758800000"},
+		{"la próxima antes que la última", "1758900000|2|1758800000|1"},
 	} {
 		t.Run(c.nombre, func(t *testing.T) {
 			s, eng := serverQueAnotaViajes(t, "http://127.0.0.1:1", true)

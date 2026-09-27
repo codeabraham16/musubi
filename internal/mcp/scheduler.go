@@ -292,9 +292,13 @@ func (s *McpServer) tickBajada() time.Duration {
 //
 // La próxima es un tick base porque hoy la bajada no espacia sus pedidos. Si algún día espacia,
 // la próxima tiene que salir del ritmo, o musubi_sync_status prometería un pedido que no va a haber.
+//
+// Las páginas con filas salen del mismo viaje que va a sync_viajes —las que llegaron menos las
+// vacías—: así una página que trajo filas y no pudo ingerir ninguna no se anota como una bajada
+// vacía (ver memory.UltimaBajada).
 func (s *McpServer) anotarUltimaBajada(v memory.Viaje) {
 	ahora := time.Now()
-	u := memory.UltimaBajada{Unix: ahora.Unix(), Filas: v.Filas, ProximaUnix: ahora.Add(s.tickBajada()).Unix()}
+	u := memory.UltimaBajada{Unix: ahora.Unix(), Filas: v.Filas, ProximaUnix: ahora.Add(s.tickBajada()).Unix(), ConFilas: v.Posts - v.Vacias}
 	if err := s.engine.RegistrarBajada(v, u); err != nil {
 		logx.Error("inbound: no se pudo registrar el viaje ni la edad de la bajada", "error", err)
 	}
