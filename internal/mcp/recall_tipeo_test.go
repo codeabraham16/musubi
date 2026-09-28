@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"musubi/internal/memory"
 	"musubi/internal/memory/memtest"
@@ -52,6 +53,18 @@ func (m *motorQueAnotaConsultas) CorregirConsulta(ctx context.Context, q string,
 	return m.StorageBackend.(correctorDeTipeo).CorregirConsulta(ctx, q, alcance)
 }
 
+// motorSinApuro es el motor real con el corrector SIN el plazo de producción, como
+// motorSinPlazoDeMaquina en recalleval y corregirSinApuro en memory. Estas pruebas miden QUÉ hace
+// cada tool con la corrección; con los 60 ms de producción, bajo `-race` en CI y con decenas de
+// paquetes compitiendo por la CPU, la consulta podía volver sin corregir y la prueba caer por la
+// máquina. Embebe el *memory.DbEngine entero para que el servidor siga viendo todas sus interfaces
+// opcionales. El plazo tiene su prueba en internal/memory (TestCorrectorSeRindeAlPlazo).
+type motorSinApuro struct{ *memory.DbEngine }
+
+func (m motorSinApuro) CorregirConsulta(ctx context.Context, q string, a memory.ProjectScope) (string, []memory.Correccion) {
+	return m.CorregirConsultaConPlazo(ctx, q, a, 30*time.Second)
+}
+
 // servidorDeTipeo arma un servidor sobre una base propia, sin proyecto propio, con las notas dadas
 // como proyecto → contenidos. Un proyecto "" es una nota sin atribuir.
 func servidorDeTipeo(t *testing.T, emb *embebedorQueAnotaTextos, notas map[string][]string) *McpServer {
@@ -71,9 +84,9 @@ func servidorDeTipeo(t *testing.T, emb *embebedorQueAnotaTextos, notas map[strin
 		}
 	}
 	if emb == nil {
-		return NewMcpServer(engine, t.TempDir(), fakeEmbedder{vec: []float32{1, 0, 0}})
+		return NewMcpServer(motorSinApuro{engine}, t.TempDir(), fakeEmbedder{vec: []float32{1, 0, 0}})
 	}
-	return NewMcpServer(engine, t.TempDir(), emb)
+	return NewMcpServer(motorSinApuro{engine}, t.TempDir(), emb)
 }
 
 // llamarTool llama una tool por el despacho, como un cliente, y devuelve el texto JSON de la respuesta.
