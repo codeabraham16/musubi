@@ -75,7 +75,7 @@ func aparte(t *testing.T, e *DbEngine, consulta string) RecallResult {
 	return res
 }
 
-// idsDe devuelve los ids de un resultado, en orden.
+// idsDelReparto devuelve los ids de un resultado, en orden.
 func idsDelReparto(r RecallResult) []string {
 	out := make([]string, 0, len(r.Items))
 	for _, it := range r.Items {
