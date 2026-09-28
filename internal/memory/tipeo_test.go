@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -219,6 +220,33 @@ func TestCorrectorTieneTope(t *testing.T) {
 	}
 }
 
+// TestCorrectorTopeSeQuedaConLosMasLargos: con cinco muertos corregibles, el que queda afuera del tope
+// es el MÁS CORTO («cabel»), no el último de la consulta («rasbperry»). Esta consulta los trae del más
+// corto al más largo, al revés que la de TestCorrectorTieneTope: sin el orden por largo, el tope se
+// quedaría con los cuatro primeros y soltaría justo el más largo.
+//
+// Sabotaje: los muertos no se ordenan por largo antes del tope.
+// arnes: archivo="internal/memory/tipeo.go"
+// arnes: de="\tsort.SliceStable(muertos, func(i, j int) bool {\n\t\treturn len([]rune(muertos[i].bajo)) > len([]rune(muertos[j].bajo))\n\t})\n"
+// arnes: a=""
+func TestCorrectorTopeSeQuedaConLosMasLargos(t *testing.T) {
+	e := newTestEngine(t)
+	sembrarTipeo(t, e, "doc",
+		"El cable del kiosko quedó flojo.",
+		"Cambiamos el cable de la raspberry.",
+		"El kiosko del fichaje reinicia solo.",
+		"El fichaje pasa por el servidor central.",
+		"El servidor y la raspberry hablan por el tailnet.",
+	)
+	got, cs := corregirSinApuro(e, "cabel kisoko fichjae servdior rasbperry", ProjectScope{})
+	if quiero := "kisoko→kiosko, fichjae→fichaje, servdior→servidor, rasbperry→raspberry"; resumenDeCorrecciones(cs) != quiero {
+		t.Fatalf("correcciones = %q, quería %q: el tope suelta al más corto", resumenDeCorrecciones(cs), quiero)
+	}
+	if quiero := "cabel kiosko fichaje servidor raspberry"; got != quiero {
+		t.Errorf("consulta corregida = %q, quería %q", got, quiero)
+	}
+}
+
 // TestCorrectorExigeLargoYDosNotas: los dos pisos del corrector. Un término de menos de 5 runas no se
 // revisa aunque tenga un vecino vivo («acsa» está a una transposición de «casa», que está en dos
 // notas), y un candidato que está en UNA sola nota no alcanza («zrobax» está a una transposición de
@@ -256,6 +284,71 @@ func TestCorrectorExigeLargoYDosNotas(t *testing.T) {
 	}
 }
 
+// TestCorrectorNoRevisaTerminosLargos: un término de más de 40 runas no se revisa, aunque la memoria
+// tenga en dos notas la palabra que está a una transposición; uno de 40 justas, sí (si no, la prueba no
+// probaría nada). El techo es lo que acota el trabajo en Go, que el plazo no corta: sin él, un término
+// de 3000 letras le hace armar a «falta una letra» 78.026 candidatos de 3001 runas antes de la primera
+// consulta al índice, más de 200 MB.
+//
+// Sabotaje: el techo de largo se va.
+// arnes: archivo="internal/memory/tipeo.go"
+// arnes: de=" || len(r) > maxRunasDeTipeo"
+// arnes: a=""
+func TestCorrectorNoRevisaTerminosLargos(t *testing.T) {
+	e := newTestEngine(t)
+	justo := strings.Repeat("kiosko", 6) + "wxyz" // 40 runas
+	largo := strings.Repeat("fichaje", 6)         // 42 runas
+	sembrarTipeo(t, e, "doc",
+		"El "+justo+" del turno.", "Otro "+justo+" del hook.",
+		"El "+largo+" del turno.", "Otro "+largo+" del hook.",
+	)
+	// El tipeo de cada una: sus dos primeras letras invertidas.
+	invertida := func(s string) string { return s[1:2] + s[:1] + s[2:] }
+	q := invertida(justo) + " " + invertida(largo)
+	got, cs := corregirSinApuro(e, q, ProjectScope{})
+	if quiero := invertida(justo) + "→" + justo; resumenDeCorrecciones(cs) != quiero {
+		t.Fatalf("correcciones = %q, quería %q: se revisa el de 40 runas y no el de 42", resumenDeCorrecciones(cs), quiero)
+	}
+	if quiero := justo + " " + invertida(largo); got != quiero {
+		t.Errorf("consulta corregida = %q, quería %q", got, quiero)
+	}
+
+	// Y un término de 3000 letras no le cuesta memoria: ni se revisa. Con el plazo de producción, porque
+	// lo que se mide es el trabajo en Go que el plazo no corta.
+	q = "el " + strings.Repeat("qwzjx", 600)
+	var antes, despues runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&antes)
+	got, _ = e.CorregirConsulta(context.Background(), q, ProjectScope{})
+	runtime.ReadMemStats(&despues)
+	if got != q {
+		t.Fatalf("la consulta de 3000 letras cambió: %q", got)
+	}
+	if alloc := despues.TotalAlloc - antes.TotalAlloc; alloc > 64<<20 {
+		t.Errorf("una consulta de %d bytes alocó %d MB", len(q), alloc>>20)
+	}
+}
+
+// TestCorrectorNoTocaTerminosConDigitos: un término con dígitos es un identificador (un host, una
+// versión, un archivo), no una palabra mal tipeada. «kiosko2» está a una letra de sobra de «kiosko»,
+// que la memoria tiene en dos notas, y aun así no se corrige.
+//
+// Sabotaje: se revisan también los términos con dígitos.
+// arnes: archivo="internal/memory/tipeo.go"
+// arnes: de=" || !todoLetras(r)"
+// arnes: a=""
+func TestCorrectorNoTocaTerminosConDigitos(t *testing.T) {
+	e := newTestEngine(t)
+	sembrarTipeo(t, e, "doc",
+		"El cable del kiosko quedó flojo.",
+		"El kiosko del fichaje reinicia solo.",
+	)
+	q := "reinicia el kiosko2"
+	if got, cs := corregirSinApuro(e, q, ProjectScope{}); len(cs) != 0 || got != q {
+		t.Fatalf("corrigió un término con dígitos: %q (consulta %q)", resumenDeCorrecciones(cs), got)
+	}
+}
+
 // TestCorrectorSeRindeAlPlazo: si se vence el plazo, la consulta va como vino y sin correcciones —una
 // corrección a medias no se aplica—. Con el plazo de producción la misma consulta sí se corrige (si
 // no, la prueba no probaría nada).
@@ -276,6 +369,30 @@ func TestCorrectorSeRindeAlPlazo(t *testing.T) {
 	}
 	if _, cs := e.CorregirConsulta(context.Background(), q, ProjectScope{}); resumenDeCorrecciones(cs) != "infromacion→informacion" {
 		t.Fatalf("con el plazo de producción corrigió %q: la prueba no probaría nada", resumenDeCorrecciones(cs))
+	}
+}
+
+// TestCorrectorCandidatoMiraElPlazo: la fase de los candidatos también respeta el plazo. Con el
+// contexto ya vencido, mejorCandidato no puede devolver un candidato sin error. TestCorrectorSeRindeAlPlazo
+// no llega a mirar esta fase: con plazo 0 muere antes, en terminosMuertos.
+//
+// Sabotaje: la consulta de los candidatos no lleva el plazo.
+// arnes: archivo="internal/memory/tipeo.go"
+// arnes: de="\tfilas, err := e.db.QueryContext(ctx, consulta, args...)\n\tif err != nil {\n\t\treturn \"\", 0, err\n"
+// arnes: a="\tfilas, err := e.db.QueryContext(context.Background(), consulta, args...)\n\tif err != nil {\n\t\treturn \"\", 0, err\n"
+func TestCorrectorCandidatoMiraElPlazo(t *testing.T) {
+	e := newTestEngine(t)
+	sembrarTipeo(t, e, "doc",
+		"El cable del kiosko quedó flojo.",
+		"El kiosko del fichaje reinicia solo.",
+	)
+	if buscado, _, err := e.mejorCandidato(context.Background(), "kisoko", ProjectScope{}); err != nil || buscado != "kiosko" {
+		t.Fatalf("con el contexto vivo, mejorCandidato(kisoko) = %q, %v; quería kiosko (la prueba no probaría nada)", buscado, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if buscado, df, err := e.mejorCandidato(ctx, "kisoko", ProjectScope{}); err == nil {
+		t.Fatalf("con el contexto vencido devolvió %q (df %d) sin error: la fase de candidatos no mira el plazo", buscado, df)
 	}
 }
 

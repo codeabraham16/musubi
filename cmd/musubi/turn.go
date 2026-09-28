@@ -1150,7 +1150,7 @@ func encabezadoDeMemoria(titulo string, huboMarcas bool, correcciones []memory.C
 }
 
 // lineaDeCorreccion es el aviso de lo que el corrector de tipeo cambió en la consulta del turno:
-// «busqué «información» por «infromacion», «comando» por «comadno»». Primero lo BUSCADO y después
+// «busqué «informacion» por «infromacion», «comando» por «comadno»». Primero lo BUSCADO y después
 // lo TIPEADO, todas las correcciones en una sola línea.
 //
 // Arranca con transcripts.PrefijoDeCorreccion, que es un contrato: la línea repite a propósito un

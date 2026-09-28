@@ -58,6 +58,12 @@ const (
 	// minRunasDeTipeo: los términos más cortos no se revisan, porque ahí un tipeo suele dar otra
 	// palabra válida. Es el mismo largo que perturba el banco (recalleval.PerturbarConsulta).
 	minRunasDeTipeo = 5
+	// maxRunasDeTipeo: los más largos tampoco. Los candidatos de un término crecen con el CUADRADO de
+	// su largo —«falta una letra» arma 26·(n+1) cadenas de n+1 runas— y armarlos es trabajo en Go, que
+	// el plazo no corta: sin techo, una consulta de 8 KB con cuatro tramos de 2000 letras alocaba 1 GB
+	// bajo el RLock del despacho del MCP. El término muerto más largo de los 98 prompts reales medidos
+	// tiene 15 runas.
+	maxRunasDeTipeo = 40
 	// maxTerminosDeTipeo acota cuántos términos distintos se revisan: un prompt pegado de una página
 	// no puede convertir al corrector en el costo del turno.
 	maxTerminosDeTipeo = 40
@@ -75,8 +81,10 @@ const (
 	alfabetoDeTipeo = "abcdefghijklmnopqrstuvwxyz"
 )
 
-// PlazoDelCorrector es el techo de tiempo del corrector entero. Si se vence —o cualquier consulta
-// falla—, la consulta sigue como vino: corregir es una ayuda, nunca el costo del turno.
+// PlazoDelCorrector es el techo de tiempo de las consultas del corrector al índice. Si se vence —o
+// cualquier consulta falla—, la consulta sigue como vino: corregir es una ayuda, nunca el costo del
+// turno. Corta las consultas y no el trabajo en Go de armar los candidatos: a ése lo acota
+// maxRunasDeTipeo.
 //
 // Lo que cuesta, medido sobre una copia de la base real (1,9 k notas, 9 segmentos de FTS) con los 54
 // prompts reales que tienen términos muertos, y con el motor FRÍO como en el hook, que es un proceso
@@ -128,14 +136,14 @@ type terminoDeTipeo struct {
 }
 
 // terminosDeTipeo son los términos que el corrector revisa: los de TerminosDeConsulta (la definición
-// única de término) que son todo letras y tienen minRunasDeTipeo runas o más, sin repetir, hasta
-// maxTerminosDeTipeo.
+// única de término) que son todo letras y tienen entre minRunasDeTipeo y maxRunasDeTipeo runas, sin
+// repetir, hasta maxTerminosDeTipeo.
 func terminosDeTipeo(q string) []terminoDeTipeo {
 	vistos := map[string]bool{}
 	var out []terminoDeTipeo
 	for _, t := range TerminosDeConsulta(q) {
 		r := []rune(t)
-		if len(r) < minRunasDeTipeo || !todoLetras(r) {
+		if len(r) < minRunasDeTipeo || len(r) > maxRunasDeTipeo || !todoLetras(r) {
 			continue
 		}
 		bajo := strings.ToLower(t)
