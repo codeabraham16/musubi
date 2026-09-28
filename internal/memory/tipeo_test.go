@@ -210,6 +210,43 @@ func TestCorrectorTieneTope(t *testing.T) {
 	}
 }
 
+// TestCorrectorExigeLargoYDosNotas: los dos pisos del corrector. Un término de menos de 5 runas no se
+// revisa aunque tenga un vecino vivo («acsa» está a una transposición de «casa», que está en dos
+// notas), y un candidato que está en UNA sola nota no alcanza («zrobax» está a una transposición de
+// «zorbax», que está en una). La misma forma, con el candidato en dos notas, sí se corrige («qlemore»
+// → «qelmore»): si no, la prueba no probaría nada. Medido sobre los prompts reales, bajar el piso a
+// una nota cambiaba la mitad de las veces hacia algo malo («comienza→comenza»).
+//
+// Sabotaje: se revisan también los términos de 3 runas.
+// arnes: archivo="internal/memory/tipeo.go"
+// arnes: de="\tminRunasDeTipeo = 5\n"
+// arnes: a="\tminRunasDeTipeo = 3\n"
+//
+// Sabotaje: alcanza con que el candidato esté en una nota.
+// arnes: archivo="internal/memory/tipeo.go"
+// arnes: de="\tdfMinimoDeCandidato = 2\n"
+// arnes: a="\tdfMinimoDeCandidato = 1\n"
+func TestCorrectorExigeLargoYDosNotas(t *testing.T) {
+	e := newTestEngine(t)
+	sembrarTipeo(t, e, "doc",
+		"La casa del kiosko.",
+		"Otra casa del fichaje.",
+		"El zorbax quedó prendido.",
+		"El qelmore del servidor.",
+		"Reiniciar el qelmore.",
+	)
+	for _, c := range []struct{ q, quiero string }{
+		{"la acsa", ""},
+		{"el zrobax", ""},
+		{"el qlemore", "qlemore→qelmore"},
+	} {
+		_, cs := e.CorregirConsulta(context.Background(), c.q, ProjectScope{})
+		if got := resumenDeCorrecciones(cs); got != c.quiero {
+			t.Errorf("%q: correcciones = %q, quería %q", c.q, got, c.quiero)
+		}
+	}
+}
+
 // TestCorrectorSeRindeAlPlazo: si se vence el plazo, la consulta va como vino y sin correcciones —una
 // corrección a medias no se aplica—. Con el plazo de producción la misma consulta sí se corrige (si
 // no, la prueba no probaría nada).
