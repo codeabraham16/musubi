@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // sembrarTipeo guarda cada contenido como una observación visible, sin proyecto.
@@ -34,10 +35,11 @@ func resumenDeCorrecciones(cs []Correccion) string {
 // se corrigen hacia la palabra que la memoria sí tiene, y la consulta reescrita conserva todo lo demás.
 //
 // Sabotaje: la transposición deja de invertir las letras (el candidato sale igual al término y se
-// descarta).
+// descarta). Se invierte dos veces y no con `c[k], c[k+1] = c[k], c[k+1]`, que go vet rechaza por
+// autoasignación y la prueba ni compila.
 // arnes: archivo="internal/memory/tipeo.go"
 // arnes: de="\t\tc[k], c[k+1] = c[k+1], c[k]\n"
-// arnes: a="\t\tc[k], c[k+1] = c[k], c[k+1]\n"
+// arnes: a="\t\tc[k], c[k+1] = c[k+1], c[k]\n\t\tc[k], c[k+1] = c[k+1], c[k]\n"
 //
 // Sabotaje: «falta una letra» no prueba ninguna posición.
 // arnes: archivo="internal/memory/tipeo.go"
@@ -148,6 +150,41 @@ func TestCorrectorNoUsaSustitucion(t *testing.T) {
 	}
 }
 
+// TestCorrectorRespetaElOrdenDeLasClases: las clases van en orden estricto —dos letras invertidas,
+// una letra de menos, una de más— y gana la PRIMERA que tenga un candidato vivo, aunque una clase
+// posterior tenga uno más frecuente. Las palabras son inventadas para que cada tipeo tenga un solo
+// candidato por clase: «zrobax» es «zorbax» con dos letras invertidas (2 notas) y «zroba» con una de
+// más (3 notas); «qlmore» es «qelmore» con una de menos (2 notas) y «qmore» con una de más (3). Y la
+// tercera clase corrige sola cuando es la única con candidato: «zorbaxx» → «zorbax».
+//
+// Sabotaje: las clases se prueban al revés.
+// arnes: archivo="internal/memory/tipeo.go"
+// arnes: de="\tfor _, clase := range [][]string{transposiciones(r), faltaUnaLetra(r), sobraUnaLetra(r)} {\n"
+// arnes: a="\tfor _, clase := range [][]string{sobraUnaLetra(r), faltaUnaLetra(r), transposiciones(r)} {\n"
+//
+// Sabotaje: «sobra una letra» no quita ninguna (el candidato sale igual al término y se descarta).
+// arnes: archivo="internal/memory/tipeo.go"
+// arnes: de="\t\tout = append(out, string(r[:i])+string(r[i+1:]))\n"
+// arnes: a="\t\tout = append(out, string(r[:i])+string(r[i:]))\n"
+func TestCorrectorRespetaElOrdenDeLasClases(t *testing.T) {
+	e := newTestEngine(t)
+	sembrarTipeo(t, e, "doc",
+		"El zorbax del banco.", "Otro zorbax en la tanda.",
+		"La zroba de ayer.", "Una zroba nueva.", "La zroba vieja.",
+		"El qelmore del hook.", "Otro qelmore del turno.",
+		"El qmore del sync.", "Un qmore más.", "El último qmore.",
+	)
+	for _, c := range []struct{ q, quiero string }{
+		{"el zrobax de hoy", "zrobax→zorbax"},   // invertidas antes que «sobra» (zroba, 3 notas)
+		{"el qlmore de hoy", "qlmore→qelmore"},  // «falta» antes que «sobra» (qmore, 3 notas)
+		{"el zorbaxx de hoy", "zorbaxx→zorbax"}, // sólo «sobra» tiene candidato
+	} {
+		if _, cs := e.CorregirConsulta(context.Background(), c.q, ProjectScope{}); resumenDeCorrecciones(cs) != c.quiero {
+			t.Errorf("%q: correcciones = %q, quería %q", c.q, resumenDeCorrecciones(cs), c.quiero)
+		}
+	}
+}
+
 // TestCorrectorTieneTope: con cinco tipeos, se corrigen cuatro — los más largos — y el quinto queda
 // como vino.
 //
@@ -162,12 +199,34 @@ func TestCorrectorTieneTope(t *testing.T) {
 		"Más información: el servidor corre el comando del fichaje en la raspberry.",
 	)
 	got, cs := e.CorregirConsulta(context.Background(), "infromacion rasberry servdior comadno fihcaje", ProjectScope{})
-	if len(cs) != maxCorreccionesDeTipeo {
-		t.Fatalf("corrigió %d términos (%q), el tope es %d", len(cs), resumenDeCorrecciones(cs), maxCorreccionesDeTipeo)
+	// Contra el 4 literal y no contra la constante: si la prueba leyera el tope del código, cambiar el
+	// tope cambiaría también lo que la prueba espera.
+	if len(cs) != 4 {
+		t.Fatalf("corrigió %d términos (%q), quería 4: el tope", len(cs), resumenDeCorrecciones(cs))
 	}
 	// Los cuatro más largos; entre «comadno» y «fihcaje» (7 runas) queda el primero de la consulta.
 	if quiero := "informacion raspberry servidor comando fihcaje"; got != quiero {
 		t.Errorf("consulta corregida = %q, quería %q", got, quiero)
+	}
+}
+
+// TestCorrectorSeRindeAlPlazo: si se vence el plazo, la consulta va como vino y sin correcciones —una
+// corrección a medias no se aplica—. Con el plazo de producción la misma consulta sí se corrige (si
+// no, la prueba no probaría nada).
+//
+// Sabotaje: el corrector no se pone plazo.
+// arnes: archivo="internal/memory/tipeo.go"
+// arnes: de="\tctx, cancel := context.WithTimeout(ctx, plazo)\n"
+// arnes: a="\tctx, cancel := context.WithCancel(ctx)\n"
+func TestCorrectorSeRindeAlPlazo(t *testing.T) {
+	e := newTestEngine(t)
+	sembrarTipeo(t, e, "doc", "La información del fichaje.", "Más información del kiosko.")
+	q := "infromacion del fichaje"
+	if got, cs := e.CorregirConsultaConPlazo(context.Background(), q, ProjectScope{}, time.Nanosecond); len(cs) != 0 || got != q {
+		t.Fatalf("con el plazo vencido corrigió: %q (consulta %q)", resumenDeCorrecciones(cs), got)
+	}
+	if _, cs := e.CorregirConsulta(context.Background(), q, ProjectScope{}); resumenDeCorrecciones(cs) != "infromacion→informacion" {
+		t.Fatalf("con el plazo de producción corrigió %q: la prueba no probaría nada", resumenDeCorrecciones(cs))
 	}
 }
 
@@ -198,38 +257,56 @@ func TestCorrectorCorrigeEnSoloLectura(t *testing.T) {
 	}
 }
 
-// TestCorrectorRespetaElAlcance: el corrector nunca ve vocabulario que el recall no podría devolver.
-// «raspberry» sólo existe en el proyecto b: una consulta acotada al proyecto a no se corrige hacia
-// ella, y la misma consulta federada sí (si no, la prueba no probaría nada).
+// TestCorrectorRespetaElAlcance: el corrector nunca ve vocabulario que el recall no podría devolver,
+// y el alcance vale en las DOS mitades. Para elegir: «raspberry» sólo existe en el proyecto b, así que
+// una consulta acotada al proyecto a no se corrige hacia ella, y la misma consulta federada sí (si no,
+// la prueba no probaría nada). Para decidir qué está muerto: el proyecto b guardó el tipeo «fichjae»
+// tal cual, y eso no puede darlo por vivo en el proyecto a, que tiene «fichaje» y no el tipeo.
 //
 // Sabotaje: el conteo de candidatos pierde la cláusula del alcance.
 // arnes: archivo="internal/memory/tipeo.go"
 // arnes: de="\tclausula, argsAlcance := alcance.scopeClause(\"o\")\n\tconsulta := fmt.Sprintf(sqlDFDeCandidatos"
 // arnes: a="\tclausula, argsAlcance := ProjectScope{}.scopeClause(\"o\")\n\tconsulta := fmt.Sprintf(sqlDFDeCandidatos"
+//
+// Sabotaje: la detección de términos muertos pierde la cláusula del alcance.
+// arnes: archivo="internal/memory/tipeo.go"
+// arnes: de="\tclausula, argsAlcance := alcance.scopeClause(\"o\")\n\tconsulta := fmt.Sprintf(sqlExpresionesVivas"
+// arnes: a="\tclausula, argsAlcance := ProjectScope{}.scopeClause(\"o\")\n\tconsulta := fmt.Sprintf(sqlExpresionesVivas"
 func TestCorrectorRespetaElAlcance(t *testing.T) {
 	e := newTestEngine(t)
-	deB := sembrarTipeo(t, e, "b",
-		"La raspberry del fichaje.",
+	delProyecto := func(proyecto string, contenidos ...string) {
+		t.Helper()
+		for _, id := range sembrarTipeo(t, e, proyecto, contenidos...) {
+			if _, err := e.db.Exec(`UPDATE observations SET project_id = ? WHERE id = ?`, proyecto, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	delProyecto("b",
+		"La raspberry del fichjae.",
 		"Reiniciar la raspberry.",
 		"La raspberry quedó sin red.",
 	)
-	for _, id := range deB {
-		if _, err := e.db.Exec(`UPDATE observations SET project_id = ? WHERE id = ?`, "b", id); err != nil {
-			t.Fatal(err)
-		}
-	}
-	deA := sembrarTipeo(t, e, "a", "El kiosko de Altura.", "Otro kiosko en blanco.")
-	for _, id := range deA {
-		if _, err := e.db.Exec(`UPDATE observations SET project_id = ? WHERE id = ?`, "a", id); err != nil {
-			t.Fatal(err)
-		}
-	}
+	delProyecto("a",
+		"El kiosko de Altura.",
+		"Otro kiosko en blanco.",
+		"El fichaje de la mañana.",
+		"El fichaje quedó en cero.",
+	)
 	q := "la rasberry del kiosko"
 	if got, cs := e.CorregirConsulta(context.Background(), q, ProjectScope{ProjectID: "a"}); len(cs) != 0 || got != q {
 		t.Fatalf("el proyecto a se corrigió con vocabulario del b: %q", resumenDeCorrecciones(cs))
 	}
 	if _, cs := e.CorregirConsulta(context.Background(), q, ProjectScope{}); resumenDeCorrecciones(cs) != "rasberry→raspberry" {
 		t.Fatalf("federada no corrigió: %q (la prueba no probaría nada)", resumenDeCorrecciones(cs))
+	}
+	got, cs := e.CorregirConsulta(context.Background(), "el fichjae de hoy", ProjectScope{ProjectID: "a"})
+	if resumenDeCorrecciones(cs) != "fichjae→fichaje" || got != "el fichaje de hoy" {
+		t.Fatalf("en el proyecto a, «fichjae» quedó %q (consulta %q): lo dio por vivo una nota del b", resumenDeCorrecciones(cs), got)
+	}
+	// Y federada, la nota del b sí lo deja vivo: el tipeo es una palabra de la memoria que se ve.
+	if _, cs := e.CorregirConsulta(context.Background(), "el fichjae de hoy", ProjectScope{}); len(cs) != 0 {
+		t.Fatalf("federada corrigió «fichjae», que está en una nota visible: %q", resumenDeCorrecciones(cs))
 	}
 }
 

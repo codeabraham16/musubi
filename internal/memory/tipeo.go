@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -76,6 +77,10 @@ const (
 
 // PlazoDelCorrector es el techo de tiempo del corrector entero. Si se vence —o cualquier consulta
 // falla—, la consulta sigue como vino: corregir es una ayuda, nunca el costo del turno.
+//
+// Lo que cuesta, medido sobre una copia de la base real (1,9 k notas, 9 segmentos de FTS) con los 54
+// prompts reales que tienen términos muertos, y con el motor FRÍO como en el hook, que es un proceso
+// nuevo por turno: p50 15 ms y p95 29 ms, máximo 38. Ver corregirTerminos para por qué en paralelo.
 const PlazoDelCorrector = 60 * time.Millisecond
 
 // CorregirConsulta devuelve q con sus términos muertos corregidos y la lista de lo que corrigió (nil
@@ -85,18 +90,25 @@ const PlazoDelCorrector = 60 * time.Millisecond
 // Ante cualquier error o si se vence PlazoDelCorrector devuelve q tal cual y nil: una corrección a
 // medias no se aplica.
 func (e *DbEngine) CorregirConsulta(ctx context.Context, q string, alcance ProjectScope) (string, []Correccion) {
+	return e.CorregirConsultaConPlazo(ctx, q, alcance, PlazoDelCorrector)
+}
+
+// CorregirConsultaConPlazo es CorregirConsulta con otro techo de tiempo. Las superficies usan
+// CorregirConsulta; esto existe para el banco, que mide QUÉ corrige el corrector y no puede depender
+// de cuán cargada está la máquina que corre las pruebas (el plazo se mide aparte, en el hook).
+func (e *DbEngine) CorregirConsultaConPlazo(ctx context.Context, q string, alcance ProjectScope, plazo time.Duration) (string, []Correccion) {
 	terminos := terminosDeTipeo(q)
 	if len(terminos) == 0 {
 		return q, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, PlazoDelCorrector)
+	ctx, cancel := context.WithTimeout(ctx, plazo)
 	defer cancel()
 	correcciones, err := e.corregirTerminos(ctx, terminos, alcance)
 	if err != nil {
 		if ctx.Err() != nil {
 			// Info y no Warn, como el timeout del embebedor en el turno: es la conducta diseñada de la
 			// guarda, no una avería.
-			logx.Info("corrector de tipeo: se venció el plazo, la consulta va como vino", "plazo", PlazoDelCorrector)
+			logx.Info("corrector de tipeo: se venció el plazo, la consulta va como vino", "plazo", plazo)
 		} else {
 			logx.Warn("corrector de tipeo: falló, la consulta va como vino", "error", err)
 		}
@@ -149,6 +161,16 @@ func todoLetras(r []rune) bool {
 }
 
 // corregirTerminos busca los términos muertos y, para los más largos, su corrección.
+//
+// CADA TÉRMINO MUERTO SE CORRIGE EN SU PROPIA GOROUTINE, con su conexión del pool. Son independientes,
+// y lo caro es el candidato: cada uno es un MATCH contra todos los segmentos del índice, y «falta una
+// letra» son 26 por posición (286 para una palabra de 10). En serie, cuatro muertos sin candidato en
+// las primeras clases suman sus enumeraciones enteras, y con la base fría del hook eso pasaba el plazo:
+// medido sobre la copia de la base real, p95 79 ms y 12 de 108 corridas por encima de 60 ms. En
+// paralelo el costo es el del término más caro: p95 29 ms, ninguna por encima. Partir además cada
+// clase en trozos no ganaba nada medible (p95 31-32 ms).
+//
+// Un pool más chico que los términos (el motor sin arranque tiene 2 conexiones) sólo los pone en fila.
 func (e *DbEngine) corregirTerminos(ctx context.Context, terminos []terminoDeTipeo, alcance ProjectScope) ([]Correccion, error) {
 	muertos, err := e.terminosMuertos(ctx, terminos, alcance)
 	if err != nil || len(muertos) == 0 {
@@ -163,22 +185,29 @@ func (e *DbEngine) corregirTerminos(ctx context.Context, terminos []terminoDeTip
 	type hallada struct {
 		Correccion
 		orden int
+		err   error
 	}
-	var halladas []hallada
-	for _, m := range muertos {
-		buscado, df, err := e.mejorCandidato(ctx, m.bajo, alcance)
-		if err != nil {
-			return nil, err
-		}
-		if buscado != "" {
-			halladas = append(halladas, hallada{Correccion{Tipeado: m.original, Buscado: buscado, DF: df}, m.orden})
-		}
+	halladas := make([]hallada, len(muertos))
+	var wg sync.WaitGroup
+	for i, m := range muertos {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			buscado, df, err := e.mejorCandidato(ctx, m.bajo, alcance)
+			halladas[i] = hallada{Correccion{Tipeado: m.original, Buscado: buscado, DF: df}, m.orden, err}
+		}()
 	}
+	wg.Wait()
 	// En el orden de la consulta, que es como se lee el aviso.
 	sort.Slice(halladas, func(i, j int) bool { return halladas[i].orden < halladas[j].orden })
 	out := make([]Correccion, 0, len(halladas))
 	for _, h := range halladas {
-		out = append(out, h.Correccion)
+		if h.err != nil {
+			return nil, h.err
+		}
+		if h.Buscado != "" {
+			out = append(out, h.Correccion)
+		}
 	}
 	return out, nil
 }
