@@ -4,9 +4,11 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"musubi/internal/config"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 	"musubi/internal/transcripts"
 )
 
@@ -53,10 +55,7 @@ func itemDelPi() memory.RecallResult {
 // arnes: de="\tres, err := store.Recall(context.Background(), consulta, opts)\n"
 // arnes: a="\tres, err := store.Recall(context.Background(), prompt, opts)\n"
 //
-// Sabotaje: el corrector recibe un alcance distinto del filtro duro del recall.
-// arnes: archivo="cmd/musubi/turn.go"
-// arnes: de="\t\talcance := memory.ProjectScope{ProjectID: opts.ProjectScope, Federate: opts.Federate}\n"
-// arnes: a="\t\talcance := memory.ProjectScope{ProjectID: \"otro\", Federate: opts.Federate}\n"
+// Con qué vocabulario corrige lo fija TestTurnoCorrigeConElVocabularioDelModo.
 func TestTurnoEmbebeLaConsultaCorregida(t *testing.T) {
 	store := &fakeTurnStore{recall: itemDelPi(), corregir: corrigeDosTipeos}
 	var embebidos []string
@@ -73,10 +72,89 @@ func TestTurnoEmbebeLaConsultaCorregida(t *testing.T) {
 	if store.lastQuery != "la informacion del comando" {
 		t.Errorf("al recall tenía que ir el texto CORREGIDO, y fue %q", store.lastQuery)
 	}
-	// El alcance del corrector es el filtro duro del recall, sacado de las MISMAS opciones.
-	quiere := memory.ProjectScope{ProjectID: store.lastOpts.ProjectScope, Federate: store.lastOpts.Federate}
-	if store.corrigioAlcance != quiere {
-		t.Errorf("el corrector corrió con el alcance %+v y el recall con %+v", store.corrigioAlcance, quiere)
+}
+
+// TestTurnoCorrigeConElVocabularioDelModo: el vocabulario del corrector sale del MODO, por
+// memory.RecallOptions.AlcanceDelCorrector, y no del filtro duro de las opciones del recall. En
+// «aparte» ese filtro es el proyecto propio, pero el recall trae hasta loop.recall_otros_max notas de
+// otro proyecto: con el vocabulario propio, el corrector daba por muerta una palabra de esas notas y
+// la reescribía a una de éste. En «aislado», el propio; en «mezclado» y sin proyecto, todo el acervo.
+//
+// Sabotaje: el turno le pasa al corrector el filtro duro del recall, que en «aparte» es el propio.
+// arnes: archivo="cmd/musubi/turn.go"
+// arnes: de="\t\tconsulta, correcciones = store.CorregirConsulta(context.Background(), prompt, opts.AlcanceDelCorrector())\n"
+// arnes: a="\t\tconsulta, correcciones = store.CorregirConsulta(context.Background(), prompt, memory.ProjectScope{ProjectID: opts.ProjectScope, Federate: opts.Federate})\n"
+func TestTurnoCorrigeConElVocabularioDelModo(t *testing.T) {
+	for _, c := range []struct {
+		modo, propio string
+		quiere       memory.ProjectScope
+	}{
+		{config.OtrosProyectosAparte, "musubi", memory.ProjectScope{}},
+		{config.OtrosProyectosAislado, "musubi", memory.ProjectScope{ProjectID: "musubi"}},
+		{config.OtrosProyectosMezclado, "musubi", memory.ProjectScope{}},
+		{config.OtrosProyectosAparte, "", memory.ProjectScope{}},
+	} {
+		store := &fakeTurnStore{recall: itemDelPi(), corregir: corrigeDosTipeos}
+		buildTurnRecall(store, parametrosDelTurno{sesion: "s-" + c.modo, prompt: promptConTipeos, presupuesto: 250,
+			memCfg: config.Default().Memory, propio: c.propio, otrosModo: c.modo, otrosMax: 2})
+		if !store.llamoAlCorrector {
+			t.Fatalf("modo %s con propio %q: el turno no llamó al corrector", c.modo, c.propio)
+		}
+		if store.corrigioAlcance != c.quiere {
+			t.Errorf("modo %s con propio %q: el corrector corrió con %+v y tenía que correr con %+v (el recall filtró %q con tope %d)",
+				c.modo, c.propio, store.corrigioAlcance, c.quiere, store.lastOpts.ProjectScope, store.lastOpts.TopeOtrosProyectos)
+		}
+	}
+}
+
+// motorSinApuro es el motor real con el corrector sin el plazo de producción (60 ms): la prueba de
+// abajo mide QUÉ corrige el turno, no si le alcanza el tiempo en una máquina cargada. Un plazo vencido
+// devolvería el prompt sin corregir, y la mitad de la prueba que espera NO ver una corrección pasaría
+// por el motivo equivocado.
+type motorSinApuro struct{ *memory.DbEngine }
+
+func (m motorSinApuro) CorregirConsulta(ctx context.Context, q string, a memory.ProjectScope) (string, []memory.Correccion) {
+	return m.CorregirConsultaConPlazo(ctx, q, a, 5*time.Second)
+}
+
+// TestTurnoEnAparteNoCorrigeLaPalabraDeOtroProyecto: el caso de la revisión, de punta a punta con el
+// motor real. Altura escribe «planilla» y Musubi «plantilla», a una letra. Desde el repo de Musubi, en
+// «aparte», el turno trae las notas de Altura sobre la planilla, así que «planilla» está VIVA y no se
+// toca. Con el vocabulario propio se leía «busqué «plantilla» por «planilla»» encima de las mismas
+// notas de Altura. En «aislado» sí se corrige, porque ese recall no puede traer lo de Altura. Y esa
+// mitad muestra además que la prueba no pasa porque el corrector no corrió.
+func TestTurnoEnAparteNoCorrigeLaPalabraDeOtroProyecto(t *testing.T) {
+	eng, err := memory.NewDbEngine(memtest.DirSembrado(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { eng.Close() })
+	for _, n := range []struct{ proyecto, id, topic, texto string }{
+		{"musubi", "p-pla1", "sdd/plantillas", "La plantilla de artefactos SDD vive en el repo."},
+		{"musubi", "p-pla2", "cuerpo/lienzo", "El lienzo arranca desde una plantilla vacía."},
+		{"altura", "a-pla1", "rrhh/planilla", "La planilla del turno noche se cierra los viernes."},
+		{"altura", "a-pla2", "rrhh/horas", "Las horas extra se cargan en la planilla semanal."},
+	} {
+		if err := eng.SaveObservationTypedFrom(n.proyecto, "", n.id, n.topic, n.texto, 1, "", "", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	turno := func(modo string) string {
+		return buildTurnRecall(motorSinApuro{eng}, parametrosDelTurno{sesion: "s-" + modo,
+			prompt: "cómo se cierra la planilla del turno noche", presupuesto: 250,
+			memCfg: config.Default().Memory, propio: "musubi", otrosModo: modo, otrosMax: 2})
+	}
+
+	aparte := turno(config.OtrosProyectosAparte)
+	if !strings.Contains(aparte, "[id:a-pla1]") {
+		t.Fatalf("precondición: en «aparte» el turno tenía que traer la nota de Altura sobre la planilla:\n%s", aparte)
+	}
+	if strings.Contains(aparte, transcripts.PrefijoDeCorreccion) {
+		t.Errorf("en «aparte» el turno corrigió una palabra de las notas ajenas que él mismo trae:\n%s", aparte)
+	}
+	aislado := turno(config.OtrosProyectosAislado)
+	if !strings.Contains(aislado, transcripts.PrefijoDeCorreccion+"plantilla» por «planilla»") {
+		t.Errorf("en «aislado» «planilla» no está en nada que ese recall pueda traer, y el turno no la corrigió:\n%s", aislado)
 	}
 }
 

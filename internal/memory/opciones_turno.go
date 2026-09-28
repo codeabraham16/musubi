@@ -22,8 +22,8 @@ import (
 //   - «aislado»:  ProjectScope = propio y TopeOtrosProyectos = 0.
 //   - «mezclado»: el valor cero.
 //
-// EL VOCABULARIO DEL CORRECTOR DE TIPEO sale de lo que este alcance deja ENTRAR al ranking, porque
-// el alcance del corrector es el filtro DURO que el caller le aplica a Recall, no el reparto:
+// EL VOCABULARIO DEL CORRECTOR DE TIPEO sale de lo que este alcance deja ENTRAR al ranking, y NO
+// del filtro duro de las opciones, que en «aparte» es el proyecto propio:
 //   - ProjectScope vacío, o Federate en true: vocabulario FEDERADO, el de todo el acervo.
 //   - ProjectScope puesto, Federate en false y TopeOtrosProyectos > 0 («aparte»): también FEDERADO.
 //     El tope reparte el presupuesto al empaquetar y no le cierra la puerta a lo ajeno: un prompt
@@ -32,8 +32,10 @@ import (
 //   - ProjectScope puesto, Federate en false y TopeOtrosProyectos == 0 («aislado»): el vocabulario
 //     del proyecto propio y de lo sin atribuir, que es exactamente lo que ese recall deja ver.
 //
-// La regla no tiene función ni campo propio a propósito: la aplica quien llama al corrector, con
-// estos tres campos a la vista, y una función sin ese lector sería una guarda desconectada.
+// La regla vive en RecallOptions.AlcanceDelCorrector, y la leen el hook y el banco. Antes era sólo
+// prosa, «sin función a propósito», y el merge limpio con el corrector la violó: armaba el alcance
+// con el filtro duro de las opciones, y en «aparte» reescribía palabras de las notas ajenas que el
+// mismo turno devolvía.
 type AlcanceDelTurno struct {
 	ProjectScope string
 	Federate     bool
@@ -152,4 +154,29 @@ func OpcionesDeRecallDelTurno(memCfg config.MemoryConfig, alcance AlcanceDelTurn
 		Federate:           alcance.Federate,
 		TopeOtrosProyectos: alcance.TopeOtrosProyectos,
 	}
+}
+
+// AlcanceDelCorrector es el alcance del vocabulario del corrector de tipeo para un recall con estas
+// opciones: la regla de AlcanceDelTurno en UN lugar, para sus dos lectores, el hook del turno
+// (buildTurnRecall) y el banco (recalleval, los brazos CorregirTipeo). Sin tope es el filtro duro del
+// recall: con ProjectScope puesto, lo propio y lo sin atribuir; vacío o federado, todo el acervo. Con
+// tope («aparte») es el FEDERADO, porque ese recall trae notas de otro proyecto y el corrector no
+// puede dar por muertas las palabras de lo que el mismo turno devuelve. Con el vocabulario propio las
+// reescribía a una palabra de éste: medido en una copia de davantis-1 el 2026-09-27, 79 términos de
+// notas ajenas que «aparte» puede devolver, «planilla»→«plantilla» entre ellos.
+//
+// EN «APARTE» ES UNA APROXIMACIÓN POR EXCESO, y se acepta. El federado incluye las palabras de los
+// registros históricos ajenos (commits y artefactos SDD de otro repo), que ese recall saca en el
+// choke point, así que el corrector puede proponer una palabra que sólo vive ahí: en la misma
+// medición, 574 términos con df ≥ 2. El daño es acotado, porque el término tipeado ya estaba muerto.
+// La regla exacta pide un gemelo SQL de historicalRecord, y eso son dos definiciones que mantener
+// sincronizadas.
+//
+// Las tools MCP no pasan por acá: su alcance es el de la credencial (en el central, sólo el
+// vocabulario del proyecto de quien pregunta) y no llevan tope.
+func (o RecallOptions) AlcanceDelCorrector() ProjectScope {
+	if o.TopeOtrosProyectos > 0 {
+		return ProjectScope{}
+	}
+	return ProjectScope{ProjectID: o.ProjectScope, Federate: o.Federate}
 }

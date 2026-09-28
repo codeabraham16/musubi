@@ -585,14 +585,14 @@ func buildTurnRecall(store turnStore, p parametrosDelTurno) string {
 
 	// EL CORRECTOR DE TIPEO, ANTES DE EMBEBER Y DE BUSCAR: el texto corregido es el que va al
 	// embebedor y al recall, y lo que corrigió se avisa en el bloque (ver encabezadoDeMemoria). Su
-	// alcance es el MISMO filtro duro que las opciones le ponen al recall —hoy el valor cero,
-	// federado: todo lo visible—, así que nunca propone una palabra que este recall no podría
-	// devolver. Con memory.recall_typo_correction apagado el turno busca el prompt como vino, y el
-	// bloque sale byte a byte como antes.
+	// vocabulario lo decide el modo, en memory.RecallOptions.AlcanceDelCorrector, y NO es el filtro
+	// duro de opts: en «aparte» es todo el acervo, porque este recall trae notas de otro proyecto y
+	// sus palabras no pueden darse por muertas; en «aislado», el proyecto propio, que es lo único que
+	// este recall deja ver. Con memory.recall_typo_correction apagado el turno busca el prompt como
+	// vino, y el bloque sale byte a byte como antes.
 	consulta, correcciones := prompt, []memory.Correccion(nil)
 	if p.memCfg.RecallTypoCorrection {
-		alcance := memory.ProjectScope{ProjectID: opts.ProjectScope, Federate: opts.Federate}
-		consulta, correcciones = store.CorregirConsulta(context.Background(), prompt, alcance)
+		consulta, correcciones = store.CorregirConsulta(context.Background(), prompt, opts.AlcanceDelCorrector())
 	}
 
 	// LA SEÑAL VECTORIAL, con el techo de latencia puesto. El backfill embebe el content completo,

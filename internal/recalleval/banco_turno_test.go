@@ -281,8 +281,9 @@ func TestElBancoCorreElPoolDelTurno(t *testing.T) {
 }
 
 // TestElBancoCorrigeAntesDeEmbeber: un brazo CorregirTipeo pasa la consulta por el corrector del
-// motor con el alcance de SU recall, y lo que embebe y lo que busca es la consulta CORREGIDA, en el
-// orden del hook (buildTurnRecall). Un brazo sin CorregirTipeo no llama al corrector.
+// motor con el alcance del HOOK (RecallOptions.AlcanceDelCorrector: sin tope, el filtro de su recall;
+// con tope, todo el acervo), y lo que embebe y lo que busca es la consulta CORREGIDA, en el orden
+// del hook (buildTurnRecall). Un brazo sin CorregirTipeo no llama al corrector.
 //
 // Sabotaje: el banco busca lo que se tipeó y no lo corregido.
 // arnes: archivo="internal/recalleval/harness.go"
@@ -294,10 +295,10 @@ func TestElBancoCorreElPoolDelTurno(t *testing.T) {
 // arnes: de="\t\tvec, err := embed(consulta)"
 // arnes: a="\t\tvec, err := embed(query)"
 //
-// Sabotaje: el corrector del banco mira todo el acervo y no el alcance del recall.
+// Sabotaje: el corrector del banco usa el filtro duro del recall, que en «aparte» es el propio.
 // arnes: archivo="internal/recalleval/harness.go"
-// arnes: de="memory.ProjectScope{ProjectID: opts.ProjectScope, Federate: opts.Federate})"
-// arnes: a="memory.ProjectScope{})"
+// arnes: de="c.CorregirConsulta(ctx, query, opts.AlcanceDelCorrector())"
+// arnes: a="c.CorregirConsulta(ctx, query, memory.ProjectScope{ProjectID: opts.ProjectScope, Federate: opts.Federate})"
 func TestElBancoCorrigeAntesDeEmbeber(t *testing.T) {
 	fx := &Fixture{
 		Docs:    []Doc{{ID: "d0"}},
@@ -328,6 +329,18 @@ func TestElBancoCorrigeAntesDeEmbeber(t *testing.T) {
 	}
 	if !reflect.DeepEqual(r.buscadas, []string{"el fichaje del kiosko"}) {
 		t.Errorf("se buscó %q; quería la consulta corregida", r.buscadas)
+	}
+
+	// Y con tope («aparte»), el vocabulario es el de todo el acervo, como en el hook: ese recall trae
+	// notas de otro proyecto, y sus palabras no pueden darse por muertas.
+	conTope := ConfigTurnoHibrido()
+	conTope.Opts.ProjectScope, conTope.Opts.TopeOtrosProyectos = "altura", 2
+	ra := &recuperadorQueAnota{}
+	if _, err := Evaluate(ctx, ra, fx, conTope, embed, []int{10}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ra.alcances) != 1 || ra.alcances[0] != (memory.ProjectScope{}) {
+		t.Errorf("con tope, el corrector corrió con los alcances %+v; quería uno solo, el de todo el acervo", ra.alcances)
 	}
 
 	// CONTROL: un brazo que no corrige busca lo que se tipeó y ni llama al corrector.

@@ -88,6 +88,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   sigue federado: no se esconde ni se topa nada». La marca `[de X]` no cambia. Por esa misma entrada,
   en altura-erp hay 3 notas propias estampadas `altura-erp`: siguen siendo ajenas para el hook, y
   ahora entran con el tope. No cambia el esquema ni ninguna tool, y no hay goldens que regenerar.
+
+  Y cambia lo que dice la entrada «La búsqueda tolera el tipeo», más abajo: «El vocabulario es el
+  que el recall de quien pregunta podría devolver: el mismo filtro duro». En el hook, con «aparte»,
+  el filtro duro es lo propio, pero el turno trae notas ajenas, así que el corrector toma el
+  vocabulario de todo el acervo. Con el del proyecto reescribía palabras de lo que el mismo turno
+  devuelve: «planilla»→«plantilla», y 79 términos así en una copia de davantis-1. Es una
+  aproximación por exceso, porque incluye palabras de los registros históricos ajenos, que «aparte»
+  no devuelve. Con «aislado» el vocabulario es lo propio, y en `musubi_recall`, `musubi_ask` y el
+  central no cambia nada.
 - **La búsqueda tolera el tipeo.** El recall es léxico: «infromacion», «temrinal» o «fichjae» no
   matchean ninguna nota, y el vector no los rescata (según la medición del plan, el coseno entre el
   tipeo y la palabra promedia 0,159 sobre 10 pares). Ahora el hook del turno, `musubi_recall` y
