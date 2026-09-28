@@ -43,6 +43,7 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   |---|---|
   | Prompts reales de davantis-1 desde el 09-14 (98), sobre una copia de la base | corrige 35; de las 56 correcciones, 50 bien, 3 dudosas y 3 mal («ponle→pone», «impornte→importe», «haslo→halo») |
   | Dorado, MRR sin → con corrector (3 semillas) | transposición 0,500 → 0,528 · falta 0,583 → 0,611 · sobra 0,500 → 0,528 · sustitución y limpio sin cambio |
+  | Memoria real (copia de la base local, 88 consultas), un tipeo por consulta, MRR sin → con corrector | transposición 0,316 → 0,388 · falta 0,320 → 0,376 · sobra 0,308 → 0,381, contra 0,377 sin tipeo; las limpias no pierden (0,377 → 0,388). Con TODOS los términos tipeados queda a 0,03-0,08 del limpio |
   | Hook, binario de main contra el de la rama, 268 corridas por lado | mezcla real: p50 380 → 404 ms, p95 652 → 637 ms; peor caso (términos muertos sin candidato) p50 +42 ms; 0 plazos vencidos |
 
   El dorado recupera menos de lo que el plan pedía, y es por el dorado: de los 405 términos que
