@@ -446,7 +446,7 @@ func TestElAvisoSinCompactSaleUnaSolaVez(t *testing.T) {
 // Sabotaje: el matcher que es una expresión regular no cubre nada.
 // arnes: archivo="cmd/musubi/agente_plugin.go"
 // arnes: de="\treturn re.MatchString(valor)\n"
-// arnes: a="\treturn false\n"
+// arnes: a="\t_ = re\n\treturn false\n"
 //
 // Sabotaje: el settings.local no se mira.
 // arnes: archivo="cmd/musubi/agente_plugin.go"
