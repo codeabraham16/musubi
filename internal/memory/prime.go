@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -16,7 +17,8 @@ import (
 const defaultPrimeBudget = 300
 
 // PrimeContext devuelve los gists más salientes que entren en budget tokens,
-// rankeados por saliencia. No recibe query: es contexto general del proyecto.
+// rankeados por saliencia y a lo sumo uno por topic_key. No recibe query: es
+// contexto general del proyecto.
 // Es PrimeContextCtx sin alcance: todo el acervo, como fue siempre.
 func (e *DbEngine) PrimeContext(budget int) (RecallResult, error) {
 	return e.PrimeContextCtx(context.Background(), budget)
@@ -61,7 +63,39 @@ func (e *DbEngine) PrimeContextCtx(ctx context.Context, budget int) (RecallResul
 	}
 	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
 
-	return packByBudget(ranked, budget, defaultGistMaxTokens, reparto{}), nil
+	// UNA NOTA POR TEMA: de cada topic_key entra sólo la primera del ranking, que es la más saliente.
+	// Medido el 2026-09-28 sobre una copia de la base de davantis-1, con el binario de main: de las 15
+	// notas del bloque, 5 eran de project/brain-dashboard-webgl y 3 de ola1/prender-lo-construido, o
+	// sea 9 temas en 15 lugares. Las del dashboard son de julio: las sostienen arriba su importancia y
+	// el recall, que las sigue trayendo, y no notas nuevas del tema. El presupuesto del arranque se iba
+	// en contar el mismo tema cinco veces.
+	//
+	// Un topic vacío NO se deduplica: no dice de qué habla la nota, así que dos notas sin tema no son
+	// el mismo tema y entran las dos. «Vacío» es lo mismo que para el MCP, que rechaza un topic_key
+	// en blanco: después de strings.TrimSpace.
+	//
+	// Va ANTES de packByBudget, y eso decide el borde del presupuesto: si la nota más saliente de un
+	// tema no cabe en lo que queda, el tema queda afuera y su lugar lo toma la próxima nota de OTRO
+	// tema que quepa (el `continue` de empaquetar). La segunda del mismo tema no entra: sería una
+	// versión menos saliente del tema, elegida sólo por ser más corta. Y hacerlo adentro tocaría
+	// empaquetar, que es el núcleo que el priming comparte con el recall por turno.
+	//
+	// Sin vectores ni MMR, a propósito: sobre las 2.412 candidatas de ese arranque, diversificar por
+	// similitud pediría los vectores de todas, cada vez.
+	visto := make(map[string]bool, len(ranked))
+	unaPorTema := ranked[:0]
+	for _, c := range ranked {
+		tema := strings.TrimSpace(c.topicKey)
+		if tema != "" {
+			if visto[tema] {
+				continue
+			}
+			visto[tema] = true
+		}
+		unaPorTema = append(unaPorTema, c)
+	}
+
+	return packByBudget(unaPorTema, budget, defaultGistMaxTokens, reparto{}), nil
 }
 
 // candidateSalience calcula la saliencia de un candidato usando la edad derivada

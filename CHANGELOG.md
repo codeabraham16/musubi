@@ -867,6 +867,55 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **El arranque trae una nota por tema.** El bloque «[Musubi — memoria]» del SessionStart rankea lo
+  visible por saliencia y lo empaqueta hasta el presupuesto (300 tokens por defecto), y un tema con
+  varias notas muy consultadas se llevaba varios lugares del mismo bloque. Medido el 2026-09-28 con
+  `musubi detect --hook-mode` sobre una copia de la base de davantis-1 (2.412 candidatas en el alcance
+  del arranque), el binario de main y el de esta rama sobre la MISMA copia:
+
+  | | main (009ebfae) | esta rama |
+  |---|---|---|
+  | notas en el bloque | 15 | 14 |
+  | temas distintos | 9 | 14 |
+  | tema más repetido | `project/brain-dashboard-webgl`, 5 veces | ninguno: 1 por tema |
+  | caracteres del bloque | 2.872 | 2.770 |
+
+  Las cinco del dashboard son de julio: las sostienen arriba su importancia (6 y 7) y el recall, que
+  las tocó entre el 24 y el 27 de septiembre. Ocupaban un tercio del bloque, y
+  `ola1/prender-lo-construido` otros tres lugares. Ahora `PrimeContextCtx`, después del orden por
+  saliencia, deja pasar sólo la primera nota de cada `topic_key` —la más saliente— y recién ahí
+  empaqueta: el lugar de las repetidas lo toman seis temas que antes no entraban, y sale uno, el que
+  en main entraba último. Un topic vacío o en blanco no se deduplica, porque no dice de qué habla la
+  nota. Sin vectores ni MMR: diversificar por similitud pediría los vectores de todas las candidatas
+  en cada arranque.
+
+  **Si la nota más saliente de un tema no cabe en lo que queda del presupuesto, el tema queda
+  afuera**, y el lugar lo toma la próxima nota de otro tema que quepa (el `continue` de
+  `empaquetar`). La segunda del mismo tema no entra: sería una versión menos saliente del tema,
+  elegida sólo por ser más corta, y llevar la deduplicación adentro de `empaquetar` tocaría el núcleo
+  que el priming comparte con el recall por turno.
+
+  `TestPrimingUnaNotaPorTema` lo prueba por los dos caminos del hook (todo el acervo y acotado a lo
+  propio), `TestPrimingElTemaQueNoCabeQuedaAfuera` fija el borde del presupuesto y
+  `TestPrimingElTemaVacioNoSeDeduplica`, el tema vacío y el en blanco. `TestPrimeContextRespetaBudget`
+  pasa a tener un tema por nota: con las diez en `topic/x` entraba una sola, y la prueba seguía verde
+  con un `empaquetar` que no mirara el presupuesto (medido con ese sabotaje, que ahora la pone roja).
+  Cinco sabotajes mecanizados en total.
+
+  **El costo, medido con `BenchmarkPrimeContext`** (`-count=5`, esta rama contra un árbol de
+  009ebfae, en la misma máquina): el mapa de temas suma 54,6 KB y 5 allocs por llamada con 1.000
+  notas (+3,6 % de B/op) y 437 KB y 33 allocs con 10.000 (+2,4 %). El tiempo no sube, baja: de 5,6 a
+  3,5 ms con 1.000 y de 61 a 43 ms con 10.000 (medianas; el tiempo de esta máquina es ruidoso, la
+  memoria no). Es la cola del presupuesto: cuando lo que queda no alcanza para la próxima nota,
+  `empaquetar` sigue probando candidatas —estimando los tokens de cada una— hasta el final del
+  ranking, y ahora el ranking tiene una por tema (el banco tiene 50). El perfil de CPU lo confirma:
+  en 009ebfae `empaquetar` se llevaba 1,7 ms de cada llamada, y en esta rama queda por debajo de lo
+  que el muestreo alcanza a ver.
+
+  La deduplicación es por `topic_key` a secas: en «mezclado», y en el respaldo cuando no hay nada
+  propio, dos proyectos con el mismo tema cuentan como uno (en esa base, 7 temas están en más de un
+  proyecto). Sólo el bloque del SessionStart: el recall por turno, las tools y el ranking de
+  saliencia no cambian. Llega a cada máquina con su binario.
 - **El latido del riel en vivo ya no dice «sin sondeo» con el sistema sano.** El pie del riel contaba
   los sondeos del último minuto y con cero apagaba la lámpara. Con la bajada espaciada una máquina
   quieta pide cada 300 s, y hasta ~450 s cuando el candado cambia de dueño porque el anterior murió
