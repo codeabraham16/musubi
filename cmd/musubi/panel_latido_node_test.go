@@ -99,7 +99,7 @@ const formatoAtDelFeed = "2006-01-02T15:04:05.000Z07:00"
 func TestElLatidoAguantaLaBajadaEspaciadaYSeApagaConUnCorte(t *testing.T) {
 	nodeParaElLatido(t)
 
-	tope := config.SyncConfig{}.EffectiveInboundIdleMaxSeconds()
+	tope := config.Default().Sync.EffectiveInboundIdleMaxSeconds()
 	peor := peorHuecoSanoDeLaBajada()
 	promesa := int(latidoApagaAMasTardar / time.Second)
 	if peor >= promesa {
@@ -245,7 +245,7 @@ func TestElLatidoAguantaLaBajadaEspaciadaYSeApagaConUnCorte(t *testing.T) {
 // soltarla (leaseBajadaSegundos en internal/mcp/scheduler.go: cuatro ticks, con piso de 120 s).
 // Con la config por defecto, 300 + 120 + 30 = 450 s.
 func peorHuecoSanoDeLaBajada() int {
-	tope := config.SyncConfig{}.EffectiveInboundIdleMaxSeconds()
+	tope := config.Default().Sync.EffectiveInboundIdleMaxSeconds()
 	tick := config.Default().Sync.DrainIntervalSeconds
 	return tope + max(4*tick, 120) + tick
 }
