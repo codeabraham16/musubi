@@ -117,6 +117,14 @@ type MemoryConfig struct {
 	// re-indexar ni dependencia. Default ON; se desactiva con recall_stemming: false. Un bloque
 	// `memory` presente pero sin la clave conserva el default ON (ver applyMemoryDefaults).
 	RecallStemming bool `yaml:"recall_stemming"`
+	// RecallTypoCorrection enciende el corrector de tipeo de la consulta (internal/memory/tipeo.go):
+	// antes de embeber y de buscar, un término que no está en ninguna nota visible se cambia por el
+	// de la memoria que queda a UN error de tipeo (letras vecinas invertidas, una de menos o una de
+	// más; nunca una sustituida). Lo usan el hook del turno —que avisa en el bloque lo que
+	// corrigió—, musubi_recall, musubi_ask y el banco. Default ON; se desactiva con
+	// recall_typo_correction: false, y entonces el bloque del turno sale byte a byte como sin él. Un
+	// bloque `memory` presente pero sin la clave conserva el default ON (ver applyMemoryDefaults).
+	RecallTypoCorrection bool `yaml:"recall_typo_correction"`
 	// VectorFloor es el piso de coseno (0..1) del pool vectorial del recall híbrido (Q1): los
 	// candidatos por similitud con coseno < VectorFloor se descartan ANTES de entrar al ranking,
 	// para no inyectar vecinos de baja señal con peso RRF pleno (el defecto era rankear hasta 50
@@ -1278,6 +1286,7 @@ func Default() Config {
 			RecallGraphCentrality: true,
 			RecallCooccurrence:    true,
 			RecallStemming:        true,
+			RecallTypoCorrection:  true,
 			VectorFloor:           0.30,
 			MMRLambda:             0.75,
 		},
@@ -1571,6 +1580,9 @@ func (c *Config) applyMemoryDefaults(data []byte) {
 	}
 	if !keys["recall_stemming"] {
 		c.Memory.RecallStemming = Default().Memory.RecallStemming
+	}
+	if !keys["recall_typo_correction"] {
+		c.Memory.RecallTypoCorrection = Default().Memory.RecallTypoCorrection
 	}
 	if !keys["vector_floor"] {
 		c.Memory.VectorFloor = Default().Memory.VectorFloor

@@ -232,7 +232,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_recall",
-				Description: "Recall por PRESUPUESTO de tokens (model-free). Devuelve los GISTS más útiles para la consulta que entren en token_budget, rankeados por relevancia + recencia + frecuencia + importancia. Para traer el contenido completo de un item, usá musubi_memory_expand con su id. Es la forma eficiente de recuperar memoria.",
+				Description: "Recall por PRESUPUESTO de tokens (model-free). Devuelve los GISTS más útiles para la consulta que entren en token_budget, rankeados por relevancia + recencia + frecuencia + importancia. Para traer el contenido completo de un item, usá musubi_memory_expand con su id. Es la forma eficiente de recuperar memoria. Corrige tipeos de una letra antes de buscar y lo dice en `correcciones` ([{tipeado, buscado}]).",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
@@ -253,7 +253,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_ask",
-				Description: "Cognición A-DEMANDA (3er pilar, OPT-IN): responde una pregunta en lenguaje natural SINTETIZANDO la memoria relevante y citando los ids que la respaldan (RAG). A diferencia de musubi_recall (gists crudos, model-free, siempre disponible), acá un LLM redacta la respuesta — tolera latencia, invocala cuando querés una respuesta razonada, no en cada búsqueda. Requiere cognition.provider configurado; si no, usá musubi_recall.",
+				Description: "Cognición A-DEMANDA (3er pilar, OPT-IN): responde una pregunta en lenguaje natural SINTETIZANDO la memoria relevante y citando los ids que la respaldan (RAG). A diferencia de musubi_recall (gists crudos, model-free, siempre disponible), acá un LLM redacta la respuesta — tolera latencia, invocala cuando querés una respuesta razonada, no en cada búsqueda. Requiere cognition.provider configurado; si no, usá musubi_recall. Como musubi_recall, busca la memoria con los tipeos de la pregunta corregidos y lo dice en `correcciones`; al LLM le llega la pregunta como vino.",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{

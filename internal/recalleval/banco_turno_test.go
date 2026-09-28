@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"musubi/internal/config"
@@ -64,6 +65,12 @@ func TestConfigDelBancoEsLaDelHook(t *testing.T) {
 // arnes: archivo="internal/memory/opciones_turno.go"
 // arnes: de="\t\tMMRLambda:   memCfg.MMRLambda,"
 // arnes: a="\t\tMMRLambda:   0.75,"
+//
+// Sabotaje: el brazo del turno corrige el tipeo aunque el yaml apague el corrector.
+// arnes: archivo="internal/recalleval/configs.go"
+// arnes: de="\tc.CorregirTipeo = m.RecallTypoCorrection\n"
+// arnes: a="\tc.CorregirTipeo = true\n"
+// arnes: colision_ok="TestConfigsNoDivergenDeProduccion"
 func TestElBrazoDelTurnoTraduceElYaml(t *testing.T) {
 	m := config.Default().Memory
 	m.RecallStemming = false
@@ -83,6 +90,10 @@ func TestElBrazoDelTurnoTraduceElYaml(t *testing.T) {
 	}
 	if got := ConfigTurnoCon(m).Opts; !reflect.DeepEqual(got, quiero) {
 		t.Errorf("el brazo del turno no traduce el yaml como el hook:\n  banco  %+v\n  quiero %+v", got, quiero)
+	}
+	m.RecallTypoCorrection = false
+	if ConfigTurnoCon(m).CorregirTipeo {
+		t.Error("con recall_typo_correction: false el brazo del turno corrige el tipeo, y el hook no corrige")
 	}
 }
 
@@ -187,18 +198,32 @@ func corpusParaMMR() *Fixture {
 	return fx
 }
 
-// recuperadorQueAnota registra las opciones de cada Recall, y con qué procedencia de vectores
-// estaba el motor en ese momento, y no devuelve nada.
+// recuperadorQueAnota registra las opciones y la consulta de cada Recall, y con qué procedencia de
+// vectores estaba el motor en ese momento, y no devuelve nada. Como corrector de tipeo anota con qué
+// consulta y qué alcance lo llamaron, y sólo corrige «fichjae» (a «fichaje»).
 type recuperadorQueAnota struct {
-	opts    []memory.RecallOptions
-	modelo  string
-	modelos []string
+	opts     []memory.RecallOptions
+	modelo   string
+	modelos  []string
+	buscadas []string
+	corregir []string
+	alcances []memory.ProjectScope
 }
 
-func (r *recuperadorQueAnota) Recall(_ context.Context, _ string, o memory.RecallOptions) (memory.RecallResult, error) {
+func (r *recuperadorQueAnota) Recall(_ context.Context, q string, o memory.RecallOptions) (memory.RecallResult, error) {
 	r.opts = append(r.opts, o)
 	r.modelos = append(r.modelos, r.modelo)
+	r.buscadas = append(r.buscadas, q)
 	return memory.RecallResult{}, nil
+}
+
+func (r *recuperadorQueAnota) CorregirConsulta(_ context.Context, q string, a memory.ProjectScope) (string, []memory.Correccion) {
+	r.corregir = append(r.corregir, q)
+	r.alcances = append(r.alcances, a)
+	if c := strings.ReplaceAll(q, "fichjae", "fichaje"); c != q {
+		return c, []memory.Correccion{{Tipeado: "fichjae", Buscado: "fichaje"}}
+	}
+	return q, nil
 }
 
 func (r *recuperadorQueAnota) VectorModelID() string     { return r.modelo }
@@ -252,5 +277,65 @@ func TestElBancoCorreElPoolDelTurno(t *testing.T) {
 	}
 	if got := r.opts[0].CandidatePool; got != len(fx.Docs) {
 		t.Errorf("control: fuera del modo del turno el pool tenía que ser el corpus (%d), fue %d", len(fx.Docs), got)
+	}
+}
+
+// TestElBancoCorrigeAntesDeEmbeber: un brazo CorregirTipeo pasa la consulta por el corrector del
+// motor con el alcance de SU recall, y lo que embebe y lo que busca es la consulta CORREGIDA, en el
+// orden del hook (buildTurnRecall). Un brazo sin CorregirTipeo no llama al corrector.
+//
+// Sabotaje: el banco busca lo que se tipeó y no lo corregido.
+// arnes: archivo="internal/recalleval/harness.go"
+// arnes: de="\tres, err := eng.Recall(ctx, consulta, opts)"
+// arnes: a="\tres, err := eng.Recall(ctx, query, opts)"
+//
+// Sabotaje: el banco embebe lo que se tipeó.
+// arnes: archivo="internal/recalleval/harness.go"
+// arnes: de="\t\tvec, err := embed(consulta)"
+// arnes: a="\t\tvec, err := embed(query)"
+//
+// Sabotaje: el corrector del banco mira todo el acervo y no el alcance del recall.
+// arnes: archivo="internal/recalleval/harness.go"
+// arnes: de="memory.ProjectScope{ProjectID: opts.ProjectScope, Federate: opts.Federate})"
+// arnes: a="memory.ProjectScope{})"
+func TestElBancoCorrigeAntesDeEmbeber(t *testing.T) {
+	fx := &Fixture{
+		Docs:    []Doc{{ID: "d0"}},
+		Queries: []Query{{ID: "q", Text: "el fichjae del kiosko", Relevant: []string{"d0"}}},
+	}
+	ctx := context.Background()
+	var embebidas []string
+	embed := func(s string) ([]float32, error) {
+		embebidas = append(embebidas, s)
+		return []float32{1}, nil
+	}
+
+	// El hook con embebedor: corrige (el default) Y embebe, así se ven las dos cosas en un brazo.
+	cfg := ConfigTurnoHibrido()
+	cfg.Opts.ProjectScope = "altura"
+	r := &recuperadorQueAnota{}
+	if _, err := Evaluate(ctx, r, fx, cfg, embed, []int{10}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(r.corregir, []string{"el fichjae del kiosko"}) {
+		t.Fatalf("el corrector recibió %q; quería la consulta tipeada, una vez", r.corregir)
+	}
+	if quiero := (memory.ProjectScope{ProjectID: "altura"}); r.alcances[0] != quiero {
+		t.Errorf("el corrector corrió con el alcance %+v y el recall del brazo filtra %+v", r.alcances[0], quiero)
+	}
+	if !reflect.DeepEqual(embebidas, []string{"el fichaje del kiosko"}) {
+		t.Errorf("se embebió %q; quería la consulta corregida", embebidas)
+	}
+	if !reflect.DeepEqual(r.buscadas, []string{"el fichaje del kiosko"}) {
+		t.Errorf("se buscó %q; quería la consulta corregida", r.buscadas)
+	}
+
+	// CONTROL: un brazo que no corrige busca lo que se tipeó y ni llama al corrector.
+	sin := &recuperadorQueAnota{}
+	if _, err := Evaluate(ctx, sin, fx, ConfigLexica(), nil, []int{10}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sin.corregir) != 0 || !reflect.DeepEqual(sin.buscadas, []string{"el fichjae del kiosko"}) {
+		t.Errorf("el brazo léxico corrigió %q y buscó %q; no corrige", sin.corregir, sin.buscadas)
 	}
 }

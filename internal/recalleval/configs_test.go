@@ -15,6 +15,20 @@ import (
 // sin piso de coseno y con MMR apagado — o sea, uno que nadie corre. Nada avisaba porque nada
 // comparaba los dos lados. Esto lo compara.
 //
+// El corrector de tipeo es una fila más: el brazo de producción y el del turno corrigen si
+// memory.recall_typo_correction está encendido, porque musubi_recall y el hook corrigen.
+//
+// Sabotaje: el brazo de producción deja de correr el corrector de tipeo.
+// arnes: archivo="internal/recalleval/configs.go"
+// arnes: de="CorregirTipeo: config.Default().Memory.RecallTypoCorrection}"
+// arnes: a="CorregirTipeo: false}"
+//
+// Sabotaje: el brazo del turno deja de correr el corrector de tipeo.
+// arnes: archivo="internal/recalleval/configs.go"
+// arnes: de="\tc.CorregirTipeo = m.RecallTypoCorrection\n"
+// arnes: a="\tc.CorregirTipeo = false\n"
+// arnes: colision_ok="TestElBrazoDelTurnoTraduceElYaml"
+//
 // Sabotaje: el brazo con alcance lo pierde y mide el turno federado de antes.
 // arnes: archivo="internal/recalleval/configs.go"
 // arnes: de="\tc.Opts = memory.OpcionesDeRecallDelTurno(m, alcance)\n"
@@ -48,6 +62,10 @@ func TestConfigsNoDivergenDeProduccion(t *testing.T) {
 		t.Errorf("ConfigProduccion no lleva los defaults: MMRLambda=%v (esperaba %v), VectorFloor=%v (esperaba %v)",
 			p.Opts.MMRLambda, m.MMRLambda, p.Opts.VectorFloor, m.VectorFloor)
 	}
+	if p := ConfigProduccion(); p.CorregirTipeo != m.RecallTypoCorrection {
+		t.Errorf("ConfigProduccion: CorregirTipeo=%v y producción declara recall_typo_correction=%v",
+			p.CorregirTipeo, m.RecallTypoCorrection)
+	}
 	// Y el léxico tiene que ser léxico DE VERDAD: sin señal vectorial, o el contraste no significa nada.
 	if l := ConfigLexica(); l.UseVector {
 		t.Error("ConfigLexica enciende la señal vectorial: entonces no es la línea base de nada")
@@ -62,6 +80,9 @@ func TestConfigsNoDivergenDeProduccion(t *testing.T) {
 	// (TestConfigDelBancoEsLaDelHook), pero esa fuente también podría divergir del yaml: acá se ve.
 	// CandidatePool y TokenBudget no tienen fila a propósito: el hook nunca los tomó de memory.* (el
 	// pool es el del motor y el presupuesto es loop.recall_budget).
+	if got := ConfigTurno().CorregirTipeo; got != m.RecallTypoCorrection {
+		t.Errorf("turno · CorregirTipeo: el banco corre %v y producción declara recall_typo_correction=%v", got, m.RecallTypoCorrection)
+	}
 	tu := ConfigTurno().Opts
 	for _, c := range []struct {
 		campo       string

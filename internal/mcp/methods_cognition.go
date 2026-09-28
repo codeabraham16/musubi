@@ -144,10 +144,16 @@ func (s *McpServer) toolAsk(ctx context.Context, raw json.RawMessage) (interface
 		MMRLambda:       s.memory.MMRLambda,
 	}
 	opts.ProjectScope, opts.Federate = recallScopeFor(principalFrom(ctx))
+	// TRAMO 0 — RLock ACOTADO. El corrector de tipeo, como en musubi_recall: el grounding se embebe y
+	// se busca con la pregunta corregida. Al motor, en cambio, le llega la PREGUNTA como la escribió
+	// la persona (ver el prompt, más abajo): un modelo de lenguaje lee un tipeo sin ayuda, y si la
+	// corrección fue mala no tiene que responder otra pregunta que la que le hicieron.
+	consulta, correcciones := s.corregirConsulta(ctx, args.Question, opts)
+
 	// TRAMO 1 — SIN CANDADO. Embeber es I/O externa con 30 s de techo.
 	if embedding.Enabled(s.embedder) {
 		embCtx, embCancel := context.WithTimeout(ctx, 30*time.Second)
-		if vec, eerr := s.embedder.Embed(embCtx, args.Question); eerr != nil {
+		if vec, eerr := s.embedder.Embed(embCtx, consulta); eerr != nil {
 			logx.Error("ask: no se pudo embeber la pregunta, sigo solo con léxico", "error", eerr)
 		} else {
 			opts.QueryVector = vec
@@ -168,7 +174,7 @@ func (s *McpServer) toolAsk(ctx context.Context, raw json.RawMessage) (interface
 	var full map[string]string
 	var err error
 	s.withReadLock(func() {
-		if res, err = s.engine.Recall(ctx, args.Question, opts); err != nil || len(res.Items) == 0 {
+		if res, err = s.engine.Recall(ctx, consulta, opts); err != nil || len(res.Items) == 0 {
 			return
 		}
 		full = s.hydrateGrounding(ctx, res.Items, budget)
@@ -178,11 +184,11 @@ func (s *McpServer) toolAsk(ctx context.Context, raw json.RawMessage) (interface
 	}
 	// Sin memoria relevante NO llamamos al LLM (evita alucinación y gasta una llamada en vano).
 	if len(res.Items) == 0 {
-		return jsonResult(map[string]interface{}{
+		return jsonResult(conCorrecciones(map[string]interface{}{
 			"answer":  "No encontré memoria relevante para esa pregunta.",
 			"sources": []string{},
 			"model":   s.cognition.Name(),
-		})
+		}, correcciones))
 	}
 
 	// 3) Construir el prompt fundamentado. El system exige citar ids y admitir lo que no sabe.
@@ -265,12 +271,22 @@ func (s *McpServer) toolAsk(ctx context.Context, raw json.RawMessage) (interface
 	// sources = SÓLO las memorias que la respuesta realmente citó (no las ~N del grounding), para que
 	// el caller pueda verificar la atribución sin ruido. grounded_on deja transparente cuántas se
 	// consideraron.
-	return jsonResult(map[string]interface{}{
+	return jsonResult(conCorrecciones(map[string]interface{}{
 		"answer":      answer,
 		"sources":     citedSources(answer, res.Items),
 		"grounded_on": len(res.Items),
 		"model":       s.cognition.Name(),
-	})
+	}, correcciones))
+}
+
+// conCorrecciones le suma a la respuesta de musubi_ask lo que el corrector de tipeo cambió en la
+// pregunta antes de buscar el grounding, con el mismo criterio que el campo de musubi_recall: sólo
+// si cambió algo, así que sin corrección el JSON sale byte a byte como antes.
+func conCorrecciones(r map[string]interface{}, cs []memory.Correccion) map[string]interface{} {
+	if len(cs) > 0 {
+		r["correcciones"] = cs
+	}
+	return r
 }
 
 // citedSources devuelve los ids de las memorias del grounding que la respuesta CITÓ, ya sea por su id

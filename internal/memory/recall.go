@@ -175,6 +175,11 @@ type RecallResult struct {
 	// sin `score`: sin esta marca, un caller vería campos faltantes y lo leería como un bug.
 	// omitempty ⇒ el camino model-free (el default) no paga ni un token por esto.
 	Reranked bool `json:"reranked,omitempty"`
+	// Correcciones es lo que el corrector de tipeo cambió en la consulta ANTES de buscar (ver
+	// CorregirConsulta). Recall no corrige ni la llena: la llena quien corrigió (musubi_recall), para
+	// que el agente sepa que los items responden a otra palabra que la que mandó. omitempty ⇒ sin
+	// corrección el JSON sale byte a byte como antes.
+	Correcciones []Correccion `json:"correcciones,omitempty"`
 }
 
 type candidate struct {

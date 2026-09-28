@@ -88,6 +88,51 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   sigue federado: no se esconde ni se topa nada». La marca `[de X]` no cambia. Por esa misma entrada,
   en altura-erp hay 3 notas propias estampadas `altura-erp`: siguen siendo ajenas para el hook, y
   ahora entran con el tope. No cambia el esquema ni ninguna tool, y no hay goldens que regenerar.
+- **La búsqueda tolera el tipeo.** El recall es léxico: «infromacion», «temrinal» o «fichjae» no
+  matchean ninguna nota, y el vector no los rescata (según la medición del plan, el coseno entre el
+  tipeo y la palabra promedia 0,159 sobre 10 pares). Ahora el hook del turno, `musubi_recall` y
+  `musubi_ask` corrigen la consulta ANTES de embeberla y de buscar:
+
+  - Sólo se tocan términos MUERTOS: todo letras, de 5 a 40 runas, sin ninguna nota visible del
+    alcance que los tenga, ni exactos ni por el prefijo de su raíz (la cláusula del recall). Un
+    término vivo no se corrige nunca. El techo de 40 acota el trabajo de armar los candidatos, que
+    crece con el cuadrado del largo y que el plazo no corta: sin él, una consulta de 8 KB alocaba
+    1 GB. El muerto más largo de los prompts reales tiene 15 runas.
+  - Tres clases, en este orden, y gana la primera con candidato: dos letras vecinas invertidas, una
+    de menos, una de más. Nunca la sustitución de una letra por otra (dejemos↔dejamos), que suele
+    dar otra palabra válida.
+  - El candidato tiene que estar como término EXACTO en 2 notas o más; entre varios gana el de más
+    notas. Hasta 4 términos por consulta, los más largos.
+  - El vocabulario es el que el recall de quien pregunta podría devolver: el mismo filtro duro. En
+    el central, el proyecto de la credencial; nunca una palabra que sólo existe en otro proyecto.
+  - Plazo de 60 ms: si se vence o algo falla, la consulta va como vino. No escribe nada (sin tabla
+    ni migración), así que anda sobre un motor en sólo lectura.
+  - Prueba UNA sola edición: un tipeo de dos errores, como «infroamcion» (dos pares invertidos),
+    queda como vino.
+
+  El hook avisa en un renglón propio, antes de la primera viñeta: `busqué «informacion» por
+  «infromacion»`. Sólo en el turno: ni el priming ni la memoria que vuelve tras compactar lo llevan.
+  `musubi_recall` y `musubi_ask` lo devuelven en `correcciones` (`[{tipeado, buscado}]`); sin
+  corrección la respuesta sale byte a byte como antes. A `musubi_ask` el LLM le llega la pregunta
+  como vino, y el juez de pertinencia también ve la consulta tipeada.
+
+  Encendido por defecto; `memory.recall_typo_correction: false` lo apaga, y el bloque del hook sale
+  como antes.
+
+  Medido:
+
+  | Qué | Resultado |
+  |---|---|
+  | Prompts reales de davantis-1 desde el 09-14 (98), sobre una copia de la base | corrige 35; de las 56 correcciones, 50 bien, 3 dudosas y 3 mal («ponle→pone», «impornte→importe», «haslo→halo») |
+  | Dorado, MRR sin → con corrector (3 semillas) | transposición 0,500 → 0,528 · falta 0,583 → 0,611 · sobra 0,500 → 0,528 · sustitución y limpio sin cambio |
+  | Memoria real (copia de la base local, 88 consultas), un tipeo por consulta, MRR sin → con corrector | transposición 0,316 → 0,388 · falta 0,320 → 0,376 · sobra 0,308 → 0,381, contra 0,377 sin tipeo; las limpias no pierden (0,377 → 0,388). Con TODOS los términos tipeados queda a 0,03-0,08 del limpio |
+  | Hook, binario de main contra el de la rama, 268 corridas por lado | mezcla real: p50 380 → 404 ms, p95 652 → 637 ms; peor caso (términos muertos sin candidato) p50 362 → 404 ms (+42) y p95 575 → 665 ms (+90; en las otras clases el p95 se movió entre −15 y +20); 0 plazos vencidos |
+
+  El dorado recupera menos de lo que el plan pedía, y es por el dorado: de los 405 términos que
+  tipea, la palabra buscada está como término exacto en 2 notas o más sólo en 54. Bajar el piso a
+  1 nota llegaba más lejos, pero la mitad de lo que eso cambiaba en los prompts reales era malo
+  («comienza→comenza», «piendo→iendo»).
+
 - **Cada nota dice de qué proyecto viene.** El recall es federado a propósito: el hook del turno,
   el priming de arranque y la tool por stdio traen memoria de todos los proyectos del acervo. Lo que
   faltaba era decirlo. El candidato traía su `project_id` y el empaquetado lo tiraba, así que una

@@ -1509,12 +1509,17 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 		}
 	}
 
+	// TRAMO 0 — RLock ACOTADO. El corrector de tipeo, ANTES de embeber: el texto corregido es el que
+	// se embebe y se busca. Lee la base, así que va bajo el candado de lectura; lo acota su propio
+	// plazo (memory.PlazoDelCorrector).
+	consulta, correcciones := s.corregirConsulta(ctx, args.Query, opts)
+
 	// TRAMO 1 — SIN CANDADO. Recall híbrido (T5.7 R2): si hay embedder, embeber la query para sumar
 	// el pool vectorial. Es I/O externa con 30 s de techo; bajo el candado del despacho dejaría al
 	// servidor sin atender todo ese rato. Best-effort: si falla, se sigue solo con el léxico.
 	if embedding.Enabled(s.embedder) {
 		embCtx, embCancel := context.WithTimeout(ctx, 30*time.Second)
-		vec, eerr := s.embedder.Embed(embCtx, args.Query)
+		vec, eerr := s.embedder.Embed(embCtx, consulta)
 		embCancel()
 		if eerr != nil {
 			logx.Error("recall: no se pudo embeber la query, sigo solo con léxico", "error", eerr)
@@ -1537,7 +1542,7 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 		//
 		// Con scope vacío o Federate el comportamiento es bit-idéntico al de antes (sin filtro),
 		// que es el caso del stdio local y del bearer legacy.
-		res, err = s.engine.Recall(s.scopedCtx(ctx), args.Query, opts)
+		res, err = s.engine.Recall(s.scopedCtx(ctx), consulta, opts)
 	})
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "error en recall: %v", err)
@@ -1546,8 +1551,45 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 	// TRAMO 3 — SIN CANDADO. Juez de pertinencia read-time (F3.5c): OPT-IN y best-effort. Con la
 	// flag apagada (default) es un no-op y el recall queda 100% model-free; encendido, re-ordena el
 	// tope llamando al motor por red (hasta 120 s) — de ahí que este tramo quede afuera.
+	//
+	// EL JUEZ VE LA CONSULTA COMO LA TIPEÓ LA PERSONA, no la corregida. Juzga pertinencia contra lo
+	// que se pidió, y un modelo de lenguaje lee un tipeo sin ayuda; si la corrección fue mala, es el
+	// único que todavía puede bajar los items que respondieron a la palabra equivocada. Y la caché
+	// del juez sigue indexada por lo que llegó.
 	res = s.rerankSiCorresponde(ctx, args.Query, res, args.Rerank)
+	res.Correcciones = correcciones
 	return jsonResult(res)
+}
+
+// correctorDeTipeo lo implementa el motor real (memory.DbEngine.CorregirConsulta). Interfaz y no
+// *memory.DbEngine por lo mismo que referenciasReader: un backend que no sepa corregir busca la
+// consulta como vino.
+type correctorDeTipeo interface {
+	CorregirConsulta(ctx context.Context, q string, alcance memory.ProjectScope) (string, []memory.Correccion)
+}
+
+// corregirConsulta corre el corrector de tipeo sobre la consulta de musubi_recall o musubi_ask, bajo
+// el candado de lectura. Con memory.recall_typo_correction apagado, o un motor sin corrector, la
+// consulta vuelve como vino y sin correcciones.
+//
+// EL ALCANCE ES EL FILTRO DURO DEL RECALL DE QUIEN PREGUNTA, y sale de las MISMAS opciones: el
+// ProjectScope que recallScopeFor le dio a opts, que es el que scopedCtx le pone al recall. En el
+// central eso es el proyecto de la credencial (decisión 3 del dueño): el corrector no puede
+// proponerle a nadie una palabra que sólo existe en otro proyecto.
+func (s *McpServer) corregirConsulta(ctx context.Context, q string, opts memory.RecallOptions) (string, []memory.Correccion) {
+	if !s.memory.RecallTypoCorrection {
+		return q, nil
+	}
+	corrector, ok := s.engine.(correctorDeTipeo)
+	if !ok {
+		return q, nil
+	}
+	consulta, correcciones := q, []memory.Correccion(nil)
+	alcance := memory.ProjectScope{ProjectID: opts.ProjectScope, Federate: opts.Federate}
+	s.withReadLock(func() {
+		consulta, correcciones = corrector.CorregirConsulta(ctx, q, alcance)
+	})
+	return consulta, correcciones
 }
 
 func (s *McpServer) toolSaveFact(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
