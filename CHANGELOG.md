@@ -761,6 +761,58 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   y el bundle embebido la llamen con el `at`. Sólo el panel: no cambia ninguna tool ni el sync. Al
   panel del central (`musubi-dashboard`) llega con su próximo despliegue, y a un `musubi dashboard`
   local, con el binario de esa máquina.
+- **La subida al central no manda dos veces la misma nota ni espera al tick.** Con varios daemons
+  sobre una base (seis en davantis-1), el drain reclamaba `batch_size` (50) filas con UN lease de
+  60 s y las empujaba de a una. Con ~3,5 s por nota en el central, 50 no entraban en el lease: vencía
+  a mitad de la lista y otro daemon volvía a reclamar —y a subir— las que el primero todavía tenía en
+  la mano (116 saves por 95 notas, medido el 2026-09-25). Y una nota escrita por otro proceso —un
+  hook, la captura— esperaba al tick siguiente: 22 s de mediana con el intervalo de 30 s.
+
+  Ahora `drainOutboxOnce` reclama sublotes de `max(1, lease_seconds/10)` filas (seis con el
+  default), cada uno con su lease fresco, y repite hasta vaciar la cola o hasta el 80 % del
+  intervalo; el tick sigue dejando UN solo viaje de subida en `sync_viajes`. Antes de cada push
+  pregunta con una lectura (`ReclamoVigente`) si la fila sigue reclamada por ESE claim y con el mismo
+  contenido: si otro drainer la reclamó o se editó, el payload viejo no sale, y si la fila sigue
+  siendo de ese claim la suelta (`SoltarReclamo`, con un CAS sobre el lease, así que uno ajeno no se
+  toca) para que la versión nueva salga en el claim siguiente y no al vencer el lease. El lease se
+  escribe con milisegundos:
+  `datetime('now', '+1 seconds')` trunca al segundo, y un lease de 1 s duraba entre cero y un
+  segundo. Entre ticks, `RunOutboxScheduler` mira cada 2 s si hay algo que un claim tomaría
+  (`HayOutboxPorSubir`: una lectura sobre `idx_outbox_claim`, sin red y sin el candado de escritura)
+  y, si hay, drena.
+
+  Un choque de la bajada sobre una fila que se está subiendo se cuenta y no toca el outbox: el
+  central se queda con la versión más nueva, y la máquina que tenía la suya en vuelo se queda con la
+  suya hasta su próxima edición. Es una divergencia conocida que esta ola sólo cuenta; cerrarla es
+  #15.
+
+  Medido contra un central de juguete que embebe 35 ms por nota, de a una. Envíos por nota, en
+  escala 1/60 de producción (lease 1 s, intervalo 500 ms), dos corridas: con dos daemons 1,05 y
+  1,08 en main, 1,00 en la rama; con seis, 2,94 y 2,84 en main (84 y 70 de 95 notas subidas más de
+  una vez), 1,00 en la rama. Una nota escrita por otro proceso, con el intervalo de 30 s: mediana
+  16,8 s en main (máximo 24,5 s) y 2,2 s en la rama (máximo 2,6 s). La ráfaga de 95 notas con
+  drenes seguidos no se hace más lenta: 1.210 filas/min en main y 1.248 en la rama (medianas de
+  tres). El sondeo, sobre una copia de la base de davantis-1: entre 47 y 237 µs de media, tres por
+  segundo con seis daemons, y contesta igual con el candado de escritura tomado por otro proceso.
+
+  **Cambia un contrato de #700: una edición que llega mientras su versión anterior viaja ya no sale
+  enseguida.** En #700 la edición devolvía la fila a 'pending' y en hora, y otro daemon sobre la
+  misma base podía reclamarla —con el sondeo, a los 2 s; con su tick, cuando cayera— y subir v2
+  mientras el POST de v1 seguía en el aire. Ganaba la que el central guardara última, y el central
+  embebe antes de guardar: v1 podía quedar allá y bajar a pisar v2 acá. Ahora la edición deja la
+  fila 'claimed' con el lease de ese vuelo —`enqueueOutboxTx` mira el estado, así que una segunda
+  edición en el mismo vuelo la encuentra igual—, y v2 sale cuando vuelve la marca de v1 (el 200, el
+  reintento y el rechazo la sueltan en hora) o cuando vence el lease, lo que llegue primero: unos 3 s
+  más en el caso común, lo que tarda un push en el central (2,98 s de mediana, 8,76 s en el p99). A
+  cambio, el orden en el central lo pone el cliente. Una edición sobre una fila que espera el backoff
+  de un intento fallido sigue saliendo ya: ese backoff era de la versión vieja.
+
+  **Sólo cliente: el central no cambia**, y ya no hace falta un save condicional allá: el caso común
+  se cierra en el cliente. Queda abierto un push más largo que su lease: el lease vence con el POST
+  en el aire, otro daemon reclama la misma fila y la sube otra vez, y si en el medio hubo una
+  edición, v2 sale a la par de v1. En el central, en 30 días, ninguna de 1.984 ventanas de seis
+  saves pasó de 60 s (la más larga, 52,4 s: el 87 % del lease) y el push más largo tardó 12,91 s. Se
+  cierra renovando el lease antes de cada push, y queda para el plan siguiente.
 - **El índice del delta desaloja primero a las sesiones sin turnos: una sesión interactiva que
   espera un workflow ya no pierde su delta ni sus pedidos cuando arrancan las hijas.** El índice
   `loop_delta_sessions` acota a 32 las sesiones que conservan su delta
@@ -1532,6 +1584,65 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   puede dar un «no cuadra» falso, que corrige el push siguiente o la higiene de 24 h. Diecinueve
   sabotajes corridos, los diecinueve rojos y cada uno en su aserción; diecisiete quedan como
   directivas `arnes:`.*
+- **Una nota que baja del central conserva la fecha en que el central la recibió —la de
+  nacimiento, salvo que la subida se haya demorado—.** `IngestShared` guardaba cada nota bajada
+  con la fecha de la BAJADA (`CURRENT_TIMESTAMP`): una nota escrita hace tres meses en otra máquina
+  nacía «hoy» acá, y el recall, que ordena la novedad por `created_at`, la trataba como nueva.
+  Medido sobre una copia de la base de davantis-1 contra el central (sólo lectura): 1.858 notas
+  bajadas (selladas 'espejo') tienen acá una fecha posterior a la del central. La mediana de la
+  diferencia es de 17 s, pero 186 pasan de un día y 114 de treinta, con un máximo de 73,7 días; y
+  64 visibles se ven con menos de una semana cuando en el central tienen entre 62 y 76 días.
+
+  `SharedObs` lleva `created_at`: la fecha tal como la guarda el central («2006-01-02 15:04:05»,
+  UTC). No siempre es la de nacimiento: la subida no manda la fecha y el central sella la suya al
+  recibir la nota, así que la que tardó en subir trae la de su llegada. Le pasa a todo lo que nació
+  antes que el central, cuyo `created_at` más viejo es del 2026-07-11 20:21:25: una nota de
+  davantis-1 del 2026-06-21 que subió en el backfill del 2026-07-13 viaja con el 2026-07-13.
+  `ListSharedForPull` la lee envuelta en `COALESCE`, porque pelada el driver la convierte y
+  viaja «2026-07-11T20:21:25Z», y un NULL cortaría la página entera. `IngestShared` la usa SÓLO al
+  insertar una fila nueva, normalizada al layout de la columna: SQLite compara estas fechas como
+  texto, y una «T» ordena después de un espacio. Si falta, no se puede leer, viene más de 5 minutos
+  del futuro o es anterior al 2026-01-01, la fila nace con `CURRENT_TIMESTAMP`, como siempre. Una
+  fila que ya estaba conserva la suya: el `ON CONFLICT DO UPDATE` no se tocó. El costo en el cable,
+  medido con las 2.973 notas de la copia en 60 páginas de 50: 39 B por nota en claro (+1,27 %) y
+  7 B con gzip (+0,59 %).
+
+  **Lo que no hace.** No corrige las filas ya bajadas: la reparación con `MIN(created_at)` queda
+  para el dueño, y lo que les devolvería es la fecha en que el central las recibió, no la de
+  nacimiento. Lo que nació antes que el central quedaría con la de su subida, que nunca es anterior
+  al 2026-07-11 20:21:25. Y la viñeta del hook sigue sin decir la edad de NINGUNA nota, bajada o
+  propia: `gistAge` sólo lee RFC3339 y la base guarda el layout de SQLite. Es otro defecto y va
+  aparte.
+
+  **Lo que cambia además, y conviene saberlo antes de V3.** El olvido cuenta la edad desde
+  `last_accessed` o, si la nota nunca se leyó, desde `created_at`. Con la fecha viaja la edad de la
+  nota pero no su acceso: la fila bajada llega con `access_count` 0 y `last_accessed` NULL, sin los
+  14 días de gracia de `MinAgeDays` (`decay_min_age_days`), así que una nota vieja que baja por
+  primera vez puede archivarse en el primer mantenimiento. Medido el 2026-09-27 con el `Decay` real
+  sobre las 3.237 notas shared visibles del central (exportadas en sólo lectura): un cliente NUEVO
+  que las baje todas archivaría 1.007 (31,1 %) con los valores por defecto, y el central, con la
+  misma fórmula y sus accesos, mantiene vivas 1.003 de esas 1.007; hoy, ninguna, porque nacen con
+  edad cero. Ningún camino automático la revive: el `ON CONFLICT DO UPDATE` no nombra `archived`,
+  así que una re-entrega la deja archivada. Y con la config que escribe `musubi init`
+  (`purge_archived_after_days: 90`), a los 90 días de archivada se borra para siempre. davantis-1
+  no lo sufre, porque ya tiene las 3.237 y no inserta ninguna fila nueva de ellas; la laptop no se
+  midió. Restar la fecha local de la del central deja de medir la demora del sync en las filas
+  nuevas; para eso está `sync_viajes`. Y el panel deja de hacer brotar casi todo lo que baja: la
+  nota llega con una fecha anterior a la ventana del pulso (desde el sondeo anterior, unos 5 s) y
+  sin `last_accessed`, así que no entra al pulso y aparece con la recarga completa del grafo, sin
+  brote.
+
+  **Despliegue:** la fecha viaja recién con el central nuevo (ventana V3), y V3 queda atada a lo
+  que el dueño decida sobre el olvido del párrafo anterior. Un cliente viejo contra el central
+  nuevo ignora la clave, como toda clave que no conoce, y guarda la fecha de la bajada. Un cliente
+  nuevo contra el central de hoy no la recibe y hace lo mismo. Cada cliente necesita el binario
+  nuevo (V1 davantis-1, V2 la laptop).
+
+  *Pruebas: seis en `internal/memory` (`fecha_de_origen_test.go`); dos en `internal/mcp`
+  (`fecha_viaja_test.go`), con el JSON de la respuesta y los dos sentidos de la convivencia; y la
+  e2e `TestLaNotaBajadaConservaSuEdad` en `cmd/musubi`, con el central real detrás de un
+  `httptest`, el cliente de sync real y el hook del turno. Dieciséis sabotajes corridos, los
+  dieciséis rojos; catorce quedan como directivas `arnes:`.*
 
 ## [0.141.0] - 2026-09-14
 

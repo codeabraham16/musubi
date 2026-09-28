@@ -56,6 +56,13 @@ const (
 // viajaba. Se lee junto con el contenido y no de enqueued_hash porque tiene que nombrar lo que se
 // empujó: el claim y la carga del payload son dos sentencias, y una edición entre las dos cambia el
 // contenido que sale.
+//
+// Reclamo es el next_attempt_at que escribió EL claim que trajo este ítem, tal cual quedó en la base:
+// el fin de su lease. Tampoco viaja. Sirve de ficha del claim para ReclamoVigente: si la fila ya no
+// tiene esa marca, la reclamó otro drainer (venció el lease y la volvió a tomar) o una marca ya la
+// resolvió, y el payload que este ítem lleva ya no es el que hay que subir. Una edición NO cambia la
+// marca —enqueueOutboxTx no toca una fila en vuelo—: ésa la delata el hash. Y es con esta misma ficha
+// que el drain suelta lo que sigue siendo suyo (SoltarReclamo) sin soltar un lease ajeno.
 type OutboxItem struct {
 	ObsID      string
 	TopicKey   string
@@ -65,6 +72,7 @@ type OutboxItem struct {
 	ProjectID  string
 	Attempts   int
 	Hash       string
+	Reclamo    string
 }
 
 // enqueueOutboxTx encola (o re-encola) la observación obsID en el outbox, DENTRO de la tx
@@ -74,7 +82,22 @@ type OutboxItem struct {
 //     caso común 'local': el enqueue es incondicional a nivel engine, ver D6).
 //   - Si es 'shared' y no había fila → INSERT pending.
 //   - Si ya había fila con el MISMO content_hash → no-op (idempotencia, R3).
-//   - Si el content_hash CAMBIÓ → vuelve a pending con attempts reseteado (re-sync, R3).
+//   - Si el content_hash CAMBIÓ → vuelve a pending con attempts reseteado y en hora, aunque
+//     estuviera esperando el backoff de un intento fallido: ese backoff era de la versión vieja
+//     (re-sync, R3).
+//   - Salvo que la fila esté EN VUELO ('claimed'): queda 'claimed' y con su lease tal cual, y la
+//     versión nueva sale cuando vuelva la vieja —la marca de ese push la suelta (MarkOutboxSent,
+//     MarkOutboxRetry, MarkOutboxDead)— o cuando venza el lease, lo que llegue primero.
+//
+// Lo último es lo que ordena las versiones en el central. Si la edición soltaba la fila, otro daemon
+// sobre la misma base (hay seis por base en davantis-1) la reclamaba y subía v2 mientras el POST de v1
+// seguía en el aire, y ganaba el que el central guardara último: v1 podía pisar a v2 allá y bajar a
+// pisarla acá. Retenida, v2 sale detrás del 200 de v1 —unos 3 s más en el caso común: el push tarda
+// 2,98 s de mediana y 8,76 s en el p99— y el orden en el central lo pone el cliente. Lo que se mira es
+// el estado 'claimed' y no el reloj, y alcanza: la edición no toca el lease, así que uno vigente sigue
+// vigente y uno vencido lo toma el claim como siempre (porSubir). Y una segunda edición en el mismo
+// vuelo encuentra la fila como la encontró la primera; si la primera la dejara 'pending' con el lease
+// puesto, la segunda la pondría en hora y el vuelo de v1 dejaría de protegerla.
 //
 // El WHERE del ON CONFLICT usa `IS NOT` (no `!=`) para tratar NULL correctamente.
 func enqueueOutboxTx(tx *sql.Tx, obsID string) error {
@@ -83,7 +106,9 @@ func enqueueOutboxTx(tx *sql.Tx, obsID string) error {
 		SELECT id, content_hash, 'pending', 0, datetime('now'), datetime('now'), datetime('now')
 		FROM observations WHERE id = ? AND scope = 'shared'
 		ON CONFLICT(obs_id) DO UPDATE SET
-			status = 'pending', attempts = 0, next_attempt_at = datetime('now'),
+			status = CASE WHEN outbox.status = 'claimed' THEN 'claimed' ELSE 'pending' END,
+			attempts = 0,
+			next_attempt_at = CASE WHEN outbox.status = 'claimed' THEN outbox.next_attempt_at ELSE datetime('now') END,
 			enqueued_hash = excluded.enqueued_hash, last_error = NULL, updated_at = datetime('now')
 		WHERE outbox.enqueued_hash IS NOT excluded.enqueued_hash`, obsID)
 	if err != nil {
@@ -131,29 +156,31 @@ func (e *DbEngine) ClaimOutboxBatch(limit, leaseSeconds int) ([]OutboxItem, erro
 	rows, err := e.db.Query(`
 		UPDATE outbox
 		SET status = 'claimed',
-		    next_attempt_at = datetime('now', '+' || ? || ' seconds'),
+		    next_attempt_at = `+leaseMs+`,
 		    updated_at = datetime('now')
 		WHERE id IN (
 			SELECT id FROM outbox
-			WHERE status IN ('pending','claimed') AND next_attempt_at <= datetime('now')
+			WHERE `+porSubir+`
 			ORDER BY next_attempt_at
 			LIMIT ?
 		)
-		RETURNING obs_id, attempts`, leaseSeconds, limit)
+		RETURNING obs_id, attempts, CAST(next_attempt_at AS TEXT)`, leaseSeconds, limit)
 	if err != nil {
 		return nil, fmt.Errorf("error al reclamar batch del outbox: %w", err)
 	}
 	var ids []string
 	attemptsByID := map[string]int{}
+	reclamoByID := map[string]string{}
 	for rows.Next() {
-		var id string
+		var id, reclamo string
 		var attempts int
-		if err := rows.Scan(&id, &attempts); err != nil {
+		if err := rows.Scan(&id, &attempts, &reclamo); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("error al escanear obs_id reclamado: %w", err)
 		}
 		ids = append(ids, id)
 		attemptsByID[id] = attempts
+		reclamoByID[id] = reclamo
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -163,7 +190,106 @@ func (e *DbEngine) ClaimOutboxBatch(limit, leaseSeconds int) ([]OutboxItem, erro
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	return e.loadOutboxPayloads(ids, attemptsByID)
+	items, err := e.loadOutboxPayloads(ids, attemptsByID)
+	for i := range items {
+		items[i].Reclamo = reclamoByID[items[i].ObsID]
+	}
+	return items, err
+}
+
+// ahoraMs es «ahora» CON MILISEGUNDOS. El lease del claim se escribe y se compara con esto, y no con
+// datetime('now'), porque datetime trunca al segundo: un lease de N segundos escrito así vencía entre
+// N-1 y N segundos después del claim, según en qué fracción del segundo cayera. Con lease_seconds=1
+// eso es un lease de CERO a un segundo, y una fila reclamada a las hh:mm:ss.95 volvía a ser
+// reclamable 50 ms después, con su push todavía en vuelo: el envío doble que este lease existe para
+// impedir. Con milisegundos el lease dura lo que dice.
+//
+// Convive con los valores de segundo pelado que escriben el enqueue, el backfill y el reintento: el
+// texto «AAAA-MM-DD hh:mm:ss» es prefijo de «AAAA-MM-DD hh:mm:ss.mmm», así que compara como el
+// primer milisegundo de ese segundo, que es lo que significaba.
+const ahoraMs = `strftime('%Y-%m-%d %H:%M:%f', 'now')`
+
+// leaseMs es el fin del lease de un claim: ahoraMs más los segundos del parámetro.
+const leaseMs = `strftime('%Y-%m-%d %H:%M:%f', 'now', '+' || ? || ' seconds')`
+
+// porSubir es lo que un claim puede tomar: pendiente o reclamada con el lease vencido, y ya en hora.
+// Es UNA sola condición para el claim y para el sondeo (HayOutboxPorSubir) a propósito: si el sondeo
+// mirara otra cosa, podría ver trabajo que el claim no toma —y drenar en vacío cada dos segundos— o
+// no ver el que sí toma.
+const porSubir = `status IN ('pending','claimed') AND next_attempt_at <= ` + ahoraMs
+
+// ReclamoVigente dice si la fila de obsID sigue reclamada por EL claim que trajo el ítem (reclamo es
+// su OutboxItem.Reclamo) y con el mismo contenido (hash). El drain la pregunta justo antes de cada
+// push, y si la respuesta es no, ese payload no sale.
+//
+// Existe por la carrera de dos drainers sobre la misma base (varios daemons por base en davantis-1):
+// el claim carga el payload de todo el sublote al principio, y si el lease venció mientras se
+// empujaban los de adelante, otro drainer ya pudo tomar la fila y subirla. Sin esta pregunta el
+// primero seguía con su lista y la subía otra vez: dos veces, y si en el medio hubo una edición, v1
+// DESPUÉS de v2 —el central quedaba con v1, la fila local 'sent' por v2, y la bajada siguiente le
+// pisaba v2 también acá—.
+//
+// Y dice que no también si la fila se editó mientras esperaba su turno: sigue 'claimed' por este
+// claim (enqueueOutboxTx no suelta un vuelo), pero lo que el ítem lleva es v1. Subirla sería un save
+// de una versión que ya no existe, un embedding y un eco para todas las máquinas. El drain la suelta
+// entonces con SoltarReclamo para que v2 salga ya y no al vencer el lease.
+//
+// Es una LECTURA: no toma el candado de escritura, que con seis daemons por base es lo que se paga.
+// Lo que queda entre esta lectura y el POST son microsegundos, y una edición que cae con el POST ya en
+// el aire la retiene enqueueOutboxTx hasta que vuelva la marca (ver el comentario de drainOutboxOnce).
+//
+// Un ítem sin Reclamo (armado a mano, no por un claim) no tiene con qué compararse y se da por
+// vigente: es el comportamiento de antes de esta pregunta.
+func (e *DbEngine) ReclamoVigente(obsID, hash, reclamo string) (bool, error) {
+	if reclamo == "" {
+		return true, nil
+	}
+	var vigente bool
+	if err := e.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM outbox
+		WHERE obs_id = ? AND status = 'claimed' AND next_attempt_at = ? AND ? = `+hashActual+`)`,
+		obsID, reclamo, hash).Scan(&vigente); err != nil {
+		return false, fmt.Errorf("error al verificar el claim de %s: %w", obsID, err)
+	}
+	return vigente, nil
+}
+
+// SoltarReclamo devuelve a la cola, y en hora, la fila de obsID si sigue reclamada por EL claim de
+// reclamo (su OutboxItem.Reclamo). El drain la llama cuando ReclamoVigente dijo que no y ese payload
+// no sale.
+//
+// Hace falta por la edición que llega mientras la fila espera su turno en el sublote: la deja
+// 'claimed' con este mismo reclamo (enqueueOutboxTx no suelta un vuelo) y el payload viejo no sale,
+// así que no vuelve ninguna marca que la suelte. Sin esto, v2 esperaba el lease entero.
+//
+// El CAS sobre next_attempt_at es lo que impide soltar un lease AJENO: si la pregunta dijo que no
+// porque otro drainer ya la reclamó, la marca ya no es ésta y no se toca nada. Un reclamo vacío (un
+// ítem armado a mano, no por un claim) no tiene con qué reconocerse, y tampoco toca nada.
+func (e *DbEngine) SoltarReclamo(obsID, reclamo string) error {
+	if reclamo == "" {
+		return nil
+	}
+	if _, err := e.db.Exec(`
+		UPDATE outbox SET status = 'pending', next_attempt_at = `+ahoraMs+`, updated_at = datetime('now')
+		WHERE obs_id = ? AND status = 'claimed' AND next_attempt_at = ?`, obsID, reclamo); err != nil {
+		return fmt.Errorf("error al soltar el claim de %s: %w", obsID, err)
+	}
+	return nil
+}
+
+// HayOutboxPorSubir es el SONDEO del drain: si hay alguna fila que un claim tomaría ahora mismo. Lo
+// corre RunOutboxScheduler cada pocos segundos entre ticks para que una nota escrita por OTRO proceso
+// sobre la misma base —la captura, los hooks, otro daemon— no espere al tick siguiente.
+//
+// Es una lectura sobre idx_outbox_claim (status, next_attempt_at) y nada más: no abre transacción,
+// así que no toma el candado de escritura, que en esta base comparten varios daemons; y no sale a la
+// red. Si hay algo, el que sale es el drain de siempre.
+func (e *DbEngine) HayOutboxPorSubir() (bool, error) {
+	var hay bool
+	fila := e.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM outbox WHERE ` + porSubir + `)`)
+	if err := fila.Scan(&hay); err != nil {
+		return false, fmt.Errorf("error al sondear el outbox: %w", err)
+	}
+	return hay, nil
 }
 
 // loadOutboxPayloads reconstruye el payload de cada obs_id reclamado desde observations. Si
@@ -228,9 +354,19 @@ const hashActual = `(SELECT COALESCE(o.content_hash, '') FROM observations o WHE
 //
 // hash es el de lo que SALIÓ (OutboxItem.Hash). La fila queda 'sent' sólo si eso es lo que la
 // observación tiene ahora (hashActual): una edición local que llegó mientras el push viajaba ya
-// cambió el contenido y devolvió la fila a 'pending' (enqueueOutboxTx), y marcarla 'sent' daba por
-// entregada una versión que nunca salió —medido: claim de v1, edición v2, 200 de v1, y la fila en
-// 'sent' con 0 filas por reenviar—. Así queda 'pending' y la versión nueva sale en el próximo tick.
+// cambió el contenido, y marcarla 'sent' daba por entregada una versión que nunca salió —medido:
+// claim de v1, edición v2, 200 de v1, y la fila en 'sent' con 0 filas por reenviar—.
+//
+// A esa fila, además, la SUELTA: la edición la dejó 'claimed' esperando la vuelta de este push
+// (enqueueOutboxTx no suelta un vuelo, para que otro daemon no suba v2 a la par de v1), y ésta es la
+// vuelta. Queda 'pending' y en hora, y v2 sale en el próximo drain, detrás de v1. Suelta sólo una
+// 'claimed': una 'pending' con otro contenido ya está esperando por su cuenta —el backoff de un
+// intento fallido de la versión nueva— y ese turno no es de esta marca.
+//
+// Lo que no distingue es DE QUIÉN es la 'claimed'. Si el lease de este push venció en vuelo y otro
+// drainer ya reclamó la versión nueva, la suelta igual y esa versión puede salir dos veces. Pasa sólo
+// con un push más largo que su lease, y se cierra con el mismo arreglo que ese caso: renovar el lease
+// antes de cada push.
 //
 // Al quedar 'sent' re-sella enqueued_hash con lo que salió, que es contra lo que enqueueOutboxTx
 // mide la próxima edición: si quedaba el de una deriva, re-guardar el mismo contenido la volvía a
@@ -247,19 +383,27 @@ const hashActual = `(SELECT COALESCE(o.content_hash, '') FROM observations o WHE
 // central la va a devolver en la bajada. IngestShared distingue ese rebote propio de un choque con
 // otra máquina comparando contra sent_hash; si la entrega en vuelo no se anotara, el rebote más
 // común —el de la versión que viajaba mientras se editaba— se contaría como choque.
+//
+// Cierra también una fila 'pending' con el MISMO contenido que salió, y es a propósito: esa versión
+// ya está en el central. Se llega ahí sin error de nadie: al drainer se le venció el lease con el
+// push en vuelo, otro la reclamó y su intento falló (MarkOutboxRetry la dejó 'pending' con backoff),
+// y recién después volvió este 200. Dejarla abierta la subía otra vez igual: un save de más en el
+// central, un embedding de más y un eco para todas las máquinas.
 func (e *DbEngine) MarkOutboxSent(obsID, hash string) error {
 	// Fencing por estado (auditoría #13c): una marca sólo aplica a una fila NO terminal (pending/claimed),
 	// nunca a una 'sent'/'dead'. Sin esto, con dos drainers solapados por vencimiento de lease, un ciclo
 	// rezagado podía re-marcar una fila que otro ya resolvió (p. ej. un MarkRetry tardío revivía un 'sent'
 	// a 'pending' = phantom pending). Excluir los estados terminales corta esa resurrección.
+	// Los SET de SQLite leen la fila de ANTES del UPDATE: el status de next_attempt_at es el viejo.
 	if _, err := e.db.Exec(`
 		UPDATE outbox SET
-			status = CASE WHEN ? = `+hashActual+` THEN 'sent' ELSE status END,
+			status = CASE WHEN ? = `+hashActual+` THEN 'sent' WHEN status = 'claimed' THEN 'pending' ELSE status END,
+			next_attempt_at = CASE WHEN ? = `+hashActual+` OR status != 'claimed' THEN next_attempt_at ELSE `+ahoraMs+` END,
 			enqueued_hash = CASE WHEN ? = `+hashActual+` THEN ? ELSE enqueued_hash END,
 			last_error = CASE WHEN ? = `+hashActual+` THEN NULL ELSE last_error END,
 			updated_at = datetime('now'),
 			sent_hash = ?, sent_at = datetime('now')
-		WHERE obs_id = ? AND status IN ('pending','claimed')`, hash, hash, hash, hash, hash, obsID); err != nil {
+		WHERE obs_id = ? AND status IN ('pending','claimed')`, hash, hash, hash, hash, hash, hash, obsID); err != nil {
 		return fmt.Errorf("error al marcar outbox como enviado: %w", err)
 	}
 	return nil
@@ -268,9 +412,10 @@ func (e *DbEngine) MarkOutboxSent(obsID, hash string) error {
 // MarkOutboxRetry devuelve la fila a 'pending' tras un fallo transitorio (R11): incrementa
 // attempts y posterga next_attempt_at backoffSeconds al futuro (backoff), guardando el error.
 //
-// Sólo si lo que falló (hash) es lo que la observación tiene ahora (hashActual): una edición que
-// llegó mientras viajaba ya dejó la fila 'pending' para salir YA, y el backoff y el intento fallido
-// son de la versión vieja.
+// Sólo si lo que falló (hash) es lo que la observación tiene ahora (hashActual): el backoff y el
+// intento fallido son de la versión que viajaba. Si mientras viajaba llegó una edición, la fila quedó
+// 'claimed' esperando esta vuelta (enqueueOutboxTx no suelta un vuelo), y lo que corresponde es
+// soltarla para que la versión nueva salga YA; sin eso esperaba el lease entero de la vieja.
 func (e *DbEngine) MarkOutboxRetry(obsID, hash string, backoffSeconds int, errMsg string) error {
 	if backoffSeconds < 0 {
 		backoffSeconds = 0
@@ -285,7 +430,7 @@ func (e *DbEngine) MarkOutboxRetry(obsID, hash string, backoffSeconds int, errMs
 		WHERE obs_id = ? AND status IN ('pending','claimed') AND ? = `+hashActual, backoffSeconds, errMsg, obsID, hash); err != nil {
 		return fmt.Errorf("error al reprogramar reintento en outbox: %w", err)
 	}
-	return nil
+	return e.soltarSiViajabaOtra(obsID, hash, "reintento")
 }
 
 // MarkOutboxDead manda la fila a dead-letter (R12): fallo permanente o tope de reintentos.
@@ -293,11 +438,29 @@ func (e *DbEngine) MarkOutboxRetry(obsID, hash string, backoffSeconds int, errMs
 //
 // Sólo si lo rechazado (hash) es lo que la observación tiene ahora (hashActual): el central rechazó
 // la versión que viajaba, no la edición que llegó después, y matarla acá la dejaba sin salir nunca.
+// A esa edición, que quedó 'claimed' esperando este vuelo, la suelta para que salga ya.
 func (e *DbEngine) MarkOutboxDead(obsID, hash, errMsg string) error {
 	if _, err := e.db.Exec(`
 		UPDATE outbox SET status = 'dead', last_error = ?, updated_at = datetime('now')
 		WHERE obs_id = ? AND status IN ('pending','claimed') AND ? = `+hashActual, errMsg, obsID, hash); err != nil {
 		return fmt.Errorf("error al marcar outbox como dead: %w", err)
+	}
+	return e.soltarSiViajabaOtra(obsID, hash, "rechazo")
+}
+
+// soltarSiViajabaOtra devuelve a la cola, en hora, la fila de obsID si sigue 'claimed' y lo que viajaba
+// (hash) ya no es lo que la observación tiene: es la edición que llegó en vuelo y quedó esperando la
+// vuelta de ese push (enqueueOutboxTx), y la marca que la llama es esa vuelta. Si lo que viajaba sigue
+// siendo lo actual, la marca ya aplicó y la fila no está 'claimed': no toca nada. motivo nombra la
+// marca en el error.
+//
+// Como MarkOutboxSent, no distingue de quién es la 'claimed': el reintento o el rechazo tardío de un
+// push cuyo lease venció en vuelo suelta el reclamo del drainer que ya tomó la versión nueva.
+func (e *DbEngine) soltarSiViajabaOtra(obsID, hash, motivo string) error {
+	if _, err := e.db.Exec(`
+		UPDATE outbox SET status = 'pending', next_attempt_at = `+ahoraMs+`, updated_at = datetime('now')
+		WHERE obs_id = ? AND status = 'claimed' AND ? IS NOT `+hashActual, obsID, hash); err != nil {
+		return fmt.Errorf("error al soltar el vuelo de %s tras el %s: %w", obsID, motivo, err)
 	}
 	return nil
 }
