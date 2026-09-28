@@ -8,6 +8,44 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Después de compactar, Musubi devuelve la memoria que el resumen perdió.** Al compactar, Claude
+  Code cambia la conversación por un resumen y dispara `SessionStart` con source `compact` y el
+  mismo `session_id`. El delta de la sesión seguía diciendo que el agente tenía lo inyectado, así que
+  el turno no lo repetía. Medido el 2026-09-26 en davantis-1: 147 compactaciones contra 5 arranques,
+  ninguna seguida de un `SessionStart` de Musubi (setup instalaba el hook sólo con matcher
+  `startup`), y el delta escondió 132 de los 220 ids que el recall por turno volvió a encontrar
+  (60 %).
+
+  El hook de arranque (`musubi detect --hook-mode`) ahora lee el `source` del evento:
+  - `compact` tiene su rama, que no es el arranque. Vacía el delta de ESA sesión y olvida sus marcas
+    «ya avisado» de fase, lote y conflictos. Después vuelve a buscar memoria sobre el último pedido
+    sustantivo de la sesión (`loop_pedidos:<sesión>`), con el mismo recall del turno, y la emite
+    como superficie `compact_recall`. No muestra el pedido, porque el resumen ya lo trae. Tampoco
+    muestra la línea «busqué … por …» del corrector de tipeo (decisión 2 del dueño: ese aviso es sólo
+    del turno), aunque la consulta sí sale corregida. No refresca manuales, no ofrece generar skills
+    y no corre el bloque cognitivo, la captura, el priming ni el de salud. Sin pedidos guardados
+    calla, pero el delta queda limpio igual.
+  - `clear` y `startup` (o un evento sin source) van por el arranque de siempre.
+  - `resume` y `fork` no se instalan.
+
+  `musubi setup` y el plugin (`musubi agente instalar`) atan el mismo comando a tres matchers:
+  `startup`, `compact` y `clear`. El plugin cede el arranque a un repo sólo si el settings del repo
+  (`settings.json` o `settings.local.json`) corre `detect --hook-mode` con un matcher que cubre ESE
+  source. El matcher se lee con la regla de Claude Code. Con el setup viejo (sólo `startup`), el
+  plugin nuevo cede el arranque pero corre la compactación.
+
+  Un repo sin el hook de compactación se entera por tres lados:
+  - una línea de salud en el arranque, una sola vez por proyecto (marca `arranque_aviso_sin_compact`
+    en la base, superficie `startup_aviso_compact`);
+  - una línea «Compactación: …» en `musubi agente estado`;
+  - un aviso al final de `musubi setup`.
+
+  **Binario y settings van juntos.** Un binario viejo con el settings nuevo corre el arranque entero
+  en cada compactación: vacía el delta y trae el priming, pero no el recall del último pedido. Un
+  binario nuevo con el settings viejo nunca se entera de la compactación. En la ventana V1 el dueño
+  instala el binario nuevo, vuelve a correr `musubi setup` en cada repo con Musubi y corre
+  `musubi agente instalar` para el plugin. La prueba de punta a punta con un `/compact` real queda
+  para esa ventana.
 - **El turno trae lo propio primero, y lo de otros proyectos con tope (`loop.recall_otros_proyectos`).**
   Hasta acá el hook del turno era federado sin reparto. En davantis-1, el 15,0 % de lo que inyectó
   en 36 sesiones era de otro proyecto (208 de 1385 notas), y el 74,0 % de eso eran registros

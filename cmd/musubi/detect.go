@@ -14,14 +14,43 @@ import (
 	"musubi/internal/memory"
 )
 
+// entradaDeArranque es lo que el hook SessionStart lee del JSON del evento (stdin): de qué sesión
+// es, y por qué arrancó. Claude Code manda en source «startup», «resume», «clear» o «compact»; la
+// compactación conserva el session_id, y /clear abre una sesión nueva.
+type entradaDeArranque struct {
+	SessionID string `json:"session_id"`
+	Source    string `json:"source"`
+}
+
+// Las fuentes del SessionStart que Musubi atiende: son las de los matchers que instalan setup y el
+// plugin. «resume» y «fork» no se instalan; si un matcher hecho a mano las dispara, van por el
+// arranque, como iba todo antes de que el hook mirara la fuente.
+const (
+	fuenteStartup = "startup"
+	fuenteCompact = "compact"
+	fuenteClear   = "clear"
+)
+
+// leerEntradaDeArranque lee la entrada del hook. Tolera entrada vacía o inválida: devuelve los
+// campos que pudo leer, y "" en los demás.
+func leerEntradaDeArranque(stdin io.Reader) entradaDeArranque {
+	var in entradaDeArranque
+	_ = json.NewDecoder(stdin).Decode(&in)
+	in.SessionID = strings.TrimSpace(in.SessionID)
+	in.Source = strings.TrimSpace(in.Source)
+	return in
+}
+
+// esCompactacion dice si el hook arrancó por una compactación: la única fuente que NO va por el
+// arranque (ver detect_compactar.go). Un «clear» es una sesión nueva, y va por el arranque.
+func (e entradaDeArranque) esCompactacion() bool {
+	return e.Source == fuenteCompact
+}
+
 // readSessionID extrae session_id del JSON del evento de hook (stdin). Tolera
 // entrada vacía o inválida devolviendo "".
 func readSessionID(stdin io.Reader) string {
-	var in struct {
-		SessionID string `json:"session_id"`
-	}
-	_ = json.NewDecoder(stdin).Decode(&in)
-	return strings.TrimSpace(in.SessionID)
+	return leerEntradaDeArranque(stdin).SessionID
 }
 
 // startupStore abstrae lo que el hook necesita del motor de memoria: leer/guardar
@@ -45,6 +74,14 @@ type startupStore interface {
 //     buildHookOutput, que decide qué generación de skills hace falta (completa,
 //     incremental por delta de stack, o ninguna) e inyecta el priming de memoria.
 func detectOutput(root string, hookMode bool, sessionID string) (string, error) {
+	return detectOutputSegunFuente(root, hookMode, entradaDeArranque{SessionID: sessionID})
+}
+
+// detectOutputSegunFuente es detectOutput con la entrada entera del hook: la fuente decide la rama.
+// Una compactación va por detectOutputDeCompactacion, ANTES de detectar el stack y de refrescar los
+// manuales, que son del arranque; todo lo demás (vacío, startup, clear) va por el arranque de siempre.
+func detectOutputSegunFuente(root string, hookMode bool, in entradaDeArranque) (string, error) {
+	sessionID := in.SessionID
 	if !hookMode {
 		resultados, err := detector.DetectStack(root)
 		if err != nil {
@@ -63,6 +100,9 @@ func detectOutput(root string, hookMode bool, sessionID string) (string, error) 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "musubi detect: config no disponible, usando defaults: %v\n", err)
 		cfg = config.Default()
+	}
+	if in.esCompactacion() {
+		return detectOutputDeCompactacion(root, cfg, sessionID), nil
 	}
 	var store startupStore
 	current, _ := detector.DetectStack(root)
@@ -87,7 +127,11 @@ func detectOutput(root string, hookMode bool, sessionID string) (string, error) 
 	// Y el MISMO modo que el turno: en «aparte» y en «aislado» el priming trae lo propio y lo sin
 	// atribuir; en «mezclado», todo el acervo. Hoy es una guarda (ver ScopeDelPriming).
 	alcance := memory.AlcanceDelTurnoSegun(cfg.Loop.RecallOtrosProyectos, cfg.Loop.RecallOtrosMax, propio)
-	return buildHookOutputCon(alcance, root, store, cfg.Startup, sessionID, current, propio)
+	// Si nada ata este hook a la compactación, el arranque lo avisa una vez por proyecto: sin eso, la
+	// memoria que vuelve tras compactar no llega, y nadie se entera (ver buildAvisoSinCompact). Se mira
+	// la raíz y la carpeta de la sesión, que es donde Claude Code lee el settings.
+	aviso := buildAvisoSinCompact(store, root, carpetaDeLaSesion())
+	return buildHookOutputConAviso(alcance, root, store, cfg.Startup, sessionID, current, propio, aviso)
 }
 
 // buildHookOutput arma el additionalContext del SessionStart combinando dos
@@ -106,14 +150,22 @@ func buildHookOutput(root string, store startupStore, cfg config.StartupConfig, 
 // priming usa para marcar las notas de otro proyecto (vacío ⇒ ninguna marca). El alcance decide QUÉ
 // entra al priming (ver buildPrimingContext); su valor cero es todo el acervo.
 func buildHookOutputCon(alcance memory.AlcanceDelTurno, root string, store startupStore, cfg config.StartupConfig, sessionID string, current []detector.StackResult, propio string) (string, error) {
+	return buildHookOutputConAviso(alcance, root, store, cfg, sessionID, current, propio, "")
+}
+
+// buildHookOutputConAviso es buildHookOutputCon con el aviso de salud de un repo sin el hook de
+// compactación (buildAvisoSinCompact), que lo calcula quien corre el hook de verdad: las pruebas que
+// arman el arranque con buildHookOutput no dependen de lo que haya instalado en la PC que las corre.
+// El aviso NO cuenta para decidir si va la captura proactiva: solo, no es algo que decir.
+func buildHookOutputConAviso(alcance memory.AlcanceDelTurno, root string, store startupStore, cfg config.StartupConfig, sessionID string, current []detector.StackResult, propio, aviso string) (string, error) {
 	skillsDir := filepath.Join(root, config.DirName, config.SkillsDir)
 	sentinelPath := filepath.Join(skillsDir, config.SentinelFile)
 	_, sentinelErr := os.Stat(sentinelPath)
 	sentinelExists := sentinelErr == nil
 
-	// SessionStart (arranque o compactación) = contexto fresco: limpiar el estado
-	// de inyección diferencial DE ESTA SESIÓN para que su memoria relevante se
-	// re-inyecte por turno. Las otras sesiones conservan el suyo: antes se vaciaba el
+	// SessionStart (arranque o /clear; la compactación tiene su rama, que también lo limpia) =
+	// contexto fresco: limpiar el estado de inyección diferencial DE ESTA SESIÓN para que su
+	// memoria relevante se re-inyecte por turno. Las otras sesiones conservan el suyo: antes se vaciaba el
 	// slot único y el arranque de cualquier ventana les hacía repetir la memoria a todas.
 	// Las dos claves globales del esquema viejo se vacían para no dejar un JSON huérfano.
 	if store != nil {
@@ -148,6 +200,7 @@ func buildHookOutputCon(alcance memory.AlcanceDelTurno, root string, store start
 		{surface: "startup_priming", text: priming},
 		{surface: "startup_capture", text: capture},
 		{surface: "startup_health", text: health},
+		{surface: surfaceAvisoSinCompact, text: aviso},
 		{surface: "startup_cognitive", text: cognitive},
 		{surface: "startup_skillgen", text: generation},
 	}), nil
@@ -494,24 +547,27 @@ func runDetect() {
 	}
 
 	root := workspaceDir()
+	// En hook-mode, Claude Code envía el JSON del evento por stdin: el session_id, para contabilizar
+	// el ledger por sesión, y el source, que decide la rama (arranque o compactación). Tolera
+	// ausencia (== "").
+	var entrada entradaDeArranque
 	if hookMode {
 		// Como hook, sólo sobre un proyecto que YA tiene memoria (ver raiz.go): un hook nunca la
 		// crea, y sin proyecto se calla.
 		r := raizDelProceso()
-		if r.Dir == "" || r.Activar || elPluginCedeElGancho("detect") {
+		if r.Dir == "" || r.Activar {
 			return
 		}
 		root = r.Dir
+		entrada = leerEntradaDeArranque(os.Stdin)
+		// El plugin cede SEGÚN LA FUENTE, y por eso pregunta después de leerla: se hace a un lado
+		// sólo si el proyecto ya corre este hook para esta misma fuente (ver elPluginCedeElArranque).
+		if elPluginCedeElArranque(entrada.Source) {
+			return
+		}
 	}
 
-	// En hook-mode, Claude Code envía el JSON del evento por stdin; extraemos el
-	// session_id para contabilizar el ledger por sesión. Tolera ausencia (== "").
-	sessionID := ""
-	if hookMode {
-		sessionID = readSessionID(os.Stdin)
-	}
-
-	out, err := detectOutput(root, hookMode, sessionID)
+	out, err := detectOutputSegunFuente(root, hookMode, entrada)
 	if err != nil {
 		// En hook-mode, un error no debe romper la sesión: loguear a stderr y salir 0.
 		fmt.Fprintf(os.Stderr, "musubi detect: %v\n", err)

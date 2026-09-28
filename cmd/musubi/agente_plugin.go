@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"musubi/internal/bootstrap"
@@ -53,8 +54,14 @@ const marcaDelPlugin = ".musubi-plugin"
 // ganchosDelAgente son los hooks que el agente tiene que correr, los MISMOS que escribe setup en
 // .claude/settings.json de cada repo. Lo fija TestElPluginLlevaLosMismosGanchosQueSetup: si uno de
 // los dos lados cambia, la prueba se pone roja.
+//
+// El arranque va con tres matchers y el mismo comando: «compact» devuelve la memoria que el resumen
+// perdió (detect_compactar.go) y «clear» es una sesión nueva, que va por el arranque. «resume» y
+// «fork» no van.
 var ganchosDelAgente = []struct{ evento, matcher, sub string }{
 	{"SessionStart", "startup", "detect --hook-mode"},
+	{"SessionStart", "compact", "detect --hook-mode"},
+	{"SessionStart", "clear", "detect --hook-mode"},
 	{"UserPromptSubmit", "", "turn --hook-mode"},
 	{"PreToolUse", "Read", "precheck --hook-mode"},
 	{"PreToolUse", matcherEdicion, "precheck --hook-mode"},
@@ -166,6 +173,7 @@ func runAgente(args []string) {
 			fmt.Println("Permisos: Musubi no puso ninguno (cada llamada puede pedir confirmación).")
 		}
 		fmt.Println(estadoDelAhorro(dir, settings))
+		fmt.Println(estadoDeLaCompactacion(carpetaDeLaSesion(), dir))
 	case "quitar":
 		if err := quitarPermisos(dir); err != nil {
 			fmt.Fprintf(os.Stderr, "musubi agente: no pude sacar los permisos que había puesto: %v\n", err)
@@ -402,7 +410,145 @@ func elProyectoYaTieneElGancho(dir, sub string) bool {
 	return false
 }
 
-// elPluginCedeElGancho es la pregunta que se hacen los hooks al arrancar.
+// elPluginCedeElGancho es la pregunta que se hacen los hooks al arrancar. El de arranque no la usa:
+// hace la suya, que mira el matcher (elPluginCedeElArranque).
 func elPluginCedeElGancho(sub string) bool {
 	return corriendoComoPlugin() && elProyectoYaTieneElGancho(carpetaDeLaSesion(), sub)
+}
+
+// ── El arranque cede según la fuente ─────────────────────────────────────────────────────────
+
+// elPluginCedeElArranque es la pregunta del hook de arranque del plugin, y a diferencia de la de los
+// demás hooks mira el MATCHER. Mirar sólo si el proyecto nombra `detect --hook-mode` alcanzaba
+// mientras el arranque tenía un solo matcher; con tres, un repo con el settings viejo (sólo
+// «startup») y el plugin nuevo haría que el plugin cediera también la compactación, que el repo no
+// corre: nadie devolvería la memoria. El plugin cede sólo si el proyecto ya corre este hook PARA ESTA
+// MISMA FUENTE, porque entonces Claude Code corre los dos.
+func elPluginCedeElArranque(fuente string) bool {
+	return corriendoComoPlugin() && elProyectoYaTieneElArranque(carpetaDeLaSesion(), fuente)
+}
+
+// elProyectoYaTieneElArranque dice si el proyecto corre el hook de arranque de Musubi para esta
+// fuente desde cualquiera de sus dos settings: Claude Code junta los hooks de los dos.
+func elProyectoYaTieneElArranque(dir, fuente string) bool {
+	for _, f := range []string{config.ClaudeSettingsFile, "settings.local.json"} {
+		crudo, err := os.ReadFile(filepath.Join(dir, config.ClaudeDir, f))
+		if err != nil {
+			continue
+		}
+		if arranqueDeMusubiCubre(crudo, fuente) {
+			return true
+		}
+	}
+	return false
+}
+
+// arranqueDeMusubiCubre dice si un settings —o el hooks.json de un plugin, que tiene la misma
+// forma— corre el hook de arranque de Musubi para la fuente. La fuente vacía es la de un evento sin
+// source, que va por el arranque: cuenta como «startup». Un JSON que no se entiende no cubre nada.
+func arranqueDeMusubiCubre(crudo []byte, fuente string) bool {
+	if !strings.Contains(strings.ToLower(string(crudo)), "musubi") {
+		return false
+	}
+	if fuente == "" {
+		fuente = fuenteStartup
+	}
+	var doc struct {
+		Hooks struct {
+			SessionStart []struct {
+				Matcher string `json:"matcher"`
+				Hooks   []struct {
+					Command string `json:"command"`
+				} `json:"hooks"`
+			} `json:"SessionStart"`
+		} `json:"hooks"`
+	}
+	if json.Unmarshal(crudo, &doc) != nil {
+		return false
+	}
+	for _, e := range doc.Hooks.SessionStart {
+		if !matcherCubre(e.Matcher, fuente) {
+			continue
+		}
+		for _, h := range e.Hooks {
+			if strings.Contains(h.Command, "detect --hook-mode") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// matcherSimple es la forma de matcher que Claude Code compara por igualdad, o por lista con «|».
+var matcherSimple = regexp.MustCompile(`^[a-zA-Z0-9_|]+$`)
+
+// matcherCubre dice si un matcher de hook dispara para el valor, con la regla de Claude Code: vacío
+// o «*» dispara para todo; letras, dígitos, «_» y «|» son uno o varios valores exactos; cualquier
+// otra cosa es una expresión regular sin anclar, y una que no compila no dispara.
+func matcherCubre(matcher, valor string) bool {
+	if matcher == "" || matcher == "*" {
+		return true
+	}
+	if matcherSimple.MatchString(matcher) {
+		for _, m := range strings.Split(matcher, "|") {
+			if strings.TrimSpace(m) == valor {
+				return true
+			}
+		}
+		return false
+	}
+	re, err := regexp.Compile(matcher)
+	if err != nil {
+		return false
+	}
+	return re.MatchString(valor)
+}
+
+// elPluginEnCubre dice si el plugin de Musubi en dir corre el hook de arranque para la fuente. Una
+// carpeta que no es un plugin de Musubi no cubre nada.
+func elPluginEnCubre(dir, fuente string) bool {
+	if dir == "" || !esPluginDeMusubi(dir) {
+		return false
+	}
+	crudo, err := os.ReadFile(filepath.Join(dir, "hooks", "hooks.json"))
+	if err != nil {
+		return false
+	}
+	return arranqueDeMusubiCubre(crudo, fuente)
+}
+
+// dirDelPluginInstalado es el plugin que Claude Code carga: el que lanzó este proceso, si lo lanzó
+// uno, y si no el de la carpeta de configuración de Claude Code.
+func dirDelPluginInstalado() string {
+	if d := os.Getenv("CLAUDE_PLUGIN_ROOT"); d != "" {
+		return d
+	}
+	d, _ := dirDelPlugin()
+	return d
+}
+
+// compactCubierto dice si algo ata el hook de arranque de Musubi a la compactación: el settings de
+// alguna de las carpetas dadas, o el plugin instalado. No mira el settings del usuario
+// (~/.claude/settings.json) ni si el plugin está deshabilitado en enabledPlugins.
+func compactCubierto(dirs ...string) bool {
+	for _, d := range dirs {
+		if d != "" && elProyectoYaTieneElArranque(d, fuenteCompact) {
+			return true
+		}
+	}
+	return elPluginEnCubre(dirDelPluginInstalado(), fuenteCompact)
+}
+
+// estadoDeLaCompactacion es la línea de `musubi agente estado` sobre la compactación en el repo:
+// si su settings o el plugin en pluginDir devuelven la memoria después de compactar.
+func estadoDeLaCompactacion(repo, pluginDir string) string {
+	switch {
+	case elProyectoYaTieneElArranque(repo, fuenteCompact):
+		return fmt.Sprintf("Compactación: cubierta en %s (SessionStart «compact» en su .claude/settings): tras compactar, Musubi devuelve la memoria que el resumen perdió.", repo)
+	case elPluginEnCubre(pluginDir, fuenteCompact):
+		return "Compactación: cubierta por el plugin (SessionStart «compact» en su hooks/hooks.json): tras compactar, Musubi devuelve la memoria que el resumen perdió."
+	default:
+		return fmt.Sprintf("Compactación: SIN CUBRIR en %s: ni su .claude/settings ni el plugin tienen el hook SessionStart «compact», y después de compactar la memoria que el resumen pierde no vuelve. "+
+			"Lo instala `musubi setup` en el repo, o `musubi agente instalar` para el plugin.", repo)
+	}
 }
