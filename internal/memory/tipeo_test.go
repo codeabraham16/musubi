@@ -31,6 +31,15 @@ func resumenDeCorrecciones(cs []Correccion) string {
 	return strings.Join(partes, ", ")
 }
 
+// corregirSinApuro corre el corrector con un plazo que no depende de la máquina. Estas pruebas miden
+// QUÉ corrige; el plazo tiene su prueba (TestCorrectorSeRindeAlPlazo) y su medición en el hook. Con
+// el de producción, la consulta de cinco tipeos tarda ~5 ms acá, y bajo `-race` en CI puede pasarse
+// de los 60 ms: la consulta volvería sin corregir y la prueba fallaría por la máquina. Y un sabotaje
+// que hace más lento al corrector quedaría verde por el plazo, no por la lógica.
+func corregirSinApuro(e *DbEngine, q string, alcance ProjectScope) (string, []Correccion) {
+	return e.CorregirConsultaConPlazo(context.Background(), q, alcance, 30*time.Second)
+}
+
 // TestCorrectorArreglaTransposicionYFaltaDeLetra: los tipeos de las dos clases que más comete el dueño
 // se corrigen hacia la palabra que la memoria sí tiene, y la consulta reescrita conserva todo lo demás.
 //
@@ -54,7 +63,7 @@ func TestCorrectorArreglaTransposicionYFaltaDeLetra(t *testing.T) {
 		"Otro comando útil en la raspberry del fichaje.",
 	)
 	q := "infromacion del comadno en la rasberry"
-	got, cs := e.CorregirConsulta(context.Background(), q, ProjectScope{})
+	got, cs := corregirSinApuro(e, q, ProjectScope{})
 	if quiero := "infromacion→informacion, comadno→comando, rasberry→raspberry"; resumenDeCorrecciones(cs) != quiero {
 		t.Fatalf("correcciones = %q, quería %q", resumenDeCorrecciones(cs), quiero)
 	}
@@ -86,7 +95,7 @@ func TestCorrectorEligeElTerminoExacto(t *testing.T) {
 		"El banco, mejorarlo con otra semilla.",
 	)
 	sembrarTipeo(t, e, "doc", docs...)
-	got, cs := e.CorregirConsulta(context.Background(), "meorar el recall", ProjectScope{})
+	got, cs := corregirSinApuro(e, "meorar el recall", ProjectScope{})
 	if len(cs) != 1 || cs[0].Buscado != "mejorar" {
 		t.Fatalf("correcciones = %q, quería meorar→mejorar", resumenDeCorrecciones(cs))
 	}
@@ -124,7 +133,7 @@ func TestCorrectorNoTocaTerminosVivos(t *testing.T) {
 		"Los que investiguen el grafo, avisen.",
 	)
 	q := "revisá los deploys que investigue ayer"
-	got, cs := e.CorregirConsulta(context.Background(), q, ProjectScope{})
+	got, cs := corregirSinApuro(e, q, ProjectScope{})
 	if len(cs) != 0 || got != q {
 		t.Fatalf("corrigió términos vivos: %q (consulta %q)", resumenDeCorrecciones(cs), got)
 	}
@@ -145,7 +154,7 @@ func TestCorrectorNoUsaSustitucion(t *testing.T) {
 		"Dejamos el binario viejo en su lugar.",
 	)
 	q := "dejemos el binario"
-	if got, cs := e.CorregirConsulta(context.Background(), q, ProjectScope{}); len(cs) != 0 || got != q {
+	if got, cs := corregirSinApuro(e, q, ProjectScope{}); len(cs) != 0 || got != q {
 		t.Fatalf("sustituyó: %q (consulta %q)", resumenDeCorrecciones(cs), got)
 	}
 }
@@ -179,7 +188,7 @@ func TestCorrectorRespetaElOrdenDeLasClases(t *testing.T) {
 		{"el qlmore de hoy", "qlmore→qelmore"},  // «falta» antes que «sobra» (qmore, 3 notas)
 		{"el zorbaxx de hoy", "zorbaxx→zorbax"}, // sólo «sobra» tiene candidato
 	} {
-		if _, cs := e.CorregirConsulta(context.Background(), c.q, ProjectScope{}); resumenDeCorrecciones(cs) != c.quiero {
+		if _, cs := corregirSinApuro(e, c.q, ProjectScope{}); resumenDeCorrecciones(cs) != c.quiero {
 			t.Errorf("%q: correcciones = %q, quería %q", c.q, resumenDeCorrecciones(cs), c.quiero)
 		}
 	}
@@ -198,7 +207,7 @@ func TestCorrectorTieneTope(t *testing.T) {
 		"La información del servidor y el comando del fichaje en la raspberry.",
 		"Más información: el servidor corre el comando del fichaje en la raspberry.",
 	)
-	got, cs := e.CorregirConsulta(context.Background(), "infromacion rasberry servdior comadno fihcaje", ProjectScope{})
+	got, cs := corregirSinApuro(e, "infromacion rasberry servdior comadno fihcaje", ProjectScope{})
 	// Contra el 4 literal y no contra la constante: si la prueba leyera el tope del código, cambiar el
 	// tope cambiaría también lo que la prueba espera.
 	if len(cs) != 4 {
@@ -240,7 +249,7 @@ func TestCorrectorExigeLargoYDosNotas(t *testing.T) {
 		{"el zrobax", ""},
 		{"el qlemore", "qlemore→qelmore"},
 	} {
-		_, cs := e.CorregirConsulta(context.Background(), c.q, ProjectScope{})
+		_, cs := corregirSinApuro(e, c.q, ProjectScope{})
 		if got := resumenDeCorrecciones(cs); got != c.quiero {
 			t.Errorf("%q: correcciones = %q, quería %q", c.q, got, c.quiero)
 		}
@@ -259,7 +268,10 @@ func TestCorrectorSeRindeAlPlazo(t *testing.T) {
 	e := newTestEngine(t)
 	sembrarTipeo(t, e, "doc", "La información del fichaje.", "Más información del kiosko.")
 	q := "infromacion del fichaje"
-	if got, cs := e.CorregirConsultaConPlazo(context.Background(), q, ProjectScope{}, time.Nanosecond); len(cs) != 0 || got != q {
+	// Plazo 0 y no 1 ns: con 1 ns el timer del contexto puede no haber disparado cuando corre la primera
+	// consulta (en Windows el reloj avanza a saltos) y la corrección terminaba igual. Con 0 el contexto
+	// nace vencido en cualquier máquina.
+	if got, cs := e.CorregirConsultaConPlazo(context.Background(), q, ProjectScope{}, 0); len(cs) != 0 || got != q {
 		t.Fatalf("con el plazo vencido corrigió: %q (consulta %q)", resumenDeCorrecciones(cs), got)
 	}
 	if _, cs := e.CorregirConsulta(context.Background(), q, ProjectScope{}); resumenDeCorrecciones(cs) != "infromacion→informacion" {
@@ -289,7 +301,7 @@ func TestCorrectorCorrigeEnSoloLectura(t *testing.T) {
 		t.Fatalf("NewDbEngineSoloLectura: %v", err)
 	}
 	defer ro.Close()
-	if _, cs := ro.CorregirConsulta(context.Background(), "infromacion", ProjectScope{}); len(cs) == 0 {
+	if _, cs := corregirSinApuro(ro, "infromacion", ProjectScope{}); len(cs) == 0 {
 		t.Fatal("en sólo lectura no corrigió «infromacion»: el corrector necesita escribir")
 	}
 }
@@ -331,18 +343,18 @@ func TestCorrectorRespetaElAlcance(t *testing.T) {
 		"El fichaje quedó en cero.",
 	)
 	q := "la rasberry del kiosko"
-	if got, cs := e.CorregirConsulta(context.Background(), q, ProjectScope{ProjectID: "a"}); len(cs) != 0 || got != q {
+	if got, cs := corregirSinApuro(e, q, ProjectScope{ProjectID: "a"}); len(cs) != 0 || got != q {
 		t.Fatalf("el proyecto a se corrigió con vocabulario del b: %q", resumenDeCorrecciones(cs))
 	}
-	if _, cs := e.CorregirConsulta(context.Background(), q, ProjectScope{}); resumenDeCorrecciones(cs) != "rasberry→raspberry" {
+	if _, cs := corregirSinApuro(e, q, ProjectScope{}); resumenDeCorrecciones(cs) != "rasberry→raspberry" {
 		t.Fatalf("federada no corrigió: %q (la prueba no probaría nada)", resumenDeCorrecciones(cs))
 	}
-	got, cs := e.CorregirConsulta(context.Background(), "el fichjae de hoy", ProjectScope{ProjectID: "a"})
+	got, cs := corregirSinApuro(e, "el fichjae de hoy", ProjectScope{ProjectID: "a"})
 	if resumenDeCorrecciones(cs) != "fichjae→fichaje" || got != "el fichaje de hoy" {
 		t.Fatalf("en el proyecto a, «fichjae» quedó %q (consulta %q): lo dio por vivo una nota del b", resumenDeCorrecciones(cs), got)
 	}
 	// Y federada, la nota del b sí lo deja vivo: el tipeo es una palabra de la memoria que se ve.
-	if _, cs := e.CorregirConsulta(context.Background(), "el fichjae de hoy", ProjectScope{}); len(cs) != 0 {
+	if _, cs := corregirSinApuro(e, "el fichjae de hoy", ProjectScope{}); len(cs) != 0 {
 		t.Fatalf("federada corrigió «fichjae», que está en una nota visible: %q", resumenDeCorrecciones(cs))
 	}
 }
@@ -373,7 +385,7 @@ func TestCorrectorIgnoraInvisibles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, cs := e.CorregirConsulta(context.Background(), "infromacion del kisoko", ProjectScope{})
+	got, cs := corregirSinApuro(e, "infromacion del kisoko", ProjectScope{})
 	if quiero := "infromacion→informacion"; resumenDeCorrecciones(cs) != quiero {
 		t.Fatalf("correcciones = %q, quería %q", resumenDeCorrecciones(cs), quiero)
 	}
