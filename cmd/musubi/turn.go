@@ -111,9 +111,10 @@ func turnOutputWith(store turnStore, loopCfg config.LoopConfig, pipeCfg config.P
 // el hook real las pasa: postear en el tablero es escribir en la memoria, y las pruebas del resto del
 // turno no tienen por qué hacerlo.
 //
-// propio es el proyecto de ESTE repo (resolveProjectID), y sólo sirve para decir en cada viñeta si
-// la nota es de otro proyecto. No acota el recall: el hook sigue federado (ver buildTurnRecall).
-// Vacío ⇒ ninguna marca, que es la conducta de antes y la de los callers que no lo conocen.
+// propio es el proyecto de ESTE repo (resolveProjectID). Decide dos cosas: qué viñeta se marca como
+// de otro proyecto, y —con loop.recall_otros_proyectos— cuánto de otros proyectos trae el recall
+// (ver buildTurnRecall). Vacío ⇒ ninguna marca y el recall federado de siempre, que es la conducta de
+// los callers que no lo conocen.
 func turnOutputConTareas(store turnStore, loopCfg config.LoopConfig, pipeCfg config.PipelineConfig, maCfg config.MultiAgentConfig, memCfg config.MemoryConfig, probe gateProbe, stdin io.Reader, embedder embedding.Provider, tareas *tareasDelTurno, propio string) string {
 	if store == nil {
 		return ""
@@ -170,6 +171,8 @@ func turnOutputConTareas(store turnStore, loopCfg config.LoopConfig, pipeCfg con
 			delta:       loopCfg.DeltaInjection,
 			memCfg:      memCfg,
 			embebedor:   embedder,
+			otrosModo:   loopCfg.RecallOtrosProyectos,
+			otrosMax:    loopCfg.RecallOtrosMax,
 		})})
 		// DESPUÉS del recall, a propósito: el recall ya anotó la sesión en el índice del delta
 		// (saveDeltaState), así que recordarPedido casi nunca tiene que volver a escribirlo.
@@ -541,12 +544,17 @@ type parametrosDelTurno struct {
 	sesion string
 	prompt string
 	// propio es el proyecto de este repo. Lo lee el formateador para marcar las viñetas de OTRO
-	// proyecto; NO acota el recall, que sigue federado. Vacío ⇒ ninguna marca.
+	// proyecto, y con otrosModo y otrosMax arma el alcance del recall. Vacío ⇒ ninguna marca y el
+	// recall federado de siempre.
 	propio      string
 	presupuesto int  // techo de tokens del bloque (loop.recall_budget)
 	delta       bool // inyectar sólo lo nuevo o modificado respecto de lo ya inyectado en la sesión
 	memCfg      config.MemoryConfig
 	embebedor   embedding.Provider // nil ⇒ recall sólo léxico
+	// otrosModo y otrosMax son loop.recall_otros_proyectos y loop.recall_otros_max, crudos: los
+	// traduce memory.AlcanceDelTurnoSegun, y el vacío y el cero valen el default.
+	otrosModo string
+	otrosMax  int
 }
 
 // buildTurnRecall hace un recall read-only acotado al prompt y formatea los gists.
@@ -559,24 +567,32 @@ func buildTurnRecall(store turnStore, p parametrosDelTurno) string {
 	// el hook y el banco las armaran cada uno por su lado, el banco mediría un ranker que el hook no
 	// corre. Ver memory.OpcionesDeRecallDelTurno.
 	//
-	// El alcance va en su valor cero, y es una decisión, no un descuido. scope.go declara que el
-	// stdio local es uno de los casos FEDERADOS por diseño ("Federate o ProjectID vacío ⇒ sin
-	// filtro: stdio local, bearer legacy, admin"). Acotar el hook por turno a un proyecto le
-	// escondería al agente la memoria del resto del acervo, que es justo lo que un workspace local
-	// quiere ver. El aislamiento multi-tenant es del borde MCP con credencial, no de este hook.
-	opts := memory.OpcionesDeRecallDelTurno(p.memCfg, memory.AlcanceDelTurno{})
+	// EL ALCANCE SALE DEL MODO (loop.recall_otros_proyectos), y el default es «aparte»: lo propio
+	// primero y a lo sumo loop.recall_otros_max notas de otro proyecto, salvo que nada propio venga al
+	// caso, y ahí lo ajeno llena el bloque marcado con su proyecto. Ver memory.AlcanceDelTurnoSegun.
+	//
+	// Antes iba en su valor cero, federado, con el argumento de que el aislamiento es del borde MCP y
+	// no de este hook. Lo que ese argumento no veía es de dónde sale el acervo local: la decisión de la
+	// sala de mando [id:5cff131b] dice VER TODO ≠ REPLICAR TODO —el daemon local acotado, lo federado
+	// se consulta en vivo—, y aun así la base de davantis-1 baja cinco proyectos, porque sincroniza con
+	// una credencial admin. Medido en la ola 2 (2026-09-26): el hook metió 178 notas ajenas de 1222
+	// inyectadas; en las tres sesiones largas, 178 de 753 (23,6 %); y el 74 % de lo ajeno eran
+	// commits o artefactos SDD de otro repo, que no le sirven a nadie que trabaja en éste. «aparte»
+	// saca esos registros y le pone tope al resto; «mezclado» es el federado de antes, con la marca.
+	alcance := memory.AlcanceDelTurnoSegun(p.otrosModo, p.otrosMax, p.propio)
+	opts := memory.OpcionesDeRecallDelTurno(p.memCfg, alcance)
 	opts.TokenBudget = p.presupuesto
 
 	// EL CORRECTOR DE TIPEO, ANTES DE EMBEBER Y DE BUSCAR: el texto corregido es el que va al
 	// embebedor y al recall, y lo que corrigió se avisa en el bloque (ver encabezadoDeMemoria). Su
-	// alcance es el MISMO filtro duro que las opciones le ponen al recall —hoy el valor cero,
-	// federado: todo lo visible—, así que nunca propone una palabra que este recall no podría
-	// devolver. Con memory.recall_typo_correction apagado el turno busca el prompt como vino, y el
-	// bloque sale byte a byte como antes.
+	// vocabulario lo decide el modo, en memory.RecallOptions.AlcanceDelCorrector, y NO es el filtro
+	// duro de opts: en «aparte» es todo el acervo, porque este recall trae notas de otro proyecto y
+	// sus palabras no pueden darse por muertas; en «aislado», el proyecto propio, que es lo único que
+	// este recall deja ver. Con memory.recall_typo_correction apagado el turno busca el prompt como
+	// vino, y el bloque sale byte a byte como antes.
 	consulta, correcciones := prompt, []memory.Correccion(nil)
 	if p.memCfg.RecallTypoCorrection {
-		alcance := memory.ProjectScope{ProjectID: opts.ProjectScope, Federate: opts.Federate}
-		consulta, correcciones = store.CorregirConsulta(context.Background(), prompt, alcance)
+		consulta, correcciones = store.CorregirConsulta(context.Background(), prompt, opts.AlcanceDelCorrector())
 	}
 
 	// LA SEÑAL VECTORIAL, con el techo de latencia puesto. El backfill embebe el content completo,

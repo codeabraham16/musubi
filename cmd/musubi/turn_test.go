@@ -691,11 +691,49 @@ func TestBuildTurnRecallPasaLaConfigDeProduccion(t *testing.T) {
 	if len(store.lastOpts.QueryVector) == 0 {
 		t.Error("no se pasó QueryVector: sin él el pool vectorial no existe y el recall queda sólo-léxico")
 	}
-	// ProjectScope se deja federado A PROPÓSITO: scope.go declara el stdio local como uno de los
-	// casos sin filtro. Acotarlo acá le escondería al agente el resto del acervo.
-	if store.lastOpts.ProjectScope != "" {
-		t.Errorf("el hook por turno no debe acotar por proyecto (es federado por diseño), y acotó a %q",
-			store.lastOpts.ProjectScope)
+	// Sin proyecto propio (este caller no lo pasa) no hay nada ajeno, y el recall queda federado como
+	// siempre. El alcance con proyecto lo fija TestElTurnoVaAparteConLaConfigDeProduccion.
+	if store.lastOpts.ProjectScope != "" || store.lastOpts.TopeOtrosProyectos != 0 {
+		t.Errorf("sin proyecto propio el hook no tiene nada que acotar, y acotó a %q con tope %d",
+			store.lastOpts.ProjectScope, store.lastOpts.TopeOtrosProyectos)
+	}
+}
+
+// TestElTurnoVaAparteConLaConfigDeProduccion: con el proyecto propio y el loop por defecto, el recall
+// del turno corre en «aparte» —acotado al proyecto, con el tope de ajenas del yaml y sin federar—,
+// que es la decisión 8 del dueño. Y con «mezclado» vuelve a ser el federado de antes.
+//
+// Sabotaje: el turno queda federado aunque sepa su proyecto.
+// arnes: archivo="cmd/musubi/turn.go"
+// arnes: de="\talcance := memory.AlcanceDelTurnoSegun(p.otrosModo, p.otrosMax, p.propio)\n"
+// arnes: a="\talcance := memory.AlcanceDelTurnoSegun(config.OtrosProyectosMezclado, p.otrosMax, p.propio)\n"
+func TestElTurnoVaAparteConLaConfigDeProduccion(t *testing.T) {
+	loop := config.Default().Loop
+	for _, c := range []struct {
+		modo  string
+		scope string
+		tope  int
+	}{
+		{loop.RecallOtrosProyectos, "musubi", loop.RecallOtrosMax},
+		{config.OtrosProyectosMezclado, "", 0},
+	} {
+		store := &fakeTurnStore{recall: memory.RecallResult{
+			Count: 1,
+			Items: []memory.RecallItem{{ID: "a", Gist: "algo", ContentHash: "h"}},
+		}}
+		buildTurnRecall(store, parametrosDelTurno{
+			sesion: "s1", prompt: "el prompt del turno", propio: "musubi", presupuesto: 250,
+			memCfg: config.Default().Memory, otrosModo: c.modo, otrosMax: loop.RecallOtrosMax,
+		})
+		o := store.lastOpts
+		if o.ProjectScope != c.scope || o.TopeOtrosProyectos != c.tope || o.Federate {
+			t.Errorf("modo %q: el recall corrió con scope=%q tope=%d federate=%v, quiere scope=%q tope=%d",
+				c.modo, o.ProjectScope, o.TopeOtrosProyectos, o.Federate, c.scope, c.tope)
+		}
+	}
+	if loop.RecallOtrosProyectos != config.OtrosProyectosAparte || loop.RecallOtrosMax != 2 {
+		t.Errorf("el default del dueño es «aparte» con 2 ajenas, y el yaml por defecto dice %q con %d",
+			loop.RecallOtrosProyectos, loop.RecallOtrosMax)
 	}
 }
 

@@ -297,7 +297,30 @@ type LoopConfig struct {
 	// de lo ya inyectado en la sesión (en vez de re-inyectar todo cada turno).
 	// Ahorra tokens y evita churnear el contexto (cache-considerate) (default true).
 	DeltaInjection bool `yaml:"delta_injection"`
+	// RecallOtrosProyectos dice qué hacen los DOS hooks (el del turno y el de arranque) con la
+	// memoria de OTROS proyectos del acervo. Una base local que sincroniza con alcance federado —la
+	// sala de mando— tiene notas de varios repos, y el recall del hook no las distinguía:
+	//   - "aparte" (default): el turno trae lo propio primero y a lo sumo RecallOtrosMax notas de
+	//     otro proyecto, marcadas con su proyecto, y nunca un commit ni un contrato SDD de otro repo.
+	//     Si nada propio viene al caso, lo ajeno llena el bloque, marcado. El arranque trae sólo lo
+	//     propio.
+	//   - "aislado": sólo lo propio y lo sin atribuir, en los dos hooks.
+	//   - "mezclado": lo de antes, federado y marcado. Es el rollback.
+	// Un valor desconocido cae al default con un aviso. Lo traduce memory.AlcanceDelTurnoSegun, el
+	// único lugar donde el modo se vuelve alcance.
+	RecallOtrosProyectos string `yaml:"recall_otros_proyectos"`
+	// RecallOtrosMax es el tope de notas de otro proyecto por turno en "aparte" (default 2). Como el
+	// resto de los numéricos de esta sección, 0 significa "usar el default" y un valor negativo lo
+	// apaga: sin notas ajenas, que es lo mismo que "aislado".
+	RecallOtrosMax int `yaml:"recall_otros_max"`
 }
+
+// Los modos de loop.recall_otros_proyectos. Ver LoopConfig.RecallOtrosProyectos.
+const (
+	OtrosProyectosAparte   = "aparte"
+	OtrosProyectosAislado  = "aislado"
+	OtrosProyectosMezclado = "mezclado"
+)
 
 // PipelineConfig controla el pipeline por fases del loop dirigido: Musubi mantiene
 // el estado de la fase actual de la tarea (explorar→planear→codear→verificar) y se
@@ -1348,6 +1371,8 @@ func Default() Config {
 			ReminderAfterTurns:     5,
 			DurableNudgeAfterTurns: 20,
 			DeltaInjection:         true,
+			RecallOtrosProyectos:   OtrosProyectosAparte,
+			RecallOtrosMax:         2,
 		},
 		Pipeline: PipelineConfig{
 			Enabled: true,
@@ -1752,6 +1777,17 @@ func (c *Config) applyDefaults(present map[string]bool) {
 		}
 		if c.Loop.DurableNudgeAfterTurns == 0 {
 			c.Loop.DurableNudgeAfterTurns = d.Loop.DurableNudgeAfterTurns
+		}
+		// Los dos de la memoria de otros proyectos. Una sección `loop:` escrita antes de que
+		// existieran ya trae el default —Parse arranca de Default() y yaml sólo pisa lo escrito—;
+		// lo que llega acá es la clave escrita vacía o el tope en 0, y eso también es "usar el
+		// default", no "mezclado" ni "sin tope". Un modo desconocido NO se corrige acá: lo resuelve
+		// memory.AlcanceDelTurnoSegun, con su aviso.
+		if strings.TrimSpace(c.Loop.RecallOtrosProyectos) == "" {
+			c.Loop.RecallOtrosProyectos = d.Loop.RecallOtrosProyectos
+		}
+		if c.Loop.RecallOtrosMax == 0 {
+			c.Loop.RecallOtrosMax = d.Loop.RecallOtrosMax
 		}
 	}
 

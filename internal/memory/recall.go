@@ -79,6 +79,19 @@ type RecallOptions struct {
 	// Federate, si es true, IGNORA ProjectScope y devuelve memoria de todos los proyectos
 	// (recall federado explícito). Es el opt-in del modelo "aislado + federación opt-in".
 	Federate bool
+	// TopeOtrosProyectos convierte el aislamiento de ProjectScope en un REPARTO: lo propio primero y
+	// lo de otros proyectos con tope (el modo «aparte» de loop.recall_otros_proyectos, que es lo que
+	// decidió el dueño: «lo propio primero y a lo sumo 2 ajenas, salvo que no haya nada propio que
+	// venga al caso»). Sólo cuenta con ProjectScope puesto y Federate en false:
+	//   - > 0: el choke point descarta los REGISTROS HISTÓRICOS de otro proyecto (un commit o un
+	//     contrato SDD de otro repo no describe éste) y conserva el resto de lo ajeno; packByBudget
+	//     deja entrar a lo sumo este número de notas ajenas, después de las propias. Si en el
+	//     empaquetado de siempre no entra ninguna propia, el tope se levanta y lo ajeno llena el
+	//     presupuesto, como antes (el hook lo marca con su proyecto).
+	//   - <= 0: el aislamiento de siempre, sólo lo propio y lo sin atribuir.
+	// Con ProjectScope vacío o Federate no hace nada: el recall federado, bit a bit. Lo pone el hook
+	// del turno y nadie más: la tool musubi_recall, musubi_ask y el central lo dejan en 0.
+	TopeOtrosProyectos int
 	// VectorFloor es el piso de coseno (0..1) del pool vectorial del recall híbrido (Q1): los
 	// candidatos con similitud < VectorFloor se descartan ANTES de entrar al ranking, para no
 	// inyectar vecinos de baja señal con peso RRF pleno. <= 0 ⇒ sin piso (histórico bit-a-bit).
@@ -270,8 +283,16 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 	// (léxico, vectorial, co-ocurrencia) confluyen en `cands`; filtrar acá cubre todos de una
 	// vez, antes del grafo y el scoring. Scope vacío o Federate ⇒ NO filtra (federado histórico
 	// bit-a-bit). Se conservan el proyecto pedido y las filas sin atribuir (project_id vacío).
+	// Con TopeOtrosProyectos (el modo «aparte» del hook) el filtro es otro: lo ajeno queda, salvo
+	// sus registros históricos, y el tope lo aplica packByBudget con el reparto.
+	var rep reparto
 	if !opts.Federate && opts.ProjectScope != "" {
-		cands = filterCandidatesByProject(cands, opts.ProjectScope)
+		if opts.TopeOtrosProyectos > 0 {
+			cands = filterCandidatesAparte(cands, opts.ProjectScope)
+			rep = reparto{propio: opts.ProjectScope, tope: opts.TopeOtrosProyectos}
+		} else {
+			cands = filterCandidatesByProject(cands, opts.ProjectScope)
+		}
 	}
 
 	result := RecallResult{Budget: budget, Items: []RecallItem{}}
@@ -311,7 +332,7 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 	// que es donde esa regla vive escrita una sola vez y con el porqué del cero.
 	scored = e.diversify(scored, opts.MMRLambda)
 
-	result = packByBudget(scored, budget, gistMax)
+	result = packByBudget(scored, budget, gistMax, rep)
 
 	// Anclas al estado del proyecto (origins.go): DESPUÉS de rankear y empaquetar, nunca
 	// antes. Si esto influyera en la selección o en el orden dejaría de ser una advertencia
@@ -343,13 +364,90 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 	return result, nil
 }
 
+// reparto dice cuánto de OTROS proyectos puede entrar al empaquetado (ver
+// RecallOptions.TopeOtrosProyectos). Su valor cero no reparte nada: es el empaquetado de siempre, el
+// del priming y el de todo recall que no esté en el modo «aparte».
+type reparto struct {
+	propio string // el proyecto del workspace; qué es ajeno lo decide MismoProyecto
+	tope   int    // cuántas notas ajenas entran como mucho; <= 0 ⇒ no reparte
+}
+
 // packByBudget empaqueta gists en orden de score hasta llenar budget tokens,
 // garantizando el top-1 (truncado si hace falta). Es el núcleo compartido por el
 // recall por query y el priming de arranque: un único lugar donde vive la lógica
 // de presupuesto y el estimador de tokens. Determinista, sin LLM.
-func packByBudget(ranked []scoredCandidate, budget, gistMax int) RecallResult {
+//
+// Con un reparto (el modo «aparte» del hook del turno) son DOS pasadas en memoria sobre el MISMO
+// ranking, sin volver a buscar:
+//  1. La de siempre. Si en ella no entra ninguna nota propia ni sin atribuir, nada propio viene al
+//     caso y se queda así: lo ajeno llena el presupuesto como antes, y el hook lo marca con su
+//     proyecto. Es preguntar por el fichaje del kiosko desde el repo de Musubi, cuando la respuesta
+//     ES de Altura.
+//  2. Si entra alguna, se re-empaqueta con el tope: lo ajeno que pasa del tope se saltea, su lugar
+//     lo ocupa lo propio que venía detrás, y lo propio va primero.
+//
+// «Que venga al caso» se mide con lo que ENTRA y no con lo que hay en el ranking; las dos reglas se
+// midieron (ver el CHANGELOG). En las 155 consultas medidas que trajeron memoria, el pool de 50 tuvo
+// siempre alguna propia, así que con el ranking el tope no se levantaba nunca: la consulta del kiosko
+// desde el repo de Musubi pasaba de 11 notas de altura a 2, con 9 propias en su lugar (5 hablaban del
+// kiosko, 4 eran relleno). El costo de esta regla es el caso inverso, que ya era así: un tópico
+// propio que habla de Altura (1 de 81 en el banco) se queda sin nada propio.
+//
+// Y tiene un borde que main NO tenía (lo encontró la revisión, con un ranking armado a mano). La
+// pasada 1 corre sobre el ranking que el choke point ya filtró: sacar un registro histórico ajeno
+// libera presupuesto, una ajena grande que antes no cabía entra, y la propia que venía detrás ya no.
+// Sin nada propio en la pasada 1 el tope se levanta, y el turno sale con CERO propias donde main
+// traía una. En los 77 turnos reales sin delta no pasó ninguna vez. Cerrarlo pide decidir el
+// levantamiento sobre el ranking sin filtrar y empaquetar lo propio antes que lo ajeno, y eso cambia
+// qué entra en todos los turnos, no sólo en el borde: no está hecho.
+func packByBudget(ranked []scoredCandidate, budget, gistMax int, rep reparto) RecallResult {
+	result := empaquetar(ranked, budget, gistMax, reparto{})
+	if rep.tope <= 0 {
+		return result
+	}
+	if !entroAlgoPropio(result, rep.propio) {
+		return result
+	}
+	return loPropioPrimero(empaquetar(ranked, budget, gistMax, rep), rep.propio)
+}
+
+// entroAlgoPropio dice si un empaquetado trae al menos una nota propia o sin atribuir.
+func entroAlgoPropio(r RecallResult, propio string) bool {
+	for _, it := range r.Items {
+		if MismoProyecto(propio, it.ProjectID) {
+			return true
+		}
+	}
+	return false
+}
+
+// loPropioPrimero pone lo propio (y lo sin atribuir) adelante y lo ajeno detrás, cada grupo en el
+// orden en que entró, que es el del score. Es una partición estable: no cambia QUÉ entró, sólo en
+// qué orden lo lee el agente.
+func loPropioPrimero(r RecallResult, propio string) RecallResult {
+	items := make([]RecallItem, 0, len(r.Items))
+	var ajenas []RecallItem
+	for _, it := range r.Items {
+		if MismoProyecto(propio, it.ProjectID) {
+			items = append(items, it)
+		} else {
+			ajenas = append(ajenas, it)
+		}
+	}
+	r.Items = append(items, ajenas...)
+	return r
+}
+
+// empaquetar es UNA pasada de packByBudget. Con el reparto cero es el empaquetado de siempre; con
+// uno, saltea lo ajeno que pasa del tope y sigue con lo que viene detrás.
+func empaquetar(ranked []scoredCandidate, budget, gistMax int, rep reparto) RecallResult {
 	result := RecallResult{Budget: budget, Items: []RecallItem{}}
+	ajenas := 0
 	for _, c := range ranked {
+		ajena := rep.tope > 0 && !MismoProyecto(rep.propio, c.projectID)
+		if ajena && ajenas >= rep.tope {
+			continue // el cupo de lo ajeno ya se llenó: sigue lo propio que venga detrás
+		}
 		gist := c.gist
 		if strings.TrimSpace(gist) == "" {
 			gist = Gist(c.content, gistMax)
@@ -377,6 +475,9 @@ func packByBudget(ranked []scoredCandidate, budget, gistMax int) RecallResult {
 			Provenance:  stampProvenance(c.provenance),
 		})
 		result.UsedTokens += cost
+		if ajena {
+			ajenas++
+		}
 		if result.UsedTokens >= budget {
 			break
 		}
@@ -598,6 +699,26 @@ func filterCandidatesByProject(cands []candidate, scope string) []candidate {
 	out := cands[:0]
 	for _, c := range cands {
 		if c.projectID == scope || c.projectID == "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// filterCandidatesAparte es el filtro del modo «aparte» (RecallOptions.TopeOtrosProyectos > 0):
+// deja pasar lo propio, lo sin atribuir y lo ajeno que es CONOCIMIENTO, y saca lo ajeno que es
+// REGISTRO HISTÓRICO (commits y artefactos SDD, historicalRecord). Esos son el 74 % de lo ajeno que
+// el hook metía en davantis-1 —«qué commit hizo Altura el martes» no le sirve a nadie que trabaja
+// en Musubi— y no entran ni cuando nada propio viene al caso. Cuántas ajenas entran lo decide
+// después packByBudget, que es el que sabe qué entró.
+func filterCandidatesAparte(cands []candidate, propio string) []candidate {
+	out := cands[:0]
+	for _, c := range cands {
+		if MismoProyecto(propio, c.projectID) {
+			out = append(out, c) // lo propio y lo sin atribuir pasan siempre, registros incluidos
+			continue
+		}
+		if !historicalRecord(c.topicKey) {
 			out = append(out, c)
 		}
 	}

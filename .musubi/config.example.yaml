@@ -23,6 +23,19 @@ mode: local # local | team
 #                         # deja con la MAYOR redundancia medida (0,7453 @10, contra 0,6313 del default).
 #                         # Y por debajo de ~0.72 empieza a promover items sin relación con la consulta.
 
+# --- Hooks del agente: la memoria del turno y del arranque --------------------------------------
+# loop:
+#   recall_otros_proyectos: aparte # qué hacen los hooks con la memoria de OTROS proyectos del acervo
+#                           # (una base que sincroniza federado tiene varios). aparte = lo propio
+#                           # primero y a lo sumo recall_otros_max notas ajenas por turno, marcadas
+#                           # con su proyecto y nunca un commit ni un contrato SDD de otro repo; si
+#                           # nada propio viene al caso, lo ajeno llena el bloque. El arranque trae
+#                           # sólo lo propio. aislado = sólo lo propio en los dos hooks. mezclado = lo
+#                           # de antes, todo federado y marcado: es el rollback. Un valor desconocido
+#                           # cae a aparte con un aviso
+#   recall_otros_max: 2     # tope de notas ajenas por turno en aparte. 0 o ausente = 2. Negativo =
+#                           # ninguna, que es lo mismo que aislado
+
 # --- Detección de conflictos ---------------------------------------------------------------------
 # conflicts:
 #   enabled: true

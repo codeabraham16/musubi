@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"time"
@@ -16,17 +17,28 @@ const defaultPrimeBudget = 300
 
 // PrimeContext devuelve los gists más salientes que entren en budget tokens,
 // rankeados por saliencia. No recibe query: es contexto general del proyecto.
+// Es PrimeContextCtx sin alcance: todo el acervo, como fue siempre.
 func (e *DbEngine) PrimeContext(budget int) (RecallResult, error) {
+	return e.PrimeContextCtx(context.Background(), budget)
+}
+
+// PrimeContextCtx es PrimeContext acotado al ProjectScope del ctx (WithProjectScope): con un
+// proyecto, sólo lo propio y lo sin atribuir entran al ranking de saliencia, con el MISMO criterio
+// que la muralla (scopeClause). Sin scope en el ctx, o federado, es todo el acervo.
+//
+// Lo usa el hook de arranque en los modos «aparte» y «aislado» (AlcanceDelTurno.ScopeDelPriming).
+func (e *DbEngine) PrimeContextCtx(ctx context.Context, budget int) (RecallResult, error) {
 	if budget <= 0 {
 		budget = defaultPrimeBudget
 	}
 
-	rows, err := e.db.Query(`
+	clause, args := projectScopeFrom(ctx).scopeClause("o")
+	rows, err := e.db.QueryContext(ctx, `
 		SELECT o.id, o.topic_key, COALESCE(o.gist,''), o.content, COALESCE(o.content_hash,''), o.tokens,
 		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), o.access_count, o.importance, COALESCE(o.project_id,''), COALESCE(o.author,''), COALESCE(o.provenance,'human')
 		FROM observations o
-		WHERE ` + visibleObsPredicate + `
-	`)
+		WHERE `+visibleObsPredicate+clause+`
+	`, args...)
 	if err != nil {
 		return RecallResult{}, fmt.Errorf("error al listar observaciones para priming: %w", err)
 	}
@@ -49,7 +61,7 @@ func (e *DbEngine) PrimeContext(budget int) (RecallResult, error) {
 	}
 	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
 
-	return packByBudget(ranked, budget, defaultGistMaxTokens), nil
+	return packByBudget(ranked, budget, defaultGistMaxTokens, reparto{}), nil
 }
 
 // candidateSalience calcula la saliencia de un candidato usando la edad derivada

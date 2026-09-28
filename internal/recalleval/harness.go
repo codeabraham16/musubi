@@ -123,8 +123,9 @@ type Config struct {
 	// memory.recall_typo_correction encendido. Es un eje del experimento: un brazo lo prende o lo
 	// apaga para medir el corrector contra el mismo ranker sin él.
 	//
-	// EL ALCANCE ES EL DEL RECALL DEL BRAZO: el ProjectScope y el Federate de Opts, que son el filtro
-	// duro que ese Recall aplica. Y el juez, si hay, ve la consulta como llegó, igual que en
+	// EL ALCANCE ES EL DEL HOOK: memory.RecallOptions.AlcanceDelCorrector de Opts, la misma regla que
+	// corre buildTurnRecall. Sin tope es el filtro duro del recall del brazo; con tope («aparte»), el
+	// vocabulario de todo el acervo. Y el juez, si hay, ve la consulta como llegó, igual que en
 	// musubi_recall: juzga pertinencia contra lo que la persona preguntó.
 	//
 	// Un motor sin corrector no puede correr este brazo, y rankedIDs lo corta: seguir sin corregir
@@ -319,7 +320,7 @@ func rankedIDs(ctx context.Context, eng recuperador, query string, cfg Config, e
 		if !ok {
 			return nil, fmt.Errorf("config %q corrige el tipeo y este motor (%T) no tiene corrector", cfg.Name, eng)
 		}
-		consulta, _ = c.CorregirConsulta(ctx, query, memory.ProjectScope{ProjectID: opts.ProjectScope, Federate: opts.Federate})
+		consulta, _ = c.CorregirConsulta(ctx, query, opts.AlcanceDelCorrector())
 	}
 	if cfg.UseVector {
 		if embed == nil {

@@ -66,7 +66,7 @@ func TestTokenConsumptionAudit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrimeContext: %v", err)
 	}
-	primeBlock := buildPrimingContext(eng, startup.RecallBudget, sess, "")
+	primeBlock := buildPrimingContext(memory.AlcanceDelTurno{}, eng, startup.RecallBudget, sess, "")
 	t.Logf("Priming: %d gists, %d tokens de gists (budget %d), bloque formateado %d tokens.",
 		primeRes.Count, primeRes.UsedTokens, startup.RecallBudget, memory.EstimateTokens(primeBlock))
 	if primeRes.UsedTokens > startup.RecallBudget {

@@ -8,6 +8,95 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El turno trae lo propio primero, y lo de otros proyectos con tope (`loop.recall_otros_proyectos`).**
+  Hasta acá el hook del turno era federado sin reparto. En davantis-1, el 15,0 % de lo que inyectó
+  en 36 sesiones era de otro proyecto (208 de 1385 notas), y el 74,0 % de eso eran registros
+  históricos de otro repo: commits y artefactos SDD. El modo de fábrica pasa a ser «aparte», la
+  decisión 8 del dueño: lo propio primero y a lo sumo 2 notas ajenas, salvo que no haya nada propio
+  que venga al caso. Ahí entra lo ajeno, marcado con su proyecto (`[de altura] `).
+
+  Dos claves nuevas en `loop:`, documentadas en `config.example.yaml`. Una config sin ellas toma los
+  defaults:
+  - `recall_otros_proyectos`: `aparte` (default), `aislado` (lo propio y lo sin atribuir, nada más) o
+    `mezclado` (el recall federado de antes). Vacío ⇒ el default; un modo desconocido ⇒ el default,
+    con un aviso en el log.
+  - `recall_otros_max`: el tope de «aparte» (default 2). 0 ⇒ el default; negativo ⇒ «aislado».
+
+  Cómo lo hace:
+  - `RecallOptions.TopeOtrosProyectos`, que pone sólo `OpcionesDeRecallDelTurno`: el hook del turno y
+    el banco. `musubi_recall`, `musubi_ask` y el cerebro central siguen en 0 y no cambian.
+  - En el choke point, «aparte» saca los registros históricos de otro proyecto (`historicalRecord`:
+    un commit o un contrato SDD de otro repo no describe éste) y deja el resto de lo ajeno. Esos
+    registros no entran ni cuando nada propio viene al caso.
+  - El tope lo aplica `packByBudget`, sobre el MISMO ranking y sin volver a buscar: empaqueta como
+    siempre; si no entró nada propio ni sin atribuir, se queda así; si entró algo, reempaqueta con el
+    tope y pone lo propio primero.
+  - El priming de arranque (`detect`) se acota a lo propio en «aparte» y en «aislado», sin cupo de
+    ajenas: no tiene consulta, así que nada ajeno puede venir al caso. Si lo propio no trae NADA —un
+    repo cuya memoria entera lleva el sello de otro proyecto—, «aparte» lo repite con todo el acervo,
+    marcado (`AlcanceDelTurno.PrimingDeRespaldo`).
+
+  **«Que venga al caso» se mide con lo que ENTRA al bloque, no con lo que hay en el ranking.** Se
+  midieron las dos reglas:
+  - Con la del ranking (el tope se levanta sólo si ninguna candidata es propia) no se levantaba
+    nunca: en las 155 consultas medidas que trajeron memoria, el pool de 50 tuvo siempre alguna
+    propia. «el fichaje del kiosko no anda», desde el repo de Musubi, pasaba de 11 notas de altura a
+    2, con 9 propias en su lugar: 5 hablaban del kiosko y 4 eran relleno.
+  - Con la de lo que entra, esa consulta sigue trayendo las 11 de altura, marcadas.
+  - En la mezcla real, las dos dan lo mismo turno por turno.
+  - El costo de la elegida es el caso inverso, que ya era así en main: un tópico propio que habla de
+    Altura se queda sin nada propio y trae 11 ajenas. Es 1 de las 81 consultas del banco
+    (`altura/kiosko-audio-fichaje`, con notas `musubi`).
+
+  Medido el 2026-09-27 sobre copias de la base de davantis-1 (esquema 58; notas vivas: musubi 2411,
+  altura 542, musubi-design 182, crm 79, last-chaos 1), con el binario de main y el de esta rama.
+  Mezcla real, 77 prompts de 5 sesiones:
+
+  | | main | esta rama |
+  |---|---|---|
+  | Ajenas, con el delta de la sesión | 184 de 663 | 41 de 649 |
+  | Ajenas por turno: media · p95 · máx | 2,39 · 6,2 · 8 | 0,53 · 2 · 2 |
+  | Ajenas que son registros históricos | 134 | 0 |
+  | Turnos con más ajenas que el tope | 28 | 0 |
+  | Cada prompt en su sesión (sin delta) | 225 de 849 | 49 de 844 |
+
+  Sin delta, la rama trae menos ajenas en 60 turnos y más en ninguno, y más propias en 59 y menos en
+  ninguno. El priming de arranque, en 5 sesiones nuevas: 15 propias y 0 ajenas en los dos, con el
+  mismo bloque.
+
+  El banco (`TestMezclaDeProyectosReal`: 81 consultas de tópicos de musubi, tope 2, 250 tokens):
+
+  | Modo | Ajenas | Históricas | Consultas con ≥1 ajena | Pasaron el tope | Sin nada propio |
+  |---|---|---|---|---|---|
+  | `aparte` | 49 de 932 (5,3 %) | 0 | 30 | 1 | 1 |
+  | `aislado` | 0 de 931 | 0 | 0 | 0 | 0 |
+  | `mezclado` (= main) | 134 de 927 (14,5 %) | 79 | 54 | 20 | 1 |
+  | `aparte` con la regla del ranking | 40 de 933 (4,3 %) | 0 | 30 | 0 | 0 |
+
+  Se vuelve a medir con
+  `MUSUBI_FIXTURE_DB=<ruta a una memory.db> go test -run TestMezclaDeProyectosReal -v ./internal/recalleval/`.
+  La base se abre en `mode=ro` y el banco trabaja sobre una copia.
+
+  Latencia del hook del turno, 234 corridas por binario, intercaladas (78 prompts × 3 rondas, cada
+  uno en su sesión): p50 de 407 ms en main y 397 en la rama, p95 de 724 y 709. La diferencia
+  pareada tiene mediana −4,2 ms.
+
+  **La vuelta atrás es `loop.recall_otros_proyectos: mezclado`, y es la de antes bit a bit:** el
+  bloque del turno salió idéntico al de main en 78 de 78 prompts.
+
+  Esto reemplaza lo que dice la entrada «Cada nota dice de qué proyecto viene», más abajo: «El hook
+  sigue federado: no se esconde ni se topa nada». La marca `[de X]` no cambia. Por esa misma entrada,
+  en altura-erp hay 3 notas propias estampadas `altura-erp`: siguen siendo ajenas para el hook, y
+  ahora entran con el tope. No cambia el esquema ni ninguna tool, y no hay goldens que regenerar.
+
+  Y cambia lo que dice la entrada «La búsqueda tolera el tipeo», más abajo: «El vocabulario es el
+  que el recall de quien pregunta podría devolver: el mismo filtro duro». En el hook, con «aparte»,
+  el filtro duro es lo propio, pero el turno trae notas ajenas, así que el corrector toma el
+  vocabulario de todo el acervo. Con el del proyecto reescribía palabras de lo que el mismo turno
+  devuelve: «planilla»→«plantilla», y 79 términos así en una copia de davantis-1. Es una
+  aproximación por exceso, porque incluye palabras de los registros históricos ajenos, que «aparte»
+  no devuelve. Con «aislado» el vocabulario es lo propio, y en `musubi_recall`, `musubi_ask` y el
+  central no cambia nada.
 - **La búsqueda tolera el tipeo.** El recall es léxico: «infromacion», «temrinal» o «fichjae» no
   matchean ninguna nota, y el vector no los rescata (según la medición del plan, el coseno entre el
   tipeo y la palabra promedia 0,159 sobre 10 pares). Ahora el hook del turno, `musubi_recall` y

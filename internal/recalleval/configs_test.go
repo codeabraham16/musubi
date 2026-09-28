@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"musubi/internal/config"
+	"musubi/internal/memory"
 )
 
 // TestConfigsNoDivergenDeProduccion es el trinquete que faltaba: exige que lo que el banco mide
@@ -27,6 +28,11 @@ import (
 // arnes: de="\tc.CorregirTipeo = m.RecallTypoCorrection\n"
 // arnes: a="\tc.CorregirTipeo = false\n"
 // arnes: colision_ok="TestElBrazoDelTurnoTraduceElYaml"
+//
+// Sabotaje: el brazo con alcance lo pierde y mide el turno federado de antes.
+// arnes: archivo="internal/recalleval/configs.go"
+// arnes: de="\tc.Opts = memory.OpcionesDeRecallDelTurno(m, alcance)\n"
+// arnes: a="\tc.Opts = memory.OpcionesDeRecallDelTurno(m, memory.AlcanceDelTurno{})\n"
 func TestConfigsNoDivergenDeProduccion(t *testing.T) {
 	m := config.Default().Memory
 	o := OptsDeProduccion()
@@ -90,6 +96,25 @@ func TestConfigsNoDivergenDeProduccion(t *testing.T) {
 	} {
 		if c.banco != c.prod {
 			t.Errorf("turno · %s: el banco mide %v y producción declara %v", c.campo, c.banco, c.prod)
+		}
+	}
+
+	// EL ALCANCE DEL TURNO, que sale de loop.* y no de memory.*: con el modo y el tope de fábrica, el
+	// brazo que mide la mezcla de proyectos corre acotado al propio y con el tope del yaml. Si esto
+	// divergiera, el banco de la mezcla mediría el turno federado de antes y diría que no cambió nada.
+	l := config.Default().Loop
+	al := ConfigTurnoConAlcance(m, memory.AlcanceDelTurnoSegun(l.RecallOtrosProyectos, l.RecallOtrosMax, "propio")).Opts
+	for _, c := range []struct {
+		campo       string
+		banco, prod any
+	}{
+		{"TopeOtrosProyectos", al.TopeOtrosProyectos, l.RecallOtrosMax},
+		{"ProjectScope", al.ProjectScope, "propio"},
+		{"Federate", al.Federate, false},
+		{"Stemming", al.Stemming, m.RecallStemming},
+	} {
+		if c.banco != c.prod {
+			t.Errorf("turno con alcance · %s: el banco mide %v y producción declara %v", c.campo, c.banco, c.prod)
 		}
 	}
 }

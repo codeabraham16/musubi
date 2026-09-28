@@ -100,6 +100,18 @@ func ConfigTurnoCon(m config.MemoryConfig) Config {
 	return c
 }
 
+// ConfigTurnoConAlcance es ConfigTurnoCon con el alcance que el hook deriva de
+// loop.recall_otros_proyectos (memory.AlcanceDelTurnoSegun): el mismo motor, el mismo pool y las
+// mismas opciones, más el proyecto propio y el tope de ajenos. Es el brazo con el que se mide cuánto
+// de otros proyectos entra al turno (mezcla_real_test.go). ConfigTurno sigue en el alcance cero a
+// propósito: el banco de calidad mide el ORDEN sobre un corpus sin proyectos, y ahí «aparte» y
+// «mezclado» son la misma cosa.
+func ConfigTurnoConAlcance(m config.MemoryConfig, alcance memory.AlcanceDelTurno) Config {
+	c := ConfigTurnoCon(m)
+	c.Opts = memory.OpcionesDeRecallDelTurno(m, alcance)
+	return c
+}
+
 // ConfigTurnoHibrido es el hook con su embebedor construido, que es lo que evalúa
 // ola2/vector-en-el-turno: el prompt lleva vector y el motor lee con la procedencia del embebedor,
 // así que, con las opciones de fábrica, TAMBIÉN corre MMR. Encender el vector en el turno enciende
