@@ -135,6 +135,35 @@ func TestCompactarTraeMemoriaYNoRepiteLosPedidos(t *testing.T) {
 	}
 }
 
+// TestCompactarRespetaElRecallPorTurnoApagado: con `loop.per_turn_recall` apagado el turno no trae
+// memoria, y la compactación tampoco: vacía el delta y calla. CONTROL: con el recall prendido, la
+// misma compactación devuelve la nota.
+//
+// Sabotaje: la compactación ignora per_turn_recall.
+// arnes: archivo="cmd/musubi/detect_compactar.go"
+// arnes: de="\tif !loopCfg.PerTurnRecall {\n"
+// arnes: a="\tif false {\n"
+func TestCompactarRespetaElRecallPorTurnoApagado(t *testing.T) {
+	eng := motorConCorpusDeRuido(t)
+	if got := turnoReal(t, eng, "S", pedidoDelTLS); !strings.Contains(got, "[id:tls]") {
+		t.Fatalf("control: el turno tenía que traer la nota del TLS; salió %q", got)
+	}
+
+	apagado := config.LoopConfig{PerTurnRecall: false, RecallBudget: 400, DeltaInjection: true}
+	if out := buildHookOutputDeCompactacion(eng, apagado, config.Default().Memory, "S", "", nil); out != "" {
+		t.Errorf("con per_turn_recall apagado la compactación trajo memoria: %q", out)
+	}
+	if d := loadDeltaState(eng, "S"); len(d) != 0 {
+		t.Errorf("con el recall apagado la compactación igual tiene que vaciar el delta: %v", d)
+	}
+
+	prendido := apagado
+	prendido.PerTurnRecall = true
+	if out := buildHookOutputDeCompactacion(eng, prendido, config.Default().Memory, "S", "", nil); !strings.Contains(out, "[id:tls]") {
+		t.Errorf("control: con el recall prendido la compactación tenía que devolver la nota; salió %q", out)
+	}
+}
+
 // TestCompactarOlvidaSoloLasMarcasDeEsaSesion: las marcas «ya avisado en esta sesión» de la fase, el
 // lote y los conflictos se van con la conversación de S; las de T se quedan, con su orden.
 //
@@ -355,6 +384,39 @@ func TestElPluginNoCedeCompactSiElProyectoSoloTieneStartup(t *testing.T) {
 	}
 	if out := correrMusubiCon(t, repo, home, `{"session_id":"S3","source":"startup"}`, comoPlugin, "detect", "--hook-mode"); out != "" {
 		t.Errorf("control: el plugin tenía que ceder el arranque que el repo ya corre; salió %q", out)
+	}
+}
+
+// TestAgenteEstadoDiceSiLaCompactacionEstaCubierta: `musubi agente estado` dice si el repo devuelve
+// la memoria después de compactar. Con el setup viejo (sólo «startup») y sin plugin sale SIN CUBRIR;
+// el mismo repo con el settings que escribe setup sale cubierto. Se mide sobre el proceso: la línea
+// la imprime runAgente.
+//
+// Sabotaje: estado no dice nada de la compactación.
+// arnes: archivo="cmd/musubi/agente_plugin.go"
+// arnes: de="\t\tfmt.Println(estadoDeLaCompactacion(carpetaDeLaSesion(), dir))\n"
+// arnes: a="\t\t_ = estadoDeLaCompactacion\n"
+func TestAgenteEstadoDiceSiLaCompactacionEstaCubierta(t *testing.T) {
+	home := t.TempDir()
+	repo := t.TempDir()
+	plugin := filepath.Join(home, ".claude", "skills", "musubi")
+	sinPlugin := []string{"CLAUDE_CONFIG_DIR=" + filepath.Join(home, ".claude")}
+	if err := os.MkdirAll(filepath.Join(repo, config.ClaudeDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	soloStartup := `{"hooks":{"SessionStart":[{"matcher":"startup","hooks":[{"type":"command","command":"musubi detect --hook-mode","timeout":10}]}]}}`
+	if err := os.WriteFile(filepath.Join(repo, config.ClaudeDir, config.ClaudeSettingsFile), []byte(soloStartup), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out := correrMusubiCon(t, repo, home, "", sinPlugin, "agente", "estado", "--dir", plugin); !strings.Contains(out, "Compactación: SIN CUBRIR") {
+		t.Errorf("estado no avisa que el repo quedó sin el hook de la compactación:\n%s", out)
+	}
+	if err := writeClaudeHook(repo, "/opt/musubi/musubi"); err != nil {
+		t.Fatal(err)
+	}
+	if out := correrMusubiCon(t, repo, home, "", sinPlugin, "agente", "estado", "--dir", plugin); !strings.Contains(out, "Compactación: cubierta en") {
+		t.Errorf("estado no reconoce el hook de la compactación que escribió setup:\n%s", out)
 	}
 }
 
