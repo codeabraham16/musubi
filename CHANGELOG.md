@@ -880,8 +880,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   | tema más repetido | `project/brain-dashboard-webgl`, 5 veces | ninguno: 1 por tema |
   | caracteres del bloque | 2.872 | 2.770 |
 
-  Las cinco del dashboard son de julio: las sostienen arriba su importancia (6 y 7) y el recall, que
-  las tocó entre el 24 y el 27 de septiembre. Ocupaban un tercio del bloque, y
+  Las cinco del dashboard son de julio: las sostienen arriba su importancia (6 y 7) y sus accesos, el
+  último entre el 24 y el 27 de septiembre. Ocupaban un tercio del bloque, y
   `ola1/prender-lo-construido` otros tres lugares. Ahora `PrimeContextCtx`, después del orden por
   saliencia, deja pasar sólo la primera nota de cada `topic_key` —la más saliente— y recién ahí
   empaqueta: el lugar de las repetidas lo toman seis temas que antes no entraban, y sale uno, el que

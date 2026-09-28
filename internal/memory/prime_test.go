@@ -100,12 +100,12 @@ func TestPrimeContextExcluyeArchivadas(t *testing.T) {
 	}
 }
 
-// temaDelDashboard es el tema que se comía el bloque de arranque en la medición del 2026-09-26.
+// temaDelDashboard es el tema que se comía el bloque de arranque: 5 de sus 15 notas en la medición
+// del 2026-09-28 (ver PrimeContextCtx).
 const temaDelDashboard = "project/brain-dashboard-webgl"
 
 // corpusDeUnTema son cinco notas del MISMO tema, con la saliencia más alta del acervo y en orden
-// (d1 es la más saliente), y tres de otros temas que pesan menos. Los textos miden parecido: así,
-// con lugar para cuatro, el tema entero cabría en el presupuesto si nadie lo cortara.
+// (d1 es la más saliente), y tres de otros temas que pesan menos.
 func corpusDeUnTema() []notaDeReparto {
 	return []notaDeReparto{
 		{"musubi", "d1", temaDelDashboard, "El dashboard WebGL del cerebro dibuja las neuronas con instancias.", 5},
@@ -121,7 +121,7 @@ func corpusDeUnTema() []notaDeReparto {
 
 // TestPrimingUnaNotaPorTema: con lugar para cuatro notas, entra UNA del tema que domina la
 // saliencia —la más saliente— y las tres de otros temas ocupan el lugar que liberó. Sin cortar, el
-// tema se comía el bloque: entraban cuatro de sus cinco notas y ninguna de las otras.
+// tema se comía el bloque: con el sabotaje de abajo entran d1, d2, d3 y o3, tres de cuatro lugares.
 //
 // Corre por los dos caminos que llegan a PrimeContextCtx: todo el acervo (el modo «mezclado» y el
 // respaldo del arranque) y el acotado a lo propio, que es el que usa el hook en «aparte».

@@ -66,9 +66,9 @@ func (e *DbEngine) PrimeContextCtx(ctx context.Context, budget int) (RecallResul
 	// UNA NOTA POR TEMA: de cada topic_key entra sólo la primera del ranking, que es la más saliente.
 	// Medido el 2026-09-28 sobre una copia de la base de davantis-1, con el binario de main: de las 15
 	// notas del bloque, 5 eran de project/brain-dashboard-webgl y 3 de ola1/prender-lo-construido, o
-	// sea 9 temas en 15 lugares. Las del dashboard son de julio: las sostienen arriba su importancia y
-	// el recall, que las sigue trayendo, y no notas nuevas del tema. El presupuesto del arranque se iba
-	// en contar el mismo tema cinco veces.
+	// sea 9 temas en 15 lugares. Las del dashboard son de julio: las sostienen arriba su importancia
+	// (6 y 7) y sus accesos, el último entre el 24 y el 27 de septiembre, y no notas nuevas del tema. El
+	// presupuesto del arranque se iba en contar el mismo tema cinco veces.
 	//
 	// Un topic vacío NO se deduplica: no dice de qué habla la nota, así que dos notas sin tema no son
 	// el mismo tema y entran las dos. «Vacío» es lo mismo que para el MCP, que rechaza un topic_key
