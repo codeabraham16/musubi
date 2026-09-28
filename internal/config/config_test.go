@@ -596,10 +596,16 @@ func TestLoadRecallTypoCorrectionDefaultOn(t *testing.T) {
 	}
 }
 
-// Sabotaje: un bloque memory sin la clave deja el bool en su cero (apagado).
+// Sabotaje: un bloque memory sin la clave deja el bool en su cero (apagado). Pisa el ancla de
+// TestLoadRecallTypoCorrectionDisableRespected porque las dos guardan la MISMA línea desde lados
+// opuestos: ésta, que el default se ponga cuando la clave falta; aquélla, que NO se ponga cuando está.
+// El sabotaje INYECTA el cero en vez de sólo saltear la restauración, porque saltearla no alcanza
+// —medido: queda verde—: Parse arranca de Default() y yaml.v3 no pone en cero lo que el bloque no
+// nombra, así que hoy esta línea es la segunda red, y la prueba cuida el resultado de las dos.
 // arnes: archivo="internal/config/config.go"
 // arnes: de="\tif !keys[\"recall_typo_correction\"] {\n"
-// arnes: a="\tif false && !keys[\"recall_typo_correction\"] {\n"
+// arnes: a="\tif c.Memory.RecallTypoCorrection = keys[\"recall_typo_correction\"] && c.Memory.RecallTypoCorrection; false {\n"
+// arnes: colision_ok="TestLoadRecallTypoCorrectionDisableRespected"
 func TestLoadRecallTypoCorrectionPresentBlockDefaultsOn(t *testing.T) {
 	root := writeConfig(t, "version: \"1.0\"\nmemory:\n  recall_token_budget: 800\n")
 	cfg, err := Load(root)
@@ -611,10 +617,12 @@ func TestLoadRecallTypoCorrectionPresentBlockDefaultsOn(t *testing.T) {
 	}
 }
 
-// Sabotaje: el default pisa también el false explícito, y no hay cómo apagarlo.
+// Sabotaje: el default pisa también el false explícito, y no hay cómo apagarlo. (La colisión con
+// TestLoadRecallTypoCorrectionPresentBlockDefaultsOn está leída: es la otra mitad de la misma línea.)
 // arnes: archivo="internal/config/config.go"
 // arnes: de="\tif !keys[\"recall_typo_correction\"] {\n"
 // arnes: a="\tif true || !keys[\"recall_typo_correction\"] {\n"
+// arnes: colision_ok="TestLoadRecallTypoCorrectionPresentBlockDefaultsOn"
 func TestLoadRecallTypoCorrectionDisableRespected(t *testing.T) {
 	root := writeConfig(t, "version: \"1.0\"\nmemory:\n  recall_typo_correction: false\n")
 	cfg, err := Load(root)
