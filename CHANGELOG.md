@@ -243,10 +243,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   máquina quieta tarda hasta 5 min en ver una nota nueva del central —un tick más si el candado
   cambia de dueño en un cierre ordenado, y además el lease si el dueño muere sin soltarlo—.
 
-  ⚠️ **El panel del central va a mostrar el latido «sin sondeo» más seguido**: su ventana es de un
-  minuto, y con las bajadas espaciadas es lo normal, no un cerebro caído. Lo corrige
-  `fix/panel-latido-ventana`, que viaja con el próximo despliegue del central. Sólo cliente: el
-  central no cambia, no hay migración y no cambia ninguna tool.
+  ⚠️ **Hasta que se redespliegue el panel del central (`musubi-dashboard`), su latido va a decir
+  «sin sondeo» más seguido**: su ventana es de un minuto, y con las bajadas espaciadas es lo
+  normal, no un cerebro caído. El arreglo es la entrada «El latido del riel en vivo ya no dice «sin
+  sondeo» con el sistema sano», en Fixed; un `musubi dashboard` local lo recibe con el binario de
+  esa máquina. Sólo cliente: el central no cambia, no hay migración y no cambia ninguna tool.
 - **Cada resumen de la conversación conserva lo que el agente no puede perder.** Antes de que Claude
   Code compacte, el hook `PreCompact` le pasa al resumen las instrucciones de Musubi: conservar
   textuales las reglas, decisiones y pedidos de la persona (marcando los que no se cumplieron), el
@@ -754,10 +755,12 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   central adelantado) se recorta a la llegada, y la marca nunca retrocede. La lógica vive en
   `assets/src/latido.mjs`, sin DOM: la recorren `node --test` y
   `TestElLatidoAguantaLaBajadaEspaciadaYSeApagaConUnCorte`, que la ejecuta en node contra el tope y
-  el tick de la config (el lease sale del tick con la fórmula de `leaseBajadaSegundos`), con seis
-  sabotajes mecanizados. Sólo el panel: no cambia ninguna tool ni el sync. Al panel del central
-  (`musubi-dashboard`) llega con su próximo despliegue, y a un `musubi dashboard` local, con el
-  binario de esa máquina.
+  el tick de la config por defecto (el lease sale del tick con la fórmula de `leaseBajadaSegundos`,
+  y `TestElLeaseDeLaBajadaEsElQueSuponeElLatidoDelPanel` ata esa copia al original), con seis
+  sabotajes mecanizados; `TestElPanelCableaElLatidoConLaHoraDelEvento` custodia que dashboard.mjs
+  y el bundle embebido la llamen con el `at`. Sólo el panel: no cambia ninguna tool ni el sync. Al
+  panel del central (`musubi-dashboard`) llega con su próximo despliegue, y a un `musubi dashboard`
+  local, con el binario de esa máquina.
 - **El índice del delta desaloja primero a las sesiones sin turnos: una sesión interactiva que
   espera un workflow ya no pierde su delta ni sus pedidos cuando arrancan las hijas.** El índice
   `loop_delta_sessions` acota a 32 las sesiones que conservan su delta
