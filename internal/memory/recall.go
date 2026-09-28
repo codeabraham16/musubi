@@ -387,6 +387,14 @@ type reparto struct {
 // desde el repo de Musubi pasaba de 11 notas de altura a 2, con 9 propias en su lugar (5 hablaban del
 // kiosko, 4 eran relleno). El costo de esta regla es el caso inverso, que ya era así: un tópico
 // propio que habla de Altura (1 de 81 en el banco) se queda sin nada propio.
+//
+// Y tiene un borde que main NO tenía (lo encontró la revisión, con un ranking armado a mano). La
+// pasada 1 corre sobre el ranking que el choke point ya filtró: sacar un registro histórico ajeno
+// libera presupuesto, una ajena grande que antes no cabía entra, y la propia que venía detrás ya no.
+// Sin nada propio en la pasada 1 el tope se levanta, y el turno sale con CERO propias donde main
+// traía una. En los 77 turnos reales sin delta no pasó ninguna vez. Cerrarlo pide decidir el
+// levantamiento sobre el ranking sin filtrar y empaquetar lo propio antes que lo ajeno, y eso cambia
+// qué entra en todos los turnos, no sólo en el borde: no está hecho.
 func packByBudget(ranked []scoredCandidate, budget, gistMax int, rep reparto) RecallResult {
 	result := empaquetar(ranked, budget, gistMax, reparto{})
 	if rep.tope <= 0 {

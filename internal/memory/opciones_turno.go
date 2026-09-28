@@ -104,6 +104,13 @@ func (a AlcanceDelTurno) ScopeDelPriming() ProjectScope {
 // El caso es un repo cuya memoria entera lleva el sello de otro proyecto: una base copiada, una
 // carpeta renombrada, un repo sin project_id que sólo tiene lo que bajó. Sin esto arrancaba sin
 // memoria, cuando antes del modo le llegaba todo.
+//
+// EL RESPALDO ES FEDERADO Y SIN EL FILTRO DE REGISTROS HISTÓRICOS del turno, y eso es una asimetría.
+// Sin project_id, propio sale del nombre de la carpeta y MismoProyecto compara exacto: con la carpeta
+// «Musubi» y la memoria estampada «musubi», el arranque trae los commits y el SDD del propio repo, y
+// el turno después los saca como registros ajenos. Hoy no pasa en ningún lado (0 proyectos que
+// difieran sólo en mayúsculas, en davantis-1 y en el central), y no está decidido cuál de los dos
+// tendría que ceder.
 func (a AlcanceDelTurno) PrimingDeRespaldo() bool {
 	return a.ProjectScope != "" && !a.Federate && a.TopeOtrosProyectos > 0
 }
