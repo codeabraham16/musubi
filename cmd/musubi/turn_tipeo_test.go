@@ -179,4 +179,11 @@ func TestTurnoSinCorrectorSaleComoAntes(t *testing.T) {
 	if salida == "" || salida != referencia {
 		t.Errorf("con la perilla apagada la salida del hook cambió\n  salida:     %q\n  referencia: %q", salida, referencia)
 	}
+	// Y la forma es la de main: el encabezado en UN renglón que cierra presentando la lista, y la
+	// primera viñeta enseguida, sin nada en el medio.
+	_, ctx := hookAdditionalContext(t, salida)
+	lineas := strings.Split(ctx, "\n")
+	if len(lineas) < 2 || !strings.HasSuffix(lineas[0], " (gists; expandí con musubi_memory_expand):") || !strings.HasPrefix(lineas[1], "- ") {
+		t.Errorf("con la perilla apagada el bloque no tiene la forma de siempre (encabezado y viñetas):\n%s", ctx)
+	}
 }
