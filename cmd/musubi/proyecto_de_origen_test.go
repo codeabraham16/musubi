@@ -12,10 +12,12 @@ import (
 
 // LA VIÑETA DE UNA NOTA DE OTRO PROYECTO DICE DE CUÁL ES.
 //
-// El hook del turno y el priming de arranque son FEDERADOS a propósito (ver buildTurnRecall): traen
-// memoria de todo el acervo. Hasta acá, una nota de Altura le llegaba al agente de Musubi igual que
-// una propia. Estas pruebas fijan la marca «[de X]», la frase del encabezado que la explica, que las
-// dos superficies marquen igual, y que el criterio sea el de la muralla (memory.MismoProyecto).
+// El hook del turno trae memoria de otros proyectos del acervo: a lo sumo loop.recall_otros_max en
+// el modo «aparte» (el default), todo lo que venga al caso si nada propio viene, y todo en
+// «mezclado» (ver buildTurnRecall). Hasta el PR de la marca, una nota de Altura le llegaba al agente
+// de Musubi igual que una propia. Estas pruebas fijan la marca «[de X]», la frase del encabezado que
+// la explica, que las dos superficies marquen igual, y que el criterio sea el de la muralla
+// (memory.MismoProyecto).
 
 // notasDeTresProyectos es la misma charla en notas de otro proyecto (altura, con y sin topic, para
 // pasar por las dos formas de viñeta), del propio (musubi) y sin atribuir.
@@ -47,7 +49,7 @@ func primingConPropio(t *testing.T, items []memory.RecallItem, propio string) st
 	t.Helper()
 	store := newFakeStore()
 	store.prime = memory.RecallResult{Count: len(items), Items: items}
-	b := buildPrimingContext(store, 300, "s-arranque", propio)
+	b := buildPrimingContext(memory.AlcanceDelTurno{}, store, 300, "s-arranque", propio)
 	if b == "" {
 		t.Fatal("el priming no armó bloque: sin bloque no hay nada que medir")
 	}
@@ -235,11 +237,13 @@ func TestElProyectoNoFabricaLineas(t *testing.T) {
 	}
 }
 
-// TestLosHooksRealesMarcanLaNotaDeOtroProyecto: por el PROCESO, los dos hooks marcan la nota de
-// altura y no la del repo, y la MARCAN en vez de esconderla: el hook sigue federado. El proyecto
-// propio lo resuelven como el daemon al estampar cada nota (resolveProjectID: sin project_id en la
-// config, el nombre de la carpeta). Va por el proceso porque ese cableado vive en runTurn y en
-// detectOutput, y una prueba del formateador no dice si el hook le pasa el proyecto.
+// TestLosHooksRealesMarcanLaNotaDeOtroProyecto: por el PROCESO y con la config por defecto
+// («aparte»), el turno trae la nota de altura MARCADA —cabe en el tope, y no la esconde— y la del
+// repo sin marca; el arranque trae la del repo y NO la de altura, porque el priming va acotado al
+// proyecto propio. El proyecto propio lo resuelven como el daemon al estampar cada nota
+// (resolveProjectID: sin project_id en la config, el nombre de la carpeta). Va por el proceso porque
+// ese cableado vive en runTurn y en detectOutput, y una prueba del formateador no dice si el hook le
+// pasa el proyecto ni el modo.
 //
 // Sabotaje: el hook del turno no resuelve el proyecto propio.
 // arnes: archivo="cmd/musubi/turn.go"
@@ -251,10 +255,15 @@ func TestElProyectoNoFabricaLineas(t *testing.T) {
 // arnes: de="\tpropio := resolveProjectID(cfg, root)\n"
 // arnes: a="\tpropio := \"\"\n"
 //
-// Sabotaje: el turno se acota al proyecto propio en vez de marcar (deja de ser federado).
+// Sabotaje: el turno queda en «aislado» y esconde lo ajeno aunque quepa en el tope.
 // arnes: archivo="cmd/musubi/turn.go"
-// arnes: de="memory.OpcionesDeRecallDelTurno(p.memCfg, memory.AlcanceDelTurno{})"
-// arnes: a="memory.OpcionesDeRecallDelTurno(p.memCfg, memory.AlcanceDelTurno{ProjectScope: p.propio})"
+// arnes: de="\t\t\totrosModo:   loopCfg.RecallOtrosProyectos,\n"
+// arnes: a="\t\t\totrosModo:   config.OtrosProyectosAislado,\n"
+//
+// Sabotaje: el arranque queda en «mezclado» y trae lo ajeno.
+// arnes: archivo="cmd/musubi/detect.go"
+// arnes: de="\talcance := memory.AlcanceDelTurnoSegun(cfg.Loop.RecallOtrosProyectos, cfg.Loop.RecallOtrosMax, propio)\n"
+// arnes: a="\talcance := memory.AlcanceDelTurnoSegun(config.OtrosProyectosMezclado, cfg.Loop.RecallOtrosMax, propio)\n"
 func TestLosHooksRealesMarcanLaNotaDeOtroProyecto(t *testing.T) {
 	home := t.TempDir()
 	repo := proyectoConMemoria(t, home)
@@ -275,18 +284,124 @@ func TestLosHooksRealesMarcanLaNotaDeOtroProyecto(t *testing.T) {
 	_, turno := hookAdditionalContext(t, correrMusubiCon(t, repo, home, `{"session_id":"s-turno","prompt":"el fichaje del kiosko no anda"}`, nil, "turn", "--hook-mode"))
 	_, arranque := hookAdditionalContext(t, correrMusubiCon(t, repo, home, `{"session_id":"s-arranque","source":"startup"}`, nil, "detect", "--hook-mode"))
 
+	bt := bloqueDeMemoria(t, turno, "[Musubi — memoria relevante]")
+	if v := viñetaDe(t, bt, "n-altura"); !strings.HasPrefix(v, "- [de altura] ") {
+		t.Errorf("turno: la nota de altura llegó sin decir de qué proyecto es: %s", v)
+	}
+	if v := viñetaDe(t, bt, "n-propia"); strings.Contains(v, "[de ") {
+		t.Errorf("turno: la nota de este repo salió marcada como ajena: %s", v)
+	}
+	if !strings.Contains(bt, fraseDeProyectoDeOrigen) {
+		t.Errorf("turno: hay una viñeta marcada y el encabezado no explica la marca:\n%s", bt)
+	}
+
+	ba := bloqueDeMemoria(t, arranque, "[Musubi — memoria]")
+	if v := viñetaDe(t, ba, "n-propia"); strings.Contains(v, "[de ") {
+		t.Errorf("arranque: la nota de este repo salió marcada como ajena: %s", v)
+	}
+	if strings.Contains(ba, "[id:n-altura]") {
+		t.Errorf("arranque: el priming va acotado al proyecto propio y trajo la nota de altura:\n%s", ba)
+	}
+}
+
+// TestSinProjectIDYConTodoAjenoNoSeQuedaSinMemoria: un repo sin project_id en la config tiene por
+// proyecto el nombre de su carpeta, y si su memoria vino de otro lado —una base copiada, una carpeta
+// renombrada— toda nota es ajena. Nada propio viene al caso, así que el turno trae lo de hoy, entero
+// y marcado con su proyecto: las tres notas y no las dos del tope, ni ninguna. Y el arranque, que en
+// «aparte» se acota a lo propio, no arranca vacío: trae todo el acervo, marcado.
+//
+// Sabotaje: «aparte» se degrada a «aislado».
+// arnes: archivo="internal/memory/opciones_turno.go"
+// arnes: de="\treturn AlcanceDelTurno{ProjectScope: propio, TopeOtrosProyectos: tope}\n"
+// arnes: a="\treturn AlcanceDelTurno{ProjectScope: propio}\n"
+//
+// Sabotaje: el arranque repite el priming acotado en vez del de todo el acervo, y arranca vacío.
+// arnes: archivo="cmd/musubi/detect.go"
+// arnes: de="\t\tres, err = store.PrimeContextCtx(ctx, budget)\n"
+// arnes: a="\t\tres, err = store.PrimeContextCtx(memory.WithProjectScope(ctx, alcance.ScopeDelPriming()), budget)\n"
+func TestSinProjectIDYConTodoAjenoNoSeQuedaSinMemoria(t *testing.T) {
+	home := t.TempDir()
+	repo := proyectoConMemoria(t, home)
+	e, err := memory.NewDbEngine(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.SetProjectID("musubi")
+	notas := map[string]string{
+		"m-uno":  "La balanza del galpón se calibra desde el panel de Musubi.",
+		"m-dos":  "La balanza del galpón manda el peso por el puente serie.",
+		"m-tres": "La balanza del galpón se cuelga cuando baja la temperatura.",
+	}
+	for id, texto := range notas {
+		if err := e.SaveObservation(id, "galpon/"+id, texto, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.Close()
+
+	_, turno := hookAdditionalContext(t, correrMusubiCon(t, repo, home, `{"session_id":"s-turno","prompt":"la balanza del galpón no pesa"}`, nil, "turn", "--hook-mode"))
+	_, arranque := hookAdditionalContext(t, correrMusubiCon(t, repo, home, `{"session_id":"s-arranque","source":"startup"}`, nil, "detect", "--hook-mode"))
 	for superficie, b := range map[string]string{
 		"turno":    bloqueDeMemoria(t, turno, "[Musubi — memoria relevante]"),
 		"arranque": bloqueDeMemoria(t, arranque, "[Musubi — memoria]"),
 	} {
-		if v := viñetaDe(t, b, "n-altura"); !strings.HasPrefix(v, "- [de altura] ") {
-			t.Errorf("%s: la nota de altura llegó sin decir de qué proyecto es: %s", superficie, v)
+		for id := range notas {
+			if v := viñetaDe(t, b, id); !strings.HasPrefix(v, "- [de musubi] ") {
+				t.Errorf("%s: la nota %s de otro proyecto llegó sin su marca: %s", superficie, id, v)
+			}
 		}
-		if v := viñetaDe(t, b, "n-propia"); strings.Contains(v, "[de ") {
-			t.Errorf("%s: la nota de este repo salió marcada como ajena: %s", superficie, v)
+	}
+}
+
+// TestElRespaldoDelArranqueEsSoloParaElVacio: el priming de todo el acervo es el respaldo de «aparte»
+// cuando lo propio no trae NADA, y nada más. En «aislado», un repo con todo ajeno arranca sin
+// priming, que es lo que ese modo pide; en «aparte» con una sola nota propia, el arranque trae ésa y
+// ninguna ajena: el respaldo no es un cupo. Y en «aparte» con todo ajeno, lo trae marcado, para que
+// las dos negativas no pasen por un priming que nunca trae nada.
+//
+// Sabotaje: el respaldo vale también en «aislado».
+// arnes: archivo="internal/memory/opciones_turno.go"
+// arnes: de="\treturn a.ProjectScope != \"\" && !a.Federate && a.TopeOtrosProyectos > 0\n"
+// arnes: a="\treturn a.ProjectScope != \"\" && !a.Federate\n"
+//
+// Sabotaje: el respaldo corre aunque lo propio haya traído algo.
+// arnes: archivo="cmd/musubi/detect.go"
+// arnes: de="\tif err == nil && res.Count == 0 && alcance.PrimingDeRespaldo() {\n"
+// arnes: a="\tif err == nil && res.Count >= 0 && alcance.PrimingDeRespaldo() {\n"
+func TestElRespaldoDelArranqueEsSoloParaElVacio(t *testing.T) {
+	arranque := func(t *testing.T, modo string, conPropia bool) string {
+		t.Helper()
+		repo := proyectoConMemoria(t, t.TempDir())
+		e, err := memory.NewDbEngine(repo)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if !strings.Contains(b, fraseDeProyectoDeOrigen) {
-			t.Errorf("%s: hay una viñeta marcada y el encabezado no explica la marca:\n%s", superficie, b)
+		defer e.Close()
+		e.SetProjectID("altura")
+		if err := e.SaveObservation("a-kiosko", "fichaje/kiosko", "El kiosko del fichaje se cae cuando la Pi pierde el WiFi.", nil); err != nil {
+			t.Fatal(err)
 		}
+		if conPropia {
+			e.SetProjectID("musubi")
+			if err := e.SaveObservation("m-arranque", "hooks/arranque", "El arranque trae la memoria del proyecto propio.", nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+		alcance := memory.AlcanceDelTurnoSegun(modo, config.Default().Loop.RecallOtrosMax, "musubi")
+		return buildPrimingContext(alcance, e, 300, "s-arranque", "musubi")
+	}
+
+	if b := arranque(t, config.OtrosProyectosAislado, false); b != "" {
+		t.Errorf("«aislado» con todo ajeno: el arranque trajo memoria de otro proyecto:\n%s", b)
+	}
+	b := arranque(t, config.OtrosProyectosAparte, true)
+	if !strings.Contains(b, "[id:m-arranque]") {
+		t.Errorf("«aparte» con una propia: el arranque no la trajo:\n%s", b)
+	}
+	if strings.Contains(b, "[id:a-kiosko]") {
+		t.Errorf("«aparte» con una propia: el respaldo corrió igual y trajo la nota de altura:\n%s", b)
+	}
+	if v := viñetaDe(t, arranque(t, config.OtrosProyectosAparte, false), "a-kiosko"); !strings.HasPrefix(v, "- [de altura] ") {
+		t.Errorf("«aparte» con todo ajeno: la nota de altura llegó sin su marca: %s", v)
 	}
 }

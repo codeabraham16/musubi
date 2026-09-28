@@ -126,7 +126,7 @@ func TestI3ElSeparadorUnicodeTampocoEmpiezaUnaLinea(t *testing.T) {
 func TestI4ElPrimingAdvierteLoMismoQueElHook(t *testing.T) {
 	item := memory.RecallItem{ID: "x1", TopicKey: "arch/db", Gist: "Una nota cualquiera."}
 
-	priming := buildPrimingContext(
+	priming := buildPrimingContext(memory.AlcanceDelTurno{},
 		&fakeStore{meta: map[string]string{}, prime: memory.RecallResult{Count: 1, Items: []memory.RecallItem{item}}},
 		250, "s1", "")
 	if priming == "" {

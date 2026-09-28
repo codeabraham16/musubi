@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,7 +32,7 @@ type startupStore interface {
 	GetMeta(key string) (string, bool, error)
 	SetMeta(key, value string) error
 	MetaEnTransaccion(fn func(memory.MetaTx) error) error
-	PrimeContext(budget int) (memory.RecallResult, error)
+	PrimeContextCtx(ctx context.Context, budget int) (memory.RecallResult, error)
 	TopicExists(topicKey string) (bool, error)
 	LedgerAdd(sessionID, surface string, tokens int) (memory.TokenLedger, error)
 }
@@ -83,7 +84,10 @@ func detectOutput(root string, hookMode bool, sessionID string) (string, error) 
 	// El proyecto de este repo, para marcar en el priming las notas de otro. La MISMA resolución que
 	// el hook del turno y que el daemon al estampar cada nota: ver runTurn.
 	propio := resolveProjectID(cfg, root)
-	return buildHookOutputCon(root, store, cfg.Startup, sessionID, current, propio)
+	// Y el MISMO modo que el turno: en «aparte» y en «aislado» el priming trae lo propio y lo sin
+	// atribuir; en «mezclado», todo el acervo. Hoy es una guarda (ver ScopeDelPriming).
+	alcance := memory.AlcanceDelTurnoSegun(cfg.Loop.RecallOtrosProyectos, cfg.Loop.RecallOtrosMax, propio)
+	return buildHookOutputCon(alcance, root, store, cfg.Startup, sessionID, current, propio)
 }
 
 // buildHookOutput arma el additionalContext del SessionStart combinando dos
@@ -95,12 +99,13 @@ func detectOutput(root string, hookMode bool, sessionID string) (string, error) 
 // Si ambas partes quedan vacías, devuelve "" (hook silencioso e idempotente).
 func buildHookOutput(root string, store startupStore, cfg config.StartupConfig, sessionID string) (string, error) {
 	current, _ := detector.DetectStack(root)
-	return buildHookOutputCon(root, store, cfg, sessionID, current, "")
+	return buildHookOutputCon(memory.AlcanceDelTurno{}, root, store, cfg, sessionID, current, "")
 }
 
 // buildHookOutputCon es buildHookOutput con el stack ya detectado y el proyecto propio, que el
-// priming usa para marcar las notas de otro proyecto (vacío ⇒ ninguna marca).
-func buildHookOutputCon(root string, store startupStore, cfg config.StartupConfig, sessionID string, current []detector.StackResult, propio string) (string, error) {
+// priming usa para marcar las notas de otro proyecto (vacío ⇒ ninguna marca). El alcance decide QUÉ
+// entra al priming (ver buildPrimingContext); su valor cero es todo el acervo.
+func buildHookOutputCon(alcance memory.AlcanceDelTurno, root string, store startupStore, cfg config.StartupConfig, sessionID string, current []detector.StackResult, propio string) (string, error) {
 	skillsDir := filepath.Join(root, config.DirName, config.SkillsDir)
 	sentinelPath := filepath.Join(skillsDir, config.SentinelFile)
 	_, sentinelErr := os.Stat(sentinelPath)
@@ -120,7 +125,7 @@ func buildHookOutputCon(root string, store startupStore, cfg config.StartupConfi
 	generation := decideGeneration(root, store, cfg, current, sentinelExists)
 	priming := ""
 	if store != nil && cfg.PrimeMemory {
-		priming = buildPrimingContext(store, cfg.RecallBudget, sessionID, propio)
+		priming = buildPrimingContext(alcance, store, cfg.RecallBudget, sessionID, propio)
 	}
 	cognitive := ""
 	if store != nil && cfg.CognitiveBootstrap && bootstrappingAutoconocimiento(store) {
@@ -386,10 +391,16 @@ func assembleHookContext(eventName string, bloques ...string) string {
 }
 
 // buildPrimingContext arma el bloque de "memoria recordada" del proyecto a partir
-// de un recall por presupuesto de tokens. Devuelve "" si no hay memoria. propio sólo decide qué
-// viñetas se marcan como de otro proyecto: el priming trae lo mismo que traía.
-func buildPrimingContext(store startupStore, budget int, sessionID string, propio string) string {
-	res, err := store.PrimeContext(budget)
+// de un recall por presupuesto de tokens. Devuelve "" si no hay memoria. propio decide qué viñetas
+// se marcan como de otro proyecto; QUÉ entra lo decide el alcance: memory.AlcanceDelTurno
+// .ScopeDelPriming y, si lo propio no trae nada, .PrimingDeRespaldo.
+func buildPrimingContext(alcance memory.AlcanceDelTurno, store startupStore, budget int, sessionID string, propio string) string {
+	ctx := context.Background()
+	res, err := store.PrimeContextCtx(memory.WithProjectScope(ctx, alcance.ScopeDelPriming()), budget)
+	if err == nil && res.Count == 0 && alcance.PrimingDeRespaldo() {
+		// Nada propio: todo el acervo, y formatGists marca cada nota con su proyecto.
+		res, err = store.PrimeContextCtx(ctx, budget)
+	}
 	if err != nil || res.Count == 0 {
 		return ""
 	}
