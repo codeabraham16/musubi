@@ -908,9 +908,9 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   3,5 ms con 1.000 y de 61 a 43 ms con 10.000 (medianas; el tiempo de esta máquina es ruidoso, la
   memoria no). Es la cola del presupuesto: cuando lo que queda no alcanza para la próxima nota,
   `empaquetar` sigue probando candidatas —estimando los tokens de cada una— hasta el final del
-  ranking, y ahora el ranking tiene una por tema (el banco tiene 50). El perfil de CPU lo confirma:
-  en 009ebfae `empaquetar` se llevaba 1,7 ms de cada llamada, y en esta rama queda por debajo de lo
-  que el muestreo alcanza a ver.
+  ranking, y ahora el ranking tiene una por tema (el banco tiene 50). El perfil de CPU lo confirma
+  (n=1.000, `-benchtime=300x`): `empaquetar` suma 0,51 s en 009ebfae, unos 1,7 ms por llamada, y
+  0,01 s en esta rama, una sola muestra.
 
   La deduplicación es por `topic_key` a secas: en «mezclado», y en el respaldo cuando no hay nada
   propio, dos proyectos con el mismo tema cuentan como uno (en esa base, 7 temas están en más de un
