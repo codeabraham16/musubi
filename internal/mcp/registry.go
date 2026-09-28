@@ -232,7 +232,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_recall",
-				Description: "Recall por PRESUPUESTO de tokens (model-free). Devuelve los GISTS más útiles para la consulta que entren en token_budget, rankeados por relevancia + recencia + frecuencia + importancia. Para traer el contenido completo de un item, usá musubi_memory_expand con su id. Es la forma eficiente de recuperar memoria. Corrige tipeos antes de buscar: una palabra que no está en ninguna nota y queda a una letra movida, de menos o de más de una que sí, se busca como la de la memoria, y la respuesta lo dice en `correcciones` ([{tipeado, buscado}]). Sin corrección el campo no aparece.",
+				Description: "Recall por PRESUPUESTO de tokens (model-free). Devuelve los GISTS más útiles para la consulta que entren en token_budget, rankeados por relevancia + recencia + frecuencia + importancia. Para traer el contenido completo de un item, usá musubi_memory_expand con su id. Es la forma eficiente de recuperar memoria. Corrige tipeos de una letra antes de buscar y lo dice en `correcciones` ([{tipeado, buscado}]).",
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
