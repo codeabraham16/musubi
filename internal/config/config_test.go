@@ -578,6 +578,54 @@ func TestLoadRecallStemmingDisableRespected(t *testing.T) {
 	}
 }
 
+// El corrector de tipeo arranca ENCENDIDO (decisión del dueño), con el mismo patrón de tres casos
+// que recall_stemming: sin config, con un bloque memory que no nombra la clave, y apagado a mano.
+//
+// Sabotaje: el default de fábrica sale apagado.
+// arnes: archivo="internal/config/config.go"
+// arnes: de="\t\t\tRecallTypoCorrection:  true,\n"
+// arnes: a="\t\t\tRecallTypoCorrection:  false,\n"
+func TestLoadRecallTypoCorrectionDefaultOn(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.Memory.RecallTypoCorrection {
+		t.Error("esperaba recall_typo_correction true por defecto")
+	}
+}
+
+// Sabotaje: un bloque memory sin la clave deja el bool en su cero (apagado).
+// arnes: archivo="internal/config/config.go"
+// arnes: de="\tif !keys[\"recall_typo_correction\"] {\n"
+// arnes: a="\tif false && !keys[\"recall_typo_correction\"] {\n"
+func TestLoadRecallTypoCorrectionPresentBlockDefaultsOn(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmemory:\n  recall_token_budget: 800\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if !cfg.Memory.RecallTypoCorrection {
+		t.Error("un bloque memory sin la clave debe conservar recall_typo_correction ON")
+	}
+}
+
+// Sabotaje: el default pisa también el false explícito, y no hay cómo apagarlo.
+// arnes: archivo="internal/config/config.go"
+// arnes: de="\tif !keys[\"recall_typo_correction\"] {\n"
+// arnes: a="\tif true || !keys[\"recall_typo_correction\"] {\n"
+func TestLoadRecallTypoCorrectionDisableRespected(t *testing.T) {
+	root := writeConfig(t, "version: \"1.0\"\nmemory:\n  recall_typo_correction: false\n")
+	cfg, err := Load(root)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+	if cfg.Memory.RecallTypoCorrection {
+		t.Error("recall_typo_correction: false explícito debería respetarse")
+	}
+}
+
 func TestLoadMaintenanceDefaults(t *testing.T) {
 	root := writeConfig(t, "version: \"1.0\"\nmode: local\n")
 	cfg, err := Load(root)

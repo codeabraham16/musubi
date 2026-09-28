@@ -19,6 +19,13 @@ type fakeTurnStore struct {
 	lastQuery string
 	lastOpts  memory.RecallOptions
 
+	// corregir hace de corrector de tipeo; nil ⇒ la consulta vuelve como vino, sin correcciones.
+	corregir func(q string) (string, []memory.Correccion)
+	// Lo que el turno le pasó al corrector la última vez, y si lo llamó.
+	corrigioConsulta string
+	corrigioAlcance  memory.ProjectScope
+	llamoAlCorrector bool
+
 	savedCount  int
 	phase       memory.PhaseState
 	phaseActive bool
@@ -38,6 +45,15 @@ func (f *fakeTurnStore) Recall(ctx context.Context, query string, opts memory.Re
 	f.lastQuery = query
 	f.lastOpts = opts
 	return f.recall, nil
+}
+
+func (f *fakeTurnStore) CorregirConsulta(ctx context.Context, q string, alcance memory.ProjectScope) (string, []memory.Correccion) {
+	f.llamoAlCorrector = true
+	f.corrigioConsulta, f.corrigioAlcance = q, alcance
+	if f.corregir == nil {
+		return q, nil
+	}
+	return f.corregir(q)
 }
 
 func (f *fakeTurnStore) PendingObsRelations() ([]memory.ObsRelation, error) {

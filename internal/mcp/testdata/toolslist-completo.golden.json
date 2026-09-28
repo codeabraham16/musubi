@@ -47,7 +47,7 @@
     },
     {
       "name": "musubi_recall",
-      "description": "Recall por PRESUPUESTO de tokens (model-free). Devuelve los GISTS más útiles para la consulta que entren en token_budget, rankeados por relevancia + recencia + frecuencia + importancia. Para traer el contenido completo de un item, usá musubi_memory_expand con su id. Es la forma eficiente de recuperar memoria.",
+      "description": "Recall por PRESUPUESTO de tokens (model-free). Devuelve los GISTS más útiles para la consulta que entren en token_budget, rankeados por relevancia + recencia + frecuencia + importancia. Para traer el contenido completo de un item, usá musubi_memory_expand con su id. Es la forma eficiente de recuperar memoria. Corrige tipeos antes de buscar: una palabra que no está en ninguna nota y queda a una letra movida, de menos o de más de una que sí, se busca como la de la memoria, y la respuesta lo dice en `correcciones` ([{tipeado, buscado}]). Sin corrección el campo no aparece.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -71,7 +71,7 @@
     },
     {
       "name": "musubi_ask",
-      "description": "Cognición A-DEMANDA (3er pilar, OPT-IN): responde una pregunta en lenguaje natural SINTETIZANDO la memoria relevante y citando los ids que la respaldan (RAG). A diferencia de musubi_recall (gists crudos, model-free, siempre disponible), acá un LLM redacta la respuesta — tolera latencia, invocala cuando querés una respuesta razonada, no en cada búsqueda. Requiere cognition.provider configurado; si no, usá musubi_recall.",
+      "description": "Cognición A-DEMANDA (3er pilar, OPT-IN): responde una pregunta en lenguaje natural SINTETIZANDO la memoria relevante y citando los ids que la respaldan (RAG). A diferencia de musubi_recall (gists crudos, model-free, siempre disponible), acá un LLM redacta la respuesta — tolera latencia, invocala cuando querés una respuesta razonada, no en cada búsqueda. Requiere cognition.provider configurado; si no, usá musubi_recall. Como musubi_recall, busca la memoria con los tipeos de la pregunta corregidos y lo dice en `correcciones`; al LLM le llega la pregunta como vino.",
       "inputSchema": {
         "type": "object",
         "properties": {
