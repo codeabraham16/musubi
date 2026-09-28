@@ -52,8 +52,9 @@ const formatoAtDelFeed = "2006-01-02T15:04:05.000Z07:00"
 // que importa es lo que el latido DICE segundo a segundo, no cómo está escrito. Corre el FUENTE
 // (assets/src/latido.mjs), que no se embebe: el bundle que sí se sirve sale de ese fuente, y el job
 // `panel` de ci.yml falla si el bundle commiteado no es el que da `npm run build`. El cableado de
-// dashboard.mjs —quién llama a anotarSondeo y a latido— queda fuera de esta prueba. Sin node, en
-// CI es un fallo y afuera un salteo que dice por qué.
+// dashboard.mjs —quién llama a anotarSondeo y a latido— lo custodia
+// TestElPanelCableaElLatidoConLaHoraDelEvento. Sin node, en CI es un fallo y afuera un salteo que
+// dice por qué.
 //
 // Sabotaje: devolver el umbral a la ventana vieja de un minuto: con un sondeo cada 5 min la
 // lámpara se apaga cuatro de cada cinco minutos. La otra dirección: un umbral de 8 min también le
@@ -243,6 +244,8 @@ func TestElLatidoAguantaLaBajadaEspaciadaYSeApagaConUnCorte(t *testing.T) {
 // el tope del espaciado (una máquina quieta pide una vez por tope), más el lease del candado de la
 // bajada y un tick, que es lo que tarda otro proceso en tomarla cuando el dueño se muere sin
 // soltarla (leaseBajadaSegundos en internal/mcp/scheduler.go: cuatro ticks, con piso de 120 s).
+// La fórmula está COPIADA porque ese método no se exporta; la ata al original
+// TestElLeaseDeLaBajadaEsElQueSuponeElLatidoDelPanel, en internal/mcp.
 // Con la config por defecto, 300 + 120 + 30 = 450 s.
 func peorHuecoSanoDeLaBajada() int {
 	tope := config.Default().Sync.EffectiveInboundIdleMaxSeconds()
