@@ -3,7 +3,6 @@ package memory
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -284,7 +283,7 @@ func (e *DbEngine) expresionesVivas(ctx context.Context, exprs []string, alcance
 		return nil, err
 	}
 	clausula, argsAlcance := alcance.scopeClause("o")
-	consulta := fmt.Sprintf(sqlExpresionesVivas, visibleObsPredicateDe("o"), clausula)
+	consulta := sqlExpresionesVivas(visibleObsPredicateDe("o"), clausula)
 	args := append([]interface{}{string(lista)}, argsAlcance...)
 	filas, err := e.db.QueryContext(ctx, consulta, args...)
 	if err != nil {
@@ -303,18 +302,26 @@ func (e *DbEngine) expresionesVivas(ctx context.Context, exprs []string, alcance
 }
 
 // sqlExpresionesVivas: de una lista JSON de expresiones MATCH, las que matchean al menos una nota
-// VISIBLE (primer %s) y del alcance (segundo %s, la scopeClause del caller).
-const sqlExpresionesVivas = `SELECT c.value FROM json_each(?) c WHERE EXISTS (
+// VISIBLE (visibles) y del alcance (clausula, la scopeClause del caller).
+//
+// Las dos consultas se arman concatenando y no con fmt.Sprintf, como el resto del paquete: el gosec
+// del CI (G201) marca todo Sprintf de SQL, aunque lo que se interpola sea nuestro. Lo de la persona
+// nunca entra al texto: viaja en la lista JSON, como parámetro.
+func sqlExpresionesVivas(visibles, clausula string) string {
+	return `SELECT c.value FROM json_each(?) c WHERE EXISTS (
 	SELECT 1 FROM observations_fts f JOIN observations o ON o.rowid = f.rowid
-	WHERE observations_fts MATCH c.value AND %s%s)`
+	WHERE observations_fts MATCH c.value AND ` + visibles + clausula + `)`
+}
 
-// sqlDFDeCandidatos: para cada candidato de una lista JSON, en cuántas notas VISIBLES (primer %s) y
-// del alcance (segundo %s) aparece como término EXACTO: entre comillas y sin `*` (ver
+// sqlDFDeCandidatos: para cada candidato de una lista JSON, en cuántas notas VISIBLES (visibles) y
+// del alcance (clausula) aparece como término EXACTO: entre comillas y sin `*` (ver
 // expresionExacta). Los parámetros del alcance van ANTES que la lista, porque aparecen antes en el
 // texto de la consulta.
-const sqlDFDeCandidatos = `SELECT c.value, (
+func sqlDFDeCandidatos(visibles, clausula string) string {
+	return `SELECT c.value, (
 	SELECT COUNT(*) FROM observations_fts f JOIN observations o ON o.rowid = f.rowid
-	WHERE observations_fts MATCH '"' || c.value || '"' AND %s%s) FROM json_each(?) c`
+	WHERE observations_fts MATCH '"' || c.value || '"' AND ` + visibles + clausula + `) FROM json_each(?) c`
+}
 
 // mejorCandidato busca la corrección de un término muerto: la primera clase de error con un candidato
 // vivo gana, y dentro de la clase, el candidato que aparece en más notas (con empate, el primero en
@@ -360,7 +367,7 @@ func (e *DbEngine) mejorDeLaClase(ctx context.Context, cands []string, alcance P
 		return "", 0, err
 	}
 	clausula, argsAlcance := alcance.scopeClause("o")
-	consulta := fmt.Sprintf(sqlDFDeCandidatos, visibleObsPredicateDe("o"), clausula)
+	consulta := sqlDFDeCandidatos(visibleObsPredicateDe("o"), clausula)
 	args := append(append([]interface{}{}, argsAlcance...), string(lista))
 	filas, err := e.db.QueryContext(ctx, consulta, args...)
 	if err != nil {

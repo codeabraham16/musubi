@@ -80,8 +80,8 @@ func TestCorrectorArreglaTransposicionYFaltaDeLetra(t *testing.T) {
 //
 // Sabotaje: la verificación de candidatos pasa a ser por prefijo.
 // arnes: archivo="internal/memory/tipeo.go"
-// arnes: de="\tWHERE observations_fts MATCH '\"' || c.value || '\"' AND %s%s) FROM json_each(?) c`"
-// arnes: a="\tWHERE observations_fts MATCH '\"' || c.value || '\"*' AND %s%s) FROM json_each(?) c`"
+// arnes: de="\tWHERE observations_fts MATCH '\"' || c.value || '\"' AND ` + visibles + clausula + `) FROM json_each(?) c`"
+// arnes: a="\tWHERE observations_fts MATCH '\"' || c.value || '\"*' AND ` + visibles + clausula + `) FROM json_each(?) c`"
 func TestCorrectorEligeElTerminoExacto(t *testing.T) {
 	e := newTestEngine(t)
 	var docs []string
@@ -431,13 +431,13 @@ func TestCorrectorCorrigeEnSoloLectura(t *testing.T) {
 //
 // Sabotaje: el conteo de candidatos pierde la cláusula del alcance.
 // arnes: archivo="internal/memory/tipeo.go"
-// arnes: de="\tclausula, argsAlcance := alcance.scopeClause(\"o\")\n\tconsulta := fmt.Sprintf(sqlDFDeCandidatos"
-// arnes: a="\tclausula, argsAlcance := ProjectScope{}.scopeClause(\"o\")\n\tconsulta := fmt.Sprintf(sqlDFDeCandidatos"
+// arnes: de="\tclausula, argsAlcance := alcance.scopeClause(\"o\")\n\tconsulta := sqlDFDeCandidatos("
+// arnes: a="\tclausula, argsAlcance := ProjectScope{}.scopeClause(\"o\")\n\tconsulta := sqlDFDeCandidatos("
 //
 // Sabotaje: la detección de términos muertos pierde la cláusula del alcance.
 // arnes: archivo="internal/memory/tipeo.go"
-// arnes: de="\tclausula, argsAlcance := alcance.scopeClause(\"o\")\n\tconsulta := fmt.Sprintf(sqlExpresionesVivas"
-// arnes: a="\tclausula, argsAlcance := ProjectScope{}.scopeClause(\"o\")\n\tconsulta := fmt.Sprintf(sqlExpresionesVivas"
+// arnes: de="\tclausula, argsAlcance := alcance.scopeClause(\"o\")\n\tconsulta := sqlExpresionesVivas("
+// arnes: a="\tclausula, argsAlcance := ProjectScope{}.scopeClause(\"o\")\n\tconsulta := sqlExpresionesVivas("
 func TestCorrectorRespetaElAlcance(t *testing.T) {
 	e := newTestEngine(t)
 	delProyecto := func(proyecto string, contenidos ...string) {
@@ -482,13 +482,13 @@ func TestCorrectorRespetaElAlcance(t *testing.T) {
 //
 // Sabotaje: la detección cuenta las notas invisibles.
 // arnes: archivo="internal/memory/tipeo.go"
-// arnes: de="fmt.Sprintf(sqlExpresionesVivas, visibleObsPredicateDe(\"o\"), clausula)"
-// arnes: a="fmt.Sprintf(sqlExpresionesVivas, \"1 = 1\", clausula)"
+// arnes: de="sqlExpresionesVivas(visibleObsPredicateDe(\"o\"), clausula)"
+// arnes: a="sqlExpresionesVivas(\"1 = 1\", clausula)"
 //
 // Sabotaje: el conteo de candidatos cuenta las notas invisibles.
 // arnes: archivo="internal/memory/tipeo.go"
-// arnes: de="fmt.Sprintf(sqlDFDeCandidatos, visibleObsPredicateDe(\"o\"), clausula)"
-// arnes: a="fmt.Sprintf(sqlDFDeCandidatos, \"1 = 1\", clausula)"
+// arnes: de="sqlDFDeCandidatos(visibleObsPredicateDe(\"o\"), clausula)"
+// arnes: a="sqlDFDeCandidatos(\"1 = 1\", clausula)"
 func TestCorrectorIgnoraInvisibles(t *testing.T) {
 	e := newTestEngine(t)
 	sembrarTipeo(t, e, "vis", "La información del fichaje.", "Más información del turno.")
