@@ -86,6 +86,10 @@ func (f *fakeTurnStore) SetMeta(key, value string) error {
 	return nil
 }
 
+// MetaEnTransaccion corre fn contra el mismo fake: acá no hay otro escritor con quien competir. La
+// transacción se prueba con el motor real (turn_delta_turnos_test.go).
+func (f *fakeTurnStore) MetaEnTransaccion(fn func(memory.MetaTx) error) error { return fn(f) }
+
 func (f *fakeTurnStore) LedgerAdd(sessionID, surface string, tokens int) (memory.TokenLedger, error) {
 	if f.ledger == nil {
 		f.ledger = map[string]int{}

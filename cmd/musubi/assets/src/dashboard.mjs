@@ -17,6 +17,7 @@ import { crearVistaMemoria } from './vista-memoria.mjs';
 import { RACIMO_MUSUBI } from '../boceto/datos.mjs';
 import { crearImpulsos, AMBAR_FRENTE } from './impulsos.mjs';
 import { iterParaCambio, settleStart, settleTick, settlePendiente } from './layout.mjs';
+import { anotarSondeo, latido } from './latido.mjs';
 
 /* ---------- paletas ---------- */
 const DOMPAL=['#2dd4bf','#a78bfa','#fbbf24','#4ade80','#38bdf8','#f472b6','#fb923c','#f87171','#a3e635','#22d3ee','#e879f9','#facc15'];
@@ -1130,7 +1131,8 @@ function renderHUD(d){
    evento del central encendiendo una neurona local seria inventar. Lo que si hace un evento es
    PEDIR UN PULSO YA: si de verdad cambio algo local, los deltas reales lo encienden; si no cambio
    nada, no se enciende nada. La animacion sigue saliendo de datos medidos, nunca del feed. */
-const VIVO={ nuevos:[], vistos:new Set(), sondeos:[], enlace:{estado:'conectando'} };
+// ultimoSondeo es la marca del ultimo sondeo visto (ver anotarSondeo en latido.mjs); 0 = ninguno.
+const VIVO={ nuevos:[], vistos:new Set(), ultimoSondeo:0, enlace:{estado:'conectando'} };
 const VIVO_MAX=40;          // filas en el riel
 const VIVO_DEDUPE=600;      // claves recordadas para no repetir al reconectar
 
@@ -1160,7 +1162,7 @@ function refrescarYa(){
 
 function anotarEvento(e){
   if(!e || vistoYa(e)) return;
-  if(e.kind==='sondeo'){ VIVO.sondeos.push(Date.now()); return; }
+  if(e.kind==='sondeo'){ VIVO.ultimoSondeo=anotarSondeo(VIVO.ultimoSondeo, e.at, Date.now()); return; }
   if(e.perdidos>0) VIVO.nuevos.push({hueco:e.perdidos});
   VIVO.nuevos.push(e);
   // El grafo de codigo SI cambia de verdad con esto: se invalida para que se vuelva a bajar.
@@ -1232,7 +1234,7 @@ function pintarEnlace(){
 }
 
 // tictac corre a 1 Hz y NO toca la estructura: reescribe el texto de la antiguedad solo en las
-// filas donde de verdad cambio, y el contador de sondeo. Con la antiguedad en unidades gruesas
+// filas donde de verdad cambio, y el latido. Con la antiguedad en unidades gruesas
 // (s -> m -> h), la enorme mayoria de los segundos no cambia ni una fila.
 function tictac(){
   const cont=$('vivo');
@@ -1241,15 +1243,14 @@ function tictac(){
     const d=n.lastElementChild; if(!d||!d.classList.contains('d')) continue;
     const t=hace(at); if(d.textContent!==t) d.textContent=t;
   }
-  // El sondeo, agregado: cuantos por minuto. Es la unica forma honesta de mostrar el 99% del
-  // trafico sin que tape el 1% que importa. Ventana rodante, por eso se recalcula cada segundo.
-  const corte=Date.now()-60000;
-  VIVO.sondeos=VIVO.sondeos.filter(t=>t>corte);
+  // El sondeo, agregado: hace cuanto llego el ultimo, con la lampara prendida mientras sea
+  // reciente. Es la unica forma honesta de mostrar el 99% del trafico sin que tape el 1% que
+  // importa. Ya no cuenta los del ultimo minuto: con la bajada espaciada, un minuto sin sondeo es
+  // lo normal. El umbral y el texto salen de latido.mjs, que la prueba recorre sin DOM.
   const lat=$('latido'), txt=$('latidoTxt');
-  if(lat&&txt){ const n=VIVO.sondeos.length;
-    const s=n>0?`sondeo · ${n}/min`:'sin sondeo';
-    lat.classList.toggle('vive', n>0);
-    if(txt.textContent!==s) txt.textContent=s;
+  if(lat&&txt){ const l=latido(VIVO.ultimoSondeo, Date.now());
+    lat.classList.toggle('vive', l.vive);
+    if(txt.textContent!==l.texto) txt.textContent=l.texto;
   }
 }
 setInterval(tictac, 1000);
@@ -1291,7 +1292,7 @@ function impulsar(ev){
     // pisa al que está en vuelo), así que 200 sondeos/min serían una luz permanente hacia el
     // mismo actor que además taparía cualquier pulso de trabajo real. Luz constante sin trabajo
     // es exactamente lo que «sin evento no hay luz» promete no hacer. El sondeo queda visible
-    // donde ya vivía: el contador «sondeo · N/min» del latido.
+    // donde ya vivía: el latido del pie del riel («sondeo · hace 40s»).
     if(ev.kind==='sondeo') return;
     const racimo = n ? RACIMO_DE.get(n.terminal) : null;
     if(racimo) VISTA_MEM.pulsoHacia(racimo);

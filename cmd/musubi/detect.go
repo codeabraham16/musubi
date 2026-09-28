@@ -30,6 +30,7 @@ func readSessionID(stdin io.Reader) string {
 type startupStore interface {
 	GetMeta(key string) (string, bool, error)
 	SetMeta(key, value string) error
+	MetaEnTransaccion(fn func(memory.MetaTx) error) error
 	PrimeContext(budget int) (memory.RecallResult, error)
 	TopicExists(topicKey string) (bool, error)
 	LedgerAdd(sessionID, surface string, tokens int) (memory.TokenLedger, error)
@@ -402,7 +403,7 @@ func buildPrimingContext(store startupStore, budget int, sessionID string, propi
 	for _, it := range res.Items {
 		seed[it.ID] = it.ContentHash
 	}
-	saveDeltaState(store, sessionID, seed)
+	saveDeltaState(store, sessionID, seed, false)
 
 	// EL MISMO ENCABEZADO QUE EL HOOK POR TURNO, y armado por la MISMA función. Acá había una
 	// copia del texto escrita a mano: las dos decían lo mismo y envejecían por separado, que es

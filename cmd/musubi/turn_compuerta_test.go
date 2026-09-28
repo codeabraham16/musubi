@@ -138,7 +138,11 @@ func TestUnPromptSinTerminosNoBuscaMemoriaAlAzar(t *testing.T) {
 // TestElPedidoSustantivoSeRecuerdaPorSesion: cada sesión guarda SUS pedidos sustantivos, los tres
 // últimos, pasados por el redactor y DESPUÉS truncados; un «sigue» o un aviso del sistema no pisan el
 // último, y el mismo pedido otra vez no vuelve a escribir. (El sabotaje de la compuerta que deja
-// pasar los avisos también la pone roja: ver TestContinuacionYSistemaNoTraenMemoria.)
+// pasar los avisos también la pone roja: ver TestContinuacionYSistemaNoTraenMemoria.) Que el pedido
+// repetido no escriba lo cuidan dos capas, y esta prueba no distingue cuál: la mirada de
+// recordarPedido antes de abrir la transacción (su sabotaje está en TestUnTurnoSustantivoNoEscribeDeMas)
+// y la de guardarPedido adentro, la que cuenta cuando la sesión no consta con turno (su sabotaje está
+// en TestElPedidoRepetidoVuelveAlIndice).
 //
 // Sabotaje: los pedidos no son por sesión.
 // arnes: archivo="cmd/musubi/turn.go"
@@ -164,11 +168,6 @@ func TestUnPromptSinTerminosNoBuscaMemoriaAlAzar(t *testing.T) {
 // arnes: archivo="cmd/musubi/turn.go"
 // arnes: de="\tif len(ps) > maxPedidos {\n"
 // arnes: a="\tif len(ps) > maxPedidos*10 {\n"
-//
-// Sabotaje: el pedido repetido se vuelve a guardar.
-// arnes: archivo="cmd/musubi/turn.go"
-// arnes: de="\tif n := len(ps); n > 0 && ps[n-1].Texto == texto {\n"
-// arnes: a="\tif n := len(ps); n > 0 && ps[n-1].Texto == texto && false {\n"
 func TestElPedidoSustantivoSeRecuerdaPorSesion(t *testing.T) {
 	store := &storeQueCuenta{fakeTurnStore: &fakeTurnStore{meta: map[string]string{}, recall: memory.RecallResult{
 		Count: 1, Items: []memory.RecallItem{{ID: "x1", TopicKey: "t", Gist: "memoria", ContentHash: "h1"}},
@@ -247,15 +246,23 @@ func TestElPedidoSustantivoSeRecuerdaPorSesion(t *testing.T) {
 	}
 }
 
-// storeQueCuenta cuenta las escrituras en la meta, clave por clave.
+// storeQueCuenta cuenta las escrituras en la meta, clave por clave, y las transacciones.
 type storeQueCuenta struct {
 	*fakeTurnStore
-	escrituras map[string]int
+	escrituras    map[string]int
+	transacciones int
 }
 
 func (s *storeQueCuenta) SetMeta(key, value string) error {
 	s.escrituras[key]++
 	return s.fakeTurnStore.SetMeta(key, value)
+}
+
+// MetaEnTransaccion pasa por el que cuenta: sin esto, lo que se escribe adentro de la transacción
+// iría directo al fake y no se contaría.
+func (s *storeQueCuenta) MetaEnTransaccion(fn func(memory.MetaTx) error) error {
+	s.transacciones++
+	return fn(s)
 }
 
 // TestElPedidoSinSesionNoSeGuarda: sin session_id no hay a qué compactación devolverle el pedido, y
@@ -299,22 +306,24 @@ func TestLaMarcaDelRedactorNoEntraALaConsulta(t *testing.T) {
 
 // TestLosPedidosSePodanConElDelta: los pedidos de una sesión se vacían cuando la sesión sale del
 // índice del delta, también la que nunca escribió su delta (el recall no trajo nada), y desalojar
-// una sesión que nunca guardó un pedido no escribe nada.
+// una sesión que nunca guardó un pedido no escribe nada. Una sesión con un pedido tuvo un turno, así
+// que no la desaloja la siembra de una hija: sale cuando llegan maxDeltaSessions sesiones con turno
+// más nuevas, por LRU (ver TestDesalojoPrefiereSesionesSinTurnos).
 //
 // Sabotaje: el desalojo no vacía los pedidos.
 // arnes: archivo="cmd/musubi/turn.go"
-// arnes: de="\t\t\tolvidarPedidos(store, p.id)\n"
-// arnes: a="\t\t\t_ = olvidarPedidos\n"
+// arnes: de="\t\tif err := olvidarPedidos(tx, id); err != nil {\n"
+// arnes: a="\t\tif err := error(nil); err != nil {\n"
 //
 // Sabotaje: recordarPedido no anota la sesión en el índice.
 // arnes: archivo="cmd/musubi/turn.go"
-// arnes: de="\tif !sesionEnElIndice(store, sessionID) {\n"
-// arnes: a="\tif false && !sesionEnElIndice(store, sessionID) {\n"
+// arnes: de="\tif sesionConTurno(tx, sessionID) {\n"
+// arnes: a="\tif true || sesionConTurno(tx, sessionID) {\n"
 //
 // Sabotaje: el desalojo escribe un vacío aunque la sesión no tuviera pedidos.
 // arnes: archivo="cmd/musubi/turn.go"
-// arnes: de="\tif raw, ok, _ := store.GetMeta(pedidosKey(sessionID)); ok && raw != \"\" {\n"
-// arnes: a="\tif raw, ok, _ := store.GetMeta(pedidosKey(sessionID)); ok || raw == \"\" {\n"
+// arnes: de="\tif raw, ok, _ := tx.GetMeta(pedidosKey(sessionID)); ok && raw != \"\" {\n"
+// arnes: a="\tif raw, ok, _ := tx.GetMeta(pedidosKey(sessionID)); ok || raw == \"\" {\n"
 func TestLosPedidosSePodanConElDelta(t *testing.T) {
 	store := &fakeTurnStore{meta: map[string]string{}} // el recall no trae nada: no hay delta
 	ahora := time.Unix(1_800_000_000, 0)
@@ -323,13 +332,20 @@ func TestLosPedidosSePodanConElDelta(t *testing.T) {
 	if len(leerPedidos(store, "interactiva")) != 1 {
 		t.Fatal("el pedido no se guardó")
 	}
-	// Llegan maxDeltaSessions+5 sesiones más nuevas, que sólo siembran su delta (hijas de workflow):
-	// la interactiva sale primero, y detrás cinco hijas que nunca guardaron un pedido.
-	for i := 0; i < maxDeltaSessions+5; i++ {
+	// Cinco hijas de un workflow siembran su delta, y después llegan maxDeltaSessions sesiones con
+	// turno, todas más nuevas: primero salen las hijas, que nunca guardaron un pedido, y detrás la
+	// interactiva, la sesión con turno más vieja.
+	for i := 0; i < 5; i++ {
 		saveDeltaStateEn(store, fmt.Sprintf("hija-%02d", i), ahora.Add(time.Duration(i+1)*time.Second))
 	}
+	for i := 0; i < maxDeltaSessions; i++ {
+		anotarEn(store, fmt.Sprintf("con-turno-%02d", i), ahora.Add(time.Duration(i+10)*time.Second), true)
+	}
+	if idx := indiceDe(t, store); idx.marca["interactiva"] != 0 {
+		t.Fatalf("CONTROL: la interactiva tenía que salir del índice, y sigue con marca %d", idx.marca["interactiva"])
+	}
 	if ps := leerPedidos(store, "interactiva"); len(ps) != 0 {
-		t.Errorf("la sesión salió del índice y sus pedidos siguen ahí: %+v", ps)
+		t.Errorf("la sesión ya no está en el índice y sus pedidos siguen ahí: %+v", ps)
 	}
 	for k := range store.meta {
 		if strings.HasPrefix(k, metaPedidos+sepDeltaKey+"hija-") {
@@ -338,15 +354,35 @@ func TestLosPedidosSePodanConElDelta(t *testing.T) {
 	}
 }
 
-// saveDeltaStateEn es saveDeltaState con el reloj puesto, para ordenar el desalojo.
-func saveDeltaStateEn(store metaStore, sesion string, en time.Time) {
-	_ = store.SetMeta(deltaKey(sesion), `{"x":"h"}`)
-	registrarSesionDelta(store, sesion, en.Unix())
+// anotarEn es saveDeltaState con el reloj puesto, para ordenar el desalojo: escribe un delta y anota
+// la sesión en el índice, en una transacción.
+func anotarEn(store metaDelDelta, sesion string, en time.Time, turno bool) {
+	_ = store.MetaEnTransaccion(func(tx memory.MetaTx) error {
+		if err := tx.SetMeta(deltaKey(sesion), `{"x":"h"}`); err != nil {
+			return err
+		}
+		return registrarSesionDelta(tx, sesion, en.Unix(), turno)
+	})
+}
+
+// saveDeltaStateEn es la siembra del priming con el reloj puesto: una sesión sin turno.
+func saveDeltaStateEn(store metaDelDelta, sesion string, en time.Time) {
+	anotarEn(store, sesion, en, false)
+}
+
+// indiceDe lee el índice del delta, o corta la prueba.
+func indiceDe(t *testing.T, store memory.MetaTx) indiceDelta {
+	t.Helper()
+	idx, err := leerIndiceDelta(store)
+	if err != nil {
+		t.Fatalf("leer el índice del delta: %v", err)
+	}
+	return idx
 }
 
 // storeIntercalado corre UNA vez otra operación justo después de que alguien lee el índice del
-// delta: es lo que pasa cuando dos hooks de sesiones distintas corren a la vez, porque el
-// leer-modificar-escribir de registrarSesionDelta no tiene candado.
+// delta: es lo que pasa cuando dos hooks de sesiones distintas corren a la vez y uno de los dos no
+// toma el candado, como un binario viejo (registrarSesionDeltaDeMain).
 type storeIntercalado struct {
 	*fakeTurnStore
 	alLeerElIndice func()
@@ -361,35 +397,51 @@ func (s *storeIntercalado) GetMeta(key string) (string, bool, error) {
 	return v, ok, err
 }
 
-// TestElPedidoRepetidoVuelveAlIndice: una carrera entre dos hooks saca a una sesión del índice con
-// su pedido adentro, y si la sesión repite el pedido, vuelve a anotarse, así que la poda la alcanza.
-// Antes, el pedido repetido salía antes de mirar el índice y el pedido quedaba sin poda para siempre.
+// TestElPedidoRepetidoVuelveAlIndice: una carrera con un binario viejo, que escribe el índice sin
+// candado, saca a una sesión del índice con su pedido adentro; si la sesión repite el pedido, vuelve
+// a anotarse, así que la poda la alcanza. La marca de turno que le quedó de antes no alcanza para
+// darla por anotada: el binario viejo no conoce esa clave y no la borró.
 //
 // Sabotaje: el pedido repetido sale antes de mirar el índice.
 // arnes: archivo="cmd/musubi/turn.go"
-// arnes: de="\tps := leerPedidos(store, sessionID)\n"
-// arnes: a="\tps := leerPedidos(store, sessionID)\n\tif len(ps) > 0 && ps[len(ps)-1].Texto == texto {\n\t\treturn\n\t}\n"
+// arnes: de="\tps := leerPedidos(tx, sessionID)\n"
+// arnes: a="\tps := leerPedidos(tx, sessionID)\n\tif len(ps) > 0 && ps[len(ps)-1].Texto == texto {\n\t\treturn nil\n\t}\n"
+//
+// Sabotaje: una marca de turno vieja la da por anotada aunque ya no esté en el índice.
+// arnes: archivo="cmd/musubi/turn.go"
+// arnes: de="\treturn esta && idx.conTurno[sessionID]\n"
+// arnes: a="\t_ = esta\n\treturn idx.conTurno[sessionID]\n"
+// arnes: colision_ok="TestUnIndiceDeUnBinarioViejoConvive"
+//
+// Sabotaje: el pedido repetido se vuelve a guardar.
+// arnes: archivo="cmd/musubi/turn.go"
+// arnes: de="\tif n := len(ps); n > 0 && ps[n-1].Texto == texto {\n"
+// arnes: a="\tif n := len(ps); n > 0 && ps[n-1].Texto == texto && false {\n"
 func TestElPedidoRepetidoVuelveAlIndice(t *testing.T) {
 	store := &fakeTurnStore{meta: map[string]string{}}
 	ahora := time.Unix(1_800_000_000, 0)
 	const pedido = "revisá el TLS del cerebro"
 
-	// Una hija lee el índice; antes de que lo reescriba, S guarda su pedido y se anota. La hija
-	// escribe el índice que había leído, sin S.
-	hija := &storeIntercalado{fakeTurnStore: store, alLeerElIndice: func() {
+	// Un binario viejo anota a una hija: lee el índice y, antes de que lo reescriba, S guarda su
+	// pedido y se anota con turno. El binario viejo escribe el índice que había leído, sin S.
+	viejo := &storeIntercalado{fakeTurnStore: store, alLeerElIndice: func() {
 		recordarPedido(store, "S", pedido, ahora)
 	}}
-	registrarSesionDelta(hija, "hija", ahora.Add(time.Second).Unix())
-	if sesionEnElIndice(store, "S") || len(leerPedidos(store, "S")) != 1 {
-		t.Fatal("CONTROL: la carrera tenía que dejar a S fuera del índice con su pedido guardado; si no, la prueba no mide nada")
+	registrarSesionDeltaDeMain(viejo, "hija", ahora.Add(time.Second).Unix())
+	idx := indiceDe(t, store)
+	if _, esta := idx.marca["S"]; esta || len(leerPedidos(store, "S")) != 1 || !idx.conTurno["S"] {
+		t.Fatal("CONTROL: la carrera tenía que dejar a S fuera del índice, con su pedido guardado y su marca de turno; si no, la prueba no mide nada")
 	}
 
 	recordarPedido(store, "S", pedido, ahora.Add(2*time.Second)) // S repite el pedido
-	if !sesionEnElIndice(store, "S") {
+	if _, esta := indiceDe(t, store).marca["S"]; !esta {
 		t.Fatal("S repitió el pedido y no volvió al índice: su pedido no se podaría nunca")
 	}
+	if ps := leerPedidos(store, "S"); len(ps) != 1 {
+		t.Errorf("S repitió el pedido fuera del índice y se guardó dos veces: %+v", ps)
+	}
 	for i := 0; i < maxDeltaSessions; i++ {
-		saveDeltaStateEn(store, fmt.Sprintf("hija-%02d", i), ahora.Add(time.Duration(i+3)*time.Second))
+		anotarEn(store, fmt.Sprintf("con-turno-%02d", i), ahora.Add(time.Duration(i+3)*time.Second), true)
 	}
 	if ps := leerPedidos(store, "S"); len(ps) != 0 {
 		t.Errorf("S salió del índice y su pedido sigue ahí: %+v", ps)

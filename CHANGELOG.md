@@ -164,8 +164,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
   Lo anota sólo el dueño del candado, desde el defer que ya existía en `drainInboundOnce` y sólo si
   el tick salió a la red, en la meta `sync:inbound_ultima` =
-  `unix|filas|proxima_unix|con_filas|paginas_del_dia`; la próxima es un tick base, porque la bajada
-  todavía no espacia. La forma crece sólo agregando campos al final: un binario lee los que conoce e
+  `unix|filas|proxima_unix|con_filas|paginas_del_dia`; la próxima es la real, la del ritmo que
+  espacia la bajada. La forma crece sólo agregando campos al final: un binario lee los que conoce e
   ignora los de más, así que el que va a espaciar la bajada puede sumar los suyos sin que un binario
   anterior la lea `ilegible`. Y se lee sólo de ahí, nunca de la memoria del proceso que contesta:
   sobre una base corren varios daemons (seis en davantis-1) y baja uno.
@@ -198,6 +198,56 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   duraciones van redondeadas a la unidad más cercana (dos días y 23 horas son `3 d`, no `2 d`). No
   cambia el esquema ni la descripción de ninguna tool y no trae migración: viaja en la V1 con el
   resto de la ola.
+- **La bajada deja de preguntarle al central cada 30 s cuando no hay nada, y vuelve a los 30 s en
+  cuanto alguien trabaja.** Medido en el ledger del central el 2026-09-26: 6.207 `musubi_sync_pull`
+  en un día, el 92,8 % de todas sus invocaciones, casi todos páginas vacías de ~135 B. Ahora el
+  dueño del candado, después de k bajadas vacías seguidas, saltea 2^k − 1 ticks —desde la segunda,
+  hasta uno más al azar, para desparejar máquinas— con un tope: 60, 120, 240 y 300 s de ahí en más.
+  Todo cuenta TICKS del scheduler, sin reloj ni jitter en la base, así que el ritmo con actividad es
+  exactamente el tick. Medido con el scheduler real contra un central de prueba, en 120 ticks (una
+  hora): una base quieta pide 14 veces (−88 %), con un turno cada 10 min 24 (−80 %), y con un turno
+  por tick 120, como antes.
+
+  Vuelven al tick y reinician el espaciado: una bajada con filas; la marca de actividad
+  `sync:inbound_despertar`, que escribe el hook del turno con TODO prompt no vacío —«sigue» y los
+  avisos del sistema incluidos, antes de la compuerta de consulta— y todo daemon al arrancar, que
+  además baja una vez antes del primer tick; y el cambio de dueño del candado: quien lo recupera
+  baja en ese tick, sin heredar lo que le quedaba por esperar de cuando era dueño. Vacía es sin
+  páginas con filas, no sin filas ingeridas: una página que no entra no espacia la bajada atascada.
+  El ledger local de invocaciones NO despierta, a propósito: 260 en 7 días (188 de trabajo) y sólo
+  en 27 de 168 horas, contra ~68 prompts por día, y una tool nueva contaría como trabajo: el tope
+  acota lo que queda afuera.
+
+  El corte va después de reclamar el candado: el dueño lo renueva en cada tick aunque no salga a la
+  red, y el lease no vence en la espera. Un tick salteado escribe una sola fila —esa renovación, que
+  ya hacía— y lee la marca; uno que sale y vuelve vacío escribe tres (candado, `sync_viajes`,
+  `sync:inbound_ultima`), medido con triggers sobre las 37 tablas de una base de prueba. La meta
+  `sync:inbound_ultima` anota ahora la próxima REAL, la del ritmo, y no un tick base: la línea
+  «bajada» de `musubi_sync_status` dice `próxima en ~3 min` con la bajada espaciada, y `próxima en
+  ≤20 s (hubo actividad después de la última)` cuando un turno ya la adelantó.
+
+  El hook reescribe la marca sólo si la vigente tiene 15 s o más —medio tick—, así una ráfaga de
+  avisos o de «sigue» no escribe una vez por turno; el costo es que un turno que llega antes de eso,
+  con la marca ya leída, no vuelve a despertar y la próxima bajada llega hasta un tick más tarde.
+  Medido sobre una copia de la base de davantis-1: la marca cuesta menos de 0,5 ms cuando sólo lee
+  (bajo la resolución del reloj) y 7 ms de p50 y 16 ms de p95 cuando escribe; el hook entero, en A/B
+  contra el binario anterior con el método del banco de latencia (copias de la base, orden
+  alternado, mezcla de los turnos reales), +9 ms de p50 sobre ~420-520 ms, y el p95 cambia de signo
+  entre corridas (−434 y +362 ms): ruido. Eso es sin otro escritor: si otra conexión tiene tomada la
+  base, la marca espera como cualquier escritura hasta el `busy_timeout` (5 s) y, si vence, no se
+  escribe —la reintenta el turno siguiente, y el tope acota lo que se atrasa la bajada—. Medido con
+  la base tomada 20 s: un «sigue» tardó 20,0 s, contra 15,2 s en main, que ya escribía en ese camino.
+
+  La clave nueva `sync.inbound_idle_max_seconds` (en `.musubi/config.example.yaml`) fija el tope: 0
+  o ausente es 300; un negativo deja el ritmo fijo, un pedido por tick. El alta no la escribe. Una
+  máquina quieta tarda hasta 5 min en ver una nota nueva del central —un tick más si el candado
+  cambia de dueño en un cierre ordenado, y además el lease si el dueño muere sin soltarlo—.
+
+  ⚠️ **Hasta que se redespliegue el panel del central (`musubi-dashboard`), su latido va a decir
+  «sin sondeo» más seguido**: su ventana es de un minuto, y con las bajadas espaciadas es lo
+  normal, no un cerebro caído. El arreglo es la entrada «El latido del riel en vivo ya no dice «sin
+  sondeo» con el sistema sano», en Fixed; un `musubi dashboard` local lo recibe con el binario de
+  esa máquina. Sólo cliente: el central no cambia, no hay migración y no cambia ninguna tool.
 - **Cada resumen de la conversación conserva lo que el agente no puede perder.** Antes de que Claude
   Code compacte, el hook `PreCompact` le pasa al resumen las instrucciones de Musubi: conservar
   textuales las reglas, decisiones y pedidos de la persona (marcando los que no se cumplieron), el
@@ -683,6 +733,125 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **El latido del riel en vivo ya no dice «sin sondeo» con el sistema sano.** El pie del riel contaba
+  los sondeos del último minuto y con cero apagaba la lámpara. Con la bajada espaciada una máquina
+  quieta pide cada 300 s, y hasta ~450 s cuando el candado cambia de dueño porque el anterior murió
+  sin soltarlo (tope + lease + tick): con los 3 sondeadores que el central vio en 24 h (medido el
+  2026-09-27), la ventana de un minuto la apagaba el 51,6 % del tiempo (simulado con fases al azar;
+  el 80 % con un solo sondeador). Ahora sigue prendida mientras el último sondeo tenga 10 min o
+  menos, y el texto dice hace cuánto llegó: «sondeo · hace 40s», o «sin sondeo desde hace 12m».
+
+  **El umbral de 10 min le gana al peor hueco sano por 150 s**, y a cambio un corte real apaga la
+  lámpara a los 10 min del último sondeo y no al minuto. Esa rapidez la devuelve el texto, que da la
+  antigüedad desde el primer segundo, y un enlace caído lo sigue diciendo en el acto el encabezado
+  del riel. En el ledger del central (24 h) los huecos entre sondeos dan p50 10 s, p95 30 s y máximo
+  200 s: con 10 min la lámpara no se habría apagado ninguna vez, y con un minuto, el 0,29 % del
+  tiempo. Ese número es bajo porque los clientes todavía no tienen el ritmo: el 51,6 % de arriba es
+  lo que viene cuando lo tengan.
+
+  **La hora del sondeo es la del evento (`at`) y no la de su llegada.** El relay re-manda su backlog
+  al abrir la página y al reconectar, y estampados al llegar, sondeos de hace horas prendían la
+  lámpara un minuto —con el umbral nuevo habrían sido diez—. Un `at` del futuro (el reloj del
+  central adelantado) se recorta a la llegada, y la marca nunca retrocede. La lógica vive en
+  `assets/src/latido.mjs`, sin DOM: la recorren `node --test` y
+  `TestElLatidoAguantaLaBajadaEspaciadaYSeApagaConUnCorte`, que la ejecuta en node contra el tope y
+  el tick de la config por defecto (el lease sale del tick con la fórmula de `leaseBajadaSegundos`,
+  y `TestElLeaseDeLaBajadaEsElQueSuponeElLatidoDelPanel` ata esa copia al original), con seis
+  sabotajes mecanizados; `TestElPanelCableaElLatidoConLaHoraDelEvento` custodia que dashboard.mjs
+  y el bundle embebido la llamen con el `at`. Sólo el panel: no cambia ninguna tool ni el sync. Al
+  panel del central (`musubi-dashboard`) llega con su próximo despliegue, y a un `musubi dashboard`
+  local, con el binario de esa máquina.
+- **La subida al central no manda dos veces la misma nota ni espera al tick.** Con varios daemons
+  sobre una base (seis en davantis-1), el drain reclamaba `batch_size` (50) filas con UN lease de
+  60 s y las empujaba de a una. Con ~3,5 s por nota en el central, 50 no entraban en el lease: vencía
+  a mitad de la lista y otro daemon volvía a reclamar —y a subir— las que el primero todavía tenía en
+  la mano (116 saves por 95 notas, medido el 2026-09-25). Y una nota escrita por otro proceso —un
+  hook, la captura— esperaba al tick siguiente: 22 s de mediana con el intervalo de 30 s.
+
+  Ahora `drainOutboxOnce` reclama sublotes de `max(1, lease_seconds/10)` filas (seis con el
+  default), cada uno con su lease fresco, y repite hasta vaciar la cola o hasta el 80 % del
+  intervalo; el tick sigue dejando UN solo viaje de subida en `sync_viajes`. Antes de cada push
+  pregunta con una lectura (`ReclamoVigente`) si la fila sigue reclamada por ESE claim y con el mismo
+  contenido: si otro drainer la reclamó o se editó, el payload viejo no sale, y si la fila sigue
+  siendo de ese claim la suelta (`SoltarReclamo`, con un CAS sobre el lease, así que uno ajeno no se
+  toca) para que la versión nueva salga en el claim siguiente y no al vencer el lease. El lease se
+  escribe con milisegundos:
+  `datetime('now', '+1 seconds')` trunca al segundo, y un lease de 1 s duraba entre cero y un
+  segundo. Entre ticks, `RunOutboxScheduler` mira cada 2 s si hay algo que un claim tomaría
+  (`HayOutboxPorSubir`: una lectura sobre `idx_outbox_claim`, sin red y sin el candado de escritura)
+  y, si hay, drena.
+
+  Un choque de la bajada sobre una fila que se está subiendo se cuenta y no toca el outbox: el
+  central se queda con la versión más nueva, y la máquina que tenía la suya en vuelo se queda con la
+  suya hasta su próxima edición. Es una divergencia conocida que esta ola sólo cuenta; cerrarla es
+  #15.
+
+  Medido contra un central de juguete que embebe 35 ms por nota, de a una. Envíos por nota, en
+  escala 1/60 de producción (lease 1 s, intervalo 500 ms), dos corridas: con dos daemons 1,05 y
+  1,08 en main, 1,00 en la rama; con seis, 2,94 y 2,84 en main (84 y 70 de 95 notas subidas más de
+  una vez), 1,00 en la rama. Una nota escrita por otro proceso, con el intervalo de 30 s: mediana
+  16,8 s en main (máximo 24,5 s) y 2,2 s en la rama (máximo 2,6 s). La ráfaga de 95 notas con
+  drenes seguidos no se hace más lenta: 1.210 filas/min en main y 1.248 en la rama (medianas de
+  tres). El sondeo, sobre una copia de la base de davantis-1: entre 47 y 237 µs de media, tres por
+  segundo con seis daemons, y contesta igual con el candado de escritura tomado por otro proceso.
+
+  **Cambia un contrato de #700: una edición que llega mientras su versión anterior viaja ya no sale
+  enseguida.** En #700 la edición devolvía la fila a 'pending' y en hora, y otro daemon sobre la
+  misma base podía reclamarla —con el sondeo, a los 2 s; con su tick, cuando cayera— y subir v2
+  mientras el POST de v1 seguía en el aire. Ganaba la que el central guardara última, y el central
+  embebe antes de guardar: v1 podía quedar allá y bajar a pisar v2 acá. Ahora la edición deja la
+  fila 'claimed' con el lease de ese vuelo —`enqueueOutboxTx` mira el estado, así que una segunda
+  edición en el mismo vuelo la encuentra igual—, y v2 sale cuando vuelve la marca de v1 (el 200, el
+  reintento y el rechazo la sueltan en hora) o cuando vence el lease, lo que llegue primero: unos 3 s
+  más en el caso común, lo que tarda un push en el central (2,98 s de mediana, 8,76 s en el p99). A
+  cambio, el orden en el central lo pone el cliente. Una edición sobre una fila que espera el backoff
+  de un intento fallido sigue saliendo ya: ese backoff era de la versión vieja.
+
+  **Sólo cliente: el central no cambia**, y ya no hace falta un save condicional allá: el caso común
+  se cierra en el cliente. Queda abierto un push más largo que su lease: el lease vence con el POST
+  en el aire, otro daemon reclama la misma fila y la sube otra vez, y si en el medio hubo una
+  edición, v2 sale a la par de v1. En el central, en 30 días, ninguna de 1.984 ventanas de seis
+  saves pasó de 60 s (la más larga, 52,4 s: el 87 % del lease) y el push más largo tardó 12,91 s. Se
+  cierra renovando el lease antes de cada push, y queda para el plan siguiente.
+- **El índice del delta desaloja primero a las sesiones sin turnos: una sesión interactiva que
+  espera un workflow ya no pierde su delta ni sus pedidos cuando arrancan las hijas.** El índice
+  `loop_delta_sessions` acota a 32 las sesiones que conservan su delta
+  (`loop_delta_injected:<sesión>`) y sus pedidos (`loop_pedidos:<sesión>`), y desalojaba por LRU a
+  secas. Desde la compuerta del turno, un «sigue» o un aviso del sistema no refrescan la marca: una
+  interactiva que espera un workflow quedaba como la más vieja cuando sus hijas sembraban el delta
+  al arrancar, y perdía el delta —su próximo pedido le repetía memoria que ya tenía— y los pedidos.
+  Ahora el índice sabe qué sesiones tuvieron un turno (el recall del turno o un pedido sustantivo), y
+  al pasar de 32 salen primero las que no, de la más vieja a la más nueva, y recién después, por LRU,
+  las que sí. «Turno» es pegajoso: la siembra del priming al compactar no lo baja. La sesión que se
+  anota no compite contra sí misma: con el índice lleno de sesiones con turno, la siembra de una
+  nueva desaloja a la más vieja con turno, como main. En la base de esta PC, 29 de las 32 entradas
+  del índice eran siembras, y sólo 3 eran de sesiones con turnos.
+
+  **El turno va en una clave aparte, `loop_delta_con_turno`, y el índice conserva su forma
+  `{id: unix}`**, por los binarios viejos que comparten la base: decodifican el índice en un
+  `map[string]int64` ignorando el error, y una marca con otra forma les llegaría como 0 —la más vieja
+  de todas—, así que desalojarían primero justo a las interactivas. Probado en los dos sentidos
+  contra una copia congelada del código de main: lo que escribió un binario viejo se lee acá entero
+  y sin turnos, y la sesión que guarda un pedido recupera el suyo; lo que escribe esta rama lo lee
+  un binario viejo sin error ni ceros. Un binario viejo sigue desalojando por LRU, y sin candado,
+  hasta que se actualice.
+
+  **Una transacción para el leer-modificar-escribir** (`DbEngine.MetaEnTransaccion`, BEGIN
+  IMMEDIATE como `LedgerAdd`): el delta, el índice, las claves de las desalojadas y los pedidos van
+  juntos. Sin ella, dos hooks a la vez podían dejar a una sesión fuera del índice con su delta y sus
+  pedidos sin poda. La prueba no depende del reloj: en el instante del medio, una sonda con
+  busy_timeout 0 dice si el otro escritor tiene que esperar. Un engine en sólo lectura no la abre
+  (`ErrMetaSoloLectura`).
+
+  **Escrituras por turno**, contadas con el motor real sobre una copia de la base de esta PC: el
+  primer turno sustantivo de una sesión escribe 9 claves de meta tomando 6 veces el candado (main: 8
+  y 8) —la de más es `loop_delta_con_turno`, una vez por sesión—; los siguientes, 6 y 5 (main: 6 y
+  6); el pedido repetido, 5 y 4 (main: 5 y 5); «sigue», 3 y 3, como antes. La latencia del hook no
+  se distingue del ruido. En la corrida final, sobre el commit y con otras suites corriendo en
+  paralelo en la misma máquina (dos copias de la base, 8 rondas intercaladas), cada pedido
+  sustantivo en una sesión nueva (el peor caso: anota la sesión, desaloja y escribe la clave de
+  turnos) dio p50 761,1 → 707,5 ms y p95 3.665,5 → 4.393,4 ms, y «sigue» y los avisos, que corren
+  el mismo código en los dos binarios, difirieron hasta 1.921 ms en su p95.
 - **Las sesiones de shell vencidas se cierran aunque el barrido de la flota esté apagado.** Con
   `fleet.probe_minutes` negativo el cerebro dejaba de cerrarlas. En una máquina sin agente, el `ssh`
   de una sesión vencida seguía vivo, y la bitácora la mostraba activa. Ahora las cierra un vigía
@@ -1415,6 +1584,65 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   puede dar un «no cuadra» falso, que corrige el push siguiente o la higiene de 24 h. Diecinueve
   sabotajes corridos, los diecinueve rojos y cada uno en su aserción; diecisiete quedan como
   directivas `arnes:`.*
+- **Una nota que baja del central conserva la fecha en que el central la recibió —la de
+  nacimiento, salvo que la subida se haya demorado—.** `IngestShared` guardaba cada nota bajada
+  con la fecha de la BAJADA (`CURRENT_TIMESTAMP`): una nota escrita hace tres meses en otra máquina
+  nacía «hoy» acá, y el recall, que ordena la novedad por `created_at`, la trataba como nueva.
+  Medido sobre una copia de la base de davantis-1 contra el central (sólo lectura): 1.858 notas
+  bajadas (selladas 'espejo') tienen acá una fecha posterior a la del central. La mediana de la
+  diferencia es de 17 s, pero 186 pasan de un día y 114 de treinta, con un máximo de 73,7 días; y
+  64 visibles se ven con menos de una semana cuando en el central tienen entre 62 y 76 días.
+
+  `SharedObs` lleva `created_at`: la fecha tal como la guarda el central («2006-01-02 15:04:05»,
+  UTC). No siempre es la de nacimiento: la subida no manda la fecha y el central sella la suya al
+  recibir la nota, así que la que tardó en subir trae la de su llegada. Le pasa a todo lo que nació
+  antes que el central, cuyo `created_at` más viejo es del 2026-07-11 20:21:25: una nota de
+  davantis-1 del 2026-06-21 que subió en el backfill del 2026-07-13 viaja con el 2026-07-13.
+  `ListSharedForPull` la lee envuelta en `COALESCE`, porque pelada el driver la convierte y
+  viaja «2026-07-11T20:21:25Z», y un NULL cortaría la página entera. `IngestShared` la usa SÓLO al
+  insertar una fila nueva, normalizada al layout de la columna: SQLite compara estas fechas como
+  texto, y una «T» ordena después de un espacio. Si falta, no se puede leer, viene más de 5 minutos
+  del futuro o es anterior al 2026-01-01, la fila nace con `CURRENT_TIMESTAMP`, como siempre. Una
+  fila que ya estaba conserva la suya: el `ON CONFLICT DO UPDATE` no se tocó. El costo en el cable,
+  medido con las 2.973 notas de la copia en 60 páginas de 50: 39 B por nota en claro (+1,27 %) y
+  7 B con gzip (+0,59 %).
+
+  **Lo que no hace.** No corrige las filas ya bajadas: la reparación con `MIN(created_at)` queda
+  para el dueño, y lo que les devolvería es la fecha en que el central las recibió, no la de
+  nacimiento. Lo que nació antes que el central quedaría con la de su subida, que nunca es anterior
+  al 2026-07-11 20:21:25. Y la viñeta del hook sigue sin decir la edad de NINGUNA nota, bajada o
+  propia: `gistAge` sólo lee RFC3339 y la base guarda el layout de SQLite. Es otro defecto y va
+  aparte.
+
+  **Lo que cambia además, y conviene saberlo antes de V3.** El olvido cuenta la edad desde
+  `last_accessed` o, si la nota nunca se leyó, desde `created_at`. Con la fecha viaja la edad de la
+  nota pero no su acceso: la fila bajada llega con `access_count` 0 y `last_accessed` NULL, sin los
+  14 días de gracia de `MinAgeDays` (`decay_min_age_days`), así que una nota vieja que baja por
+  primera vez puede archivarse en el primer mantenimiento. Medido el 2026-09-27 con el `Decay` real
+  sobre las 3.237 notas shared visibles del central (exportadas en sólo lectura): un cliente NUEVO
+  que las baje todas archivaría 1.007 (31,1 %) con los valores por defecto, y el central, con la
+  misma fórmula y sus accesos, mantiene vivas 1.003 de esas 1.007; hoy, ninguna, porque nacen con
+  edad cero. Ningún camino automático la revive: el `ON CONFLICT DO UPDATE` no nombra `archived`,
+  así que una re-entrega la deja archivada. Y con la config que escribe `musubi init`
+  (`purge_archived_after_days: 90`), a los 90 días de archivada se borra para siempre. davantis-1
+  no lo sufre, porque ya tiene las 3.237 y no inserta ninguna fila nueva de ellas; la laptop no se
+  midió. Restar la fecha local de la del central deja de medir la demora del sync en las filas
+  nuevas; para eso está `sync_viajes`. Y el panel deja de hacer brotar casi todo lo que baja: la
+  nota llega con una fecha anterior a la ventana del pulso (desde el sondeo anterior, unos 5 s) y
+  sin `last_accessed`, así que no entra al pulso y aparece con la recarga completa del grafo, sin
+  brote.
+
+  **Despliegue:** la fecha viaja recién con el central nuevo (ventana V3), y V3 queda atada a lo
+  que el dueño decida sobre el olvido del párrafo anterior. Un cliente viejo contra el central
+  nuevo ignora la clave, como toda clave que no conoce, y guarda la fecha de la bajada. Un cliente
+  nuevo contra el central de hoy no la recibe y hace lo mismo. Cada cliente necesita el binario
+  nuevo (V1 davantis-1, V2 la laptop).
+
+  *Pruebas: seis en `internal/memory` (`fecha_de_origen_test.go`); dos en `internal/mcp`
+  (`fecha_viaja_test.go`), con el JSON de la respuesta y los dos sentidos de la convivencia; y la
+  e2e `TestLaNotaBajadaConservaSuEdad` en `cmd/musubi`, con el central real detrás de un
+  `httptest`, el cliente de sync real y el hook del turno. Dieciséis sabotajes corridos, los
+  dieciséis rojos; catorce quedan como directivas `arnes:`.*
 
 ## [0.141.0] - 2026-09-14
 

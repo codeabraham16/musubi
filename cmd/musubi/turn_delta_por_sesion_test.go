@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"musubi/internal/config"
 	"musubi/internal/memory"
@@ -93,24 +94,23 @@ func TestElArranqueDeOtraSesionNoBorraElDelta(t *testing.T) {
 }
 
 // Las claves por sesión no crecen sin límite: se conservan las maxDeltaSessions más recientes y
-// las demás se vacían.
+// las demás se vacían. (Todas sin turno: a quién se desaloja primero cuando algunas tuvieron uno lo
+// prueba TestDesalojoPrefiereSesionesSinTurnos.)
 //
 // Sabotaje que la pone roja: no podar nunca.
 // arnes: archivo="cmd/musubi/turn.go"
-// arnes: de="if len(sesiones) > maxDeltaSessions {"
-// arnes: a="if false && len(sesiones) > maxDeltaSessions {"
+// arnes: de="\tif sobra <= 0 {\n"
+// arnes: a="\tif sobra <= 0 || true {\n"
 //
 // Sabotaje que la pone roja: podar las más nuevas en vez de las más viejas.
 // arnes: archivo="cmd/musubi/turn.go"
-// arnes: de="return ps[i].t < ps[j].t"
-// arnes: a="return ps[i].t > ps[j].t"
+// arnes: de="\t\t\treturn idx.marca[a] < idx.marca[b]\n"
+// arnes: a="\t\t\treturn idx.marca[a] > idx.marca[b]\n"
 func TestLasSesionesViejasDelDeltaSePodan(t *testing.T) {
 	store := &fakeTurnStore{meta: map[string]string{}}
 	total := maxDeltaSessions + 3
 	for i := 0; i < total; i++ {
-		id := "s" + strconv.Itoa(i)
-		_ = store.SetMeta(deltaKey(id), `{"x":"h"}`)
-		registrarSesionDelta(store, id, int64(1000+i))
+		saveDeltaStateEn(store, "s"+strconv.Itoa(i), time.Unix(int64(1000+i), 0))
 	}
 
 	var indice map[string]int64
