@@ -118,6 +118,18 @@ type Config struct {
 	// constante que aplica el servidor — no una copia: si el banco juzgara más candidatos que
 	// producción, mediría una configuración que nadie va a correr.
 	JuezTopK int
+	// CorregirTipeo pasa la consulta por el CORRECTOR DE TIPEO del motor (CorregirConsulta) antes de
+	// embeberla y de buscarla, que es lo que hacen el hook y las tools con
+	// memory.recall_typo_correction encendido. Es un eje del experimento: un brazo lo prende o lo
+	// apaga para medir el corrector contra el mismo ranker sin él.
+	//
+	// EL ALCANCE ES EL DEL RECALL DEL BRAZO: el ProjectScope y el Federate de Opts, que son el filtro
+	// duro que ese Recall aplica. Y el juez, si hay, ve la consulta como llegó, igual que en
+	// musubi_recall: juzga pertinencia contra lo que la persona preguntó.
+	//
+	// Un motor sin corrector no puede correr este brazo, y rankedIDs lo corta: seguir sin corregir
+	// mediría el ranker sin corrector bajo el nombre del brazo que corrige.
+	CorregirTipeo bool
 }
 
 // Scores son las métricas agregadas (promedio sobre queries con ≥1 relevante) de una
@@ -266,12 +278,18 @@ type motorConProcedencia interface {
 	SetVectorModelID(string)
 }
 
+// motorQueCorrige es el corrector de tipeo que un brazo CorregirTipeo necesita del motor.
+// *memory.DbEngine lo cumple.
+type motorQueCorrige interface {
+	CorregirConsulta(ctx context.Context, q string, alcance memory.ProjectScope) (string, []memory.Correccion)
+}
+
 // rankedIDs corre un recall y devuelve solo los ids en orden de score (mejor primero).
 // Fuerza un presupuesto de tokens enorme para que el ranking NO se recorte por presupuesto: el
 // harness mide CALIDAD DE ORDEN, no empaquetado. Salvo en el modo PoolDelTurno, también sube el
 // pool al corpus entero. NoBump evita que un recall contamine las stats de acceso del siguiente
 // (reproducibilidad). En un brazo SinEmbebedor corre el recall con el motor sin procedencia de
-// vectores y lo devuelve como estaba.
+// vectores y lo devuelve como estaba; en un brazo CorregirTipeo, embebe y busca la consulta corregida.
 func rankedIDs(ctx context.Context, eng recuperador, query string, cfg Config, embed EmbedFunc, pool int) ([]string, error) {
 	opts := cfg.Opts
 	opts.NoBump = true
@@ -293,17 +311,27 @@ func rankedIDs(ctx context.Context, eng recuperador, query string, cfg Config, e
 		m.SetVectorModelID("")
 		defer m.SetVectorModelID(antes)
 	}
+	// El corrector va ANTES de embeber, como en el hook: lo que se embebe y se busca es la consulta
+	// corregida. query sigue siendo lo que tipeó la persona, y es lo que ve el juez.
+	consulta := query
+	if cfg.CorregirTipeo {
+		c, ok := eng.(motorQueCorrige)
+		if !ok {
+			return nil, fmt.Errorf("config %q corrige el tipeo y este motor (%T) no tiene corrector", cfg.Name, eng)
+		}
+		consulta, _ = c.CorregirConsulta(ctx, query, memory.ProjectScope{ProjectID: opts.ProjectScope, Federate: opts.Federate})
+	}
 	if cfg.UseVector {
 		if embed == nil {
 			return nil, fmt.Errorf("config %q usa vector pero no se pasó EmbedFunc", cfg.Name)
 		}
-		vec, err := embed(query)
+		vec, err := embed(consulta)
 		if err != nil {
-			return nil, fmt.Errorf("embed query %q: %w", query, err)
+			return nil, fmt.Errorf("embed query %q: %w", consulta, err)
 		}
 		opts.QueryVector = vec
 	}
-	res, err := eng.Recall(ctx, query, opts)
+	res, err := eng.Recall(ctx, consulta, opts)
 	if err != nil {
 		return nil, err
 	}

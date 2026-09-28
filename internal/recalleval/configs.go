@@ -57,11 +57,13 @@ func ConfigHibrida() Config {
 	return Config{Name: "hybrid", Opts: o, UseVector: true}
 }
 
-// ConfigProduccion es TODO lo que producción declara encendido, MMR incluido. Existe porque es la
-// única que responde "¿cómo se comporta el sistema tal como está configurado?", que es una pregunta
-// distinta de "¿cuánto suma cada señal?".
+// ConfigProduccion es TODO lo que producción declara encendido, MMR incluido, y el corrector de tipeo
+// si memory.recall_typo_correction lo está (musubi_recall corrige antes de buscar). Existe porque es
+// la única que responde "¿cómo se comporta el sistema tal como está configurado?", que es una
+// pregunta distinta de "¿cuánto suma cada señal?". ConfigLexica y ConfigHibrida no corrigen: miden
+// señales del ranker, y el corrector es otro eje.
 func ConfigProduccion() Config {
-	return Config{Name: "produccion", Opts: OptsDeProduccion(), UseVector: true}
+	return Config{Name: "produccion", Opts: OptsDeProduccion(), UseVector: true, CorregirTipeo: config.Default().Memory.RecallTypoCorrection}
 }
 
 // ConfigTurno es el ranker del HOOK por turno (UserPromptSubmit), donde ocurre casi todo el recall
@@ -85,14 +87,17 @@ func ConfigTurno() Config {
 }
 
 // ConfigTurnoCon es ConfigTurno para la config de un proyecto (su yaml) en vez de la de fábrica: el
-// mismo motor sin embebedor y el mismo pool, con las opciones que la fuente única traduce de m.
+// mismo motor sin embebedor y el mismo pool, con las opciones que la fuente única traduce de m. El
+// corrector de tipeo sigue a memory.recall_typo_correction, como en buildTurnRecall.
 func ConfigTurnoCon(m config.MemoryConfig) Config {
-	return Config{
+	c := Config{
 		Name:         "turno",
 		Opts:         memory.OpcionesDeRecallDelTurno(m, memory.AlcanceDelTurno{}),
 		PoolDelTurno: true,
 		SinEmbebedor: true,
 	}
+	c.CorregirTipeo = m.RecallTypoCorrection
+	return c
 }
 
 // ConfigTurnoHibrido es el hook con su embebedor construido, que es lo que evalúa

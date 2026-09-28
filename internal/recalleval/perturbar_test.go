@@ -251,7 +251,10 @@ func TestLaPerturbacionMueveElDorado(t *testing.T) {
 	}
 	defer eng.Close()
 	ks := []int{10}
+	// El instrumento mide al RANKER del turno, sin el corrector de tipeo: lo que tiene que mover es
+	// lo que después el corrector recupera (TestTipeoNoRompeElDorado).
 	cfg := ConfigTurno()
+	cfg.CorregirTipeo = false
 
 	limpio, err := Evaluate(ctx, eng, fx, cfg, nil, ks)
 	if err != nil {
@@ -294,6 +297,11 @@ func TestLaPerturbacionMueveElDorado(t *testing.T) {
 // el corrector va a arreglar tres clases y no la cuarta: medir sólo transposiciones sería medirlo
 // con el error que sabe arreglar.
 //
+// EL CORRECTOR DE TIPEO VA EN SUS PROPIOS BRAZOS («hook-corrector-*»): el hook tal como sale de
+// fábrica, con el corrector encendido, limpio y con cada clase de tipeo. Todos los demás corren SIN
+// corrector, a propósito: son la línea base con la que se comparan los números de antes, y el
+// corrector se mide contra ellos en la misma corrida.
+//
 // No tiene gate a propósito, igual que TestABLexicoVsHibridoFixtureReal: la memoria de trabajo de
 // alguien cambia entre corridas. Tarda ~40 minutos, casi todo en sembrar los vectores.
 //
@@ -326,12 +334,15 @@ func TestTipeoFixtureReal(t *testing.T) {
 	ctx := context.Background()
 	ks := []int{1, 5, 10}
 	hook := ConfigTurno() // léxico, pool 50, sin embebedor: MMR inerte
-	lexicoMMR := ConfigTurno()
+	hook.CorregirTipeo = false
+	hookCorrector := ConfigTurno() // el hook de fábrica: con el corrector de tipeo
+	lexicoMMR := hook
 	lexicoMMR.SinEmbebedor = false // el motor ve los vectores: MMR 0,75 corre
 	hibridoMMR := ConfigTurnoHibrido()
-	hibridoSinMMR := ConfigTurnoHibrido()
+	hibridoMMR.CorregirTipeo = false
+	hibridoSinMMR := hibridoMMR
 	hibridoSinMMR.Opts.MMRLambda = 1
-	poolCorpus := ConfigTurno()
+	poolCorpus := hook
 	poolCorpus.PoolDelTurno = false
 
 	type brazo struct {
@@ -341,6 +352,7 @@ func TestTipeoFixtureReal(t *testing.T) {
 	}
 	brazos := []brazo{
 		{"hook-lexico-pool50-sinMMR", hook, fx},
+		{"hook-corrector-limpio", hookCorrector, fx},
 		{"lexico-pool50-MMR", lexicoMMR, fx},
 		{"hibrido-pool50-MMR", hibridoMMR, fx},
 		{"hibrido-pool50-sinMMR", hibridoSinMMR, fx},
@@ -354,6 +366,8 @@ func TestTipeoFixtureReal(t *testing.T) {
 		brazos = append(brazos,
 			brazo{"hook-un-tipeo-" + string(clase), hook, uno},
 			brazo{"hook-todos-" + string(clase), hook, todos},
+			brazo{"hook-corrector-un-tipeo-" + string(clase), hookCorrector, uno},
+			brazo{"hook-corrector-todos-" + string(clase), hookCorrector, todos},
 			brazo{"hibMMR-un-tipeo-" + string(clase), hibridoMMR, uno},
 			brazo{"hibMMR-todos-" + string(clase), hibridoMMR, todos},
 			brazo{"hibSinMMR-un-tipeo-" + string(clase), hibridoSinMMR, uno},
