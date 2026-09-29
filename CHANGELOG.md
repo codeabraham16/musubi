@@ -920,7 +920,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   5 s y hasta `MUSUBI_ESPERA_RED` segundos (300 en la unidad, 0 a mano), y al vencerse copia igual,
   para que el fallo se vea por el camino de siempre. Sólo sondea un destino rsync por ssh.
   `deploy/pruebas/respaldo-espera-la-red.sh` corre el guion de verdad con un reloj falso, y una
-  guarda exige que toda unidad cuyo guion sabe esperar le pida que espere.
+  guarda exige que toda unidad cuyo guion sabe esperar le pida que espere. La guarda lee la unidad
+  como systemd, que aplica la última asignación: la variable se nombra una sola vez.
 - **Una máquina al día con el código del cerebro ya no queda marcada para siempre por la etiqueta
   del build (A138).** `musubi_fleet_device_agent_build_stale` comparaba la versión entera como
   texto, y la versión lleva dos cosas que no salen del código: la etiqueta del track (`flota` el

@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -222,6 +223,24 @@ func TestElRespaldoEsperaLaRedAntesDeCopiar(t *testing.T) {
 // arnes: archivo="deploy/systemd/musubi-respaldo-local.service"
 // arnes: de="Environment=MUSUBI_ESPERA_RED=300"
 // arnes: a="Environment=MUSUBI_ESPERA_RED=300s"
+//
+// Sabotaje que la hace fallar: una segunda asignación más abajo, en cero. systemd aplica la
+// ÚLTIMA, y la guarda leía la primera: quedaba en verde con una unidad que no espera. Lo
+// encontraron los tres jueces de la revisión de A139.
+// arnes: archivo="deploy/systemd/musubi-respaldo-local.service"
+// arnes: de="Environment=MUSUBI_HOME=@REPO@\n"
+// arnes: a="Environment=MUSUBI_HOME=@REPO@\nEnvironment=MUSUBI_ESPERA_RED=0\n"
+// Y la otra dirección: con sangría y con espacios alrededor del `=`, que systemd saca, es la misma
+// línea y tiene que quedar en verde. La guarda de antes la buscaba al principio de la línea, y la
+// daba por ausente.
+// arnes: arreglo_de="Environment=MUSUBI_ESPERA_RED=300"
+// arnes: arreglo_a="  Environment = MUSUBI_ESPERA_RED=300"
+//
+// Sabotaje que la hace fallar: un `Environment=` vacío más abajo. Para systemd borra todas las
+// asignaciones anteriores, y no nombra la variable.
+// arnes: archivo="deploy/systemd/musubi-respaldo-local.service"
+// arnes: de="StandardOutput=journal"
+// arnes: a="Environment=\nStandardOutput=journal"
 func TestLaUnidadDeUnGuionQueSabeEsperarLaRedLePideQueEspere(t *testing.T) {
 	unidades, err := filepath.Glob(filepath.Join("..", "..", "deploy", "systemd", "*.service"))
 	if err != nil || len(unidades) == 0 {
@@ -229,9 +248,6 @@ func TestLaUnidadDeUnGuionQueSabeEsperarLaRedLePideQueEspere(t *testing.T) {
 	}
 	execStart := regexp.MustCompile(`(?m)^ExecStart=.*?@REPO@/deploy/([^\s"']+)`)
 	leeLaEspera := regexp.MustCompile(`\$\{?MUSUBI_ESPERA_RED\b`)
-	// EL VALOR SE TOMA ENTERO Y SE LEE COMO LO LEE EL GUION: un entero, que `[ "$X" -gt 0 ]`
-	// acepta. Con `(\d+)` a secas, `300s` pasaba por 300 y el guion no esperaba nada.
-	pideEspera := regexp.MustCompile(`(?m)^Environment=.*\bMUSUBI_ESPERA_RED=([^\s"']*)`)
 
 	var revisadas []string
 	for _, u := range unidades {
@@ -245,21 +261,15 @@ func TestLaUnidadDeUnGuionQueSabeEsperarLaRedLePideQueEspere(t *testing.T) {
 				continue
 			}
 			revisadas = append(revisadas, filepath.Base(u)+" → deploy/"+m[1])
-			n, pide := -1, "no la declara"
-			if p := pideEspera.FindStringSubmatch(unidad); p != nil {
-				pide = "MUSUBI_ESPERA_RED=" + strconv.Quote(p[1])
-				if v, err := strconv.Atoi(p[1]); err == nil {
-					n = v
-				}
-			}
-			if n <= 0 {
+			if n, pide := esperaQuePideLaUnidad(unidad); n <= 0 {
 				t.Errorf("%s corre deploy/%s, que sabe esperar la red, y NO le pide que espere "+
 					"(%s).\n"+
 					"  El guion espera sólo con un entero de segundos mayor que cero, y vale 0 por "+
 					"defecto: sin eso la unidad copia antes de que levante el tailnet, que es el "+
 					"incidente del 2026-09-29 (A139). `300s`, como escribe systemd una duración, "+
 					"tampoco le sirve.\n"+
-					"  Se arregla con `Environment=MUSUBI_ESPERA_RED=300` en la unidad.",
+					"  Se arregla con UNA línea `Environment=MUSUBI_ESPERA_RED=300` en la unidad, y "+
+					"ninguna otra que nombre la variable.",
 					filepath.Base(u), m[1], pide)
 			}
 		}
@@ -269,4 +279,69 @@ func TestLaUnidadDeUnGuionQueSabeEsperarLaRedLePideQueEspere(t *testing.T) {
 			"escribir el ExecStart, o la de leer la variable — en los dos casos esta guarda dejó de mirar")
 	}
 	t.Logf("unidades revisadas: %s", strings.Join(revisadas, " · "))
+}
+
+// esperaQuePideLaUnidad devuelve la espera que el guion va a ver, en segundos, y cómo la pide la
+// unidad, para el mensaje. Un número <= 0 es «no espera».
+//
+// SE LEE COMO LA LEE SYSTEMD, Y GANA LA ÚLTIMA ASIGNACIÓN (systemd.exec(5)). La guarda tomaba la
+// primera `Environment=` que nombrara la variable: una segunda línea en 0 debajo de la de 300, un
+// `Environment=` vacío —que borra todo lo anterior— o un `UnsetEnvironment=` la dejaban en verde
+// con una unidad que no espera. Lo encontraron los tres jueces de la revisión de A139.
+//
+// NO SE MODELA CUÁL DE VARIAS GANA: LA VARIABLE SE NOMBRA UNA SOLA VEZ en `[Service]`. Una segunda
+// mención es rojo, sea otra asignación, un `UnsetEnvironment=`, un `PassEnvironment=` o un `env`
+// en el `ExecStart`, así que no hay una lista de formas que se pueda quedar corta. Lo único que
+// pisa la asignación sin nombrarla es el `Environment=` vacío, y ése se mira aparte.
+//
+// LO QUE NO VE. Las variables de un `EnvironmentFile=` le ganan a `Environment=`, y el del respaldo
+// vive fuera del repo. Y una línea continuada con `\` no se une con la siguiente: cada pedazo
+// cuenta sus menciones igual, así que eso sólo puede costar un rojo de más.
+func esperaQuePideLaUnidad(unidad string) (int, string) {
+	nombra := regexp.MustCompile(`\bMUSUBI_ESPERA_RED\b`)
+	// EL VALOR SE TOMA ENTERO Y SE LEE COMO LO LEE EL GUION: un entero, que `[ "$X" -gt 0 ]`
+	// acepta. Con `(\d+)` a secas, `300s` pasaba por 300 y el guion no esperaba nada.
+	asigna := regexp.MustCompile(`(?:^|\s)["']?MUSUBI_ESPERA_RED=([^\s"']*)`)
+	n, pide := -1, "no la declara en `Environment=`"
+	veces, seccion := 0, ""
+	var menciones []string
+	for _, linea := range strings.Split(unidad, "\n") {
+		// systemd.syntax(7): los espacios de las puntas no cuentan, y `#` o `;` abren un
+		// comentario.
+		linea = strings.TrimSpace(linea)
+		if linea == "" || strings.HasPrefix(linea, "#") || strings.HasPrefix(linea, ";") {
+			continue
+		}
+		if strings.HasPrefix(linea, "[") {
+			seccion = linea
+			continue
+		}
+		if seccion != "[Service]" {
+			continue
+		}
+		if k := len(nombra.FindAllStringIndex(linea, -1)); k > 0 {
+			veces += k
+			menciones = append(menciones, "«"+linea+"»")
+		}
+		// Los espacios alrededor del `=` tampoco cuentan.
+		clave, valor, ok := strings.Cut(linea, "=")
+		if !ok || strings.TrimSpace(clave) != "Environment" {
+			continue
+		}
+		valor = strings.TrimSpace(valor)
+		if valor == "" && veces > 0 {
+			n, pide = -1, pide+", y un `Environment=` vacío más abajo borra todo lo anterior"
+		} else if p := asigna.FindStringSubmatch(valor); p != nil {
+			n, pide = -1, "MUSUBI_ESPERA_RED="+strconv.Quote(p[1])
+			if v, err := strconv.Atoi(p[1]); err == nil {
+				n = v
+			}
+		}
+	}
+	if veces > 1 {
+		return -1, fmt.Sprintf("la nombra %d veces: %s. systemd aplica la última, y una segunda "+
+			"asignación, un `UnsetEnvironment=` o un `env` en el `ExecStart` la pisan sin que se vea",
+			veces, strings.Join(menciones, " · "))
+	}
+	return n, pide
 }
