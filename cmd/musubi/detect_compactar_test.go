@@ -240,6 +240,7 @@ func TestCompactarNoMuestraLaCorreccionDeTipeo(t *testing.T) {
 // arnes: archivo="cmd/musubi/detect.go"
 // arnes: de="\tif in.esCompactacion() {\n"
 // arnes: a="\tif false && in.esCompactacion() {\n"
+// arnes: colision_ok="TestCompactarNoRefrescaLosManuales"
 func TestCompactarNoCorreElArranqueEntero(t *testing.T) {
 	aislarDelPluginInstalado(t)
 	dir := proyectoConPedido(t, "S")
@@ -557,6 +558,7 @@ func TestElAvisoSinCompactSaleUnaSolaVez(t *testing.T) {
 // arnes: archivo="cmd/musubi/agente_plugin.go"
 // arnes: de="var matcherLista = regexp.MustCompile(`^[a-zA-Z0-9_|, -]+$`)\n"
 // arnes: a="var matcherLista = regexp.MustCompile(`^[a-zA-Z0-9_|]+$`)\n"
+// arnes: colision_ok="TestElPluginCedeConListaConComa"
 //
 // Sabotaje: la lista se parte sólo por «|».
 // arnes: archivo="cmd/musubi/agente_plugin.go"
@@ -656,6 +658,7 @@ func settingsConArranque(t *testing.T, matcher string) string {
 // arnes: archivo="cmd/musubi/agente_plugin.go"
 // arnes: de="var matcherLista = regexp.MustCompile(`^[a-zA-Z0-9_|, -]+$`)\n"
 // arnes: a="var matcherLista = regexp.MustCompile(`^[a-zA-Z0-9_|]+$`)\n"
+// arnes: colision_ok="TestLaCoberturaSigueLaReglaDelMatcher"
 func TestElPluginCedeConListaConComa(t *testing.T) {
 	t.Setenv("CLAUDE_PLUGIN_ROOT", t.TempDir())
 	t.Setenv("CLAUDE_PROJECT_DIR", settingsConArranque(t, "startup, compact"))
