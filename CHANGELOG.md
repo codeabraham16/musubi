@@ -31,8 +31,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   `musubi setup` y el plugin (`musubi agente instalar`) atan el mismo comando a tres matchers:
   `startup`, `compact` y `clear`. El plugin cede el arranque a un repo sólo si el settings del repo
   (`settings.json` o `settings.local.json`) corre `detect --hook-mode` con un matcher que cubre ESE
-  source. El matcher se lee con la regla de Claude Code. Con el setup viejo (sólo `startup`), el
-  plugin nuevo cede el arranque pero corre la compactación.
+  source. El matcher se lee con la regla que Claude Code aplica a `SessionStart` (leída de su binario
+  2.1.284): vacío o `*` es todo; una lista de valores separados por `|` o `,`, con o sin espacios
+  alrededor (`startup, compact`), es igualdad con cada uno; lo demás es una expresión regular sin
+  anclar. Con el setup viejo (sólo `startup`), el plugin nuevo cede el arranque pero corre la
+  compactación.
 
   Un repo sin el hook de compactación se entera por tres lados:
   - una línea de salud en el arranque, una sola vez por proyecto (marca `arranque_aviso_sin_compact`
@@ -44,8 +47,12 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   en cada compactación: vacía el delta y trae el priming, pero no el recall del último pedido. Un
   binario nuevo con el settings viejo nunca se entera de la compactación. En la ventana V1 el dueño
   instala el binario nuevo, vuelve a correr `musubi setup` en cada repo con Musubi y corre
-  `musubi agente instalar` para el plugin. La prueba de punta a punta con un `/compact` real queda
-  para esa ventana.
+  `musubi agente instalar` para el plugin. El orden importa: setup y el plugin graban la ruta
+  absoluta del binario que los corrió, así que van con el binario nuevo ya en su lugar definitivo, y
+  en Windows un `musubi.exe` viejo en la carpeta del repo le gana en `cmd` al instalado. Después, en
+  cada repo, `musubi version` confirma el binario y `musubi agente estado` tiene que decir
+  «Compactación: cubierta…»: esa línea y la de salud sólo existen en el binario nuevo, así que con el
+  viejo nada avisa. La prueba de punta a punta con un `/compact` real queda para esa ventana.
 - **El turno trae lo propio primero, y lo de otros proyectos con tope (`loop.recall_otros_proyectos`).**
   Hasta acá el hook del turno era federado sin reparto. En davantis-1, el 15,0 % de lo que inyectó
   en 36 sesiones era de otro proyecto (208 de 1385 notas), y el 74,0 % de eso eran registros

@@ -275,6 +275,51 @@ func TestCompactarNoCorreElArranqueEntero(t *testing.T) {
 	}
 }
 
+// TestCompactarNoRefrescaLosManuales: la compactación tampoco pone al día los manuales, que es del
+// arranque (ver skills_frescas.go). TestCompactarNoCorreElArranqueEntero no lo ve: su proyecto no
+// tiene .musubi/skills/, y sin esa carpeta el refresco no hace nada. Acá la tiene, y el CONTROL es el
+// arranque del mismo proyecto, que sí deja la huella de los manuales.
+//
+// Sabotaje: el hook refresca los manuales antes de despachar la compactación.
+// arnes: archivo="cmd/musubi/detect.go"
+// arnes: de="\tif in.esCompactacion() {\n"
+// arnes: a="\tif eng, err := memory.NewDbEngine(root); err == nil {\n\t\tst, _ := detector.DetectStack(root)\n\t\t_, _ = refrescarSkillsSiHaceFalta(root, eng, st)\n\t\t_ = eng.Close()\n\t}\n\tif in.esCompactacion() {\n"
+//
+// Sabotaje: la rama de la compactación refresca los manuales.
+// arnes: archivo="cmd/musubi/detect_compactar.go"
+// arnes: de="\tdefer engine.Close()\n\t// El proyecto propio y el embebedor salen"
+// arnes: a="\tdefer engine.Close()\n\t_, _ = refrescarSkillsSiHaceFalta(root, engine, nil)\n\t// El proyecto propio y el embebedor salen"
+func TestCompactarNoRefrescaLosManuales(t *testing.T) {
+	aislarDelPluginInstalado(t)
+	dir := proyectoConPedido(t, "S")
+	if err := os.MkdirAll(filepath.Join(dir, config.DirName, config.SkillsDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_PROJECT_DIR", dir)
+
+	out, err := detectOutputSegunFuente(dir, true, entradaDeArranque{SessionID: "S", Source: fuenteCompact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "[id:tls]") {
+		t.Fatalf("la compactación no devolvió la memoria: %q", out)
+	}
+	if v, ok := metaDe(t, dir, metaHuellaSkills); ok {
+		t.Errorf("la compactación refrescó los manuales: dejó la huella %q", v)
+	}
+	if n := len(skillMDs(t, dir)); n != 0 {
+		t.Errorf("la compactación exportó %d manuales a .claude/skills", n)
+	}
+
+	// CONTROL: el arranque del mismo proyecto sí los refresca.
+	if _, err := detectOutputSegunFuente(dir, true, entradaDeArranque{SessionID: "S2", Source: fuenteStartup}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := metaDe(t, dir, metaHuellaSkills); !ok {
+		t.Error("control: el arranque tenía que refrescar los manuales y dejar la huella")
+	}
+}
+
 // TestClearVaPorElArranque: /clear abre una sesión nueva, así que va por el arranque entero —acá, la
 // oferta de skills y la huella—, no por la rama de la compactación.
 //
@@ -501,9 +546,27 @@ func TestElAvisoSinCompactSaleUnaSolaVez(t *testing.T) {
 	}
 }
 
-// TestLaCoberturaSigueLaReglaDelMatcher: el matcher se lee con la regla de Claude Code —vacío o «*»
-// es todo, una lista con «|» es igualdad, lo demás es una expresión regular—, y el settings.local
-// cuenta igual que el settings: Claude Code junta los dos.
+// TestLaCoberturaSigueLaReglaDelMatcher: el matcher se lee con la regla que Claude Code aplica a
+// SessionStart —vacío o «*» es todo; una lista con «|» o «,», con o sin espacios alrededor, es
+// igualdad con cada valor; lo demás es una expresión regular—, y el settings.local cuenta igual que el
+// settings: Claude Code junta los dos. La regla de la lista está leída del binario de Claude Code
+// 2.1.284: para SessionStart acepta ^[a-zA-Z0-9_|, -]+$, parte por [|,] y le saca los espacios a cada
+// valor.
+//
+// Sabotaje: la lista vuelve a ser sólo letras, dígitos, «_» y «|», la regla de los otros eventos.
+// arnes: archivo="cmd/musubi/agente_plugin.go"
+// arnes: de="var matcherLista = regexp.MustCompile(`^[a-zA-Z0-9_|, -]+$`)\n"
+// arnes: a="var matcherLista = regexp.MustCompile(`^[a-zA-Z0-9_|]+$`)\n"
+//
+// Sabotaje: la lista se parte sólo por «|».
+// arnes: archivo="cmd/musubi/agente_plugin.go"
+// arnes: de="\t\tfor _, m := range separadorDeLista.Split(matcher, -1) {\n"
+// arnes: a="\t\tfor _, m := range strings.Split(matcher, \"|\") {\n"
+//
+// Sabotaje: los valores de la lista no pierden los espacios de los bordes.
+// arnes: archivo="cmd/musubi/agente_plugin.go"
+// arnes: de="\t\t\tif strings.TrimSpace(m) == valor {\n"
+// arnes: a="\t\t\tif m == valor {\n"
 //
 // Sabotaje: el matcher que es una expresión regular no cubre nada.
 // arnes: archivo="cmd/musubi/agente_plugin.go"
@@ -528,6 +591,17 @@ func TestLaCoberturaSigueLaReglaDelMatcher(t *testing.T) {
 		{"comp", "compact", false},
 		{"comp.*", "compact", true},
 		{"(", "compact", false},
+		// Con «-» sigue siendo una lista, y una lista no es una expresión regular: «comp» no cubre
+		// «compact».
+		{"comp|start-up", "compact", false},
+		{"compact ", "compact", true},
+		{"startup,compact", "compact", true},
+		{"startup, compact", "compact", true},
+		{"startup | compact", "compact", true},
+		{"startup, clear", "startup", true},
+		{"startup, clear", "compact", false},
+		// El espacio no separa: «startup compact» es un solo valor.
+		{"startup compact", "compact", false},
 	}
 	for _, c := range casos {
 		if got := matcherCubre(c.matcher, c.fuente); got != c.cubre {
@@ -555,5 +629,47 @@ func TestLaCoberturaSigueLaReglaDelMatcher(t *testing.T) {
 	}
 	if !elProyectoYaTieneElArranque(repo, fuenteCompact) {
 		t.Error("el settings.local con «compact» no cuenta: Claude Code lo junta con el settings")
+	}
+}
+
+// settingsConArranque arma un proyecto cuyo .claude/settings.json corre el hook de arranque de
+// Musubi con ese matcher.
+func settingsConArranque(t *testing.T, matcher string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, config.ClaudeDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s := `{"hooks":{"SessionStart":[{"matcher":"` + matcher + `","hooks":[{"type":"command","command":"musubi detect --hook-mode","timeout":10}]}]}}`
+	if err := os.WriteFile(filepath.Join(dir, config.ClaudeDir, config.ClaudeSettingsFile), []byte(s), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// TestElPluginCedeConListaConComa: un proyecto con el matcher escrito a mano como lista con coma
+// hace que Claude Code corra SU arranque para esas fuentes, así que el plugin cede, o hay dos bloques.
+// Con «startup, clear» es además la conducta de antes de este cambio: el plugin cedía el arranque si
+// el proyecto nombraba `detect --hook-mode`, sin mirar el matcher.
+//
+// Sabotaje: la lista vuelve a ser sólo letras, dígitos, «_» y «|», la regla de los otros eventos.
+// arnes: archivo="cmd/musubi/agente_plugin.go"
+// arnes: de="var matcherLista = regexp.MustCompile(`^[a-zA-Z0-9_|, -]+$`)\n"
+// arnes: a="var matcherLista = regexp.MustCompile(`^[a-zA-Z0-9_|]+$`)\n"
+func TestElPluginCedeConListaConComa(t *testing.T) {
+	t.Setenv("CLAUDE_PLUGIN_ROOT", t.TempDir())
+	t.Setenv("CLAUDE_PROJECT_DIR", settingsConArranque(t, "startup, compact"))
+	if !elPluginCedeElArranque(fuenteCompact) {
+		t.Error("«startup, compact»: el plugin no cede la compactación y Claude Code corre también la del proyecto: dos bloques tras compactar")
+	}
+	if !elPluginCedeElArranque(fuenteStartup) {
+		t.Error("«startup, compact»: el plugin no cede el arranque: dos primings")
+	}
+	t.Setenv("CLAUDE_PROJECT_DIR", settingsConArranque(t, "startup, clear"))
+	if !elPluginCedeElArranque(fuenteStartup) {
+		t.Error("«startup, clear»: el plugin no cede el arranque: dos primings")
+	}
+	if elPluginCedeElArranque(fuenteCompact) {
+		t.Error("«startup, clear»: el plugin cede la compactación, que el proyecto no corre: nadie devuelve la memoria")
 	}
 }

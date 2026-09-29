@@ -30,7 +30,8 @@ import (
 //     memoria: el hook los trata como un pedido y busca con el texto del aviso. Sólo cuenta los que
 //     el hook ve: los registros de un slash-command no pasan por él y se informan aparte.
 //   - M2: compactaciones seguidas de un bloque de Musubi del SessionStart antes del próximo pedido.
-//     Hoy el hook de arranque sólo escucha «startup», así que tras compactar Musubi calla.
+//     Mientras el hook de arranque escuchó sólo «startup», tras compactar Musubi callaba. Ahora setup
+//     y el plugin lo atan también a «compact» (detect_compactar.go), y M2 dice si llegó a cada repo.
 //   - M3: ids de memoria repetidos DENTRO de una misma ventana de contexto: ya estaban a la vista.
 //   - M5: ids de una ventana ANTERIOR que volvieron después de compactar. El resumen de la
 //     compactación no guarda la memoria de Musubi, y el delta de la sesión la sigue dando por

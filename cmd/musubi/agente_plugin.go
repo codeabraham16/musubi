@@ -479,18 +479,25 @@ func arranqueDeMusubiCubre(crudo []byte, fuente string) bool {
 	return false
 }
 
-// matcherSimple es la forma de matcher que Claude Code compara por igualdad, o por lista con «|».
-var matcherSimple = regexp.MustCompile(`^[a-zA-Z0-9_|]+$`)
+// matcherLista es la forma de matcher que Claude Code lee, en SessionStart, como uno o varios valores
+// exactos: letras, dígitos, «_», espacio y «-», separados por «|» o «,». Es la regla extendida que
+// Claude Code aplica a SessionStart y a otros eventos; los demás no admiten coma ni espacio, pero acá
+// sólo se lee SessionStart.
+var matcherLista = regexp.MustCompile(`^[a-zA-Z0-9_|, -]+$`)
 
-// matcherCubre dice si un matcher de hook dispara para el valor, con la regla de Claude Code: vacío
-// o «*» dispara para todo; letras, dígitos, «_» y «|» son uno o varios valores exactos; cualquier
-// otra cosa es una expresión regular sin anclar, y una que no compila no dispara.
+// separadorDeLista parte un matcher de lista.
+var separadorDeLista = regexp.MustCompile(`[|,]`)
+
+// matcherCubre dice si un matcher del SessionStart dispara para el valor, con la regla de Claude
+// Code para ese evento: vacío o «*» dispara para todo; un matcher de lista (matcherLista) son valores
+// exactos, cada uno sin los espacios de los bordes —«startup, compact» son dos—; cualquier otra cosa
+// es una expresión regular sin anclar, y una que no compila no dispara.
 func matcherCubre(matcher, valor string) bool {
 	if matcher == "" || matcher == "*" {
 		return true
 	}
-	if matcherSimple.MatchString(matcher) {
-		for _, m := range strings.Split(matcher, "|") {
+	if matcherLista.MatchString(matcher) {
+		for _, m := range separadorDeLista.Split(matcher, -1) {
 			if strings.TrimSpace(m) == valor {
 				return true
 			}
