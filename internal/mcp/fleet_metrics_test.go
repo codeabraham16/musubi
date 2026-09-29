@@ -390,9 +390,17 @@ func TestUnLatidoSinMuestraNoBorraLaAnterior(t *testing.T) {
 // («la máquina del token no recibió su autorreporte»), que es el cabo cerrado y no el invariante.
 // El invariante es que NO se toque la fila ajena, así que el sabotaje tiene que AGREGAR la
 // escritura prohibida y dejar la legítima en pie.
+//
+// EL ANCLA VA DONDE ESTÁ EL CUERPO CRUDO, no al lado de la llamada legítima. El `device_id` no es
+// un campo de `fleet.CuerpoLatido` —ése es justamente el invariante—, así que el sabotaje sólo lo
+// puede sacar de los bytes, y los bytes viven en `leerCuerpoDelLatido`. A133 (#706, 2026-09-27)
+// partió esa función en dos: la llamada se mudó a `aplicarCuerpoDelLatido`, el ancla se mudó con
+// ella y `crudo` se quedó del otro lado. Desde entonces el sabotaje no compilaba («undefined:
+// crudo»), y `-validar` seguía en verde porque mira que el `de` exista, no que el `a` compile. Un
+// rojo de compilación no es el rojo de esta aserción. Medido el 2026-09-29.
 // arnes: archivo="internal/mcp/fleet_http.go"
-// arnes: de="\t\t_ = s.engine.ActualizarAutoreporte(d.ID, version, direccion)\n\t}\n"
-// arnes: a="\t\t_ = s.engine.ActualizarAutoreporte(d.ID, version, direccion)\n\t}\n\tvar identidadReportada struct {\n\t\tDeviceID string `json:\"device_id\"`\n\t}\n\tif jsonpkg.Unmarshal(crudo, &identidadReportada) == nil && identidadReportada.DeviceID != \"\" {\n\t\t_ = s.engine.ActualizarAutoreporte(identidadReportada.DeviceID, version, direccion)\n\t}\n"
+// arnes: de="\tjson, notaMuestra, notaServicios, notaProtocolo = s.aplicarCuerpoDelLatido(d, cuerpo)\n"
+// arnes: a="\tjson, notaMuestra, notaServicios, notaProtocolo = s.aplicarCuerpoDelLatido(d, cuerpo)\n\tvar identidadReportada struct {\n\t\tDeviceID string `json:\"device_id\"`\n\t}\n\tif jsonpkg.Unmarshal(crudo, &identidadReportada) == nil && identidadReportada.DeviceID != \"\" {\n\t\t_ = s.engine.ActualizarAutoreporte(identidadReportada.DeviceID, cuerpo.Version, cuerpo.Direccion)\n\t}\n"
 func TestElAutorreporteSoloTocaLaFilaDelToken(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 	otroToken := enrolarDePrueba(t, s, "casa", "servidor-critico")
@@ -461,7 +469,7 @@ func TestElAutorreporteNoDependeDeLaCapacidadMetrics(t *testing.T) {
 // arnes: archivo="internal/mcp/fleet_http.go"
 // arnes: de="ActualizarAutoreporte(d.ID, version, direccion)"
 // arnes: a="ActualizarAutoreporte(d.ID, cuerpo.Version, direccion)"
-// arnes: colision_ok="TestElAutorreporteSoloTocaLaFilaDelToken TestUnAgenteQueSeActualizoSiEscribeSuVersionNueva"
+// arnes: colision_ok="TestUnAgenteQueSeActualizoSiEscribeSuVersionNueva"
 func TestElAutorreporteSeRecorta(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 	largo := strings.Repeat("v", 500)

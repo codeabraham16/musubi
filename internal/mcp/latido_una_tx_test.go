@@ -315,7 +315,7 @@ func TestEntregarUnComandoNoLeCuestaOtraTransaccionAlLatido(t *testing.T) {
 // arnes: archivo="internal/mcp/fleet_http.go"
 // arnes: de="\t\t_ = s.engine.ActualizarAutoreporte(d.ID, version, direccion)"
 // arnes: a="\t\t_ = d.ID"
-// arnes: colision_ok="TestElAutorreporteSoloTocaLaFilaDelToken TestElAutorreporteSeRecorta"
+// arnes: colision_ok="TestElAutorreporteSeRecorta"
 func TestUnAgenteQueSeActualizoSiEscribeSuVersionNueva(t *testing.T) {
 	s, ts, token, espia := servidorConEspiaDeEscrituras(t)
 
