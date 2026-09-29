@@ -76,9 +76,13 @@ func (e *DbEngine) PrimeContextCtx(ctx context.Context, budget int) (RecallResul
 	//
 	// Va ANTES de packByBudget, y eso decide el borde del presupuesto: si la nota más saliente de un
 	// tema no cabe en lo que queda, el tema queda afuera y su lugar lo toma la próxima nota de OTRO
-	// tema que quepa (el `continue` de empaquetar). La segunda del mismo tema no entra: sería una
-	// versión menos saliente del tema, elegida sólo por ser más corta. Y hacerlo adentro tocaría
-	// empaquetar, que es el núcleo que el priming comparte con el recall por turno.
+	// tema que quepa (el `continue` de empaquetar). Cada tema entra con su mejor nota o no entra, y
+	// tiene un costo: si ninguna otra cabe, ese lugar queda sin usar aunque la segunda del tema
+	// cupiera. Sobre la copia de davantis-1 del 2026-09-29, con 150, 200, 350 y 600 tokens de
+	// presupuesto el bloque trae un tema menos del que cabría; con los 300 por defecto, no. Contar el
+	// tema recién al entrar, adentro de empaquetar, no es mejor: la segunda de un tema puede ocupar el
+	// lugar donde cabían dos temas nuevos. Lo que recupera el sobrante sin perder temas es una segunda
+	// pasada con él.
 	//
 	// Sin vectores ni MMR, a propósito: sobre las 2.412 candidatas de ese arranque, diversificar por
 	// similitud pediría los vectores de todas, cada vez.

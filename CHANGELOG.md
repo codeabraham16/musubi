@@ -891,9 +891,12 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
   **Si la nota más saliente de un tema no cabe en lo que queda del presupuesto, el tema queda
   afuera**, y el lugar lo toma la próxima nota de otro tema que quepa (el `continue` de
-  `empaquetar`). La segunda del mismo tema no entra: sería una versión menos saliente del tema,
-  elegida sólo por ser más corta, y llevar la deduplicación adentro de `empaquetar` tocaría el núcleo
-  que el priming comparte con el recall por turno.
+  `empaquetar`): cada tema entra con su mejor nota o no entra. Tiene un costo: si ninguna otra nota
+  cabe en ese lugar, queda sin usar aunque la segunda del tema cupiera. Sobre la copia del
+  2026-09-29, con 150, 200, 350 y 600 tokens de presupuesto el bloque trae un tema menos del que
+  cabría; con los 300 por defecto, no. Contar el tema recién al entrar, adentro de `empaquetar`, no
+  es mejor: la segunda de un tema puede ocupar el lugar donde cabían dos temas nuevos. Una segunda
+  pasada con el sobrante recuperaría ese tema sin perder otros; no está en este cambio.
 
   `TestPrimingUnaNotaPorTema` lo prueba por los dos caminos del hook (todo el acervo y acotado a lo
   propio), `TestPrimingElTemaQueNoCabeQuedaAfuera` fija el borde del presupuesto y
@@ -904,18 +907,25 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
   **El costo, medido con `BenchmarkPrimeContext`** (`-count=5`, esta rama contra un árbol de
   009ebfae, en la misma máquina): el mapa de temas suma 54,6 KB y 5 allocs por llamada con 1.000
-  notas (+3,6 % de B/op) y 437 KB y 33 allocs con 10.000 (+2,4 %). El tiempo no sube, baja: de 5,6 a
-  3,5 ms con 1.000 y de 61 a 43 ms con 10.000 (medianas; el tiempo de esta máquina es ruidoso, la
-  memoria no). Es la cola del presupuesto: cuando lo que queda no alcanza para la próxima nota,
-  `empaquetar` sigue probando candidatas —estimando los tokens de cada una— hasta el final del
-  ranking, y ahora el ranking tiene una por tema (el banco tiene 50). El perfil de CPU lo confirma
-  (n=1.000, `-benchtime=300x`): `empaquetar` suma 0,51 s en 009ebfae, unos 1,7 ms por llamada, y
-  0,01 s en esta rama, una sola muestra.
+  notas (+3,6 % de B/op) y 437 KB y 33 allocs con 10.000 (+2,4 %). En el banco el tiempo no sube,
+  baja: de 5,6 a 3,5 ms con 1.000 y de 61 a 43 ms con 10.000 (medianas; el tiempo de esta máquina es
+  ruidoso, la memoria no). Es la cola del presupuesto: cuando lo que queda no alcanza para la
+  próxima nota, `empaquetar` sigue probando candidatas —estimando los tokens de cada una— hasta el
+  final del ranking, y el banco siembra 50 temas: con una nota por tema, su ranking queda en 50
+  candidatas. El perfil de CPU lo confirma (n=1.000, `-benchtime=300x`): `empaquetar` suma 0,51 s en
+  009ebfae, unos 1,7 ms por llamada, y 0,01 s en esta rama, una sola muestra. **Eso es del banco, no
+  del arranque.** En una copia de la base de davantis-1 del 2026-09-29 hay 1.375 temas en 2.405
+  candidatas, y sobre esa copia, intercalando los dos binarios, el arranque real no muestra
+  diferencia: medianas de 422 ms en main y 436 ms en esta rama de punta a punta (20 rondas), y de
+  47,7 y 49,4 ms el priming en proceso (30 iteraciones).
 
   La deduplicación es por `topic_key` a secas: en «mezclado», y en el respaldo cuando no hay nada
   propio, dos proyectos con el mismo tema cuentan como uno (en esa base, 7 temas están en más de un
-  proyecto). Sólo el bloque del SessionStart: el recall por turno, las tools y el ranking de
-  saliencia no cambian. Llega a cada máquina con su binario.
+  proyecto). Cambia sólo el bloque del SessionStart: el recall por turno, las tools y el ranking de
+  saliencia no cambian de algoritmo. Pero el arranque siembra el delta de la sesión con lo que
+  mostró, y el turno saltea lo sembrado: como el bloque trae otras notas, en esa sesión el turno
+  puede traer las del mismo tema que el arranque dejó afuera, y deja de repetir las que entraron.
+  Llega a cada máquina con su binario.
 - **El latido del riel en vivo ya no dice «sin sondeo» con el sistema sano.** El pie del riel contaba
   los sondeos del último minuto y con cero apagaba la lámpara. Con la bajada espaciada una máquina
   quieta pide cada 300 s, y hasta ~450 s cuando el candado cambia de dueño porque el anterior murió
