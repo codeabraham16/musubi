@@ -184,6 +184,14 @@ const marcaDeVersionRecortada = "…"
 // commit no tiene. Con la marca, detrás del último punto ya no hay una huella y la comparación
 // vuelve al texto, que es el lado seguro. Lo encontró la revisión de A138: la comparación textual
 // de antes no igualaba esas dos cadenas, así que el hueco lo abría la comparación por commit.
+//
+// EL LADO SEGURO TIENE UN COSTO. Un build LIMPIO que no entra también pierde su huella detrás de
+// la marca, así que da «otro código» contra su mismo commit, cuando el corte mudo a veces le
+// dejaba siete caracteres de huella y lo igualaba. Hoy no pasa, porque una versión de construir.sh
+// mide unos veinte bytes. Pero el cerebro no recorta la suya: si una etiqueta llevara las
+// versiones más allá del techo, toda máquina construida con ella quedaría como «otro código»
+// aunque esté al día. Se acepta porque ese error se ve y se investiga, y el contrario esconde una
+// máquina vieja detrás de un «al día».
 func VersionReportada(v string) string {
 	v = strings.TrimSpace(v)
 	if len(v) <= VersionReportadaMax {

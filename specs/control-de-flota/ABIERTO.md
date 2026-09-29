@@ -780,9 +780,11 @@ Se vio el 2026-09-29, al preparar la actualización de gio: el cerebro corría `
 - La ayuda de la serie deja de decir «BINARIO distinto (release Y commit)».
 
 **Lo que encontró la revisión, y se arregló antes de unir:**
-- El latido recortaba la versión a 64 bytes sin avisar, y `-sucio` va detrás de la huella. Un build sucio de etiqueta larga quedaba guardado como el build LIMPIO de ese commit, y la comparación por commit lo igualaba con el cerebro. La textual de antes no lo hacía: el hueco lo abría este cambio. Hoy no se alcanza, porque pide una etiqueta de 46 a 48 caracteres, pero la serie no puede declarar «al día» a una máquina que no lo está.
+- El latido recortaba la versión a 64 bytes sin avisar, y `-sucio` va detrás de la huella. Un build sucio de etiqueta larga quedaba guardado como el build LIMPIO de ese commit, y la comparación por commit lo igualaba con el cerebro. La textual de antes no lo hacía: el hueco lo abría este cambio. Hoy no se alcanza, porque con las huellas de 7 u 8 caracteres de hoy pide una etiqueta de 47 o 48, y la ventana se ensancha con la huella. Pero la serie no puede declarar «al día» a una máquina que no lo está.
   - Ahora el recorte vive en el dominio, `fleet.VersionReportada`, y se marca con `…`, que no es hexadecimal: detrás del último punto ya no queda una huella.
   - `TestUnaVersionSuciaQueNoEntraNoSeGuardaComoUnBuildLimpio` lo mide de punta a punta: el latido, la fila y la serie.
+  - El lado seguro tiene un costo: un build LIMPIO que no entra también pierde su huella y da «otro código» contra su mismo commit. Hoy no pasa, porque una versión mide unos veinte bytes. Se acepta porque ese error se ve, y el contrario esconde una máquina vieja.
+  - `TestElAutorreporteSeRecorta`, que ya existía, mira el techo de lo que se GUARDA. Suma el sabotaje de comparar la versión recortada y guardar la cruda, que la prueba de punta a punta de A138 no ve.
 - Ninguna prueba ejercitaba una huella en mayúsculas, y aceptarlas quedaba en verde. `TestSoloUnaHuellaDeGitSeIgualaPorPrefijo` suma el caso con las DOS cadenas en mayúsculas: con una sola, el prefijo ya no coincide y la fila no distingue nada.
 - La huella no tiene techo de 40 caracteres, aunque el diseño lo decía: un repositorio con `sha256` las tiene de 64, y cortarlas dejaría afuera un commit legítimo. El registro, la ayuda y el código dicen lo mismo: «al menos 7».
 

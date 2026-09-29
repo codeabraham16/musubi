@@ -607,9 +607,13 @@ func escribirLatido(w http.ResponseWriter, code int, resp fleet.RespuestaLatido)
 	_ = jsonpkg.NewEncoder(w).Encode(resp)
 }
 
-// recortar acota un texto que viene del device. El cuerpo ya está acotado en bytes, pero un
-// `agent_version` de 4 KiB seguiría ensuciando el inventario y las etiquetas de Prometheus: un
-// campo que se muestra en una tabla tiene que tener un tamaño de tabla.
+// recortar acota un texto que viene del device. El cuerpo ya está acotado en bytes, pero una
+// `direccion` de 4 KiB seguiría ensuciando el inventario y los registros: un campo que se muestra
+// en una tabla tiene que tener un tamaño de tabla.
+//
+// EL RECORTE ES MUDO, así que sirve sólo para un campo cuyo final no decide nada. La versión del
+// agente no pasa por acá: lleva `-sucio` al final, y cortarlo callado dejaba un build sucio guardado
+// como uno limpio (A138). Va por `fleet.VersionReportada`, que marca el recorte.
 func recortar(s string, max int) string {
 	if len(s) <= max {
 		return s
