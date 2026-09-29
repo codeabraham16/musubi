@@ -879,6 +879,65 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   el latido ya no recorta la versión en silencio: una versión sucia de más de 64 bytes perdía el
   `-sucio`, que va detrás de la huella, y la comparación por commit la habría dado por limpia.
   Ahora el recorte lleva una marca y esa versión se compara como texto.
+- **El arranque trae una nota por tema.** El bloque «[Musubi — memoria]» del SessionStart rankea lo
+  visible por saliencia y lo empaqueta hasta el presupuesto (300 tokens por defecto), y un tema con
+  varias notas muy consultadas se llevaba varios lugares del mismo bloque. Medido el 2026-09-28 con
+  `musubi detect --hook-mode` sobre una copia de la base de davantis-1 (2.412 candidatas en el alcance
+  del arranque), el binario de main y el de esta rama sobre la MISMA copia:
+
+  | | main (009ebfae) | esta rama |
+  |---|---|---|
+  | notas en el bloque | 15 | 14 |
+  | temas distintos | 9 | 14 |
+  | tema más repetido | `project/brain-dashboard-webgl`, 5 veces | ninguno: 1 por tema |
+  | caracteres del bloque | 2.872 | 2.770 |
+
+  Las cinco del dashboard son de julio: las sostienen arriba su importancia (6 y 7) y sus accesos, el
+  último entre el 24 y el 27 de septiembre. Ocupaban un tercio del bloque, y
+  `ola1/prender-lo-construido` otros tres lugares. Ahora `PrimeContextCtx`, después del orden por
+  saliencia, deja pasar sólo la primera nota de cada `topic_key` —la más saliente— y recién ahí
+  empaqueta: el lugar de las repetidas lo toman seis temas que antes no entraban, y sale uno, el que
+  en main entraba último. Un topic vacío o en blanco no se deduplica, porque no dice de qué habla la
+  nota. Sin vectores ni MMR: diversificar por similitud pediría los vectores de todas las candidatas
+  en cada arranque.
+
+  **Si la nota más saliente de un tema no cabe en lo que queda del presupuesto, el tema queda
+  afuera**, y el lugar lo toma la próxima nota de otro tema que quepa (el `continue` de
+  `empaquetar`): cada tema entra con su mejor nota o no entra. Tiene un costo: si ninguna otra nota
+  cabe en ese lugar, queda sin usar aunque la segunda del tema cupiera. Sobre la copia del
+  2026-09-29, con 150, 200, 350 y 600 tokens de presupuesto el bloque trae un tema menos del que
+  cabría; con los 300 por defecto, no. Contar el tema recién al entrar, adentro de `empaquetar`, no
+  es mejor: la segunda de un tema puede ocupar el lugar donde cabían dos temas nuevos. Una segunda
+  pasada con el sobrante recuperaría ese tema sin perder otros; no está en este cambio.
+
+  `TestPrimingUnaNotaPorTema` lo prueba por los dos caminos del hook (todo el acervo y acotado a lo
+  propio), `TestPrimingElTemaQueNoCabeQuedaAfuera` fija el borde del presupuesto y
+  `TestPrimingElTemaVacioNoSeDeduplica`, el tema vacío y el en blanco. `TestPrimeContextRespetaBudget`
+  pasa a tener un tema por nota: con las diez en `topic/x` entraba una sola, y la prueba seguía verde
+  con un `empaquetar` que no mirara el presupuesto (medido con ese sabotaje, que ahora la pone roja).
+  Cinco sabotajes mecanizados en total.
+
+  **El costo, medido con `BenchmarkPrimeContext`** (`-count=5`, esta rama contra un árbol de
+  009ebfae, en la misma máquina): el mapa de temas suma 54,6 KB y 5 allocs por llamada con 1.000
+  notas (+3,6 % de B/op) y 437 KB y 33 allocs con 10.000 (+2,4 %). En el banco el tiempo no sube,
+  baja: de 5,6 a 3,5 ms con 1.000 y de 61 a 43 ms con 10.000 (medianas; el tiempo de esta máquina es
+  ruidoso, la memoria no). Es la cola del presupuesto: cuando lo que queda no alcanza para la
+  próxima nota, `empaquetar` sigue probando candidatas —estimando los tokens de cada una— hasta el
+  final del ranking, y el banco siembra 50 temas: con una nota por tema, su ranking queda en 50
+  candidatas. El perfil de CPU lo confirma (n=1.000, `-benchtime=300x`): `empaquetar` suma 0,51 s en
+  009ebfae, unos 1,7 ms por llamada, y 0,01 s en esta rama, una sola muestra. **Eso es del banco, no
+  del arranque.** En una copia de la base de davantis-1 del 2026-09-29 hay 1.375 temas en 2.405
+  candidatas, y sobre esa copia, intercalando los dos binarios, el arranque real no muestra
+  diferencia: medianas de 422 ms en main y 436 ms en esta rama de punta a punta (20 rondas), y de
+  47,7 y 49,4 ms el priming en proceso (30 iteraciones).
+
+  La deduplicación es por `topic_key` a secas: en «mezclado», y en el respaldo cuando no hay nada
+  propio, dos proyectos con el mismo tema cuentan como uno (en esa base, 7 temas están en más de un
+  proyecto). Cambia sólo el bloque del SessionStart: el recall por turno, las tools y el ranking de
+  saliencia no cambian de algoritmo. Pero el arranque siembra el delta de la sesión con lo que
+  mostró, y el turno saltea lo sembrado: como el bloque trae otras notas, en esa sesión el turno
+  puede traer las del mismo tema que el arranque dejó afuera, y deja de repetir las que entraron.
+  Llega a cada máquina con su binario.
 - **El cambiador de Windows vuelve a leer el lanzador, y una actualización ya no vuelve atrás
   siempre (A137).** Desde #575, `deploy/cambiar-agente.cmd` buscaba `"%DIR%agente.cmd"`, pero `DIR`
   no trae la barra final. La ruta quedaba `…\Musubiagente.cmd`, que no existe: la prueba del binario
