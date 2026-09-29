@@ -912,6 +912,18 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **Una máquina al día con el código del cerebro ya no queda marcada para siempre por la etiqueta
+  del build (A138).** `musubi_fleet_device_agent_build_stale` comparaba la versión entera como
+  texto, y la versión lleva dos cosas que no salen del código: la etiqueta del track (`flota` el
+  actualizador de Windows, `main` el redespliegue del cerebro) y el largo de la huella, que git
+  alarga cuando el clon tiene más objetos. `0.141.0-flota.eb2cdb72` y `0.141.0-main.eb2cdb7` son
+  el mismo commit, y la serie decía que no. Ahora compara el núcleo y el commit, el commit por
+  prefijo y con al menos 7 caracteres hexadecimales; un build sucio no se iguala por commit, y lo
+  que no tiene esa forma sigue comparándose como texto. `deploy/pruebas/version-parseable.sh` le
+  pasa al comparador lo que emite el `construir.sh` de verdad, con el build sucio como control. Y
+  el latido ya no recorta la versión en silencio: una versión sucia de más de 64 bytes perdía el
+  `-sucio`, que va detrás de la huella, y la comparación por commit la habría dado por limpia.
+  Ahora el recorte lleva una marca y esa versión se compara como texto.
 - **El arranque trae una nota por tema.** El bloque «[Musubi — memoria]» del SessionStart rankea lo
   visible por saliencia y lo empaqueta hasta el presupuesto (300 tokens por defecto), y un tema con
   varias notas muy consultadas se llevaba varios lugares del mismo bloque. Medido el 2026-09-28 con

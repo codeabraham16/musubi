@@ -1,6 +1,10 @@
 package fleet
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"unicode/utf8"
+)
 
 // LAS DOS FAMILIAS DE VERSIÓN QUE HAY ENROLADAS TIENEN QUE PARSEAR.
 //
@@ -99,11 +103,12 @@ func TestUnCerebroSinVersionNoMarcaAtrasadaALaFlotaEntera(t *testing.T) {
 // y marcaría a la flota entera— y ésta no puede ordenar dos commits, porque de la cadena no sale
 // ningún orden.
 //
-// Sabotaje: hacer que BuildDelAgenteDifiere compare el núcleo, que es volver a A118.
+// Sabotaje: hacer que BuildDelAgenteDifiere compare el núcleo, que es volver a A118. Desde A138 el
+// commit sale de `commitDelBuild`, así que basta con que lo tire: queda sólo el núcleo.
 //
 // arnes: archivo="internal/fleet/version.go"
-// arnes: de="\treturn a != c, true\n}"
-// arnes: a="\tna, _ := NucleoDeVersion(a)\n\tnc, _ := NucleoDeVersion(c)\n\treturn na != nc, true\n}"
+// arnes: de="\treturn nucleo, commit, true\n}"
+// arnes: a="\treturn nucleo, \"\", true\n}"
 func TestDosBuildsDelMismoReleaseSonBinariosDistintos(t *testing.T) {
 	const cerebro = "0.131.0-flota.d6f623d"
 
@@ -142,5 +147,292 @@ func TestSinVersionDelCerebroElBuildNoSeCompara(t *testing.T) {
 		if difiere, comparable := BuildDelAgenteDifiere("0.131.0-flota.abc", cerebro); comparable || difiere {
 			t.Errorf("con el cerebro en %q la comparación se contestó (difiere=%v comparable=%v)", cerebro, difiere, comparable)
 		}
+	}
+}
+
+// EL MISMO COMMIT ES EL MISMO CÓDIGO, AUNQUE CAMBIEN LA ETIQUETA Y EL LARGO DE LA HUELLA (A138).
+//
+// Medido el 2026-09-29: el cerebro corría `0.141.0-main.eb2cdb7` y ese MISMO commit, construido por
+// el actualizador de Windows en la laptop, salía `0.141.0-flota.eb2cdb72`. Otra etiqueta, porque la
+// elige quien construye, y una huella un carácter más larga, porque `git rev-parse --short` la
+// alarga cuando el clon tiene más objetos. Con la comparación textual, una máquina actualizada a
+// exactamente el código del cerebro quedaba marcada para siempre: la alerta no se apagaba ni
+// actualizando.
+//
+// Y la respuesta no puede depender de cuál de los dos es el cerebro: si A es el mismo código que B,
+// B es el mismo código que A. La prueba pregunta en los dos sentidos.
+//
+// EL ORDEN DE LAS FILAS ES PARTE DE LA PRUEBA. Cada sabotaje de abajo cae PRIMERO en una fila
+// distinta, así que el motivo del rojo dice cuál se rompió: con las filas en otro orden, tres de
+// ellos caían en la misma y el arnés no los podía distinguir. Por eso la primera fila tiene la misma
+// huella —sólo la tira el texto entero— y la segunda tiene la huella más larga del lado del cerebro,
+// que sólo la tira la igualdad exacta, y con los papeles cambiados el no ordenar por largo.
+//
+// Sabotaje: volver a comparar el texto entero, que es exactamente lo que había en main.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="\treturn !mismoCodigo(a, c), true\n}"
+// arnes: a="\treturn a != c, true\n}"
+//
+// Sabotaje: igualar las huellas sólo si son idénticas, que deja afuera el largo variable.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="\treturn strings.HasPrefix(y, x)\n}"
+// arnes: a="\treturn x == y\n}"
+//
+// Sabotaje: no ordenar las huellas por largo, con lo que el prefijo se mira en un solo sentido.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="\tif len(x) > len(y) {\n\t\tx, y = y, x\n\t}\n"
+// arnes: a=""
+//
+// Sabotaje: igualar el commit sin mirar el release.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="okA && okC && na == nc && mismoCommit(ca, cc)"
+// arnes: a="okA && okC && na+nc != \"\" && mismoCommit(ca, cc)"
+func TestElMismoCommitEsElMismoCodigoAunqueCambieLaEtiqueta(t *testing.T) {
+	const cerebro = "0.141.0-main.eb2cdb7"
+
+	casos := []struct {
+		nombre  string
+		agente  string
+		cerebro string
+		difiere bool
+	}{
+		{"otra etiqueta, la misma huella", "0.141.0-flota.eb2cdb7", cerebro, false},
+		{"el cerebro con la huella más larga", "0.141.0-flota.eb2cdb7", "0.141.0-main.eb2cdb72", false},
+		// EL CASO MEDIDO: el actualizador de Windows contra el redespliegue del cerebro.
+		{"el agente con la huella más larga", "0.141.0-flota.eb2cdb72", cerebro, false},
+		{"la huella completa", "0.141.0-flota.eb2cdb72ffa390b24bdc391f96df977e309a41df", cerebro, false},
+		{"una etiqueta con guiones", "0.141.0-mi-rama.eb2cdb7", cerebro, false},
+		// El agente de musubi-server el mismo día: mismo release, otro commit. Ése SÍ difiere.
+		{"otro commit", "0.141.0-main.b14bff87", cerebro, true},
+		// La misma huella con otro release no es el mismo código: o la huella choca, o la cadena la
+		// armó alguien a mano. Ninguna de las dos es «al día».
+		{"otro release con la misma huella", "0.140.3-flota.eb2cdb7", cerebro, true},
+	}
+	for _, c := range casos {
+		difiere, comparable := BuildDelAgenteDifiere(c.agente, c.cerebro)
+		if difiere != c.difiere || !comparable {
+			t.Errorf("%s: BuildDelAgenteDifiere(%q, %q) = (%v, %v); esperaba (%v, true)",
+				c.nombre, c.agente, c.cerebro, difiere, comparable, c.difiere)
+		}
+		difiere, comparable = BuildDelAgenteDifiere(c.cerebro, c.agente)
+		if difiere != c.difiere || !comparable {
+			t.Errorf("%s, con los papeles cambiados: BuildDelAgenteDifiere(%q, %q) = (%v, %v); esperaba (%v, true)",
+				c.nombre, c.cerebro, c.agente, difiere, comparable, c.difiere)
+		}
+	}
+}
+
+// UN BUILD SUCIO NO SE IGUALA POR COMMIT: NO SALIÓ DEL COMMIT QUE NOMBRA.
+//
+// construir.sh le pega `-sucio` a la versión cuando el árbol tenía cambios sin commitear. Ese
+// binario lleva código que el commit no tiene, y dos sucios del mismo commit pueden llevar cambios
+// distintos: igualarlos por la huella sería declarar «al día» a una máquina que corre otra cosa, que
+// es lo único que esta serie no puede hacer. La cadena idéntica sí se iguala —es lo que hacía la
+// comparación textual, y el dato no da para más—.
+//
+// Sabotaje: leer el commit de un build sucio como si fuera limpio.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="\tnucleo, resto, _ := strings.Cut(v, \"-\")\n"
+// arnes: a="\tnucleo, resto, _ := strings.Cut(strings.TrimSuffix(v, \"-sucio\"), \"-\")\n"
+func TestUnBuildSucioNoSeIgualaPorCommit(t *testing.T) {
+	casos := []struct {
+		nombre  string
+		agente  string
+		cerebro string
+		difiere bool
+	}{
+		{"el agente sucio", "0.141.0-flota.eb2cdb72-sucio", "0.141.0-main.eb2cdb7", true},
+		{"el cerebro sucio", "0.141.0-flota.eb2cdb72", "0.141.0-main.eb2cdb7-sucio", true},
+		{"los dos sucios del mismo commit", "0.141.0-flota.eb2cdb7-sucio", "0.141.0-main.eb2cdb7-sucio", true},
+		{"la misma cadena sucia", "0.141.0-main.eb2cdb7-sucio", "0.141.0-main.eb2cdb7-sucio", false},
+	}
+	for _, c := range casos {
+		difiere, comparable := BuildDelAgenteDifiere(c.agente, c.cerebro)
+		if difiere != c.difiere || !comparable {
+			t.Errorf("%s: BuildDelAgenteDifiere(%q, %q) = (%v, %v); esperaba (%v, true)",
+				c.nombre, c.agente, c.cerebro, difiere, comparable, c.difiere)
+		}
+	}
+}
+
+// UNA VERSIÓN RECORTADA NO PUEDE PASAR POR UN BUILD LIMPIO (A138).
+//
+// El cerebro guarda a lo sumo VersionReportadaMax bytes de la versión que declara el agente, y
+// `-sucio` va DETRÁS de la huella: es lo primero que se pierde al cortar. Lo encontró la revisión de
+// A138, midiendo el camino del latido: con un recorte mudo, un build sucio de etiqueta larga quedaba
+// guardado como el build limpio de ese commit, y la comparación por commit lo igualaba con el
+// cerebro. La textual de antes no lo igualaba: el hueco lo abría A138.
+//
+// DOS CASOS, PORQUE HAY DOS CORTES MUDOS Y CADA UNO SE LE ESCAPA AL CASO DEL OTRO:
+//
+//   - La huella de 8 de hoy, con la etiqueta justa para que el TECHO caiga detrás de ella. Es lo
+//     que hacía el latido: cortar en VersionReportadaMax. Pero la función corta antes, para dejarle
+//     lugar a la marca, y ahí a la huella le quedan 5 caracteres, que ya no nombran un commit: con
+//     marca o sin ella el comparador ya dice «otro código», así que este caso no ve la marca.
+//   - La huella ENTERA, la de `core.abbrev=40`. Cualquiera de los dos cortes le deja más de siete
+//     caracteres, que todavía nombran el commit: es el caso en que la MARCA decide. Lo encontró la
+//     segunda revisión de A138, con el sabotaje de recortar donde corta hoy pero sin la marca, que
+//     sólo el primer caso dejaba en verde.
+//
+// El control de cada caso afirma primero que sus cortes mudos lo igualan con el cerebro. Sin él, un
+// cambio en el techo o en la marca dejaría a la prueba construyendo otro caso y pasando sin medir
+// nada.
+//
+// Sabotaje: recortar sin la marca, que es lo que hacía el latido.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="\treturn v[:corte] + marcaDeVersionRecortada\n"
+// arnes: a="\treturn v[:VersionReportadaMax]\n"
+// arnes: colision_ok="TestUnaVersionRecortadaNoPasaPorUnBuildLimpio"
+//
+// Sabotaje: recortar donde corta hoy, pero sin la marca. Sólo la huella entera lo ve.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="\treturn v[:corte] + marcaDeVersionRecortada\n"
+// arnes: a="\treturn v[:corte]\n"
+// arnes: colision_ok="TestUnaVersionRecortadaNoPasaPorUnBuildLimpio"
+//
+// Sabotaje: sacar los espacios DESPUÉS de mirar el largo, que recorta y marca una versión que entra.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="\tv = strings.TrimSpace(v)\n\tif len(v) <= VersionReportadaMax {\n\t\treturn v\n\t}\n"
+// arnes: a="\tif len(v) <= VersionReportadaMax {\n\t\treturn strings.TrimSpace(v)\n\t}\n"
+func TestUnaVersionRecortadaNoPasaPorUnBuildLimpio(t *testing.T) {
+	const cerebro = "0.141.0-main.eb2cdb7"
+	const cabeza, huella = "0.141.0-", ".eb2cdb72"
+	const huellaEntera = ".eb2cdb72ffa390b24bdc391f96df977e309a41df" // el mismo commit, con core.abbrev=40
+	casos := []struct {
+		nombre string
+		sucia  string
+		mudos  []int // dónde un corte SIN marca la iguala con el cerebro: lo que el caso sabe medir
+	}{
+		{
+			"la huella de 8 contra el techo",
+			cabeza + strings.Repeat("e", VersionReportadaMax-len(cabeza)-len(huella)) + huella + "-sucio",
+			[]int{VersionReportadaMax},
+		},
+		{
+			"la huella entera",
+			cabeza + "etiquetalarga15" + huellaEntera + "-sucio",
+			[]int{VersionReportadaMax, VersionReportadaMax - len(marcaDeVersionRecortada)},
+		},
+	}
+	for _, c := range casos {
+		for _, corte := range c.mudos {
+			if difiere, _ := BuildDelAgenteDifiere(c.sucia[:corte], cerebro); difiere {
+				t.Fatalf("control (%s): %q cortada en %d sin marca ya no se iguala con %q, así que la "+
+					"prueba dejó de construir el caso que la motivó", c.nombre, c.sucia, corte, cerebro)
+			}
+		}
+
+		guardada := VersionReportada(c.sucia)
+		if difiere, comparable := BuildDelAgenteDifiere(guardada, cerebro); !difiere || !comparable {
+			t.Errorf("%s: la versión sucia %q se guardó como %q y se declaró el mismo código que %q "+
+				"(difiere=%v comparable=%v): el recorte le sacó el -sucio, y la serie diría «al día» de "+
+				"un binario con código que el commit no tiene", c.nombre, c.sucia, guardada, cerebro,
+				difiere, comparable)
+		}
+		if len(guardada) > VersionReportadaMax {
+			t.Errorf("%s: VersionReportada(%q) = %q mide %d bytes, más que el techo de %d",
+				c.nombre, c.sucia, guardada, len(guardada), VersionReportadaMax)
+		}
+		// El núcleo sobrevive a la marca: un recorte no puede dejar ciega a la serie del release.
+		if n, ok := NucleoDeVersion(guardada); !ok || n != "0.141.0" {
+			t.Errorf("%s: NucleoDeVersion(%q) = (%q, %v); esperaba (\"0.141.0\", true)", c.nombre, guardada, n, ok)
+		}
+	}
+	// Lo que entra no se toca: sólo pierde los espacios de alrededor. Los dos últimos pasan el techo
+	// SÓLO por los espacios, así que dicen si se sacan antes de mirar el largo.
+	for _, v := range []string{
+		"0.141.0-flota.eb2cdb72",
+		" 0.141.0-flota.eb2cdb72\n",
+		"",
+		"0.141.0-flota.eb2cdb72" + strings.Repeat(" ", VersionReportadaMax),
+		strings.Repeat("\n", VersionReportadaMax) + "0.141.0-flota.eb2cdb72",
+	} {
+		if got := VersionReportada(v); got != strings.TrimSpace(v) {
+			t.Errorf("VersionReportada(%q) = %q; una versión que entra se guarda entera", v, got)
+		}
+	}
+}
+
+// UN RECORTE NO PARTE UN CARÁCTER EN DOS.
+//
+// Una versión ilegible puede traer cualquier cosa, y el corte cae donde cae. Sin el retroceso, un
+// carácter de dos bytes partido al medio deja en la fila un UTF-8 roto, que después sale así en el
+// inventario y en los registros. No fabrica ningún «al día»: el daño es de lectura. Lo encontró la
+// segunda revisión de A138: sin el bucle, todo seguía en verde.
+//
+// «é» mide dos bytes, así que de los dos rellenos, uno pone el corte en la mitad de una: cualquiera
+// sea el largo de la marca, alguno de los dos lo mide.
+//
+// Sabotaje: no retroceder hasta el principio del carácter.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="for corte > 0 && !utf8.RuneStart(v[corte]) {"
+// arnes: a="for corte < 0 && !utf8.RuneStart(v[corte]) {"
+func TestUnRecorteNoParteUnCaracterEnDos(t *testing.T) {
+	for relleno := 0; relleno < 2; relleno++ {
+		v := strings.Repeat("x", relleno) + strings.Repeat("é", VersionReportadaMax)
+		got := VersionReportada(v)
+		if !utf8.ValidString(got) {
+			t.Errorf("con %d byte(s) de relleno, VersionReportada devolvió %q, que no es UTF-8 válido: "+
+				"el corte partió un carácter", relleno, got)
+		}
+		if len(got) > VersionReportadaMax || !strings.HasSuffix(got, marcaDeVersionRecortada) {
+			t.Errorf("con %d byte(s) de relleno, VersionReportada devolvió %q (%d bytes): tenía que "+
+				"recortar a lo sumo a %d y marcarlo", relleno, got, len(got), VersionReportadaMax)
+		}
+	}
+}
+
+// SÓLO UNA HUELLA DE GIT SE IGUALA POR PREFIJO; LO DEMÁS SE COMPARA COMO TEXTO.
+//
+// Igualar por prefijo es seguro mientras el prefijo nombre UN commit y sea todo lo que hay después
+// del punto. Cada fila es una forma que se parece a la del cerebro y que NO se puede declarar el
+// mismo código: una huella tan corta que ya no nombra un commit, algo pegado detrás de la huella,
+// una versión sin etiqueta —construir.sh la exige, así que ésta no la armó él— y la familia vieja de
+// `git describe`, cuyo núcleo es el último tag y no el archivo VERSION.
+//
+// Sabotaje: aceptar huellas de 6 caracteres.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="len(commit) < 7"
+// arnes: a="len(commit) < 6"
+//
+// Sabotaje: no mirar que después del punto haya sólo hexadecimal.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="strings.Trim(commit, \"0123456789abcdef\") != \"\""
+// arnes: a="false"
+//
+// Sabotaje: aceptar una versión sin etiqueta, o con la etiqueta vacía.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="\tif i <= 0 {\n\t\treturn \"\", \"\", false\n\t}\n"
+// arnes: a=""
+//
+// Sabotaje: pasar la huella a minúsculas antes de mirarla, que acepta las mayúsculas.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="\tcommit = resto[i+1:]\n"
+// arnes: a="\tcommit = strings.ToLower(resto[i+1:])\n"
+func TestSoloUnaHuellaDeGitSeIgualaPorPrefijo(t *testing.T) {
+	const cerebro = "0.141.0-main.eb2cdb7"
+
+	for _, agente := range []string{
+		"0.141.0-flota.eb2c",           // cuatro caracteres: ya no nombra un commit
+		"0.141.0-flota.eb2cdb",         // seis: uno menos que lo que emite git
+		"0.141.0-flota.eb2cdb7-parche", // algo pegado detrás de la huella
+		"0.141.0-eb2cdb7",              // sin etiqueta
+		"0.141.0-.eb2cdb7",             // con la etiqueta vacía
+		"0.141.0-28-geb2cdb7",          // la familia de git describe
+	} {
+		difiere, comparable := BuildDelAgenteDifiere(agente, cerebro)
+		if !difiere || !comparable {
+			t.Errorf("BuildDelAgenteDifiere(%q, %q) = (%v, %v); esperaba (true, true): esa forma no "+
+				"es una huella de git y se declaró el mismo código", agente, cerebro, difiere, comparable)
+		}
+	}
+
+	// UNA HUELLA EN MAYÚSCULAS NO LA EMITE GIT, ASÍ QUE NO SE IGUALA COMO SI LO FUERA. Va con las DOS
+	// cadenas en mayúsculas: con el cerebro en minúsculas el prefijo ya no coincide, la fila da
+	// «difiere» por la razón equivocada y no distingue nada. Lo encontró la revisión de A138.
+	agente, cerebroEnMayusculas := "0.141.0-flota.EB2CDB72", "0.141.0-main.EB2CDB7"
+	if difiere, comparable := BuildDelAgenteDifiere(agente, cerebroEnMayusculas); !difiere || !comparable {
+		t.Errorf("BuildDelAgenteDifiere(%q, %q) = (%v, %v); esperaba (true, true): una huella en "+
+			"mayúsculas no es de git y se declaró el mismo código", agente, cerebroEnMayusculas, difiere, comparable)
 	}
 }

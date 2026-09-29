@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 #
 # version-parseable.sh — comprueba que TODA versión que `construir.sh` pueda emitir la parsee
-# `fleet.NucleoDeVersion`, el código que decide si el cerebro puede comparar versiones.
+# `fleet.NucleoDeVersion`, el código que decide si el cerebro puede comparar versiones. Y, desde
+# A138, que `fleet.BuildDelAgenteDifiere` reconozca como el mismo código al mismo commit construido
+# con otra etiqueta y otra huella (pasos 2b y 6).
 #
 # ────────────────────────────────────────────────────────────────────────────────────────────
 # QUÉ ROMPIÓ ESTO, Y POR QUÉ NO LO CAZÓ LA PRUEBA QUE YA EXISTÍA
@@ -74,6 +76,39 @@ echo "  ✓ sin track → el guión se niega (exit $RC), como debe"
 V_LIMPIO="$(version_de "$TMP/limpio")"
 [[ -n "$V_LIMPIO" ]] || { echo "✗ no pude leer la versión del binario limpio"; exit 2; }
 
+# ── 2b · EL MISMO COMMIT, CON OTRA ETIQUETA Y OTRA HUELLA (A138) ──────────────────────────────
+# La versión lleva dos cosas que NO salen del código: la ETIQUETA, que elige quien construye, y el
+# LARGO de la huella, que `git rev-parse --short` decide según cuántos objetos tiene el clon. El
+# 2026-09-29 el cerebro corría `0.141.0-main.eb2cdb7` y el actualizador de Windows sacó, del MISMO
+# commit, `0.141.0-flota.eb2cdb72`. El paso 6 le pasa un par así al comparador de builds de verdad.
+#
+# EL LARGO SE FUERZA CON `core.abbrev` EN VEZ DE ESPERAR A QUE PASE: adentro de un mismo clon el
+# largo automático sale igual en las dos corridas, y sin forzarlo el caso que marcó a la flota no
+# se ejercitaría nunca. Va ANTES del paso 3 porque tiene que salir limpio, y el 3 ensucia el árbol.
+# Y si el build del paso 2 dejó algo suelto en el clon, éste saldría sucio y el paso 6 acusaría al
+# comparador por lo que fue una falla de la medición: se para acá, en 2.
+[[ -z "$(git -C "$CLON" status --porcelain)" ]] || {
+  echo "✗ el clon quedó sucio después del paso 2: el build con otra etiqueta no saldría limpio"
+  git -C "$CLON" status --porcelain | sed 's/^/    /'; exit 2; }
+CORTA="$(git -C "$CLON" rev-parse --short HEAD)"
+git -C "$CLON" config core.abbrev $(( ${#CORTA} + 1 ))
+LARGA="$(git -C "$CLON" rev-parse --short HEAD)"
+( cd "$CLON" && ./deploy/construir.sh flota "$TMP/otra" ) >"$TMP/log-otra" 2>&1
+RC=$?
+git -C "$CLON" config --unset core.abbrev
+[[ $RC -eq 0 ]] || { echo "✗ el build con otra etiqueta falló:"; sed 's/^/    /' "$TMP/log-otra"; exit 1; }
+V_OTRA="$(version_de "$TMP/otra")"
+[[ -n "$V_OTRA" ]] || { echo "✗ no pude leer la versión del binario con otra etiqueta"; exit 2; }
+# LAS PREMISAS NO SUPONEN EL FORMATO, a propósito: si lo supusieran, un cambio de formato las
+# rompería a ellas antes que al paso 6, y el rojo acusaría a la medición en vez de al guion.
+[[ ${#LARGA} -gt ${#CORTA} && "$LARGA" == "$CORTA"* ]] || {
+  echo "✗ core.abbrev no alargó la huella ($CORTA → $LARGA): el caso de otra huella no se pudo armar"; exit 2; }
+[[ "$V_OTRA" != "$V_LIMPIO" ]] || {
+  echo "✗ el build con otra etiqueta salió igual al limpio ($V_OTRA): el paso 6 no mediría nada"; exit 2; }
+[[ "$V_LIMPIO" == *"$CORTA"* && "$V_OTRA" == *"$LARGA"* ]] || {
+  echo "✗ las versiones no llevan las huellas que pidió git (limpio «$V_LIMPIO» con $CORTA, otra «$V_OTRA» con $LARGA):"
+  echo "  el caso de otra huella no se ejercitó"; exit 2; }
+
 # ── 3 · CON TRACK, ÁRBOL SUCIO ───────────────────────────────────────────────────────────────
 # La cuarta combinación: `-sucio` se pega AL FINAL, así que hay que comprobar que el parser
 # tampoco se atore con ella. Un build sucio se despliega poco, pero cuando se despliega es
@@ -100,6 +135,16 @@ import (
 )
 
 func main() {
+	// `-build agente cerebro [agente cerebro …]`: el comparador de builds sobre cada par, para el
+	// paso 6. Mismo separador que abajo, por lo mismo.
+	if len(os.Args) > 1 && os.Args[1] == "-build" {
+		pares := os.Args[2:]
+		for i := 0; i+1 < len(pares); i += 2 {
+			difiere, comparable := fleet.BuildDelAgenteDifiere(pares[i], pares[i+1])
+			fmt.Printf("%s|%s|%v|%v\n", pares[i], pares[i+1], difiere, comparable)
+		}
+		return
+	}
 	for _, v := range os.Args[1:] {
 		n, ok := fleet.NucleoDeVersion(v)
 		// EL SEPARADOR NO ES TAB, Y NO ES ESTÉTICO: bash COLAPSA las corridas de
@@ -206,3 +251,57 @@ if [[ "$comparados" -ne "${#TABLA[@]}" ]]; then
 fi
 [[ $difieren -eq 0 ]] || exit 1
 echo "  ✓ los dos parsers coinciden en los ${#TABLA[@]} casos de la tabla"
+
+# ── 6 · EL MISMO CÓDIGO CON OTRA ETIQUETA, CONTRA EL COMPARADOR DE BUILDS (A138) ───────────────
+#
+# `fleet.BuildDelAgenteDifiere` decide si una máquina corre OTRO CÓDIGO que el cerebro. Hasta A138
+# comparaba el texto entero, y el par del paso 2b daba «difiere» para siempre: una máquina
+# actualizada a exactamente el código del cerebro no se apagaba ni actualizando. Sus pruebas de
+# internal/fleet usan cadenas escritas a mano; acá le llega LO QUE EMITE construir.sh, que es lo
+# que dice si la forma que el comparador espera sigue siendo la que el guion produce. Es la misma
+# costura que el paso 4 cubre para el núcleo: productor y consumidor, sin nadie en el medio.
+#
+# EL CONTROL ES EL SUCIO: el mismo commit con el árbol sucio TIENE que dar «difiere». Un comparador
+# que contestara «igual» a todo pasaría los dos primeros pares y cae en el tercero; uno que
+# contestara «distinto» a todo —el de antes de A138— cae en los dos primeros.
+#
+# EL COMPARADOR SALE DEL CLON, O SEA DEL CÓDIGO COMMITEADO: un cambio sin commitear a
+# internal/fleet/version.go NO lo ve este paso. Lo que este paso cubre es el guion, que sí se copia
+# del árbol de trabajo; al comparador lo cubren sus pruebas de internal/fleet.
+SAL_BUILD="$( cd "$CLON" && go run ./cmd/zz_arnes_version -build \
+  "$V_OTRA" "$V_LIMPIO" \
+  "$V_LIMPIO" "$V_OTRA" \
+  "$V_SUCIO" "$V_LIMPIO" 2>&1 )" || {
+  echo "✗ no pude correr el comparador de builds:"; sed 's/^/    /' <<<"$SAL_BUILD"; exit 2; }
+
+# Lo que tiene que contestar cada par, en el MISMO orden en que se le pasaron.
+ESPERADO=(
+  "$V_OTRA|$V_LIMPIO|false|true"
+  "$V_LIMPIO|$V_OTRA|false|true"
+  "$V_SUCIO|$V_LIMPIO|true|true"
+)
+mapfile -t OBTENIDO <<<"$SAL_BUILD"
+if [[ ${#OBTENIDO[@]} -ne ${#ESPERADO[@]} ]]; then
+  echo "✗ el comparador contestó ${#OBTENIDO[@]} líneas por ${#ESPERADO[@]} pares: este verde no valdría"
+  sed 's/^/    /' <<<"$SAL_BUILD"; exit 2
+fi
+fallo=0
+for i in "${!ESPERADO[@]}"; do
+  IFS="|" read -r a c difiere comparable <<<"${OBTENIDO[$i]}"
+  IFS="|" read -r ea ec edifiere ecomparable <<<"${ESPERADO[$i]}"
+  if [[ "$a|$c" != "$ea|$ec" ]]; then
+    echo "✗ el comparador contestó por «$a» contra «$c» cuando se le preguntó por «$ea» contra «$ec»"; exit 2
+  fi
+  [[ "$difiere|$comparable" == "$edifiere|$ecomparable" ]] && continue
+  if [[ "$edifiere" == "false" ]]; then
+    echo "✗ «$a» y «$c» son el MISMO commit con otra etiqueta y otra huella, y BuildDelAgenteDifiere contesta difiere=$difiere comparable=$comparable."
+    echo "  Una máquina actualizada a exactamente el código del cerebro quedaría marcada para siempre"
+    echo "  (A138): la huella ya no sale donde el comparador la busca."
+  else
+    echo "✗ «$a» es un build SUCIO del mismo commit que «$c», y BuildDelAgenteDifiere contesta difiere=$difiere comparable=$comparable."
+    echo "  Un binario que no salió del commit que nombra pasaría por ese código."
+  fi
+  fallo=1
+done
+[[ $fallo -eq 0 ]] || exit 1
+echo "  ✓ el mismo commit con otra etiqueta y otra huella es el mismo código, y el sucio no"

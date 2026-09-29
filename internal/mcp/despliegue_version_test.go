@@ -91,6 +91,31 @@ import (
 // arnes: archivo="deploy/construir.sh"
 // arnes: de="fi\nVERSION=\"${BASE}${ETIQUETA:+-$ETIQUETA}.${COMMIT}${SUCIO}\""
 // arnes: a="fi\nVERSION=\"${BASE}${ETIQUETA:+.$ETIQUETA}.${COMMIT}${SUCIO}\""
+// arnes: colision_ok="TestLaVersionQueEmiteConstruirEsSiempreParseable"
+//
+// Y DESDE A138, LA MISMA SALIDA CONTRA EL COMPARADOR DE BUILDS. `fleet.BuildDelAgenteDifiere`
+// comparaba el texto entero, y el mismo commit construido con otra etiqueta (`main` el cerebro,
+// `flota` el actualizador) y otra huella (`eb2cdb7` contra `eb2cdb72`) daba «difiere» para siempre.
+// El arnés arma ese par con el construir.sh de verdad (paso 2b) y se lo pasa al comparador (paso
+// 6), con el build sucio del mismo commit como control: ése tiene que seguir dando «difiere».
+//
+// Los dos sabotajes tocan la MISMA línea de construir.sh y son dos guardas, no una contada dos
+// veces: el de arriba rompe el NÚCLEO y cae en el paso 4; éste deja el núcleo sano y cae en el 6.
+// Por eso cada uno declara al otro en `colision_ok`. Y por eso el rojo lleva en su primera línea la
+// primera queja del arnés: `motivo.awk` toma el motivo de esa línea, y con un mensaje fijo los dos
+// rojos tendrían el mismo.
+//
+// Sabotaje que la hace fallar en el paso 6 y en ningún otro: separar la etiqueta de la huella con
+// `-` en vez de `.`. El núcleo sigue parseando, pero la huella ya no está donde el comparador la
+// busca.
+// arnes: archivo="deploy/construir.sh"
+// arnes: de="fi\nVERSION=\"${BASE}${ETIQUETA:+-$ETIQUETA}.${COMMIT}${SUCIO}\""
+// arnes: a="fi\nVERSION=\"${BASE}${ETIQUETA:+-$ETIQUETA}-${COMMIT}${SUCIO}\""
+// arnes: colision_ok="TestLaVersionQueEmiteConstruirEsSiempreParseable"
+// Y la otra dirección: la misma línea escrita con llaves, que para bash emite la misma versión, tiene
+// que quedar en verde. La guarda mide lo que el guion emite, no cómo está escrito.
+// arnes: arreglo_de="fi\nVERSION=\"${BASE}${ETIQUETA:+-$ETIQUETA}.${COMMIT}${SUCIO}\""
+// arnes: arreglo_a="fi\nVERSION=\"${BASE}${ETIQUETA:+-${ETIQUETA}}.${COMMIT}${SUCIO}\""
 func TestLaVersionQueEmiteConstruirEsSiempreParseable(t *testing.T) {
 	// El salteo de fuera de linux vive en UN solo lugar (internal/guiones) y en linux no puede
 	// activarse. Acá había tres `t.Skipf` propios, y los dos de `exec.LookPath` salteaban TAMBIÉN
@@ -103,9 +128,9 @@ func TestLaVersionQueEmiteConstruirEsSiempreParseable(t *testing.T) {
 	raiz := filepath.Join("..", "..")
 	salida, err := compuerta.Comando("bash", arnes, raiz).CombinedOutput()
 	if err != nil {
-		t.Fatalf("el arnés de la versión falló:\n%s", salida)
+		t.Fatalf("el arnés de la versión falló: %s\n%s", primeraQueja(salida), salida)
 	}
-	// CONTROL DE QUE EJERCITÓ LAS TRES COSAS. Un arnés que saliera en 0 sin haber corrido los
+	// CONTROL DE QUE EJERCITÓ CADA COSA QUE DICE. Un arnés que saliera en 0 sin haber corrido los
 	// builds —o sin haber probado su propio control— diría «no hay peligro» cuando lo que hubo
 	// fue «no lo provoqué». Es la falla que `sufijo-sucio.sh` ya documenta en su hermana.
 	for _, senal := range []string{
@@ -113,9 +138,21 @@ func TestLaVersionQueEmiteConstruirEsSiempreParseable(t *testing.T) {
 		"(parseable)",
 		"la forma mala conocida",
 		"los dos parsers coinciden",
+		"el mismo commit con otra etiqueta",
 	} {
 		if !strings.Contains(string(salida), senal) {
 			t.Fatalf("el arnés terminó en 0 pero no dijo %q, así que no ejercitó lo que dice:\n%s", senal, salida)
 		}
 	}
+}
+
+// primeraQueja devuelve la primera línea `✗` que imprimió el arnés, que es la que nombra el paso que
+// falló. Va en la primera línea del rojo porque de ahí sale el motivo que cuenta `arnes`.
+func primeraQueja(salida []byte) string {
+	for _, l := range strings.Split(string(salida), "\n") {
+		if strings.HasPrefix(l, "✗") {
+			return l
+		}
+	}
+	return "(el arnés no imprimió ninguna línea ✗)"
 }

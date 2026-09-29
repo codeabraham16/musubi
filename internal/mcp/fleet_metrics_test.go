@@ -450,7 +450,18 @@ func TestElAutorreporteNoDependeDeLaCapacidadMetrics(t *testing.T) {
 	}
 }
 
-// Un texto absurdo del device no ensucia el inventario ni las etiquetas de Prometheus.
+// Un texto absurdo del device no llena la fila del inventario: la versión se guarda con techo.
+//
+// MIRA EL TECHO DE LO QUE SE GUARDA, NO DE LO QUE SE COMPARA. La prueba de punta a punta de A138
+// pasa una versión que termina en `-sucio`, y ésa da «difiere» se guarde recortada o cruda: no
+// nota que el latido compare una cosa y escriba otra. Ésta sí. Lo midió la revisión de A138 el
+// 2026-09-29.
+//
+// Sabotaje que la hace fallar: que el latido compare la versión recortada y guarde la CRUDA.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="ActualizarAutoreporte(d.ID, version, direccion)"
+// arnes: a="ActualizarAutoreporte(d.ID, cuerpo.Version, direccion)"
+// arnes: colision_ok="TestElAutorreporteSoloTocaLaFilaDelToken TestUnAgenteQueSeActualizoSiEscribeSuVersionNueva"
 func TestElAutorreporteSeRecorta(t *testing.T) {
 	s, ts, tokenDevice, _ := servidorConFlota(t)
 	largo := strings.Repeat("v", 500)
