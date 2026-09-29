@@ -68,7 +68,7 @@ func TestLaDireccionDelCerebroNoSeEscribeAManoEnLosGuionesDeWindows(t *testing.T
 				"  fallar, y —si es el cambiador— disparar el rollback acusando al binario nuevo. El\n"+
 				"  binario va a estar sano.\n"+
 				"  Arreglo en un `.cmd`: derivar el entorno del lanzador, que está al lado —\n"+
-				"    for /f \"usebackq delims=\" %%L in (`findstr /b /c:\"set MUSUBI_\" \"%%DIR%%agente.cmd\"`) do %%L\n"+
+				"    for /f \"usebackq delims=\" %%L in (`findstr /b /c:\"set MUSUBI_\" \"%%DIR%%\\agente.cmd\"`) do %%L\n"+
 				"  y fallar en voz alta si no quedó definida, porque «no pude leer el lanzador» y «el\n"+
 				"  agente no late» son cosas distintas.\n"+
 				"  Arreglo en el instalador: la dirección entra por parámetro, no se clava.",
