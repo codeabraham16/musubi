@@ -3,6 +3,7 @@ package fleet
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // LAS DOS FAMILIAS DE VERSIÓN QUE HAY ENROLADAS TIENEN QUE PARSEAR.
@@ -262,42 +263,121 @@ func TestUnBuildSucioNoSeIgualaPorCommit(t *testing.T) {
 // guardado como el build limpio de ese commit, y la comparación por commit lo igualaba con el
 // cerebro. La textual de antes no lo igualaba: el hueco lo abría A138.
 //
-// La etiqueta se calcula para que el corte caiga JUSTO detrás de la huella, que es el peor caso: lo
-// que queda es indistinguible de un build limpio. El control lo afirma antes que nada. Sin él, un
-// cambio en el techo dejaría a la prueba construyendo otro caso y pasando sin medir nada.
+// DOS CASOS, PORQUE HAY DOS CORTES MUDOS Y CADA UNO SE LE ESCAPA AL CASO DEL OTRO:
+//
+//   - La huella de 8 de hoy, con la etiqueta justa para que el TECHO caiga detrás de ella. Es lo
+//     que hacía el latido: cortar en VersionReportadaMax. Pero la función corta antes, para dejarle
+//     lugar a la marca, y ahí a la huella le quedan 5 caracteres, que ya no nombran un commit: con
+//     marca o sin ella el comparador ya dice «otro código», así que este caso no ve la marca.
+//   - La huella ENTERA, la de `core.abbrev=40`. Cualquiera de los dos cortes le deja más de siete
+//     caracteres, que todavía nombran el commit: es el caso en que la MARCA decide. Lo encontró la
+//     segunda revisión de A138, con el sabotaje de recortar donde corta hoy pero sin la marca, que
+//     sólo el primer caso dejaba en verde.
+//
+// El control de cada caso afirma primero que sus cortes mudos lo igualan con el cerebro. Sin él, un
+// cambio en el techo o en la marca dejaría a la prueba construyendo otro caso y pasando sin medir
+// nada.
 //
 // Sabotaje: recortar sin la marca, que es lo que hacía el latido.
 // arnes: archivo="internal/fleet/version.go"
 // arnes: de="\treturn v[:corte] + marcaDeVersionRecortada\n"
 // arnes: a="\treturn v[:VersionReportadaMax]\n"
+// arnes: colision_ok="TestUnaVersionRecortadaNoPasaPorUnBuildLimpio"
+//
+// Sabotaje: recortar donde corta hoy, pero sin la marca. Sólo la huella entera lo ve.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="\treturn v[:corte] + marcaDeVersionRecortada\n"
+// arnes: a="\treturn v[:corte]\n"
+// arnes: colision_ok="TestUnaVersionRecortadaNoPasaPorUnBuildLimpio"
+//
+// Sabotaje: sacar los espacios DESPUÉS de mirar el largo, que recorta y marca una versión que entra.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="\tv = strings.TrimSpace(v)\n\tif len(v) <= VersionReportadaMax {\n\t\treturn v\n\t}\n"
+// arnes: a="\tif len(v) <= VersionReportadaMax {\n\t\treturn strings.TrimSpace(v)\n\t}\n"
 func TestUnaVersionRecortadaNoPasaPorUnBuildLimpio(t *testing.T) {
 	const cerebro = "0.141.0-main.eb2cdb7"
-	cabeza, huella := "0.141.0-", ".eb2cdb72"
-	sucia := cabeza + strings.Repeat("e", VersionReportadaMax-len(cabeza)-len(huella)) + huella + "-sucio"
+	const cabeza, huella = "0.141.0-", ".eb2cdb72"
+	const huellaEntera = ".eb2cdb72ffa390b24bdc391f96df977e309a41df" // el mismo commit, con core.abbrev=40
+	casos := []struct {
+		nombre string
+		sucia  string
+		mudos  []int // dónde un corte SIN marca la iguala con el cerebro: lo que el caso sabe medir
+	}{
+		{
+			"la huella de 8 contra el techo",
+			cabeza + strings.Repeat("e", VersionReportadaMax-len(cabeza)-len(huella)) + huella + "-sucio",
+			[]int{VersionReportadaMax},
+		},
+		{
+			"la huella entera",
+			cabeza + "etiquetalarga15" + huellaEntera + "-sucio",
+			[]int{VersionReportadaMax, VersionReportadaMax - len(marcaDeVersionRecortada)},
+		},
+	}
+	for _, c := range casos {
+		for _, corte := range c.mudos {
+			if difiere, _ := BuildDelAgenteDifiere(c.sucia[:corte], cerebro); difiere {
+				t.Fatalf("control (%s): %q cortada en %d sin marca ya no se iguala con %q, así que la "+
+					"prueba dejó de construir el caso que la motivó", c.nombre, c.sucia, corte, cerebro)
+			}
+		}
 
-	if difiere, _ := BuildDelAgenteDifiere(sucia[:VersionReportadaMax], cerebro); difiere {
-		t.Fatalf("control: %q cortada a secas ya no se iguala con %q, así que la prueba dejó de "+
-			"construir el caso que la motivó", sucia, cerebro)
+		guardada := VersionReportada(c.sucia)
+		if difiere, comparable := BuildDelAgenteDifiere(guardada, cerebro); !difiere || !comparable {
+			t.Errorf("%s: la versión sucia %q se guardó como %q y se declaró el mismo código que %q "+
+				"(difiere=%v comparable=%v): el recorte le sacó el -sucio, y la serie diría «al día» de "+
+				"un binario con código que el commit no tiene", c.nombre, c.sucia, guardada, cerebro,
+				difiere, comparable)
+		}
+		if len(guardada) > VersionReportadaMax {
+			t.Errorf("%s: VersionReportada(%q) = %q mide %d bytes, más que el techo de %d",
+				c.nombre, c.sucia, guardada, len(guardada), VersionReportadaMax)
+		}
+		// El núcleo sobrevive a la marca: un recorte no puede dejar ciega a la serie del release.
+		if n, ok := NucleoDeVersion(guardada); !ok || n != "0.141.0" {
+			t.Errorf("%s: NucleoDeVersion(%q) = (%q, %v); esperaba (\"0.141.0\", true)", c.nombre, guardada, n, ok)
+		}
 	}
-
-	guardada := VersionReportada(sucia)
-	if difiere, comparable := BuildDelAgenteDifiere(guardada, cerebro); !difiere || !comparable {
-		t.Errorf("la versión sucia %q se guardó como %q y se declaró el mismo código que %q "+
-			"(difiere=%v comparable=%v): el recorte le sacó el -sucio, y la serie diría «al día» de "+
-			"un binario con código que el commit no tiene", sucia, guardada, cerebro, difiere, comparable)
-	}
-	if len(guardada) > VersionReportadaMax {
-		t.Errorf("VersionReportada(%q) = %q mide %d bytes, más que el techo de %d",
-			sucia, guardada, len(guardada), VersionReportadaMax)
-	}
-	// El núcleo sobrevive a la marca: un recorte no puede dejar ciega a la serie del release.
-	if n, ok := NucleoDeVersion(guardada); !ok || n != "0.141.0" {
-		t.Errorf("NucleoDeVersion(%q) = (%q, %v); esperaba (\"0.141.0\", true)", guardada, n, ok)
-	}
-	// Lo que entra no se toca: sólo pierde los espacios de alrededor.
-	for _, v := range []string{"0.141.0-flota.eb2cdb72", " 0.141.0-flota.eb2cdb72\n", ""} {
+	// Lo que entra no se toca: sólo pierde los espacios de alrededor. Los dos últimos pasan el techo
+	// SÓLO por los espacios, así que dicen si se sacan antes de mirar el largo.
+	for _, v := range []string{
+		"0.141.0-flota.eb2cdb72",
+		" 0.141.0-flota.eb2cdb72\n",
+		"",
+		"0.141.0-flota.eb2cdb72" + strings.Repeat(" ", VersionReportadaMax),
+		strings.Repeat("\n", VersionReportadaMax) + "0.141.0-flota.eb2cdb72",
+	} {
 		if got := VersionReportada(v); got != strings.TrimSpace(v) {
 			t.Errorf("VersionReportada(%q) = %q; una versión que entra se guarda entera", v, got)
+		}
+	}
+}
+
+// UN RECORTE NO PARTE UN CARÁCTER EN DOS.
+//
+// Una versión ilegible puede traer cualquier cosa, y el corte cae donde cae. Sin el retroceso, un
+// carácter de dos bytes partido al medio deja en la fila un UTF-8 roto, que después sale así en el
+// inventario y en los registros. No fabrica ningún «al día»: el daño es de lectura. Lo encontró la
+// segunda revisión de A138: sin el bucle, todo seguía en verde.
+//
+// «é» mide dos bytes, así que de los dos rellenos, uno pone el corte en la mitad de una: cualquiera
+// sea el largo de la marca, alguno de los dos lo mide.
+//
+// Sabotaje: no retroceder hasta el principio del carácter.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="for corte > 0 && !utf8.RuneStart(v[corte]) {"
+// arnes: a="for corte < 0 && !utf8.RuneStart(v[corte]) {"
+func TestUnRecorteNoParteUnCaracterEnDos(t *testing.T) {
+	for relleno := 0; relleno < 2; relleno++ {
+		v := strings.Repeat("x", relleno) + strings.Repeat("é", VersionReportadaMax)
+		got := VersionReportada(v)
+		if !utf8.ValidString(got) {
+			t.Errorf("con %d byte(s) de relleno, VersionReportada devolvió %q, que no es UTF-8 válido: "+
+				"el corte partió un carácter", relleno, got)
+		}
+		if len(got) > VersionReportadaMax || !strings.HasSuffix(got, marcaDeVersionRecortada) {
+			t.Errorf("con %d byte(s) de relleno, VersionReportada devolvió %q (%d bytes): tenía que "+
+				"recortar a lo sumo a %d y marcarlo", relleno, got, len(got), VersionReportadaMax)
 		}
 	}
 }

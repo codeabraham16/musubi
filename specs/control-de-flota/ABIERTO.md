@@ -786,10 +786,14 @@ Se vio el 2026-09-29, al preparar la actualización de gio: el cerebro corría `
   - El lado seguro tiene un costo: un build LIMPIO que no entra también pierde su huella y da «otro código» contra su mismo commit. Hoy no pasa, porque una versión mide unos veinte bytes. Se acepta porque ese error se ve, y el contrario esconde una máquina vieja.
   - `TestElAutorreporteSeRecorta`, que ya existía, mira el techo de lo que se GUARDA. Suma el sabotaje de comparar la versión recortada y guardar la cruda, que la prueba de punta a punta de A138 no ve.
 - Ninguna prueba ejercitaba una huella en mayúsculas, y aceptarlas quedaba en verde. `TestSoloUnaHuellaDeGitSeIgualaPorPrefijo` suma el caso con las DOS cadenas en mayúsculas: con una sola, el prefijo ya no coincide y la fila no distingue nada.
-- La huella no tiene techo de 40 caracteres, aunque el diseño lo decía: un repositorio con `sha256` las tiene de 64, y cortarlas dejaría afuera un commit legítimo. El registro, la ayuda y el código dicen lo mismo: «al menos 7».
+- La huella no tiene techo de 40 caracteres, aunque el diseño lo decía: un repositorio con `sha256` las tiene de 64, y cortarlas dejaría afuera un commit legítimo. El registro y el código dicen lo mismo: «al menos 7». La ayuda de la serie no habla del largo.
+- La segunda revisión encontró que la prueba del recorte no veía la marca. Armaba el caso contra el techo de 64, pero la función corta en 61 para dejarle lugar a la `…`, y ahí a una huella de 8 le quedan 5 caracteres, que ya no nombran un commit: recortar donde corta hoy, pero sin la marca, quedaba en verde. `TestUnaVersionRecortadaNoPasaPorUnBuildLimpio` suma el caso de la huella entera, la de `core.abbrev=40`, que a cualquiera de los dos cortes le quedan más de siete caracteres: es el caso en que la marca decide.
+- También quedaban en verde otros dos cambios al recorte:
+  - Partir un carácter en dos: el recorte retrocede hasta el principio del carácter, y sin eso la fila guardaba UTF-8 roto. No fabrica ningún «al día», el daño es de lectura. Lo mide `TestUnRecorteNoParteUnCaracterEnDos`.
+  - Sacar los espacios después de mirar el largo, que recorta y marca una versión que entra. El bucle de «lo que entra no se toca» suma dos casos que pasan el techo sólo por los espacios.
 
 **Las pruebas:**
-- `internal/fleet/version_test.go` suma 10 sabotajes. Los 13 del archivo dan ROJO en el arnés, con motivos distintos.
+- `internal/fleet/version_test.go` suma 13 sabotajes. Los 16 del archivo dan ROJO en el arnés, con motivos distintos.
 - `deploy/pruebas/version-parseable.sh` gana los pasos 2b y 6. Arma con el `construir.sh` de verdad el mismo commit con otra etiqueta y una huella un carácter más larga, forzada con `core.abbrev`, y se lo pasa al comparador. El build sucio del mismo commit es el control: tiene que seguir dando «difiere».
 - `TestLaVersionQueEmiteConstruirEsSiempreParseable` suma un sabotaje sobre la misma línea de `construir.sh` que el que ya tenía: separar la etiqueta de la huella con `-`. El de antes rompe el núcleo y cae en el paso 4; éste deja el núcleo sano y cae en el 6. Cada uno declara al otro en `colision_ok`, y el rojo lleva en su primera línea la primera queja del arnés, para que los dos no tengan el mismo motivo. La otra dirección, la misma línea escrita con llaves, queda en verde.
 
