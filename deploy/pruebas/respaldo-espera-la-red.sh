@@ -54,6 +54,8 @@ cat > "$BIN/ssh" <<'FIN'
 #!/usr/bin/env bash
 ahora="$(cat "$RELOJ")"
 echo "$ahora $*" >> "$REG/ssh"
+# Si la marca del snapshot todavía no está, esta sonda corrió ANTES del respaldo local (R6).
+[ -f "$MARCA_SNAPSHOT" ] || echo "$ahora" >> "$REG/ssh-antes-del-snapshot"
 [ "$ahora" -ge "$T_SONDA" ] && exit 0
 echo "ssh: connect to host servidor port 22: Network is unreachable" >&2
 exit 255
@@ -86,11 +88,12 @@ correr() {
   CASO="$TMP/casos/$1"
   mkdir -p "$CASO/reg" "$CASO/home"
   echo 0 > "$CASO/reloj"
-  : > "$CASO/reg/ssh"; : > "$CASO/reg/rsync"; : > "$CASO/reg/rclone"
+  : > "$CASO/reg/ssh"; : > "$CASO/reg/rsync"; : > "$CASO/reg/rclone"; : > "$CASO/reg/ssh-antes-del-snapshot"
   local espera=()
   [[ $# -ge 6 ]] && espera=("MUSUBI_ESPERA_RED=$6")
   env -i PATH="$BIN:$PATH" HOME="$CASO/home" DATE_REAL="$DATE_REAL" RELOJ="$CASO/reloj" \
     REG="$CASO/reg" T_SONDA="$2" T_COPIA="$3" MUSUBI_HOME="$CASO/home" MUSUBI_BIN="$BIN/musubi" \
+    MARCA_SNAPSHOT="$CASO/home/.musubi/backups/.last_snapshot" \
     BACKUP_METHOD="$4" BACKUP_REMOTE="$5" ${espera[@]+"${espera[@]}"} \
     timeout 20 bash "$GUION" > "$CASO/salida" 2>&1
   echo $? > "$CASO/rc"
@@ -148,6 +151,12 @@ if salida | grep -q 'todavía no contesta; espero hasta 300s' && salida | grep -
 else
   mal "el registro no dice que esperó ni cuánto: quien lea el journal no sabe por qué la copia tardó"
 fi
+AVISOS="$(salida | grep -c 'todavía no contesta')"
+if [[ "$AVISOS" == 1 ]]; then
+  ok "avisa que espera una sola vez, no una por sonda"
+else
+  mal "el aviso de la espera salió $AVISOS veces y tenía que salir una: cinco minutos de espera serían sesenta líneas en el journal"
+fi
 
 # ── E4 · QUÉ SE SONDEA: EL HOST DEL DESTINO, POR EL MISMO SSH QUE USA RSYNC ──────────────────
 ARGS="$(sed -n 1p "$CASO/reg/ssh" | cut -d' ' -f2-)"
@@ -155,6 +164,18 @@ if [[ "$ARGS" == "-n -o BatchMode=yes -o ConnectTimeout=5 respaldo@servidor true
   ok "sondea el host con su usuario y sin la ruta, sin pedir clave y sin leer la entrada"
 else
   mal "la sonda tenía que ser «ssh -n -o BatchMode=yes -o ConnectTimeout=5 respaldo@servidor true» y fue «$ARGS»"
+fi
+
+# ── R6 · LA ESPERA NO DEMORA EL RESPALDO LOCAL ───────────────────────────────────────────────
+# El snapshot y su marca salen ANTES de sondear: la red le importa a la copia off-host, no al
+# respaldo local, que tiene que quedar hecho aunque la red no vuelva nunca. Cada sonda falsa anota
+# si la marca ya estaba. Sin este control, mudar la espera arriba del snapshot dejaba todo lo
+# demás en verde: lo midió la revisión de A139.
+ANTES="$(wc -l < "$CASO/reg/ssh-antes-del-snapshot" | tr -d ' ')"
+if [[ "$(sondeos)" -gt 0 && "$ANTES" == 0 ]]; then
+  ok "la espera corre después del snapshot: las $(sondeos) sondas encontraron la marca .last_snapshot"
+else
+  mal "la espera tiene que correr después del snapshot: $ANTES de $(sondeos) sondas no encontraron .last_snapshot"
 fi
 
 # ── E3 · LA ESPERA VENCE: SE SIGUE IGUAL, Y EL FALLO SALE POR EL CAMINO DE SIEMPRE ───────────
@@ -199,7 +220,9 @@ sin_sonda ipv6   rsync  "respaldo@[2001:db8:0:0:0:0:0:1]:/srv/copias" "un IPv6 e
 sin_sonda cp     cp     "$TMP/destino-cp"                             "cp copia a una ruta local"
 
 # ── E6 · LO QUE NO ES UN NÚMERO POSITIVO NO ES UNA ESPERA ────────────────────────────────────
-for v in 0 -5 abc ""; do
+# `300s` es como escribe systemd una duración, y el guion no la toma: por eso la guarda de la unidad
+# exige un entero.
+for v in 0 -5 abc 300s ""; do
   correr "valor-${v:-vacio}" 999999 0 rsync "respaldo@servidor:/srv/copias" "$v"
   if [[ "$(rc)" == 0 && "$(sondeos)" == 0 && "$(relojes rsync)" == "0" ]]; then
     ok "MUSUBI_ESPERA_RED=«$v» no espera"

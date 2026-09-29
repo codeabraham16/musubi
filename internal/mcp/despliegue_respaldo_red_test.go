@@ -110,6 +110,27 @@ import (
 // arnes: archivo="deploy/musubi-backup.sh"
 // arnes: de="if [ \"$AVISADO\" -eq 1 ]; then log \"· seguí a los"
 // arnes: a="if false; then log \"· seguí a los"
+//
+// Sabotaje que la hace fallar: que la marca del snapshot se escriba al salir, después de la
+// espera, que es lo mismo que ve el arnés si la espera se muda arriba del snapshot.
+// arnes: archivo="deploy/musubi-backup.sh"
+// arnes: de="date -u +%Y-%m-%dT%H:%M:%SZ > \"$BACKUP_LOCAL_DIR/.last_snapshot\" || log \"no se pudo escribir la marca .last_snapshot\""
+// arnes: a="trap 'date -u +%Y-%m-%dT%H:%M:%SZ > \"$BACKUP_LOCAL_DIR/.last_snapshot\"' EXIT"
+//
+// Sabotaje que la hace fallar: avisar en cada sonda, que en cinco minutos son sesenta líneas.
+// arnes: archivo="deploy/musubi-backup.sh"
+// arnes: de="if [ \"$AVISADO\" -eq 0 ]; then"
+// arnes: a="if true; then"
+//
+// Sabotaje que la hace fallar: borrar del arnés uno de los destinos que no se sondean.
+// arnes: archivo="deploy/pruebas/respaldo-espera-la-red.sh"
+// arnes: de="sin_sonda local  rsync  \"copias\""
+// arnes: a=": sin_sonda local  rsync  \"copias\""
+//
+// Sabotaje que la hace fallar: dejarle al arnés un solo valor que no es una espera.
+// arnes: archivo="deploy/pruebas/respaldo-espera-la-red.sh"
+// arnes: de="for v in 0 -5 abc 300s \"\"; do"
+// arnes: a="for v in abc; do"
 func TestElRespaldoEsperaLaRedAntesDeCopiar(t *testing.T) {
 	compuerta := guiones.Exigir(t, "corre deploy/pruebas/respaldo-espera-la-red.sh, que ejercita el guion "+
 		"de respaldo con un reloj falso", "bash", "mktemp", "env", "timeout", "awk", "sed", "grep", "cut",
@@ -121,25 +142,52 @@ func TestElRespaldoEsperaLaRedAntesDeCopiar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("el arnés del respaldo falló: %s\n%s", primeraQueja(salida), salida)
 	}
-	// CONTROL DE QUE EJERCITÓ CADA COSA QUE DICE: una por bloque del arnés. Si alguien borra un
-	// bloque, el arnés sigue saliendo en 0 y esto es lo único que lo nota.
-	for _, senal := range []string{
+	// CONTROL DE QUE EJERCITÓ CADA COSA QUE DICE: una señal por cada «✓» del arnés, y tantos «✓»
+	// como señales. Si alguien borra un caso, el arnés sigue saliendo en 0 y esto es lo único que lo
+	// nota. Una señal por BLOQUE no alcanzaba: la revisión de A139 borró seis de los siete destinos
+	// que no se sondean y tres de los cuatro valores que no son una espera, y la prueba seguía verde.
+	senales := []string{
 		"el reloj falso avanza",
 		"control: con la red arriba",
 		"sin MUSUBI_ESPERA_RED no espera",
 		"sondea cada 5 s y copia apenas el host contesta",
 		"el registro dice que esperó y cuánto",
+		"avisa que espera una sola vez",
 		"sondea el host con su usuario y sin la ruta",
+		"la espera corre después del snapshot",
 		"al vencerse la espera sigue igual",
 		"si la red nunca vuelve, falla por el camino de siempre",
-		"no sondea y copia en el acto",
+		"rclone a «remoto:musubi»: no sondea",
 		"la espera no aplica a ese destino",
+		"rsync a «servidor::modulo»: no sondea",
+		"rsync a «rsync://servidor/modulo»: no sondea",
+		"rsync a «./copias:viejas»: no sondea",
+		"rsync a «copias»: no sondea",
+		"rsync a «respaldo@[2001:db8:0:0:0:0:0:1]:/srv/copias»: no sondea",
+		"cp a «",
+		"MUSUBI_ESPERA_RED=«0» no espera",
+		"MUSUBI_ESPERA_RED=«-5» no espera",
 		"MUSUBI_ESPERA_RED=«abc» no espera",
-		"TODO OK",
-	} {
+		"MUSUBI_ESPERA_RED=«300s» no espera",
+		"MUSUBI_ESPERA_RED=«» no espera",
+	}
+	for _, senal := range senales {
 		if !strings.Contains(string(salida), senal) {
 			t.Fatalf("el arnés terminó en 0 pero no dijo %q, así que no ejercitó lo que dice:\n%s", senal, salida)
 		}
+	}
+	controles := 0
+	for _, linea := range strings.Split(string(salida), "\n") {
+		if strings.HasPrefix(linea, "  ✓ ") {
+			controles++
+		}
+	}
+	if controles != len(senales) {
+		t.Fatalf("el arnés dijo %d «✓» y la prueba conoce %d señales: se borró un caso, o se agregó uno "+
+			"sin sumarle acá su señal:\n%s", controles, len(senales), salida)
+	}
+	if !strings.Contains(string(salida), "TODO OK") {
+		t.Fatalf("el arnés terminó en 0 sin decir TODO OK:\n%s", salida)
 	}
 }
 

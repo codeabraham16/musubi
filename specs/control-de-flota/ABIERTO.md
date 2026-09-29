@@ -781,11 +781,17 @@ Misma máquina, mismo segundo, mismo servidor. La diferencia era la espera, que 
 
 **Las pruebas:**
 - `deploy/pruebas/respaldo-espera-la-red.sh` corre el guion de verdad con el mundo falseado. Delante del PATH van un `ssh`, un `rsync`, un `rclone`, un `date` y un `sleep` falsos que comparten un reloj en un archivo: cinco minutos de espera se prueban en un segundo, y la «red» levanta a la hora que diga cada caso.
-- `TestElRespaldoEsperaLaRedAntesDeCopiar` corre ese arnés y exige que haya dicho cada uno de sus bloques: si alguien borra uno, el arnés sigue saliendo en 0 y ese control es lo único que lo nota. Suma 13 sabotajes.
+- `TestElRespaldoEsperaLaRedAntesDeCopiar` corre ese arnés y exige una señal por cada «✓», y tantos «✓» como señales: si alguien borra un caso, el arnés sigue saliendo en 0 y ese control es lo único que lo nota. Al principio pedía una señal por bloque, y la revisión le borró seis de los siete destinos que no se sondean y tres de los cuatro valores que no son una espera sin que se pusiera en rojo. Suma 17 sabotajes.
+- La revisión encontró dos conductas más sin guarda, y el arnés ahora las mide. Una: la espera corre DESPUÉS del snapshot, porque la red le importa a la copia al servidor y no al respaldo local, que tiene que quedar hecho aunque la red no vuelva. Cada sonda falsa anota si la marca `.last_snapshot` ya estaba: sin eso, mudar la espera arriba del snapshot dejaba todo lo demás en verde. Dos: el aviso de la espera sale una sola vez y no una por sonda, que en cinco minutos serían sesenta líneas en el journal.
 - `TestLaUnidadDeUnGuionQueSabeEsperarLaRedLePideQueEspere` cubre la otra mitad del arreglo, la línea de la unidad, que la prueba de arriba no mide porque le pasa la variable ella misma. Recorre cada unidad cuyo `ExecStart` corre un guion del repo, sin una lista escrita a mano: si el guion lee `MUSUBI_ESPERA_RED`, la unidad tiene que pedirla como un entero mayor que cero, que es lo único que el guion toma. Suma 2 sabotajes: el 0 y `300s`, como escribe systemd una duración. La revisión encontró que la guarda leía sólo los dígitos del principio y daba `300s` por buena, con un guion que así no espera nada. La otra dirección (la línea entre comillas, que para systemd es la misma) queda en verde.
-- Los 15 sabotajes dan ROJO en el arnés.
+- Los 19 sabotajes dan ROJO en el arnés, cada uno con su motivo.
 
 **Lo que no se salva, y está bien.** El 2026-09-21 a las 03:25:44 el respaldo murió con `Connection timed out`, sin arranque de por medio: la red no llegaba a ningún lado desde antes de la 01:00 hasta las 05:15. Ninguna espera razonable salva cuatro horas. Ese caso sigue fallando, y se ve por el camino de siempre.
+
+**Límites que se conocen, y no son un cabo.** Valen igual para `comparar-y-latir.sh`, que tiene la misma espera:
+- Un valor que no es un entero, como `300s` o `5m`, apaga la espera sin decirlo: el guion lo compara con `-gt 0` y descarta el error. La guarda lo caza en las unidades del repo, pero no donde ella no mira: un drop-in, o `~/.config/musubi-respaldo.env`, cuyas variables le ganan a `Environment=`. El arnés deja escrita esa conducta: con `300s` no espera.
+- `ConnectTimeout=5` corta la conexión y el intercambio de claves, no lo que viene después. Una sonda que se cuelga ya conectada no tiene techo, y rsync tampoco. Las dos unidades son `oneshot`, y systemd no le pone techo de arranque a una `oneshot` que no lo pide.
+- La espera cuenta con el reloj de pared (`date +%s`). Si la laptop se suspende, o NTP corrige la hora en el medio, dura más o menos de lo que dice.
 
 **Lo que falta, y no es código:**
 - En la laptop, la unidad corre el guion del árbol donde se instaló (`/home/davantis/musubi`), y la unidad instalada no tiene la línea de la espera. El arreglo llega cuando ese árbol tenga el guion nuevo y se reinstale la unidad, con su permiso. Hasta entonces, el vigía la marca en rojo: «instalada difiere de deploy/systemd/».
