@@ -161,10 +161,19 @@ func TestElRespaldoEsperaLaRedAntesDeCopiar(t *testing.T) {
 // arnes: archivo="deploy/systemd/musubi-respaldo-local.service"
 // arnes: de="Environment=MUSUBI_ESPERA_RED=300"
 // arnes: a="Environment=MUSUBI_ESPERA_RED=0"
+// arnes: colision_ok="TestLaUnidadDeUnGuionQueSabeEsperarLaRedLePideQueEspere"
 // Y la otra dirección: entre comillas, que para systemd es la misma asignación, tiene que quedar en
 // verde.
 // arnes: arreglo_de="Environment=MUSUBI_ESPERA_RED=300"
 // arnes: arreglo_a="Environment=\"MUSUBI_ESPERA_RED=300\""
+//
+// Sabotaje que la hace fallar: escribir la espera como systemd escribe una duración, `300s`. El
+// guion no la toma como número y no espera nada. La guarda leía sólo los dígitos del principio y
+// la daba por buena; lo encontró la revisión de A139. El sabotaje de arriba pisa esta misma línea
+// y lo declara; los dos caen con motivos distintos, porque el mensaje cita el valor entero.
+// arnes: archivo="deploy/systemd/musubi-respaldo-local.service"
+// arnes: de="Environment=MUSUBI_ESPERA_RED=300"
+// arnes: a="Environment=MUSUBI_ESPERA_RED=300s"
 func TestLaUnidadDeUnGuionQueSabeEsperarLaRedLePideQueEspere(t *testing.T) {
 	unidades, err := filepath.Glob(filepath.Join("..", "..", "deploy", "systemd", "*.service"))
 	if err != nil || len(unidades) == 0 {
@@ -172,7 +181,9 @@ func TestLaUnidadDeUnGuionQueSabeEsperarLaRedLePideQueEspere(t *testing.T) {
 	}
 	execStart := regexp.MustCompile(`(?m)^ExecStart=.*?@REPO@/deploy/([^\s"']+)`)
 	leeLaEspera := regexp.MustCompile(`\$\{?MUSUBI_ESPERA_RED\b`)
-	pideEspera := regexp.MustCompile(`(?m)^Environment=.*\bMUSUBI_ESPERA_RED=(\d+)`)
+	// EL VALOR SE TOMA ENTERO Y SE LEE COMO LO LEE EL GUION: un entero, que `[ "$X" -gt 0 ]`
+	// acepta. Con `(\d+)` a secas, `300s` pasaba por 300 y el guion no esperaba nada.
+	pideEspera := regexp.MustCompile(`(?m)^Environment=.*\bMUSUBI_ESPERA_RED=([^\s"']*)`)
 
 	var revisadas []string
 	for _, u := range unidades {
@@ -186,17 +197,22 @@ func TestLaUnidadDeUnGuionQueSabeEsperarLaRedLePideQueEspere(t *testing.T) {
 				continue
 			}
 			revisadas = append(revisadas, filepath.Base(u)+" → deploy/"+m[1])
-			n := -1
+			n, pide := -1, "no la declara"
 			if p := pideEspera.FindStringSubmatch(unidad); p != nil {
-				n, _ = strconv.Atoi(p[1])
+				pide = "MUSUBI_ESPERA_RED=" + strconv.Quote(p[1])
+				if v, err := strconv.Atoi(p[1]); err == nil {
+					n = v
+				}
 			}
 			if n <= 0 {
 				t.Errorf("%s corre deploy/%s, que sabe esperar la red, y NO le pide que espere "+
-					"(MUSUBI_ESPERA_RED=%d).\n"+
-					"  El guion vale 0 por defecto, así que sin esa línea la unidad copia antes de que "+
-					"levante el tailnet: es el incidente del 2026-09-29 (A139).\n"+
+					"(%s).\n"+
+					"  El guion espera sólo con un entero de segundos mayor que cero, y vale 0 por "+
+					"defecto: sin eso la unidad copia antes de que levante el tailnet, que es el "+
+					"incidente del 2026-09-29 (A139). `300s`, como escribe systemd una duración, "+
+					"tampoco le sirve.\n"+
 					"  Se arregla con `Environment=MUSUBI_ESPERA_RED=300` en la unidad.",
-					filepath.Base(u), m[1], max(n, 0))
+					filepath.Base(u), m[1], pide)
 			}
 		}
 	}
