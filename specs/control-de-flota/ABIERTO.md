@@ -762,6 +762,37 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
+**2026-09-29 · A137 CERRADO — EL CAMBIADOR LEÍA EL LANZADOR SIN LA BARRA, Y NINGUNA WINDOWS SE PODÍA ACTUALIZAR.**
+
+Desde #575 (`9baf1dde`, 2026-09-20), el paso [4] de `deploy/cambiar-agente.cmd` leía `"%DIR%agente.cmd"`. `DIR` no trae la barra final: se la saca el recorte que sigue al `set DIR=%~dp0`. La ruta quedaba `…\AppData\Local\Musubiagente.cmd`, un archivo que no existe:
+- `findstr` no encontraba nada y `MUSUBI_BRAIN_URL` quedaba vacía;
+- el cambiador volvía atrás SIEMPRE, con un binario nuevo que estaba sano.
+
+Lo midió gio el 2026-09-29, en el primer intento de actualizarla. Su `cambio.log` dice `FALLO: no pude leer MUSUBI_BRAIN_URL de "C:\Users\meirn\AppData\Local\Musubiagente.cmd"` y después `ROLLBACK HECHO`. La máquina quedó sana, con su binario de antes.
+
+**Por qué no lo vio nadie:**
+- Las guardas del cambiador miran que el entorno se DERIVE del lanzador (A129), no que la ruta al lanzador exista.
+- El mensaje de `TestLaDireccionDelCerebroNoSeEscribeAManoEnLosGuionesDeWindows` recomendaba, como arreglo, esa misma línea sin la barra.
+- Y el camino no corrió hasta gio. Los dos agentes de Windows de la flota tienen binarios anteriores a #575: `davantis-1` corre `1b3d170` (19/09) y gio `bfa4ac4` (11/09).
+
+**Lo que se hizo:**
+- La barra, en las dos líneas: la del `findstr` y la del mensaje de FALLO.
+- El mensaje de la prueba de A129 recomienda ahora la forma con barra.
+- La guarda nueva es `TestElCambiadorNoPegaUnNombreALaCarpetaSinBarra`:
+  - deriva las carpetas recortadas de la línea `if %X:~-1%==\ set X=%X:~0,-1%`, sin una lista escrita a mano;
+  - acusa cualquier nombre pegado a una de ellas sin barra (`%X%nombre` o `!X!nombre`), en el código y no en los `REM`;
+  - si no encuentra la línea de recorte, falla, porque no midió nada.
+
+Su sabotaje, sacarle la barra al `findstr`, dio ROJO en el arnés por su propia aserción. Los demás casos, probados a mano:
+- la forma rota adentro de un `REM`: verde;
+- sin la línea de recorte: rojo, por «no medí»;
+- en minúsculas o con `!DIR!`: rojo;
+- `%DIR:~-1%` y `"%DIR%\x"`: verde.
+
+**Lo que falta, y no es código:** reintentar gio y, cuando vuelva a estar en línea, `davantis-1`, cada una con su permiso.
+
+**Ojo con desde dónde se corre el actualizador.** `deploy/actualizar-agente-windows.sh` compila el binario en un árbol limpio del commit que se le pasa, pero el cambiador lo copia del árbol desde donde se lo corre (`cp "$REPO/deploy/cambiar-agente.cmd"`). Corrido desde un árbol anterior a este arreglo, le serviría a la máquina el cambiador roto, aunque el commit pedido ya lo tenga arreglado.
+
 **2026-09-27 · A133 CERRADO — EL AGENTE MANDA SU HORA, Y EL CEREBRO PUBLICA CUÁNTO ESTÁ CORRIDO CADA RELOJ, CON SU SIGNO.**
 
 La fila proponía medirlo en el cerebro con lo que ya llegaba: `tomada` cruda − llegada, antes de recortarla. **Decisión del usuario:** que el agente mande su hora; descartó la variante «sólo en el cerebro». `tomada` no es la hora en que el latido salió, y restarla fallaba de dos formas:
@@ -4274,7 +4305,7 @@ cuatro eran pruebas que pasaban por el motivo equivocado, y sólo el sabotaje lo
    (A21 «habría que tocar el bundle», A13 «verificar contra el relay», A28 «no se puede sin
    instalar un servidor»). Antes de dar por bueno un «no se hizo porque X», verificá X.
 6. **El número es la identidad: uno solo por cosa, y para siempre.** Un número nuevo va por encima
-   del máximo en uso (hoy **A136** y **B21**) y NO se recicla uno libre: `A6`-`A9`, `A15` y `A16`
+   del máximo en uso (hoy **A137** y **B21**) y NO se recicla uno libre: `A6`-`A9`, `A15` y `A16`
    nunca se usaron, y estrenarlos ahora haría que un lector con el archivo viejo en la cabeza lea
    otra cosa. Si un cabo se convierte en otro —de la tabla 1 a la 2, o al revés— la fila nueva dice
    **«(era A33)»** y la vieja se borra: sin esa marca, cada cita del número anterior apunta a la

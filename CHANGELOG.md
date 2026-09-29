@@ -867,6 +867,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **El cambiador de Windows vuelve a leer el lanzador, y una actualización ya no vuelve atrás
+  siempre (A137).** Desde #575, `deploy/cambiar-agente.cmd` buscaba `"%DIR%agente.cmd"`, pero `DIR`
+  no trae la barra final. La ruta quedaba `…\Musubiagente.cmd`, que no existe: la prueba del binario
+  nuevo se quedaba sin la dirección del cerebro y el cambiador devolvía el binario viejo, con el
+  nuevo sano. Lo midió gio el 2026-09-29, en su primer intento. Ahora la ruta lleva la barra, el
+  mensaje de la guarda de A129 deja de recomendar la forma rota, y
+  `TestElCambiadorNoPegaUnNombreALaCarpetaSinBarra` acusa cualquier nombre pegado a una carpeta
+  recortada. Las carpetas las deriva de la línea que recorta, y si no la encuentra, falla.
 - **El latido del riel en vivo ya no dice «sin sondeo» con el sistema sano.** El pie del riel contaba
   los sondeos del último minuto y con cero apagaba la lámpara. Con la bajada espaciada una máquina
   quieta pide cada 300 s, y hasta ~450 s cuando el candado cambia de dueño porque el anterior murió
