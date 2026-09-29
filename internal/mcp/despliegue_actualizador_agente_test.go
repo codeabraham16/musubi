@@ -31,6 +31,7 @@ package mcp
 // ────────────────────────────────────────────────────────────────────────────────────────────
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -502,3 +503,92 @@ func TestElCambiadorNoEscapaConCaretDentroDeComillas(t *testing.T) {
 		}
 	}
 }
+
+// LA CARPETA RECORTADA NO SE PEGA A UN NOMBRE: ENTRE LAS DOS VA LA BARRA (A137).
+//
+// El cambiador le saca a `DIR` la barra final que trae `%~dp0`, para que el resto escriba
+// `"%DIR%\musubi.exe"` sin barras dobles. O sea que cada nombre que se arma sobre `DIR` tiene que
+// poner la barra él. El paso [4], el que lee el lanzador, la escribió sin barra desde #575
+// (2026-09-20): `"%DIR%agente.cmd"` da `C:\Users\meirn\AppData\Local\Musubiagente.cmd`, un archivo
+// que no existe. `findstr` no encuentra nada, `MUSUBI_BRAIN_URL` queda vacía y el cambiador vuelve
+// atrás SIEMPRE, con un binario nuevo que estaba sano. Ninguna Windows se podía actualizar. Lo
+// midió gio el 2026-09-29, en su `cambio.log`:
+//
+//	FALLO: no pude leer MUSUBI_BRAIN_URL de "C:\Users\meirn\AppData\Local\Musubiagente.cmd"
+//
+// NINGUNA GUARDA LO VIO, Y UNA LO RECOMENDABA. Las de este guion miran que el entorno se DERIVE del
+// lanzador, no que la ruta al lanzador exista; y el mensaje de
+// `TestLaDireccionDelCerebroNoSeEscribeAManoEnLosGuionesDeWindows` proponía como arreglo esa misma
+// línea sin barra. El camino no corrió nunca entre el cambio y la primera actualización de verdad.
+//
+// LAS CARPETAS SE DERIVAN DE LA LÍNEA QUE RECORTA, no se enumeran: otra variable que se recorte
+// igual queda cubierta sin tocar esta prueba. Y si no hay ninguna línea de recorte, falla: cero
+// hallazgos sin haber mirado nada no es «está limpio».
+//
+// `%DIR:~-1%` y `%DIR:~0,-1%` no cuentan, porque después del nombre viene `:` y no `%`. Se miran
+// también `!DIR!`, la forma de la expansión demorada, por si el guion algún día la enciende;
+// `"%DIR%"agente.cmd`, que cmd.exe junta en el mismo nombre pegado; y `%DIR%%NOMBRE%`, un nombre
+// que sale de otra variable y queda pegado igual. Lo que NO se sigue es una copia: con
+// `set LAN=%DIR%`, un `%LAN%agente.cmd` pasa. Hoy el guion no copia la carpeta; si empieza a
+// hacerlo, hay que enseñárselo a esta prueba.
+//
+// Sabotaje que la hace fallar: sacarle la barra a la línea del `findstr`, que es exactamente como
+// estuvo en main desde #575.
+// arnes: archivo="deploy/cambiar-agente.cmd"
+// arnes: de="/c:\"set MUSUBI_\" \"%DIR%\\agente.cmd\""
+// arnes: a="/c:\"set MUSUBI_\" \"%DIR%agente.cmd\""
+// Y la otra dirección: cmd.exe no distingue mayúsculas en los nombres de variable, así que el
+// recorte escrito con otra caja es el mismo recorte, y la prueba lo tiene que seguir reconociendo.
+// arnes: arreglo_de="if %DIR:~-1%==\\ set DIR=%DIR:~0,-1%"
+// arnes: arreglo_a="if %dir:~-1%==\\ set Dir=%DIR:~0,-1%"
+//
+// Sabotaje que la hace fallar: pegarle a la carpeta un nombre que sale de otra variable, en la línea
+// del mensaje de FALLO para no pisar al sabotaje de arriba.
+// arnes: archivo="deploy/cambiar-agente.cmd"
+// arnes: de="MUSUBI_BRAIN_URL de \"%DIR%\\agente.cmd\""
+// arnes: a="MUSUBI_BRAIN_URL de \"%DIR%%LANZADOR%\""
+// Y la otra dirección: el mismo nombre en una variable, con la barra afuera, es la forma correcta y
+// tiene que quedar en verde. Es lo que separa «acusa la barra que falta» de «acusa toda variable
+// pegada a la carpeta».
+// arnes: arreglo_de="MUSUBI_BRAIN_URL de \"%DIR%\\agente.cmd\""
+// arnes: arreglo_a="MUSUBI_BRAIN_URL de \"%DIR%\\%LANZADOR%\""
+func TestElCambiadorNoPegaUnNombreALaCarpetaSinBarra(t *testing.T) {
+	c := leerDeploy(t, "cambiar-agente.cmd")
+
+	var recortadas []string
+	for _, m := range laLineaQueRecortaLaBarra.FindAllStringSubmatch(c, -1) {
+		if strings.EqualFold(m[1], m[2]) && strings.EqualFold(m[2], m[3]) {
+			recortadas = append(recortadas, m[1])
+		}
+	}
+	if len(recortadas) == 0 {
+		t.Fatalf("no encontré en el cambiador ninguna línea `if %%X:~-1%%==\\ set X=%%X:~0,-1%%`.\n" +
+			"Sin ella no sé qué carpeta viene sin barra, así que esta prueba no midió nada.\n" +
+			"Si dejaste de recortar la barra, revisá que ningún `%%X%%\\nombre` quede con dos barras\n" +
+			"y adaptá la prueba; si cambiaste la forma del recorte, enseñásela a la expresión")
+	}
+
+	lineas := strings.Split(c, "\n")
+	for _, v := range recortadas {
+		n := regexp.QuoteMeta(v)
+		pegado := regexp.MustCompile(`(?i)(%` + n + `%|!` + n + `!)"?[A-Za-z0-9._%!-]`)
+		for i, linea := range lineas {
+			if !pegado.MatchString(linea) {
+				continue
+			}
+			t.Errorf("cambiar-agente.cmd:%d pega un nombre a `%s` sin la barra:\n"+
+				"    %s\n"+
+				"  `%s` no termina en barra (se la saca `if %%%s:~-1%%==\\ …`), así que esto arma un\n"+
+				"  nombre pegado a la carpeta —como `…\\Musubiagente.cmd`— que no existe. Escribí\n"+
+				"  `%%%s%%\\nombre`.\n"+
+				"  Pasó el 2026-09-29 en gio: el paso [4] no leyó el lanzador y el cambiador volvió\n"+
+				"  atrás con un binario sano (cabo A137)",
+				i+1, v, strings.TrimSpace(linea), v, v, v)
+		}
+	}
+}
+
+// laLineaQueRecortaLaBarra reconoce `if %X:~-1%==\ set X=%X:~0,-1%`, la línea que deja una carpeta
+// sin su barra final. Que los tres nombres sean el mismo se compara aparte, sin distinguir
+// mayúsculas, que es como los compara cmd.exe.
+var laLineaQueRecortaLaBarra = regexp.MustCompile(`(?im)^\s*if\s+%(\w+):~-1%==\\\s+set\s+(\w+)=%(\w+):~0,-1%`)
