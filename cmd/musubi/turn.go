@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -302,6 +303,22 @@ func guardarMarcaDeSesion(store metaStore, key string, m marcasPorSesion, sessio
 	}
 }
 
+// olvidarMarcaDeSesion borra la marca de UNA sesión en la clave `key`, y deja las de las demás como
+// estaban. La usa la compactación (ver buildHookOutputDeCompactacion): lo que la marca decía que el
+// agente ya tenía en contexto, el resumen se lo llevó, y la próxima vez que la superficie tenga algo
+// que decir en esa sesión lo tiene que volver a decir. Sólo escribe si la sesión tenía marca.
+func olvidarMarcaDeSesion(store metaStore, key, sessionID string) {
+	m := leerMarcasPorSesion(store, key)
+	if _, ok := m.Valor[sessionID]; !ok {
+		return
+	}
+	delete(m.Valor, sessionID)
+	m.Orden = slices.DeleteFunc(m.Orden, func(id string) bool { return id == sessionID })
+	if b, err := json.Marshal(m); err == nil {
+		_ = store.SetMeta(key, string(b))
+	}
+}
+
 // ledgerDeLaSesion lee la cuenta de ESTA sesión. El hook sí conoce su id, así que no tiene por qué
 // adivinar: con LedgerStatus() a secas —«la última que escribió»— la alerta de presupuesto y la
 // brevedad automática de la terminal A se disparaban con el total de la terminal B. Una revisión
@@ -555,6 +572,10 @@ type parametrosDelTurno struct {
 	// traduce memory.AlcanceDelTurnoSegun, y el vacío y el cero valen el default.
 	otrosModo string
 	otrosMax  int
+	// sinAvisoDeCorreccion calla la línea «busqué … por …» y deja la corrección: la consulta sale
+	// corregida igual. Lo pide la memoria que vuelve tras compactar, donde el aviso sería un pedazo
+	// del pedido viejo (decisión 2 del dueño). En false, el turno de siempre, que sí avisa.
+	sinAvisoDeCorreccion bool
 }
 
 // buildTurnRecall hace un recall read-only acotado al prompt y formatea los gists.
@@ -593,6 +614,11 @@ func buildTurnRecall(store turnStore, p parametrosDelTurno) string {
 	consulta, correcciones := prompt, []memory.Correccion(nil)
 	if p.memCfg.RecallTypoCorrection {
 		consulta, correcciones = store.CorregirConsulta(context.Background(), prompt, opts.AlcanceDelCorrector())
+	}
+	// Tras compactar se busca con la consulta CORREGIDA, pero el aviso no sale: repetiría un pedazo
+	// del pedido, que el resumen de la compactación ya trae (ver encabezadoDeMemoria).
+	if p.sinAvisoDeCorreccion {
+		correcciones = nil
 	}
 
 	// LA SEÑAL VECTORIAL, con el techo de latencia puesto. El backfill embebe el content completo,
@@ -1146,7 +1172,8 @@ const (
 // no corrige: pasa nil. Y la superficie que devuelve la memoria tras compactar (compact_recall) no
 // la lleva, a propósito: el aviso le sirve a quien acaba de tipear, en ESE turno; repetido después
 // de una compactación sería un pedazo del prompt viejo que vuelve como ruido (decisión 2 del dueño).
-// Por eso no hay perilla que la encienda en otra superficie.
+// Esa superficie busca con el mismo buildTurnRecall y pide sinAvisoDeCorreccion: la consulta sale
+// corregida igual, y las correcciones llegan acá en nil.
 //
 // La frase del punto 3 NO es la advertencia de material CITADO del punto 2, y no se funden. Ésa
 // habla de quién ESCRIBIÓ la nota (puede no ser una orden); ésta, de qué REPO describe (puede no
@@ -1212,6 +1239,32 @@ func formatGists(titulo string, res memory.RecallResult, propio string) string {
 	return strings.TrimRight(encabezadoDeMemoria(titulo, huboMarcas, nil)+"\n"+b.String(), "\n")
 }
 
+// embebedorDelHook construye el embebedor de un hook que busca memoria (el turno, y la memoria que
+// vuelve tras compactar), CON DOS GUARDAS QUE SON CONSECUENCIA DE MEDIR. Devuelve nil cuando no hay
+// que construirlo: el recall sigue, léxico.
+//
+// (1) SÓLO SI EL RECALL POR TURNO ESTÁ ENCENDIDO. Antes se construía siempre, así que una
+// instalación con per_turn_recall en false pagaba igual el costo de construirlo para después no
+// usarlo nunca.
+//
+// (2) SÓLO SI CONSTRUIRLO ES BARATO. Ver embedderCaroDeConstruir: con la tabla estática, cada
+// invocación del hook leía 512 MB de disco. Medido acá: el hook pasó de 0,29 s a 11-23 s con picos
+// de 1,3 GB, contra un timeout de 10 s en .claude/settings.json — o sea que el turno se quedaba SIN
+// memoria inyectada, que es peor que el léxico que tenía antes. Degradar acá es estrictamente mejor
+// que morir: el recall léxico funciona.
+func embebedorDelHook(cfg config.Config, root string, engine *memory.DbEngine) embedding.Provider {
+	if !cfg.Loop.PerTurnRecall || embedderCaroDeConstruir(cfg, root) {
+		return nil
+	}
+	embedder := resolveEmbedder(cfg, root)
+	if embedding.Enabled(embedder) {
+		// La MISMA procedencia que estampa cualquier save: sin esto SearchObservations no
+		// puede aplicar la regla de homogeneidad y el pool vectorial sale vacío.
+		engine.SetVectorModelID(embedder.Name())
+	}
+	return embedder
+}
+
 // runTurn implementa el comando 'musubi turn [--hook-mode]'. Sin --hook-mode es
 // un no-op (el comando solo tiene sentido como hook). En hook-mode lee stdin,
 // abre la memoria (best-effort) y escribe el envelope en stdout. Los errores no
@@ -1243,26 +1296,7 @@ func runTurn() {
 	}
 	defer engine.Close()
 
-	// EL EMBEBEDOR DEL HOOK, CON DOS GUARDAS QUE SON CONSECUENCIA DE MEDIR.
-	//
-	// (1) SÓLO SI EL RECALL POR TURNO ESTÁ ENCENDIDO. Antes se construía siempre, así que una
-	//     instalación con per_turn_recall en false pagaba igual el costo de construirlo para
-	//     después no usarlo nunca.
-	//
-	// (2) SÓLO SI CONSTRUIRLO ES BARATO. Ver embedderCaroDeConstruir: con la tabla estática, cada
-	//     invocación del hook leía 512 MB de disco. Medido acá: el hook pasó de 0,29 s a 11-23 s
-	//     con picos de 1,3 GB, contra un timeout de 10 s en .claude/settings.json — o sea que el
-	//     turno se quedaba SIN memoria inyectada, que es peor que el léxico que tenía antes.
-	//     Degradar acá es estrictamente mejor que morir: el recall léxico funciona.
-	var embedder embedding.Provider
-	if cfg.Loop.PerTurnRecall && !embedderCaroDeConstruir(cfg, root) {
-		embedder = resolveEmbedder(cfg, root)
-		if embedding.Enabled(embedder) {
-			// La MISMA procedencia que estampa cualquier save: sin esto SearchObservations no
-			// puede aplicar la regla de homogeneidad y el pool vectorial sale vacío.
-			engine.SetVectorModelID(embedder.Name())
-		}
-	}
+	embedder := embebedorDelHook(cfg, root, engine)
 
 	tareas := &tareasDelTurno{store: engine, subagente: subagenteDeTareasDisponible(), ahora: time.Now()}
 	// El proyecto de este repo, resuelto con la MISMA función con que el daemon estampa cada nota al

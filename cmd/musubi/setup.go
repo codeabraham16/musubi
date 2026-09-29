@@ -219,7 +219,7 @@ func setupProjectWith(exeOverride, agent string) {
 		if err := writeClaudeHook(root, exePath); err != nil {
 			printWarn(fmt.Sprintf("No se pudo registrar el hook SessionStart: %v", err))
 		} else {
-			printOK("Hook SessionStart en .claude/settings.json (auto-descubrimiento de skills)")
+			printOK("Hook SessionStart (startup, compact, clear) en .claude/settings.json (arranque, y la memoria que vuelve tras compactar)")
 		}
 		if err := writeTurnHook(root, exePath); err != nil {
 			printWarn(fmt.Sprintf("No se pudo registrar el hook UserPromptSubmit: %v", err))
@@ -257,6 +257,17 @@ func setupProjectWith(exeOverride, agent string) {
 	if exeOverride == "" && os.Getenv("MUSUBI_BIN") == "" && !exeInPath(exePath) {
 		printInfo("El proyecto referencia el binario por ruta: " + cDim(exePath))
 		printInfo("Si lo movés/borrás, reabrí con 'musubi setup'. Para una ruta estable en toda la PC, instalá Global.")
+	}
+
+	// La compactación, dicha al final porque es lo que más se pierde sin avisar: si el settings del
+	// repo no ata el arranque a «compact», la memoria que el resumen se lleva no vuelve, y el agente
+	// sigue sin quejarse. Setup lo acaba de escribir, así que esto sólo sale mal si no pudo.
+	if target.SupportsHooks {
+		if elProyectoYaTieneElArranque(root, fuenteCompact) {
+			printOK("Compactación cubierta: SessionStart «compact» en .claude/settings.json (tras compactar, Musubi devuelve la memoria que el resumen perdió)")
+		} else {
+			printWarn("Este repo quedó SIN el hook SessionStart «compact»: después de compactar, la memoria que el resumen pierde no vuelve. Revisá .claude/settings.json y volvé a correr musubi setup.")
+		}
 	}
 
 	fmt.Printf("\n%s Reabrí el proyecto en %s y el servidor 'musubi' estará disponible.\n", cGreen("Listo."), target.Name)
@@ -310,8 +321,18 @@ func hookExeCommand(exePath, sub string) string {
 	return quoteExe(exePath) + " " + sub
 }
 
+// fuentesDelArranque son los matchers con que setup ata el hook de arranque, el mismo comando en los
+// tres: «compact» devuelve la memoria que el resumen perdió (detect_compactar.go), y «clear» es una
+// sesión nueva, que va por el arranque. «resume» y «fork» no se instalan. El plugin lleva los mismos
+// en ganchosDelAgente, y TestElPluginLlevaLosMismosGanchosQueSetup los ata.
+//
+// VAN CON EL BINARIO QUE LOS ENTIENDE: un binario anterior corre el arranque entero —manuales,
+// skills, bloque cognitivo, salud— en cada compactación.
+var fuentesDelArranque = []string{fuenteStartup, fuenteCompact, fuenteClear}
+
 // writeClaudeHook inyecta (idempotente) el hook SessionStart de auto-descubrimiento
-// de skills en {root}/.claude/settings.json usando bootstrap.MergeClaudeSettings.
+// de skills en {root}/.claude/settings.json usando bootstrap.MergeClaudeSettings, con un
+// matcher por cada fuente de fuentesDelArranque.
 // Si el archivo no existe, lo crea. Si ya contiene el hook de Musubi, no lo duplica.
 func writeClaudeHook(root, exePath string) error {
 	claudeDir := filepath.Join(root, config.ClaudeDir)
@@ -328,9 +349,12 @@ func writeClaudeHook(root, exePath string) error {
 		Command: hookExeCommand(exePath, "detect --hook-mode"),
 		Timeout: 10,
 	}
-	merged, err := bootstrap.MergeClaudeSettings(existing, "SessionStart", "startup", hook)
-	if err != nil {
-		return fmt.Errorf("error al mergear settings.json: %w", err)
+	merged := existing
+	for _, fuente := range fuentesDelArranque {
+		merged, err = bootstrap.MergeClaudeSettings(merged, "SessionStart", fuente, hook)
+		if err != nil {
+			return fmt.Errorf("error al mergear settings.json: %w", err)
+		}
 	}
 	return os.WriteFile(settingsPath, merged, 0644)
 }

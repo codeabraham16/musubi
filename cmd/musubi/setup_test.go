@@ -55,7 +55,7 @@ func contarHooksDetect(entradas []map[string]interface{}) int {
 
 // TestWriteClaudeHookCreaArchivo verifica que writeClaudeHook crea
 // .claude/settings.json con un hook SessionStart cuyo command termina en
-// "detect --hook-mode".
+// "detect --hook-mode", uno por cada fuente del arranque (startup, compact, clear).
 func TestWriteClaudeHookCreaArchivo(t *testing.T) {
 	root := t.TempDir()
 	exePath := "/usr/local/bin/musubi"
@@ -73,8 +73,8 @@ func TestWriteClaudeHookCreaArchivo(t *testing.T) {
 	// Verificar el contenido.
 	entradas := parseClaudeSettings(t, root)
 	n := contarHooksDetect(entradas)
-	if n != 1 {
-		t.Errorf("se esperaba exactamente 1 hook detect, encontré %d", n)
+	if n != len(fuentesDelArranque) {
+		t.Errorf("se esperaba 1 hook detect por fuente (%d), encontré %d", len(fuentesDelArranque), n)
 	}
 }
 
@@ -93,8 +93,8 @@ func TestWriteTurnHookRegistraUserPromptSubmit(t *testing.T) {
 	}
 
 	// SessionStart sigue presente.
-	if n := contarHooksDetect(parseClaudeSettings(t, root)); n != 1 {
-		t.Errorf("se esperaba 1 hook detect tras writeTurnHook, encontré %d", n)
+	if n := contarHooksDetect(parseClaudeSettings(t, root)); n != len(fuentesDelArranque) {
+		t.Errorf("se esperaba 1 hook detect por fuente (%d) tras writeTurnHook, encontré %d", len(fuentesDelArranque), n)
 	}
 
 	// UserPromptSubmit registra el comando 'turn --hook-mode'.
@@ -179,8 +179,8 @@ func TestWriteClaudeHookIdempotente(t *testing.T) {
 
 	entradas := parseClaudeSettings(t, root)
 	n := contarHooksDetect(entradas)
-	if n != 1 {
-		t.Errorf("se esperaba 1 hook detect (idempotente), encontré %d", n)
+	if n != len(fuentesDelArranque) {
+		t.Errorf("se esperaba 1 hook detect por fuente (%d, idempotente), encontré %d", len(fuentesDelArranque), n)
 	}
 }
 
@@ -211,9 +211,12 @@ func TestWriteClaudeHookPreservaHooksExistentes(t *testing.T) {
 	}
 
 	entradas := parseClaudeSettings(t, root)
-	// Debe haber exactamente 1 entrada de matcher con 2 hooks.
-	if len(entradas) != 1 {
-		t.Fatalf("se esperaba 1 entrada de matcher, encontré %d", len(entradas))
+	// Una entrada por fuente del arranque; la de startup, la que ya estaba, con 2 hooks.
+	if len(entradas) != len(fuentesDelArranque) {
+		t.Fatalf("se esperaba 1 entrada de matcher por fuente (%d), encontré %d", len(fuentesDelArranque), len(entradas))
+	}
+	if m, _ := entradas[0]["matcher"].(string); m != "startup" {
+		t.Fatalf("la entrada que ya estaba (startup) tenía que seguir primera, y la primera es %q", m)
 	}
 	hooksRaw, _ := entradas[0]["hooks"].([]interface{})
 	if len(hooksRaw) != 2 {
