@@ -780,10 +780,10 @@ Lo midió gio el 2026-09-29, en el primer intento de actualizarla. Su `cambio.lo
 - El mensaje de la prueba de A129 recomienda ahora la forma con barra.
 - La guarda nueva es `TestElCambiadorNoPegaUnNombreALaCarpetaSinBarra`:
   - deriva las carpetas recortadas de la línea `if %X:~-1%==\ set X=%X:~0,-1%`, sin una lista escrita a mano;
-  - acusa cualquier nombre pegado a una de ellas sin barra (`%X%nombre` o `!X!nombre`), en el código y no en los `REM`;
+  - acusa cualquier nombre pegado a una de ellas sin barra (`%X%nombre`, `!X!nombre`, o `%X%%NOMBRE%` si el nombre sale de otra variable), en el código y no en los `REM`;
   - si no encuentra la línea de recorte, falla, porque no midió nada.
 
-Su sabotaje, sacarle la barra al `findstr`, dio ROJO en el arnés por su propia aserción. Los demás casos, probados a mano:
+Sus dos sabotajes, sacarle la barra al `findstr` y pegarle a la carpeta un nombre que sale de otra variable, dieron ROJO en el arnés por su propia aserción. Y la otra dirección también la corre el arnés: el recorte escrito con otra caja (`%dir%`, `Dir`) es el mismo para cmd.exe, y la guarda lo sigue reconociendo. Los demás casos, probados a mano:
 - la forma rota adentro de un `REM`: verde;
 - sin la línea de recorte: rojo, por «no medí»;
 - en minúsculas o con `!DIR!`: rojo;
@@ -791,7 +791,7 @@ Su sabotaje, sacarle la barra al `findstr`, dio ROJO en el arnés por su propia 
 
 **Lo que falta, y no es código:** reintentar gio y, cuando vuelva a estar en línea, `davantis-1`, cada una con su permiso.
 
-**Ojo con desde dónde se corre el actualizador.** `deploy/actualizar-agente-windows.sh` compila el binario en un árbol limpio del commit que se le pasa, pero el cambiador lo copia del árbol desde donde se lo corre (`cp "$REPO/deploy/cambiar-agente.cmd"`). Corrido desde un árbol anterior a este arreglo, le serviría a la máquina el cambiador roto, aunque el commit pedido ya lo tenga arreglado.
+**Ojo con qué copia del actualizador se invoca.** `deploy/actualizar-agente-windows.sh` compila el binario en un árbol limpio del commit que se le pasa, pero el cambiador lo copia de `$REPO` (`cp "$REPO/deploy/cambiar-agente.cmd"`), y `$REPO` sale de `MUSUBI_REPO` o de la carpeta donde vive el guion, no del directorio actual. Invocar el guion de un árbol anterior a este arreglo le sirve a la máquina el cambiador roto, aunque el commit pedido ya lo tenga arreglado y aunque se lo llame parado en un árbol arreglado.
 
 **2026-09-27 · A133 CERRADO — EL AGENTE MANDA SU HORA, Y EL CEREBRO PUBLICA CUÁNTO ESTÁ CORRIDO CADA RELOJ, CON SU SIGNO.**
 

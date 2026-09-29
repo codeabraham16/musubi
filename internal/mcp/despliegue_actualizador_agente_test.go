@@ -526,16 +526,27 @@ func TestElCambiadorNoEscapaConCaretDentroDeComillas(t *testing.T) {
 // hallazgos sin haber mirado nada no es «está limpio».
 //
 // `%DIR:~-1%` y `%DIR:~0,-1%` no cuentan, porque después del nombre viene `:` y no `%`. Se miran
-// también `!DIR!`, la forma de la expansión demorada, por si el guion algún día la enciende, y
-// `"%DIR%"agente.cmd`, que cmd.exe junta en el mismo nombre pegado. Lo que NO se sigue es una
-// copia: con `set LAN=%DIR%`, un `%LAN%agente.cmd` pasa. Hoy el guion no copia la carpeta; si
-// empieza a hacerlo, hay que enseñárselo a esta prueba.
+// también `!DIR!`, la forma de la expansión demorada, por si el guion algún día la enciende;
+// `"%DIR%"agente.cmd`, que cmd.exe junta en el mismo nombre pegado; y `%DIR%%NOMBRE%`, un nombre
+// que sale de otra variable y queda pegado igual. Lo que NO se sigue es una copia: con
+// `set LAN=%DIR%`, un `%LAN%agente.cmd` pasa. Hoy el guion no copia la carpeta; si empieza a
+// hacerlo, hay que enseñárselo a esta prueba.
 //
 // Sabotaje que la hace fallar: sacarle la barra a la línea del `findstr`, que es exactamente como
 // estuvo en main desde #575.
 // arnes: archivo="deploy/cambiar-agente.cmd"
 // arnes: de="/c:\"set MUSUBI_\" \"%DIR%\\agente.cmd\""
 // arnes: a="/c:\"set MUSUBI_\" \"%DIR%agente.cmd\""
+// Y la otra dirección: cmd.exe no distingue mayúsculas en los nombres de variable, así que el
+// recorte escrito con otra caja es el mismo recorte, y la prueba lo tiene que seguir reconociendo.
+// arnes: arreglo_de="if %DIR:~-1%==\\ set DIR=%DIR:~0,-1%"
+// arnes: arreglo_a="if %dir:~-1%==\\ set Dir=%DIR:~0,-1%"
+//
+// Sabotaje que la hace fallar: pegarle a la carpeta un nombre que sale de otra variable, en la línea
+// del mensaje de FALLO para no pisar al sabotaje de arriba.
+// arnes: archivo="deploy/cambiar-agente.cmd"
+// arnes: de="MUSUBI_BRAIN_URL de \"%DIR%\\agente.cmd\""
+// arnes: a="MUSUBI_BRAIN_URL de \"%DIR%%LANZADOR%\""
 func TestElCambiadorNoPegaUnNombreALaCarpetaSinBarra(t *testing.T) {
 	c := leerDeploy(t, "cambiar-agente.cmd")
 
@@ -555,7 +566,7 @@ func TestElCambiadorNoPegaUnNombreALaCarpetaSinBarra(t *testing.T) {
 	lineas := strings.Split(c, "\n")
 	for _, v := range recortadas {
 		n := regexp.QuoteMeta(v)
-		pegado := regexp.MustCompile(`(?i)(%` + n + `%|!` + n + `!)"?[A-Za-z0-9._-]`)
+		pegado := regexp.MustCompile(`(?i)(%` + n + `%|!` + n + `!)"?[A-Za-z0-9._%!-]`)
 		for i, linea := range lineas {
 			if !pegado.MatchString(linea) {
 				continue
