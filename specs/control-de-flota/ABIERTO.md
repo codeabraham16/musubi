@@ -779,8 +779,15 @@ Se vio el 2026-09-29, al preparar la actualización de gio: el cerebro corría `
 - Sigue sin haber orden entre dos commits: la serie dice «otro código», no «más viejo».
 - La ayuda de la serie deja de decir «BINARIO distinto (release Y commit)».
 
+**Lo que encontró la revisión, y se arregló antes de unir:**
+- El latido recortaba la versión a 64 bytes sin avisar, y `-sucio` va detrás de la huella. Un build sucio de etiqueta larga quedaba guardado como el build LIMPIO de ese commit, y la comparación por commit lo igualaba con el cerebro. La textual de antes no lo hacía: el hueco lo abría este cambio. Hoy no se alcanza, porque pide una etiqueta de 46 a 48 caracteres, pero la serie no puede declarar «al día» a una máquina que no lo está.
+  - Ahora el recorte vive en el dominio, `fleet.VersionReportada`, y se marca con `…`, que no es hexadecimal: detrás del último punto ya no queda una huella.
+  - `TestUnaVersionSuciaQueNoEntraNoSeGuardaComoUnBuildLimpio` lo mide de punta a punta: el latido, la fila y la serie.
+- Ninguna prueba ejercitaba una huella en mayúsculas, y aceptarlas quedaba en verde. `TestSoloUnaHuellaDeGitSeIgualaPorPrefijo` suma el caso con las DOS cadenas en mayúsculas: con una sola, el prefijo ya no coincide y la fila no distingue nada.
+- La huella no tiene techo de 40 caracteres, aunque el diseño lo decía: un repositorio con `sha256` las tiene de 64, y cortarlas dejaría afuera un commit legítimo. El registro, la ayuda y el código dicen lo mismo: «al menos 7».
+
 **Las pruebas:**
-- `internal/fleet/version_test.go` suma 8 sabotajes. Los 11 del archivo dan ROJO en el arnés, con motivos distintos.
+- `internal/fleet/version_test.go` suma 10 sabotajes. Los 13 del archivo dan ROJO en el arnés, con motivos distintos.
 - `deploy/pruebas/version-parseable.sh` gana los pasos 2b y 6. Arma con el `construir.sh` de verdad el mismo commit con otra etiqueta y una huella un carácter más larga, forzada con `core.abbrev`, y se lo pasa al comparador. El build sucio del mismo commit es el control: tiene que seguir dando «difiere».
 - `TestLaVersionQueEmiteConstruirEsSiempreParseable` suma un sabotaje sobre la misma línea de `construir.sh` que el que ya tenía: separar la etiqueta de la huella con `-`. El de antes rompe el núcleo y cae en el paso 4; éste deja el núcleo sano y cae en el 6. Cada uno declara al otro en `colision_ok`, y el rojo lleva en su primera línea la primera queja del arnés, para que los dos no tengan el mismo motivo. La otra dirección, la misma línea escrita con llaves, queda en verde.
 

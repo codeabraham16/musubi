@@ -1,6 +1,9 @@
 package fleet
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // LAS DOS FAMILIAS DE VERSIÓN QUE HAY ENROLADAS TIENEN QUE PARSEAR.
 //
@@ -251,6 +254,54 @@ func TestUnBuildSucioNoSeIgualaPorCommit(t *testing.T) {
 	}
 }
 
+// UNA VERSIÓN RECORTADA NO PUEDE PASAR POR UN BUILD LIMPIO (A138).
+//
+// El cerebro guarda a lo sumo VersionReportadaMax bytes de la versión que declara el agente, y
+// `-sucio` va DETRÁS de la huella: es lo primero que se pierde al cortar. Lo encontró la revisión de
+// A138, midiendo el camino del latido: con un recorte mudo, un build sucio de etiqueta larga quedaba
+// guardado como el build limpio de ese commit, y la comparación por commit lo igualaba con el
+// cerebro. La textual de antes no lo igualaba: el hueco lo abría A138.
+//
+// La etiqueta se calcula para que el corte caiga JUSTO detrás de la huella, que es el peor caso: lo
+// que queda es indistinguible de un build limpio. El control lo afirma antes que nada. Sin él, un
+// cambio en el techo dejaría a la prueba construyendo otro caso y pasando sin medir nada.
+//
+// Sabotaje: recortar sin la marca, que es lo que hacía el latido.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="\treturn v[:corte] + marcaDeVersionRecortada\n"
+// arnes: a="\treturn v[:VersionReportadaMax]\n"
+func TestUnaVersionRecortadaNoPasaPorUnBuildLimpio(t *testing.T) {
+	const cerebro = "0.141.0-main.eb2cdb7"
+	cabeza, huella := "0.141.0-", ".eb2cdb72"
+	sucia := cabeza + strings.Repeat("e", VersionReportadaMax-len(cabeza)-len(huella)) + huella + "-sucio"
+
+	if difiere, _ := BuildDelAgenteDifiere(sucia[:VersionReportadaMax], cerebro); difiere {
+		t.Fatalf("control: %q cortada a secas ya no se iguala con %q, así que la prueba dejó de "+
+			"construir el caso que la motivó", sucia, cerebro)
+	}
+
+	guardada := VersionReportada(sucia)
+	if difiere, comparable := BuildDelAgenteDifiere(guardada, cerebro); !difiere || !comparable {
+		t.Errorf("la versión sucia %q se guardó como %q y se declaró el mismo código que %q "+
+			"(difiere=%v comparable=%v): el recorte le sacó el -sucio, y la serie diría «al día» de "+
+			"un binario con código que el commit no tiene", sucia, guardada, cerebro, difiere, comparable)
+	}
+	if len(guardada) > VersionReportadaMax {
+		t.Errorf("VersionReportada(%q) = %q mide %d bytes, más que el techo de %d",
+			sucia, guardada, len(guardada), VersionReportadaMax)
+	}
+	// El núcleo sobrevive a la marca: un recorte no puede dejar ciega a la serie del release.
+	if n, ok := NucleoDeVersion(guardada); !ok || n != "0.141.0" {
+		t.Errorf("NucleoDeVersion(%q) = (%q, %v); esperaba (\"0.141.0\", true)", guardada, n, ok)
+	}
+	// Lo que entra no se toca: sólo pierde los espacios de alrededor.
+	for _, v := range []string{"0.141.0-flota.eb2cdb72", " 0.141.0-flota.eb2cdb72\n", ""} {
+		if got := VersionReportada(v); got != strings.TrimSpace(v) {
+			t.Errorf("VersionReportada(%q) = %q; una versión que entra se guarda entera", v, got)
+		}
+	}
+}
+
 // SÓLO UNA HUELLA DE GIT SE IGUALA POR PREFIJO; LO DEMÁS SE COMPARA COMO TEXTO.
 //
 // Igualar por prefijo es seguro mientras el prefijo nombre UN commit y sea todo lo que hay después
@@ -273,6 +324,11 @@ func TestUnBuildSucioNoSeIgualaPorCommit(t *testing.T) {
 // arnes: archivo="internal/fleet/version.go"
 // arnes: de="\tif i <= 0 {\n\t\treturn \"\", \"\", false\n\t}\n"
 // arnes: a=""
+//
+// Sabotaje: pasar la huella a minúsculas antes de mirarla, que acepta las mayúsculas.
+// arnes: archivo="internal/fleet/version.go"
+// arnes: de="\tcommit = resto[i+1:]\n"
+// arnes: a="\tcommit = strings.ToLower(resto[i+1:])\n"
 func TestSoloUnaHuellaDeGitSeIgualaPorPrefijo(t *testing.T) {
 	const cerebro = "0.141.0-main.eb2cdb7"
 
@@ -289,5 +345,14 @@ func TestSoloUnaHuellaDeGitSeIgualaPorPrefijo(t *testing.T) {
 			t.Errorf("BuildDelAgenteDifiere(%q, %q) = (%v, %v); esperaba (true, true): esa forma no "+
 				"es una huella de git y se declaró el mismo código", agente, cerebro, difiere, comparable)
 		}
+	}
+
+	// UNA HUELLA EN MAYÚSCULAS NO LA EMITE GIT, ASÍ QUE NO SE IGUALA COMO SI LO FUERA. Va con las DOS
+	// cadenas en mayúsculas: con el cerebro en minúsculas el prefijo ya no coincide, la fila da
+	// «difiere» por la razón equivocada y no distingue nada. Lo encontró la revisión de A138.
+	agente, cerebroEnMayusculas := "0.141.0-flota.EB2CDB72", "0.141.0-main.EB2CDB7"
+	if difiere, comparable := BuildDelAgenteDifiere(agente, cerebroEnMayusculas); !difiere || !comparable {
+		t.Errorf("BuildDelAgenteDifiere(%q, %q) = (%v, %v); esperaba (true, true): una huella en "+
+			"mayúsculas no es de git y se declaró el mismo código", agente, cerebroEnMayusculas, difiere, comparable)
 	}
 }

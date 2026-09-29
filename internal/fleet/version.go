@@ -23,7 +23,10 @@ package fleet
 // mismo release no.
 // ────────────────────────────────────────────────────────────────────────────────────────────
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // NucleoDeVersion extrae el MAJOR.MINOR.PATCH de una versión de Musubi.
 //
@@ -72,7 +75,7 @@ func NucleoDeVersion(v string) (string, bool) {
 // `TestDosCommitsDelMismoReleaseNoSonUnAgenteAtrasado` declara como sabotaje exactamente eso
 // —comparar las cadenas completas— porque el binario del cerebro se redespliega varias veces por
 // día y marcaría a la flota entera después de cada despliegue. Las dos coexisten: aquélla dice
-// «esta máquina se quedó en otro RELEASE» y ésta «esta máquina corre OTRO BINARIO». La segunda es
+// «esta máquina se quedó en otro RELEASE» y ésta «esta máquina corre OTRO CÓDIGO». La segunda es
 // ruidosa por naturaleza, y por eso su alerta la lee con un plazo largo en vez de al instante.
 //
 // SE COMPARAN EL NÚCLEO Y EL COMMIT, NO LA CADENA ENTERA (A138)
@@ -160,6 +163,38 @@ func mismoCommit(x, y string) bool {
 		x, y = y, x
 	}
 	return strings.HasPrefix(y, x)
+}
+
+// VersionReportadaMax es cuánto guarda el cerebro de la versión que un agente declara en su
+// latido. Una versión de construir.sh mide unos veinte bytes: el techo está para que un agente roto
+// no llene la fila de basura, no para recortar versiones de verdad.
+const VersionReportadaMax = 64
+
+// marcaDeVersionRecortada cierra una versión que no entró. No es hexadecimal a propósito: es lo que
+// hace que lo que queda detrás del último punto deje de ser una huella.
+const marcaDeVersionRecortada = "…"
+
+// VersionReportada es la versión que declaró un agente tal como la guarda el cerebro: sin espacios
+// alrededor y, si no entra en VersionReportadaMax, recortada CON UNA MARCA al final.
+//
+// EL RECORTE SE MARCA PORQUE UN RECORTE MUDO FABRICA UNA VERSIÓN QUE NO EXISTE (A138). construir.sh
+// pone `-sucio` DETRÁS de la huella, que es justo lo primero que se pierde al cortar: una versión
+// sucia de etiqueta larga quedaba guardada como el build LIMPIO de ese commit, y
+// BuildDelAgenteDifiere la igualaba con el cerebro. «Al día», de un binario con código que el
+// commit no tiene. Con la marca, detrás del último punto ya no hay una huella y la comparación
+// vuelve al texto, que es el lado seguro. Lo encontró la revisión de A138: la comparación textual
+// de antes no igualaba esas dos cadenas, así que el hueco lo abría la comparación por commit.
+func VersionReportada(v string) string {
+	v = strings.TrimSpace(v)
+	if len(v) <= VersionReportadaMax {
+		return v
+	}
+	corte := VersionReportadaMax - len(marcaDeVersionRecortada)
+	// Sin partir un carácter en dos: una versión ilegible puede traer cualquier cosa.
+	for corte > 0 && !utf8.RuneStart(v[corte]) {
+		corte--
+	}
+	return v[:corte] + marcaDeVersionRecortada
 }
 
 // VersionDelAgenteDifiere responde si el agente de una máquina corre una versión distinta de la

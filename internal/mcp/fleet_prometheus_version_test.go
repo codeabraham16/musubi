@@ -170,6 +170,47 @@ func TestLaVersionDelAgenteNoEntraComoEtiqueta(t *testing.T) {
 	}
 }
 
+// UNA VERSIÓN SUCIA QUE NO ENTRA NO SE GUARDA COMO UN BUILD LIMPIO (A138).
+//
+// De punta a punta: el latido, la fila y la serie. Lo encontró la revisión de A138 por este mismo
+// camino: el latido recortaba la versión a 64 bytes sin avisar, `-sucio` va DETRÁS de la huella, y
+// un build sucio de etiqueta larga quedaba guardado como el build limpio de ese commit. La serie
+// daba 0 de un binario con código que el commit no tiene.
+//
+// La versión se arma con las partes de la del cerebro y con el techo del dominio, para que el corte
+// caiga justo detrás de la huella. El control es otra máquina con un build limpio del mismo commit
+// y otra etiqueta: ésa SÍ da 0, así que el 1 de la sucia sale del recorte y no de otra diferencia.
+//
+// Sabotaje: que el latido vuelva a recortar la versión a mano, sin la marca.
+// arnes: archivo="internal/mcp/fleet_http.go"
+// arnes: de="\tversion := fleet.VersionReportada(cuerpo.Version)\n"
+// arnes: a="\tversion := strings.TrimSpace(recortar(cuerpo.Version, fleet.VersionReportadaMax))\n"
+func TestUnaVersionSuciaQueNoEntraNoSeGuardaComoUnBuildLimpio(t *testing.T) {
+	s := newTestServer(t, embedding.NoopProvider{})
+	ts := servidorHTTP(t, s)
+
+	nucleo, resto, _ := strings.Cut(versionDePrueba, "-")
+	huella := resto[strings.LastIndex(resto, "."):]
+	cabeza := nucleo + "-"
+	sucia := cabeza + strings.Repeat("e", fleet.VersionReportadaMax-len(cabeza)-len(huella)) + huella + "-sucio"
+	limpia := cabeza + "otra" + huella
+
+	latirConVersion(t, ts.URL, enrolarDePrueba(t, s, "casa", "sucia-larga"), sucia)
+	latirConVersion(t, ts.URL, enrolarDePrueba(t, s, "casa", "limpia"), limpia)
+
+	out := exportar(t, s, nil)
+	if v, hay := serieDe(out, "musubi_fleet_device_agent_build_stale", "limpia"); !hay || v != "0" {
+		t.Fatalf("control: %q es el mismo commit que el cerebro (%q) con otra etiqueta y da "+
+			"build_stale=%q (hay=%v); sin este 0, el 1 de abajo no dice nada del recorte\n%s",
+			limpia, versionDePrueba, v, hay, out)
+	}
+	if v, hay := serieDe(out, "musubi_fleet_device_agent_build_stale", "sucia-larga"); !hay || v != "1" {
+		d, _, _ := s.engine.DevicePorNombre("casa", "sucia-larga")
+		t.Errorf("la versión sucia %q se guardó como %q y da build_stale=%q (hay=%v): el recorte le "+
+			"sacó el -sucio y la serie la iguala con el cerebro %q", sucia, d.AgentVer, v, hay, versionDePrueba)
+	}
+}
+
 // LA VERSIÓN LLEGA POR UNA OPTION, Y UNA OPTION SE OLVIDA EN SILENCIO.
 //
 // `internal/mcp` no puede leer la variable que el build inyecta en `main`, así que la referencia

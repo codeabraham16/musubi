@@ -875,7 +875,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   el mismo commit, y la serie decía que no. Ahora compara el núcleo y el commit, el commit por
   prefijo y con al menos 7 caracteres hexadecimales; un build sucio no se iguala por commit, y lo
   que no tiene esa forma sigue comparándose como texto. `deploy/pruebas/version-parseable.sh` le
-  pasa al comparador lo que emite el `construir.sh` de verdad, con el build sucio como control.
+  pasa al comparador lo que emite el `construir.sh` de verdad, con el build sucio como control. Y
+  el latido ya no recorta la versión en silencio: una versión sucia de más de 64 bytes perdía el
+  `-sucio`, que va detrás de la huella, y la comparación por commit la habría dado por limpia.
+  Ahora el recorte lleva una marca y esa versión se compara como texto.
 - **El cambiador de Windows vuelve a leer el lanzador, y una actualización ya no vuelve atrás
   siempre (A137).** Desde #575, `deploy/cambiar-agente.cmd` buscaba `"%DIR%agente.cmd"`, pero `DIR`
   no trae la barra final. La ruta quedaba `…\Musubiagente.cmd`, que no existe: la prueba del binario

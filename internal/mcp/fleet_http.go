@@ -283,7 +283,11 @@ func (s *McpServer) aplicarCuerpoDelLatido(d fleet.Device, cuerpo fleet.CuerpoLa
 	//
 	// El sesgo del error es el seguro: si la comparación se equivoca, escribe de más (una
 	// escritura idéntica, inofensiva), nunca de menos.
-	version := strings.TrimSpace(recortar(cuerpo.Version, 64))
+	//
+	// LA VERSIÓN SE RECORTA EN EL DOMINIO, Y CON MARCA. Un recorte mudo le sacaba el `-sucio` a un
+	// build sucio largo y lo dejaba guardado como uno limpio, que la serie del build igualaba con
+	// el cerebro (A138). El porqué completo está en `fleet.VersionReportada`.
+	version := fleet.VersionReportada(cuerpo.Version)
 	direccion := strings.TrimSpace(recortar(cuerpo.Direccion, 128))
 	if (version != "" && version != d.AgentVer) || (direccion != "" && direccion != d.Address) {
 		_ = s.engine.ActualizarAutoreporte(d.ID, version, direccion)
