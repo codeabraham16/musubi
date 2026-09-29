@@ -112,14 +112,17 @@ REM (A129), esta prueba iba a seguir discando el viejo, fallar, y disparar el ro
 REM al binario nuevo de no latir. El binario estaria sano y nadie miraria aca.
 REM Leer las lineas `set MUSUBI_` del lanzador trae tambien MUSUBI_BRAIN_TLS_NAME y
 REM MUSUBI_ALCANCE si estan, sin tener que enumerarlas aca.
+REM OJO CON LA BARRA ANTES DE agente.cmd: DIR no la trae (se la saca el recorte que sigue al
+REM `set DIR=`), y sin ella se leia "...\Musubiagente.cmd", un archivo que no existe. El
+REM cambiador volvia atras SIEMPRE con un binario nuevo sano (A137, medido en gio el 2026-09-29).
 set MUSUBI_BRAIN_URL=
-for /f "usebackq delims=" %%L in (`findstr /b /c:"set MUSUBI_" "%DIR%agente.cmd"`) do %%L
+for /f "usebackq delims=" %%L in (`findstr /b /c:"set MUSUBI_" "%DIR%\agente.cmd"`) do %%L
 
 REM Y SI NO SE PUDO LEER, ES ROJO Y NO UN DEFAULT. Un `agent --once` sin URL no prueba nada:
 REM fallaria por falta de configuracion y el rollback culparia al binario. "No pude leer el
 REM lanzador" y "el agente nuevo no late" son cosas distintas y tienen que decirse distinto.
 if not defined MUSUBI_BRAIN_URL (
-  echo FALLO: no pude leer MUSUBI_BRAIN_URL de "%DIR%agente.cmd" >> "%LOG%"
+  echo FALLO: no pude leer MUSUBI_BRAIN_URL de "%DIR%\agente.cmd" >> "%LOG%"
   echo        sin la direccion del cerebro esta prueba no mide nada, asi que no se acepta el nuevo >> "%LOG%"
   goto rollback
 )
