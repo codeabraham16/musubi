@@ -912,6 +912,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **El respaldo de la laptop espera la red antes de mandar la copia (A139).** Su timer es
+  `Persistent=true`: con la máquina apagada a la hora, corre apenas arranca, antes de que levante el
+  tailnet. El 2026-09-29 los dos timers de la laptop dispararon juntos al arrancar: `musubi-comparar`
+  esperó 42 s a `musubi-server` y anduvo, y el rsync del respaldo murió con `Network is
+  unreachable`. Ahora `musubi-backup.sh` espera al host del destino con la misma sonda por ssh, cada
+  5 s y hasta `MUSUBI_ESPERA_RED` segundos (300 en la unidad, 0 a mano), y al vencerse copia igual,
+  para que el fallo se vea por el camino de siempre. Sólo sondea un destino rsync por ssh.
+  `deploy/pruebas/respaldo-espera-la-red.sh` corre el guion de verdad con un reloj falso, y una
+  guarda exige que toda unidad cuyo guion sabe esperar le pida que espere.
 - **Una máquina al día con el código del cerebro ya no queda marcada para siempre por la etiqueta
   del build (A138).** `musubi_fleet_device_agent_build_stale` comparaba la versión entera como
   texto, y la versión lleva dos cosas que no salen del código: la etiqueta del track (`flota` el
