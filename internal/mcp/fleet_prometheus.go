@@ -1150,12 +1150,13 @@ func seriesDeFlota(ahora time.Time, intervaloSonda time.Duration, versionCerebro
 		// caída sigue diciendo en qué versión se quedó — que es lo que se quiere saber de ella.
 		// LA HERMANA DE LA DE ABAJO, Y CONTESTA LA OTRA MITAD (A118). Aquélla compara el NÚCLEO
 		// semver y por eso no puede ver que una máquina se quedó 41 commits atrás dentro del mismo
-		// release; ésta compara el BUILD completo. No se fusionan: la del núcleo marcaría a la
+		// release; ésta compara el núcleo Y el commit, sin la etiqueta del track ni el largo de la
+		// huella, que no salen del código (A138). No se fusionan: la del núcleo marcaría a la
 		// flota entera después de cada despliegue del cerebro —su propia guarda declara eso como
 		// sabotaje— y ésta, leída al instante, diría lo mismo. Por eso su alerta la lee con un
 		// plazo LARGO: lo que importa no es que difiera hoy, es que siga difiriendo en una semana.
 		{"musubi_fleet_device_agent_build_stale",
-			"1 si el agente corre un BINARIO distinto del cerebro (release Y commit), 0 si es el mismo. Es la hermana de musubi_fleet_device_agent_stale, que compara sólo el NÚCLEO semver y por eso no ve a una máquina que se quedó commits atrás dentro del mismo release — el caso de A118, medido con las cadenas reales de la flota. AUSENTE con las mismas dos reglas que su hermana: en las máquinas sin agente (un Tier B no tiene versión que comparar) y cuando el cerebro no sabe la suya (sin referencia, marcar a la flota entera sería culparla de un build propio). SE LEE CON UN PLAZO LARGO: el binario del cerebro se redespliega varias veces por día, así que un 1 recién aparecido es lo normal y lo que importa es que PERSISTA.",
+			"1 si el agente corre un binario construido de OTRO CÓDIGO que el del cerebro (otro release u otro commit), 0 si es el mismo código. La etiqueta del track y el largo de la huella no cuentan: `0.141.0-flota.eb2cdb72` y `0.141.0-main.eb2cdb7` son el mismo commit (A138). Un build sucio no se iguala por commit, porque no salió del commit que nombra. Es la hermana de musubi_fleet_device_agent_stale, que compara sólo el NÚCLEO semver y por eso no ve a una máquina que se quedó commits atrás dentro del mismo release — el caso de A118, medido con las cadenas reales de la flota. AUSENTE con las mismas dos reglas que su hermana: en las máquinas sin agente (un Tier B no tiene versión que comparar) y cuando el cerebro no sabe la suya (sin referencia, marcar a la flota entera sería culparla de un build propio). SE LEE CON UN PLAZO LARGO: el binario del cerebro se redespliega varias veces por día, así que un 1 recién aparecido es lo normal y lo que importa es que PERSISTA.",
 			"", false,
 			func(d fleet.Device, _ *fleet.Muestra) (float64, bool) {
 				difiere, comparable := fleet.BuildDelAgenteDifiere(d.AgentVer, versionCerebro)

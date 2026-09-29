@@ -762,6 +762,32 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
+**2026-09-29 · A138 CERRADO — EL MISMO COMMIT CONSTRUIDO CON OTRA ETIQUETA CONTABA COMO OTRO BINARIO, Y LA SERIE DEL BUILD NO SE APAGABA NI ACTUALIZANDO.**
+
+`fleet.BuildDelAgenteDifiere` (A118) comparaba la versión entera como texto. Pero la versión que arma `construir.sh` lleva dos cosas que no salen del código:
+- la etiqueta del track, que elige quien construye: `flota` el actualizador de Windows, `main` el redespliegue del cerebro;
+- el largo de la huella, que `git rev-parse --short` alarga cuando el clon tiene más objetos.
+
+Se vio el 2026-09-29, al preparar la actualización de gio: el cerebro corría `0.141.0-main.eb2cdb7` y el actualizador armó, del mismo commit, `0.141.0-flota.eb2cdb72`. Con la comparación textual, `musubi_fleet_device_agent_build_stale` habría quedado en 1 para siempre sobre una máquina al día, y `AgenteConBuildViejo` se habría disparado a la semana. Una alerta que no se apaga ni actualizando enseña a ignorarla.
+
+**Lo que se hizo:**
+- Se igualan el núcleo y el commit, y el commit por prefijo: la huella más corta tiene que ser el principio de la otra.
+- Con tres límites, porque la serie no puede declarar «al día» a una máquina que no lo está:
+  - la huella tiene al menos 7 caracteres hexadecimales en minúscula;
+  - un build sucio no se iguala por commit: `eb2cdb72-sucio` ya no es una huella;
+  - lo que no tiene esa forma (la familia de `git describe`, un `dev`) vuelve a la comparación textual.
+- Sigue sin haber orden entre dos commits: la serie dice «otro código», no «más viejo».
+- La ayuda de la serie deja de decir «BINARIO distinto (release Y commit)».
+
+**Las pruebas:**
+- `internal/fleet/version_test.go` suma 8 sabotajes. Los 11 del archivo dan ROJO en el arnés, con motivos distintos.
+- `deploy/pruebas/version-parseable.sh` gana los pasos 2b y 6. Arma con el `construir.sh` de verdad el mismo commit con otra etiqueta y una huella un carácter más larga, forzada con `core.abbrev`, y se lo pasa al comparador. El build sucio del mismo commit es el control: tiene que seguir dando «difiere».
+- `TestLaVersionQueEmiteConstruirEsSiempreParseable` suma un sabotaje sobre la misma línea de `construir.sh` que el que ya tenía: separar la etiqueta de la huella con `-`. El de antes rompe el núcleo y cae en el paso 4; éste deja el núcleo sano y cae en el 6. Cada uno declara al otro en `colision_ok`, y el rojo lleva en su primera línea la primera queja del arnés, para que los dos no tengan el mismo motivo. La otra dirección, la misma línea escrita con llaves, queda en verde.
+
+**Lo que no cambia:** `AgenteConBuildViejo` dice «un binario distinto del cerebro, dentro del mismo release», y su nota, «lo que cambió es el commit». Las dos siguen siendo ciertas, y cambiarlas dejaría una diferencia de despliegue en las reglas por una palabra.
+
+**Lo que falta, y no es código:** redesplegar el cerebro con este cambio, con su permiso. Hasta entonces la serie sigue comparando texto.
+
 **2026-09-29 · A137 CERRADO — EL CAMBIADOR LEÍA EL LANZADOR SIN LA BARRA, Y NINGUNA WINDOWS SE PODÍA ACTUALIZAR.**
 
 Desde #575 (`9baf1dde`, 2026-09-20), el paso [4] de `deploy/cambiar-agente.cmd` leía `"%DIR%agente.cmd"`. `DIR` no trae la barra final: se la saca el recorte que sigue al `set DIR=%~dp0`. La ruta quedaba `…\AppData\Local\Musubiagente.cmd`, un archivo que no existe:
@@ -4307,7 +4333,7 @@ cuatro eran pruebas que pasaban por el motivo equivocado, y sólo el sabotaje lo
    (A21 «habría que tocar el bundle», A13 «verificar contra el relay», A28 «no se puede sin
    instalar un servidor»). Antes de dar por bueno un «no se hizo porque X», verificá X.
 6. **El número es la identidad: uno solo por cosa, y para siempre.** Un número nuevo va por encima
-   del máximo en uso (hoy **A137** y **B21**) y NO se recicla uno libre: `A6`-`A9`, `A15` y `A16`
+   del máximo en uso (hoy **A138** y **B21**) y NO se recicla uno libre: `A6`-`A9`, `A15` y `A16`
    nunca se usaron, y estrenarlos ahora haría que un lector con el archivo viejo en la cabeza lea
    otra cosa. Si un cabo se convierte en otro —de la tabla 1 a la 2, o al revés— la fila nueva dice
    **«(era A33)»** y la vieja se borra: sin esa marca, cada cita del número anterior apunta a la

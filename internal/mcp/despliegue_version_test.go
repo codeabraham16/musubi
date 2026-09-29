@@ -112,6 +112,10 @@ import (
 // arnes: de="fi\nVERSION=\"${BASE}${ETIQUETA:+-$ETIQUETA}.${COMMIT}${SUCIO}\""
 // arnes: a="fi\nVERSION=\"${BASE}${ETIQUETA:+-$ETIQUETA}-${COMMIT}${SUCIO}\""
 // arnes: colision_ok="TestLaVersionQueEmiteConstruirEsSiempreParseable"
+// Y la otra dirección: la misma línea escrita con llaves, que para bash emite la misma versión, tiene
+// que quedar en verde. La guarda mide lo que el guion emite, no cómo está escrito.
+// arnes: arreglo_de="fi\nVERSION=\"${BASE}${ETIQUETA:+-$ETIQUETA}.${COMMIT}${SUCIO}\""
+// arnes: arreglo_a="fi\nVERSION=\"${BASE}${ETIQUETA:+-${ETIQUETA}}.${COMMIT}${SUCIO}\""
 func TestLaVersionQueEmiteConstruirEsSiempreParseable(t *testing.T) {
 	// El salteo de fuera de linux vive en UN solo lugar (internal/guiones) y en linux no puede
 	// activarse. Acá había tres `t.Skipf` propios, y los dos de `exec.LookPath` salteaban TAMBIÉN

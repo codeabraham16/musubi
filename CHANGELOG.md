@@ -867,6 +867,15 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **Una máquina al día con el código del cerebro ya no queda marcada para siempre por la etiqueta
+  del build (A138).** `musubi_fleet_device_agent_build_stale` comparaba la versión entera como
+  texto, y la versión lleva dos cosas que no salen del código: la etiqueta del track (`flota` el
+  actualizador de Windows, `main` el redespliegue del cerebro) y el largo de la huella, que git
+  alarga cuando el clon tiene más objetos. `0.141.0-flota.eb2cdb72` y `0.141.0-main.eb2cdb7` son
+  el mismo commit, y la serie decía que no. Ahora compara el núcleo y el commit, el commit por
+  prefijo y con al menos 7 caracteres hexadecimales; un build sucio no se iguala por commit, y lo
+  que no tiene esa forma sigue comparándose como texto. `deploy/pruebas/version-parseable.sh` le
+  pasa al comparador lo que emite el `construir.sh` de verdad, con el build sucio como control.
 - **El cambiador de Windows vuelve a leer el lanzador, y una actualización ya no vuelve atrás
   siempre (A137).** Desde #575, `deploy/cambiar-agente.cmd` buscaba `"%DIR%agente.cmd"`, pero `DIR`
   no trae la barra final. La ruta quedaba `…\Musubiagente.cmd`, que no existe: la prueba del binario
