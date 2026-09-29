@@ -780,14 +780,16 @@ Lo midió gio el 2026-09-29, en el primer intento de actualizarla. Su `cambio.lo
 - El mensaje de la prueba de A129 recomienda ahora la forma con barra.
 - La guarda nueva es `TestElCambiadorNoPegaUnNombreALaCarpetaSinBarra`:
   - deriva las carpetas recortadas de la línea `if %X:~-1%==\ set X=%X:~0,-1%`, sin una lista escrita a mano;
-  - acusa cualquier nombre pegado a una de ellas sin barra (`%X%nombre`, `!X!nombre`, o `%X%%NOMBRE%` si el nombre sale de otra variable), en el código y no en los `REM`;
+  - acusa un nombre pegado a una de ellas sin barra, en el código y no en los `REM`: `%X%nombre`, `!X!nombre`, o `%X%%NOMBRE%` si el nombre sale de otra variable. «Nombre» es lo que empieza con una letra, un dígito, `.`, `_`, `-`, o un `%` o `!` que abre otra variable;
   - si no encuentra la línea de recorte, falla, porque no midió nada.
 
-Sus dos sabotajes, sacarle la barra al `findstr` y pegarle a la carpeta un nombre que sale de otra variable, dieron ROJO en el arnés por su propia aserción. Y la otra dirección también la corre el arnés: el recorte escrito con otra caja (`%dir%`, `Dir`) es el mismo para cmd.exe, y la guarda lo sigue reconociendo. Los demás casos, probados a mano:
+Sus dos sabotajes, sacarle la barra al `findstr` y pegarle a la carpeta un nombre que sale de otra variable, dieron ROJO en el arnés por su propia aserción. Y la otra dirección de cada uno también la corre el arnés, y queda en verde: el recorte escrito con otra caja (`%dir%`, `Dir`), que para cmd.exe es el mismo, y el nombre en una variable con la barra afuera (`"%DIR%\%LANZADOR%"`). Los demás casos, probados a mano:
 - la forma rota adentro de un `REM`: verde;
 - sin la línea de recorte: rojo, por «no medí»;
 - en minúsculas o con `!DIR!`: rojo;
 - `%DIR:~-1%` y `"%DIR%\x"`: verde.
+
+**Lo que la guarda no distingue, medido en la revisión y sin ningún caso en el guion de hoy.** Da rojo, en voz alta, sobre tres formas correctas: `%%DIR%%\agente.cmd` (la doble expansión de `call set`), `%DIR%!` cuando el `!` es un signo, y `"%DIR%%LAN%"` si `LAN` ya empieza con la barra. Y deja pasar un nombre que empiece con `~`, `$`, `[` o `^`. Si alguna de esas formas hace falta, se le enseña a la prueba.
 
 **Lo que falta, y no es código:** reintentar gio y, cuando vuelva a estar en línea, `davantis-1`, cada una con su permiso.
 

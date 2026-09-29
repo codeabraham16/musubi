@@ -547,6 +547,11 @@ func TestElCambiadorNoEscapaConCaretDentroDeComillas(t *testing.T) {
 // arnes: archivo="deploy/cambiar-agente.cmd"
 // arnes: de="MUSUBI_BRAIN_URL de \"%DIR%\\agente.cmd\""
 // arnes: a="MUSUBI_BRAIN_URL de \"%DIR%%LANZADOR%\""
+// Y la otra dirección: el mismo nombre en una variable, con la barra afuera, es la forma correcta y
+// tiene que quedar en verde. Es lo que separa «acusa la barra que falta» de «acusa toda variable
+// pegada a la carpeta».
+// arnes: arreglo_de="MUSUBI_BRAIN_URL de \"%DIR%\\agente.cmd\""
+// arnes: arreglo_a="MUSUBI_BRAIN_URL de \"%DIR%\\%LANZADOR%\""
 func TestElCambiadorNoPegaUnNombreALaCarpetaSinBarra(t *testing.T) {
 	c := leerDeploy(t, "cambiar-agente.cmd")
 
