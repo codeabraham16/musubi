@@ -764,9 +764,9 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
-**2026-09-29 · A141 CERRADO — `internal/mcp` VIVÍA PEGADO AL TECHO DEL PRESUPUESTO PORQUE SUS PRUEBAS MIGRABAN 108 BASES DESDE CERO, Y EL ROJO LE TOCÓ A UN PEDIDO QUE NO TOCABA ESE PAQUETE.**
+**2026-09-29 · A141 CERRADO — `internal/mcp` VIVÍA PEGADO AL TECHO DEL PRESUPUESTO PORQUE SUS PRUEBAS MIGRABAN 108 BASES DESDE CERO, Y EL ROJO LE TOCÓ A UN PEDIDO QUE LE SUMABA 1,4 S.**
 
-El #720 (A139) dio rojo en la guarda del presupuesto: con `-race`, `internal/mcp` tardó 752,3 s, y con `RACE_TIMEOUT` en 25m y `MARGEN_MINIMO` en 2,00 el paquete más lento tiene que entrar en 750 s. El #720 no toca ese paquete. El rojo no fue ruido del runner: desde #713, las siete corridas de `main` dieron entre 729,1 y 745,2 s, un margen de 2,01× a 2,06×. Las siete anteriores, entre 655,7 y 681,8 s, salvo una de 518,9 s.
+El #720 (A139) dio rojo en la guarda del presupuesto: con `-race`, `internal/mcp` tardó 752,3 s, y con `RACE_TIMEOUT` en 25m y `MARGEN_MINIMO` en 2,00 el paquete más lento tiene que entrar en 750 s. El #720 le suma a ese paquete dos pruebas, que sin `-race` tardan 1,4 s. El rojo no fue ruido del runner: desde #713, las siete corridas de `main` dieron entre 729,1 y 745,2 s, un margen de 2,01× a 2,06×. Las siete anteriores, entre 655,7 y 681,8 s, salvo una de 518,9 s.
 
 **Lo que se midió:**
 - **Contención.** CI corre cuatro paquetes a la vez. Con #713, `internal/recalleval` pasó de 87 a 242 s, y en la misma corrida subieron `internal/mcp` (+63 s), `internal/memory` (+71 s) y `cmd/musubi` (+34 s). Sin `-race`, `internal/recalleval` tarda 4,4 s. De eso, 1,6 s son del corrector de tipeo de #713 en `TestTipeoNoRompeElDorado`, con 156 llamadas, y otros 1,6 s salen de 25 bases que las pruebas migraban desde cero.
