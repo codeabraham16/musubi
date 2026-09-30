@@ -15,6 +15,7 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // Invariantes del generador de fixtures desde memoria real (specs/fixture-real/).
@@ -22,7 +23,7 @@ import (
 // baseDePrueba arma una base con topics de tamaños conocidos y devuelve su ruta.
 func baseDePrueba(t *testing.T, porTopico map[string]int) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := memtest.DirSembrado(t)
 	eng, err := memory.NewDbEngine(dir)
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
@@ -550,7 +551,7 @@ func TestFixtureTraeLasAristasDelGrafo(t *testing.T) {
 // otra capa y la prueba no prueba nada.
 func baseConTextoLargoYCuarentena(t *testing.T) (ruta string, idCuarentenada string) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := memtest.DirSembrado(t)
 	eng, err := memory.NewDbEngine(dir)
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)

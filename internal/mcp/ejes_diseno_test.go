@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // I-EJE1 · LA TAXONOMÍA ETIQUETA POR VOCABULARIO, NO POR EL NOMBRE DEL EJE.
@@ -109,7 +110,7 @@ func TestEjesUnaMencionSueltaNoEtiqueta(t *testing.T) {
 // arnes: de="\t\t\treturn nil\n"
 // arnes: a="\t\t\treturn vecs\n"
 func TestEjesSinTablaCompletaNoSeRutea(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +136,7 @@ func TestEjesSinTablaCompletaNoSeRutea(t *testing.T) {
 // arnes: de="\t\tAxis:            rec.Eje,"
 // arnes: a="\t\tAxis:            \"\","
 func TestEjesElRuteoSeDeclaraEnElBrief(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +301,7 @@ func TestRuteoDeclaraElSegundoCandidato(t *testing.T) {
 
 func probarRuteo(t *testing.T, alto, medio string) {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // embebedorPorAngulo mapea cada texto a un vector unitario en 2D según un ángulo elegido por su
@@ -43,7 +44,7 @@ func (e *embebedorPorAngulo) Embed(_ context.Context, text string) ([]float32, e
 // consulta. `sims` es topic → similitud deseada contra el pedido "CONSULTA".
 func motorConSimilitudes(t *testing.T, sims map[string]float64) *McpServer {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

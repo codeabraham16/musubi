@@ -7,11 +7,12 @@ import (
 	"testing"
 
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 func servidorConMarca(t *testing.T, tenant, texto string) *McpServer {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"musubi/internal/memory/memtest"
 )
 
 // EL RECALL TIENE QUE SER DETERMINISTA CUANDO EL REFUERZO ESTÁ APAGADO, Y ESO SOSTIENE AL BANCO
@@ -48,7 +50,7 @@ func TestElRecallEsDeterministaSinRefuerzo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fixture golden: %v", err)
 	}
-	e, err := SeedEngine(t.TempDir(), fx, nil)
+	e, err := SeedEngine(memtest.DirSembrado(t), fx, nil)
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}

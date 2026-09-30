@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // motorSinPlazoDeMaquina es el motor del dorado con el corrector de tipeo SIN el plazo de producción.
@@ -47,7 +48,7 @@ func (m motorSinPlazoDeMaquina) CorregirConsulta(ctx context.Context, q string, 
 func TestTipeoNoRompeElDorado(t *testing.T) {
 	fx := loadGolden(t)
 	ctx := context.Background()
-	eng, err := SeedEngine(t.TempDir(), fx, nil)
+	eng, err := SeedEngine(memtest.DirSembrado(t), fx, nil)
 	if err != nil {
 		t.Fatalf("SeedEngine: %v", err)
 	}

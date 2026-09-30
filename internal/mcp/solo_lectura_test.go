@@ -11,21 +11,18 @@ import (
 	"musubi/internal/config"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 
 	_ "modernc.org/sqlite"
 )
 
-// servidorSoloLectura arma un servidor sobre una base REAL abierta en el escalón: se migra, se le
-// adelanta el user_version y se reabre sin migrar. No hay engine falso de por medio a propósito —
-// lo que se prueba incluye que el servidor le pregunte al engine de verdad quién es.
+// servidorSoloLectura arma un servidor sobre una base REAL abierta en el escalón: llega migrada
+// (sembrada con la plantilla), se le adelanta el user_version y se reabre sin migrar. No hay engine
+// falso de por medio a propósito — lo que se prueba incluye que el servidor le pregunte al engine
+// de verdad quién es.
 func servidorSoloLectura(t *testing.T) *McpServer {
 	t.Helper()
-	dir := t.TempDir()
-	eng, err := memory.NewDbEngine(dir)
-	if err != nil {
-		t.Fatalf("NewDbEngine: %v", err)
-	}
-	eng.Close()
+	dir := memtest.DirSembrado(t)
 
 	db, err := sql.Open("sqlite", filepath.Join(dir, config.DirName, config.DBFile))
 	if err != nil {

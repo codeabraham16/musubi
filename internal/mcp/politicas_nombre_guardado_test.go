@@ -25,6 +25,7 @@ import (
 
 	"musubi/internal/fleet"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // politicasGuardadas son los nombres de política que tienen alguna fila en fleet_policy_state.
@@ -71,7 +72,7 @@ func marcarYVerComoSeGuarda(t *testing.T, e memory.StorageBackend, politica, dev
 // más al de la prueba.
 func nombresGuardados(t *testing.T, pols []fleet.Politica) []string {
 	t.Helper()
-	espejo, err := memory.NewDbEngine(t.TempDir())
+	espejo, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
 	}

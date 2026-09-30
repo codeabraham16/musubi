@@ -9,6 +9,7 @@ import (
 
 	"musubi/internal/config"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // Pruebas del banco que corre el ranker del HOOK por turno: las opciones de la fuente única
@@ -131,7 +132,7 @@ func TestElBrazoDelTurnoTraduceElYaml(t *testing.T) {
 func TestElBancoCorreElMotorDelHook(t *testing.T) {
 	fx := corpusParaMMR()
 	ctx := context.Background()
-	eng, err := SeedEngine(t.TempDir(), fx, hashEmbed)
+	eng, err := SeedEngine(memtest.DirSembrado(t), fx, hashEmbed)
 	if err != nil {
 		t.Fatalf("SeedEngine: %v", err)
 	}

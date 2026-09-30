@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // El invariante: UN FALLO DEL EMBEDDER NO PIERDE LA OBSERVACIÓN. El save degrada — guarda sin
@@ -20,7 +21,7 @@ import (
 // arnes: de="\temb := s.embedIfEnabled(content)\n\n"
 // arnes: a="\tvar emb []float32\n\tif embedding.Enabled(s.embedder) {\n\t\tv, errEmb := s.embedder.Embed(ctx, content)\n\t\tif errEmb != nil {\n\t\t\treturn nil, rpcErrorf(codeInternalError, \"error al embeber: %v\", errEmb)\n\t\t}\n\t\temb = v\n\t}\n\n"
 func TestSaveObservationSobreviveAlEmbedderCaido(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine error: %v", err)
 	}

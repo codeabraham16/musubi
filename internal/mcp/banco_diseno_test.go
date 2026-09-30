@@ -23,6 +23,7 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 const (
@@ -128,7 +129,7 @@ func acervoDeFixture(t *testing.T, s *McpServer, e *memory.DbEngine) {
 // es correcto para lo que este banco mide y explícitamente insuficiente para lo que mide la sonda.
 func servidorDelBanco(t *testing.T) *McpServer {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +273,7 @@ func TestBancoDiseno(t *testing.T) {
 // contaminar las demás métricas con el veneno.
 func medirInyeccionPorAcervo(t *testing.T, set *SetBanco) float64 {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
