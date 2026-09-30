@@ -763,6 +763,34 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
+**2026-09-30 · A142 CERRADO — LA PRUEBA DE LOS DOS ESCRITORES MEDÍA LA DISPONIBILIDAD, IGUAL QUE LA DEL LEDGER EN A134; AHORA EL ORDEN LO FIJA LA PRUEBA.**
+
+`TestX1DosEscritoresConcurrentesNoSeMatan` cayó al menos cuatro veces, todas en `test-cross (windows-latest)` y siempre con `database is locked (5) (SQLITE_BUSY)`:
+- el 2026-09-12, en el pedido de dependabot de gotreesitter 0.52.0 (corrida 34705964312), con la prueba en 13,43 s;
+- el 2026-09-21, dos veces en `main`: en 259feee5 (35616877293) a los 7,52 s y en 4d28ff46 (35638073981) a los 14,61 s;
+- el 2026-09-30, en el primer intento del #721 (36668183447), a los 9,39 s. Se relanzó y pasó.
+
+Es «al menos» porque una corrida relanzada que pasa deja de figurar como fallida: `gh run list --status failure` no la muestra, y la del #721 apareció sólo porque se sabía dónde buscarla.
+
+**Producción estaba bien.** El DSN lleva `_txlock=immediate` y `busy_timeout(5000)`, y el código es 5, no el 517 de una lectora que no pudo subir a escritora: una conexión esperó los 5 s enteros sin conseguir el lock. La prueba eran dos goroutines sin orden, doce leer-y-escribir contra cuarenta altas, y con el runner cargado una se quedaba sin turno. Es la inanición de A134, y la prueba la contaba como el defecto que custodia.
+
+**Lo que se hizo.** Se reescribió en su lugar, con el mismo nombre:
+- A abre la transacción y lee. B escribe por el camino público, `SaveObservationTyped`, desde otra goroutine.
+- Mientras A no confirme, B no puede terminar: ni bien, porque no tiene el lock, ni mal, porque lo espera. La prueba mira una ventana de 300 ms, contra una espera de 5 s.
+- A escribe lo que leyó y confirma. Recién ahí termina B, y quedan las dos escrituras.
+
+El orden lo fija la prueba, así que la carga no decide nada: cinco corridas seguidas, 0,39 a 0,40 s cada una.
+
+**Y ahora tiene sabotajes, que antes no tenía.** Separa las dos mitades del DSN, cada una con su motivo:
+- Sin `_txlock=immediate`, A nace lectora y B escribe con A adentro: «B escribió con la transacción de A abierta…».
+- Sin `busy_timeout(5000)`, B choca con el lock de A y vuelve al instante: «B chocó con el lock de A y volvió al instante…».
+
+Los dos pisan el mismo literal del DSN que el sabotaje de `TestSinArranqueElLedgerEsperaAlOtroEscritor`, y el arnés lo informa como choque. Son guardas distintas sobre la misma línea, así que cada prueba nombra a la otra en su `colision_ok`. El censo pasa de 1958 a 1960 sabotajes mecanizados.
+
+**Límite que se conoce.** Bajo sabotaje, la ventana sí decide por reloj: si la goroutine de B arranca después de los 300 ms, ese sabotaje pasa en verde esa vez. Al revés no hay reloj que decida: con el DSN sano, B no puede terminar antes de que A confirme.
+
+**Lo que no cambia.** Producción no reintenta ante SQLITE_BUSY. Si dos escritores reales compitieran más de 5 s por el lock, el alta devolvería el error, igual que antes de este cambio.
+
 **2026-09-29 · A139 CERRADO — EL RESPALDO DE LA LAPTOP COPIABA ANTES DE QUE HUBIERA RED, Y SU HERMANO YA SABÍA ESPERAR.**
 
 Los timers de la laptop son `Persistent=true`: si la máquina estaba apagada a la hora, corren apenas arranca. El 2026-09-29 arrancó a las 10:16:44, `musubi-comparar` y `musubi-respaldo-local` dispararon juntos a las 10:21:12, y el wifi se conectó recién a las 10:21:49:
@@ -4417,7 +4445,7 @@ cuatro eran pruebas que pasaban por el motivo equivocado, y sólo el sabotaje lo
    (A21 «habría que tocar el bundle», A13 «verificar contra el relay», A28 «no se puede sin
    instalar un servidor»). Antes de dar por bueno un «no se hizo porque X», verificá X.
 6. **El número es la identidad: uno solo por cosa, y para siempre.** Un número nuevo va por encima
-   del máximo en uso (hoy **A141** y **B21**) y NO se recicla uno libre: `A6`-`A9`, `A15` y `A16`
+   del máximo en uso (hoy **A142** y **B21**) y NO se recicla uno libre: `A6`-`A9`, `A15` y `A16`
    nunca se usaron, y estrenarlos ahora haría que un lector con el archivo viejo en la cabeza lea
    otra cosa. Si un cabo se convierte en otro —de la tabla 1 a la 2, o al revés— la fila nueva dice
    **«(era A33)»** y la vieja se borra: sin esa marca, cada cita del número anterior apunta a la
