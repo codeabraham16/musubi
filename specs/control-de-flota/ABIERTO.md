@@ -783,12 +783,12 @@ El #720 (A139) dio rojo en la guarda del presupuesto: con `-race`, `internal/mcp
   - `internal/mcp`: 1478 de primer nivel y 625 subpruebas;
   - `internal/recalleval`: 57 de primer nivel y 6 subpruebas.
   - El dorado del corrector da los mismos números.
-- La base sembrada tiene el mismo esquema que la migrada, y eso lo exige `TestLaBaseSembradaEsIdenticaALaMigradaDeCero`, que compara el DDL. Los datos no los compara ninguna guarda: la revisión los volcó enteros y difieren en una sola fila de `meta`, la hora de `token_estimator_version`, que no lee nadie.
+- La base sembrada tiene el mismo esquema que la migrada, y eso lo exige `TestLaBaseSembradaEsIdenticaALaMigradaDeCero`, que compara el DDL. Los datos no los compara ninguna guarda: la revisión los volcó enteros y difieren en una sola fila de `meta`, la hora de `token_estimator_version`, que no lee nadie. Volcadas en segundos distintos difieren también en la hora de `schema_floor`, pero esa no sale de la siembra: la vuelve a grabar cada arranque, esté la base sembrada o no.
 
 **Lo que no se hizo, a propósito:**
 - No se subió `RACE_TIMEOUT` ni se bajó `MARGEN_MINIMO`.
 - No se relanzó el trabajo hasta que saliera verde. `presupuesto-de-pruebas.env` ya lo dice: ese rojo «entrena a relanzar sin leer, y el día que el fallo sea real nadie lo mira».
-- No se agregó una guarda contra la migración desde cero. Tendría que enumerar formas: agarraría la literal, pero no el `dir := t.TempDir()` que después se abre o se le pasa a un ayudante, y de esa forma salían 52 de las 108. La guarda que mide el costo, venga de donde venga, ya existe: es la del presupuesto, y es la que lo encontró.
+- No se agregó una guarda contra la migración desde cero. Tendría que enumerar formas: agarraría la literal, pero no el `dir := t.TempDir()` que después se abre o se le pasa a un ayudante, y de esa forma salían 53 de las 108: 52 se sembraron, y la otra es la de `TestI1ElEsquemaPublicadoEsElQueMigraLaBase`, que migra a propósito. La guarda que mide el costo, venga de donde venga, ya existe: es la del presupuesto, y es la que lo encontró.
 
 **Lo que queda, y se decide aparte:**
 - `TestTipeoNoRompeElDorado` sigue corriendo el corrector 156 veces bajo `-race`. Es la próxima palanca si la contención vuelve. No se tocó porque su vara está calibrada sobre tres semillas.
