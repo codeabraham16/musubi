@@ -53,7 +53,7 @@ Cada `case.yaml` declara en un comentario el costo de UNA corrida de UN brazo (`
 | `control-primer-contacto` | 0,05 | 0,15 | 0,50 |
 | **suma** | **0,68** | **1,94** | **5,00** |
 
-Total = suma × corridas × 2 brazos + jueces (2 graders llm × 3 votos × corrida × brazo, con haiku:
+Total = suma × corridas × 2 brazos + jueces (los 2 graders llm de toda la suite × 3 votos × corrida × brazo, con haiku:
 ≈ 0,005 USD el voto).
 
 | Corrida | mínimo | típico | máximo |

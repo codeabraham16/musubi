@@ -105,7 +105,7 @@ Costo estimado por corrida de UN brazo (USD, precio de lista de un modelo grande
 | control-normalizar | 0,08 | 0,15 | 0,40 |
 | control-primer-contacto | 0,05 | 0,15 | 0,50 |
 
-Total = Σ casos × corridas × 2 brazos + jueces (2 graders llm × 3 votos × 0,005 USD por corrida y
+Total = Σ casos × corridas × 2 brazos + jueces (los 2 graders llm de toda la suite × 3 votos × 0,005 USD por corrida y
 brazo). Piloto (`recuerda-puerto`, 1 corrida): **0,10 / 0,24 / 0,60**. Suite con 1 corrida:
 **1,42 / 3,94 / 10,06**. Suite con 3 corridas: **4,26 / 11,82 / 30,18**. `correr.sh` hace esta
 cuenta sola para lo que se elija. Los tres números de la suite los recalculé a mano y coinciden.
