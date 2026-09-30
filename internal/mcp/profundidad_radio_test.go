@@ -8,6 +8,7 @@ import (
 	"musubi/internal/codeintel"
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // Tocar un README no puede volver inalcanzable el panel más barato.
@@ -19,7 +20,7 @@ import (
 // medía el proxy y no la cosa. Se descubrió saboteándolo.
 func servidorConGrafoVacio(t *testing.T) *McpServer {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

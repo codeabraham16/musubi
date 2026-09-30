@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"musubi/internal/memory/memtest"
 )
 
 // Invariantes del spec «El juez se puede medir» (specs/juez-medible/) que viven en el banco.
@@ -52,7 +54,7 @@ func TestJ4ElBrazoDelJuezCambiaLasMetricas(t *testing.T) {
 	conJuez.Name = "lexico+juez-invertido"
 	conJuez.Juez = juez
 
-	scores, err := Run(context.Background(), t.TempDir(), fx, nil, []Config{lexicalConfig, conJuez}, ks)
+	scores, err := Run(context.Background(), memtest.DirSembrado(t), fx, nil, []Config{lexicalConfig, conJuez}, ks)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -77,7 +79,7 @@ func TestJ5SinJuezElBancoEsBitIdentico(t *testing.T) {
 	fx := loadGolden(t)
 	ks := []int{1, 5, 10}
 
-	scores, err := Run(context.Background(), t.TempDir(), fx, nil, []Config{lexicalConfig}, ks)
+	scores, err := Run(context.Background(), memtest.DirSembrado(t), fx, nil, []Config{lexicalConfig}, ks)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -115,7 +117,7 @@ func TestJ6ElBancoNoMemoiza(t *testing.T) {
 	cfg1 := lexicalConfig
 	cfg1.Name = "una-vez"
 	cfg1.Juez = unaVez
-	if _, err := Run(context.Background(), t.TempDir(), fx, nil, []Config{cfg1}, []int{5}); err != nil {
+	if _, err := Run(context.Background(), memtest.DirSembrado(t), fx, nil, []Config{cfg1}, []int{5}); err != nil {
 		t.Fatalf("Run (una vez): %v", err)
 	}
 	base := unaVez.llamadas.Load()
@@ -127,7 +129,7 @@ func TestJ6ElBancoNoMemoiza(t *testing.T) {
 	cfgA, cfgB := lexicalConfig, lexicalConfig
 	cfgA.Name, cfgB.Name = "pasada-a", "pasada-b"
 	cfgA.Juez, cfgB.Juez = dosVeces, dosVeces
-	if _, err := Run(context.Background(), t.TempDir(), fx, nil, []Config{cfgA, cfgB}, []int{5}); err != nil {
+	if _, err := Run(context.Background(), memtest.DirSembrado(t), fx, nil, []Config{cfgA, cfgB}, []int{5}); err != nil {
 		t.Fatalf("Run (dos veces): %v", err)
 	}
 

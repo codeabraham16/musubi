@@ -14,12 +14,13 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // bancoDesign arma un servidor con el acervo vacío, listo para sembrarle veneno.
 func bancoDesign(t *testing.T) (*McpServer, *memory.DbEngine) {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

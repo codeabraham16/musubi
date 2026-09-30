@@ -18,6 +18,7 @@ import (
 	"musubi/internal/embedding"
 	"musubi/internal/fleet"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // registroDePrueba arma un registro de principals en memoria (sin archivo).
@@ -632,7 +633,7 @@ func servidorSobre(t *testing.T, dir string, pol config.PolicyConfig, reg *Princ
 // arnes: de="\ts.cargarCooldowns()\n"
 // arnes: a=""
 func TestElCooldownSobreviveUnReinicioDelCerebro(t *testing.T) {
-	dir := t.TempDir()
+	dir := memtest.DirSembrado(t)
 	reg := registroDePrueba(autoHeal())
 
 	// --- primera vida del cerebro ---

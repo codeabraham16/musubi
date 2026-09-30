@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // lexicalConfig es el baseline: recall léxico con las señales model-free que corren en
@@ -65,7 +66,7 @@ func loadGolden(t *testing.T) *Fixture {
 func TestHarnessLexicalBaseline(t *testing.T) {
 	fx := loadGolden(t)
 	ks := []int{1, 5, 10}
-	scores, err := Run(context.Background(), t.TempDir(), fx, nil, []Config{lexicalConfig}, ks)
+	scores, err := Run(context.Background(), memtest.DirSembrado(t), fx, nil, []Config{lexicalConfig}, ks)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -105,7 +106,7 @@ func TestHarnessLexicalBaseline(t *testing.T) {
 func TestHarnessHybridPathRuns(t *testing.T) {
 	fx := loadGolden(t)
 	ks := []int{1, 5, 10}
-	scores, err := Run(context.Background(), t.TempDir(), fx, hashEmbed, []Config{lexicalConfig, hybridConfig}, ks)
+	scores, err := Run(context.Background(), memtest.DirSembrado(t), fx, hashEmbed, []Config{lexicalConfig, hybridConfig}, ks)
 	if err != nil {
 		t.Fatalf("Run híbrido: %v", err)
 	}

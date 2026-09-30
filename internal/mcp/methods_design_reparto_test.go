@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // acervoDePatrones siembra el tenant de diseño con patrones de contenido conocido y devuelve el
@@ -24,7 +25,7 @@ import (
 // sirve y cuánto), y un embebedor falso mediría al embebedor falso.
 func acervoDePatrones(t *testing.T, entradas map[string]string) *McpServer {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +177,7 @@ func TestDesignElRecorteNoParteUnCaracter(t *testing.T) {
 // arnes: de="\tcase len(b.Method) > designPisoBloque:\n\t\tb.Method = b.Method[:len(b.Method)-1]\n\tcase len(b.Corpus) > designPisoCorpus:\n\t\tb.Corpus = b.Corpus[:len(b.Corpus)-1]"
 // arnes: a="\tcase len(b.Method) > 0:\n\t\tb.Method = b.Method[:len(b.Method)-1]\n\tcase len(b.Corpus) > 0:\n\t\tb.Corpus = b.Corpus[:len(b.Corpus)-1]"
 func TestDesignLaMarcaCedeAntesDeVaciarElMaterial(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

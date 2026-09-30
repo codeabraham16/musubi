@@ -15,6 +15,7 @@ import (
 
 	"musubi/internal/embedding"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // I-PRE1 · la marca precede al método. Los modelos leen en U y pierden más del 30 % de eficacia sobre
@@ -57,7 +58,7 @@ func TestDesignLaMarcaPrecedeAlMetodo(t *testing.T) {
 // I-PRE2 + I-PRE3 · el presupuesto es un tope duro con ningún `limit`, y lo que se recorta se declara
 // con su total. Un recorte mudo entrega un brief mutilado con cara de completo.
 func TestDesignPresupuestoEsTopeDuroYSeDeclara(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

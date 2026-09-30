@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // I-FRM1 · EL MOTOR ACOTA, NO ELIGE.
@@ -141,7 +142,7 @@ func TestFormasTodaReferenciaExiste(t *testing.T) {
 // arnes: de="\t\tShape:           forma,"
 // arnes: a="\t\tShape:           forma[:0],"
 func TestFormasLaFormaLlegaAlBrief(t *testing.T) {
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +174,7 @@ func TestFormasLaFormaLlegaAlBrief(t *testing.T) {
 
 func servidorConFormas(t *testing.T) (*McpServer, *memory.DbEngine) {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

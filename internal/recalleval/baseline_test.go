@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+
+	"musubi/internal/memory/memtest"
 )
 
 const baselinePath = "testdata/baseline_modelfree.json"
@@ -19,7 +21,7 @@ const baselinePath = "testdata/baseline_modelfree.json"
 func TestModelFreeBaselineNoRegression(t *testing.T) {
 	fx := loadGolden(t)
 	ks := []int{1, 5, 10}
-	scores, err := Run(context.Background(), t.TempDir(), fx, nil, []Config{lexicalConfig}, ks)
+	scores, err := Run(context.Background(), memtest.DirSembrado(t), fx, nil, []Config{lexicalConfig}, ks)
 	if err != nil {
 		t.Fatalf("Run léxico: %v", err)
 	}
@@ -53,7 +55,7 @@ func TestModelFreeBaselineDeterministic(t *testing.T) {
 	fx := loadGolden(t)
 	ks := []int{1, 5, 10}
 	run := func() Scores {
-		scores, err := Run(context.Background(), t.TempDir(), fx, nil, []Config{lexicalConfig}, ks)
+		scores, err := Run(context.Background(), memtest.DirSembrado(t), fx, nil, []Config{lexicalConfig}, ks)
 		if err != nil {
 			t.Fatalf("Run léxico: %v", err)
 		}

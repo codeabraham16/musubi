@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 type entradaDirigida struct {
@@ -27,7 +28,7 @@ type entradaDirigida struct {
 // simula calidad de recuperación — fija los números para poder ejercitar la lógica de selección.
 func acervoDirigido(t *testing.T, entradas []entradaDirigida) *McpServer {
 	t.Helper()
-	engine, err := memory.NewDbEngine(t.TempDir())
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -36,6 +36,7 @@ import (
 	"musubi/internal/embedding"
 	"musubi/internal/fleet"
 	"musubi/internal/memory"
+	"musubi/internal/memory/memtest"
 )
 
 // resultadosTrasElDisparo devuelve los resultados que actuarSiCorresponde cuenta DESPUÉS de marcar el
@@ -539,7 +540,7 @@ type filaDeCooldown struct {
 // recorrer corre UNA fila: el disparo, sus cuatro lectores, la hora de cooldown, el reinicio y la
 // vuelta a actuar.
 func (f filaDeCooldown) recorrer(t *testing.T) {
-	dir, marcas := t.TempDir(), t.TempDir()
+	dir, marcas := memtest.DirSembrado(t), t.TempDir()
 	reg := registroDePrueba(f.curador)
 	pc := config.PolicyConfig{
 		Name: "cooldown-" + string(f.cond), Principal: f.curador.Name, When: string(f.cond),
@@ -831,7 +832,7 @@ func TestAlArrancarSeSiembranLosCooldownsDeLasPoliticasComoEstanHoy(t *testing.T
 		{"borrada-del-archivo", "dev-a", "", false, "una política que ya no está configurada"},
 	}
 
-	dir := t.TempDir()
+	dir := memtest.DirSembrado(t)
 	semilla, err := memory.NewDbEngine(dir)
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)

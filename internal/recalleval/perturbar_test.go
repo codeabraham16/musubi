@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"musubi/internal/embedding"
+	"musubi/internal/memory/memtest"
 )
 
 // Pruebas de la perturbación por clase de tipeo (perturbar.go): que el instrumento meta el error
@@ -245,7 +246,7 @@ func perturbarFixture(fx *Fixture, f func(string) string) (*Fixture, int) {
 func TestLaPerturbacionMueveElDorado(t *testing.T) {
 	fx := loadGolden(t)
 	ctx := context.Background()
-	eng, err := SeedEngine(t.TempDir(), fx, nil)
+	eng, err := SeedEngine(memtest.DirSembrado(t), fx, nil)
 	if err != nil {
 		t.Fatalf("SeedEngine: %v", err)
 	}
