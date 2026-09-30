@@ -38,14 +38,21 @@ import (
 // leer-y-escribir contra cuarenta altas— y dependía de que ninguna se quedara sin turno más que el
 // `busy_timeout` (5 s). En el runner de Windows alguna se quedaba: cayó al menos cuatro veces, dos
 // de ellas en main, siempre con SQLITE_BUSY (5) y con la prueba corriendo entre 7,5 y 14,6 s, y
-// contaba esa falta de disponibilidad como el defecto. Ahora el orden lo fija la prueba, como A134 con el ledger
-// (ledger_test.go): A abre la transacción y lee; B intenta escribir; mientras A no confirme, B no
-// puede terminar —ni bien, porque no tiene el lock, ni mal, porque lo espera—; A escribe y confirma,
-// y recién ahí B termina. Lo único que decide por reloj es una ventana de 300 ms que el DSN sano no
-// puede violar, contra una espera de 5 s.
+// contaba esa falta de disponibilidad como el defecto. Ahora el orden lo fija la prueba, como A134
+// con el ledger (ledger_test.go): A abre la transacción y lee; B intenta escribir; mientras A no
+// confirme, B no puede terminar —ni bien, porque no tiene el lock, ni mal, porque lo espera—; A
+// escribe y confirma, y recién ahí B termina. La ventana de 300 ms sólo decide bajo sabotaje. Con el
+// DSN sano queda un reloj, los 5 s del `busy_timeout` de B, que B agotaría sólo si A tardara más de
+// 4,7 s en escribir y confirmar después de la ventana. Y ahí ya no hay cola sin orden: A suelta el
+// lock una sola vez y B es el único que espera, así que haría falta una máquina parada casi cinco
+// segundos.
 //
 // Y AHORA SEPARA LAS DOS MITADES, porque cada una deja una huella distinta en esa ventana: si A nació
 // lectora, B escribe con A adentro y termina bien; si no hay espera, B choca y vuelve al instante.
+// La segunda huella no es exclusiva de ese sabotaje, y por eso su mensaje no inventa una causa sola:
+// un `busy_timeout` más corto que la ventana, o un camino de B que abre su transacción como lectora
+// y la sube a escritora, caen en la misma línea.
+//
 // Los dos sabotajes de abajo pisan el literal del DSN que también sabotea SA5 (sin_arranque_test.go),
 // y cada uno lo declara: son guardas distintas sobre la misma línea —ésta mide el motor entero con
 // el patrón leer-y-escribir; aquélla, el ledger del motor liviano—.
@@ -88,6 +95,7 @@ func TestX1DosEscritoresConcurrentesNoSeMatan(t *testing.T) {
 	// B escribe por el camino público, que es como entra la memoria de verdad.
 	const idB = "x1-b"
 	hecho := make(chan error, 1)
+	inicioB := time.Now()
 	go func() {
 		hecho <- e.SaveObservationTyped(idB, "t/x1", "la escritura de B, que tiene que esperar a que A confirme", 1.0, "semantic", ScopeLocal, nil)
 	}()
@@ -102,7 +110,7 @@ func TestX1DosEscritoresConcurrentesNoSeMatan(t *testing.T) {
 			t.Fatal("B escribió con la transacción de A abierta: A nació LECTORA (al DSN le falta `_txlock=immediate`), y al subir a escritora moriría con SQLITE_BUSY_SNAPSHOT, que `busy_timeout` no espera")
 		}
 		if esBaseBloqueada(err) {
-			t.Fatalf("B chocó con el lock de A y volvió al instante: al DSN le falta el `busy_timeout`, no hay espera que esperar — %v", err)
+			t.Fatalf("B se rindió con SQLITE_BUSY a los %v, antes de que A confirmara: no esperó el lock. O al DSN le falta el `busy_timeout`, o vale menos que la ventana, o el camino de B abre su transacción como lectora y la sube a escritora, un BUSY que `busy_timeout` no espera — %v", time.Since(inicioB).Round(time.Millisecond), err)
 		}
 		t.Fatalf("B falló con la transacción de A abierta, y no por el lock: %v", err)
 	case <-time.After(ventana):

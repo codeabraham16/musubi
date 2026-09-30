@@ -177,7 +177,7 @@ func configPresente(projectPath string) bool {
 // «database is locked», callado detrás del `_, _ = LedgerAdd` de precheck.go. El porqué de cada
 // pragma está en el comentario largo de NewDbEngine; el engine de sólo lectura tiene el suyo y a
 // propósito no usa éste. Sabotaje: sacar `busy_timeout(5000)` de acá →
-// TestSinArranqueElLedgerEsperaAlOtroEscritor (sin_arranque_test.go), además de X3.
+// TestSinArranqueElLedgerEsperaAlOtroEscritor (sin_arranque_test.go), además de X1 y X3.
 func dsnEscribible(dbPath string) string {
 	return dbPath + "?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)"
 }

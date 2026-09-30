@@ -765,31 +765,42 @@
 
 **2026-09-30 · A142 CERRADO — LA PRUEBA DE LOS DOS ESCRITORES MEDÍA LA DISPONIBILIDAD, IGUAL QUE LA DEL LEDGER EN A134; AHORA EL ORDEN LO FIJA LA PRUEBA.**
 
-`TestX1DosEscritoresConcurrentesNoSeMatan` cayó al menos cuatro veces, todas en `test-cross (windows-latest)` y siempre con `database is locked (5) (SQLITE_BUSY)`:
+`TestX1DosEscritoresConcurrentesNoSeMatan` nació con el #425 el 2026-09-09 y cayó cuatro veces, todas en `test-cross (windows-latest)` y siempre con `database is locked (5) (SQLITE_BUSY)`:
 - el 2026-09-12, en el pedido de dependabot de gotreesitter 0.52.0 (corrida 34705964312), con la prueba en 13,43 s;
 - el 2026-09-21, dos veces en `main`: en 259feee5 (35616877293) a los 7,52 s y en 4d28ff46 (35638073981) a los 14,61 s;
 - el 2026-09-30, en el primer intento del #721 (36668183447), a los 9,39 s. Se relanzó y pasó.
 
-Es «al menos» porque una corrida relanzada que pasa deja de figurar como fallida: `gh run list --status failure` no la muestra, y la del #721 apareció sólo porque se sabía dónde buscarla.
+El número sale de un recuento, no de una búsqueda: se revisaron todos los intentos fallidos del flujo `CI` desde el 2026-09-08, que es el único que corre las pruebas en Windows. Fueron 764 corridas y 78 intentos, incluidos los de las corridas relanzadas que terminaron en verde. Esas no figuran como fallidas —`gh run list --status failure` no las muestra— y la del #721 sólo aparece mirando los intentos. Otros tres intentos murieron por tiempo (`test timed out`), pero lo que colgaba eran otras pruebas.
 
-**Producción estaba bien.** El DSN lleva `_txlock=immediate` y `busy_timeout(5000)`, y el código es 5, no el 517 de una lectora que no pudo subir a escritora: una conexión esperó los 5 s enteros sin conseguir el lock. La prueba eran dos goroutines sin orden, doce leer-y-escribir contra cuarenta altas, y con el runner cargado una se quedaba sin turno. Es la inanición de A134, y la prueba la contaba como el defecto que custodia.
+**Producción estaba bien, hasta donde se puede ver.** El DSN lleva `_txlock=immediate` y `busy_timeout(5000)`. El código es 5, no el 517 de una lectora que no pudo subir a escritora, y las cuatro veces la prueba corrió más de 5 s: todo indica que una conexión esperó los 5 s enteros sin conseguir el lock. Es una inferencia: los registros sólo muestran el código y la duración, y la caída no se reprodujo acá, ni siquiera con la X1 vieja y la máquina cargada. La prueba eran dos goroutines sin orden, doce leer-y-escribir contra cuarenta altas, y alcanzaba con que una se quedara sin turno más de 5 s. Es la inanición de A134, y la prueba la contaba como el defecto que custodia.
 
 **Lo que se hizo.** Se reescribió en su lugar, con el mismo nombre:
 - A abre la transacción y lee. B escribe por el camino público, `SaveObservationTyped`, desde otra goroutine.
 - Mientras A no confirme, B no puede terminar: ni bien, porque no tiene el lock, ni mal, porque lo espera. La prueba mira una ventana de 300 ms, contra una espera de 5 s.
 - A escribe lo que leyó y confirma. Recién ahí termina B, y quedan las dos escrituras.
 
-El orden lo fija la prueba, así que la carga no decide nada: cinco corridas seguidas, 0,39 a 0,40 s cada una.
+El orden lo fija la prueba y no la carga: cinco corridas seguidas tardan 0,39 a 0,40 s cada una, y la revisión la corrió 90 veces más con el DSN sano —30 seguidas, 30 con un solo procesador y 30 con la máquina cargada—, todas en verde.
 
 **Y ahora tiene sabotajes, que antes no tenía.** Separa las dos mitades del DSN, cada una con su motivo:
 - Sin `_txlock=immediate`, A nace lectora y B escribe con A adentro: «B escribió con la transacción de A abierta…».
-- Sin `busy_timeout(5000)`, B choca con el lock de A y vuelve al instante: «B chocó con el lock de A y volvió al instante…».
+- Sin `busy_timeout(5000)`, B choca con el lock de A y vuelve al instante: «B se rindió con SQLITE_BUSY a los …, antes de que A confirmara…».
 
-Los dos pisan el mismo literal del DSN que el sabotaje de `TestSinArranqueElLedgerEsperaAlOtroEscritor`, y el arnés lo informa como choque. Son guardas distintas sobre la misma línea, así que cada prueba nombra a la otra en su `colision_ok`. El censo pasa de 1958 a 1960 sabotajes mecanizados.
+La revisión encontró que el segundo mensaje nombraba una sola causa, y midió otras dos que caen en la misma línea: un `busy_timeout` más corto que la ventana (lo probó con 100 ms) y un camino de B que abre su transacción como lectora y la sube a escritora. Ahora el mensaje nombra las tres y dice a los cuántos milisegundos se rindió B.
 
-**Límite que se conoce.** Bajo sabotaje, la ventana sí decide por reloj: si la goroutine de B arranca después de los 300 ms, ese sabotaje pasa en verde esa vez. Al revés no hay reloj que decida: con el DSN sano, B no puede terminar antes de que A confirme.
+Los dos sabotajes pisan el mismo literal del DSN que el de `TestSinArranqueElLedgerEsperaAlOtroEscritor`, y el arnés lo informa como choque. Son guardas distintas sobre la misma línea, así que cada prueba nombra a la otra en su `colision_ok`. El censo pasa de 1958 a 1960 sabotajes mecanizados. Y el comentario de `dsnEscribible` (database.go), que lista las pruebas que caen sin el `busy_timeout`, ahora nombra también a X1.
 
-**Lo que no cambia.** Producción no reintenta ante SQLITE_BUSY. Si dos escritores reales compitieran más de 5 s por el lock, el alta devolvería el error, igual que antes de este cambio.
+**Límites que se conocen.**
+- Bajo sabotaje, la ventana decide por reloj: si la goroutine de B arranca después de los 300 ms, ese sabotaje puede pasar en verde esa vez.
+- Con el DSN sano queda un solo reloj, los 5 s del `busy_timeout` de B. B lo agotaría sólo si A tardara más de 4,7 s en escribir y confirmar después de la ventana, y ya no hay cola sin orden: A suelta el lock una sola vez y B es el único que espera. Haría falta una máquina parada casi cinco segundos.
+- Ninguna prueba fija el valor 5000. Según midió la revisión, entre unos 700 ms —el piso que pone `TestSinArranqueElLedgerEsperaAlOtroEscritor`— y 5 s no cae ninguna prueba del paquete. La X1 vieja tampoco lo veía, así que no es una regresión.
+
+**Dos vecinas que también cayeron en Windows, y quedan afuera.** Las encontró el mismo recuento:
+- `TestClaimWorkUnitConcurrentNoDoubleClaim` tiene el patrón que tenía X1: ocho goroutines en bucle contra el lock, y cualquier error la pone en rojo. El 2026-09-21, en el primer intento de la corrida 35609040205 (`fix/embebedor-tras-ingest`), siete de los ocho reclamos volvieron con `database is locked (5)` y la prueba tardó 39 s. Se relanzó y pasó, así que no figura como fallida. La prueba existe desde julio y el recuento empieza el 2026-09-08: lo de antes no se miró.
+- `TestX2ElDSNAbreLasTransaccionesComoEscritoras` cayó en la misma corrida de `main` que X1 (35638073981), pero por otra cosa: al limpiar su carpeta temporal, Windows no pudo borrar `memory.db` porque seguía abierta. Cuando vence su espera de 1,5 s, X2 vuelve sin esperar a su goroutine, y lo probable es que esa conexión siguiera viva al limpiar. Es inferido: no se midió.
+
+El valor 5000 sin fijar y estas dos vecinas quedan propuestos como cabos nuevos, sin número hasta que se decida.
+
+**Lo que no cambia.** El alta no reintenta ante SQLITE_BUSY: si dos escritores reales compitieran más de 5 s por el lock, `SaveObservationTyped` devolvería el error, igual que antes de este cambio. Qué pasa después depende del llamador: la captura de commits, por ejemplo, lo toma como transitorio y lo reintenta en la corrida siguiente (`cmd/musubi/capture.go`).
 
 **2026-09-29 · A139 CERRADO — EL RESPALDO DE LA LAPTOP COPIABA ANTES DE QUE HUBIERA RED, Y SU HERMANO YA SABÍA ESPERAR.**
 
