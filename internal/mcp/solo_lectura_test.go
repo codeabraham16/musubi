@@ -17,17 +17,12 @@ import (
 )
 
 // servidorSoloLectura arma un servidor sobre una base REAL abierta en el escalón: llega migrada
-// (sembrada con la plantilla) y se abre una vez con el engine normal, se le adelanta el user_version
-// y se reabre sin migrar. No hay engine falso de por medio a propósito — lo que se prueba incluye
-// que el servidor le pregunte al engine de verdad quién es.
+// (sembrada con la plantilla), se le adelanta el user_version y se reabre sin migrar. No hay engine
+// falso de por medio a propósito — lo que se prueba incluye que el servidor le pregunte al engine
+// de verdad quién es.
 func servidorSoloLectura(t *testing.T) *McpServer {
 	t.Helper()
 	dir := memtest.DirSembrado(t)
-	eng, err := memory.NewDbEngine(dir)
-	if err != nil {
-		t.Fatalf("NewDbEngine: %v", err)
-	}
-	eng.Close()
 
 	db, err := sql.Open("sqlite", filepath.Join(dir, config.DirName, config.DBFile))
 	if err != nil {

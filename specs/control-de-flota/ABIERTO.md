@@ -770,7 +770,7 @@ El #720 (A139) dio rojo en la guarda del presupuesto: con `-race`, `internal/mcp
 
 **Lo que se midió:**
 - **Contención.** CI corre cuatro paquetes a la vez. Con #713, `internal/recalleval` pasó de 87 a 242 s, y en la misma corrida subieron `internal/mcp` (+63 s), `internal/memory` (+71 s) y `cmd/musubi` (+34 s). Sin `-race`, `internal/recalleval` tarda 4,4 s. De eso, 1,6 s son del corrector de tipeo de #713 en `TestTipeoNoRompeElDorado`, con 156 llamadas, y otros 1,6 s salen de 25 bases que las pruebas migraban desde cero.
-- **Crecimiento propio.** Las pruebas de `internal/mcp` migraban 108 bases desde cero en cada corrida, y eso costaba 7 a 10 de sus 99 s sin `-race`. 48 de esas bases eran de la tabla del cooldown del 2026-09-26. Otras 17 salían de `memory.NewDbEngine(t.TempDir())` escrito tal cual en doce archivos de prueba. Bajo `-race` la cuenta es otra: A45 midió quince pruebas de este mismo paquete, y pasaron de 69,8 s a 12,9 s con la plantilla.
+- **Crecimiento propio.** Las pruebas de `internal/mcp` migraban 108 bases desde cero en cada corrida, y eso costaba 7 a 10 de sus 99 s sin `-race`. 48 de esas bases eran de la tabla del cooldown del 2026-09-26. Otras 54 salían de `memory.NewDbEngine(t.TempDir())` escrito tal cual: son 17 lugares en doce archivos de prueba, y varios son ayudantes que llaman muchas pruebas. Bajo `-race` la cuenta es otra: A45 midió quince pruebas de este mismo paquete, y pasaron de 69,8 s a 12,9 s con la plantilla.
 - **Refutado:** que el corrector de tipeo encareciera a `internal/mcp`. Cien llamadas cuestan 0,12 s.
 
 **Lo que se hizo.** Se aplicó el arreglo de A45 en los sitios que nacieron sin él. La prueba pide `memtest.DirSembrado(t)`, que trae la base ya migrada, en vez de un `t.TempDir()` que la primera apertura migra desde cero. Son 21 sitios de `internal/mcp` y 14 de `internal/recalleval`, y el cambio sólo toca archivos `_test.go`:
@@ -783,12 +783,12 @@ El #720 (A139) dio rojo en la guarda del presupuesto: con `-race`, `internal/mcp
   - `internal/mcp`: 1478 de primer nivel y 625 subpruebas;
   - `internal/recalleval`: 57 de primer nivel y 6 subpruebas.
   - El dorado del corrector da los mismos números.
-- La base sembrada es la misma que la migrada: lo exige `TestLaBaseSembradaEsIdenticaALaMigradaDeCero`.
+- La base sembrada tiene el mismo esquema que la migrada, y eso lo exige `TestLaBaseSembradaEsIdenticaALaMigradaDeCero`, que compara el DDL. Los datos no los compara ninguna guarda: la revisión los volcó enteros y difieren en una sola fila de `meta`, la hora de `token_estimator_version`, que no lee nadie.
 
 **Lo que no se hizo, a propósito:**
 - No se subió `RACE_TIMEOUT` ni se bajó `MARGEN_MINIMO`.
 - No se relanzó el trabajo hasta que saliera verde. `presupuesto-de-pruebas.env` ya lo dice: ese rojo «entrena a relanzar sin leer, y el día que el fallo sea real nadie lo mira».
-- No se agregó una guarda contra la migración desde cero. Tendría que enumerar formas: agarraría la literal, pero no el `dir := t.TempDir()` que se le pasa a un ayudante, y de ahí salían 48 de las 108. La guarda que mide el costo, venga de donde venga, ya existe: es la del presupuesto, y es la que lo encontró.
+- No se agregó una guarda contra la migración desde cero. Tendría que enumerar formas: agarraría la literal, pero no el `dir := t.TempDir()` que después se abre o se le pasa a un ayudante, y de esa forma salían 52 de las 108. La guarda que mide el costo, venga de donde venga, ya existe: es la del presupuesto, y es la que lo encontró.
 
 **Lo que queda, y se decide aparte:**
 - `TestTipeoNoRompeElDorado` sigue corriendo el corrector 156 veces bajo `-race`. Es la próxima palanca si la contención vuelve. No se tocó porque su vara está calibrada sobre tres semillas.
