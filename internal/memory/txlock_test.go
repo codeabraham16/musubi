@@ -22,7 +22,6 @@ import (
 	"errors"
 	"math/rand"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -32,85 +31,127 @@ import (
 // X1 — DOS ESCRITORES CONCURRENTES NO SE MATAN.
 //
 // Es la reproducción chica de lo que le pasaba al sembrado: un lado abre transacción, LEE, y recién
-// después escribe (el patrón de saveObservation), mientras el otro escribe sin parar. Con la
-// transacción diferida, la subida de lector a escritor revienta con SQLITE_BUSY inmediato.
+// después escribe (el patrón de saveObservation), mientras el otro escribe por el camino público.
+// Con la transacción diferida, la subida de lector a escritor revienta con SQLITE_BUSY inmediato.
 //
-// Se afirma sobre el ERROR, no sobre un contador: lo que se quiere prohibir es exactamente
-// «database is locked», no cualquier fallo.
+// ES DETERMINISTA A PROPÓSITO (A142). La versión anterior eran dos goroutines sin orden —doce
+// leer-y-escribir contra cuarenta altas— y dependía de que ninguna se quedara sin turno más que el
+// `busy_timeout` (5 s). En el runner de Windows alguna se quedaba: cayó al menos cuatro veces, dos
+// de ellas en main, siempre con SQLITE_BUSY (5) y con la prueba corriendo entre 7,5 y 14,6 s, y
+// contaba esa falta de disponibilidad como el defecto. Ahora el orden lo fija la prueba, como A134
+// con el ledger (ledger_test.go): A abre la transacción y lee; B intenta escribir; mientras A no
+// confirme, B no puede terminar —ni bien, porque no tiene el lock, ni mal, porque lo espera—; A
+// escribe y confirma, y recién ahí B termina. La ventana de 300 ms sólo decide bajo sabotaje. Con el
+// DSN sano queda un reloj, los 5 s del `busy_timeout` de B, que B agotaría sólo si A tardara más de
+// 4,7 s en escribir y confirmar después de la ventana. Y ahí ya no hay cola sin orden: A suelta el
+// lock una sola vez y B es el único que espera, así que haría falta una máquina parada casi cinco
+// segundos.
+//
+// Y AHORA SEPARA LAS DOS MITADES, porque cada una deja una huella distinta en esa ventana: si A nació
+// lectora, B escribe con A adentro y termina bien; si no hay espera, B choca y vuelve al instante.
+// La segunda huella no es exclusiva de ese sabotaje, y por eso su mensaje no inventa una causa sola:
+// un `busy_timeout` más corto que la ventana, o un camino de B que abre su transacción como lectora
+// y la sube a escritora, caen en la misma línea.
+//
+// Los dos sabotajes de abajo pisan el literal del DSN que también sabotea SA5 (sin_arranque_test.go),
+// y cada uno lo declara: son guardas distintas sobre la misma línea —ésta mide el motor entero con
+// el patrón leer-y-escribir; aquélla, el ledger del motor liviano—.
+//
+// Sabotaje que la hace fallar: sacar `_txlock=immediate` del DSN → A nace lectora, B escribe con A
+// adentro y termina dentro de la ventana; A, al subir a escritora, moriría con SQLITE_BUSY_SNAPSHOT.
+// arnes: archivo="internal/memory/database.go"
+// arnes: de="?_txlock=immediate&"
+// arnes: a="?"
+// arnes: colision_ok="TestSinArranqueElLedgerEsperaAlOtroEscritor"
+//
+// Sabotaje que la hace fallar: sacar `busy_timeout(5000)` del DSN → B choca con el lock de A y
+// vuelve al instante con «database is locked».
+// arnes: archivo="internal/memory/database.go"
+// arnes: de="_pragma=busy_timeout(5000)&"
+// arnes: a=""
+// arnes: colision_ok="TestSinArranqueElLedgerEsperaAlOtroEscritor"
 func TestX1DosEscritoresConcurrentesNoSeMatan(t *testing.T) {
 	e := nuevoEngineDePrueba(t)
 
-	// Semilla para que la lectura de la transacción larga tenga algo que leer.
-	for i := 0; i < 20; i++ {
-		if err := e.SaveObservationTyped(idDePrueba("semilla", i), "t/x1", "una nota de semilla suficientemente larga", 1.0, "semantic", ScopeLocal, nil); err != nil {
-			t.Fatalf("sembrar: %v", err)
-		}
+	// La fila que A lee y después escribe.
+	const semilla = "x1-semilla"
+	if err := e.SaveObservationTyped(semilla, "t/x1", "una nota de semilla suficientemente larga", 1.0, "semantic", ScopeLocal, nil); err != nil {
+		t.Fatalf("sembrar: %v", err)
+	}
+	// Que no quede trabajo de fondo del arranque ni del alta: el único otro escritor tiene que ser B.
+	e.bgWG.Wait()
+
+	// A abre la transacción y LEE. Con el DSN sano ya es dueña del lock de escritura desde el Begin.
+	tx, err := e.db.Begin()
+	if err != nil {
+		t.Fatalf("Begin de A: %v", err)
+	}
+	defer tx.Rollback() // en cualquier salida suelta el lock, y B deja de esperar
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&n); err != nil {
+		t.Fatalf("la lectura de A: %v", err)
 	}
 
-	var wg sync.WaitGroup
-	errs := make(chan error, 64)
-
-	// Lado A: el patrón leer-y-después-escribir, sostenido en el tiempo.
-	wg.Add(1)
+	// B escribe por el camino público, que es como entra la memoria de verdad.
+	const idB = "x1-b"
+	hecho := make(chan error, 1)
+	inicioB := time.Now()
 	go func() {
-		defer wg.Done()
-		for i := 0; i < 12; i++ {
-			tx, err := e.db.Begin()
-			if err != nil {
-				errs <- err
-				return
-			}
-			var n int
-			if err := tx.QueryRow(`SELECT COUNT(*) FROM observations`).Scan(&n); err != nil {
-				tx.Rollback()
-				errs <- err
-				return
-			}
-			time.Sleep(2 * time.Millisecond) // deja lugar a que el otro lado escriba en el medio
-			if _, err := tx.Exec(`UPDATE observations SET importance = importance WHERE id = ?`, idDePrueba("semilla", 0)); err != nil {
-				tx.Rollback()
-				errs <- err
-				return
-			}
-			if err := tx.Commit(); err != nil {
-				errs <- err
-				return
-			}
-		}
+		hecho <- e.SaveObservationTyped(idB, "t/x1", "la escritura de B, que tiene que esperar a que A confirme", 1.0, "semantic", ScopeLocal, nil)
 	}()
 
-	// Lado B: escrituras normales por el camino público, que es como entra la memoria de verdad.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 40; i++ {
-			if err := e.SaveObservationTyped(idDePrueba("x1", i), "t/x1", "una observación cualquiera, suficientemente larga para pasar", 1.0, "semantic", ScopeLocal, nil); err != nil {
-				errs <- err
-				return
-			}
+	// MIENTRAS A NO CONFIRME, B NO PUEDE TERMINAR. La ventana sólo decide bajo sabotaje: con el DSN
+	// sano B está adentro del busy_timeout, que dura 5 s, y en 300 ms no puede terminar de ninguna
+	// forma. Cada salida anticipada tiene su propia línea porque cada una señala una mitad distinta.
+	const ventana = 300 * time.Millisecond
+	select {
+	case err := <-hecho:
+		if err == nil {
+			t.Fatal("B escribió con la transacción de A abierta: A nació LECTORA (al DSN le falta `_txlock=immediate`), y al subir a escritora moriría con SQLITE_BUSY_SNAPSHOT, que `busy_timeout` no espera")
 		}
-	}()
-
-	wg.Wait()
-	close(errs)
-	for err := range errs {
 		if esBaseBloqueada(err) {
-			// El mensaje NO afirma cuál de las dos mitades falló, porque este caso no lo mide:
-			// hay busy tanto si `Begin()` nace diferida (y la subida de lector a escritor vuelve al
-			// instante) como si nace escritora pero no hay espera configurada. X2 separa la primera;
-			// X3, la segunda. Nombrar una sola sería una causa inventada — y ya costó siete semanas
-			// creerle a un rótulo que no había medido nada.
-			t.Fatalf("SQLITE_BUSY con dos escritores: al DSN le falta `_txlock=immediate` (la transacción nace DIFERIDA y la subida de lector a escritor no espera) o le falta el `busy_timeout` (no hay espera que esperar) — %v", err)
+			t.Fatalf("B se rindió con SQLITE_BUSY a los %v, antes de que A confirmara: no esperó el lock. O al DSN le falta el `busy_timeout`, o vale menos que la ventana, o el camino de B abre su transacción como lectora y la sube a escritora, un BUSY que `busy_timeout` no espera — %v", time.Since(inicioB).Round(time.Millisecond), err)
 		}
-		t.Fatalf("error inesperado: %v", err)
+		t.Fatalf("B falló con la transacción de A abierta, y no por el lock: %v", err)
+	case <-time.After(ventana):
+	}
+
+	// A escribe lo que leyó y confirma. Como tiene el lock desde el Begin, no hay subida que choque.
+	if _, err := tx.Exec(`UPDATE observations SET importance = 2.5 WHERE id = ?`, semilla); err != nil {
+		t.Fatalf("A leyó y no pudo escribir: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("A no pudo confirmar: %v", err)
+	}
+
+	// Y B, que esperaba, termina bien.
+	select {
+	case err := <-hecho:
+		if err != nil {
+			t.Fatalf("B no sobrevivió a la espera: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("B siguió esperando 10 s después de que A soltó el lock")
+	}
+
+	// Quedaron las dos escrituras: nadie mató a nadie.
+	if v := importanciaDe(t, e, semilla); v != 2.5 {
+		t.Errorf("la escritura de A no quedó: importance=%v, esperaba 2.5", v)
+	}
+	var deB int
+	if err := e.db.QueryRow(`SELECT COUNT(*) FROM observations WHERE id = ?`, idB).Scan(&deB); err != nil {
+		t.Fatalf("contar la fila de B: %v", err)
+	}
+	if deB != 1 {
+		t.Errorf("la escritura de B no quedó: %d filas con id %q", deB, idB)
 	}
 }
 
 // X2 — Y EL DSN LO DICE.
 //
-// X1 puede pasar por suerte: con poca contención la subida a veces no choca. Este caso fija la
-// CAUSA, no el síntoma, y es el que se rompe de forma determinista si alguien saca el pragma del
-// DSN sin querer.
+// X1 mide el síntoma —quién muere— con el camino de escritura entero en el medio. Este caso fija la
+// CAUSA sola, y es el que se rompe de forma más directa si alguien saca el pragma del DSN sin
+// querer: dos `Begin()` y nada más.
 func TestX2ElDSNAbreLasTransaccionesComoEscritoras(t *testing.T) {
 	e := nuevoEngineDePrueba(t)
 	// (Acá había un `strings.Contains(e.path, ".musubi")` que no podía fallar: la ruta la arma el
