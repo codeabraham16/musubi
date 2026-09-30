@@ -63,7 +63,7 @@ func TestElJuezSeDecidePorLlamada(t *testing.T) {
 
 	for _, c := range casos {
 		t.Run(c.nombre, func(t *testing.T) {
-			motor := &motorEspia{respuesta: `["c","b","a"]`}
+			motor := &motorEspia{respuesta: `["id-3","id-2","id-1"]`}
 			s := servidorConDial(t, motor, c.dial)
 
 			s.rerankSiCorresponde(context.Background(), "consulta "+c.nombre, itemsDePrueba(), c.pedido)
@@ -81,7 +81,7 @@ func TestElJuezSeDecidePorLlamada(t *testing.T) {
 // Contar llamadas al motor demostraría que el cable está enchufado, no que el resultado se usa. Un
 // juez que se invoca y cuyo veredicto se descarta pasaría R1 entero.
 func TestElPedidoExplicitoReordenaDeVerdad(t *testing.T) {
-	motor := &motorEspia{respuesta: `["c","b","a"]`}
+	motor := &motorEspia{respuesta: `["id-3","id-2","id-1"]`}
 	s := servidorConDial(t, motor, false) // dial APAGADO: todo lo que pase es por el pedido
 
 	antes := itemsDePrueba()
@@ -95,7 +95,7 @@ func TestElPedidoExplicitoReordenaDeVerdad(t *testing.T) {
 	}
 
 	// Y el control: con false, el mismo motor y el mismo fixture no mueven nada.
-	motor2 := &motorEspia{respuesta: `["c","b","a"]`}
+	motor2 := &motorEspia{respuesta: `["id-3","id-2","id-1"]`}
 	s2 := servidorConDial(t, motor2, true) // dial ENCENDIDO
 	quieto := s2.rerankSiCorresponde(context.Background(), "r2 quieto", itemsDePrueba(), ptrBool(false))
 	if quieto.Items[0].ID != "a" {
@@ -143,7 +143,7 @@ func TestElRerankPorLlamadaSeAnunciaConSuCosto(t *testing.T) {
 // El pedido explícito no puede saltearse el freno de gasto: si pudiera, cualquier llamador tendría
 // una puerta para vaciar la cuota del motor con sólo pedirlo, y el freno dejaría de ser un freno.
 func TestElPedidoExplicitoNoSalteaElFreno(t *testing.T) {
-	motor := &motorEspia{respuesta: `["c","b","a"]`}
+	motor := &motorEspia{respuesta: `["id-3","id-2","id-1"]`}
 	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
