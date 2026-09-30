@@ -287,12 +287,18 @@ func TestElJuezVeLaConsultaComoLaTipearon(t *testing.T) {
 		"El fichaje del kiosko quedó en cero.",
 		"El fichaje de la raspberry se cortó.",
 	}})
-	fake := &fakeCognition{answer: `["-b","-a"]`}
+	// El juez contesta en rótulos (specs/juez-ids-cortos). Con los ids reales (`-a`, `-b`) el
+	// parseo falla, el recall degrada al orden model-free, y la prueba seguiría verde sin que el
+	// juicio llegara a aplicarse: por eso mira `reranked` además de la consulta.
+	fake := &fakeCognition{answer: `["id-2","id-1"]`}
 	s.cognition = fake
 	// Una consulta que ninguna otra prueba usa: la caché del juez es del paquete.
 	texto := llamarTool(t, s, nil, "musubi_recall", map[string]any{"query": "juez: el fichjae de la raspberry", "rerank": true})
 	if !fake.called {
 		t.Fatalf("el juez no se llamó:\n%s", texto)
+	}
+	if !strings.Contains(texto, `"reranked":true`) {
+		t.Errorf("el juez se llamó pero su orden no se aplicó (degradó al model-free):\n%s", texto)
 	}
 	if !strings.Contains(fake.gotUser, "fichjae") {
 		t.Errorf("el juez no vio la consulta como la tipearon:\n%s", fake.gotUser)

@@ -105,8 +105,8 @@ ignora por inventado, y la memoria cae al final de la cabeza sin que nadie lo ve
 Contestaban con ids reales, y con I4 eso es error a propósito:
 
 - `internal/cognition/rerank_test.go`
-- `internal/mcp`: `juez_medible_test.go`, `juez_por_llamada_test.go`, `motor_con_freno_test.go` y
-  `methods_ask_test.go`.
+- `internal/mcp`: `juez_medible_test.go`, `juez_por_llamada_test.go`, `motor_con_freno_test.go`,
+  `methods_ask_test.go` y `recall_tipeo_test.go`.
 
 La traducción es mecánica: el id real en la posición i del tope pasa a `id-<i+1>`.
 
@@ -115,12 +115,15 @@ respuesta no se parsea nunca. Con una respuesta inválida, `TestSinJuezElPuntaje
 pasaría de vacío el día que la flag dejara de apagar al juez: el parseo fallaría, producción
 degradaría al orden model-free, y la prueba vería ese orden intacto por la razón equivocada.
 
-Dos quedan sin tocar, a propósito:
+`recall_tipeo_test.go` se migró en la revisión, no en la primera pasada. Contestaba `["-b","-a"]`,
+y la primera versión de este documento decía que eran ids que nunca existieron: era falso.
+`servidorDeTipeo` siembra justamente `-a` y `-b`, así que antes la respuesta reordenaba y con I4
+pasó a ser error. La prueba seguía verde porque sólo mira que el juez se llame y qué consulta ve:
+el recall degradaba al orden model-free sin que nada lo dijera. Ahora contesta `["id-2","id-1"]` y
+exige `reranked`, para que un doble que vuelva a hablar en ids reales no pase de vacío.
 
-- `recall_tipeo_test.go` contesta `["-b","-a"]`: ids que no existían ni antes ni ahora. La prueba
-  mira que el juez se llame y qué consulta ve, no el orden que devuelve.
-- `motor_sin_candado_test.go` contesta `["a"]` desde un motor que se cuelga hasta que lo sueltan.
-  Mide el candado; el orden no se observa.
+Uno queda sin tocar, a propósito: `motor_sin_candado_test.go` contesta `["a"]` desde un motor que
+se cuelga hasta que lo sueltan. Mide el candado; el orden no se observa.
 
 ## D8 · Rótulos predecibles e inyección desde un gist
 

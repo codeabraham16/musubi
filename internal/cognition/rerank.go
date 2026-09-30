@@ -114,9 +114,31 @@ func Rerank(ctx context.Context, p Provider, query string, cands []Candidato) ([
 	}
 	orden := ParsearOrdenDeIDs(respuesta, cands)
 	if len(orden) == 0 {
-		return nil, fmt.Errorf("rerank: la respuesta del motor no trae un array con rótulos de los candidatos (id-1..id-%d)", len(cands))
+		// DOS CAUSAS, DOS MENSAJES. En producción la respuesta cruda no se registra y este error es
+		// lo único que queda. «No trae un array» (JSON roto, corchetes en la prosa) y «el array no
+		// nombra ningún rótulo» (otra grafía, los ids reales, el ejemplo copiado) se arreglan
+		// distinto, y con un solo texto el segundo diagnóstico tapaba al primero.
+		if _, ok := arrayDeLaRespuesta(respuesta); !ok {
+			return nil, fmt.Errorf("rerank: la respuesta del motor no trae un array JSON de strings")
+		}
+		return nil, fmt.Errorf("rerank: el array de la respuesta no nombra ningún rótulo de los candidatos (id-1..id-%d)", len(cands))
 	}
 	return orden, nil
+}
+
+// arrayDeLaRespuesta extrae el array JSON de strings de la respuesta del juez: del primer '[' al
+// último ']'. ok es false si no hay uno parseable.
+func arrayDeLaRespuesta(respuesta string) ([]string, bool) {
+	i := strings.IndexByte(respuesta, '[')
+	j := strings.LastIndexByte(respuesta, ']')
+	if i < 0 || j <= i {
+		return nil, false
+	}
+	var rotulos []string
+	if err := json.Unmarshal([]byte(respuesta[i:j+1]), &rotulos); err != nil {
+		return nil, false
+	}
+	return rotulos, true
 }
 
 // ParsearOrdenDeIDs extrae el array JSON de rótulos de la respuesta del juez y lo traduce a los
@@ -136,13 +158,8 @@ func Rerank(ctx context.Context, p Provider, query string, cands []Candidato) ([
 //
 // Devuelve nil si no hay un array de strings parseable o si ninguno es un rótulo conocido.
 func ParsearOrdenDeIDs(respuesta string, cands []Candidato) []string {
-	i := strings.IndexByte(respuesta, '[')
-	j := strings.LastIndexByte(respuesta, ']')
-	if i < 0 || j <= i {
-		return nil
-	}
-	var rotulos []string
-	if err := json.Unmarshal([]byte(respuesta[i:j+1]), &rotulos); err != nil {
+	rotulos, ok := arrayDeLaRespuesta(respuesta)
+	if !ok {
 		return nil
 	}
 	real := make(map[string]string, len(cands))

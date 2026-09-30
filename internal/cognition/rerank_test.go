@@ -315,3 +315,30 @@ func TestI4SinNingunRotuloConocidoEsError(t *testing.T) {
 		})
 	}
 }
+
+// El error de Rerank dice POR QUÉ no hubo orden. En producción la respuesta cruda no se registra y
+// ese log es lo único que queda: «no trae un array» (JSON roto, corchetes en la prosa) y «el array
+// no nombra ningún rótulo» (otra grafía, los ids reales) llevan a arreglos distintos. Con un solo
+// texto, una respuesta con los rótulos correctos y un corchete de más en la prosa se leía como
+// «el modelo escribió otra grafía».
+//
+// Sabotaje: el caso del array roto da el mensaje del otro caso.
+// arnes: archivo="internal/cognition/rerank.go"
+// arnes: de="no trae un array JSON de strings\")"
+// arnes: a="el array de la respuesta no nombra ningún rótulo\")"
+func TestElErrorDistingueArrayRotoDeRotuloDesconocido(t *testing.T) {
+	casos := []struct{ nombre, respuesta, quiere string }{
+		{"rótulos buenos con un corchete en la prosa", `["id-2","id-1"] Nota: [id-1] es el mejor`, "no trae un array JSON"},
+		{"sin array", "no tengo idea", "no trae un array JSON"},
+		{"array sin ningún rótulo conocido", `["ID-1","id-01"]`, "no nombra ningún rótulo"},
+		{"los ids reales", `["` + idB + `","` + idA + `"]`, "no nombra ningún rótulo"},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			_, err := Rerank(context.Background(), &motorGrabador{respuesta: c.respuesta}, "consulta", candidatosDePrueba)
+			if err == nil || !strings.Contains(err.Error(), c.quiere) {
+				t.Fatalf("error = %v, quería uno que dijera %q", err, c.quiere)
+			}
+		})
+	}
+}

@@ -84,6 +84,12 @@ esto dice y lo que no»).
   q-provision 564/214, q-tenancy 247/74). Repitió también la respuesta en 3 de ellas. En
   q-provision, dos elementos vecinos salieron en el orden inverso. Una diferencia de una posición
   entre brazos puede ser, entonces, ruido del propio modelo en CPU.
+- **Y el ruido es mayor que eso** (lo encontró la revisión, contra la corrida completa anterior
+  `ollama-largo-uuid-llama32.json` de las 13:50): del brazo de UUIDs difieren **3 de 10**
+  respuestas, no sólo q-provision. q-backup cambia la cola, y q-forget escribió 10 elementos
+  (238 tokens de salida) contra 7 (169). El RR quedó igual en las 10 y el formato (82/1/2) también,
+  así que no mueve ni el 10 de 10 ni la mediana; sí dice que una sola corrida por brazo no alcanza
+  para leer diferencias de una o dos posiciones.
 - Base léxica (D6) y variante uuid, sobre las 12 consultas del dorado. Cada consulta corre en un
   proceso aparte. Los dos brazos van **intercalados por consulta y alternando cuál arranca**
   (ABBA), así que la carga del modelo, el swap y la temperatura pesan igual en los dos.
@@ -219,9 +225,14 @@ del chat suma 25 tokens fijos a cada llamada, y porque la base léxica trae meno
 - En promedio, la pared bajó de 58,4 a 23,5 s: generar, de 32,3 a 6,8 s, y leer el prompt, de 25,6
   a 16,2 s. El modelo generaba a ~6 tokens/s en los dos brazos, así que casi todo el ahorro es
   escribir menos.
-- Cuando los rótulos corrieron primero, la razón fue más baja (mediana 0,32, contra 0,49 con los
-  reales primero). El orden ABBA reparte ese efecto entre los dos brazos, y aun con los reales
-  primero la llamada con rótulos fue más rápida en 6 de 6.
+- ~~Cuando los rótulos corrieron primero, la razón fue más baja (mediana 0,32, contra 0,49 con los
+  reales primero).~~ **Esa atribución al orden está confundida con el tamaño de la consulta** (lo
+  encontró la revisión): las tres consultas de 3–4 candidatos (q-ivf 0,97, q-tenancy 0,49,
+  q-identity 0,58) cayeron todas en «reales primero». Mirando sólo las de 10 o más candidatos, la
+  diferencia casi desaparece: 0,42 (n=3) contra 0,32 (n=4). Además el ABBA sobre las 12 consultas
+  quedó 6:4 entre las 10 que llaman al juez, porque q-fts y q-redaction —que no lo llaman— cayeron
+  en turnos de «rótulos primero». La dirección del resultado se sostiene (más rápida en 10 de 10) y
+  el 0,43 queda conservador; lo que no se sostiene es el número atribuido al orden.
 
 **Un riesgo que los rótulos agregan: el número es la posición.** `id-1` es el primero del orden
 model-free, así que un modelo que «cuenta» escribe una secuencia en vez de juzgar. En q-forget, los
