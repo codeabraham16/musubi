@@ -24,6 +24,9 @@
 #                          escape hatch consciente al fallo-cerrado de arriba.
 #   BACKUP_METHOD          rsync | rclone | cp   (default: rsync)
 #   BACKUP_RETENTION_DAYS  purga snapshots locales más viejos que N días (default: 14)
+#   MUSUBI_ESPERA_RED      segundos que la copia off-host espera a que el host del destino conteste
+#                          por ssh (default: 0, no espera). Sólo para rsync a «[usuario@]host:ruta».
+#                          La pone la unidad que arranca con la máquina; a mano, falla rápido.
 set -euo pipefail
 
 MUSUBI_BIN="${MUSUBI_BIN:-/usr/local/bin/musubi}"
@@ -43,6 +46,22 @@ mark_offhost_error() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" > 
 # die_offhost registra el fallo off-host (para el check de doctor) y aborta.
 die_offhost() { mark_offhost_error "$*"; die "$*"; }
 die() { printf '[musubi-backup] ERROR: %s\n' "$*" >&2; exit 1; }
+# host_ssh_del_destino imprime el host al que rsync se va a conectar por ssh para el destino $1, con
+# el usuario si lo lleva, o NADA si ese destino no va por ssh. La regla es la de rsync: `rsync://` y
+# «host::módulo» van al daemon; sin «:», o con una «/» antes del primero, es una ruta local. Un IPv6
+# entre corchetes no se separa con esta regla, así que tampoco se sondea: sin sonda, el guion copia
+# como siempre.
+host_ssh_del_destino() {
+  local d="$1" host resto
+  case "$d" in rsync://*) return 0 ;; esac
+  host="${d%%:*}"
+  resto="${d#*:}"
+  [ "$host" != "$d" ] || return 0
+  case "$host" in *'['*) return 0 ;; esac
+  case "$host" in ''|*/*) return 0 ;; esac
+  case "$resto" in :*) return 0 ;; esac
+  printf '%s\n' "$host"
+}
 
 # 1. Snapshot consistente. `musubi backup` imprime SOLO la ruta del snapshot en stdout.
 log "Tomando snapshot en $BACKUP_LOCAL_DIR ..."
@@ -119,6 +138,45 @@ if [ -z "$BACKUP_REMOTE" ]; then
   fi
 else
   log "Enviando off-host ($BACKUP_METHOD) → $BACKUP_REMOTE ..."
+  # LA RED SE ESPERA ANTES DE COPIAR, Y NO ES UNA PRECAUCIÓN TEÓRICA. El timer de la laptop es
+  # `Persistent=true`: si la máquina estaba apagada a la hora, el respaldo corre apenas arranca, y
+  # ahí el tailnet todavía no levantó. Medido el 2026-09-29 a las 10:21:13: el rsync a
+  # musubi-server murió con «Network is unreachable», el respaldo quedó en failed, y un minuto
+  # después la red ya estaba. musubi-comparar tenía el mismo problema y ya lo resolvió igual
+  # (comparar-y-latir.sh, sección 0): se espera al host, con techo.
+  #
+  # SE SONDEA EL MISMO HOST, POR EL MISMO SSH QUE VA A USAR RSYNC, y no «la red» en general: lo
+  # que tiene que estar listo es ESE camino. Si el destino no va por ssh (rclone, cp, el daemon de
+  # rsync), no hay qué sondear y se copia como siempre.
+  #
+  # AL AGOTAR LA ESPERA SE SIGUE IGUAL, no se corta acá: la copia falla con el error VERDADERO de
+  # rsync y por el camino de siempre (`die_offhost`, `.last_offhost_error`). Una espera que
+  # fallara por su cuenta sería un segundo camino de error que nadie vigila.
+  #
+  # Sin la variable no espera nada: corrido a mano, un destino caído tiene que fallar rápido.
+  ESPERA_RED="${MUSUBI_ESPERA_RED:-0}"
+  if [ "$ESPERA_RED" -gt 0 ] 2>/dev/null; then
+    HOST_RED=""
+    if [ "$BACKUP_METHOD" = rsync ]; then HOST_RED="$(host_ssh_del_destino "$BACKUP_REMOTE")"; fi
+    if [ -z "$HOST_RED" ]; then
+      log "· la espera de red no aplica a este destino (no es «[usuario@]host:ruta» por ssh)"
+    else
+      T0="$(date +%s)"
+      AVISADO=0
+      until ssh -n -o BatchMode=yes -o ConnectTimeout=5 "$HOST_RED" true 2>/dev/null; do
+        if [ "$(( $(date +%s) - T0 ))" -ge "$ESPERA_RED" ]; then
+          log "✘ $HOST_RED sigue sin contestar después de ${ESPERA_RED}s de espera — sigo igual, para que el fallo se VEA"
+          break
+        fi
+        if [ "$AVISADO" -eq 0 ]; then
+          log "· $HOST_RED todavía no contesta; espero hasta ${ESPERA_RED}s (arranque: el tailnet tarda en levantar)"
+          AVISADO=1
+        fi
+        sleep 5
+      done
+      if [ "$AVISADO" -eq 1 ]; then log "· seguí a los $(( $(date +%s) - T0 ))s"; fi
+    fi
+  fi
   case "$BACKUP_METHOD" in
     rsync)  rsync -a --mkpath $ENVIAR "$BACKUP_REMOTE/" || die_offhost "rsync falló" ;;
     rclone) for f in $ENVIAR; do rclone copy "$f" "$BACKUP_REMOTE" || die_offhost "rclone falló"; done ;;
