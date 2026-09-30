@@ -156,6 +156,13 @@ type medicionEmbebedor struct {
 	RSSAntesMB   int             `json:"rss_proceso_antes_mb"`
 	RSSCargadoMB int             `json:"rss_proceso_cargado_mb"`
 	OllamaPS     []modeloCargado `json:"ollama_ps,omitempty"`
+	// La presión de memoria con la que se midió, porque las latencias no se leen sin ella: con la
+	// tabla de POTION en swap, cada fila que el embebido toca puede ser un fallo de página, y el
+	// costo que se anota es el del swap y no el del modelo. Swap usado de la máquina (SwapTotal −
+	// SwapFree) antes y con el embebedor cargado, y el VmSwap de ESTE proceso con él cargado.
+	SwapAntesMB     int `json:"swap_usado_antes_mb"`
+	SwapCargadoMB   int `json:"swap_usado_cargado_mb"`
+	VmSwapCargadoMB int `json:"vmswap_proceso_cargado_mb"`
 	// scores NO va al JSON: trae el detalle por consulta, y en el fixture real el id de una consulta
 	// es un topic de la memoria de alguien.
 	scores map[string]map[string][]Scores // variante → fixture → uno por config
@@ -379,6 +386,7 @@ func medirEmbebedor(t *testing.T, ctx context.Context, c candidatoEmbebedor, pro
 		Reembebido: map[string]Reembebido{}, scores: map[string]map[string][]Scores{},
 	}
 	m.MemAntesMB = leerMeminfoMB("MemAvailable")
+	m.SwapAntesMB = swapUsadoMB()
 	if c.Modelo != "" {
 		ps, err := ollamaPS(ctx, urlOllama)
 		if err != nil {
@@ -421,6 +429,8 @@ func medirEmbebedor(t *testing.T, ctx context.Context, c candidatoEmbebedor, pro
 			}
 			m.MemCargadoMB = leerMeminfoMB("MemAvailable")
 			m.RSSCargadoMB = leerStatusMB("VmRSS")
+			m.SwapCargadoMB = swapUsadoMB()
+			m.VmSwapCargadoMB = leerStatusMB("VmSwap")
 		}
 		for _, va := range c.Variantes {
 			if m.scores[va.Nombre] == nil {
@@ -692,6 +702,15 @@ func leerMeminfoMB(campo string) int {
 	return -1
 }
 
+// swapUsadoMB es el swap en uso de la máquina (SwapTotal − SwapFree) en MB, o -1 si no se pudo leer.
+func swapUsadoMB() int {
+	total, libre := leerMeminfoMB("SwapTotal"), leerMeminfoMB("SwapFree")
+	if total < 0 || libre < 0 {
+		return -1
+	}
+	return total - libre
+}
+
 // leerStatusMB devuelve un campo de /proc/self/status (VmRSS, VmHWM…) en MB, o -1 si no se pudo.
 func leerStatusMB(campo string) int {
 	b, err := os.ReadFile("/proc/self/status")
@@ -754,6 +773,8 @@ func costoLegible(m medicionEmbebedor) string {
 	}
 	fmt.Fprintf(&b, " · MemAvailable antes %d MB, cargado %d MB · RSS del proceso antes %d MB, cargado %d MB",
 		m.MemAntesMB, m.MemCargadoMB, m.RSSAntesMB, m.RSSCargadoMB)
+	fmt.Fprintf(&b, " · swap de la máquina antes %d MB, cargado %d MB · VmSwap del proceso cargado %d MB",
+		m.SwapAntesMB, m.SwapCargadoMB, m.VmSwapCargadoMB)
 	return b.String()
 }
 
