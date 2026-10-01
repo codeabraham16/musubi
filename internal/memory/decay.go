@@ -69,6 +69,48 @@ func salience(importance float64, accessCount int, ageDays, halfLifeDays, typeWe
 	return importance * freq * recency * typeWeight
 }
 
+// edadDesde devuelve el instante desde el que el olvido y la cuota cuentan la edad de una nota: su
+// último acceso, o su creación si nunca se accedió. Y si la nota BAJÓ del central (llegada es el
+// created_at de su sello 'espejo' en el outbox) y llegó después, cuenta desde la llegada.
+//
+// ES LA GRACIA DESDE LA LLEGADA. Desde que la nota bajada guarda la fecha en que el central la
+// recibió (fechaDeOrigen), una de hace tres meses entra con tres meses encima y sin un solo acceso:
+// el primer mantenimiento de un cliente nuevo la archivaba antes de que nadie la pudiera usar. Con
+// esto, lo que baja tiene la misma gracia que lo que se escribe acá, y después se enfría al mismo
+// ritmo, contando desde que llegó.
+//
+// Toma el MÁS NUEVO de los dos instantes: una nota usada después de llegar cuenta desde el uso, y un
+// sello anterior a la fecha de la nota no cambia nada. Si la fecha de la nota no se puede leer
+// devuelve ok=false, como siempre, aunque el sello sí se lea.
+//
+// EN EL OLVIDO ESO SÓLO ARCHIVA MENOS; EN LA CUOTA, NO. Una edad menor sube la saliencia y demora la
+// edad mínima, así que Decay nunca archiva una nota que antes no archivaba. La cuota, en cambio,
+// desaloja un excedente FIJO: si una nota recién bajada queda en su gracia, su lugar lo ocupa la
+// siguiente más fría, y ésa puede ser una nota local que nunca subió al central. Es lo decidido: la
+// cuota cuenta la misma edad que el olvido.
+//
+// Y EL SELLO NO SIEMPRE ES UNA LLEGADA. Una nota propia cuyo envío murió ('dead') y que vuelve del
+// central pasa a 'espejo' con la fecha de su encolado, porque el UPSERT del sello no toca created_at;
+// y lo mismo quedó en las 'sent' que el sello de #656 pasó a 'espejo' hasta #693. Ahí la edad cuenta
+// desde el encolado, y la nota sólo se archiva más tarde. Que una re-bajada NO renueve la llegada
+// depende de ese mismo UPSERT: si algún día tocara created_at, lo que el central vuelve a entregar
+// no se olvidaría mientras volviera a bajar antes de enfriarse.
+func edadDesde(createdAt, lastAccess, llegada string) (time.Time, bool) {
+	ts := lastAccess
+	if strings.TrimSpace(ts) == "" {
+		ts = createdAt
+	}
+	t, err := time.Parse(sqliteTimeLayout, ts)
+	if err != nil {
+		return time.Time{}, false
+	}
+	l, err := time.Parse(sqliteTimeLayout, llegada)
+	if err == nil && l.After(t) {
+		return l, true
+	}
+	return t, true
+}
+
 // Decay archiva las observaciones frías cuya saliencia cae por debajo de
 // MinSalience y que son más viejas que MinAgeDays.
 func (e *DbEngine) Decay(opts DecayOptions) (DecayResult, error) {
@@ -91,10 +133,15 @@ func (e *DbEngine) Decay(opts DecayOptions) (DecayResult, error) {
 	scanned := 0
 	lastID := ""
 	for {
+		// El sello 'espejo' dice cuándo llegó una nota bajada (ver edadDesde). outbox tiene
+		// UNIQUE(obs_id): el JOIN trae a lo sumo una fila por nota y la paginación no cambia.
 		rows, err := e.db.Query(`
-			SELECT id, access_count, importance, COALESCE(created_at,''), COALESCE(last_accessed,''), COALESCE(mem_type,'')
-			FROM observations WHERE archived = 0 AND id > ?
-			ORDER BY id LIMIT ?
+			SELECT o.id, o.access_count, o.importance, COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), COALESCE(o.mem_type,''),
+			       COALESCE(esp.created_at,'')
+			FROM observations o
+			LEFT JOIN outbox esp ON esp.obs_id = o.id AND esp.status = 'espejo'
+			WHERE o.archived = 0 AND o.id > ?
+			ORDER BY o.id LIMIT ?
 		`, lastID, decayBatchSize)
 		if err != nil {
 			return DecayResult{}, fmt.Errorf("error al listar observaciones: %w", err)
@@ -106,9 +153,9 @@ func (e *DbEngine) Decay(opts DecayOptions) (DecayResult, error) {
 				access                int
 				importance            float64
 				createdAt, lastAccess string
-				memType               string
+				memType, llegada      string
 			)
-			if err := rows.Scan(&id, &access, &importance, &createdAt, &lastAccess, &memType); err != nil {
+			if err := rows.Scan(&id, &access, &importance, &createdAt, &lastAccess, &memType, &llegada); err != nil {
 				rows.Close()
 				return DecayResult{}, fmt.Errorf("error al escanear observación: %w", err)
 			}
@@ -121,12 +168,8 @@ func (e *DbEngine) Decay(opts DecayOptions) (DecayResult, error) {
 				continue
 			}
 
-			ts := lastAccess
-			if strings.TrimSpace(ts) == "" {
-				ts = createdAt
-			}
-			t, perr := time.Parse(sqliteTimeLayout, ts)
-			if perr != nil {
+			t, ok := edadDesde(createdAt, lastAccess, llegada)
+			if !ok {
 				continue // sin timestamp parseable: no se archiva
 			}
 			ageDays := now.Sub(t).Hours() / 24
