@@ -911,6 +911,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     hermana de diseño, que no tenía sabotaje, ahora tiene uno), y la compuerta de procesos daba un
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
+### Changed
+- **El juez que reordena el recall lee y escribe la mitad.** Recibía cada candidato con su UUID y
+  tenía que devolverlos todos en orden: con 12 candidatos, la salida sola eran ~280 tokens de hex.
+  Ahora los ve rotulados `id-1` … `id-N`, y Musubi traduce los rótulos a los ids reales. Hacia
+  afuera no cambia nada: `musubi_recall` devuelve los mismos ids. Un rótulo desconocido o repetido
+  se ignora, y lo que el juez omite queda al final, como antes.
+
+  Medido con tiktoken, porque no hay un tokenizador de Claude local, sobre 12 llamadas de la base
+  híbrida: la entrada baja 41,5 %, la salida 82,6 % y el total 54,8 %. **Ese número de la híbrida
+  es una simulación**: los prompts volcados con cada id reemplazado por su rótulo. La simulación
+  coincide byte a byte con los volcados reales de la base léxica, donde el ahorro medido es de
+  53,1 %. Con un juez local de 3B (llama3.2:3b), cada llamada tardó 0,43 veces lo que con UUIDs
+  (mediana pareada, más rápida en 10 de 10). La exactitud del orden no se pudo comparar: un juez de
+  3B empeora el orden con los dos formatos. La latencia con el juez de producción no se midió.
+
+  Cuando el juez no devuelve un orden, el error ahora dice por qué: la respuesta no traía un array
+  JSON, o el array no nombraba ningún rótulo.
+
 ### Fixed
 - **Lo que baja del central ya no se olvida apenas llega.** Desde que la nota bajada guarda la fecha
   en que el central la recibió (#711), una de hace tres meses entraba con tres meses encima y sin un
