@@ -38,6 +38,12 @@ import (
 //	                         sesiones y sembrarlas es lo caro.
 //	MUSUBI_LONGMEMEVAL_ABLACION  "1": suma los brazos exploratorios de brazosDeAblacion, que
 //	                         apagan señales de la fusión RRF del léxico. No son configs de producción.
+//	MUSUBI_LONGMEMEVAL_ABLACION_MMR  "1": suma los brazos de brazosDeAblacionMMR, la config de
+//	                         producción con UNA cosa distinta cada uno (MMR, el corrector, λ). Pide
+//	                         MUSUBI_POTION_DIR: producción es híbrida.
+//	MUSUBI_LONGMEMEVAL_CADA  K ≥ 1: evalúa una de cada K preguntas en el orden del archivo (1 = todas).
+//	                         Como el archivo viene agrupado por tipo, tomar una cada K deja cada tipo
+//	                         en su proporción, cosa que un prefijo (MUSUBI_LONGMEMEVAL_N) no hace.
 //	MUSUBI_POTION_DIR        tabla de POTION: agrega los brazos híbridos (embebedor local, sin red)
 //	MUSUBI_LONGMEMEVAL_OUT   prefijo de salida: <prefijo>.json (agregados) y <prefijo>.jsonl (por
 //	                         pregunta). Fuera del repo: son sesiones de chat de un dataset ajeno.
@@ -61,6 +67,14 @@ func TestLongMemEval(t *testing.T) {
 			t.Fatalf("MUSUBI_LONGMEMEVAL_N=%q no es un entero ≥ 0", s)
 		}
 		tope = n
+	}
+	cada := 1
+	if s := os.Getenv("MUSUBI_LONGMEMEVAL_CADA"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 1 {
+			t.Fatalf("MUSUBI_LONGMEMEVAL_CADA=%q no es un entero ≥ 1", s)
+		}
+		cada = n
 	}
 	modo := ModoUsuario
 	if s := os.Getenv("MUSUBI_LONGMEMEVAL_MODO"); s != "" {
@@ -93,6 +107,12 @@ func TestLongMemEval(t *testing.T) {
 		}
 		cfgs = append(cfgs, brazosDeAblacion()...)
 	}
+	if os.Getenv("MUSUBI_LONGMEMEVAL_ABLACION_MMR") == "1" {
+		if embed == nil {
+			t.Fatal("MUSUBI_LONGMEMEVAL_ABLACION_MMR necesita MUSUBI_POTION_DIR: sus brazos son la config de producción, que es híbrida")
+		}
+		cfgs = append(cfgs, brazosDeAblacionMMR()...)
+	}
 	brazos := []string{"bm25-paper"}
 	for _, c := range cfgs {
 		brazos = append(brazos, c.Name)
@@ -117,6 +137,7 @@ func TestLongMemEval(t *testing.T) {
 	defer f.Close()
 
 	m := newMedicion(brazos)
+	m.cada = cada
 	inicio := time.Now()
 	errTope := errors.New("tope de preguntas")
 	err = LeerLongMemEval(bufio.NewReaderSize(f, 1<<20), func(p Pregunta) error {
@@ -124,6 +145,10 @@ func TestLongMemEval(t *testing.T) {
 			return errTope
 		}
 		m.leidas++
+		if (m.leidas-1)%cada != 0 {
+			m.fueraDeMuestra++
+			return nil
+		}
 		motivo := Exclusion(p)
 		m.porMotivo[motivo]++
 		if motivo == "abstencion" {
@@ -292,6 +317,83 @@ func brazosDeAblacion() []recalleval.Config {
 	}
 }
 
+// TestBrazosDeAblacionMMR fija lo que hace legible a esta ablación: cada brazo es ConfigProduccion
+// con UNA sola cosa distinta, la que dice su nombre. `produccion` suma DOS cosas sobre `hybrid` —MMR
+// y el corrector de tipeo— y un brazo que cambiara dos ya no separaría cuál de las dos pesa.
+//
+// Sabotaje: los brazos salen de la config híbrida y difieren de producción en más de una cosa.
+// arnes: archivo="internal/recalleval/publico/medicion_test.go"
+// arnes: de="\t\tc := recalleval.ConfigProduccion()\n\t\tc.Name = nombre\n"
+// arnes: a="\t\tc := recalleval.ConfigHibrida()\n\t\tc.Name = nombre\n"
+func TestBrazosDeAblacionMMR(t *testing.T) {
+	prod := recalleval.ConfigProduccion()
+	if !prod.CorregirTipeo || prod.Opts.MMRLambda <= 0 || prod.Opts.MMRLambda >= 1 {
+		t.Fatalf("la ablación supone producción con el corrector y MMR encendidos: corrector %v, λ %v",
+			prod.CorregirTipeo, prod.Opts.MMRLambda)
+	}
+	brazos := brazosDeAblacionMMR()
+	if len(brazos) == 0 {
+		t.Fatal("sin brazos")
+	}
+	for _, c := range brazos {
+		// Lo que el nombre dice que cambia vuelve al valor de producción: si queda algo distinto,
+		// es una segunda diferencia.
+		igualado := c
+		igualado.Name = prod.Name
+		switch {
+		case c.Name == "prod-sin-mmr":
+			if c.Opts.MMRLambda > 0 && c.Opts.MMRLambda < 1 {
+				t.Errorf("%s: λ %v deja MMR encendido", c.Name, c.Opts.MMRLambda)
+			}
+			igualado.Opts.MMRLambda = prod.Opts.MMRLambda
+		case c.Name == "prod-sin-tipeo":
+			if c.CorregirTipeo {
+				t.Errorf("%s: el corrector sigue encendido", c.Name)
+			}
+			igualado.CorregirTipeo = prod.CorregirTipeo
+		case strings.HasPrefix(c.Name, "prod-mmr-"):
+			l, err := strconv.ParseFloat(strings.TrimPrefix(c.Name, "prod-mmr-"), 64)
+			if err != nil || c.Opts.MMRLambda != l {
+				t.Errorf("%s: λ %v no es el que dice el nombre", c.Name, c.Opts.MMRLambda)
+			}
+			igualado.Opts.MMRLambda = prod.Opts.MMRLambda
+		default:
+			t.Errorf("brazo %q sin regla: no se sabe qué difiere de producción", c.Name)
+			continue
+		}
+		if !reflect.DeepEqual(igualado, prod) {
+			t.Errorf("%s difiere de ConfigProduccion en algo más que lo que dice su nombre:\n%+v\n%+v", c.Name, igualado, prod)
+		}
+	}
+}
+
+// brazosDeAblacionMMR son los brazos de MUSUBI_LONGMEMEVAL_ABLACION_MMR. `produccion` (la config de
+// musubi_recall) cae a menos de la mitad de `hybrid` en recall_all@5, y la caída se concentra en las
+// preguntas con dos o más sesiones de oro: el patrón de MMR, pero `produccion` también corrige
+// tipeos, y sin separar las dos cosas la atribución era una conjetura. Cada brazo es ConfigProduccion
+// con UNA diferencia —lo fija TestBrazosDeAblacionMMR—:
+//
+//   - prod-sin-mmr: sin MMR (λ 0), o sea la híbrida con el corrector.
+//   - prod-sin-tipeo: sin el corrector, o sea la híbrida con MMR.
+//   - prod-mmr-0.85, prod-mmr-0.90 y prod-mmr-0.95: con otro λ, para ver cuánto se recupera sin
+//     apagar MMR. Lo que MMR compra —menos redundancia en el presupuesto de tokens— no lo mide
+//     LongMemEval: estos números son la mitad de la cuenta, no la decisión.
+func brazosDeAblacionMMR() []recalleval.Config {
+	brazo := func(nombre string, cambiar func(*recalleval.Config)) recalleval.Config {
+		c := recalleval.ConfigProduccion()
+		c.Name = nombre
+		cambiar(&c)
+		return c
+	}
+	return []recalleval.Config{
+		brazo("prod-sin-mmr", func(c *recalleval.Config) { c.Opts.MMRLambda = 0 }),
+		brazo("prod-sin-tipeo", func(c *recalleval.Config) { c.CorregirTipeo = false }),
+		brazo("prod-mmr-0.85", func(c *recalleval.Config) { c.Opts.MMRLambda = 0.85 }),
+		brazo("prod-mmr-0.90", func(c *recalleval.Config) { c.Opts.MMRLambda = 0.90 }),
+		brazo("prod-mmr-0.95", func(c *recalleval.Config) { c.Opts.MMRLambda = 0.95 }),
+	}
+}
+
 // embebedorConCache memoiza por el hash del texto: los pajares salen de un fondo común de sesiones
 // y se repiten entre preguntas. Contado sobre los `haystack_session_ids` el 2026-09-30: en S, 19.829
 // ids distintos en 25.112 lugares (se repite una de cada cinco); en M, 52.476 en 250.948 (sólo una
@@ -371,6 +473,8 @@ func (a *acumulador) media(k string) float64 {
 type medicion struct {
 	brazos               []string
 	leidas               int
+	cada                 int // MUSUBI_LONGMEMEVAL_CADA: 1 = todas
+	fueraDeMuestra       int // leídas que la muestra salteó: no suman en ningún contador de abajo
 	porMotivo            map[string]int
 	desparejas           int
 	evaluadasSinOro      int
@@ -388,7 +492,7 @@ type medicion struct {
 }
 
 func newMedicion(brazos []string) *medicion {
-	m := &medicion{brazos: brazos, porMotivo: map[string]int{}, empatesBM25: map[int]int{},
+	m := &medicion{brazos: brazos, cada: 1, porMotivo: map[string]int{}, empatesBM25: map[int]int{},
 		sinAbs: map[string]*acumulador{}, estricto: map[string]*acumulador{}, porTipo: map[string]map[string]*acumulador{}}
 	for _, b := range brazos {
 		m.sinAbs[b], m.estricto[b] = &acumulador{}, &acumulador{}
@@ -419,6 +523,10 @@ func (m *medicion) informe() string {
 	fmt.Fprintf(&b, "%s · modo %s · embebedor local %v · %s\n", m.dataset, m.modo, m.embebedor, m.duracion.Round(time.Second))
 	fmt.Fprintf(&b, "leídas %d · excluidas por abstención %d · sin evidencia del usuario %d · evaluadas (estricto) %d\n",
 		m.leidas, m.porMotivo["abstencion"], m.porMotivo["sin_oro_de_usuario"], m.porMotivo[""])
+	if m.cada > 1 {
+		fmt.Fprintf(&b, "MUESTRA: una de cada %d preguntas del archivo; %d de las leídas quedaron fuera y no cuentan en nada\n",
+			m.cada, m.fueraDeMuestra)
+	}
 	fmt.Fprintf(&b, "anomalías: evaluadas sin oro %d · pajares desparejos %d · docs que la base no aceptó %d (en %d preguntas) · empates BM25 en el corte @5 %d, @10 %d\n",
 		m.evaluadasSinOro, m.desparejas, m.omitidos, m.preguntasConOmitidos, m.empatesBM25[5], m.empatesBM25[10])
 	tabla := func(titulo string, acc map[string]*acumulador) {
@@ -478,7 +586,8 @@ func (m *medicion) resumen() map[string]any {
 	}
 	return map[string]any{
 		"dataset": m.dataset, "modo": m.modo, "embebedor_local": m.embebedor, "duracion_s": m.duracion.Seconds(),
-		"leidas": m.leidas, "por_motivo": m.porMotivo, "evaluadas_sin_oro": m.evaluadasSinOro,
+		"leidas": m.leidas, "cada": m.cada, "fuera_de_muestra": m.fueraDeMuestra,
+		"por_motivo": m.porMotivo, "evaluadas_sin_oro": m.evaluadasSinOro,
 		"desparejas": m.desparejas, "docs_omitidos": m.omitidos, "preguntas_con_omitidos": m.preguntasConOmitidos,
 		"empates_bm25_en_corte": m.empatesBM25,
 		"estricto":              medias(m.estricto), "sin_abstenciones": medias(m.sinAbs), "por_tipo_estricto": porTipo,
