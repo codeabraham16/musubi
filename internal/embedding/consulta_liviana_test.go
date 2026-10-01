@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -110,7 +111,8 @@ func escribirTablaDeJuguete(t *testing.T, dir string, filas, dim int, semilla in
 }
 
 // tablaDeJugueteConSidecars arma la tabla y construye el StaticProvider sobre ella, que es lo que
-// escribe los sidecars. Devuelve el directorio y el proveedor completo, que es la referencia.
+// escribe los sidecars. Devuelve el directorio y la referencia: el proveedor completo con el
+// tokenizer del MAPA (conElMapa).
 func tablaDeJugueteConSidecars(t *testing.T, filas, dim int) (string, *StaticProvider) {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "tabla-juguete")
@@ -127,7 +129,25 @@ func tablaDeJugueteConSidecars(t *testing.T, filas, dim int) (string, *StaticPro
 			t.Fatalf("NewStaticProvider no dejó %s al lado de la tabla: %v", f, err)
 		}
 	}
-	return dir, sp
+	return dir, conElMapa(t, sp, dir)
+}
+
+// conElMapa devuelve una copia de sp que tokeniza con el MAPA, armado de nuevo desde el
+// tokenizer.json de dir. Es la referencia de toda comparación bit a bit: desde que el completo
+// tokeniza con el índice, comparar la consulta liviana contra él sería comparar el índice consigo
+// mismo, y un defecto del índice que rompiera los dos lados por igual daría verde.
+func conElMapa(t *testing.T, sp *StaticProvider, dir string) *StaticProvider {
+	t.Helper()
+	tok, err := loadTokenizer(filepath.Join(dir, archivoTokenizer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u, ok := tok.(*unigram); !ok || u.vocab == nil || u.piezas != nil {
+		t.Fatalf("control: la referencia tiene que tokenizar con el mapa (%T)", tok)
+	}
+	ref := *sp
+	ref.tok = tok
+	return &ref
 }
 
 // textosDePrueba son los 50 textos contra los que se compara bit a bit: tipeos, voseo con tilde,
@@ -211,7 +231,8 @@ func TestConsultaLivianaEsBitExacta(t *testing.T) {
 
 // TestConsultaLivianaEsBitExactaConLaTablaReal es la misma comparación sobre POTION multilingüe,
 // que es la tabla que usa este repo y la única con el charsmap real (Precompiled): la de juguete no
-// lo tiene. Corre en el job recall-gate, que baja la tabla.
+// lo tiene. Corre en el job recall-gate, que baja la tabla. Los dos que tokenizan con el índice —la
+// consulta liviana y el completo— se comparan contra el completo con el MAPA.
 //
 // ESCRIBE tokenizer.idx e identidad.json AL LADO DE LA TABLA, porque NewStaticProvider los escribe
 // siempre: son los mismos que escribiría el daemon. En una máquina de desarrollo, apuntá
@@ -235,7 +256,9 @@ func TestConsultaLivianaEsBitExactaConLaTablaReal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewConsultaLiviana(%s) después de NewStaticProvider: %v", dir, err)
 	}
-	compararBitABit(t, sp, liv, textosDePrueba())
+	ref := conElMapa(t, sp, dir)
+	compararBitABit(t, ref, liv, textosDePrueba())
+	compararBitABit(t, ref, sp, textosDePrueba())
 }
 
 // TestIndiceTokenizerIgualAlMapa compara los IDS —no los vectores— del tokenizer del índice contra
@@ -288,7 +311,13 @@ func TestIndiceTokenizerIgualAlMapa(t *testing.T) {
 
 // TestIndiceTokenizerBitExacto compara el tokenizer del índice armado desde el tokenizer.json REAL
 // contra la referencia clavada en testdata/spm_potion_ids.json (la misma de TestUnigramRealBitExact)
-// y contra el mapa, sobre los 50 textos. Corre en recall-gate.
+// y contra el mapa, sobre los 50 textos y sobre un texto real largo. Corre en recall-gate.
+//
+// El texto largo existe porque el completo tokeniza con el índice TODO lo que embebe, notas de
+// miles de caracteres incluidas, y los 50 textos son casi todos frases. Son los .go de este
+// paquete: comentarios en español con tildes, comillas, rayas y código, recortados a 20.000 runas.
+// Cambian con el código, y no importa: se comparan los dos caminos entre sí, no contra una
+// referencia fija.
 //
 // Sabotaje: cortar la búsqueda un paso antes de que el rango quede vacío.
 // arnes: archivo="internal/embedding/indice_tokenizer.go"
@@ -337,6 +366,50 @@ func TestIndiceTokenizerBitExacto(t *testing.T) {
 			t.Errorf("EncodeIDs(%q): mapa %v, índice %v", recortar(tx), a, b)
 		}
 	}
+	largo := textoRealLargo(t, 20_000)
+	a, b := u.EncodeIDs(largo), indexado.EncodeIDs(largo)
+	if !slices.Equal(a, b) {
+		k := 0
+		for k < len(a) && k < len(b) && a[k] == b[k] {
+			k++
+		}
+		t.Errorf("texto real largo: los ids difieren desde la posición %d (mapa %d ids, índice %d)", k, len(a), len(b))
+	}
+}
+
+// textoRealLargo concatena los .go de este paquete, en orden de nombre, y devuelve las primeras
+// `runas` runas. Falla si no llega a ser largo o si es todo ASCII: un texto así no ejercitaría ni
+// el largo ni las runas de varios bytes, que es para lo que existe.
+func textoRealLargo(t *testing.T, runas int) string {
+	t.Helper()
+	archivos, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r []rune
+	for _, f := range archivos {
+		c, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r = append(r, []rune(string(c))...)
+		if len(r) >= runas {
+			break
+		}
+	}
+	if len(r) > runas {
+		r = r[:runas]
+	}
+	noASCII := 0
+	for _, x := range r {
+		if x > 0x7f {
+			noASCII++
+		}
+	}
+	if len(r) < runas*3/4 || noASCII < 100 {
+		t.Fatalf("control: el texto real largo tiene %d runas y %d fuera de ASCII; no ejercita lo que tiene que ejercitar", len(r), noASCII)
+	}
+	return string(r)
 }
 
 // TestConsultaLivianaRechazaIdentidadVencida fija el invariante N1 en el camino liviano: si la
@@ -604,7 +677,7 @@ func TestUnIndiceQueNoSePudoReemplazarNoDejaUnaIdentidadNueva(t *testing.T) {
 	if err != nil {
 		t.Fatalf("después de un arranque sano tenía que haber atajo: %v", err)
 	}
-	compararBitABit(t, sp, liv, textosDePrueba()[:10])
+	compararBitABit(t, conElMapa(t, sp, dir), liv, textosDePrueba()[:10])
 }
 
 // TestUnIndiceAbiertoNoRompeNada es la versión con el sistema operativo de verdad: el índice
@@ -635,21 +708,21 @@ func TestUnIndiceAbiertoNoRompeNada(t *testing.T) {
 		t.Logf("sin atajo mientras el índice estaba abierto (esperable en Windows): %v", err)
 		return
 	}
-	compararBitABit(t, sp, liv, textosDePrueba())
+	compararBitABit(t, conElMapa(t, sp, dir), liv, textosDePrueba())
 }
 
 // TestUnIndiceDeOtroFormatoSeReescribe fija la promesa de formatoIndice: un tokenizer.idx de otro
 // formato —el que deja un binario anterior o posterior, con su crc correcto y una identidad que lo
-// nombra— se trata como si no existiera, y el próximo NewStaticProvider lo reescribe. Si el «al
-// día» sólo mirara que la identidad lo nombra, el atajo quedaría apagado para siempre en toda
-// máquina que haya corrido el otro binario, y el hook volvería a léxico sin avisar.
+// nombra— no se interpreta: se trata como si no existiera, y el próximo NewStaticProvider lo
+// reescribe. Interpretarlo daría los ids de una derivación que este binario no conoce, y desde que
+// el completo tokeniza con el índice, ésos serían los vectores de TODO lo que se indexa.
 //
-// Sabotaje: dar por bueno un índice de otro formato en el «al día».
-// arnes: archivo="internal/embedding/consulta_liviana.go"
-// arnes: de="if err := cabeceraVigente(idx); err != nil {"
-// arnes: a="if err := cabeceraVigente(idx); err != nil && false {"
+// Sabotaje: interpretar un índice de otro formato.
+// arnes: archivo="internal/embedding/indice_tokenizer.go"
+// arnes: de="if f := binary.LittleEndian.Uint32(idx[len(magiaIndice):]); f != formatoIndice {"
+// arnes: a="if f := binary.LittleEndian.Uint32(idx[len(magiaIndice):]); f != formatoIndice && false {"
 func TestUnIndiceDeOtroFormatoSeReescribe(t *testing.T) {
-	dir, _ := tablaDeJugueteConSidecars(t, 200, 8)
+	dir, ref := tablaDeJugueteConSidecars(t, 200, 8)
 	rutaIdx := filepath.Join(dir, archivoIndice)
 	idx, err := os.ReadFile(rutaIdx)
 	if err != nil {
@@ -659,25 +732,9 @@ func TestUnIndiceDeOtroFormatoSeReescribe(t *testing.T) {
 	otro := append([]byte(nil), idx...)
 	binary.LittleEndian.PutUint32(otro[len(magiaIndice):], formatoIndice+1)
 	binary.LittleEndian.PutUint32(otro[len(otro)-4:], crc32.Checksum(otro[:len(otro)-4], castagnoli))
-	if err := os.WriteFile(rutaIdx, otro, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	var id identidadDeTabla
-	crudo, err := os.ReadFile(filepath.Join(dir, archivoIdentidad))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(crudo, &id); err != nil {
-		t.Fatal(err)
-	}
-	id.Indice.Tamano = int64(len(otro))
-	id.Indice.CRC32C = crc32.Checksum(otro, castagnoli)
-	crudo, _ = json.MarshalIndent(id, "", "  ")
-	if err := os.WriteFile(filepath.Join(dir, archivoIdentidad), append(crudo, '\n'), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewConsultaLiviana(dir); err == nil {
-		t.Fatal("control: un índice de otro formato no tenía que servir")
+	reemplazarIndice(t, dir, otro)
+	if _, err := NewConsultaLiviana(dir); !errors.Is(err, ErrSinAtajo) {
+		t.Fatalf("un índice de otro formato no tiene que servir: esperaba ErrSinAtajo, obtuve %v", err)
 	}
 
 	sp, err := NewStaticProvider(dir) // el arranque siguiente de un daemon con ESTE binario
@@ -692,7 +749,32 @@ func TestUnIndiceDeOtroFormatoSeReescribe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("después de reescribir tenía que haber atajo: %v", err)
 	}
-	compararBitABit(t, sp, liv, textosDePrueba()[:10])
+	compararBitABit(t, ref, liv, textosDePrueba()[:10])
+	compararBitABit(t, ref, sp, textosDePrueba()[:10])
+}
+
+// reemplazarIndice pone `idx` como tokenizer.idx y rehace la identidad para que lo nombre (tamaño y
+// crc32c), como lo dejaría un binario que lo escribió así: la identidad sigue vigente, y lo único
+// que puede rechazar ese índice es leerlo.
+func reemplazarIndice(t *testing.T, dir string, idx []byte) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, archivoIndice), idx, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var id identidadDeTabla
+	crudo, err := os.ReadFile(filepath.Join(dir, archivoIdentidad))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(crudo, &id); err != nil {
+		t.Fatal(err)
+	}
+	id.Indice.Tamano = int64(len(idx))
+	id.Indice.CRC32C = crc32.Checksum(idx, castagnoli)
+	crudo, _ = json.MarshalIndent(id, "", "  ")
+	if err := os.WriteFile(filepath.Join(dir, archivoIdentidad), append(crudo, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // sinEscritura hace que crear un temporal falle en cualquier carpeta, como en una carpeta de
@@ -1092,12 +1174,18 @@ func TestLosSidecarsQuedanLegiblesParaTodos(t *testing.T) {
 
 // TestLosTemporalesHuerfanosSeBorran: un daemon que muere a mitad de escritura (se cierra la sesión
 // que lo lanzó) deja su temporal; el próximo proveedor completo lo borra si es viejo, y deja el de
-// un daemon que puede estar escribiendo ahora.
+// un daemon que puede estar escribiendo ahora. El proveedor se construye con los sidecars AL DÍA,
+// que es el caso de casi todos los arranques: ahí no se escribe nada, y la limpieza igual corre.
 //
 // Sabotaje: no borrar nunca un temporal.
 // arnes: archivo="internal/embedding/consulta_liviana.go"
 // arnes: de="if info, err := e.Info(); err == nil && ahora.Sub(info.ModTime()) > edadDeHuerfano {"
 // arnes: a="if info, err := e.Info(); err == nil && ahora.Sub(info.ModTime()) > edadDeHuerfano && false {"
+//
+// Sabotaje: no limpiar al construir el proveedor.
+// arnes: archivo="internal/embedding/static.go"
+// arnes: de="limpiarTemporalesHuerfanos(dir, time.Now())"
+// arnes: a="_ = time.Now()"
 func TestLosTemporalesHuerfanosSeBorran(t *testing.T) {
 	dir, _ := tablaDeJugueteConSidecars(t, 200, 8)
 	viejo := filepath.Join(dir, archivoIndice+".tmp-999-123")
@@ -1118,6 +1206,12 @@ func TestLosTemporalesHuerfanosSeBorran(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(viejo); !os.IsNotExist(err) {
+		// Dos causas con el mismo síntoma, y se separan llamando a la limpieza a mano: si ella lo
+		// borra, el que falló es el proveedor, que no la llamó.
+		limpiarTemporalesHuerfanos(dir, time.Now())
+		if _, err := os.Stat(viejo); os.IsNotExist(err) {
+			t.Fatal("NewStaticProvider no limpió: la limpieza borra el temporal abandonado hace 3 h, pero con los sidecars al día el proveedor no la llamó")
+		}
 		t.Fatalf("el temporal abandonado hace 3 h sigue ahí (err=%v)", err)
 	}
 	for _, f := range []string{nuevo, ajeno} {

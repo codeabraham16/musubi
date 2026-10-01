@@ -911,6 +911,43 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     hermana de diseño, que no tenía sabotaje, ahora tiene uno), y la compuerta de procesos daba un
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
+### Changed
+- **El embebedor completo tokeniza con `tokenizer.idx`: arranca en ~0,56 s en vez de ~1,5 s y
+  tokeniza la memoria real ~55 veces más rápido, con los mismos ids.**
+  `NewStaticProvider` (daemon, serve, capture, ingest y los backfill de embeddings y conflictos)
+  armaba en cada arranque el mapa de 500.353 piezas de `tokenizer.json` y tokenizaba con él: en
+  cada posición del texto buscaba en el mapa todas las subcadenas de hasta 186 runas. La consulta
+  liviana ya tokenizaba con el índice ordenado; ahora el completo también. Con los sidecars al día
+  toma el tokenizer de `tokenizer.idx` y no deserializa `tokenizer.json` (lo sigue leyendo, porque
+  el checksum lo necesita). Si faltan o están vencidos, arma el mapa, escribe el índice y tokeniza
+  con el que acaba de escribir: el ahorro no espera al arranque siguiente. El mapa queda sólo si el
+  índice no se pudo escribir (una carpeta sin escritura).
+
+  Medido en davantis sobre POTION:
+  - El arranque de `NewStaticProvider`, cinco procesos frescos por lado con la caché caliente: de
+    1,45-1,59 s a 0,51-0,67 s (medianas 1,49 y 0,56 s), y el pico de memoria (VmHWM) de ~846 a
+    ~533 MiB. El tokenizer solo: 0,03 s y 13,9 MB de heap vivo con el índice, contra 1,2-1,3 s y
+    39,7 MB con el mapa.
+  - Las 2907 notas de la memoria (8.019.075 runas) dan los mismos ids por los dos caminos.
+    Tokenizarlas cuesta 26 min 17 s con el mapa y 28,9 s con el índice (54,6×). Se corrió con
+    GOMAXPROCS=1 y nice 19, así que los absolutos están inflados; la razón no. Depende del largo:
+    4,2× en textos de menos de 100 runas, 69,9× entre 100 y 1.000, 62,7× entre 1.000 y 10.000 y
+    22,4× por encima. Ahí pesa el armado de la secuencia en `viterbi` (`spm.go`), cuadrático en la
+    cantidad de tokens y común a los dos caminos: pasando de 10.000 runas, los dos suben casi lo
+    mismo por cada 1.000 runas.
+
+  «Al día» quiere decir ahora que el índice se puede USAR (`indiceAlDia`): la identidad coincide y
+  `leerIndiceTokenizer` lo acepta. Un índice con la identidad vigente que no se puede leer se
+  reescribe en el arranque siguiente; antes quedaba ahí para siempre y la consulta liviana se
+  quedaba sin atajo. La limpieza de temporales huérfanos pasó a `NewStaticProvider`, antes del
+  camino rápido, así corre aunque no haya nada que escribir.
+
+  Los vectores no cambian: las pruebas comparan bit a bit contra el mapa, y la huella del charsmap
+  da lo mismo por los dos caminos. Como el completo ahora confía en un `tokenizer.idx` que pudo
+  escribir otro binario, `TestElIndiceRealEstaAtadoASuFormato` ata los bytes del índice de POTION a
+  `formatoIndice`: si la derivación cambia y el formato no sube, se pone roja. Corre en
+  `recall-gate`.
+
 ### Fixed
 - **Lo que baja del central ya no se olvida apenas llega.** Desde que la nota bajada guarda la fecha
   en que el central la recibió (#711), una de hace tres meses entraba con tres meses encima y sin un

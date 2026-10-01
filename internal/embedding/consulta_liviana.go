@@ -14,6 +14,11 @@ package embedding
 // vencidos. Si no están, o si la tabla cambió desde que se escribieron, no hay atajo: el
 // constructor devuelve error y quien lo pidió sigue sin vector, como hoy. Degradar, no romper.
 //
+// El proveedor completo también tokeniza con tokenizer.idx: lo toma cuando está al día
+// (indiceAlDia) y, si no, usa el que acaba de escribir. Así el vector que se indexa y el que se
+// consulta salen del MISMO tokenizer, y el mapa de tokenizer.json sólo se arma cuando el índice
+// falta, está vencido o no se puede leer.
+//
 // LA TABLA SE DA POR NO CAMBIADA MIRANDO TAMAÑO Y FECHA de model.safetensors y tokenizer.json, y
 // no releyéndola: es la decisión del dueño (ola 2, decisión 5). Releer las 488 MB para validar es
 // justo lo que este archivo existe para no hacer. Lo que eso no ve —una tabla reescrita con el
@@ -147,8 +152,10 @@ func leerEntero(ruta string) ([]byte, error) {
 }
 
 // cargarSidecars lee identidad.json y tokenizer.idx y comprueba que sigan describiendo la tabla
-// que hay en disco. Es el único criterio de «los sidecars sirven»: lo usan la consulta liviana
-// (para construirse) y NewStaticProvider (para no reescribirlos en cada arranque).
+// que hay en disco: la identidad, las huellas, y el tamaño y el crc del índice. NO contesta si el
+// índice se puede leer —otro formato, offsets que no cierran, un normalizer que no parsea—: eso lo
+// contesta leerIndiceTokenizer, y los dos que preguntan lo llaman después (NewConsultaLiviana e
+// indiceAlDia). Mirarlo también acá taparía la comprobación de allá, y su sabotaje daría verde.
 func cargarSidecars(dir string) (identidadDeTabla, []byte, error) {
 	var id identidadDeTabla
 	crudo, err := leerEntero(filepath.Join(dir, archivoIdentidad))
@@ -177,19 +184,31 @@ func cargarSidecars(dir string) (identidadDeTabla, []byte, error) {
 	if int64(len(idx)) != id.Indice.Tamano || crc32.Checksum(idx, castagnoli) != id.Indice.CRC32C {
 		return id, nil, fmt.Errorf("%w: %s no es el que la identidad describe", ErrIdentidadVencida, archivoIndice)
 	}
-	// Un índice de OTRO formato (el de un binario anterior o posterior) cuenta como ausente. Si
-	// sólo se mirara que la identidad lo nombra, NewStaticProvider lo daría por «al día» y no lo
-	// reescribiría nunca, mientras la consulta liviana lo rechaza: el atajo apagado para siempre.
-	if err := cabeceraVigente(idx); err != nil {
-		return id, nil, fmt.Errorf("%w: %v", ErrSinAtajo, err)
-	}
 	return id, idx, nil
+}
+
+// indiceAlDia es LA respuesta a «¿el índice del tokenizer está al día para esta carga?», y la
+// única: la usan el camino rápido de NewStaticProvider y escribirSidecarsSiHaceFalta. Al día quiere
+// decir que se puede USAR: cargarSidecars lo acepta, la identidad lleva el checksum y las huellas de
+// esta carga, y leerIndiceTokenizer lo lee. Devuelve ese tokenizer, o nil.
+//
+// Que «al día» sea «se puede usar» y no «la identidad lo nombra» es lo que hace que un índice
+// inservible se reescriba, sea cual sea la forma de serlo. Si alcanzara con que la identidad lo
+// nombre, un índice de otro formato quedaría «al día» para siempre: nadie lo reescribiría, la
+// consulta liviana quedaría sin atajo y el completo pagaría el mapa en cada arranque.
+func indiceAlDia(dir, checksum string, tabla, tok huellaArchivo) *unigram {
+	if id, idx, err := cargarSidecars(dir); err == nil && id.Checksum == checksum && id.Tabla == tabla && id.Tokenizer == tok {
+		if u, err := leerIndiceTokenizer(idx); err == nil {
+			return u
+		}
+	}
+	return nil
 }
 
 // escribirSidecarsSiHaceFalta deja tokenizer.idx e identidad.json al día para la tabla que
 // NewStaticProvider acaba de cargar. Es BEST-EFFORT: un directorio de sólo lectura, un disco lleno
-// o un rename que Windows rechaza no le cuestan nada al proveedor completo; sólo dejan al camino
-// liviano sin atajo hasta el próximo arranque.
+// o un rename que Windows rechaza no rompen el proveedor completo, que sigue con el mapa; sólo
+// dejan sin índice al completo y sin atajo al camino liviano hasta el próximo arranque.
 //
 // `tabla` y `tok` son las huellas tomadas ANTES de leer los archivos. Si al terminar de cargar ya
 // no coinciden, alguien reescribió la tabla en el medio y lo que se cargó no se sabe de qué versión
@@ -199,10 +218,14 @@ func cargarSidecars(dir string) (identidadDeTabla, []byte, error) {
 // EL ORDEN ES PARTE DEL CONTRATO: primero el índice, después la identidad que lo nombra. Si el
 // índice no se pudo reemplazar, la identidad NO se escribe; y si la identidad falla, la vieja no
 // nombra al índice nuevo. En los dos casos cargarSidecars rechaza, que es lo seguro.
-func escribirSidecarsSiHaceFalta(dir string, u *unigram, checksum string, tabla, tok huellaArchivo) {
-	limpiarTemporalesHuerfanos(dir, time.Now())
-	if id, _, err := cargarSidecars(dir); err == nil && id.Checksum == checksum && id.Tabla == tabla && id.Tokenizer == tok {
-		return // al día: nada que escribir
+//
+// Devuelve el tokenizer del índice que queda vigente, para que el completo tokenice con él y suelte
+// el mapa: si ya estaba al día, ése (pudo escribirlo otro proceso después de que el completo
+// preguntara); si lo escribe, el recién escrito, aunque después falle la identidad, porque esos
+// bytes salen del mapa que se acaba de cargar. Si no lo escribe, nil, y el completo sigue con el mapa.
+func escribirSidecarsSiHaceFalta(dir string, u *unigram, checksum string, tabla, tok huellaArchivo) *unigram {
+	if al := indiceAlDia(dir, checksum, tabla, tok); al != nil {
+		return al // al día: nada que escribir
 	}
 	for _, par := range []struct {
 		archivo string
@@ -214,7 +237,7 @@ func escribirSidecarsSiHaceFalta(dir string, u *unigram, checksum string, tabla,
 		}
 		if err != nil {
 			avisarSinAtajo(dir, "la tabla cambió mientras se cargaba: no se escribe el índice del tokenizer", err)
-			return
+			return nil
 		}
 	}
 	// El índice se ARMA ADENTRO de escribirAtomico, después de crear el temporal: en una carpeta sin
@@ -223,20 +246,25 @@ func escribirSidecarsSiHaceFalta(dir string, u *unigram, checksum string, tabla,
 	idx, err := escribirAtomico(filepath.Join(dir, archivoIndice), func() ([]byte, error) { return armarIndice(u) })
 	if err != nil { // sin índice nuevo no hay identidad nueva: ver «EL ORDEN», arriba
 		avisarSinAtajo(dir, "no se pudo escribir el índice del tokenizer", err)
-		return
+		return nil
 	}
+	// Se lee de los bytes que se acaban de escribir, no del mapa: es el MISMO camino por el que lo
+	// van a leer los arranques siguientes y la consulta liviana. Si no se pudiera leer (la ida y
+	// vuelta la fija TestIndiceTokenizerBitExacto), escrito queda nil y el completo sigue con el mapa.
+	escrito, _ := leerIndiceTokenizer(idx)
 	id := identidadDeTabla{Formato: formatoIdentidad, Checksum: checksum, Tabla: tabla, Tokenizer: tok}
 	id.Indice.Tamano = int64(len(idx))
 	id.Indice.CRC32C = crc32.Checksum(idx, castagnoli)
 	crudo, err := json.MarshalIndent(id, "", "  ")
 	if err != nil {
-		return
+		return escrito
 	}
 	if _, err := escribirAtomico(filepath.Join(dir, archivoIdentidad), func() ([]byte, error) { return append(crudo, '\n'), nil }); err != nil {
 		avisarSinAtajo(dir, "no se pudo escribir la identidad de la tabla", err)
-		return
+		return escrito
 	}
 	logx.Info("índice del tokenizer escrito: el embebedor de consulta ya no carga la tabla", "dir", dir)
+	return escrito
 }
 
 // armarIndice es escribirIndiceTokenizer; costura para contar cuántas veces se arma el índice.
