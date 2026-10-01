@@ -1,7 +1,9 @@
 # Embebedores locales contra POTION, sobre la memoria real
 
-> Unidad `e4e92462` del lote `48a47614`, rama `medir/embeddings-locales` (sale de `origin/main`
-> `704c5013`; el arnés está en `982eb0df` y `cc85ddc1`). Medido entre el 2026-09-30 y el
+> Unidad `e4e92462` del lote `48a47614`, rama `medir/embeddings-locales`. Se midió con la rama
+> sobre `origin/main` `704c5013`; después se rebasó sobre `752b4467` sin conflictos y con los
+> parches idénticos (`git range-diff` da `=` en los cuatro commits), así que el arnés medido es el
+> de `71ad5cce` y `d89d9bbb`. Medido entre el 2026-09-30 y el
 > 2026-10-01 en `davantis` (Linux, i5-1235U, 7,6 GB de RAM compartidos con otras sesiones que
 > compilaban). La memoria real se usó como **copia de sólo lectura**, se borró al terminar cada
 > corrida y no salió de la máquina: el arnés exige un Ollama en loopback. Acá van sólo agregados,
@@ -78,8 +80,9 @@
     idéntico en todas las comparaciones que se corrieron.
   - Un embebedor roto (`constante`) tiene que salir peor que POTION con un IC95 que no toque el
     cero. Ver §3.
-  - Las cinco directivas de sabotaje del arnés dieron rojo por el motivo correcto, medido sobre
-    `982eb0df` (`go run ./deploy/cmd/arnes -correr -paquete ./internal/recalleval`).
+  - Las cinco directivas de sabotaje del arnés dieron rojo por el motivo correcto, medido antes
+    del rebase sobre el parche que hoy es `71ad5cce`
+    (`go run ./deploy/cmd/arnes -correr -paquete ./internal/recalleval`).
 - **Costo:** un microbench aparte, fuera de la prueba, con `/api/embed` de Ollama sobre 84
   fragmentos de 3.200 caracteres de `CHANGELOG.md` (no de la memoria): 20 de a uno y 4 lotes de
   16. A eso se suman los costos que la prueba anota en cada corrida.
