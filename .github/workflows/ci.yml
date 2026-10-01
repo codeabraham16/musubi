@@ -435,8 +435,9 @@ jobs:
         # contra vectores incompatibles y el ranking se corrompe sin un error. La tabla de juguete
         # de `go test ./...` no tiene el charsmap real (Precompiled), y por eso estas cuatro corren
         # aca, sobre POTION: el vector liviano y el de StaticProvider contra el del mapa de
-        # tokenizer.json, los ids del indice contra la referencia de testdata, el embebedor de
-        # consulta contra el del daemon (resolveEmbedder), y los bytes del indice contra su formato.
+        # tokenizer.json, los ids del indice contra la referencia de testdata y contra el mapa en
+        # cada pieza del vocabulario, el embebedor de consulta contra el del daemon
+        # (resolveEmbedder), y los bytes del indice contra su formato.
         #
         # La ultima existe porque StaticProvider tambien tokeniza con tokenizer.idx, y confia en un
         # indice que pudo escribir OTRO binario: si lo que se escribe cambia sin que suba

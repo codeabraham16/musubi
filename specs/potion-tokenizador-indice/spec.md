@@ -7,9 +7,11 @@ status: draft
 
 # Especificación — el embebedor completo tokeniza con el índice
 
-«Los sidecars están al día» quiere decir lo mismo que hoy en `escribirSidecarsSiHaceFalta`:
-`cargarSidecars` los acepta, y la identidad lleva el checksum de CONTENIDO recién calculado y las
-huellas de tabla y tokenizer que se tomaron ANTES de leer.
+«Los sidecars están al día» quiere decir que se pueden USAR (D1 del diseño): `cargarSidecars` los
+acepta, la identidad lleva el checksum de CONTENIDO recién calculado y las huellas de tabla y
+tokenizer que se tomaron ANTES de leer, y además `leerIndiceTokenizer` lee el índice. Antes de este
+cambio el índice no se leía: se miraba sólo su cabecera, y uno con la cabecera bien y el interior
+roto se daba por al día y no se reescribía nunca.
 
 ## Requisitos
 
@@ -19,11 +21,17 @@ huellas de tabla y tokenizer que se tomaron ANTES de leer.
     los necesita para el checksum.
 - **R2** — Cuando los sidecars no estaban al día y `NewStaticProvider` los escribe, DEBE tokenizar
   con el índice que acaba de escribir.
-- **R3** — Si al terminar no queda un índice utilizable, `NewStaticProvider` DEBE tokenizar con el
-  mapa, como hoy, y NO DEBE armar el índice en memoria. Los casos son:
-  - la carpeta no admite escritura, o el rename falla;
-  - la tabla cambió durante la carga;
-  - el tokenizer es WordPiece.
+- **R3** — Si al terminar no queda un índice que usar, `NewStaticProvider` DEBE tokenizar con el
+  mapa, como hoy. Los casos, y si se llega a armar el índice:
+  - la carpeta no admite escritura, la tabla cambió durante la carga o no se pudieron tomar las
+    huellas de la tabla o del tokenizer: NO DEBE armar el índice, porque armarlo es lo caro;
+  - el índice armado no se pudo guardar (disco lleno, rename rechazado): ya se armó, porque se
+    arma después de crear el temporal y antes del rename, y se tira;
+  - el índice recién escrito no se puede leer;
+  - el tokenizer es WordPiece, que no tiene índice.
+
+  Si lo único que falla es escribir la identidad, el índice ya quedó en disco y el proveedor
+  tokeniza con él (D2): el que se queda sin atajo es el camino liviano.
 - **R4** — Para todo texto:
   - los ids del índice DEBEN ser iguales a los del mapa;
   - el vector de `StaticProvider` DEBE ser, bit a bit, el que daba con el mapa.
@@ -99,6 +107,29 @@ huellas de tabla y tokenizer que se tomaron ANTES de leer.
   - no se acepta el índice viejo y no se escribe una identidad con la huella nueva;
   - el proveedor tokeniza con el mapa;
   - el arranque siguiente deja todo al día.
+
+### Escenario: con qué tokeniza en cada salida de la escritura
+
+- **Given** una tabla Unigram sin sidecars, salvo en la segunda fila, que los tiene al día
+- **When** se construye `NewStaticProvider` bajo cada condición, y después otra vez sin ella
+- **Then**, la primera vez:
+
+  | Condición | Tokeniza con | Índices que arma este proceso | Identidad en disco | Consulta liviana |
+  |---|---|---|---|---|
+  | primer arranque | el índice recién escrito | 1 | sí | arranca |
+  | los sidecars ya estaban al día | el índice del disco | 0 | sí, la que estaba | arranca |
+  | otro proceso los deja al día mientras éste arma el mapa | el índice del otro | 0 | sí, la del otro | arranca |
+  | la carpeta no admite escritura | el mapa | 0 | no | sin atajo |
+  | no se pudieron tomar las huellas | el mapa | 0 | no | sin atajo |
+  | la tabla cambia durante la carga | el mapa | 0 | no | sin atajo |
+  | el índice armado no se puede guardar | el mapa | 1 | no | sin atajo |
+  | el índice escrito no se puede leer | el mapa | 1 | no | sin atajo |
+  | falla sólo la identidad | el índice recién escrito | 1 | no | sin atajo |
+
+  - en todas las filas, el vector es bit a bit el del mapa;
+  - la identidad queda en disco sólo si nombra un índice que se puede usar;
+  - la segunda vez, el proveedor tokeniza con el índice y la consulta liviana arranca;
+  - lo fija `TestConQueTokenizaElCompleto`. WordPiece no tiene índice y no entra en la tabla.
 
 ### Escenario: índice de otro formato
 

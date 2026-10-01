@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"maps"
 	"math"
 	"math/rand"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"musubi/internal/logx"
 )
@@ -178,28 +180,43 @@ func textosDePrueba() []string {
 }
 
 // compararBitABit falla si los dos proveedores no dan exactamente los mismos bits para cada texto.
-func compararBitABit(t *testing.T, ref, liv Provider, textos []string) {
+// ref es la referencia y prob el que se prueba.
+func compararBitABit(t *testing.T, ref, prob Provider, textos []string) {
 	t.Helper()
 	ctx := context.Background()
-	if ref.Name() != liv.Name() || ref.Dimensions() != liv.Dimensions() {
-		t.Fatalf("identidad distinta: completo %s/%d, liviano %s/%d", ref.Name(), ref.Dimensions(), liv.Name(), liv.Dimensions())
+	nr, np := nombreDe(ref), nombreDe(prob)
+	if ref.Name() != prob.Name() || ref.Dimensions() != prob.Dimensions() {
+		t.Fatalf("identidad distinta: %s %s/%d, %s %s/%d", nr, ref.Name(), ref.Dimensions(), np, prob.Name(), prob.Dimensions())
 	}
 	for i, tx := range textos {
 		a, errA := ref.Embed(ctx, tx)
-		b, errB := liv.Embed(ctx, tx)
+		b, errB := prob.Embed(ctx, tx)
 		if errA != nil || errB != nil {
-			t.Fatalf("texto %d: errores completo=%v liviano=%v", i, errA, errB)
+			t.Fatalf("texto %d: errores %s=%v, %s=%v", i, nr, errA, np, errB)
 		}
 		if len(a) != len(b) {
-			t.Fatalf("texto %d (%q…): largo %d contra %d", i, recortar(tx), len(a), len(b))
+			t.Fatalf("texto %d (%q…): largo %d (%s) contra %d (%s)", i, recortar(tx), len(a), nr, len(b), np)
 		}
 		for j := range a {
 			if math.Float32bits(a[j]) != math.Float32bits(b[j]) {
-				t.Fatalf("texto %d (%q…): el vector difiere en la componente %d: completo %v, liviano %v",
-					i, recortar(tx), j, a[j], b[j])
+				t.Fatalf("texto %d (%q…): el vector difiere en la componente %d: %s da %v, %s da %v",
+					i, recortar(tx), j, nr, a[j], np, b[j])
 			}
 		}
 	}
+}
+
+// nombreDe nombra a un proveedor por lo que ES y no por la posición en que se lo pasó: con las
+// etiquetas fijas «completo» y «liviano», una diferencia del completo con el índice se leía como
+// una de la consulta liviana.
+func nombreDe(p Provider) string {
+	switch v := p.(type) {
+	case *ConsultaLiviana:
+		return "la consulta liviana"
+	case *StaticProvider:
+		return "el completo con " + comoTokeniza(v)
+	}
+	return fmt.Sprintf("%T", p)
 }
 
 func recortar(s string) string {
@@ -319,11 +336,29 @@ func TestIndiceTokenizerIgualAlMapa(t *testing.T) {
 // Cambian con el código, y no importa: se comparan los dos caminos entre sí, no contra una
 // referencia fija.
 //
+// Y después cada pieza del vocab, escrita como texto, por los dos caminos. Los textos de arriba
+// casi no tienen piezas largas: con un índice que no miraba más allá de 16 runas, 1.125 piezas
+// reales se tokenizaban distinto y las tres comparaciones de arriba seguían verdes. El barrido
+// sólo ve un índice que corta antes de maxRunes si alguna pieza de maxRunes runas se tokeniza
+// como sí misma, así que eso también se exige: en POTION, la más larga lo hace.
+//
 // Sabotaje: cortar la búsqueda un paso antes de que el rango quede vacío.
 // arnes: archivo="internal/embedding/indice_tokenizer.go"
 // arnes: env="MUSUBI_SPM_TESTDATA"
 // arnes: de="if lo >= hi {"
 // arnes: a="if lo >= hi-1 {"
+//
+// Sabotaje: que el índice no vea la pieza más larga.
+// arnes: archivo="internal/embedding/indice_tokenizer.go"
+// arnes: env="MUSUBI_SPM_TESTDATA"
+// arnes: de="u.maxRunes = int(l.u32())"
+// arnes: a="u.maxRunes = int(l.u32()) - 1"
+//
+// Sabotaje: que el índice no traiga el score del unk.
+// arnes: archivo="internal/embedding/indice_tokenizer.go"
+// arnes: env="MUSUBI_SPM_TESTDATA"
+// arnes: de="u.unkScore = math.Float64frombits(l.u64())"
+// arnes: a="u.unkScore = math.Float64frombits(l.u64()) + 1"
 func TestIndiceTokenizerBitExacto(t *testing.T) {
 	dir := os.Getenv("MUSUBI_SPM_TESTDATA")
 	if dir == "" {
@@ -344,6 +379,14 @@ func TestIndiceTokenizerBitExacto(t *testing.T) {
 	indexado, err := leerIndiceTokenizer(idx)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// La cabecera, campo por campo. Un unkScore distinto cambia los ids sólo donde el texto tiene
+	// runas sin pieza, y esto lo ve aunque ningún texto de abajo las tenga.
+	if c, m := indexado, u; c.maxRunes != m.maxRunes || c.unkID != m.unkID ||
+		c.unkScore != m.unkScore || c.repl != m.repl {
+		t.Errorf("la cabecera del índice no es la del mapa (índice/mapa): "+
+			"maxRunes %d/%d, unkID %d/%d, unkScore %v/%v, repl %q/%q",
+			c.maxRunes, m.maxRunes, c.unkID, m.unkID, c.unkScore, m.unkScore, c.repl, m.repl)
 	}
 	ref, err := os.ReadFile("testdata/spm_potion_ids.json")
 	if err != nil {
@@ -374,6 +417,28 @@ func TestIndiceTokenizerBitExacto(t *testing.T) {
 			k++
 		}
 		t.Errorf("texto real largo: los ids difieren desde la posición %d (mapa %d ids, índice %d)", k, len(a), len(b))
+	}
+	piezas := slices.Sorted(maps.Keys(u.vocab))
+	distintas, propiaMasLarga := 0, 0
+	for _, p := range piezas {
+		tx := strings.ReplaceAll(p, u.repl, " ")
+		a, b := u.EncodeIDs(tx), indexado.EncodeIDs(tx)
+		if !slices.Equal(a, b) {
+			if distintas < 5 {
+				t.Errorf("pieza %q: mapa %v, índice %v", recortar(p), a, b)
+			}
+			distintas++
+		}
+		if len(a) == 1 && a[0] == u.vocab[p] {
+			propiaMasLarga = max(propiaMasLarga, utf8.RuneCountInString(p))
+		}
+	}
+	if distintas > 0 {
+		t.Errorf("%d de %d piezas se tokenizan distinto por el índice", distintas, len(piezas))
+	}
+	if propiaMasLarga != u.maxRunes {
+		t.Errorf("la pieza más larga que se tokeniza como sí misma mide %d runas y maxRunes es %d: "+
+			"el barrido no vería un índice que corte antes de maxRunes", propiaMasLarga, u.maxRunes)
 	}
 }
 
@@ -627,6 +692,11 @@ func TestConsultaLivianaNoAbreElTokenizerJSON(t *testing.T) {
 // tokenizer.idx en cada turno. Si ese rename falla después de re-destilar la tabla, la identidad
 // NO se reescribe —queda la vieja, que ya no coincide con la tabla— y no queda ningún temporal.
 //
+// Y el aviso nombra la causa: el rename. Seguir de largo tampoco escribiría la identidad, porque
+// la rama del índice que no se puede leer también corta; pero el aviso diría que hay un índice
+// «recién escrito» ilegible, y ese índice no se escribió nunca. El aviso es lo único que separa
+// las dos ramas, y por eso la prueba lo mira.
+//
 // Sabotaje: seguir de largo cuando el índice no se pudo escribir.
 // arnes: archivo="internal/embedding/consulta_liviana.go"
 // arnes: de="if err != nil { // sin índice nuevo no hay identidad nueva"
@@ -644,17 +714,24 @@ func TestUnIndiceQueNoSePudoReemplazarNoDejaUnaIdentidadNueva(t *testing.T) {
 		_ = os.Chtimes(filepath.Join(dir, f), masTarde, masTarde)
 	}
 	previo := renombrar
+	rechazo := fmt.Errorf("simulado: el hook tiene %s abierto", archivoIndice)
 	renombrar = func(desde, hasta string) error {
 		if filepath.Base(hasta) == archivoIndice {
-			return fmt.Errorf("simulado: el hook tiene %s abierto", archivoIndice)
+			return rechazo
 		}
 		return previo(desde, hasta)
 	}
 	t.Cleanup(func() { renombrar = previo })
 
+	var log strings.Builder
+	restaurar := logx.Capturar(&log)
+	defer restaurar()
 	sp, err := NewStaticProvider(dir)
 	if err != nil {
 		t.Fatalf("un sidecar que no se puede escribir no puede romper el proveedor completo: %v", err)
+	}
+	if !strings.Contains(log.String(), rechazo.Error()) {
+		t.Fatalf("el aviso tiene que nombrar la causa (%v); avisó:\n%s", rechazo, log.String())
 	}
 	if identidadAhora, _ := os.ReadFile(filepath.Join(dir, archivoIdentidad)); string(identidadAhora) != string(identidadVieja) {
 		t.Fatal("se reescribió identidad.json aunque el índice nuevo no se pudo poner: la identidad nombra un índice que no está")

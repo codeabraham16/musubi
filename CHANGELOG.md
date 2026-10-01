@@ -920,8 +920,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   liviana ya tokenizaba con el índice ordenado; ahora el completo también. Con los sidecars al día
   toma el tokenizer de `tokenizer.idx` y no deserializa `tokenizer.json` (lo sigue leyendo, porque
   el checksum lo necesita). Si faltan o están vencidos, arma el mapa, escribe el índice y tokeniza
-  con el que acaba de escribir: el ahorro no espera al arranque siguiente. El mapa queda sólo si el
-  índice no se pudo escribir (una carpeta sin escritura).
+  con el que acaba de escribir: el ahorro no espera al arranque siguiente. Si no queda índice que
+  usar —por ejemplo, en una carpeta sin escritura—, tokeniza con el mapa, como antes.
 
   Medido en davantis sobre POTION:
   - El arranque de `NewStaticProvider`, cinco procesos frescos por lado con la caché caliente: de
@@ -942,11 +942,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   quedaba sin atajo. La limpieza de temporales huérfanos pasó a `NewStaticProvider`, antes del
   camino rápido, así corre aunque no haya nada que escribir.
 
-  Los vectores no cambian: las pruebas comparan bit a bit contra el mapa, y la huella del charsmap
-  da lo mismo por los dos caminos. Como el completo ahora confía en un `tokenizer.idx` que pudo
-  escribir otro binario, `TestElIndiceRealEstaAtadoASuFormato` ata los bytes del índice de POTION a
-  `formatoIndice`: si la derivación cambia y el formato no sube, se pone roja. Corre en
-  `recall-gate`.
+  Los vectores no cambian: las pruebas comparan bit a bit contra el mapa, también pieza por pieza
+  sobre las 500.353 del vocabulario real, y la huella del charsmap da lo mismo por los dos caminos.
+  Como el completo ahora confía en un `tokenizer.idx` que pudo escribir otro binario,
+  `TestElIndiceRealEstaAtadoASuFormato` ata los bytes del índice de POTION a `formatoIndice`: si la
+  derivación cambia y el formato no sube, se pone roja. Corre en `recall-gate`.
 
 ### Fixed
 - **Lo que baja del central ya no se olvida apenas llega.** Desde que la nota bajada guarda la fecha
