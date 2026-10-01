@@ -225,7 +225,8 @@ Por tipo se ve lo mismo:
 
 #### 2.2.1 Ablación: es MMR, no el corrector (2026-10-01)
 
-Corrida `abl-mmr-s-cada3`, con el build del commit `069eb413`. Usa `MUSUBI_LONGMEMEVAL_ABLACION_MMR=1`
+Corrida `abl-mmr-s-cada3`, con el build de la ablación antes del rebase sobre `752b4467`: el mismo
+parche que hoy es `76b4a1e7` (`git range-diff` da `=`). Usa `MUSUBI_LONGMEMEVAL_ABLACION_MMR=1`
 y `MUSUBI_LONGMEMEVAL_CADA=3`, así que **mide una de cada tres preguntas del archivo**: la 1.ª, la 4.ª,
 la 7.ª… Es una muestra sistemática fijada de antemano. Las otras 333 no cuentan en nada, y el informe
 lo dice en la línea `MUESTRA`. Quedan **140 preguntas en el promedio estricto**, de 419. Cada brazo es
