@@ -916,10 +916,12 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   `orchestrate-multiagent`, `adversarial-review`, `musubi_work` y `musubi_debate` decían que se
   lanzaran con el «Task tool», pasándole `mcpServers:[musubi]`. Esa tool hoy se llama Agent y no
   tiene ese parámetro, así que el agente que seguía la receta buscaba algo que no existe. El texto
-  nuevo pide lanzarlos con Agent y nombrar en el prompt de cada sub-agente las tools de Musubi que le
-  sirven. El motivo, medido el 2026-09-25: el sub-agente hereda los MCP de la sesión, pero esas
-  tools le llegan diferidas y los avisos de los hooks no le llegan. La skill de orquestación suma
-  además el heartbeat, para que la unidad de un sub-agente lento no venza y la retome otro.
+  nuevo pide lanzarlos con Agent. La orquestación y las dos tools piden además nombrar en el prompt
+  de cada sub-agente las tools de Musubi que le sirven; en `adversarial-review` eso ya lo dicen las
+  instrucciones del servidor. El motivo, medido el 2026-09-25: el sub-agente hereda los MCP de la
+  sesión, pero esas tools le llegan diferidas y los avisos de los hooks no le llegan. La skill de
+  orquestación suma además el heartbeat, para que la unidad de un sub-agente lento no venza y la
+  retome otro.
 
 - **Lo que baja del central ya no se olvida apenas llega.** Desde que la nota bajada guarda la fecha
   en que el central la recibió (#711), una de hace tres meses entraba con tres meses encima y sin un
