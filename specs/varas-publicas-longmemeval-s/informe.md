@@ -1,7 +1,8 @@
 # Varas públicas: LongMemEval (recuperación), ARB y ForgetEval-Adv
 
-> Unidad `aa1cab60` del lote `965b399b`, rama `medir/varas-publicas` (sale de `origin/main`
-> `704c5013`). Medido el 2026-09-30 en `davantis` (Linux, 7,6 GB de RAM compartidos con otras
+> Unidad `aa1cab60` del lote `965b399b`, rama `medir/varas-publicas`. Se midió con la rama sobre
+> `origin/main` `704c5013`; después se rebasó sobre `752b4467` sin conflictos y con los parches
+> idénticos. Medido el 2026-09-30 en `davantis` (Linux, 7,6 GB de RAM compartidos con otras
 > sesiones). Los datos y las salidas por pregunta quedaron **fuera del repo**: son sesiones de chat
 > de un dataset ajeno.
 
