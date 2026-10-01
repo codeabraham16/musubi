@@ -61,6 +61,10 @@ func servidorConJuez(t *testing.T, motor cognition.Provider) *McpServer {
 		WithCognitionConfig(config.CognitionConfig{Provider: "fake", ReadTimeRerank: &si}))
 }
 
+// itemsDePrueba es el tope que ve el juez, y el orden importa: el juez no ve los ids reales sino
+// rótulos por posición (specs/juez-ids-cortos), así que acá a=id-1, b=id-2 y c=id-3. Un motor falso que
+// contesta `["id-3","id-1","id-2"]` está diciendo «c, a, b». Con los ids reales, la respuesta no trae
+// ningún rótulo, es error, y el juez degrada al orden model-free.
 func itemsDePrueba() memory.RecallResult {
 	return memory.RecallResult{Items: []memory.RecallItem{
 		{ID: "a", Gist: "el candado no cruza la red"},
@@ -87,7 +91,7 @@ func candidatosDePrueba() []cognition.Candidato {
 func TestJ1ElPromptDeProduccionEsElDelPaqueteCognition(t *testing.T) {
 	const consulta = "j1 prompt identico"
 
-	espiaProd := &motorEspia{respuesta: `["c","a","b"]`}
+	espiaProd := &motorEspia{respuesta: `["id-3","id-1","id-2"]`}
 	s := servidorConJuez(t, espiaProd)
 	s.rerankIfEnabled(context.Background(), consulta, itemsDePrueba())
 	systemProd, userProd := espiaProd.prompt()
@@ -111,7 +115,7 @@ func TestJ1ElPromptDeProduccionEsElDelPaqueteCognition(t *testing.T) {
 // costar la protección del rate-limit compartido que el caché vino a dar. Dos recalls idénticos ⇒
 // una sola llamada al motor.
 func TestJ3ElCacheDeProduccionSigueVivo(t *testing.T) {
-	espia := &motorEspia{respuesta: `["c","a","b"]`}
+	espia := &motorEspia{respuesta: `["id-3","id-1","id-2"]`}
 	s := servidorConJuez(t, espia)
 	// Consulta única por prueba: rerankCache es un global de paquete y una clave compartida con otra
 	// prueba haría que ésta pase (o falle) por el motivo equivocado.
@@ -155,7 +159,7 @@ func TestJ9SiElMotorFallaElOrdenModelFreeSobrevive(t *testing.T) {
 // Control de J9: cuando el motor SÍ contesta bien, el orden cambia. Sin esta prueba, romper el juez
 // entero pasaría en verde — J9 sola se satisface con un juez que no hace nada.
 func TestJ9ControlConMotorSanoElOrdenCambia(t *testing.T) {
-	espia := &motorEspia{respuesta: `["c","b","a"]`}
+	espia := &motorEspia{respuesta: `["id-3","id-2","id-1"]`}
 	s := servidorConJuez(t, espia)
 	got := s.rerankIfEnabled(context.Background(), "j9 control motor sano", itemsDePrueba())
 

@@ -105,7 +105,7 @@ func recallRes(ids ...string) memory.RecallResult {
 // TestRerankDisabledIsNoop: con la flag apagada (default), el recall queda intacto y NO se llama al motor.
 func TestRerankDisabledIsNoop(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
-	fake := &fakeCognition{answer: `["c","b","a"]`}
+	fake := &fakeCognition{answer: `["id-3","id-2","id-1"]`}
 	s.cognition = fake // motor presente...
 	// ...pero ReadTimeRerank sigue en false (default)
 	in := recallRes("a", "b", "c")
@@ -126,7 +126,7 @@ var rerankOn = true
 // los no mencionados quedan al final sin perderse.
 func TestRerankReordersByJudge(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
-	s.cognition = &fakeCognition{answer: `El orden es ["c","a"]`} // 'b' omitido por el juez
+	s.cognition = &fakeCognition{answer: `El orden es ["id-3","id-1"]`} // 'b' omitido por el juez
 	s.cognitionCfg.ReadTimeRerank = &rerankOn
 	out := s.rerankIfEnabled(context.Background(), "q-reorder", recallRes("a", "b", "c"))
 	got := []string{out.Items[0].ID, out.Items[1].ID, out.Items[2].ID}
@@ -162,7 +162,7 @@ func recallResConPuntaje(ids ...string) memory.RecallResult {
 // ordenara por `score` deshacía, en silencio, un juicio que cuesta ~8,5 s.
 func TestRerankBorraElPuntajeQueYaNoExplicaElOrden(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
-	s.cognition = &fakeCognition{answer: `["c","a","b"]`}
+	s.cognition = &fakeCognition{answer: `["id-3","id-1","id-2"]`}
 	s.cognitionCfg.ReadTimeRerank = &rerankOn
 
 	out := s.rerankIfEnabled(context.Background(), "q-puntaje", recallResConPuntaje("a", "b", "c"))
@@ -181,7 +181,7 @@ func TestRerankBorraElPuntajeQueYaNoExplicaElOrden(t *testing.T) {
 // intacto. Borrarlo siempre habría cambiado el camino model-free, que es el 100 % del uso normal.
 func TestSinJuezElPuntajeSobreviveIntacto(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
-	s.cognition = &fakeCognition{answer: `["c","b","a"]`} // motor presente, flag apagada
+	s.cognition = &fakeCognition{answer: `["id-3","id-2","id-1"]`} // motor presente, flag apagada
 
 	out := s.rerankIfEnabled(context.Background(), "q", recallResConPuntaje("a", "b", "c"))
 
@@ -215,7 +215,7 @@ func TestJuezCaidoConservaPuntajeYNoDeclaraReorden(t *testing.T) {
 // sigue explicando su orden y tiene que quedar en pie.
 func TestLaColaFueraDelTopKConservaSuPuntaje(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
-	s.cognition = &fakeCognition{answer: `["b","a"]`}
+	s.cognition = &fakeCognition{answer: `["id-2","id-1"]`}
 	s.cognitionCfg.ReadTimeRerank = &rerankOn
 	s.cognitionCfg.ReadTimeRerankTopK = 2 // el juez sólo ve 'a' y 'b'; 'c' queda en la cola
 

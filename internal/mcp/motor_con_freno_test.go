@@ -90,7 +90,7 @@ func TestM1AskSinPresupuestoSeRechaza(t *testing.T) {
 // límite de gasto es, para el recall, otra forma de que el juez no esté disponible.
 func TestM2RecallSinPresupuestoDegrada(t *testing.T) {
 	// El juez INVIERTE, así se distingue «ordenó» de «devolvió el orden model-free».
-	motor := &motorEspia{respuesta: `["c","b","a"]`}
+	motor := &motorEspia{respuesta: `["id-3","id-2","id-1"]`}
 	s, _ := servidorConFreno(t, motor, 1)
 	ctx := ctxPrincipal("p1")
 
@@ -116,7 +116,7 @@ func TestM2RecallSinPresupuestoDegrada(t *testing.T) {
 // Es el modo por default. Un recall model-free no llama al motor: si consumiera cuota, el freno
 // estaría estrangulando una tool gratis.
 func TestM3RecallModelFreeNoGastaPresupuesto(t *testing.T) {
-	motor := &motorEspia{respuesta: `["c","b","a"]`}
+	motor := &motorEspia{respuesta: `["id-3","id-2","id-1"]`}
 	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
 	if err != nil {
 		t.Fatalf("NewDbEngine: %v", err)
@@ -147,7 +147,7 @@ func TestM3RecallModelFreeNoGastaPresupuesto(t *testing.T) {
 // El caché existe para no llamar al motor. Cobrarle contaría gasto que no ocurrió, y agotaría el
 // presupuesto justamente cuando el sistema se está portando bien.
 func TestM4AciertoDeCacheNoGasta(t *testing.T) {
-	motor := &motorEspia{respuesta: `["c","b","a"]`}
+	motor := &motorEspia{respuesta: `["id-3","id-2","id-1"]`}
 	s, _ := servidorConFreno(t, motor, 1)
 	ctx := ctxPrincipal("p1")
 	// MISMA consulta y mismos ids las dos veces ⇒ la 2da tiene que pegarle al caché.
@@ -344,7 +344,7 @@ func TestM9ElRechazoQuedaEnElLedgerConOutcomePropio(t *testing.T) {
 // El recall devuelve ok y el usuario no ve nada raro: si además no quedara registro, el sistema
 // estaría dejando de usar el juez sin que nadie pudiera enterarse.
 func TestM10LaDegradacionQuedaContada(t *testing.T) {
-	motor := &motorEspia{respuesta: `["c","b","a"]`}
+	motor := &motorEspia{respuesta: `["id-3","id-2","id-1"]`}
 	s, _ := servidorConFreno(t, motor, 1)
 	s.metrics = &serverMetrics{}
 	ctx := ctxPrincipal("p1")
