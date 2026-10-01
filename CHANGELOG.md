@@ -912,6 +912,30 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Fixed
+- **Lo que baja del central ya no se olvida apenas llega.** Desde que la nota bajada guarda la fecha
+  en que el central la recibió (#711), una de hace tres meses entraba con tres meses encima y sin un
+  solo acceso, y el primer mantenimiento de un cliente nuevo la archivaba antes de que nadie la
+  pudiera usar. Medido el 2026-09-30 sobre la base del central, en sólo lectura, simulando un cliente
+  nuevo que baja las 3.295 notas visibles y compartidas: el primer mantenimiento archivaba 1.046. Con
+  la gracia, 0. Ahora el olvido y la cuota cuentan la edad de una nota bajada desde su llegada —el
+  `created_at` de su sello `'espejo'` en el outbox, que una re-bajada no renueva— cuando llegó
+  después de su último uso o de su creación. La gracia es la de siempre (14 días), y después la nota
+  se enfría al mismo ritmo que las demás, contando desde la llegada. Una nota con la fecha ilegible
+  sigue sin archivarse aunque el sello se lea. Sin migración.
+
+  En el olvido esto sólo archiva menos. En la cuota, no: desaloja el mismo excedente, y si una nota
+  recién bajada queda en su gracia, su lugar lo ocupa la siguiente más fría, que puede ser una nota
+  local que nunca subió. Con el tope que escribe `musubi init` (50.000 activas por proyecto) no pasa
+  en ninguna base medida: la más grande, el central, tiene 5.023 activas en total. Y el sello no
+  siempre es una llegada: una nota propia cuyo envío murió y que vuelve del central, o una `'sent'`
+  que el sello de #656 pasó a `'espejo'` hasta #693, lleva la fecha de su encolado, y ahí la nota
+  sólo se archiva más tarde. En davantis-1, medido el mismo día, archiva lo mismo en el momento (0
+  contra 0) y una nota menos a los 7 días (72 contra 73): el central todavía no manda la fecha de
+  origen, así que lo que bajó ya guarda la de su llegada. **Los clientes se
+  actualizan antes que el central:** con #711 el central manda la fecha de origen, y un cliente con
+  #711 y sin esta gracia archivaría lo que baja apenas llega. Límites conocidos: una nota bajada que
+  se edita acá deja el sello `'espejo'` y pierde la gracia, y una purgada que vuelve a bajar conserva
+  el sello viejo.
 - **El respaldo de la laptop espera la red antes de mandar la copia (A139).** Su timer es
   `Persistent=true`: con la máquina apagada a la hora, corre apenas arranca, antes de que levante el
   tailnet. El 2026-09-29 los dos timers de la laptop dispararon juntos al arrancar: `musubi-comparar`
