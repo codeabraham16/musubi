@@ -15,10 +15,11 @@ import (
 // ESPERE al otro escritor en vez de fallar —el `busy_timeout` del DSN— y que no REPITA unidad.
 //
 // ES DETERMINISTA A PROPÓSITO (A143). La versión anterior eran ocho goroutines en bucle reclamando
-// veinte unidades, y cualquier error la ponía en rojo. Medía la disponibilidad de la máquina, igual
-// que la del ledger (A134) y la de los dos escritores (A142, txlock_test.go): el 2026-09-21, en el
-// runner de Windows, siete de las ocho goroutines volvieron con SQLITE_BUSY (5) y la prueba tardó
-// 39 s. Y no tenía sabotajes: nunca se había comprobado que cayera por el doble reclamo que nombra.
+// veinte unidades, y cualquier error la ponía en rojo. A lo que parece, medía la disponibilidad de
+// la máquina, igual que la del ledger (A134) y la de los dos escritores (A142, txlock_test.go): el
+// 2026-09-21, en el runner de Windows, siete de las ocho goroutines volvieron con SQLITE_BUSY (5) y
+// la prueba tardó 39 s. Y no tenía sabotajes: nunca se había comprobado que cayera por el doble
+// reclamo que nombra.
 //
 // Ahora el orden lo fija la prueba, con una COMPUERTA. A es otro escritor, que toma el lock y no lo
 // suelta. Mientras tanto b1 y b2 reclaman desde dos goroutines, y ninguno puede terminar: ni bien,
@@ -30,34 +31,41 @@ import (
 // En la primera, A no cambia nada: con las veinte libres, b1 y b2 se llevan una cada uno, y no la
 // misma. Sola no alcanza: caza el doble reclamo nada más que si los dos eligen la misma unidad.
 //
-// En la segunda, A reclama para sí las dieciocho que quedan libres —con dueño y lease, como el
-// camino público— y AGREGA una unidad al lote, como SumarAlLote, en la misma transacción. Cuando
+// En la segunda, A reclama para sí las dieciocho que quedan libres —con dueño y lease, como
+// AwardWorkUnit— y AGREGA una unidad al lote, como SumarAlLote, en la misma transacción. Cuando
 // A confirma, la nueva es la única libre: uno de los dos se la lleva y el otro vuelve sin nada.
 // Ésta mira la garantía de frente, porque desde afuera nadie ve la nueva hasta que A confirma, y
 // una elección hecha afuera mientras A escribe no puede dar con ella, elija como elija. Si eligió
 // una de las dieciocho y la actualiza por id, se la pisa a A; si vuelve a mirar antes de escribir,
-// o no eligió ninguna, la nueva queda sin dueño. Las dos salidas son rojas. Pasa sólo la elección
-// de afuera que, cuando pierde, vuelve a elegir adentro del lock, y ésa ya no es un defecto. Y lo
-// que A cuenta al reclamar —tienen que quedar dieciocho libres— caza además un reclamo de la
-// primera que se lleve más de una, o que informe una que no dejó reclamada.
+// o no eligió ninguna, la nueva queda sin dueño. Las dos salidas son rojas. Pasa la elección de
+// afuera que, cuando pierde, vuelve a elegir —adentro del lock o afuera otra vez—, y ésa ya no es
+// un defecto si no se rinde mientras quede una libre. La que se rinde después de perder dos veces
+// también pasa, porque acá hay una sola libre en disputa: ver lo que no mira. Y lo que A cuenta
+// al reclamar —tienen que quedar dieciocho libres— caza además un reclamo de la primera que se
+// lleve más de una, o que informe una que no dejó reclamada.
 //
 // Al final A devuelve las dieciocho, y el lote se vacía en secuencia: cada una de las veintiuna
 // sale una sola vez por el camino público, y un reclamo más vuelve sin nada. La segunda compuerta
 // dice que se alcanza la última unidad; el vaciado, que se alcanzan todas.
 //
-// La ventana de 300 ms sólo decide bajo sabotaje, y ahí decide por reloj, en todos los sabotajes:
-// si las goroutines llegaran a elegir su unidad, o a chocar con el lock de A, después de la
-// ventana, el sabotaje podría salir verde esa vez. Con el DSN sano queda un solo reloj, los 5 s del
-// `busy_timeout`, y no hay cola sin orden: A suelta el lock una vez por compuerta, y cada reclamo
-// es un SELECT corto —el de las unidades agotadas, que acá no encuentra ninguna— y un UPDATE corto.
-// Las carreras de memoria entre los reclamos en vuelo las ve `go test -race`, que corren las
-// pruebas automáticas.
+// La ventana de 300 ms sólo decide bajo sabotaje, y no en todos. Un sabotaje que elige afuera
+// podría salir verde la vez que las goroutines eligieran su unidad después de que A confirma, y el
+// que le saca la espera al reclamo, la vez que llegaran después y no chocaran entre ellas; los que
+// cambian la elección adentro del lock caen a cualquier hora. Con el DSN sano queda un solo reloj,
+// los 5 s del `busy_timeout`, y no hay cola sin orden: A suelta el lock una vez por compuerta, y
+// cada reclamo es un SELECT corto —el de las unidades agotadas, que acá no encuentra ninguna— y un
+// UPDATE corto. Las carreras de memoria entre los reclamos en vuelo las ve `go test -race`, que
+// corren las pruebas automáticas.
 //
 // Lo que no mira: el orden en que salen las unidades (sin el `ORDER BY seq` sigue verde); la rama
 // sin lote, que no recorre, ni un reclamo que cruce de lote, porque hay uno solo; que una unidad
 // terminada o fallida vuelva a ser elegible, o que la del lease nulo deje de serlo, que miran
-// TestElDeadLetterPersisteLaHistoria y TestUnaUnidadReclamadaSinLeaseNoQuedaTrabadaParaSiempre; y
-// un lease de 0 s, que cae sólo si cambia el segundo entre un reclamo y otro que lo mire.
+// TestElDeadLetterPersisteLaHistoria y TestUnaUnidadReclamadaSinLeaseNoQuedaTrabadaParaSiempre;
+// lo que pasa sólo con tres reclamos en vuelo, porque pone dos, o con dos libres en disputa,
+// porque pone una, como una elección que va afuera sólo cuando hay otros dos en vuelo, que la
+// versión de ocho goroutines cazaba, o un reclamo que se rinde tras perder dos veces aunque
+// quede una libre; y un lease de 0 s, que cae sólo si cambia el segundo entre un reclamo y otro
+// que lo mire.
 //
 // Sabotaje que la hace fallar: elegir la unidad con un SELECT aparte, antes del UPDATE, y
 // actualizarla por id sin volver a mirar si sigue libre → en la primera compuerta b1 y b2 eligen
@@ -104,7 +112,8 @@ import (
 //
 // Sabotaje que la hace fallar: el SELECT aparte al azar, pero volviendo a mirar en el UPDATE si
 // la elegida sigue libre → nunca se lleva una unidad ajena; en la segunda compuerta b1 y b2 eligen
-// entre las dieciocho que veían libres, al escribir ya son de A, y la nueva queda sin dueño.
+// entre las dieciocho que veían libres, al escribir ya son de A, y la nueva queda sin dueño. A
+// veces cae antes: si en la primera eligen la misma, el que pierde vuelve sin nada.
 // arnes: archivo="internal/memory/work.go"
 // arnes: de="WHERE id = (SELECT id FROM work_units WHERE batch_id=? AND `+eligible+` ORDER BY seq LIMIT 1)\n\t\t\tRETURNING `+workUnitCols,\n\t\t\tWorkClaimed, agent, agent, ttlSeconds, entrada, batchID, WorkOpen, WorkClaimed)"
 // arnes: a="WHERE id = ? AND `+eligible+`\n\t\t\tRETURNING `+workUnitCols,\n\t\t\tWorkClaimed, agent, agent, ttlSeconds, entrada, func() (elegida string) {\n\t\t\t\t_ = e.db.QueryRow(`SELECT id FROM work_units WHERE batch_id=? AND `+eligible+` ORDER BY random() LIMIT 1`, batchID, WorkOpen, WorkClaimed).Scan(&elegida)\n\t\t\t\treturn elegida\n\t\t\t}(), WorkOpen, WorkClaimed)"
@@ -234,7 +243,7 @@ func TestClaimWorkUnitConcurrentNoDoubleClaim(t *testing.T) {
 	}, "b1", "b2")
 	for _, r := range primera {
 		if !r.ok {
-			t.Fatalf("primera compuerta: %s no reclamó nada, con las %d unidades del lote libres al empezar", r.agente, units)
+			t.Fatalf("primera compuerta: %s no reclamó nada, con las %d unidades del lote libres al empezar. O el otro reclamo se llevó más de una —todas, si la sentencia no se limita a una unidad—, o se eligió fuera del lock y, cuando los dos eligieron la misma, el que perdió volvió a mirar pero no volvió a elegir, o la elección no da con las libres", r.agente, units)
 		}
 		if otro, ya := reclamadaPor[r.u.ID]; ya {
 			t.Fatalf("primera compuerta: DOBLE RECLAMO: %s y %s se llevaron la misma unidad (seq %d). O se eligió fuera del lock —los dos la vieron libre mientras A escribía—, o el filtro de elegibles deja pasar una unidad reclamada con el lease vigente, o el primero escribió un lease que ya estaba vencido, o un reclamo informó una unidad que no es la que escribió", otro, r.agente, r.u.Seq)
@@ -244,14 +253,18 @@ func TestClaimWorkUnitConcurrentNoDoubleClaim(t *testing.T) {
 
 	// SEGUNDA COMPUERTA: A reclama para sí las dieciocho libres y agrega una unidad al lote, como
 	// SumarAlLote, en la misma transacción. Cuando confirma, la nueva es la única libre: uno de
-	// los dos se la lleva y el otro vuelve sin nada. A deja cada reclamo como lo deja el camino
-	// público —estado, dueño, lease, latido, intento y token— y no a medias: una reclamada sin
-	// dueño es un estado que la API no produce, y un filtro que la rescatara pondría esta prueba
-	// en rojo sin ser un defecto.
+	// los dos se la lleva y el otro vuelve sin nada. A deja cada reclamo como lo deja
+	// AwardWorkUnit: estado, dueño, lease, latido, intento, token y la hora del cambio, y sin
+	// bitácora. Una reclamada sin dueño, o con el latido más nuevo que la hora del cambio, es un
+	// estado que la API no produce, y un filtro que la rescatara pondría esta prueba en rojo sin
+	// ser un defecto. Una reclamada sin bitácora, en cambio, la deja AwardWorkUnit, y un filtro
+	// que la rescate sí es un defecto: se lleva una adjudicada con el lease vigente. La nueva se
+	// busca por su título, que no se repite en el lote, y no por su seq, que se repetiría si
+	// CreateWorkBatch numerara desde 1.
 	var robadas int64
 	var nueva string
 	segunda := compuerta("segunda compuerta", func(tx *sql.Tx) error {
-		res, err := tx.Exec(`UPDATE work_units SET status = ?, owner_id = 'a', claimed_by = 'a', lease_expires_at = datetime('now', '+1 hour'), heartbeat_at = datetime('now'), attempts = attempts + 1, fencing_token = fencing_token + 1 WHERE batch_id = ? AND status = ?`,
+		res, err := tx.Exec(`UPDATE work_units SET status = ?, owner_id = 'a', claimed_by = 'a', lease_expires_at = datetime('now', '+1 hour'), heartbeat_at = datetime('now'), attempts = attempts + 1, fencing_token = fencing_token + 1, updated_at = datetime('now') WHERE batch_id = ? AND status = ?`,
 			WorkClaimed, batch.BatchID, WorkOpen)
 		if err != nil {
 			return err
@@ -262,7 +275,7 @@ func TestClaimWorkUnitConcurrentNoDoubleClaim(t *testing.T) {
 		if err := insertarUnidades(tx, batch.BatchID, units, []WorkUnitSpec{{Title: "nueva", Spec: "hacer algo"}}); err != nil {
 			return err
 		}
-		return tx.QueryRow(`SELECT id FROM work_units WHERE batch_id = ? AND seq = ?`, batch.BatchID, units).Scan(&nueva)
+		return tx.QueryRow(`SELECT id FROM work_units WHERE batch_id = ? AND title = ?`, batch.BatchID, "nueva").Scan(&nueva)
 	}, "b1", "b2")
 	if robadas != units-2 {
 		t.Fatalf("segunda compuerta: A encontró %d unidades libres y tenían que quedar %d. Si son menos, algún reclamo de la primera se llevó más de una; si son más, alguno informó una unidad que no dejó reclamada", robadas, units-2)
