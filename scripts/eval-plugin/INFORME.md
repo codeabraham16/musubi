@@ -1,6 +1,7 @@
 # Informe: suite de evals del plugin de Musubi
 
-Unidad `a87cf046-720f-4e5a-a379-6d2a60c6d8ea`, rama `medir/eval-plugin` (sale de `704c5013`).
+Unidad `a87cf046-720f-4e5a-a379-6d2a60c6d8ea`, rama `medir/eval-plugin` (escrita sobre `704c5013`
+y rebasada sobre `752b4467` sin conflictos).
 **La evaluación no se corrió**: todo lo de acá se validó sin gastar. El cómo se usa está en
 [README.md](README.md); este archivo tiene las respuestas a las preguntas de la unidad, lo que se
 validó, los hallazgos del producto y el análisis de `userConfig` (parte B).
