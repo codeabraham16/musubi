@@ -15,28 +15,35 @@
    - recall@10 0,485 contra 0,393: Δ +0,092 [+0,036, +0,146].
    - nDCG@10 0,437 contra 0,335: Δ +0,102 [+0,051, +0,152].
 
-   Contra el léxico solo, el MRR sube +0,122 [+0,037, +0,206]. **Es el primer embebedor medido
-   que le suma algo al léxico en la memoria real** (§2).
-2. **El vector de POTION no le suma nada medible al léxico en la memoria real.** Se midieron tres
-   copias de la memoria, y en las tres empeoran más consultas de las que mejoran (en MRR, 16 contra
-   38, 18 contra 37 y 14 contra 41). La diferencia de medias no se separa del cero. Un vector
-   constante, que es un embebedor roto a propósito, quedó a 0,044 de POTION sin separarse (IC95
-   [−0,117, +0,030]). Este instrumento no distingue a POTION de un vector sin señal (§3).
+   Contra el léxico solo, el MRR sube +0,122 [+0,037, +0,206]. **Es el primer embebedor que le
+   suma al léxico en la memoria real con un margen que este instrumento separa del ruido** (§2).
+2. **Lo que el vector de POTION le suma al léxico en la memoria real queda dentro del ruido de
+   este instrumento.**
+   - El 2026-09-11, otra medición le dio +0,043 de MRR (0,450 → 0,493). Con ella se justificó
+     encender el vector en el hook por turno, que igual hoy, con POTION, no lo usa (§4).
+   - En las tres copias de ahora dio −0,039, −0,002 y −0,038, con el IC95 cruzando el cero.
+   - Las dos lecturas son del tamaño que este fixture no resuelve. Un vector constante, que es un
+     embebedor roto a propósito, quedó 0,044 **por debajo** de POTION y tampoco se separó (IC95
+     [−0,117, +0,030]).
+
+   Con 88 consultas no se puede afirmar ni que POTION suma ni que no suma (§3).
 3. **Lo que cuesta granite (§4):**
    - ~350 ms por consulta (p50), contra ~1 ms de POTION.
    - Ollama corriendo, con ~1 GB de RSS en su llama-server.
    - Re-embeber la memoria una vez: 27 min estimados sin carga y 53 medidos con la máquina en swap.
    - 2,5 a 3,2 s de carga en frío. Se repite seguido, porque Ollama descarga el modelo a los 5 min
      sin uso.
+   - El hook por turno pasaría a usar el vector, que con POTION hoy no usa: ~350 ms más por turno.
+     En frío se pasa de su techo de 2 s, y ese turno sigue sólo con el léxico.
 4. **Los otros tres candidatos no entran en esta laptop.** granite-311m, harrier-270m y bge-m3
    tardarían 88, 245 y 313 min en re-embeber la memoria, y bge-m3 además mandó 1,6 GB de su
    llama-server a swap. bge-m3 no tiene números de calidad: la corrida que lo incluía murió en el
    límite de 2 h sin terminar de re-embeber (§4 y §5).
 5. **Hoy POTION embebe un documento por un tercio de lo que cuesta granite, y la culpa no es del
    modelo: es del tokenizador.** POTION tokeniza por el camino del mapa, y el índice que ya está en
-   el repo da los mismos ids ~100× más rápido. En la corrida de calidad, POTION re-embebió a 530 ms
-   por doc y granite a 1.588 (§4). Arreglarlo no cambia la calidad, pero abarata guardar y
-   re-embeber.
+   el repo da los mismos ids ~100× más rápido desde los 250 caracteres (en 60, sólo 6×). En la
+   corrida de calidad, POTION re-embebió a 530 ms por doc y granite a 1.588 (§4). Arreglarlo no
+   cambia la calidad, pero abarata guardar y re-embeber.
 6. **No se cambió nada.** Adoptar granite, como opción o por defecto, es una decisión de producto
    con costos reales. Las condiciones están en §6.
 
@@ -107,21 +114,30 @@ Lo mismo contra el léxico solo, en el mismo motor:
 
 ## 3. Lo que suma POTION, y hasta dónde ve este instrumento
 
-La híbrida de POTION contra el léxico, en MRR, sobre las tres copias de la memoria:
+La híbrida de POTION contra el léxico, en MRR. Las tres últimas filas son de este arnés. La primera
+es de una medición anterior (nota `ola1/prender-lo-construido`): otra versión del código, 85
+consultas y sin IC publicado.
 
 | Copia | Docs | Léxico | Híbrida POTION | Δ [IC95] | p (signo) | G/P/E |
 |---|---|---|---|---|---|---|
+| 2026-09-11 (medición anterior) | 1.953 | 0,450 | 0,493 | +0,043 (sin IC) | — | — |
 | 2026-09-30 | 1.986 | 0,483 | 0,443 | −0,039 [−0,101, +0,022] | 0,004 | 16/38/34 |
 | 2026-10-01, 09:51 | 2.069 | 0,465 | 0,463 | −0,002 [−0,060, +0,058] | 0,014 | 18/37/33 |
 | 2026-10-01, 10:47 | 2.070 | 0,465 | 0,428 | −0,038 [−0,095, +0,021] | < 0,001 | 14/41/33 |
 
-- **El patrón se repite en las tres:** por cada consulta que el vector de POTION mejora, empeora más
-  de dos. Aun así, la media no se separa del cero.
+- **En las tres copias de ahora el patrón se repite:** por cada consulta que el vector de POTION
+  mejora, empeora más de dos. Aun así, la media no se separa del cero.
+- **La medición del 2026-09-11 dio el signo contrario, y no se contradicen.** Las dos diferencias
+  miden ~0,04, que es justo lo que este fixture no resuelve (ver el control de abajo). Entre una y
+  otra cambiaron la memoria (1.953 → 1.986 docs, 85 → 88 consultas) y el código. El léxico, por
+  ejemplo, subió de 0,450 a 0,483. Lo que sí se puede decir es que el aporte de POTION, sea cual
+  sea su signo, es chico al lado del de granite.
 - **El control de sabotaje dio rojo, y eso es un resultado.** Sobre la copia del 2026-09-30, la
-  híbrida con el vector constante dio MRR 0,399, contra 0,443 de POTION: Δ −0,044, IC95 [−0,117,
-  +0,030], p = 0,389. El arnés sí usa el embebedor, porque el ranking se movió. Pero con 88
-  consultas **no separa la señal de POTION de un vector sin señal**. Contra el léxico, el constante
-  sí sale peor: Δ −0,083 [−0,150, −0,016]. El criterio se fijó antes de correr y no se aflojó.
+  híbrida con el vector constante dio MRR 0,399, contra 0,443 de POTION: Δ −0,044 (constante menos
+  POTION), IC95 [−0,117, +0,030], p = 0,389. El arnés sí usa el embebedor, porque el ranking se
+  movió. Pero con 88 consultas **no separa la señal de POTION de un vector sin señal**. Contra el
+  léxico, el constante sí sale peor: Δ −0,083 [−0,150, −0,016]. El criterio se fijó antes de
+  correr y no se aflojó.
 - **El mismo instrumento separa a granite de POTION con margen:** Δ +0,159, con el IC95 arrancando
   en +0,081. La resolución de 88 consultas queda entre esas dos distancias. Una diferencia de
   ~0,04 de MRR no se puede leer, y una de ~0,16 sí.
@@ -160,18 +176,25 @@ el de otras sesiones.
 | Un doc suelto, p50 / p95 (n = 16) | 489 / 3.736 ms | 1.824 / 13.831 ms |
 | Memoria | 793 MB de RSS en el proceso, y otros 433 en swap | 247 MB de modelo en Ollama; la memoria disponible bajó de 2.943 a 2.202 MB |
 
-- **Re-embeber con granite tardó el doble de lo que estimaba el microbench:** 53 min contra 27. Esa
-  diferencia es la presión de memoria de la máquina, no el modelo.
+- **Re-embeber con granite tardó el doble de lo que estimaba el microbench:** 53 min medidos contra
+  27 estimados. Esa diferencia es la presión de memoria de la máquina, no el modelo.
 - **El costo por doc de POTION es un problema de implementación.** Su tokenizador va por el camino
   del mapa, que prueba cada prefijo de hasta 186 runas en cada posición del texto. El índice de
-  piezas (`tokenizer.idx`), que hoy usa sólo la consulta liviana, da los mismos ids ~100× más
-  rápido: ~0,65 ms contra 77–88 ms cada 1.000 caracteres. Con ese arreglo, POTION re-embebería la
-  memoria en segundos, y la comparación de costos contra granite cambia de escala.
-- **Hoy el hook por turno no embebe la consulta:** `NewProviderDeConsulta` no tiene llamadores
-  fuera de las pruebas. Con granite, los ~350 ms por consulta los pagaría `musubi_recall`, y cada
-  observación nueva pagaría su embebido al guardarse (1 a 1,8 s por doc). El turno no paga nada. Si
-  algún día el turno usa el vector, con granite pagaría eso en cada turno, o ~3 s en frío, contra
-  un techo de 10 s.
+  piezas (`tokenizer.idx`), que hoy usa sólo la consulta liviana, da los mismos ids 67 a 120× más
+  rápido entre 250 y 16.000 caracteres: ~0,65 ms contra 77–88 ms cada 1.000. En un texto de 60
+  caracteres la ventaja baja a 6×, porque ahí el mapa ya era barato. Con ese arreglo, POTION
+  debería re-embeber la memoria en segundos (estimado, no medido), y la comparación de costos
+  contra granite cambia de escala.
+- **Con granite, el turno también paga.**
+  - Hoy, con POTION, el hook por turno no usa el vector: construir la tabla estática es caro
+    (`embedderCaroDeConstruir`, en `cmd/musubi/embed.go`), así que el hook sigue léxico.
+  - Con un embebedor por Ollama, en cambio, el hook embebe el prompt en cada turno, con un techo de
+    2 s (`turnEmbedTimeout`, en `cmd/musubi/turn.go`). Con granite serían ~350 ms por turno en
+    caliente. En frío (~3,2 s) se pasa del techo, y ese turno sigue sólo con el léxico.
+  - Además, `musubi_recall` pagaría ~350 ms por búsqueda, y cada observación nueva pagaría su
+    embebido al guardarse (1 a 1,8 s por doc).
+- **Si Ollama falla, la búsqueda ya cae al léxico:** `musubi_recall` espera hasta 30 s y el turno
+  hasta 2 s, y después siguen sin vector.
 
 ## 5. Qué no se midió, y por qué
 
@@ -189,18 +212,22 @@ el de otras sesiones.
 ## 6. Recomendación (la decisión es del usuario)
 
 1. **Lo barato primero: el tokenizador de POTION.** No cambia la calidad, abarata ~100× el embebido
-   de cada doc y no agrega dependencias. Antes de cambiarlo hay que correr las pruebas de identidad
-   bit a bit y comparar los ids de los dos caminos sobre texto real largo.
+   de cada doc de 250 caracteres para arriba y no agrega dependencias. Antes de cambiarlo hay que
+   correr las pruebas de identidad bit a bit y comparar los ids de los dos caminos sobre texto real
+   largo.
 2. **granite-97m es el único candidato que vale la pena, y como opción, no por defecto,** hasta
-   resolver tres cosas:
-   - **Depende de Ollama.** Hoy la búsqueda vectorial corre sin red ni servicios aparte. Antes de
-     ofrecer granite hay que comprobar qué hace `musubi_recall` con Ollama caído: tiene que
-     degradar a léxico, no romper.
+   resolver cuatro cosas:
+   - **Depende de Ollama.** Hoy la búsqueda vectorial corre sin red ni servicios aparte. El código
+     ya cae al léxico si Ollama falla (§4), pero acá no se probó de punta a punta. Tampoco se probó
+     el modelo en frío, que va a ser el caso común, porque Ollama lo descarga a los 5 min.
    - **El piso de coseno** hay que recalibrarlo con los cosenos de granite (§2).
    - **El re-embebido inicial** lleva 30 a 50 min en esta laptop, una sola vez.
-3. **Que el vector de POTION no le sume al léxico en la memoria real no autoriza a apagarlo.** El
-   dorado dice lo contrario, aunque sin separarse, y las etiquetas por `topic_key` son una vara
-   angosta. Sí autoriza a no esperar de POTION lo que da granite.
+   - **El turno pagaría ~350 ms.** Con un embebedor por Ollama, el hook por turno embebe cada prompt
+     (§4). Si se quiere que el turno siga léxico, como hoy con POTION, hace falta un cambio de
+     código: apagar `per_turn_recall` apaga también la memoria del turno, no sólo el vector.
+3. **Que el aporte de POTION no se separe del ruido no autoriza a apagarlo.** La medición del
+   2026-09-11 le dio +0,043, el dorado también le da ventaja aunque sin separarse, y las etiquetas
+   por `topic_key` son una vara angosta. Sí autoriza a no esperar de POTION lo que da granite.
 
 ## Cómo se reproduce
 
