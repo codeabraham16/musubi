@@ -14,11 +14,15 @@
 2. **En S, la config híbrida le gana a BM25 en las cuatro columnas**, con p < 0,01 en todas:
    0,8520 · 0,8299 · 0,9475 · 0,8515 contra 0,7351 · 0,7671 · 0,8234 · 0,7922 (promedio estricto,
    n = 419; §2.2).
-3. **En S, `musubi_recall` tal como está configurado pierde contra BM25 en las cuatro:**
-   `produccion`, que es la híbrida con MMR y corrector de tipeo, da 0,3914 de recall_all@5. La
-   caída está entera en las preguntas con dos o más sesiones de oro (0,8445 → 0,1767), y la
-   primera sesión de oro sigue arriba. Es el patrón de MMR, pero no se corrió el brazo que lo
-   separa del corrector. El hook por turno no corre MMR (§2.2).
+3. **En S, `musubi_recall` tal como está configurado pierde contra BM25 en las cuatro, y la causa
+   es MMR (λ 0,75), no el corrector de tipeo.** `produccion` da 0,3914 de recall_all@5. La caída
+   está entera en las preguntas con dos o más sesiones de oro (0,8445 → 0,1767), y la primera
+   sesión de oro sigue arriba. La ablación del 2026-10-01 lo separa (§2.2.1, una de cada tres
+   preguntas, n = 140): apagar MMR lleva recall_all@10 de 0,4786 a 0,9500 (66 preguntas ganan y
+   ninguna pierde), y apagar el corrector no mueve ninguna de las cuatro columnas. Subir λ
+   recupera de forma monótona: 0,95 ya iguala el recall_all@10 de MMR apagado, pero no su
+   recall_all@5 (0,7357 contra 0,8571). **No se tocó el default:** el otro lado de la balanza, la
+   redundancia que MMR evita, no lo mide esta vara. El hook por turno no corre MMR.
 4. **El léxico pierde contra BM25, y más cuanto más grande es el pajar.** En M da 0,3957 · 0,3230 ·
    0,6383 · 0,3959 contra el número publicado (§2.4). **Toda esa distancia es la expansión por
    co-ocurrencia (PRF):** con la PRF apagada, el léxico le gana al BM25 publicado en las cuatro
@@ -153,8 +157,8 @@ repo del paper, y cada regla lleva su prueba.
    ya elegido, y las sesiones de oro de una misma pregunta tratan el mismo tema: así se arma una
    pregunta de varias sesiones. Cuánto se parecen entre sí no se midió. El corrector de tipeo no
    tiene por qué distinguir entre una sesión de oro y varias, y en el léxico mueve poco (`turno`
-   contra `lexical`, que además difieren en el pool). **No se corrió el brazo que los separa** (la
-   híbrida con corrector y sin MMR): la atribución sale del patrón, no de una ablación.
+   contra `lexical`, que además difieren en el pool). La ablación que los separa se corrió después
+   y confirma el patrón: §2.2.1.
 
    Tampoco es el sesgo que documenta `RedundanciaAtK` en `recalleval/metrics.go`. En el banco propio
    la relevancia se etiqueta por `topic_key`, y MMR sale castigado por construcción. Acá el oro lo
@@ -218,6 +222,92 @@ Por tipo se ve lo mismo:
   (92 de 127).
 - En los tres tipos de una sola sesión, `produccion` queda pegada a la híbrida, y en
   single-session-preference hasta la supera en recall_all@5 (0,733 contra 0,700).
+
+#### 2.2.1 Ablación: es MMR, no el corrector (2026-10-01)
+
+Corrida `abl-mmr-s-cada3`, con el build del commit `069eb413`. Usa `MUSUBI_LONGMEMEVAL_ABLACION_MMR=1`
+y `MUSUBI_LONGMEMEVAL_CADA=3`, así que **mide una de cada tres preguntas del archivo**: la 1.ª, la 4.ª,
+la 7.ª… Es una muestra sistemática fijada de antemano. Las otras 333 no cuentan en nada, y el informe
+lo dice en la línea `MUESTRA`. Quedan **140 preguntas en el promedio estricto**, de 419. Cada brazo es
+`ConfigProduccion()` con **una sola** cosa cambiada; una prueba lo exige y su sabotaje da ROJO en el
+arnés. La corrida tardó 20:13 y llegó a 1,1 GB de RSS máx. El corrector venció su plazo 0 veces.
+
+<!-- abl-mmr-s-cada3.jsonl · longmemeval_s.json · modo user · cada=3 · estricto · n=140 -->
+| brazo | λ MMR | corrector | n | recall_all@5 | ndcg_any@5 | recall_all@10 | ndcg_any@10 | recall_any@5 | rv_mrr |
+|---|---|---|---|---|---|---|---|---|---|
+| produccion | 0,75 | sí | 140 | 0,3429 | 0,5738 | 0,4786 | 0,6101 | 0,9000 | 0,8058 |
+| prod-mmr-0.85 | 0,85 | sí | 140 | 0,4643 | 0,6066 | 0,6429 | 0,6561 | 0,9000 | 0,8056 |
+| prod-mmr-0.90 | 0,90 | sí | 140 | 0,5429 | 0,6358 | 0,8429 | 0,7101 | 0,8929 | 0,8094 |
+| prod-mmr-0.95 | 0,95 | sí | 140 | 0,7357 | 0,7253 | 0,9500 | 0,7795 | 0,9214 | 0,8159 |
+| prod-sin-mmr | apagado | sí | 140 | 0,8571 | 0,8199 | 0,9500 | 0,8425 | 0,9500 | 0,8213 |
+| prod-sin-tipeo | 0,75 | no | 140 | 0,3429 | 0,5738 | 0,4786 | 0,6101 | 0,9000 | 0,8058 |
+| hybrid | apagado | no | 140 | 0,8643 | 0,8214 | 0,9500 | 0,8431 | 0,9500 | 0,8213 |
+| bm25-paper | — | — | 140 | 0,7571 | 0,7743 | 0,8000 | 0,7922 | 0,8929 | 0,7841 |
+
+La muestra se parece a la corrida entera de §2.2: `produccion` 0,3429 contra 0,3914 y `hybrid`
+0,8643 contra 0,8520 en recall_all@5.
+
+**Contra `produccion`, pregunta por pregunta** (prueba de signos exacta de dos colas):
+
+<!-- abl-mmr-s-cada3.jsonl · contra produccion · estricto · n=140 -->
+| brazo | recall_all@5 gana/pierde · p | recall_all@10 gana/pierde · p | ndcg_any@10 gana/pierde · p |
+|---|---|---|---|
+| prod-mmr-0.85 | 19/2 · 2,2e-04 | 24/1 · 1,5e-06 | 54/6 · 9,7e-11 |
+| prod-mmr-0.90 | 32/4 · 1,9e-06 | 52/1 · 1,2e-14 | 81/6 · 7,0e-18 |
+| prod-mmr-0.95 | 57/2 · 6,1e-15 | 66/0 · 2,7e-20 | 96/8 · 2,8e-20 |
+| prod-sin-mmr | 74/2 · 7,7e-20 | 66/0 · 2,7e-20 | 96/10 · 8,7e-19 |
+| prod-sin-tipeo | 0/0 · — | 0/0 · — | 0/0 · — |
+
+**Con dos o más sesiones de oro** (n = 95), que es donde estaba la caída:
+
+<!-- abl-mmr-s-cada3.jsonl · oro ≥ 2 · estricto · n=95 -->
+| brazo | recall_all@5 | recall_all@10 | ndcg_any@10 | recall_any@5 | rv_mrr |
+|---|---|---|---|---|---|
+| produccion | 0,1263 | 0,2947 | 0,5511 | 0,9474 | 0,8847 |
+| prod-mmr-0.85 | 0,3158 | 0,5158 | 0,6214 | 0,9579 | 0,8878 |
+| prod-mmr-0.90 | 0,4526 | 0,7895 | 0,6915 | 0,9684 | 0,8902 |
+| prod-mmr-0.95 | 0,7053 | 0,9263 | 0,7762 | 0,9789 | 0,8930 |
+| prod-sin-mmr | 0,8316 | 0,9263 | 0,8517 | 0,9684 | 0,8899 |
+| hybrid | 0,8421 | 0,9263 | 0,8526 | 0,9684 | 0,8899 |
+
+Lo que dice:
+1. **El corrector de tipeo no es.** `prod-sin-tipeo` es idéntico a `produccion` en las cuatro
+   columnas del paper en las 140 preguntas. Cambia algo en 2, y sólo en el nDCG a 30 y a 50. El
+   corrector sí corre: `hybrid` y `prod-sin-mmr` difieren sólo en él, y se separan en 1 pregunta
+   (`gpt4_a56e767c`, multi-session). Que no haga nada es lo esperable, porque las preguntas de
+   LongMemEval no traen tipeos.
+2. **Es MMR, y en proporción a λ.** La recuperación es monótona en las cuatro columnas: 0,75 →
+   0,85 → 0,90 → 0,95 → apagado. Con una sola sesión de oro (n = 45) pesa mucho menos, pero
+   pesa: recall_all@10 da 0,8667 con MMR y 1,0000 sin él (6 preguntas ganan y ninguna pierde).
+3. **Ningún λ lo arregla gratis.** λ 0,95 iguala el recall_all@10 de MMR apagado (0,9500), pero en
+   recall_all@5 queda 0,12 abajo y en ndcg_any@10, 0,06 abajo. Por tipo, la distancia está en
+   temporal-reasoning (recall_all@5 0,667 contra 0,881) y en knowledge-update (0,792 contra 0,917).
+
+**Por qué esto no basta para cambiar el default, y qué lo haría.** Esta vara mide un solo lado: el
+costo de diversificar cuando la evidencia complementaria se parece entre sí. El oro lo puso el
+dataset, así que acá no corre el sesgo por construcción del banco propio. En el pajar de
+LongMemEval casi no hay redundancia que evitar: son sesiones de relleno distintas entre sí. MMR no
+tiene nada que ganar ahí, y lo que se ve es su precio entero. En la memoria real sí hay redundancia;
+el caso que lo originó fueron las 7 fases SDD de un mismo cambio contadas una por una. El barrido
+del banco propio (2026-09-11, corpus real) midió los dos ejes:
+
+| λ | redundancia@10 | R@10 |
+|---|---|---|
+| apagado | 0,7453 | 0,4063 |
+| 0,90 | 0,7202 (−3 %) | 0,3727 |
+| 0,75 | 0,6313 (−15 %) | 0,2679 |
+
+Ahí la relevancia sale del `topic_key`, así que la caída de R@10 es una cota de arriba. Las dos
+varas juntas dicen esto:
+- λ 0,75 compra 15 % menos de redundancia y paga, con oro exógeno, 47 puntos de recall_all@10 en
+  LongMemEval-S;
+- λ 0,90 a 0,95 paga mucho menos y compra casi nada de redundancia (−3 % a 0,90; a 0,95 no se
+  midió).
+
+**La decisión es de producto, y le toca al usuario.** Las opciones razonables son tres:
+- apagar MMR en `musubi_recall`;
+- subir λ a 0,95;
+- dejarlo y medir la redundancia a 0,95 sobre el corpus real antes de elegir.
 
 ### 2.3 La Tabla 9 del paper es M, no S
 
@@ -463,6 +553,7 @@ más CPU.
 | hibrido-user | dataset sin registrar · user | bm25-paper, hybrid, lexical, produccion, turno | 500 | 1:12:44 | 8,73 | 876 MiB | 7 |
 | lexico-m-user | longmemeval_m.json · user | bm25-paper, lexical, turno | 500 | 24:48.03 | 2,98 | 66 MiB | 4 |
 | ablacion4-m | longmemeval_m.json · user | abl-sin-cooc, abl-sin-grafo, abl-sin-planas, abl-solo-lexico, bm25-paper, lexical, turno | 500 | 14:00.14 | 1,68 | 65 MiB | 0 |
+| abl-mmr-s-cada3 | longmemeval_s.json · user · una de cada 3 | bm25-paper, hybrid, lexical, prod-mmr-0.85, prod-mmr-0.90, prod-mmr-0.95, prod-sin-mmr, prod-sin-tipeo, produccion, turno | 167 | 20:13.21 | 7,27 | 1.107 MiB | 0 |
 
 `lexico-user` y `hibrido-user` salieron del primer build del adaptador, que todavía no guardaba el
 nombre del archivo en el JSON: de ahí el «dataset sin registrar». Lo que cambió después no toca la
@@ -568,7 +659,10 @@ coinciden pregunta por pregunta con `ablacion4-s`, que sí registra el archivo.
     que es cuadrático en la cantidad de tokens.
 
   Se confirma con un benchmark de `EncodeIDs` sobre un texto largo por los dos caminos, y es lo
-  primero que hay que hacer antes de correr la híbrida en M. No se hizo acá por la RAM: la máquina
+  primero que hay que hacer antes de correr la híbrida en M. **Confirmada el 2026-10-01:** el camino
+  del mapa tarda 77–88 ms por cada 1.000 caracteres, y el del índice, 0,65 ms. Es ~100× más rápido
+  y da los mismos ids. Queda como propuesta: que `NewStaticProvider` use `tokenizer.idx` cuando
+  existe. No se hizo acá por la RAM: la máquina
   la compartían otras sesiones y llegó a tener menos de 100 MB disponibles, con el swap casi lleno.
 - **Un solo embebedor:** POTION es el que Musubi usa sin red. Contriever y Stella, los densos del
   paper, necesitan GPU o un servicio aparte.
