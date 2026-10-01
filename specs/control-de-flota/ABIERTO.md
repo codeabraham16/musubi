@@ -763,6 +763,34 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
+**2026-09-30 · A143 CERRADO — LA PRUEBA DEL RECLAMO DE LA PIZARRA TAMBIÉN MEDÍA LA DISPONIBILIDAD; AHORA EL ORDEN LO FIJA LA PRUEBA, COMO EN A142.**
+
+`TestClaimWorkUnitConcurrentNoDoubleClaim` es la primera de las dos vecinas que A142 dejó afuera. Según aquel recuento, cayó una vez, en `test-cross (windows-latest)`: el 2026-09-21, en el primer intento de la corrida 35609040205 (`fix/embebedor-tras-ingest`, 459bdf51), siete de los ocho reclamos volvieron con `error al reclamar unidad: database is locked (5) (SQLITE_BUSY)` y la prueba tardó 39,19 s. Se relanzó y pasó, así que no figura como fallida. La prueba existe desde julio y el recuento empieza el 2026-09-08: lo de antes no se miró.
+
+**Producción estaba bien, hasta donde se puede ver.** La elección de la unidad y el reclamo son una sola sentencia en autocommit, `UPDATE … WHERE id = (SELECT … LIMIT 1) RETURNING`: la unidad se elige adentro, con el lock de escritura tomado, y si la sentencia choca con otro escritor espera hasta 5 s, lo que dura el `busy_timeout`. La prueba eran ocho goroutines que reclamaban veinte unidades en bucle, y cualquier error la ponía en rojo. Alcanzaba con que un reclamo se quedara sin turno más de 5 s: es la inanición de A134 y de A142. Es una inferencia, porque el registro sólo muestra el código y la duración. Y nadie la había visto nunca en rojo por el doble reclamo que nombra: no tenía sabotajes.
+
+**Lo que se hizo.** Se reescribió en su lugar, con el mismo nombre:
+- A es otro escritor: abre una transacción y escribe sobre el lote sin cambiar nada. Así toma el lock sin depender de `_txlock=immediate`, que ya custodia X1.
+- b1 y b2 reclaman por el camino público, `ClaimWorkUnit`, desde dos goroutines. Mientras A no confirme, ninguno puede terminar: ni bien, porque no tiene el lock, ni mal, porque lo espera. La prueba mira una ventana de 300 ms.
+- A confirma, y recién ahí terminan b1 y b2, cada uno con una unidad distinta.
+- Después la prueba vacía el lote en secuencia y comprueba que cada una de las veinte unidades salió una sola vez.
+
+El orden lo fija la prueba y no la carga: diez corridas seguidas tardan 0,37 a 0,70 s cada una, y pasó 90 veces más —30 seguidas, 30 con un solo procesador y 30 con la máquina cargada, con un proceso quemando CPU en cada uno de los doce núcleos lógicos—. La más lenta tardó 1,17 s.
+
+**Y ahora tiene sabotajes, uno por cada mitad de la garantía.**
+- Elegir la unidad con un SELECT aparte, antes del UPDATE, y actualizarla por id sin volver a mirar: b1 y b2 eligen mientras A tiene el lock, los dos ven libre la misma y, cuando A lo suelta, se la llevan los dos. «DOBLE RECLAMO: b2 y b1 se llevaron la misma unidad (seq 0)…».
+- Sin `busy_timeout(5000)`, el reclamo choca con el lock de A y vuelve al instante: «b2 se rindió con SQLITE_BUSY a los 1ms, con el lock de A tomado…».
+
+El segundo pisa el mismo literal del DSN que los sabotajes de X1 y de SA5 (`TestSinArranqueElLedgerEsperaAlOtroEscritor`), y el arnés lo informa como choque. Son guardas distintas sobre la misma línea, así que cada una nombra a las otras dos en su `colision_ok`. El censo pasa de 1960 a 1962 sabotajes mecanizados. Y el comentario de `dsnEscribible` (database.go), que lista las pruebas que caen sin el `busy_timeout`, ahora nombra también al reclamo.
+
+Que la prueba no depende de `_txlock=immediate` se midió a mano: con ese pragma fuera del DSN, la prueba del reclamo pasó cinco de cinco, y X1, que es la que lo custodia, cayó con «B escribió con la transacción de A abierta…». Esa caída confirma que el cambio estaba aplicado.
+
+**Límites que se conocen.**
+- Bajo sabotaje, la ventana decide por reloj: si las goroutines eligieran su unidad después de los 300 ms, el primer sabotaje podría pasar en verde esa vez.
+- Con el DSN sano queda un solo reloj, los 5 s del `busy_timeout`. Un reclamo lo agotaría sólo si A tardara más de 4,7 s en confirmar después de la ventana, y ya no hay cola sin orden: A suelta el lock una sola vez y cada reclamo es una sentencia corta.
+
+**Lo que queda afuera.** `TestX2ElDSNAbreLasTransaccionesComoEscritoras` y el valor 5000 siguen como candidatos a cabo, sin número.
+
 **2026-09-30 · A142 CERRADO — LA PRUEBA DE LOS DOS ESCRITORES MEDÍA LA DISPONIBILIDAD, IGUAL QUE LA DEL LEDGER EN A134; AHORA EL ORDEN LO FIJA LA PRUEBA.**
 
 `TestX1DosEscritoresConcurrentesNoSeMatan` nació con el #425 el 2026-09-09 y cayó cuatro veces, todas en `test-cross (windows-latest)` y siempre con `database is locked (5) (SQLITE_BUSY)`:
@@ -798,7 +826,7 @@ Los dos sabotajes pisan el mismo literal del DSN que el de `TestSinArranqueElLed
 - `TestClaimWorkUnitConcurrentNoDoubleClaim` tiene el patrón que tenía X1: ocho goroutines en bucle contra el lock, y cualquier error la pone en rojo. El 2026-09-21, en el primer intento de la corrida 35609040205 (`fix/embebedor-tras-ingest`), siete de los ocho reclamos volvieron con `database is locked (5)` y la prueba tardó 39 s. Se relanzó y pasó, así que no figura como fallida. La prueba existe desde julio y el recuento empieza el 2026-09-08: lo de antes no se miró.
 - `TestX2ElDSNAbreLasTransaccionesComoEscritoras` cayó en la misma corrida de `main` que X1 (35638073981), pero por otra cosa: al limpiar su carpeta temporal, Windows no pudo borrar `memory.db` porque seguía abierta. Cuando vence su espera de 1,5 s, X2 vuelve sin esperar a su goroutine, y lo probable es que esa conexión siguiera viva al limpiar. Es inferido: no se midió.
 
-El valor 5000 sin fijar y estas dos vecinas quedan propuestos como cabos nuevos, sin número hasta que se decida.
+El valor 5000 sin fijar y estas dos vecinas quedan propuestos como cabos nuevos, sin número hasta que se decida. La del reclamo se cerró después como A143.
 
 **Lo que no cambia.** El alta no reintenta ante SQLITE_BUSY: si dos escritores reales compitieran más de 5 s por el lock, `SaveObservationTyped` devolvería el error, igual que antes de este cambio. Qué pasa después depende del llamador: la captura de commits, por ejemplo, lo toma como transitorio y lo reintenta en la corrida siguiente (`cmd/musubi/capture.go`).
 
@@ -4456,7 +4484,7 @@ cuatro eran pruebas que pasaban por el motivo equivocado, y sólo el sabotaje lo
    (A21 «habría que tocar el bundle», A13 «verificar contra el relay», A28 «no se puede sin
    instalar un servidor»). Antes de dar por bueno un «no se hizo porque X», verificá X.
 6. **El número es la identidad: uno solo por cosa, y para siempre.** Un número nuevo va por encima
-   del máximo en uso (hoy **A142** y **B21**) y NO se recicla uno libre: `A6`-`A9`, `A15` y `A16`
+   del máximo en uso (hoy **A143** y **B21**) y NO se recicla uno libre: `A6`-`A9`, `A15` y `A16`
    nunca se usaron, y estrenarlos ahora haría que un lector con el archivo viejo en la cabeza lea
    otra cosa. Si un cabo se convierte en otro —de la tabla 1 a la 2, o al revés— la fila nueva dice
    **«(era A33)»** y la vieja se borra: sin esa marca, cada cita del número anterior apunta a la
