@@ -84,8 +84,15 @@ fi
 
 # Todo lo que se compara sale de leer JSON, y eso lo hace python3. Sin él, cada chequeo devolvería
 # vacío y el vacío se leería como «no hay nada mal». Se corta acá, con el nombre de lo que falta.
-if ! command -v python3 >/dev/null 2>&1; then
-  printf 'falta python3 en esta máquina: es lo que lee las respuestas de las APIs.\n' >&2
+#
+# SE LO HACE CORRER, NO ALCANZA CON ENCONTRARLO. En Windows, `command -v python3` encuentra el alias
+# de la Microsoft Store (`WindowsApps/python3`), que no es un python: imprime cómo instalarlo y sale
+# con 49. Medido el 2026-10-01 en davantis-1: la guarda pasaba, cada lectura de JSON volvía vacía y
+# el informe salía lleno de ✘ falsos contra un servidor sano. Comillas dobles a propósito: esto no
+# lee JSON, y el barrido de las lecturas busca `python3 -c '` para mirar dónde cierra cada una.
+if ! python3 -c "import json" >/dev/null 2>&1; then
+  printf 'python3 no corre en esta máquina: es lo que lee las respuestas de las APIs.\n' >&2
+  printf 'Puede faltar, o ser el alias de la Microsoft Store, que se encuentra pero no ejecuta.\n' >&2
   printf 'Instalalo (apt install python3) o corré el script en el servidor.\n' >&2
   exit 2
 fi
