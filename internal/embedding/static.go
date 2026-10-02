@@ -62,9 +62,9 @@ var deserializarTokenizer = loadTokenizerBytes
 // arma el mapa, se escribe el índice y se tokeniza con el recién escrito.
 //
 // EL MAPA QUEDA SÓLO CUANDO NO HAY ÍNDICE QUE USAR, y si eso se sabe antes de armarlo, el índice ni
-// se arma: armarlo es lo caro. Un índice que quedó escrito se usa aunque falle algo después, y uno
-// que otro proceso dejó al día mientras éste armaba el mapa, también. Cada caso, fila por fila, lo
-// fija TestConQueTokenizaElCompleto.
+// se arma: armarlo es lo caro. Un índice que quedó escrito y se puede leer se usa aunque después
+// falle la identidad, y uno que otro proceso dejó al día mientras éste armaba el mapa, también.
+// Cada caso, fila por fila, lo fija TestConQueTokenizaElCompleto.
 func NewStaticProvider(dir string) (*StaticProvider, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("static_path vacío: apuntá embedding.static_path a un directorio con model.safetensors + tokenizer.json")

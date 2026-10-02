@@ -337,10 +337,14 @@ func TestIndiceTokenizerIgualAlMapa(t *testing.T) {
 // referencia fija.
 //
 // Y después cada pieza del vocab, escrita como texto, por los dos caminos. Los textos de arriba
-// casi no tienen piezas largas: con un índice que no miraba más allá de 16 runas, 1.125 piezas
-// reales se tokenizaban distinto y las tres comparaciones de arriba seguían verdes. El barrido
-// sólo ve un índice que corta antes de maxRunes si alguna pieza de maxRunes runas se tokeniza
-// como sí misma, así que eso también se exige: en POTION, la más larga lo hace.
+// casi no tienen piezas largas: con un índice que no miraba más allá de 16 runas, este barrido
+// cuenta 1.196 piezas que se tokenizan distinto, y las tres comparaciones de arriba seguían
+// verdes. El barrido sólo ve un índice que corta antes de maxRunes si alguna pieza de maxRunes
+// runas se tokeniza como sí misma, así que eso también se exige: en POTION, la más larga lo hace.
+//
+// Las tres primeras directivas caen antes del barrido, en la referencia o en la cabecera, y siguen
+// en rojo aunque el barrido no compare nada. La que lo vigila es la cuarta: con el barrido ahuecado
+// queda verde.
 //
 // Sabotaje: cortar la búsqueda un paso antes de que el rango quede vacío.
 // arnes: archivo="internal/embedding/indice_tokenizer.go"
@@ -359,6 +363,12 @@ func TestIndiceTokenizerIgualAlMapa(t *testing.T) {
 // arnes: env="MUSUBI_SPM_TESTDATA"
 // arnes: de="u.unkScore = math.Float64frombits(l.u64())"
 // arnes: a="u.unkScore = math.Float64frombits(l.u64()) + 1"
+//
+// Sabotaje: que el índice no busque piezas de más de 185 runas, con la cabecera intacta.
+// arnes: archivo="internal/embedding/indice_tokenizer.go"
+// arnes: env="MUSUBI_SPM_TESTDATA"
+// arnes: de="for l := 1; l <= len(runes); l++ {"
+// arnes: a="for l := 1; l <= len(runes) && l <= 185; l++ {"
 func TestIndiceTokenizerBitExacto(t *testing.T) {
 	dir := os.Getenv("MUSUBI_SPM_TESTDATA")
 	if dir == "" {
@@ -433,6 +443,8 @@ func TestIndiceTokenizerBitExacto(t *testing.T) {
 			propiaMasLarga = max(propiaMasLarga, utf8.RuneCountInString(p))
 		}
 	}
+	t.Logf("barrido: %d piezas del vocab, %d distintas, la más larga que se tokeniza como sí misma mide %d runas",
+		len(piezas), distintas, propiaMasLarga)
 	if distintas > 0 {
 		t.Errorf("%d de %d piezas se tokenizan distinto por el índice", distintas, len(piezas))
 	}

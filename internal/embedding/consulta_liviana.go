@@ -217,10 +217,16 @@ func indiceAlDia(dir, checksum string, tabla, tok huellaArchivo) *unigram {
 // es: no se escribe nada. Tomarlas DESPUÉS sería peor: pegaría la huella del archivo nuevo al
 // contenido viejo, y la consulta liviana lo aceptaría.
 //
-// EL ORDEN ES PARTE DEL CONTRATO: primero el índice, después la identidad que lo nombra. Si el
-// índice no se pudo reemplazar, o el recién escrito no se puede leer, la identidad NO se escribe; y
-// si la identidad falla, la vieja no nombra al índice nuevo. En todos los casos cargarSidecars
-// rechaza, que es lo seguro.
+// EL ORDEN: primero el índice, después la identidad que lo nombra. Si el índice no se pudo
+// reemplazar, o el recién escrito no se puede leer, la identidad NO se escribe. Pero la identidad
+// VIEJA que queda en disco PUEDE nombrar al índice nuevo: sus bytes salen sólo de tokenizer.json,
+// así que si sólo cambió la tabla, el índice nuevo es byte a byte el viejo, y tamaño y crc32c
+// coinciden. Lo que impide usar algo que no corresponde no es el orden, sino tres controles:
+//   - las huellas de tabla y tokenizer, en cargarSidecars;
+//   - el checksum de contenido, en indiceAlDia;
+//   - leerIndiceTokenizer, en indiceAlDia y en NewConsultaLiviana.
+//
+// cargarSidecars no mira el formato del índice. Por eso esa lectura no se puede sacar.
 //
 // Devuelve el tokenizer del índice que queda vigente, para que el completo tokenice con él y suelte
 // el mapa: si ya estaba al día, ése (pudo escribirlo otro proceso después de que el completo
@@ -265,11 +271,12 @@ func escribirSidecarsSiHaceFalta(dir string, u *unigram, checksum string, tabla,
 	id := identidadDeTabla{Formato: formatoIdentidad, Checksum: checksum, Tabla: tabla, Tokenizer: tok}
 	id.Indice.Tamano = int64(len(idx))
 	id.Indice.CRC32C = crc32.Checksum(idx, castagnoli)
-	crudo, err := json.MarshalIndent(id, "", "  ")
-	if err != nil {
-		return escrito
-	}
-	if _, err := escribirAtomico(filepath.Join(dir, archivoIdentidad), func() ([]byte, error) { return append(crudo, '\n'), nil }); err != nil {
+	// Se serializa ADENTRO de escribirAtomico para que, si alguna vez falla, salga por el mismo aviso
+	// que un rename rechazado. Hoy no puede fallar: la identidad son enteros y strings.
+	if _, err := escribirAtomico(filepath.Join(dir, archivoIdentidad), func() ([]byte, error) {
+		crudo, err := json.MarshalIndent(id, "", "  ")
+		return append(crudo, '\n'), err
+	}); err != nil {
 		avisarSinAtajo(dir, "no se pudo escribir la identidad de la tabla", err)
 		return escrito // el índice quedó escrito: la identidad que falta no se lo saca al completo
 	}

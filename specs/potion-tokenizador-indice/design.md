@@ -76,14 +76,16 @@ if tok == nil {
 - **Se gana:**
   - el arranque con el índice al día no paga `loadTokenizerBytes` (~1 s);
   - la tokenización del completo pasa del mapa (~80 ms por 1.000 caracteres) a la búsqueda binaria;
-  - el mapa de 500.353 piezas deja de vivir en el proceso.
+  - con un índice que usar, el mapa de 500.353 piezas deja de vivir en el proceso. Sin índice (los
+    casos de R3) el mapa queda, como hoy.
 - **Se cede:**
   - el completo confía en un índice escrito por otro binario. Lo ata la guarda de D7 y lo
     respaldan la identidad (checksum de contenido + huellas) y el crc del índice;
   - una carpeta sin escritura se queda con el mapa lento, como hoy;
   - el primer arranque arma el mapa, escribe el índice y lo vuelve a leer: unos ms más que hoy,
     sobre un camino que ya cuesta ~2 s.
-- **Riesgo de equivalencia:** desde ahora TODOS los vectores pasan por el índice. Se mitiga
+- **Riesgo de equivalencia:** desde ahora, siempre que haya un índice que usar, los vectores pasan
+  por él: en el caso común, todos. Se mitiga
   comparando ids de los dos caminos sobre la memoria real entera (2.907 notas, 8,3 M de
   caracteres; medición privada, no se commitea) y con pruebas de identidad en la suite y en
   `recall-gate`.

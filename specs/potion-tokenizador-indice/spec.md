@@ -10,8 +10,9 @@ status: draft
 «Los sidecars están al día» quiere decir que se pueden USAR (D1 del diseño): `cargarSidecars` los
 acepta, la identidad lleva el checksum de CONTENIDO recién calculado y las huellas de tabla y
 tokenizer que se tomaron ANTES de leer, y además `leerIndiceTokenizer` lee el índice. Antes de este
-cambio el índice no se leía: se miraba sólo su cabecera, y uno con la cabecera bien y el interior
-roto se daba por al día y no se reescribía nunca.
+cambio el índice no se leía entero: `cargarSidecars` ya rechazaba uno cuyo tamaño o crc32c no
+coincidiera con la identidad, y uno de otro formato, pero uno ENTERO (tamaño y crc32c al día) con
+la cabecera vigente y un interior que no se puede leer se daba por al día y no se reescribía nunca.
 
 ## Requisitos
 
@@ -39,7 +40,10 @@ roto se daba por al día y no se reescribía nunca.
     - los 50 textos de `textosDePrueba`;
     - las 14 frases del charsmap;
     - la referencia de `testdata/spm_potion_ids.json`;
-    - texto real largo.
+    - texto real largo;
+    - cada una de las 500.353 piezas del vocabulario de POTION, escrita como texto.
+  - La cabecera del índice DEBE ser la del mapa, campo por campo: `maxRunes`, `unkID`, `unkScore`
+    y `repl`.
 - **R5** — El `model_id` NO DEBE cambiar: la misma derivación, con el mismo checksum de los bytes.
 - **R6** — Se DEBEN conservar las garantías de hoy:
   - los temporales huérfanos se limpian en cada construcción, también cuando los sidecars están

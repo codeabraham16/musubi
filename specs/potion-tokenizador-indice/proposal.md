@@ -73,7 +73,7 @@ Mover la decisión «¿los sidecars están al día?», que hoy vive escondida de
 
 | Riesgo | Mitigación |
 |--------|------------|
-| El índice y el mapa difieren en algún texto que las pruebas no cubren, y ahora TODOS los vectores pasan por el índice | Comparar ids de los dos caminos sobre texto real largo y Unicode difícil (el corpus del charsmap y el fixture real), además de los 50 textos de hoy |
+| El índice y el mapa difieren en algún texto que las pruebas no cubren, y ahora los vectores pasan por el índice siempre que haya uno que usar | Comparar ids de los dos caminos sobre texto real largo y Unicode difícil (el corpus del charsmap y el fixture real), además de los 50 textos de hoy |
 | Un índice escrito por un binario anterior, con otra derivación del vocab (unkScore, maxRunes, ids), y el mismo `formatoIndice`: el completo heredaría la derivación vieja | Guarda que fija la huella de los bytes del índice armado desde el asset real junto al `formatoIndice`: si el índice cambia sin subir el formato, rojo |
 | Tabla reescrita durante la carga | Se conserva la regla actual: las huellas se toman ANTES de leer y el índice sólo se acepta si checksum de contenido + huellas coinciden con la identidad |
 | Directorio sin escritura: no hay índice | Se queda con el mapa (el comportamiento de hoy); no se paga armar el índice en memoria en cada arranque |
