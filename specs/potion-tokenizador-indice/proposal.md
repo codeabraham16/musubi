@@ -28,7 +28,7 @@ ignora.
     cargada (mismo checksum de contenido y mismas huellas), `NewStaticProvider` toma el tokenizer
     del índice y no deserializa el vocabulario de `tokenizer.json`.
   - Si los sidecars no estaban al día y se acaban de escribir, el completo pasa a usar el índice
-    recién escrito, y el mapa queda para el recolector.
+    recién escrito, si se puede leer, y el mapa queda para el recolector.
   - Pruebas de identidad, escritas primero:
     - los ids del índice contra los del mapa sobre texto real largo;
     - el vector del completo antes y después, bit a bit;
@@ -52,8 +52,10 @@ Mover la decisión «¿los sidecars están al día?», que hoy vive escondida de
 
 1. Con el índice al día, el completo lo usa directamente.
 2. Si no está al día, se arma el mapa como hoy, se escribe el índice y el completo usa el recién
-   escrito.
-3. Si no se pudo escribir (carpeta sin permiso de escritura, disco lleno), queda el mapa, como hoy.
+   escrito, si se puede leer.
+3. Si al final no queda índice que usar, queda el mapa, como hoy. Los casos están en R3 de la spec:
+   carpeta sin escritura, tabla que cambió durante la carga, huellas que no se pudieron tomar,
+   índice que no se pudo guardar (disco lleno) o que no se puede leer, y tokenizer WordPiece.
 
 ## Impacto
 

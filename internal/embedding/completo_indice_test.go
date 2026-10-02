@@ -14,7 +14,8 @@ import (
 )
 
 // completo_indice_test.go fija que el proveedor COMPLETO tokeniza con tokenizer.idx: lo toma del
-// disco cuando está al día, y si no, usa el que acaba de escribir. Las comparaciones bit a bit son
+// disco cuando está al día, y si no, usa el que acaba de escribir; si no queda índice que usar,
+// sigue con el mapa (TestConQueTokenizaElCompleto, fila por fila). Las comparaciones bit a bit son
 // contra el mapa (conElMapa), que es como tokenizaba antes y la referencia de lo que tiene que dar.
 
 // contarDeserializaciones envuelve la costura deserializarTokenizer y cuenta cuántas veces se

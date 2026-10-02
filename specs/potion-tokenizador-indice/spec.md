@@ -21,7 +21,7 @@ la cabecera vigente y un interior que no se puede leer se daba por al día y no 
   - NO DEBE deserializar el vocabulario de `tokenizer.json`. Los bytes los sigue leyendo, porque
     los necesita para el checksum.
 - **R2** — Cuando los sidecars no estaban al día y `NewStaticProvider` los escribe, DEBE tokenizar
-  con el índice que acaba de escribir.
+  con el índice que acaba de escribir, si se puede leer. Si no, rige R3.
 - **R3** — Si al terminar no queda un índice que usar, `NewStaticProvider` DEBE tokenizar con el
   mapa, como hoy. Los casos, y si se llega a armar el índice:
   - la carpeta no admite escritura, la tabla cambió durante la carga o no se pudieron tomar las

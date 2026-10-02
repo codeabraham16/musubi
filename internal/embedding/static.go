@@ -59,7 +59,7 @@ var deserializarTokenizer = loadTokenizerBytes
 // lee para el checksum pero NO se deserializa: sobre POTION eso es ~1 s de armar un mapa de
 // 500.353 piezas que después tokeniza ~55 veces más lento que el índice sobre la memoria real (4
 // veces en textos de menos de 100 runas). Si el índice falta, está vencido o no se puede leer, se
-// arma el mapa, se escribe el índice y se tokeniza con el recién escrito.
+// arma el mapa, se escribe el índice y se tokeniza con el recién escrito, si se puede leer.
 //
 // EL MAPA QUEDA SÓLO CUANDO NO HAY ÍNDICE QUE USAR, y si eso se sabe antes de armarlo, el índice ni
 // se arma: armarlo es lo caro. Un índice que quedó escrito y se puede leer se usa aunque después
