@@ -138,7 +138,7 @@ la cabecera vigente y un interior que no se puede leer se daba por al día y no 
 ### Escenario: índice de otro formato
 
 - **Given** un `tokenizer.idx` con otro `formatoIndice`
-- **When** se construye `NewStaticProvider`
+- **When** se construye `NewStaticProvider` en una carpeta con permiso de escritura
 - **Then** el índice se trata como ausente: se reescribe, y el proveedor usa el reescrito.
 
 ### Escenario: la derivación del índice cambia sin subir el formato

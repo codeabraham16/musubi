@@ -330,8 +330,8 @@ func TestIndiceTokenizerIgualAlMapa(t *testing.T) {
 // contra la referencia clavada en testdata/spm_potion_ids.json (la misma de TestUnigramRealBitExact)
 // y contra el mapa, sobre los 50 textos y sobre un texto real largo. Corre en recall-gate.
 //
-// El texto largo existe porque el completo tokeniza con el índice TODO lo que embebe, notas de
-// miles de caracteres incluidas, y los 50 textos son casi todos frases. Son los .go de este
+// El texto largo existe porque, con un índice que usar, el completo tokeniza con él TODO lo que
+// embebe, notas de miles de caracteres incluidas, y los 50 textos son casi todos frases. Son los .go de este
 // paquete: comentarios en español con tildes, comillas, rayas y código, recortados a 20.000 runas.
 // Cambian con el código, y no importa: se comparan los dos caminos entre sí, no contra una
 // referencia fija.

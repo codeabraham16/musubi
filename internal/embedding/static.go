@@ -103,8 +103,9 @@ func NewStaticProvider(dir string) (*StaticProvider, error) {
 		}
 		// El índice del tokenizer y la identidad (consulta_liviana.go). Se escriben acá porque éste
 		// es el único momento en que el tokenizer ya está armado y el checksum ya está calculado:
-		// hacerlo en otro lado costaría volver a leer los dos archivos. Con el índice escrito, el
-		// completo tokeniza con él desde ya, y el mapa queda para el recolector.
+		// hacerlo en otro lado costaría volver a leer los dos archivos. Si el índice queda escrito y
+		// se puede leer, el completo tokeniza con él desde ya, y el mapa queda para el recolector; si
+		// no, sigue con el mapa.
 		if u, ok := tok.(*unigram); ok && errTabla == nil && errTok == nil {
 			if escrito := escribirSidecarsSiHaceFalta(dir, u, checksum, huellaTabla, huellaTok); escrito != nil {
 				tok = escrito
