@@ -222,7 +222,8 @@ func indiceAlDia(dir, checksum string, tabla, tok huellaArchivo) *unigram {
 // VIEJA que queda en disco PUEDE nombrar al índice nuevo: sus bytes salen sólo de tokenizer.json,
 // así que si sólo cambió la tabla, el índice nuevo es byte a byte el viejo, y tamaño y crc32c
 // coinciden. Lo que impide usar algo que no corresponde no es el orden, sino tres controles:
-//   - las huellas de tabla y tokenizer, en cargarSidecars;
+//   - las huellas de tabla y tokenizer: cargarSidecars las compara con los archivos de ahora, e
+//     indiceAlDia, con las que se tomaron antes de leer;
 //   - el checksum de contenido, en indiceAlDia;
 //   - leerIndiceTokenizer, en indiceAlDia y en NewConsultaLiviana.
 //
