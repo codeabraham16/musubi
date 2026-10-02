@@ -61,12 +61,15 @@ de hoy, o contra su sabotaje, antes de que el cambio la ponga verde.
   visto ROJO
 - [x] V4 — Medición después: M3 con el binario nuevo, ya por `StaticProvider`, y M4 con el binario
   nuevo. Comparar contra la base: mediana **0,56 s** (0,51–0,67) y VmHWM **~533 MiB**
-- [ ] V5 — Revisión adversaria (skill `adversarial-review`)
+- [x] V5 — Revisión adversaria (skill `adversarial-review`). Tres vueltas: 34832493 (no_real 5/5),
+  3b01acf3 (no_real 3-2) y bdaa5975 (no_real 3-2, RECHAZADO POR AGOTAMIENTO, sólo por textos:
+  código y pruebas sin objeciones). El dueño eligió arreglar los textos y una revisión corta:
+  25c808c3 → no_real (una copia más, con otra redacción) → 2fe05d57 → **real**, determinista.
 
 ## Docs / cierre
 - [x] D1 — `CHANGELOG.md` `[Unreleased]`: el arranque del embebedor y la tokenización más rápidos,
   sin cambio de vectores
-- [ ] D2 — Borrar `internal/embedding/zz_medir_tmp_test.go` (no se commitea)
+- [x] D2 — Borrar `internal/embedding/zz_medir_tmp_test.go` (no se commitea)
 - [ ] D3 — Preguntarle al usuario antes del push y del PR
 
 ## Forecast de review
