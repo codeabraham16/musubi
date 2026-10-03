@@ -67,7 +67,7 @@
 <path class="cur" d="M93,244 H103" stroke="#818CF8" stroke-width="2.4" stroke-linecap="round"/>
 <text x="138" y="230" font-size="21" font-weight="600" fill="#E9ECF7">Your agent</text>
 <text x="138" y="256" font-size="16" fill="#98A0C0">Claude Code · Cursor</text>
-<text class="mono" x="138" y="282" font-size="13" fill="#98A0C0" fill-opacity=".8">hooks + MCP</text>
+<text class="mono" x="138" y="282" font-size="13" fill="#98A0C0" fill-opacity=".8">MCP · hooks (Claude)</text>
 <rect class="recv" x="48" y="184" width="300" height="128" rx="8" fill="#6366F1" fill-opacity=".10" stroke="#818CF8" stroke-width="1.5"/>
 </g>
 <g class="card2"><rect x="844" y="194" width="316" height="144" rx="16" fill="#03050C" fill-opacity="0.06"/><rect x="847" y="190" width="310" height="138" rx="13" fill="#03050C" fill-opacity="0.09"/><rect x="849.5" y="187.5" width="305.0" height="133.0" rx="10.5" fill="#03050C" fill-opacity="0.13"/><rect x="851" y="185" width="302" height="130" rx="9" fill="#03050C" fill-opacity="0.2"/><rect x="852" y="184" width="300" height="128" rx="8" fill="url(#card)" stroke="#2A335C"/><rect x="862" y="184.5" width="280" height="1" fill="url(#sheen)"/>

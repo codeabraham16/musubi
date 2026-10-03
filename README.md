@@ -35,7 +35,7 @@ optimización de tokens, el ranking y la resolución de skills son deterministas
 > - El ahorro de tokens viene con la instalación: la conversación se resume a los 250k ([#694](https://github.com/codeabraham16/musubi/pull/694), [#696](https://github.com/codeabraham16/musubi/pull/696))
 > - La búsqueda tolera el tipeo ([#713](https://github.com/codeabraham16/musubi/pull/713))
 > - El turno trae lo propio primero, y lo de otros proyectos con tope ([#714](https://github.com/codeabraham16/musubi/pull/714))
-> - El sync viaja comprimido en los dos sentidos: lo que sube pesa el 55 % y lo que baja, el 39 % ([#704](https://github.com/codeabraham16/musubi/pull/704), [#705](https://github.com/codeabraham16/musubi/pull/705))
+> - El sync viaja comprimido en los dos sentidos: con notas reales, lo que sube pesa el 55 % y lo que baja, el 39 % ([#704](https://github.com/codeabraham16/musubi/pull/704), [#705](https://github.com/codeabraham16/musubi/pull/705))
 
 <!-- sin-publicar:fin -->
 
@@ -264,7 +264,7 @@ go build -o musubi ./cmd/musubi
 
 | Agente | Config MCP | Hooks |
 |--------|-----------|-------|
-| `claude` (default) | `.mcp.json` | SessionStart · UserPromptSubmit · PreToolUse (dos matchers: Read, y edición) · Stop |
+| `claude` (default) | `.mcp.json` | SessionStart · UserPromptSubmit · PreToolUse (dos matchers: Read, y edición) · Stop · PreCompact |
 | `cursor` | `.cursor/mcp.json` | — (Cursor no tiene sistema de hooks) |
 
 ```bash

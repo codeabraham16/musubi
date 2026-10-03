@@ -35,7 +35,7 @@ token optimization, ranking and skill resolution are deterministic and offline.
 > - Token savings ship with the install: the conversation is summarized at 250k ([#694](https://github.com/codeabraham16/musubi/pull/694), [#696](https://github.com/codeabraham16/musubi/pull/696))
 > - Search tolerates typos ([#713](https://github.com/codeabraham16/musubi/pull/713))
 > - Each turn brings your own project's notes first, and other projects' notes with a cap ([#714](https://github.com/codeabraham16/musubi/pull/714))
-> - Sync travels compressed both ways: what goes up weighs 55 % and what comes down, 39 % ([#704](https://github.com/codeabraham16/musubi/pull/704), [#705](https://github.com/codeabraham16/musubi/pull/705))
+> - Sync travels compressed both ways: on real notes, what goes up weighs 55 % and what comes down, 39 % ([#704](https://github.com/codeabraham16/musubi/pull/704), [#705](https://github.com/codeabraham16/musubi/pull/705))
 
 <!-- sin-publicar:fin -->
 
@@ -258,7 +258,7 @@ go build -o musubi ./cmd/musubi
 
 | Agent | MCP config | Hooks |
 |--------|-----------|-------|
-| `claude` (default) | `.mcp.json` | SessionStart · UserPromptSubmit · PreToolUse (two matchers: Read, and edits) · Stop |
+| `claude` (default) | `.mcp.json` | SessionStart · UserPromptSubmit · PreToolUse (two matchers: Read, and edits) · Stop · PreCompact |
 | `cursor` | `.cursor/mcp.json` | — (Cursor has no hook system) |
 
 ```bash

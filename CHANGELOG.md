@@ -30,10 +30,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   - `CONTRIBUTING.md` y `CONTRIBUTING.en.md` suman al paso de publicar un release el Destacado, el
     comando de «Novedades» y lo que hace solo el workflow.
 - **La portada del repo vuelve a ser la de Musubi: banner animado, badges que se calculan solos y
-  un diagrama con los cinco hooks.** El README seguía con el banner de la v0.50.0 (un pie escrito a
-  mano: «19 640 LOC · 27 tools · 0 panics», cuando hoy son 80 herramientas MCP), con badges fijos
-  (`v0.50.0`, `Go 1.26`) y con un diagrama de Arquitectura en la paleta vieja que dibujaba tres de
-  los cinco hooks.
+  un diagrama con los cinco hooks.** El README seguía con el banner de la v0.50.0 («v0.50.0» y
+  «GO 1.26» dibujados en la imagen, y un pie escrito a mano: «19 640 LOC · 27 tools · 0 panics»,
+  cuando hoy son 80 herramientas MCP), con los badges de Go, licencia y changelog como texto fijo y
+  con un diagrama de Arquitectura en la paleta vieja que dibujaba tres de los cinco hooks.
   - `.github/assets/hero.svg` (y `hero.en.svg`, el de `README.en.md`) es un SVG de 1200×460 en la
     paleta del cuerpo: un nudo de vidrio en el centro que une a tu agente con tu disco. Lo que el
     agente guarda cruza el nudo hasta SQLite y vuelve por abajo como «solo lo relevante, solo lo

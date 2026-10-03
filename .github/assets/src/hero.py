@@ -31,7 +31,7 @@ TXT = {
     "es": dict(
         lang="es",
         tag="Memoria persistente para agentes de IA",
-        agent="Tu agente", agent_sub="Claude Code · Cursor", agent_mono="hooks + MCP",
+        agent="Tu agente", agent_sub="Claude Code · Cursor", agent_mono="MCP · hooks (Claude)",
         disk="Tu disco", disk_sub="SQLite local, en .musubi/", disk_mono="nada externo obligatorio",
         save="guarda lo que aprende", persist="persiste",
         back="solo lo relevante, solo lo nuevo",
@@ -42,7 +42,7 @@ TXT = {
     "en": dict(
         lang="en",
         tag="Persistent memory for AI agents",
-        agent="Your agent", agent_sub="Claude Code · Cursor", agent_mono="hooks + MCP",
+        agent="Your agent", agent_sub="Claude Code · Cursor", agent_mono="MCP · hooks (Claude)",
         disk="Your disk", disk_sub="Local SQLite, in .musubi/", disk_mono="nothing external required",
         save="saves what it learns", persist="persists",
         back="only what's relevant, only what's new",
