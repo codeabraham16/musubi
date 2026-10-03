@@ -433,9 +433,15 @@ jobs:
         # sin cargar la tabla: el tokenizer sale de tokenizer.idx y las filas se leen con ReadAt.
         # Tiene que dar EXACTAMENTE el vector de StaticProvider; si difiere, la consulta se compara
         # contra vectores incompatibles y el ranking se corrompe sin un error. La tabla de juguete
-        # de `go test ./...` no tiene el charsmap real (Precompiled), y por eso estas tres corren
-        # aca, sobre POTION: el vector contra StaticProvider, los ids del indice contra la
-        # referencia de testdata, y el embebedor de consulta contra el del daemon (resolveEmbedder).
+        # de `go test ./...` no tiene el charsmap real (Precompiled), y por eso estas cuatro corren
+        # aca, sobre POTION: el vector liviano y el de StaticProvider contra el del mapa de
+        # tokenizer.json, los ids del indice contra la referencia de testdata y contra el mapa en
+        # cada pieza del vocabulario, el embebedor de consulta contra el del daemon
+        # (resolveEmbedder), y los bytes del indice contra su formato.
+        #
+        # La ultima existe porque StaticProvider tambien tokeniza con tokenizer.idx, y confia en un
+        # indice que pudo escribir OTRO binario: si lo que se escribe cambia sin que suba
+        # formatoIndice, los indices viejos en disco siguen valiendo con la derivacion vieja.
         #
         # El `grep` con espacio final es por lo mismo que los de arriba: `--- SKIP` no es
         # `--- PASS`, y el espacio ancla el nombre contra el `(1.23s)`.
@@ -444,7 +450,8 @@ jobs:
           go test ./internal/embedding/ -run TestConsultaLivianaEsBitExactaConLaTablaReal -count=1 -timeout "$RACE_TIMEOUT" -v | tee consulta-liviana.txt
           go test ./internal/embedding/ -run TestIndiceTokenizerBitExacto -count=1 -timeout "$RACE_TIMEOUT" -v | tee -a consulta-liviana.txt
           go test ./cmd/musubi/ -run TestEmbebedorDeConsultaIgualAlDelDaemonConLaTablaReal -count=1 -timeout "$RACE_TIMEOUT" -v | tee -a consulta-liviana.txt
-          for t in TestConsultaLivianaEsBitExactaConLaTablaReal TestIndiceTokenizerBitExacto TestEmbebedorDeConsultaIgualAlDelDaemonConLaTablaReal; do
+          go test ./internal/embedding/ -run TestElIndiceRealEstaAtadoASuFormato -count=1 -timeout "$RACE_TIMEOUT" -v | tee -a consulta-liviana.txt
+          for t in TestConsultaLivianaEsBitExactaConLaTablaReal TestIndiceTokenizerBitExacto TestEmbebedorDeConsultaIgualAlDelDaemonConLaTablaReal TestElIndiceRealEstaAtadoASuFormato; do
             grep -q -- "--- PASS: $t " consulta-liviana.txt || {
               echo "::error::el embebedor de consulta NO EJECUTO $t (se salteo, o el nombre ya no existe). Un verde de este job sin esa linea no ata el vector liviano al de StaticProvider."
               exit 1
