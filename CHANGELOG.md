@@ -949,6 +949,13 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   derivación cambia y el formato no sube, se pone roja. Corre en `recall-gate`.
 
 ### Fixed
+- **El verificador del despliegue corta si `python3` no corre, no sólo si falta.** En Windows,
+  `command -v python3` encuentra el alias de la Microsoft Store, que no ejecuta nada: imprime cómo
+  instalar Python y sale con 49. Medido el 2026-10-01 en davantis-1: la guarda pasaba, cada lectura
+  de JSON volvía vacía y el informe salía con ✘ contra un servidor sano. Ahora
+  `deploy/verificar-despliegue.sh` le hace correr un `import json` y, si falla, sale con 2 (SIN
+  VERIFICAR) antes de abrir una sola sección.
+
 - **Lo que baja del central ya no se olvida apenas llega.** Desde que la nota bajada guarda la fecha
   en que el central la recibió (#711), una de hace tres meses entraba con tres meses encima y sin un
   solo acceso, y el primer mantenimiento de un cliente nuevo la archivaba antes de que nadie la
