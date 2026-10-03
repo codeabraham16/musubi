@@ -40,7 +40,7 @@ jobs:
 
       # El cuerpo del release sale del CHANGELOG de ESTE tag (el checkout es del commit
       # taggeado), con el mismo comando que mantiene al día la sección «Novedades» de los
-      # README. Antes los 131 releases salieron con el cuerpo VACÍO: este job sólo pasaba
+      # README. Antes 130 de los 131 releases salieron con el cuerpo VACÍO: este job sólo pasaba
       # `tag_name`.
       #
       # `continue-on-error` va a propósito: si el generador falla, el release se crea igual,
