@@ -52,7 +52,10 @@ func TestReadmeToolCountMatchesRegistry(t *testing.T) {
 		if err != nil {
 			t.Fatalf("no se pudo leer %s: %v", doc.archivo, err)
 		}
-		re := regexp.MustCompile(`\*\*(\d+)\s+` + doc.palabra + `\*\*|(\d+)\s+` + doc.palabra)
+		// «<N> MCP tools» también cuenta: con el número exigido pegado a la palabra, el README
+		// inglés decía «27 MCP tools» en dos lugares (el diagrama y el árbol de paquetes) con el
+		// catálogo en 80, y esta guarda no lo veía.
+		re := regexp.MustCompile(`\*\*(\d+)\s+(?:MCP\s+)?` + doc.palabra + `\*\*|(\d+)\s+(?:MCP\s+)?` + doc.palabra)
 		matches := re.FindAllStringSubmatch(string(b), -1)
 		if len(matches) == 0 {
 			t.Errorf("%s no menciona el conteo de herramientas", doc.archivo)
