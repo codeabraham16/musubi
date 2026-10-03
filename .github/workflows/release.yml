@@ -32,10 +32,42 @@ jobs:
     needs: check-version
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.6'
+
+      # El cuerpo del release sale del CHANGELOG de ESTE tag (el checkout es del commit
+      # taggeado), con el mismo comando que mantiene al día la sección «Novedades» de los
+      # README. Antes los 131 releases salieron con el cuerpo VACÍO: este job sólo pasaba
+      # `tag_name`.
+      #
+      # `continue-on-error` va a propósito: si el generador falla, el release se crea igual,
+      # sin texto, como hasta ahora. Un CHANGELOG mal armado no puede dejar sin publicar los
+      # seis binarios. Y por eso `body_path` mira `outcome` (el resultado ANTES de
+      # `continue-on-error`) y no `conclusion`, que sería `success` aun con el paso roto: en
+      # ese caso `notas.md` queda a medio escribir y NO se debe publicar.
+      #
+      # El tag y el repo entran por `env` y no con `${{ }}` dentro del script: lo que se
+      # interpola ahí es código de shell, y el SAST lo marca.
+      - name: Notas desde el CHANGELOG
+        id: notas
+        continue-on-error: true
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: go run ./deploy/cmd/notas-release -version "$TAG" -repo "$REPO" > notas.md
+
+      # Con `body_path` vacío la acción lo toma como «no dado» (src/util.ts:57-68) y el
+      # release sale sin cuerpo. Los 6 jobs de `build` suben sus archivos con otra llamada que
+      # sólo trae `files:`: la acción conserva el cuerpo ya publicado (src/github.ts:694), así
+      # que no lo pisan.
       - name: Create release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           tag_name: ${{ github.ref_name }}
+          body_path: ${{ steps.notas.outcome == 'success' && 'notas.md' || '' }}
 
   build:
     needs: [check-version, create-release]

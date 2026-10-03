@@ -26,6 +26,32 @@ optimización de tokens, el ranking y la resolución de skills son deterministas
 ## Novedades
 
 <!-- novedades:inicio -->
+
+**[v0.141.0](https://github.com/codeabraham16/musubi/releases/tag/v0.141.0)** · 14 sep 2026
+
+- El grafo de código se mantiene al día solo, y el central lo recibe sin el push de cada tick
+- La normalización Unicode queda CLAVADA, porque el `model_id` no cubre el código que produce el vector
+- El arranque del embebedor estático, medido — y «mapear la tabla» solo lo deja PEOR
+- La taxonomía de topics no era el problema, y los dos dials de la cola de conflictos quedan mapeados
+
+… y 14 más en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.141.0/CHANGELOG.md#01410---2026-09-14)
+
+**[v0.140.0](https://github.com/codeabraham16/musubi/releases/tag/v0.140.0)** · 10 sep 2026
+
+- El cerebro central mantiene su propia memoria, y ahora se puede ver si lo hace
+- La banda de capver: el cerebro declara hasta dónde atrás atiende, y le contesta a la máquina que queda afuera
+- El escalón de SÓLO LECTURA: una base que este binario no puede migrar ahora se puede consultar
+- La base ahora declara qué binarios pueden LEERLA, y la guarda dejó de contestar lo mismo en dos situaciones distintas
+
+… y 31 más en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.140.0/CHANGELOG.md#01400---2026-09-10)
+
+**[v0.131.0](https://github.com/codeabraham16/musubi/releases/tag/v0.131.0)** · 3 sep 2026
+
+- Un miss del grafo dice POR QUÉ, en vez de callarse
+- `musubi_code_context` deja de explicar lo que no encontró
+- El índice declara de qué commit es
+- El grafo de código se OFRECE en vez de esperar a que lo llamen
+
 <!-- novedades:fin -->
 
 ---
