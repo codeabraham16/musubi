@@ -70,7 +70,8 @@ de hoy, o contra su sabotaje, antes de que el cambio la ponga verde.
 - [x] D1 — `CHANGELOG.md` `[Unreleased]`: el arranque del embebedor y la tokenización más rápidos,
   sin cambio de vectores
 - [x] D2 — Borrar `internal/embedding/zz_medir_tmp_test.go` (no se commitea)
-- [ ] D3 — Preguntarle al usuario antes del push y del PR
+- [x] D3 — Preguntarle al usuario antes del push y del PR. Aprobó subir y abrir el PR (#733)
+  y, aparte, unirlo: f6df12ac, el 2026-10-03
 
 ## Forecast de review
 - Líneas estimadas: ~150 de código y ~350 de pruebas, más comentarios.
