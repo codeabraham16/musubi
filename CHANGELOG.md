@@ -8,6 +8,50 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Las notas de cada release salen solas del CHANGELOG, y el README cuenta lo último que pasó.**
+  130 de las 131 releases publicadas tienen el cuerpo vacío: el job `create-release` de
+  `release.yml` sólo le pasaba `tag_name` a la acción. Lo que faltaba ya estaba escrito, en este
+  archivo; ahora baja solo.
+  - `deploy/cmd/notas-release` (sólo stdlib, sin red) lee el CHANGELOG. `-version X.Y.Z` imprime el
+    cuerpo de la release (el `### Destacado` de esa versión, los titulares de cada grupo con su
+    «… y N más» y el enlace a su sección) y `-readme` reescribe el bloque «Novedades» de los dos
+    README. El workflow lo corre con `continue-on-error`: si el generador falla, la release se
+    crea igual, sin texto, como hasta hoy, y los binarios se suben igual. Los jobs de `build`
+    suben sus archivos sin pisar el cuerpo ya publicado.
+  - `### Destacado` (español) y `### Highlights` (inglés) son grupos nuevos de cada versión,
+    escritos a mano por quien corta el release: tres o cuatro oraciones llanas, en lugar de los
+    titulares derivados del texto, que son notas de ingeniería con jerga. Van primero y completos
+    y no cuentan como un grupo más. Están escritos para v0.141.0, v0.140.0 y v0.131.0.
+  - «Novedades» en `README.md` y `README.en.md` muestra las tres versiones más nuevas entre
+    `<!-- novedades:inicio -->` y `<!-- novedades:fin -->` y no se edita a mano:
+    `TestReadmeNovedadesAlDia` falla si el bloque no coincide con lo que sale del CHANGELOG. El
+    bloque «Ya en `main`, todavía sin publicar» sí es a mano y lleva `base=X.Y.Z`:
+    `TestSinPublicarDeLosReadmeReales` lo canta cuando la foto queda vieja.
+  - `CONTRIBUTING.md` y `CONTRIBUTING.en.md` suman al paso de publicar un release el Destacado, el
+    comando de «Novedades» y lo que hace solo el workflow.
+- **La portada del repo vuelve a ser la de Musubi: banner animado, badges que se calculan solos y
+  un diagrama con los cinco hooks.** El README seguía con el banner de la v0.50.0 (un pie escrito a
+  mano: «19 640 LOC · 27 tools · 0 panics», cuando hoy son 80 herramientas MCP), con badges fijos
+  (`v0.50.0`, `Go 1.26`) y con un diagrama de Arquitectura en la paleta vieja que dibujaba tres de
+  los cinco hooks.
+  - `.github/assets/hero.svg` (y `hero.en.svg`, el de `README.en.md`) es un SVG de 1200×460 en la
+    paleta del cuerpo: un nudo de vidrio en el centro que une a tu agente con tu disco. Lo que el
+    agente guarda cruza el nudo hasta SQLite y vuelve por abajo como «solo lo relevante, solo lo
+    nuevo». GitHub sirve el SVG como imagen (corre CSS, no scripts), así que el movimiento es CSS
+    y respeta `prefers-reduced-motion`: con la preferencia puesta queda quieto, en el estado
+    final. No lleva ninguna cifra, para que no se pudra. Los dos SVG salen de
+    `.github/assets/src/hero.py` (`python .github/assets/src/hero.py`), que trae al lado la curva
+    del nudo y los contornos del sello; la salida es determinista, byte a byte.
+  - Los badges salen de shields.io y no se editan: el último release, el CI, la versión de Go leída
+    de `go.mod`, la licencia y los commits en `main` desde el último release.
+  - El diagrama muestra los cinco hooks que instala `musubi agente instalar` (`SessionStart`,
+    `UserPromptSubmit`, `PreToolUse`, `Stop` y `PreCompact`) y el texto deja de decir «cuatro».
+    La tabla «Por qué Musubi» pierde los emojis de adorno.
+- **La guarda de «cuántas herramientas hay» también lee «N MCP tools».**
+  `TestReadmeToolCountMatchesRegistry` sólo veía el número pegado a la palabra («80 tools»). El
+  README en inglés decía «27 MCP tools» en dos lugares (el diagrama y el árbol de paquetes) con el
+  catálogo en 80, y la guarda pasaba en verde. La expresión regular ahora admite `MCP` en el medio;
+  probada en rojo (dos fallos, uno por lugar) antes de corregir ambos.
 - **Después de compactar, Musubi devuelve la memoria que el resumen perdió.** Al compactar, Claude
   Code cambia la conversación por un resumen y dispara `SessionStart` con source `compact` y el
   mismo `session_id`. El delta de la sesión seguía diciendo que el agente tenía lo inyectado, así que
