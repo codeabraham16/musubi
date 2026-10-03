@@ -25,6 +25,20 @@ token optimization, ranking and skill resolution are deterministic and offline.
 
 ## What's new
 
+<!-- sin-publicar:inicio base=0.141.0 -->
+
+> **Already on `main`, not released yet** · snapshot of Oct 3, 2026 ·
+> [everything that changed since v0.141.0](https://github.com/codeabraham16/musubi/compare/v0.141.0...main)
+>
+> - `musubi agente instalar` installs Musubi as a plugin, active in every project ([#674](https://github.com/codeabraham16/musubi/pull/674))
+> - After compaction, Musubi brings back the memory the summary lost ([#718](https://github.com/codeabraham16/musubi/pull/718))
+> - Token savings ship with the install: the conversation is summarized at 250k ([#694](https://github.com/codeabraham16/musubi/pull/694), [#696](https://github.com/codeabraham16/musubi/pull/696))
+> - Search tolerates typos ([#713](https://github.com/codeabraham16/musubi/pull/713))
+> - Each turn brings your own project's notes first, and other projects' notes with a cap ([#714](https://github.com/codeabraham16/musubi/pull/714))
+> - Sync travels compressed both ways: what goes up weighs 55 % and what comes down, 39 % ([#704](https://github.com/codeabraham16/musubi/pull/704), [#705](https://github.com/codeabraham16/musubi/pull/705))
+
+<!-- sin-publicar:fin -->
+
 <!-- novedades:inicio -->
 
 **[v0.141.0](https://github.com/codeabraham16/musubi/releases/tag/v0.141.0)** · Sep 14, 2026
