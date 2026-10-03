@@ -10,6 +10,12 @@ package embedding
 // búsqueda de «qué piezas empiezan acá» pasa a ser una búsqueda binaria que se angosta runa a runa.
 // No hay nada que construir: se lee el archivo y se busca sobre sus bytes.
 //
+// Y LO USA TAMBIÉN EL PROVEEDOR COMPLETO (NewStaticProvider): con el índice al día no deserializa
+// tokenizer.json, y si tuvo que armar el mapa para escribir el índice, tokeniza con el recién
+// escrito y suelta el mapa. Así el vector que se indexa y el que se consulta salen del mismo
+// tokenizer. Si no queda índice que usar, el completo se queda con el mapa: los casos están en
+// NewStaticProvider.
+//
 // LO QUE LLEVA ADEMÁS DEL VOCABULARIO, y es lo que hace que el camino liviano no abra NUNCA
 // tokenizer.json: el normalizer entero (el charsmap precompilado incluido, 237.539 bytes en POTION),
 // el símbolo de Metaspace, el unk_id, el score del unk y el largo máximo de pieza. Si alguna de esas
@@ -39,10 +45,12 @@ import (
 
 const (
 	magiaIndice = "MSBTKIDX"
-	// formatoIndice se sube cuando cambia CUALQUIER cosa del formato. Un índice de otro formato no
-	// se interpreta: se lo trata como si no existiera, y NewStaticProvider lo reescribe. Lo que
-	// hace cierta esa promesa es que cargarSidecars exige cabeceraVigente: sin eso, el completo
-	// daría por «al día» un índice que la consulta liviana rechaza, y el atajo quedaría apagado.
+	// formatoIndice se sube cuando cambia CUALQUIER cosa del formato, o los bytes que se escriben
+	// para el mismo tokenizer.json. El completo y la consulta liviana confían en un índice que pudo
+	// escribir OTRO binario. Un índice ROTO lo ven el crc y los offsets; uno ENTERO que se derivó
+	// distinto sólo lo delata este número, y TestElIndiceRealEstaAtadoASuFormato lo ata a los bytes
+	// del índice del asset real. Un índice de otro formato no se interpreta: leerIndiceTokenizer lo
+	// rechaza, indiceAlDia no lo da por al día, y NewStaticProvider lo reescribe.
 	formatoIndice   = 1
 	tipoIndiceUnigr = 1
 )
@@ -161,8 +169,8 @@ func leerIndiceTokenizer(crudo []byte) (*unigram, error) {
 const largoCabecera = len(magiaIndice) + 8
 
 // cabeceraVigente dice si el índice empieza con la cabecera que ESTE binario sabe leer: la magia,
-// el formato y el tipo. Es una sola función porque son dos los que preguntan —leerIndiceTokenizer
-// para interpretarlo y cargarSidecars para darlo por «al día»— y tienen que contestar lo mismo.
+// el formato y el tipo. Sólo la llama leerIndiceTokenizer, y por él pasan los dos que usan el
+// índice: la consulta liviana para construirse e indiceAlDia para darlo por al día.
 func cabeceraVigente(idx []byte) error {
 	if len(idx) < largoCabecera || string(idx[:len(magiaIndice)]) != magiaIndice {
 		return fmt.Errorf("%w: no es un índice de tokenizer", errIndiceInvalido)

@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 
 	"golang.org/x/text/unicode/norm"
@@ -47,8 +48,23 @@ type StaticProvider struct {
 	modelID string // identidad de la tabla, para la provenance del vector (S1)
 }
 
+// deserializarTokenizer es loadTokenizerBytes y nada más. Es variable para que las pruebas cuenten
+// cuántas veces NewStaticProvider deserializa tokenizer.json (completo_indice_test.go).
+var deserializarTokenizer = loadTokenizerBytes
+
 // NewStaticProvider carga la tabla (dir/model.safetensors) y el tokenizer
 // (dir/tokenizer.json). modelID identifica la tabla para la regla de homogeneidad.
+//
+// EL TOKENIZER SALE DE tokenizer.idx CUANDO ESTÁ AL DÍA (indiceAlDia), y entonces tokenizer.json se
+// lee para el checksum pero NO se deserializa: sobre POTION eso es ~1 s de armar un mapa de
+// 500.353 piezas que después tokeniza ~55 veces más lento que el índice sobre la memoria real (4
+// veces en textos de menos de 100 runas). Si el índice falta, está vencido o no se puede leer, se
+// arma el mapa, se escribe el índice y se tokeniza con el recién escrito, si se puede leer.
+//
+// EL MAPA QUEDA SÓLO CUANDO NO HAY ÍNDICE QUE USAR, y si eso se sabe antes de armarlo, el índice ni
+// se arma: armarlo es lo caro. Un índice que quedó escrito y se puede leer se usa aunque después
+// falle la identidad, y uno que otro proceso dejó al día mientras éste armaba el mapa, también.
+// Cada caso, fila por fila, lo fija TestConQueTokenizaElCompleto.
 func NewStaticProvider(dir string) (*StaticProvider, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("static_path vacío: apuntá embedding.static_path a un directorio con model.safetensors + tokenizer.json")
@@ -65,21 +81,36 @@ func NewStaticProvider(dir string) (*StaticProvider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tokenizer: %w", err)
 	}
-	tok, err := loadTokenizerBytes(tokRaw)
-	if err != nil {
-		return nil, fmt.Errorf("tokenizer: %w", err)
-	}
 	// N1: la identidad lleva el CONTENIDO, no sólo el nombre de la carpeta. Con sólo el
 	// basename, re-destilar la tabla in-place NO cambiaba el model_id: los vectores viejos
 	// seguían pareciendo compatibles y la búsqueda los comparaba por coseno contra los de la
 	// tabla nueva ⇒ ranking corrupto EN SILENCIO. Con el checksum, una tabla distinta es una
 	// identidad distinta y el contrato de procedencia (F2.2) excluye sola a los vectores viejos.
 	checksum := checksumDeCRC(crcTabla, nTabla, crc32.Checksum(tokRaw, castagnoli), int64(len(tokRaw)))
-	// El índice del tokenizer y la identidad para la consulta liviana (consulta_liviana.go). Se
-	// escriben acá porque éste es el único momento en que el tokenizer ya está armado y el checksum
-	// ya está calculado: hacerlo en otro lado costaría volver a leer los dos archivos.
-	if u, ok := tok.(*unigram); ok && errTabla == nil && errTok == nil {
-		escribirSidecarsSiHaceFalta(dir, u, checksum, huellaTabla, huellaTok)
+	var tok tokenizer
+	if errTabla == nil && errTok == nil {
+		// La limpieza va ANTES del camino rápido y no adentro de escribirSidecarsSiHaceFalta: con el
+		// índice al día ésa no se llama, y los temporales de un proceso matado quedarían para siempre.
+		limpiarTemporalesHuerfanos(dir, time.Now())
+		if u := indiceAlDia(dir, checksum, huellaTabla, huellaTok); u != nil {
+			tok = u
+		}
+	}
+	if tok == nil {
+		tok, err = deserializarTokenizer(tokRaw)
+		if err != nil {
+			return nil, fmt.Errorf("tokenizer: %w", err)
+		}
+		// El índice del tokenizer y la identidad (consulta_liviana.go). Se escriben acá porque éste
+		// es el único momento en que el tokenizer ya está armado y el checksum ya está calculado:
+		// hacerlo en otro lado costaría volver a leer los dos archivos. Si el índice queda escrito y
+		// se puede leer, el completo tokeniza con él desde ya, y el mapa queda para el recolector; si
+		// no, sigue con el mapa.
+		if u, ok := tok.(*unigram); ok && errTabla == nil && errTok == nil {
+			if escrito := escribirSidecarsSiHaceFalta(dir, u, checksum, huellaTabla, huellaTok); escrito != nil {
+				tok = escrito
+			}
+		}
 	}
 	return &StaticProvider{
 		table:   table,
@@ -414,7 +445,8 @@ type wordPiece struct {
 }
 
 // loadTokenizer lee tokenizer.json y construye el tokenizer. Wrapper por RUTA sobre
-// loadTokenizerBytes (que es el que usa NewStaticProvider, para hashear los bytes sin releerlos).
+// loadTokenizerBytes (que es el que usa NewStaticProvider cuando tiene que armar el mapa, para
+// hashear los bytes sin releerlos).
 func loadTokenizer(path string) (tokenizer, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {

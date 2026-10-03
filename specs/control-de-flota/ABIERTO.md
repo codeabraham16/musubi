@@ -763,6 +763,69 @@
 
 ## 3 · Cerrado en este track (para no volver a abrirlo por olvido)
 
+**2026-10-01 · A143 CERRADO — LA PRUEBA DEL RECLAMO DE LA PIZARRA TAMBIÉN MEDÍA, A LO QUE PARECE, LA DISPONIBILIDAD; AHORA EL ORDEN LO FIJA LA PRUEBA, COMO EN A142.**
+
+`TestClaimWorkUnitConcurrentNoDoubleClaim` es la primera de las dos vecinas que A142 dejó afuera. Según aquel recuento, cayó una vez, en `test-cross (windows-latest)`: el 2026-09-21, en el primer intento de la corrida 35609040205 (`fix/embebedor-tras-ingest`, 459bdf51), siete de las ocho goroutines volvieron con `error al reclamar unidad: database is locked (5) (SQLITE_BUSY)` y la prueba tardó 39,19 s. Se relanzó y pasó, así que no figura como fallida. La prueba existe desde julio y el recuento empieza el 2026-09-08: lo de antes no se miró.
+
+**Lo que se ve de producción no muestra un defecto.** La elección de la unidad y el reclamo son una sola sentencia en autocommit, `UPDATE … WHERE id = (SELECT … LIMIT 1) RETURNING`: la unidad se elige adentro, con el lock de escritura tomado, y si la sentencia choca con otro escritor espera hasta 5 s, lo que dura el `busy_timeout`. Antes corre un SELECT corto que busca unidades agotadas, y sólo si encuentra alguna escribe. La prueba eran ocho goroutines que reclamaban veinte unidades en bucle, y cualquier error la ponía en rojo. Alcanzaba con que un reclamo se quedara sin turno más de 5 s: es la inanición de A134 y de A142. Es una inferencia, porque el registro sólo muestra el código y la duración. Y la prueba no tenía sabotajes: nunca se había comprobado que cayera por el doble reclamo que nombra.
+
+**Lo que se hizo.** Se reescribió en su lugar, con el mismo nombre, alrededor de una compuerta:
+- A es otro escritor: abre una transacción y escribe sobre el lote. Así toma el lock sin depender de `_txlock=immediate`, que ya custodia X1.
+- Dos reclamos, b1 y b2, van por el camino público, `ClaimWorkUnit`, desde dos goroutines. Mientras A no confirme, ninguno puede terminar: ni bien, porque no tiene el lock, ni mal, porque lo espera. La prueba mira una ventana de 300 ms.
+- A confirma, y recién ahí terminan los dos.
+
+La compuerta se pasa dos veces, con los mismos b1 y b2, y lo que cambia es lo que escribe A:
+- En la primera, A no cambia nada. Con las veinte unidades libres, b1 y b2 se llevan una cada uno, y no la misma.
+- En la segunda, A reclama para sí las dieciocho que quedan libres y agrega una unidad al lote, como `SumarAlLote`, en la misma transacción. Cuando A confirma, la nueva es la única libre: uno de los dos se la lleva y el otro vuelve sin nada.
+- Al final A devuelve las dieciocho libres, sin dueño, sin lease y con los intentos en cero, como lo hace `ReopenWorkUnit` con una fallida, y el lote se vacía en secuencia: cada una de las veintiuna unidades sale una sola vez, y un reclamo más vuelve sin unidad y sin error.
+
+La segunda compuerta es la que mira la garantía de frente. Mientras A escribe, nadie de afuera ve la unidad nueva, así que una elección hecha fuera del lock no puede dar con ella, elija como elija:
+- Si eligió una de las dieciocho y la actualiza por id, se la pisa a A: ROBO.
+- Si vuelve a mirar antes de escribir, o no eligió ninguna, la nueva queda sin dueño: NADIE.
+- Como b1 y b2 ya tienen una cada uno, un reclamo que vuelva a llevarse la suya, o que informe la que ya tenía en vez de la que escribió, cae como RE-RECLAMO.
+- Que se la lleven los dos es el DOBLE RECLAMO.
+
+Cada salida tiene su propio mensaje, y dice de quién era la unidad. Pasa la elección de afuera que, cuando pierde, vuelve a elegir —adentro del lock o con un SELECT nuevo—, y ésa no es un defecto si no se rinde mientras quede una libre. La que se rinde después de perder dos veces también pasa, porque hay una sola libre en disputa: está entre los límites. Y lo que A cuenta al reclamar —tienen que quedar dieciocho libres— caza además un reclamo de la primera compuerta que se lleve más de una.
+
+A reclama como `AwardWorkUnit`, la adjudicación de la subasta: estado, dueño, lease, latido, intento, token y la hora del cambio, sin bitácora. Una reclamada sin dueño, o con el latido más nuevo que la hora del cambio, es un estado que la API no produce, y un filtro de elegibles que la rescatara pondría la prueba en rojo sin ser un defecto:
+- Con la versión anterior de A, que no escribía el dueño, el filtro que rescata las reclamadas sin dueño la ponía en rojo 10 de 10. Escribiéndolo, queda en verde las diez veces.
+- Sin la hora del cambio, el que rescata las de latido más nuevo la ponía en rojo por reloj, cuando cambiaba el segundo entre el alta del lote y la escritura de A: 18 de 40, medido por el juez de sabotajes. Escribiéndola, 0 de 20.
+
+Una reclamada sin bitácora, en cambio, la deja `AwardWorkUnit`, y un filtro que la rescate sí es un defecto: se lleva una unidad adjudicada con el lease vigente. Esta prueba lo caza 10 de 10, y por eso A no escribe la bitácora. No lo cazaba la vieja ni lo caza ninguna otra prueba de la pizarra.
+
+**La forma la fijó la revisión adversaria, en tres vueltas.**
+- El primer intento tenía sólo la primera compuerta, y el debate `4449ae3d` lo rechazó 2 a 1. Cazaba el doble reclamo nada más que si los dos reclamos elegían la misma unidad. Con la elección hecha fuera del lock, pero al azar, b1 y b2 casi siempre se llevaban unidades distintas: dos jueces midieron la prueba en rojo entre 1 y 3 veces de 30, contra 30 de 30 de la prueba vieja.
+- El segundo vaciaba el lote hasta dejar una sola libre y la hacía disputar por dos reclamos con el mismo nombre. El debate `707837ff` también lo rechazó. Cazaba el azar y la elección según el nombre del agente, pero no la elección según el turno de llegada ni según cuántos reclamos hay en vuelo: los dos reclamos eligen corridos, uno se lleva la última y el otro vuelve sin nada, que era justo lo que la prueba esperaba. El juez de sabotajes las midió en verde las diez veces. La de «en vuelo» no la caza ninguna otra prueba que reclame, porque en secuencia nunca hay otro reclamo en vuelo. Y una elección de afuera que vuelve a mirar antes de escribir nunca se lleva una unidad ajena: su defecto es volver sin nada habiendo libres, y con una sola libre en disputa eso también era lo esperado.
+- La reposición cierra las dos clases a la vez, porque la única libre después de la compuerta no existía en lo que se veía mientras A escribía. La propuso el juez de sabotajes; el de correctitud la midió por su cuenta, y el de contrato midió un híbrido propio armado desde ella.
+
+El orden lo fija la prueba y no la carga. Con el DSN sano pasó 120 de 120: 30 seguidas, 60 con `-cpu=1,2` (30 con GOMAXPROCS en 1 y 30 en 2) y 30 con la máquina cargada, con un proceso quemando CPU en cada uno de los doce núcleos lógicos. En reposo, cada corrida tardó entre 0,69 y 1,04 s; con la máquina cargada, entre 0,74 y 1,39 s.
+
+**Y ahora tiene diez sabotajes.** Los nueve primeros cambian cómo elige el reclamo, y el último le saca la espera:
+- Elegir con un SELECT aparte, por orden de seq, y actualizar por id sin volver a mirar: b1 y b2 eligen mientras A tiene el lock, los dos ven libre la misma y se la llevan los dos. Cae en la primera compuerta: «primera compuerta: DOBLE RECLAMO: b1 y b2 se llevaron la misma unidad (seq 0)…».
+- El mismo SELECT aparte, eligiendo al azar, según el último byte del nombre del agente, según el turno de llegada o según cuántos reclamos hay en vuelo: en la primera compuerta eligen unidades distintas y pasan; en la segunda eligen entre las dieciocho que veían libres y le pisan a A las que eligieron: «segunda compuerta: ROBO: b2 se llevó la unidad seq 2, que A había reclamado para sí…». Son cuatro sabotajes.
+- El SELECT aparte al azar, pero volviendo a mirar en el UPDATE si la elegida sigue libre: nunca se lleva una ajena, y la nueva queda sin dueño: «segunda compuerta: NADIE se llevó la unidad que agregó A (seq 20)…».
+- Elegir adentro del lock, pero la segunda elegible y no la primera: con veinte libres pasa la primera compuerta; en la segunda, la nueva es la única libre y no se la lleva nadie.
+- Un filtro de elegibles que deja pasar las unidades del propio agente: en la segunda compuerta, b1 y b2 vuelven a llevarse cada uno la suya: «segunda compuerta: RE-RECLAMO: b1 se llevó la unidad seq 1, que b1 tiene desde la primera compuerta…».
+- Una unidad que nunca es elegible, la seq 10: pasa las dos compuertas, porque A se la lleva y la devuelve sin pasar por el reclamo, y el vaciado vuelve sin nada: «vaciado: el reclamo en secuencia volvió sin nada, con 20 de las 21 unidades reclamadas…».
+- Sin `busy_timeout(5000)`, el reclamo choca con el lock de A y vuelve al instante: «primera compuerta: b2 se rindió con SQLITE_BUSY a los 0s, con el lock de A tomado…».
+
+Los diez dieron rojo 10 de 10. Los dos que eligen al azar caen a veces antes de su salida, en la primera compuerta, cuando b1 y b2 eligen la misma unidad: el que no vuelve a mirar, como DOBLE RECLAMO; el que vuelve a mirar, porque el que pierde no reclamó nada. La elección según el turno y la de «en vuelo» necesitan un contador, y `work.go` no importa `sync/atomic`: el contador es un canal, y el mismo reemplazo lo declara al final de la función, así que esas dos directivas llevan el `de` hasta el cierre de `ClaimWorkUnit`. El juez de sabotajes había propuesto declararlas `no_mecanizable`, porque así tocaban tres sitios; con el canal entran en un solo reemplazo, y el arnés las corre como a las demás.
+
+Los nueve que cambian la elección pisan el mismo texto de `work.go`, así que cada uno se nombra a sí mismo en su `colision_ok`, como los dos de `TestUnaUnidadReclamadaCuentaSoloConElLeaseVencido`. El décimo pisa el mismo literal del DSN que los sabotajes de X1 y de SA5 (`TestSinArranqueElLedgerEsperaAlOtroEscritor`), y el arnés lo informa como choque. Son guardas distintas sobre la misma línea, así que cada una nombra a las otras dos en su `colision_ok`. El censo suma diez sabotajes mecanizados. Y el comentario de `dsnEscribible` (database.go), que lista las pruebas que caen sin el `busy_timeout`, ahora nombra también al reclamo.
+
+Que la prueba no depende de `_txlock=immediate` se midió a mano: con ese pragma fuera del DSN, la prueba del reclamo pasó 5 de 5, y X1, que es la que lo custodia, cayó con «B escribió con la transacción de A abierta…». Esa caída confirma que el cambio estaba aplicado.
+
+**Límites que se conocen.**
+- Bajo sabotaje, la ventana decide por reloj, pero no en todos. Un sabotaje que elige afuera podría pasar en verde la vez que las goroutines eligieran su unidad después de que A confirma, y el que le saca la espera al reclamo, la vez que llegaran después y no chocaran entre ellas. Los que cambian la elección adentro del lock caen a cualquier hora: el juez de correctitud lanzó los reclamos después de que A confirma, y cayeron igual.
+- Con el DSN sano queda un solo reloj, los 5 s del `busy_timeout`. Un reclamo lo agotaría sólo si A tardara más de 4,7 s en confirmar después de la ventana, y ya no hay cola sin orden: A suelta el lock una vez por compuerta, y cada reclamo es un SELECT y un UPDATE cortos.
+- Lo que esta prueba no caza, medido con los sabotajes del juez: sacar el `ORDER BY seq`; elegir con un SELECT aparte en la rama sin lote, que esta prueba no recorre; y reclamar una unidad de otro lote. No los cazaba la vieja ni los caza ninguna otra prueba de la pizarra: quedan como candidatos, sin número.
+- Lo que pasa sólo con tres reclamos en vuelo, o con dos libres en disputa, porque la compuerta pone dos reclamos y una sola libre. Lo midió el juez de sabotajes con dos ejemplos. Una elección que va afuera sólo cuando hay otros dos reclamos en vuelo la cazaba la vieja, que tenía ocho goroutines, 10 de 10, y ésta no (0 de 10). Un reclamo que elige afuera y se rinde después de perder dos veces, aunque quede una libre, no lo caza ninguna de las dos: con una sola libre en disputa, rendirse es lo esperado. Ninguna otra prueba que reclame caza a ninguno de los dos. Quedan como candidatos, sin número, y con ellos un tercer reclamo en la segunda compuerta, que cazaría el primero.
+- Un lease de 0 s lo caza sólo a veces, por reloj, porque hace falta que cambie el segundo entre que un reclamo escribe el lease y otro lo mira: 22 de 80, en seis corridas de los jueces y del autor, entre 1 y 7 de cada 10. La vieja también lo cazaba sólo a veces, y por lo mismo: 9 de 75, en seis corridas del juez de sabotajes, entre 0 y 4 de cada 10. En esas corridas la nueva lo cazó más seguido, pero ninguna de las dos lo caza siempre: depende del reloj. Ninguna otra prueba de la pizarra mira cuánto dura el lease. El mismo juez midió un chequeo que lo caza siempre —que después de la primera compuerta los leases de b1 y b2 sigan vigentes—, y queda como candidato, sin número.
+- Que una unidad terminada o fallida vuelva a ser elegible, o que la del lease nulo deje de serlo, no lo caza esta prueba, pero sí otras de la pizarra: `TestElDeadLetterPersisteLaHistoria` y `TestUnaUnidadReclamadaSinLeaseNoQuedaTrabadaParaSiempre`.
+- Tres cambios pasan en verde, y está bien, porque no son defectos para ningún estado al que se llega por la API: sacar el `LIMIT 1` de la subconsulta, que ya es escalar, y que el filtro de elegibles rescate las reclamadas sin dueño o las que tienen el latido más nuevo que la hora del cambio.
+
+**Lo que queda afuera.** `TestX2ElDSNAbreLasTransaccionesComoEscritoras` y el valor 5000 siguen como candidatos a cabo, sin número.
+
 **2026-09-30 · A142 CERRADO — LA PRUEBA DE LOS DOS ESCRITORES MEDÍA LA DISPONIBILIDAD, IGUAL QUE LA DEL LEDGER EN A134; AHORA EL ORDEN LO FIJA LA PRUEBA.**
 
 `TestX1DosEscritoresConcurrentesNoSeMatan` nació con el #425 el 2026-09-09 y cayó cuatro veces, todas en `test-cross (windows-latest)` y siempre con `database is locked (5) (SQLITE_BUSY)`:
@@ -798,7 +861,7 @@ Los dos sabotajes pisan el mismo literal del DSN que el de `TestSinArranqueElLed
 - `TestClaimWorkUnitConcurrentNoDoubleClaim` tiene el patrón que tenía X1: ocho goroutines en bucle contra el lock, y cualquier error la pone en rojo. El 2026-09-21, en el primer intento de la corrida 35609040205 (`fix/embebedor-tras-ingest`), siete de los ocho reclamos volvieron con `database is locked (5)` y la prueba tardó 39 s. Se relanzó y pasó, así que no figura como fallida. La prueba existe desde julio y el recuento empieza el 2026-09-08: lo de antes no se miró.
 - `TestX2ElDSNAbreLasTransaccionesComoEscritoras` cayó en la misma corrida de `main` que X1 (35638073981), pero por otra cosa: al limpiar su carpeta temporal, Windows no pudo borrar `memory.db` porque seguía abierta. Cuando vence su espera de 1,5 s, X2 vuelve sin esperar a su goroutine, y lo probable es que esa conexión siguiera viva al limpiar. Es inferido: no se midió.
 
-El valor 5000 sin fijar y estas dos vecinas quedan propuestos como cabos nuevos, sin número hasta que se decida.
+El valor 5000 sin fijar y estas dos vecinas quedan propuestos como cabos nuevos, sin número hasta que se decida. La del reclamo se cerró después como A143.
 
 **Lo que no cambia.** El alta no reintenta ante SQLITE_BUSY: si dos escritores reales compitieran más de 5 s por el lock, `SaveObservationTyped` devolvería el error, igual que antes de este cambio. Qué pasa después depende del llamador: la captura de commits, por ejemplo, lo toma como transitorio y lo reintenta en la corrida siguiente (`cmd/musubi/capture.go`).
 
@@ -4456,7 +4519,7 @@ cuatro eran pruebas que pasaban por el motivo equivocado, y sólo el sabotaje lo
    (A21 «habría que tocar el bundle», A13 «verificar contra el relay», A28 «no se puede sin
    instalar un servidor»). Antes de dar por bueno un «no se hizo porque X», verificá X.
 6. **El número es la identidad: uno solo por cosa, y para siempre.** Un número nuevo va por encima
-   del máximo en uso (hoy **A142** y **B21**) y NO se recicla uno libre: `A6`-`A9`, `A15` y `A16`
+   del máximo en uso (hoy **A143** y **B21**) y NO se recicla uno libre: `A6`-`A9`, `A15` y `A16`
    nunca se usaron, y estrenarlos ahora haría que un lector con el archivo viejo en la cabeza lea
    otra cosa. Si un cabo se convierte en otro —de la tabla 1 a la 2, o al revés— la fila nueva dice
    **«(era A33)»** y la vieja se borra: sin esa marca, cada cita del número anterior apunta a la
