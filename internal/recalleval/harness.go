@@ -371,6 +371,17 @@ func rankedIDs(ctx context.Context, eng recuperador, query string, cfg Config, e
 	return append(cognition.ReordenarIDs(ids[:n], orden), ids[n:]...), nil
 }
 
+// RankingDe devuelve el ranking crudo (ids, mejor primero) que produce una configuración para una
+// consulta, por el MISMO camino que mide Evaluate. Existe para los adaptadores de varas públicas
+// (internal/recalleval/publico): esas varas definen sus propias métricas —LongMemEval, p. ej., mide
+// recall_all y un nDCG con otro descuento— y necesitan el orden, no el promedio de las nuestras.
+//
+// Es un envoltorio y nada más, a propósito: si el adaptador armara su propio recall, mediría una
+// copia del banco que envejece aparte (NoBump, presupuesto, pool, brazo SinEmbebedor, corrector).
+func RankingDe(ctx context.Context, eng recuperador, query string, cfg Config, embed EmbedFunc, pool int) ([]string, error) {
+	return rankedIDs(ctx, eng, query, cfg, embed, pool)
+}
+
 // Evaluate corre todas las queries del fixture bajo una configuración y agrega las
 // métricas en los k pedidos. Omite del promedio las queries sin relevantes.
 func Evaluate(ctx context.Context, eng recuperador, fx *Fixture, cfg Config, embed EmbedFunc, ks []int) (Scores, error) {
