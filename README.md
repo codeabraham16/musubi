@@ -27,8 +27,16 @@ optimización de tokens, el ranking y la resolución de skills son deterministas
 
 ---
 
+## Novedades
+
+<!-- novedades:inicio -->
+<!-- novedades:fin -->
+
+---
+
 ## Tabla de contenidos
 
+- [Novedades](#novedades)
 - [Por qué Musubi](#por-qué-musubi)
 - [Arquitectura](#arquitectura)
 - [Inicio rápido](#inicio-rápido)

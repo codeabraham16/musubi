@@ -27,8 +27,16 @@ token optimization, ranking and skill resolution are deterministic and offline.
 
 ---
 
+## What's new
+
+<!-- novedades:inicio -->
+<!-- novedades:fin -->
+
+---
+
 ## Table of contents
 
+- [What's new](#whats-new)
 - [Why Musubi](#why-musubi)
 - [Architecture](#architecture)
 - [Quick start](#quick-start)
