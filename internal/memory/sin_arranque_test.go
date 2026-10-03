@@ -177,7 +177,7 @@ func TestSinArranqueRechazaUnEsquemaMasNuevo(t *testing.T) {
 // arnes: archivo="internal/memory/database.go"
 // arnes: de="?_txlock=immediate&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 // arnes: a="?_txlock=immediate&_pragma=journal_mode(WAL)"
-// arnes: colision_ok="TestX1DosEscritoresConcurrentesNoSeMatan"
+// arnes: colision_ok="TestX1DosEscritoresConcurrentesNoSeMatan TestClaimWorkUnitConcurrentNoDoubleClaim"
 //
 // NO PASA POR TIMING, y por eso tiene tres piezas y no una:
 //   - El otro escritor abre SU PROPIA conexión con un DSN a mano, sin dsnEscribible: si usara el
