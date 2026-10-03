@@ -1,18 +1,14 @@
 <div align="center">
 
-![Musubi — servidor MCP de memoria persistente](.github/assets/hero.svg)
+<img src=".github/assets/hero.svg" alt="Musubi (結び): memoria persistente para agentes de IA. Servidor MCP en Go, local-first y model-free." width="100%">
 
-<h1>Musubi</h1>
+[![Release](https://img.shields.io/github/v/release/codeabraham16/musubi?sort=semver&style=flat-square&labelColor=0C1020&color=6366F1)](https://github.com/codeabraham16/musubi/releases/latest)
+[![CI](https://img.shields.io/github/actions/workflow/status/codeabraham16/musubi/ci.yml?branch=main&style=flat-square&labelColor=0C1020&label=CI)](https://github.com/codeabraham16/musubi/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/github/go-mod/go-version/codeabraham16/musubi?style=flat-square&labelColor=0C1020&color=22D3EE&logo=go&logoColor=white)](go.mod)
+[![Licencia: MIT](https://img.shields.io/github/license/codeabraham16/musubi?style=flat-square&labelColor=0C1020&color=98A0C0)](LICENSE)
+[![Commits en main desde el último release](https://img.shields.io/github/commits-since/codeabraham16/musubi/latest?style=flat-square&labelColor=0C1020&color=98A0C0)](https://github.com/codeabraham16/musubi/commits/main)
 
-<p><strong>Memoria persistente para agentes de IA · servidor MCP en Go · local-first · model-free</strong></p>
-
-[![CI](https://github.com/codeabraham16/musubi/actions/workflows/ci.yml/badge.svg)](https://github.com/codeabraham16/musubi/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/codeabraham16/musubi?sort=semver)](https://github.com/codeabraham16/musubi/releases)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go&logoColor=white)](go.mod)
-[![Changelog](https://img.shields.io/badge/changelog-keep--a--changelog-orange.svg)](CHANGELOG.md)
-
-<a href="README.en.md">English</a> · <strong>Español</strong>
+<a href="README.en.md">English</a> · <strong>Español</strong> · <a href="CHANGELOG.md">Changelog</a>
 
 </div>
 
@@ -59,15 +55,15 @@ optimización de tokens, el ranking y la resolución de skills son deterministas
 
 ## Por qué Musubi
 
-| | |
+| Capacidad | Qué hace |
 |---|---|
-| 🧠 **Memoria persistente** | Observaciones, hechos (grafo) y gists de código que sobreviven entre sesiones, en SQLite local. |
-| 🔎 **Recuperación híbrida** | Texto completo (FTS5), similitud semántica (índice vectorial IVF a escala) y recorrido de grafo — combinables. |
-| 🪙 **Eficiente en tokens** | Gobernador de sesión: mide **todas** las superficies que inyecta, las acota por presupuesto e inyecta por **delta** (solo lo nuevo). Model-free. |
-| 🛠️ **Skills automáticas** | Detecta el stack y genera skills del proyecto; descubre Agent Skills de la comunidad filtradas por tu stack. |
-| 🔗 **Orquestación model-free** | Motor de workflows DAG resumible (condiciones, loops) y pizarra multi-agente — Musubi secuencia, el agente ejecuta. |
-| 🔒 **Local-first & privado** | Sin servicios externos obligatorios. Embeddings opcionales (Ollama local u OpenAI-compatible). El secreto nunca toca el YAML. |
-| ⚙️ **Cero fricción** | Un comando (`musubi agente instalar`) deja a Musubi activo en todos tus proyectos; `musubi setup` cablea uno solo. Idempotentes. |
+| **Memoria persistente** | Observaciones, hechos (grafo) y gists de código que sobreviven entre sesiones, en SQLite local. |
+| **Recuperación híbrida** | Texto completo (FTS5), similitud semántica (índice vectorial IVF a escala) y recorrido de grafo — combinables. |
+| **Eficiente en tokens** | Gobernador de sesión: mide **todas** las superficies que inyecta, las acota por presupuesto e inyecta por **delta** (solo lo nuevo). Model-free. |
+| **Skills automáticas** | Detecta el stack y genera skills del proyecto; descubre Agent Skills de la comunidad filtradas por tu stack. |
+| **Orquestación model-free** | Motor de workflows DAG resumible (condiciones, loops) y pizarra multi-agente — Musubi secuencia, el agente ejecuta. |
+| **Local-first & privado** | Sin servicios externos obligatorios. Embeddings opcionales (Ollama local u OpenAI-compatible). El secreto nunca toca el YAML. |
+| **Cero fricción** | Un comando (`musubi agente instalar`) deja a Musubi activo en todos tus proyectos; `musubi setup` cablea uno solo. Idempotentes. |
 
 ---
 
@@ -79,7 +75,9 @@ flowchart LR
         direction TB
         H1["SessionStart"]
         H2["UserPromptSubmit"]
-        H3["PreToolUse(Read)"]
+        H3["PreToolUse<br/>(Read · edición)"]
+        H4["PreCompact"]
+        H5["Stop"]
     end
     subgraph M["Musubi · daemon Go"]
         direction TB
@@ -91,17 +89,22 @@ flowchart LR
     H1 -- "detect" --> RPC
     H2 -- "turn" --> RPC
     H3 -- "precheck" --> RPC
+    H4 -- "precompact" --> RPC
+    H5 -- "capture" --> RPC
     RPC --> COG
     COG -- "save / recall" --> DB
     DB -- "gist · delta" --> CC
 
-    classDef cc fill:#0d1422,stroke:#2dd4bf,color:#adbac7;
-    classDef mm fill:#120e22,stroke:#a78bfa,color:#adbac7;
-    classDef db fill:#0d1422,stroke:#4ade80,color:#adbac7;
+    classDef cc fill:#121734,stroke:#2A335C,color:#E9ECF7;
+    classDef mm fill:#182042,stroke:#6366F1,color:#E9ECF7;
+    classDef db fill:#121734,stroke:#22D3EE,color:#E9ECF7;
+    classDef nd fill:#0C1020,stroke:#2A335C,color:#E9ECF7;
     class CC cc; class M mm; class DB db;
+    class H1,H2,H3,H4,H5,RPC,COG nd;
+    linkStyle default stroke:#6366F1,stroke-width:1.5px;
 ```
 
-Cuatro hooks alimentan al daemon; el daemon habla MCP y persiste todo en SQLite. Lo que vuelve al
+Cinco hooks alimentan al daemon; el daemon habla MCP y persiste todo en SQLite. Lo que vuelve al
 agente (gist de código, contexto por turno) se **mide** y se inyecta como **delta** — solo lo nuevo
 respecto del turno anterior.
 
