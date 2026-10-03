@@ -3,6 +3,7 @@ package recalleval
 import (
 	"fmt"
 	"math"
+	"math/rand"
 	"sort"
 	"strings"
 )
@@ -38,6 +39,13 @@ type ComparacionPareada struct {
 	PeoresCaidas []CaidaConsulta
 	// MejoresSubas, simétrico.
 	MejoresSubas []CaidaConsulta
+	// Deltas son los (B - A) de TODAS las consultas comparadas, empates incluidos, ORDENADOS POR
+	// EL ID DE LA CONSULTA. Son la materia prima de PSigno e IntervaloBootstrap.
+	//
+	// El orden no es cosmético: PorConsulta es un mapa, y Go lo recorre en un orden distinto en cada
+	// corrida. Un bootstrap que remuestrea por posición sobre un slice armado en ese orden daría otro
+	// intervalo con la MISMA semilla, y una medición que no se repite no se puede auditar.
+	Deltas []float64
 }
 
 // CaidaConsulta es una consulta y cuánto se movió entre los dos brazos.
@@ -84,7 +92,13 @@ func CompararPareado(a, b Scores, metrica string, k int) (ComparacionPareada, er
 	var suma float64
 	var n int
 	var movidas []CaidaConsulta
-	for id, ma := range a.PorConsulta {
+	ids := make([]string, 0, len(a.PorConsulta))
+	for id := range a.PorConsulta {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids) // ver Deltas: el orden del mapa cambia entre corridas
+	for _, id := range ids {
+		ma := a.PorConsulta[id]
 		mb, ok := b.PorConsulta[id]
 		if !ok {
 			continue
@@ -100,6 +114,7 @@ func CompararPareado(a, b Scores, metrica string, k int) (ComparacionPareada, er
 		d := vb - va
 		suma += d
 		n++
+		out.Deltas = append(out.Deltas, d)
 		switch {
 		case d > 1e-12:
 			out.Gana++
@@ -146,4 +161,71 @@ func (c ComparacionPareada) String() string {
 		fmt.Fprintf(&b, "  ↑ %-50s %+.4f  (%.4f → %.4f)\n", x.Consulta, x.Delta, x.A, x.B)
 	}
 	return b.String()
+}
+
+// PSigno es el p-valor del TEST DE SIGNO EXACTO, a dos colas, sobre las consultas discordantes:
+// bajo la hipótesis nula (B no es ni mejor ni peor que A), cada consulta que se movió tiene la misma
+// chance de subir que de bajar, así que las que suben siguen una Binomial(n, 1/2) con n = Gana +
+// Pierde. Los empates no entran: no dicen nada sobre el sentido del cambio.
+//
+// Es la cuenta que el encabezado de este archivo cita («un signo-test exacto necesita ~10-2 para
+// p<0,05»), ahora hecha en vez de estimada a ojo. Sigue sin decidir nada: devuelve un número, y
+// cuál umbral usar —y sobre qué métrica— lo elige quien lee, a la vista.
+//
+// Sin discordantes devuelve 1: no hay evidencia de nada, que no es lo mismo que evidencia de
+// igualdad.
+func (c ComparacionPareada) PSigno() float64 {
+	n := c.Gana + c.Pierde
+	if n == 0 {
+		return 1
+	}
+	k := min(c.Gana, c.Pierde)
+	// Con logaritmos para no desbordar: C(n, i) revienta un float64 mucho antes de las mil consultas.
+	lnFact := func(x int) float64 {
+		v, _ := math.Lgamma(float64(x) + 1)
+		return v
+	}
+	cola := 0.0
+	for i := 0; i <= k; i++ {
+		cola += math.Exp(lnFact(n) - lnFact(i) - lnFact(n-i) - float64(n)*math.Ln2)
+	}
+	return math.Min(1, 2*cola)
+}
+
+// IntervaloBootstrap es el intervalo de confianza del DeltaMedio por bootstrap de percentiles:
+// remuestrea las consultas con reposición `reps` veces, toma el delta medio de cada remuestra y
+// devuelve los percentiles que dejan (1-nivel)/2 afuera a cada lado.
+//
+// Es DETERMINISTA: la semilla es explícita y Deltas viene ordenado por id de consulta. Con la
+// misma comparación y la misma semilla sale el mismo intervalo en cualquier corrida.
+//
+// Con pocas consultas (12 del dorado, dos docenas del fixture real) el intervalo es tosco y tiende
+// a quedar ANGOSTO: el bootstrap no puede inventar la variabilidad que la muestra no vio. Sirve para
+// ver si el signo del delta es firme o cuelga de un par de consultas, no como una cota precisa.
+//
+// Sin deltas devuelve (0, 0).
+func (c ComparacionPareada) IntervaloBootstrap(reps int, semilla int64, nivel float64) (lo, hi float64) {
+	n := len(c.Deltas)
+	if n == 0 {
+		return 0, 0
+	}
+	if reps < 1 {
+		reps = 1
+	}
+	rng := rand.New(rand.NewSource(semilla))
+	medias := make([]float64, reps)
+	for r := range medias {
+		suma := 0.0
+		for range n {
+			suma += c.Deltas[rng.Intn(n)]
+		}
+		medias[r] = suma / float64(n)
+	}
+	sort.Float64s(medias)
+	alfa := (1 - nivel) / 2
+	iLo := int(math.Floor(alfa * float64(reps)))
+	iHi := int(math.Ceil((1-alfa)*float64(reps))) - 1
+	iLo = max(0, min(iLo, reps-1))
+	iHi = max(iLo, min(iHi, reps-1))
+	return medias[iLo], medias[iHi]
 }

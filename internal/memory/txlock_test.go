@@ -55,7 +55,8 @@ import (
 //
 // Los dos sabotajes de abajo pisan el literal del DSN que también sabotea SA5 (sin_arranque_test.go),
 // y cada uno lo declara: son guardas distintas sobre la misma línea —ésta mide el motor entero con
-// el patrón leer-y-escribir; aquélla, el ledger del motor liviano—.
+// el patrón leer-y-escribir; aquélla, el ledger del motor liviano—. El de `busy_timeout` choca
+// además con el de la prueba del reclamo (claim_concurrency_test.go), y también lo declara.
 //
 // Sabotaje que la hace fallar: sacar `_txlock=immediate` del DSN → A nace lectora, B escribe con A
 // adentro y termina dentro de la ventana; A, al subir a escritora, moriría con SQLITE_BUSY_SNAPSHOT.
@@ -69,7 +70,7 @@ import (
 // arnes: archivo="internal/memory/database.go"
 // arnes: de="_pragma=busy_timeout(5000)&"
 // arnes: a=""
-// arnes: colision_ok="TestSinArranqueElLedgerEsperaAlOtroEscritor"
+// arnes: colision_ok="TestSinArranqueElLedgerEsperaAlOtroEscritor TestClaimWorkUnitConcurrentNoDoubleClaim"
 func TestX1DosEscritoresConcurrentesNoSeMatan(t *testing.T) {
 	e := nuevoEngineDePrueba(t)
 
