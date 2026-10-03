@@ -29,28 +29,30 @@ token optimization, ranking and skill resolution are deterministic and offline.
 
 **[v0.141.0](https://github.com/codeabraham16/musubi/releases/tag/v0.141.0)** · Sep 14, 2026
 
-- El grafo de código se mantiene al día solo, y el central lo recibe sin el push de cada tick
-- La normalización Unicode queda CLAVADA, porque el `model_id` no cubre el código que produce el vector
-- El arranque del embebedor estático, medido — y «mapear la tabla» solo lo deja PEOR
-- La taxonomía de topics no era el problema, y los dos dials de la cola de conflictos quedan mapeados
+- The code graph now re-indexes itself, at startup and then every hour (it used to wait 6), and only pushes to the central brain when there is something new.
+- `musubi update` can now verify a release's signature: the binary embeds the public key, and the private key stays out of the repo and out of CI.
+- Recalled memory reaches the prompt as quoted material: a foreign note can no longer forge a new line or a header inside that block.
+- Loading the embedding table no longer duplicates it in memory: the peak drops from 1,321 MB to 833 MB, and vectors already stored stay valid.
 
-… and 14 more in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.141.0/CHANGELOG.md#01410---2026-09-14)
+And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.141.0/CHANGELOG.md#01410---2026-09-14)
 
 **[v0.140.0](https://github.com/codeabraham16/musubi/releases/tag/v0.140.0)** · Sep 10, 2026
 
-- El cerebro central mantiene su propia memoria, y ahora se puede ver si lo hace
-- La banda de capver: el cerebro declara hasta dónde atrás atiende, y le contesta a la máquina que queda afuera
-- El escalón de SÓLO LECTURA: una base que este binario no puede migrar ahora se puede consultar
-- La base ahora declara qué binarios pueden LEERLA, y la guarda dejó de contestar lo mismo en dos situaciones distintas
+- The central brain now maintains its own memory (consolidate, forget, purge) without depending on another process, and exposes how long ago it last ran.
+- `/readyz` now probes writes too: a "ready" brain is one that accepts memory, and when it fails it says which probe failed.
+- If the memory can't be opened, the daemon no longer dies silently: it answers the handshake and states the cause, instead of looking like Musubi isn't installed.
+- A memory database newer than the binary opens read-only when the binary can still read it: you can query it, and anything that writes is refused with an explanation.
 
-… and 31 more in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.140.0/CHANGELOG.md#01400---2026-09-10)
+And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.140.0/CHANGELOG.md#01400---2026-09-10)
 
 **[v0.131.0](https://github.com/codeabraham16/musubi/releases/tag/v0.131.0)** · Sep 3, 2026
 
-- Un miss del grafo dice POR QUÉ, en vez de callarse
-- `musubi_code_context` deja de explicar lo que no encontró
-- El índice declara de qué commit es
-- El grafo de código se OFRECE en vez de esperar a que lo llamen
+- The code graph is now offered instead of waiting to be asked: when an agent reads an indexed file, Musubi shows it the file's symbols and who calls them. Turn it off with `MUSUBI_CODEGRAPH_HOOK=0`.
+- When the graph can't find a symbol, it now says why (file not indexed, from another branch, or no such symbol) instead of returning a silent empty answer.
+- `musubi_code_context` stops "explaining" symbols that don't exist.
+- The graph index now records which commit it was built from.
+
+And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.131.0/CHANGELOG.md#01310---2026-09-03)
 
 _The changelog is written in Spanish._
 
