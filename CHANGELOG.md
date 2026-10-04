@@ -38,8 +38,9 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     paleta del cuerpo: un nudo de vidrio en el centro que une a tu agente con tu disco. Lo que el
     agente guarda cruza el nudo hasta SQLite y vuelve por abajo como «solo lo relevante, solo lo
     nuevo». GitHub sirve el SVG como imagen (corre CSS, no scripts), así que el movimiento es CSS
-    y respeta `prefers-reduced-motion`: con la preferencia puesta queda quieto, en el estado
-    final. No lleva ninguna cifra, para que no se pudra. Los dos SVG salen de
+    y corre siempre, también con `prefers-reduced-motion` puesto: Windows la activa al apagar los
+    «efectos de animación» y la portada se veía quieta. No lleva ninguna cifra, para que no se
+    pudra. Los dos SVG salen de
     `.github/assets/src/hero.py` (`python .github/assets/src/hero.py`), que trae al lado la curva
     del nudo y los contornos del sello; la salida es determinista, byte a byte.
   - Los badges salen de shields.io y no se editan: el último release, el CI, la versión de Go leída
