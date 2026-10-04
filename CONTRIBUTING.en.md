@@ -64,11 +64,33 @@ by test) and `musubi version` (injected from the tag). There is nothing to sync 
    files by hand**: `release.yml` regenerates them from `versioninfo.json` with a pinned
    `goversioninfo`.
 2. Move the contents of `[Unreleased]` into a dated `[X.Y.Z]` section in `CHANGELOG.md`
-   and update the comparison links at the bottom of the file.
-3. Commit, merge to `main` and create the tag: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
+   and update the comparison links at the bottom of the file. **While you are at it, write the
+   version's summary by hand**, above `### Added`: `### Destacado` with three or four bullets in
+   Spanish, one plain sentence each, and `### Highlights` with the same ideas in English. That is
+   what someone landing on the repo front page or the release page sees. Without it, the
+   changelog's own headlines are shown as written, and those are engineering notes full of jargon.
+3. Regenerate "What's new" in both READMEs: `go run ./deploy/cmd/notas-release -readme`. It reads
+   `CHANGELOG.md` — hence it comes **after** step 2 — and rewrites what sits between
+   `<!-- novedades:inicio -->` and `<!-- novedades:fin -->` in `README.md` and `README.en.md`: the
+   three newest versions, with the bullets of their `### Destacado` (in the English README, those of
+   `### Highlights`) and a link to their section; a version without one gets up to four headlines
+   taken from the text. **Don't edit that block by hand**: `TestReadmeNovedadesAlDia` fails if it
+   differs from what the CHANGELOG produces. (The changelog is in Spanish; the English README says
+   so.)
+
+   Above that block sits "Already on `main`, not released yet", which *is* written by hand and
+   carries `base=X.Y.Z` in its opening marker. Once a new version ships it goes stale and
+   `TestSinPublicarDeLosReadmeReales` says so: set `base=` to the new version and redo the
+   headlines with whatever was left out, or delete the whole block.
+4. Commit, merge to `main` and create the tag: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
    The [`release.yml`](.github/workflows/release.yml) workflow **aborts if the tag does not
    match `VERSION`**, regenerates the Windows resource and builds the cross-platform binaries
-   (Windows/Linux/macOS, amd64+arm64) with SHA-256 checksums, and publishes the release.
+   (Windows/Linux/macOS, amd64+arm64) with SHA-256 checksums, and publishes the release. The
+   release notes on GitHub write themselves: the `create-release` job runs
+   `go run ./deploy/cmd/notas-release -version "$TAG"` and uses its output as the body (the
+   `### Destacado` of the `[X.Y.Z]` section, then the headlines of its groups, and a link to the
+   changelog, which is in Spanish). If that step fails, the release is published anyway, with an
+   empty body.
 
 ## License
 
