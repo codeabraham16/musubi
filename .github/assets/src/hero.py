@@ -7,7 +7,10 @@
 # cuerpo) y seal-glyphs.json (contornos del sello 結び, de Noto Sans JP, SIL OFL 1.1).
 #
 # El estado BASE de cada elemento es el estado final y estático; las animaciones parten de
-# «escondido» (from) y terminan ahí. Con prefers-reduced-motion se apagan todas y queda el final.
+# «escondido» (from) y terminan ahí, así que un visor que no corre CSS igual muestra el banner entero.
+# A propósito NO hay @media (prefers-reduced-motion): Windows la activa cuando se apagan los «efectos
+# de animación» y el banner se veía quieto. Para que vuelva a respetarla, cerrá la hoja con
+#   @media (prefers-reduced-motion:reduce){*{animation:none!important}}
 import re, math, bisect, random, pathlib, sys, json, os, tempfile
 
 D = pathlib.Path(__file__).parent
@@ -229,7 +232,7 @@ def build(lang):
     add(f".pulse{{transform-origin:{KCX}px {KCY}px;animation:pulse {LOOP}s ease-in-out {T_LOOP}s infinite}}")
     add(f".ring{{opacity:0;transform-origin:{KCX}px {KCY}px;animation:ring {LOOP}s ease-out {T_LOOP}s infinite}}")
     # el destello y los paquetes nacen escondidos por el dash offset (más allá del final del trazo):
-    # sin animación —reduced-motion, o antes de que arranque el ciclo— no se ve nada varado
+    # sin animación —un visor que no la corre, o antes de que arranque el ciclo— no se ve nada varado
     add(f".glint{{stroke-dasharray:7 200;stroke-dashoffset:{HID};animation:glint {LOOP}s linear {T_LOOP}s infinite}}")
     add(f".wl{{stroke-dasharray:100 200}}")
     for i in range(6):
@@ -251,7 +254,6 @@ def build(lang):
     add(f".backglow{{opacity:0;animation:backglow {LOOP}s ease-in-out {T_LOOP}s infinite}}")
     add(f".recv{{opacity:0;animation:recv {LOOP}s ease-in-out {T_LOOP}s infinite}}")
     add(f".cur{{animation:blink 1.1s steps(1) {T_CARD1 + 1}s infinite}}")
-    add("@media (prefers-reduced-motion:reduce){*{animation:none!important}}")
 
     rnd = random.Random(7)
     parts = []
