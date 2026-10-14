@@ -424,8 +424,8 @@ func TestLoadMemoryDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load error: %v", err)
 	}
-	if cfg.Memory.RecallTokenBudget != 1500 {
-		t.Errorf("esperaba recall_token_budget 1500 por defecto, obtuve %d", cfg.Memory.RecallTokenBudget)
+	if cfg.Memory.RecallTokenBudget != 650 {
+		t.Errorf("esperaba recall_token_budget 650 por defecto, obtuve %d", cfg.Memory.RecallTokenBudget)
 	}
 	if cfg.Memory.GistMaxTokens != 24 {
 		t.Errorf("esperaba gist_max_tokens 24 por defecto, obtuve %d", cfg.Memory.GistMaxTokens)
@@ -465,7 +465,7 @@ func TestLoadMemorySessionBudgetZeroRespected(t *testing.T) {
 		t.Errorf("un session_token_budget 0 explícito debe respetarse (sin techo), obtuve %d", cfg.Memory.SessionTokenBudget)
 	}
 	// El resto del bloque sigue tomando defaults (0 no es valor útil ahí).
-	if cfg.Memory.RecallTokenBudget != 1500 || cfg.Memory.GistMaxTokens != 24 || cfg.Memory.CandidatePool != 50 {
+	if cfg.Memory.RecallTokenBudget != 650 || cfg.Memory.GistMaxTokens != 24 || cfg.Memory.CandidatePool != 50 {
 		t.Errorf("los otros numéricos de memory deben rellenarse con defaults: %+v", cfg.Memory)
 	}
 }

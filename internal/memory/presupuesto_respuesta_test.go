@@ -29,9 +29,10 @@ func rankingDePrueba(n int) []scoredCandidate {
 	return out
 }
 
-// TestAlTechoDeLaRespuestaCortaSoloLaCola fija las tres promesas del presupuesto de respuesta:
-// la respuesta serializada entra en el presupuesto (a lo sumo 4 caracteres por token, el divisor
-// más generoso del estimador), lo que queda es un PREFIJO del empaquetado de siempre, y el score
+// TestAlTechoDeLaRespuestaCortaSoloLaCola fija las promesas del techo de la respuesta: la
+// respuesta serializada entra en holguraDeLaRespuesta veces el presupuesto (a lo sumo 4 caracteres
+// por token, el divisor más generoso del estimador), y con material de sobra pasa de 1 vez, así
+// que la holgura medida está; lo que queda es un PREFIJO del empaquetado de siempre, y el score
 // viaja con 3 cifras significativas.
 func TestAlTechoDeLaRespuestaCortaSoloLaCola(t *testing.T) {
 	const budget = 1500
@@ -49,15 +50,19 @@ func TestAlTechoDeLaRespuestaCortaSoloLaCola(t *testing.T) {
 	if r.Count != len(r.Items) {
 		t.Errorf("count=%d con %d items", r.Count, len(r.Items))
 	}
-	if r.UsedTokens > budget {
-		t.Errorf("used_tokens=%d pasa el presupuesto %d", r.UsedTokens, budget)
+	techo := holguraDeLaRespuesta * budget
+	if r.UsedTokens > techo {
+		t.Errorf("used_tokens=%d pasa el techo %d", r.UsedTokens, techo)
+	}
+	if r.UsedTokens <= budget {
+		t.Errorf("used_tokens=%d no pasa el presupuesto %d con material de sobra: la holgura medida no está", r.UsedTokens, budget)
 	}
 	b, err := json.Marshal(r)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := utf8.RuneCount(b); n > 4*budget {
-		t.Errorf("la respuesta serializada pesa %d caracteres: más de 4 por token del presupuesto (%d); el sobre de los items viaja gratis", n, 4*budget)
+	if n := utf8.RuneCount(b); n > 4*techo {
+		t.Errorf("la respuesta serializada pesa %d caracteres: más de 4 por token del techo (%d); el sobre de los items viaja gratis", n, 4*techo)
 	}
 	for _, it := range r.Items {
 		digitos := strings.TrimLeft(strings.Replace(strconv.FormatFloat(it.Score, 'g', -1, 64), "0.", "", 1), "0")
@@ -67,8 +72,8 @@ func TestAlTechoDeLaRespuestaCortaSoloLaCola(t *testing.T) {
 	}
 }
 
-// TestAlTechoDeLaRespuestaGarantizaElPrimero: un presupuesto menor que un item devuelve igual el
-// mejor, como el empaquetado de siempre, y used_tokens dice lo que pesó de verdad.
+// TestAlTechoDeLaRespuestaGarantizaElPrimero: un techo menor que un item devuelve igual el mejor,
+// como el empaquetado de siempre, y used_tokens dice lo que pesó de verdad.
 func TestAlTechoDeLaRespuestaGarantizaElPrimero(t *testing.T) {
 	const budget = 10
 	deSiempre := packByBudget(rankingDePrueba(5), budget, defaultGistMaxTokens, reparto{})
@@ -76,7 +81,7 @@ func TestAlTechoDeLaRespuestaGarantizaElPrimero(t *testing.T) {
 	if len(r.Items) != 1 || r.Items[0].ID != deSiempre.Items[0].ID {
 		t.Fatalf("esperaba sólo el primero (%s), obtuve %+v", deSiempre.Items[0].ID, r.Items)
 	}
-	if r.UsedTokens <= budget {
-		t.Errorf("used_tokens=%d: un item entero no entra en %d, tiene que decir cuánto pesó", r.UsedTokens, budget)
+	if techo := holguraDeLaRespuesta * budget; r.UsedTokens <= techo {
+		t.Errorf("used_tokens=%d: un item entero no entra en %d, tiene que decir cuánto pesó", r.UsedTokens, techo)
 	}
 }

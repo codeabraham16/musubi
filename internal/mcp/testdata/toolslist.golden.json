@@ -61,7 +61,7 @@
           },
           "token_budget": {
             "type": "number",
-            "description": "Techo de tokens del resultado (opcional; usa el default de la config)"
+            "description": "Tokens para los gists (opcional; usa el default de la config). La respuesta entera se corta en 3 veces esto."
           }
         },
         "required": [

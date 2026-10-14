@@ -521,7 +521,7 @@ embedding:
   api_key_env: OPENAI_API_KEY   # nombre de la env var; el secreto NUNCA va en el yaml
 
 memory:
-  recall_token_budget: 1500     # techo por defecto de la respuesta de musubi_recall
+  recall_token_budget: 650      # presupuesto de los gists de musubi_recall (la respuesta, ≤3×)
   gist_max_tokens: 24           # tope de un gist (titular extractivo)
   candidate_pool: 50            # candidatos a rankear antes de empaquetar
   session_token_budget: 8000    # techo blando del gobernador (0 = sin techo)

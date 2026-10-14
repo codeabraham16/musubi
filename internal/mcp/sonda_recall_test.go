@@ -3,7 +3,7 @@
 package mcp
 
 // sonda_recall_test.go — cuánto pesa la respuesta de musubi_recall sobre una COPIA de la base real,
-// antes y después de que el presupuesto cubriera el item entero (RecallOptions.PresupuestoDeRespuesta).
+// antes y después del techo de la respuesta entera (RecallOptions.PresupuestoDeRespuesta).
 //
 //	MUSUBI_SONDA_RECALL_DIR=<dir con .musubi/memory.db copiada> \
 //	  go test -tags sonda ./internal/mcp -run TestSondaRecallLiviano -v -count=1
@@ -13,7 +13,8 @@ package mcp
 // default viejo de 400; «después» es el handler real, el que recibe el agente.
 //
 // Falla sólo por lo que el cambio promete: que lo de después sea un PREFIJO de lo de antes (sólo se
-// corta la cola) y que used_tokens no pase el presupuesto. El resto lo reporta.
+// corta la cola) y que used_tokens no pase el techo, holguraMedida veces el presupuesto. El resto
+// lo reporta.
 
 import (
 	"context"
@@ -122,12 +123,15 @@ func TestSondaRecallLiviano(t *testing.T) {
 			for i := 0; prefijo && i < len(rd.Items); i++ {
 				prefijo = ra.Items[i].ID == rd.Items[i].ID
 			}
-			if !prefijo {
+			// Con el default no aplica: antes y después empaquetan con presupuestos distintos
+			// (defaultDeAntes y el de ahora), y el de ahora deja entrar gists grandes que el de antes
+			// salteaba. Ahí se reporta en la columna, y el top-10 dice si cambió la cabeza.
+			if !prefijo && budget > 0 {
 				t.Errorf("%q @%d: lo de después NO es un prefijo de lo de antes", q, budget)
 			}
-			techo := rd.Budget
+			techo := holguraMedida * rd.Budget
 			if len(rd.Items) > 1 && rd.UsedTokens > techo {
-				t.Errorf("%q @%d: used_tokens=%d pasa el presupuesto %d", q, budget, rd.UsedTokens, techo)
+				t.Errorf("%q @%d: used_tokens=%d pasa el techo %d", q, budget, rd.UsedTokens, techo)
 			}
 			etiqueta := fmt.Sprintf("%d", budget)
 			if budget == 0 {

@@ -12,13 +12,19 @@ import (
 	"musubi/internal/memory"
 )
 
-// TestRecallElPresupuestoEsTechoDeLaRespuesta: lo que recibe el agente por musubi_recall entra en
-// token_budget —el gist Y el sobre de cada item—, y bajar el presupuesto sólo corta la cola.
+// holguraMedida es la holgura de memory.AlTechoDeLaRespuesta, escrita a mano a propósito: la
+// eligió el dueño contra una medición (ver holguraDeLaRespuesta), y si cambia tiene que cambiar
+// acá también, a sabiendas.
+const holguraMedida = 3
+
+// TestRecallElTechoEsTresPresupuestos: lo que recibe el agente por musubi_recall —el gist Y el
+// sobre de cada item— no pasa de 3 veces token_budget, con material de sobra pasa de 1 vez, y
+// bajar el presupuesto sólo corta la cola.
 //
-// La vara es independiente del estimador: a lo sumo 4 caracteres por token del presupuesto, que es
-// el divisor más generoso que usa. Si el presupuesto volviera a contar sólo el gist, la respuesta
-// pesaría ~13 caracteres por token y esto se pone en rojo.
-func TestRecallElPresupuestoEsTechoDeLaRespuesta(t *testing.T) {
+// La vara es independiente del estimador: a lo sumo 4 caracteres por token del techo, que es el
+// divisor más generoso que usa. Si el sobre volviera a viajar gratis, la respuesta no tendría techo
+// y esto se pone en rojo; si el techo volviera a 1 presupuesto, también.
+func TestRecallElTechoEsTresPresupuestos(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 	for i := 0; i < 40; i++ {
 		if _, e := call(t, s, "musubi_save_observation", map[string]interface{}{
@@ -55,11 +61,15 @@ func TestRecallElPresupuestoEsTechoDeLaRespuesta(t *testing.T) {
 	}
 	txt, chico := recall(budget)
 
-	if n := utf8.RuneCountInString(txt); n > 4*budget {
-		t.Errorf("con token_budget=%d la respuesta pesa %d caracteres (más de %d): el sobre de los items viaja gratis", budget, n, 4*budget)
+	techo := holguraMedida * budget
+	if n := utf8.RuneCountInString(txt); n > 4*techo {
+		t.Errorf("con token_budget=%d la respuesta pesa %d caracteres (más de %d): el sobre de los items viaja gratis", budget, n, 4*techo)
 	}
-	if chico.UsedTokens > budget {
-		t.Errorf("used_tokens=%d pasa token_budget=%d", chico.UsedTokens, budget)
+	if chico.UsedTokens > techo {
+		t.Errorf("used_tokens=%d pasa el techo %d de token_budget=%d", chico.UsedTokens, techo, budget)
+	}
+	if chico.UsedTokens <= budget {
+		t.Errorf("used_tokens=%d no pasa token_budget=%d con material de sobra: la holgura medida no está", chico.UsedTokens, budget)
 	}
 	if len(chico.Items) < 2 || len(chico.Items) >= len(grande.Items) {
 		t.Fatalf("el corte no se ve: %d items con %d tokens, %d con 8000", len(chico.Items), budget, len(grande.Items))
@@ -125,7 +135,7 @@ func TestConJuezElCorteVaDespues(t *testing.T) {
 	if len(r.Items) >= cabeza {
 		t.Fatalf("con token_budget=%d viajaron %d items de una cabeza de %d: el corte no se ve", budget, len(r.Items), cabeza)
 	}
-	if len(r.Items) > 1 && r.UsedTokens > budget {
-		t.Errorf("used_tokens=%d pasa token_budget=%d", r.UsedTokens, budget)
+	if techo := holguraMedida * budget; len(r.Items) > 1 && r.UsedTokens > techo {
+		t.Errorf("used_tokens=%d pasa el techo %d de token_budget=%d", r.UsedTokens, techo, budget)
 	}
 }

@@ -237,7 +237,7 @@ func (s *McpServer) buildRegistry() []toolEntry {
 					Type: "object",
 					Properties: map[string]Property{
 						"query":        {Type: "string", Description: "Texto de la consulta"},
-						"token_budget": {Type: "number", Description: "Techo de tokens del resultado (opcional; usa el default de la config)"},
+						"token_budget": {Type: "number", Description: "Tokens para los gists (opcional; usa el default de la config). La respuesta entera se corta en 3 veces esto."},
 						"rerank":       {Type: "boolean", Description: "Somete el tope del ranking al juez de pertinencia (un LLM) SÓLO en esta consulta. Pone lo correcto primero más seguido y CUESTA ~8,5 s. Usalo cuando una persona está esperando la respuesta; no en sondeos ni en bucles. Ausente = decide la config del servidor; false lo apaga aunque el servidor esté en turbo. Cuando el juez corre, la respuesta trae `reranked: true` y los items del tope vienen SIN `score`: el orden pasa a ser del juez, y re-ordenar por el puntaje model-free deshace su trabajo."},
 					},
 					Required: []string{"query"},

@@ -55,9 +55,9 @@ var pruebasExcluidasAProposito = map[string]string{
 
 	// Necesita una COPIA de la base real (MUSUBI_SONDA_RECALL_DIR) y sin ella se saltea: mide cuánto
 	// pesa la respuesta de musubi_recall antes y después del techo de la respuesta. El mismo contrato
-	// —sólo se corta la cola, used_tokens no pasa el presupuesto— lo cuida en CI
-	// TestRecallElPresupuestoEsTechoDeLaRespuesta, sobre una base sembrada.
-	"internal/mcp/sonda_recall_test.go": "instrumento sobre una copia de la base real, que CI no tiene; CI SÍ la compila (`go vet -tags sonda`) y la compuerta del mismo contrato es TestRecallElPresupuestoEsTechoDeLaRespuesta",
+	// —sólo se corta la cola, used_tokens no pasa el techo— lo cuida en CI
+	// TestRecallElTechoEsTresPresupuestos, sobre una base sembrada.
+	"internal/mcp/sonda_recall_test.go": "instrumento sobre una copia de la base real, que CI no tiene; CI SÍ la compila (`go vet -tags sonda`) y la compuerta del mismo contrato es TestRecallElTechoEsTresPresupuestos",
 
 	// Éstas SÍ corren en CI, con su tag encendido, así que no son pruebas muertas: van acá porque
 	// esta guarda evalúa sin tags. `-race` define el tag `race` solo; `treesitter` va explícito en

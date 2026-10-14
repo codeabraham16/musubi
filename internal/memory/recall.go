@@ -45,13 +45,14 @@ type RecallOptions struct {
 	CandidatePool int  // candidatos a rankear antes de empaquetar
 	GistMaxTokens int  // tope de un gist generado al vuelo
 	NoBump        bool // si true, no actualiza stats de acceso (recall read-only)
-	// PresupuestoDeRespuesta hace que TokenBudget sea el techo de la respuesta ENTERA tal como la
-	// recibe quien llamó al tool: cada item cuesta su gist MÁS su sobre (id, topic_key, fecha,
-	// score, atribución, anclas rancias y los nombres de las claves JSON), y el score viaja
-	// redondeado a 3 cifras significativas. Ver AlTechoDeLaRespuesta.
+	// PresupuestoDeRespuesta le pone techo a la respuesta ENTERA tal como la recibe quien llamó al
+	// tool: holguraDeLaRespuesta veces TokenBudget, donde cada item cuesta su gist MÁS su sobre (id,
+	// topic_key, fecha, score, atribución, anclas rancias y los nombres de las claves JSON), y el
+	// score viaja redondeado a 3 cifras significativas. TokenBudget sigue siendo lo que se reparte
+	// entre los gists. Ver AlTechoDeLaRespuesta.
 	//
-	// Sin esto el presupuesto contaba sólo el gist y el sobre viajaba gratis: la respuesta real
-	// pesaba ~3,4 veces lo pedido. Lo prende SÓLO musubi_recall, que serializa los items a JSON.
+	// Sin esto el sobre viajaba gratis y la respuesta no tenía techo: el presupuesto contaba sólo
+	// el gist. Lo prende SÓLO musubi_recall, que serializa los items a JSON.
 	// El hook del turno, el priming, musubi_ask y el banco arman su propio texto con el gist (o
 	// hidratan el contenido), así que siguen con el empaquetado de siempre, bit a bit. Con el juez
 	// de pertinencia, musubi_recall lo apaga y llama a AlTechoDeLaRespuesta DESPUÉS del juez.
@@ -508,8 +509,20 @@ func empaquetar(ranked []scoredCandidate, budget, gistMax int, rep reparto) Reca
 	return result
 }
 
-// AlTechoDeLaRespuesta corta el empaquetado para que la respuesta del tool, ENTERA, entre en el
-// presupuesto (ver RecallOptions.PresupuestoDeRespuesta). Cuenta el sobre de la respuesta y, por
+// holguraDeLaRespuesta es cuántas veces el presupuesto puede pesar la respuesta ENTERA de
+// musubi_recall, contando el sobre de cada item.
+//
+// No es 1 porque el agente abre mucho de la cola. Medido el 2026-10-14 sobre 14 días de
+// transcripciones: 507 recalls y 690 aperturas con musubi_memory_expand después de un recall. El
+// 43 % de lo abierto venía de más abajo del puesto 10, así que un top-10 idéntico no prueba nada.
+// Con el techo en 1 presupuesto llegaba el 71,4 % de lo que el agente abrió después; con 2, el
+// 89,4 %; con 3, el 96,7 %, y el recall pesa un 31,8 % menos; con 4, el 98,8 % y un 14,8 % menos.
+// Va 3: la regla es no perder más del 10 %, y 3 deja margen por si la medición se equivoca.
+const holguraDeLaRespuesta = 3
+
+// AlTechoDeLaRespuesta corta el empaquetado para que la respuesta del tool, ENTERA, no pase de
+// holguraDeLaRespuesta veces el presupuesto (ver RecallOptions.PresupuestoDeRespuesta). Cuenta el
+// sobre de la respuesta y, por
 // cada item, su gist con el estimador de siempre más todo lo demás que viaja con él, estimado como
 // JSON. Redondea el score antes de medir, porque así es como viaja.
 //
@@ -519,16 +532,18 @@ func empaquetar(ranked []scoredCandidate, budget, gistMax int, rep reparto) Reca
 // que antes; sólo se pierde lo de abajo. El juez de pertinencia reordena ESE tope, así que con
 // juez el corte va después de él (ver toolRecall): cortar antes le achicaría la cabeza que juzga.
 //
-// El primer item entra siempre, como en packByBudget: un presupuesto menor que un item devuelve
-// igual el mejor, y used_tokens dice cuánto pesó de verdad. Quedan afuera del cálculo las
+// El primer item entra siempre, como en packByBudget: un techo menor que un item devuelve igual el
+// mejor. used_tokens dice cuánto pesó de verdad la respuesta, así que puede pasar de budget: el
+// techo es holguraDeLaRespuesta veces budget. Quedan afuera del cálculo las
 // `correcciones` de tipeo y la marca `reranked`, que se agregan después, son raras y pesan poco.
 func AlTechoDeLaRespuesta(r RecallResult, budget int) RecallResult {
-	usado := costoDelSobreDeLaRespuesta(budget, len(r.Items))
+	techo := holguraDeLaRespuesta * budget
+	usado := costoDelSobreDeLaRespuesta(budget, techo, len(r.Items))
 	items := make([]RecallItem, 0, len(r.Items))
 	for i, it := range r.Items {
 		it.Score = redondearScore(it.Score)
 		c := costoEnLaRespuesta(it)
-		if i > 0 && usado+c > budget {
+		if i > 0 && usado+c > techo {
 			break
 		}
 		items = append(items, it)
@@ -557,9 +572,9 @@ func costoEnLaRespuesta(it RecallItem) int {
 }
 
 // costoDelSobreDeLaRespuesta estima lo que pesa la respuesta sin items: `{"budget":…,
-// "used_tokens":…,"count":…,"items":[]}`. Usa el presupuesto y el conteo como cota de los dígitos.
-func costoDelSobreDeLaRespuesta(budget, count int) int {
-	return estimateTokensFor(fmt.Sprintf(`{"budget":%d,"used_tokens":%d,"count":%d,"items":[]}`, budget, budget, count), kindJSON)
+// "used_tokens":…,"count":…,"items":[]}`. Usa el techo y el conteo como cota de los dígitos.
+func costoDelSobreDeLaRespuesta(budget, techo, count int) int {
+	return estimateTokensFor(fmt.Sprintf(`{"budget":%d,"used_tokens":%d,"count":%d,"items":[]}`, budget, techo, count), kindJSON)
 }
 
 // redondearScore deja el puntaje en 3 cifras significativas. El orden lo da la posición en la

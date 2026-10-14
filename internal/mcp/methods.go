@@ -1475,8 +1475,8 @@ const maxRecallBudget = 8000
 // opcionesDeRecall arma las opciones de musubi_recall: la config de memoria, el alcance que sale
 // de la credencial y el presupuesto pedido (0 ⇒ el de la config), acotado a maxRecallBudget.
 //
-// PresupuestoDeRespuesta va prendido porque esta tool devuelve los items serializados: el
-// presupuesto tiene que cubrir lo que el agente recibe, no sólo los gists. toolRecall lo apaga
+// PresupuestoDeRespuesta va prendido porque esta tool devuelve los items serializados: el techo
+// de la respuesta cuenta lo que el agente recibe, no sólo los gists. toolRecall lo apaga
 // cuando corre el juez y corta después de él.
 func (s *McpServer) opcionesDeRecall(ctx context.Context, tokenBudget int) memory.RecallOptions {
 	opts := memory.RecallOptions{
