@@ -227,6 +227,30 @@ func TestSesionesViejasFiltraPorLaUltimaModificacion(t *testing.T) {
 	}
 }
 
+func TestSesionesBorrarConSiExigeUnaSemana(t *testing.T) {
+	_, projects := configDePrueba(t)
+	sesionDePrueba(t, projects, "-p", idA, 10, 10, hace40Dias)
+	jsonl := filepath.Join(projects, "-p", idA+".jsonl")
+	// Con --si, menos de una semana se rechaza entero, aunque la sesión elegida cumpla los días.
+	for _, n := range []string{"1", "6"} {
+		code, salida := correrSesiones(t, "", "borrar", "--viejas", n, "--todas", "--si")
+		if code != 2 {
+			t.Errorf("--viejas %s --si salió %d; quiero 2:\n%s", n, code, salida)
+		}
+		if !existe(jsonl) {
+			t.Fatalf("--viejas %s --si borró la sesión:\n%s", n, salida)
+		}
+	}
+	// Sin --si, un día sigue valiendo: muestra el plan, pregunta y sin «s» no borra.
+	if code, salida := correrSesiones(t, "", "borrar", "--viejas", "1", "--todas"); code != 1 || !existe(jsonl) {
+		t.Errorf("--viejas 1 sin --si salió %d (quiero 1, sin borrar):\n%s", code, salida)
+	}
+	// Desde una semana, --si borra sin preguntar.
+	if code, salida := correrSesiones(t, "", "borrar", "--viejas", "7", "--todas", "--si"); code != 0 || existe(jsonl) {
+		t.Errorf("--viejas 7 --si salió %d y la sesión sigue en disco=%v:\n%s", code, existe(jsonl), salida)
+	}
+}
+
 func TestSesionesBorrarSinSiYConNoNoBorraNada(t *testing.T) {
 	_, projects := configDePrueba(t)
 	sesionDePrueba(t, projects, "-p", idA, 10, 10, hace40Dias)
@@ -294,11 +318,11 @@ func TestSesionesMemoryQuedaIntactaSiempre(t *testing.T) {
 		}
 	}
 
-	code, salida := correrSesiones(t, "", "borrar", "--viejas", "1", "--todas", "--si")
+	code, salida := correrSesiones(t, "", "borrar", "--viejas", "7", "--todas", "--si")
 	if code != 0 || existe(filepath.Join(projects, "-p", idA+".jsonl")) {
-		t.Fatalf("borrar --viejas 1 --todas --si salió %d y A existe=%v:\n%s", code, existe(filepath.Join(projects, "-p", idA+".jsonl")), salida)
+		t.Fatalf("borrar --viejas 7 --todas --si salió %d y A existe=%v:\n%s", code, existe(filepath.Join(projects, "-p", idA+".jsonl")), salida)
 	}
-	intacta("borrar --viejas 1 --todas --si")
+	intacta("borrar --viejas 7 --todas --si")
 
 	for _, id := range []string{"memory", "MEMORY", "memory.jsonl"} {
 		if code, salida := correrSesiones(t, "s\n", "borrar", id, "--si"); code != 2 {

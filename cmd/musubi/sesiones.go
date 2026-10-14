@@ -54,6 +54,11 @@ const carpetaDeMemoria = "memory"
 // maxDiasViejas acota --viejas: más de un siglo no filtra nada y desborda la cuenta en nanosegundos.
 const maxDiasViejas = 36500
 
+// minDiasViejasConSi es el piso de --viejas cuando va --si. Sin la pregunta no queda nada que frene
+// un error de tipeo, y un día de quietud alcanza para llevarse el trabajo de ayer. Por id no hay
+// piso: cada uuid ya nombra una sesión entera.
+const minDiasViejasConSi = 7
+
 var (
 	reIDDeSesion = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	reElemento   = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -513,7 +518,7 @@ func sesionesBorrar(args []string, in io.Reader, out, errOut io.Writer) int {
 	fl.SetOutput(errOut)
 	viejas := fl.Int("viejas", 0, "elegir las que no cambiaron hace N días o más")
 	todas := fl.Bool("todas", false, "con --viejas: de todos los proyectos, no sólo del actual")
-	si := fl.Bool("si", false, "no preguntar: borrar lo que muestra el plan")
+	si := fl.Bool("si", false, "no preguntar: borrar lo que muestra el plan (con --viejas, de 7 días en adelante)")
 	ids, err := parsearIntercalado(fl, args)
 	if err != nil {
 		return 2
@@ -527,6 +532,9 @@ func sesionesBorrar(args []string, in io.Reader, out, errOut io.Writer) int {
 		return 2
 	case len(ids) > 0 && *viejas > 0:
 		fmt.Fprintln(errOut, pre, "elegí por id o por --viejas, no las dos cosas a la vez")
+		return 2
+	case *si && *viejas > 0 && *viejas < minDiasViejasConSi:
+		fmt.Fprintf(errOut, "%s con --si, --viejas va de %d días en adelante: sin la pregunta, menos es demasiado poco. Sin --si muestra el plan y pregunta\n", pre, minDiasViejasConSi)
 		return 2
 	}
 	// Selección: el id tiene que ser un uuid entero ANTES de mirar el disco. Es la puerta que deja

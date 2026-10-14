@@ -206,7 +206,7 @@ func printUsage() {
 
 	section("Sesiones de Claude Code")
 	cmd("sesiones [--todas] [--viejas N] [--titulos]", "Lista las sesiones guardadas en disco: id, carpeta, fecha, tamaño y si puede estar activa (sólo lectura)")
-	cmd("sesiones borrar <id>… | --viejas N [--todas]", "Borra sesiones: muestra el plan y pregunta (--si no pregunta); nunca toca memory/, nada fuera de projects ni una sesión tocada en los últimos 15 min")
+	cmd("sesiones borrar <id>… | --viejas N [--todas]", "Borra sesiones: muestra el plan y pregunta (--si no pregunta; con --viejas, de 7 días en adelante); nunca toca memory/, nada fuera de projects ni una sesión tocada en los últimos 15 min")
 
 	section("Ingesta")
 	cmd("ingest [--as ...] [--lang ...] [--json] <url>", "Convierte un link (video/red social/artículo) en texto; --save lo guarda en memoria")

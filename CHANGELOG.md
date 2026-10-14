@@ -13,7 +13,8 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   cambiaron hace N días o más; `--titulos`, el título puesto a mano o el automático) con su id,
   carpeta, fecha, tamaño (el `.jsonl` más su carpeta `<id>/`) y si está «posiblemente activa», y
   el subtotal por carpeta. `musubi sesiones borrar <id>…` o `--viejas N` muestra el plan y cuánto
-  libera y pregunta (s/N; `--si` no pregunta). Lo que no borra nunca, sin bandera para saltearlo:
+  libera y pregunta (s/N; `--si` no pregunta, y con `--viejas` exige 7 días o más: sin la pregunta,
+  un error de tipeo se llevaría el trabajo de ayer). Lo que no borra nunca, sin bandera para saltearlo:
   `memory/` (la memoria automática de Claude Code), nada fuera de `projects` ni a través de un
   enlace o una junction, y una sesión tocada en los últimos 15 minutos —en el `.jsonl` o en su
   carpeta— o registrada como abierta en `sessions/<pid>.json`: puede ser la que corre el comando.
