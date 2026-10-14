@@ -20,6 +20,9 @@ import (
 type entradaDeArranque struct {
 	SessionID string `json:"session_id"`
 	Source    string `json:"source"`
+	// TranscriptPath es dónde Claude Code escribe la conversación de la sesión: el traspaso lee de
+	// ahí el último resumen de compactación cuando alguien lo pide (traspaso.go).
+	TranscriptPath string `json:"transcript_path"`
 }
 
 // Las fuentes del SessionStart que Musubi atiende: son las de los matchers que instalan setup y el
@@ -38,6 +41,7 @@ func leerEntradaDeArranque(stdin io.Reader) entradaDeArranque {
 	_ = json.NewDecoder(stdin).Decode(&in)
 	in.SessionID = strings.TrimSpace(in.SessionID)
 	in.Source = strings.TrimSpace(in.Source)
+	in.TranscriptPath = strings.TrimSpace(in.TranscriptPath)
 	return in
 }
 
@@ -102,7 +106,7 @@ func detectOutputSegunFuente(root string, hookMode bool, in entradaDeArranque) (
 		cfg = config.Default()
 	}
 	if in.esCompactacion() {
-		return detectOutputDeCompactacion(root, cfg, sessionID), nil
+		return detectOutputDeCompactacion(root, cfg, in), nil
 	}
 	var store startupStore
 	current, _ := detector.DetectStack(root)
@@ -131,7 +135,10 @@ func detectOutputSegunFuente(root string, hookMode bool, in entradaDeArranque) (
 	// memoria que vuelve tras compactar no llega, y nadie se entera (ver buildAvisoSinCompact). Se mira
 	// la raíz y la carpeta de la sesión, que es donde Claude Code lee el settings.
 	aviso := buildAvisoSinCompact(store, root, carpetaDeLaSesion())
-	return buildHookOutputConAviso(alcance, root, store, cfg.Startup, sessionID, current, propio, aviso)
+	// Y si OTRA sesión del proyecto llegó al aviso de compactaciones sin que nadie recuperara su
+	// resumen, una línea lo dice (traspaso.go). El resumen no viaja: lo trae `musubi traspaso`.
+	traspaso := lineaDeTraspasoPendiente(store, in)
+	return buildHookOutputConAviso(alcance, root, store, cfg.Startup, sessionID, current, propio, aviso, traspaso)
 }
 
 // buildHookOutput arma el additionalContext del SessionStart combinando dos
@@ -150,14 +157,15 @@ func buildHookOutput(root string, store startupStore, cfg config.StartupConfig, 
 // priming usa para marcar las notas de otro proyecto (vacío ⇒ ninguna marca). El alcance decide QUÉ
 // entra al priming (ver buildPrimingContext); su valor cero es todo el acervo.
 func buildHookOutputCon(alcance memory.AlcanceDelTurno, root string, store startupStore, cfg config.StartupConfig, sessionID string, current []detector.StackResult, propio string) (string, error) {
-	return buildHookOutputConAviso(alcance, root, store, cfg, sessionID, current, propio, "")
+	return buildHookOutputConAviso(alcance, root, store, cfg, sessionID, current, propio, "", "")
 }
 
 // buildHookOutputConAviso es buildHookOutputCon con el aviso de salud de un repo sin el hook de
 // compactación (buildAvisoSinCompact), que lo calcula quien corre el hook de verdad: las pruebas que
 // arman el arranque con buildHookOutput no dependen de lo que haya instalado en la PC que las corre.
-// El aviso NO cuenta para decidir si va la captura proactiva: solo, no es algo que decir.
-func buildHookOutputConAviso(alcance memory.AlcanceDelTurno, root string, store startupStore, cfg config.StartupConfig, sessionID string, current []detector.StackResult, propio, aviso string) (string, error) {
+// El aviso NO cuenta para decidir si va la captura proactiva: solo, no es algo que decir. La línea
+// del traspaso pendiente (traspaso.go) tampoco.
+func buildHookOutputConAviso(alcance memory.AlcanceDelTurno, root string, store startupStore, cfg config.StartupConfig, sessionID string, current []detector.StackResult, propio, aviso, traspaso string) (string, error) {
 	skillsDir := filepath.Join(root, config.DirName, config.SkillsDir)
 	sentinelPath := filepath.Join(skillsDir, config.SentinelFile)
 	_, sentinelErr := os.Stat(sentinelPath)
@@ -201,6 +209,7 @@ func buildHookOutputConAviso(alcance memory.AlcanceDelTurno, root string, store 
 		{surface: "startup_capture", text: capture},
 		{surface: "startup_health", text: health},
 		{surface: surfaceAvisoSinCompact, text: aviso},
+		{surface: surfaceTraspasoPendiente, text: traspaso},
 		{surface: "startup_cognitive", text: cognitive},
 		{surface: "startup_skillgen", text: generation},
 	}), nil
