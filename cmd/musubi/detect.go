@@ -131,7 +131,10 @@ func detectOutputSegunFuente(root string, hookMode bool, in entradaDeArranque) (
 	// memoria que vuelve tras compactar no llega, y nadie se entera (ver buildAvisoSinCompact). Se mira
 	// la raíz y la carpeta de la sesión, que es donde Claude Code lee el settings.
 	aviso := buildAvisoSinCompact(store, root, carpetaDeLaSesion())
-	return buildHookOutputConAviso(alcance, root, store, cfg.Startup, sessionID, current, propio, aviso)
+	out, err := buildHookOutputConAviso(alcance, root, store, cfg.Startup, sessionID, current, propio, aviso)
+	// La guardia de instrucciones (guardia_instrucciones.go) avisa una vez por día si un CLAUDE.md o el
+	// MEMORY.md pasa el tope, y sólo acá: la compactación ya volvió más arriba.
+	return sumarGuardiaDeInstrucciones(out, store, root, sessionID), err
 }
 
 // buildHookOutput arma el additionalContext del SessionStart combinando dos
