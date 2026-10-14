@@ -22,8 +22,9 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     los saltos de línea más uno, y el largo en unidades UTF-16. Un CLAUDE.md suma lo que importa por
     `@ruta` (hasta cuatro saltos, fuera de bloques de código). La carpeta de la memoria sale del
     checkout principal del repo y se busca sin distinguir la mayúscula de la letra de unidad.
-  - `go test -tags sonda -run TestSondaGuardiaDeInstrucciones ./cmd/musubi/` con
-    `MUSUBI_SONDA_RAICES` mide los archivos reales de la PC, sin escribir nada.
+  - `go test -run TestSondaGuardiaDeInstrucciones -v ./cmd/musubi/` con
+    `MUSUBI_SONDA_RAICES` mide los archivos reales de la PC, sin escribir nada; sin esa variable
+    se saltea, y compila en CI como cualquier prueba.
 - **Las notas de cada release salen solas del CHANGELOG, y el README cuenta lo último que pasó.**
   130 de las 131 releases publicadas tienen el cuerpo vacío: el job `create-release` de
   `release.yml` sólo le pasaba `tag_name` a la acción. Lo que faltaba ya estaba escrito, en este
