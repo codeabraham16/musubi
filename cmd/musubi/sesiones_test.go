@@ -5,9 +5,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -438,12 +436,7 @@ func TestSesionesNoBorraATravesDeUnEnlace(t *testing.T) {
 	casos := 0
 	for i, crear := range []func(destino, enlace string) error{
 		os.Symlink,
-		func(destino, enlace string) error {
-			if runtime.GOOS != "windows" {
-				return os.ErrInvalid
-			}
-			return exec.Command("cmd", "/c", "mklink", "/J", enlace, destino).Run()
-		},
+		crearJunction, // sin lanzar `cmd /c mklink`: ver sesiones_ntfs_windows.go
 	} {
 		id := []string{idA, idB}[i]
 		sesionDePrueba(t, projects, "-p", id, 10, 10, hace40Dias)
