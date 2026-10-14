@@ -971,6 +971,12 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   banco siguen con el empaquetado de siempre. Con `rerank`, el corte va después del juez, que ve
   la misma cabeza que antes. La medición se repite con
   `go test -tags sonda ./internal/mcp -run TestSondaRecallLiviano` y `MUSUBI_SONDA_RECALL_DIR`.
+- **Las descripciones de las tools dejan la historia y conservan las reglas.** Salen fechas de
+  medición, números de registro (A75, A84, A86, A91, I16), `Track 20`, `F2`, la `v27`, anécdotas
+  y las justificaciones de cada regla; quedan qué hace cada tool, cuándo usarla, sus parámetros y
+  sus advertencias. `tools/list` baja de 103.173 a 99.215 caracteres (−3,8 %); lo que más baja es
+  `musubi_fleet_consent` (−684). Los esquemas no cambian: mismos parámetros y mismos `required`
+  en las 80 tools. La cita de A84 pasa a un comentario junto a `musubi_fleet_screen`.
 - **El embebedor completo tokeniza con `tokenizer.idx`: arranca en ~0,56 s en vez de ~1,5 s y
   tokeniza la memoria real ~55 veces más rápido, con los mismos ids.**
   `NewStaticProvider` (daemon, serve, capture, ingest y los backfill de embeddings y conflictos)
