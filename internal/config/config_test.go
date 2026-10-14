@@ -386,6 +386,54 @@ func TestLoadMultiAgentEnabledOnlyFalse(t *testing.T) {
 	}
 }
 
+// EL AVISO DE TAREAS NACE APAGADO, Y SE PRENDE SÓLO ESCRIBIÉNDOLO.
+//
+// Decisión del dueño (2026-10-14): cada aviso lanza un subagente que gasta tokens del agente. Tiene
+// que quedar apagado sin config, sin el bloque multiagent y con el bloque sin la clave; y
+// `tareas: true` lo tiene que prender sin tocar el resto del bloque.
+//
+// Sabotaje que la hace fallar: que nazca prendido.
+// arnes: archivo="internal/config/config.go"
+// arnes: de="\t\t\tMaxAttempts:                 5,\n"
+// arnes: a="\t\t\tMaxAttempts:                 5,\n\t\t\tTareas: true,\n"
+//
+// Sabotaje que la hace fallar: que la clave no se lea.
+// arnes: archivo="internal/config/config.go"
+// arnes: de="\tTareas bool `yaml:\"tareas\"`\n"
+// arnes: a="\tTareas bool `yaml:\"-\"`\n"
+func TestElAvisoDeTareasNaceApagado(t *testing.T) {
+	cfg, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatalf("sin config: %v", err)
+	}
+	if cfg.MultiAgent.Tareas {
+		t.Error("sin config, el aviso de tareas quedó prendido")
+	}
+	for caso, contenido := range map[string]string{
+		"sin el bloque multiagent":   "version: \"1.0\"\nmode: local\n",
+		"con el bloque sin la clave": "version: \"1.0\"\nmultiagent:\n  enabled: true\n",
+	} {
+		cfg, err := Load(writeConfig(t, contenido))
+		if err != nil {
+			t.Fatalf("%s: %v", caso, err)
+		}
+		if cfg.MultiAgent.Tareas {
+			t.Errorf("%s: el aviso de tareas quedó prendido", caso)
+		}
+	}
+
+	cfg, err = Load(writeConfig(t, "version: \"1.0\"\nmultiagent:\n  enabled: true\n  tareas: true\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.MultiAgent.Tareas {
+		t.Error("multiagent.tareas: true no prendió el aviso")
+	}
+	if !cfg.MultiAgent.Enabled || cfg.MultiAgent.MaxBatchUnits != 50 || cfg.MultiAgent.LeaseTTLSeconds != 300 {
+		t.Errorf("prender las tareas tocó el resto del bloque: %+v", cfg.MultiAgent)
+	}
+}
+
 func TestLoadParsesEmbeddingBlock(t *testing.T) {
 	root := writeConfig(t, "version: \"1.0\"\nmode: local\nskills_auto_resolve: true\nembedding:\n  provider: ollama\n  model: nomic-embed-text\n  base_url: http://localhost:11434\n  dimensions: 768\n")
 

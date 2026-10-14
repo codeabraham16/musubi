@@ -31,6 +31,9 @@ import (
 //
 // CUÁNDO NO SE DISPARA, Y POR QUÉ:
 //
+//   - Si el proyecto no lo prendió: `multiagent.tareas` nace apagado (decisión del dueño,
+//     2026-10-14), porque cada aviso lanza un subagente que gasta tokens del agente. Apagado, el
+//     hook ni postea ni avisa (runTurn no arma las tareas del turno).
 //   - Dentro de un subagente: el trabajo lo delega la sesión principal.
 //   - Si el modo de permisos no deja trabajar al subagente sin preguntar. Un plugin NO puede darse
 //     permisos —Claude Code sólo le acepta los ajustes `agent` y `subagentStatusLine`, medido en el

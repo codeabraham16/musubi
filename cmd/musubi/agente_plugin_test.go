@@ -165,7 +165,7 @@ func TestInstalarConsultarYQuitarElPlugin(t *testing.T) {
 
 // proyectoConMemoria arma un repo git con memoria de Musubi y el aviso de durable en el turno 1,
 // para que el hook del turno tenga algo que decir y su silencio signifique algo.
-func proyectoConMemoria(t *testing.T, home string) string {
+func proyectoConMemoria(t *testing.T, home string, ajustes ...func(*config.Config)) string {
 	t.Helper()
 	repo := filepath.Join(home, "proyecto")
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
@@ -174,6 +174,9 @@ func proyectoConMemoria(t *testing.T, home string) string {
 	cfg := config.Default()
 	cfg.Loop.DurableNudgeAfterTurns = 1
 	cfg.Update.CheckIntervalHours = -1
+	for _, ajustar := range ajustes {
+		ajustar(&cfg)
+	}
 	contenido, err := cfg.Marshal()
 	if err != nil {
 		t.Fatal(err)

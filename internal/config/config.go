@@ -362,6 +362,15 @@ type MultiAgentConfig struct {
 	// (status failed) en vez de reciclarla de nuevo (default 5). Evita el loop
 	// crash→reclaim→crash de una unidad que siempre falla.
 	MaxAttempts int `yaml:"max_attempts"`
+	// Tareas prende el AVISO DE TAREAS del hook del turno (cmd/musubi/tareas.go): Musubi postea en
+	// su tablero las propuestas de memoria en cuarentena y le pide al agente que se las delegue al
+	// subagente musubi-tareas. NACE APAGADO, por decisión del dueño (2026-10-14): cada aviso lanza
+	// un subagente que gasta tokens del AGENTE, no de Musubi, y medido en davantis-1 del 28/09 al
+	// 14/10 esos subagentes fueron el 3,2 % de todo el gasto —el 14/10, el 26 % y el 49 % de dos
+	// sesiones de Altura—. Apagado, el hook ni postea ni avisa, y las propuestas esperan en
+	// cuarentena, fuera del recall, hasta que alguien las juzgue (musubi_corroborate o
+	// musubi_discard_proposal). `tareas: true` vuelve a lo de antes.
+	Tareas bool `yaml:"tareas"`
 }
 
 // ConflictConfig controla la detección de relaciones semánticas entre
