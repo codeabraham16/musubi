@@ -3,9 +3,11 @@ package memory
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -43,6 +45,17 @@ type RecallOptions struct {
 	CandidatePool int  // candidatos a rankear antes de empaquetar
 	GistMaxTokens int  // tope de un gist generado al vuelo
 	NoBump        bool // si true, no actualiza stats de acceso (recall read-only)
+	// PresupuestoDeRespuesta hace que TokenBudget sea el techo de la respuesta ENTERA tal como la
+	// recibe quien llamó al tool: cada item cuesta su gist MÁS su sobre (id, topic_key, fecha,
+	// score, atribución, anclas rancias y los nombres de las claves JSON), y el score viaja
+	// redondeado a 3 cifras significativas. Ver AlTechoDeLaRespuesta.
+	//
+	// Sin esto el presupuesto contaba sólo el gist y el sobre viajaba gratis: la respuesta real
+	// pesaba ~3,4 veces lo pedido. Lo prende SÓLO musubi_recall, que serializa los items a JSON.
+	// El hook del turno, el priming, musubi_ask y el banco arman su propio texto con el gist (o
+	// hidratan el contenido), así que siguen con el empaquetado de siempre, bit a bit. Con el juez
+	// de pertinencia, musubi_recall lo apaga y llama a AlTechoDeLaRespuesta DESPUÉS del juez.
+	PresupuestoDeRespuesta bool
 	// QueryVector, si no es vacío, activa el recall HÍBRIDO (T5.7 R2): suma un pool de
 	// candidatos por similitud vectorial (coseno) al pool léxico (FTS), unidos por id, y
 	// agrega una 4ta señal RRF por rango vectorial. Lo computa la capa MCP con el embedder.
@@ -333,12 +346,21 @@ func (e *DbEngine) Recall(ctx context.Context, query string, opts RecallOptions)
 	scored = e.diversify(scored, opts.MMRLambda)
 
 	result = packByBudget(scored, budget, gistMax, rep)
+	if opts.PresupuestoDeRespuesta {
+		// Antes de las anclas: no se mira el disco por items que no van a viajar.
+		result = AlTechoDeLaRespuesta(result, budget)
+	}
 
 	// Anclas al estado del proyecto (origins.go): DESPUÉS de rankear y empaquetar, nunca
 	// antes. Si esto influyera en la selección o en el orden dejaría de ser una advertencia
 	// y pasaría a ser un filtro silencioso — que es exactamente lo que no queremos: un
 	// archivo que cambió no prueba que la memoria sea falsa. Sólo anota.
 	result = e.markStaleOrigins(result)
+	if opts.PresupuestoDeRespuesta {
+		// La advertencia de ranciedad también pesa. Se paga con la COLA, nunca con el item que
+		// avisa: el corte es por posición, así que no filtra por ranciedad ni reordena.
+		result = AlTechoDeLaRespuesta(result, budget)
+	}
 
 	// Recall read-only (ej. inyección por turno): no contar como acceso para no
 	// distorsionar el ranking por frecuencia con accesos que el agente no pidió.
@@ -484,6 +506,74 @@ func empaquetar(ranked []scoredCandidate, budget, gistMax int, rep reparto) Reca
 	}
 	result.Count = len(result.Items)
 	return result
+}
+
+// AlTechoDeLaRespuesta corta el empaquetado para que la respuesta del tool, ENTERA, entre en el
+// presupuesto (ver RecallOptions.PresupuestoDeRespuesta). Cuenta el sobre de la respuesta y, por
+// cada item, su gist con el estimador de siempre más todo lo demás que viaja con él, estimado como
+// JSON. Redondea el score antes de medir, porque así es como viaja.
+//
+// SÓLO CORTA LA COLA, y eso es el contrato: recorre en orden y se detiene en el primer item que
+// no entra, sin saltearlo para probar con uno más chico. Lo que queda es un PREFIJO exacto del
+// empaquetado de siempre, así que el tope del ranking —lo que el agente lee primero— es el mismo
+// que antes; sólo se pierde lo de abajo. El juez de pertinencia reordena ESE tope, así que con
+// juez el corte va después de él (ver toolRecall): cortar antes le achicaría la cabeza que juzga.
+//
+// El primer item entra siempre, como en packByBudget: un presupuesto menor que un item devuelve
+// igual el mejor, y used_tokens dice cuánto pesó de verdad. Quedan afuera del cálculo las
+// `correcciones` de tipeo y la marca `reranked`, que se agregan después, son raras y pesan poco.
+func AlTechoDeLaRespuesta(r RecallResult, budget int) RecallResult {
+	usado := costoDelSobreDeLaRespuesta(budget, len(r.Items))
+	items := make([]RecallItem, 0, len(r.Items))
+	for i, it := range r.Items {
+		it.Score = redondearScore(it.Score)
+		c := costoEnLaRespuesta(it)
+		if i > 0 && usado+c > budget {
+			break
+		}
+		items = append(items, it)
+		usado += c
+	}
+	r.Items = items
+	r.Count = len(items)
+	r.UsedTokens = usado
+	return r
+}
+
+// costoEnLaRespuesta es lo que un item pesa dentro de la respuesta JSON: el gist con el estimador
+// de siempre (es texto, y así lo parte el tokenizador aunque viaje entre comillas) más el resto del
+// objeto —las claves, el id, la fecha, el score, la atribución, la coma que lo separa del
+// siguiente— estimado como JSON.
+func costoEnLaRespuesta(it RecallItem) int {
+	gist := it.Gist
+	it.Gist = ""
+	sobre, err := json.Marshal(it)
+	if err != nil {
+		// No pasa con estos tipos. Si pasara, se cobra un sobre generoso: dejarlo viajar gratis es
+		// justamente el defecto que esto corrige.
+		return EstimateTokens(gist) + 128
+	}
+	return EstimateTokens(gist) + estimateTokensFor(string(sobre)+",", kindJSON)
+}
+
+// costoDelSobreDeLaRespuesta estima lo que pesa la respuesta sin items: `{"budget":…,
+// "used_tokens":…,"count":…,"items":[]}`. Usa el presupuesto y el conteo como cota de los dígitos.
+func costoDelSobreDeLaRespuesta(budget, count int) int {
+	return estimateTokensFor(fmt.Sprintf(`{"budget":%d,"used_tokens":%d,"count":%d,"items":[]}`, budget, budget, count), kindJSON)
+}
+
+// redondearScore deja el puntaje en 3 cifras significativas. El orden lo da la posición en la
+// lista, no el número; el número está para mostrar cuánto se separan los items, y para eso
+// alcanzan tres cifras. Con la precisión completa eran ~19 caracteres por item.
+func redondearScore(v float64) float64 {
+	if v == 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return v
+	}
+	r, err := strconv.ParseFloat(strconv.FormatFloat(v, 'g', 3, 64), 64)
+	if err != nil {
+		return v
+	}
+	return r
 }
 
 // PesosRRF es cuánto pesa cada señal en la fusión. Hasta acá las siete valían 1.0, y eso NO era

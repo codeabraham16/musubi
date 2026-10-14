@@ -474,7 +474,7 @@ embedding:
   api_key_env: OPENAI_API_KEY   # name of the env var; the secret NEVER goes in the yaml
 
 memory:
-  recall_token_budget: 400      # default ceiling for musubi_recall
+  recall_token_budget: 1500     # default ceiling of the musubi_recall response
   gist_max_tokens: 24           # cap of a gist (extractive headline)
   candidate_pool: 50            # candidates to rank before packing
   session_token_budget: 8000    # soft ceiling of the governor (0 = no ceiling)

@@ -1472,6 +1472,36 @@ func (s *McpServer) avisoDeHuerfanas(relationID string) string {
 // maxRecallBudget acota el presupuesto pedido por el cliente a un rango sano.
 const maxRecallBudget = 8000
 
+// opcionesDeRecall arma las opciones de musubi_recall: la config de memoria, el alcance que sale
+// de la credencial y el presupuesto pedido (0 ⇒ el de la config), acotado a maxRecallBudget.
+//
+// PresupuestoDeRespuesta va prendido porque esta tool devuelve los items serializados: el
+// presupuesto tiene que cubrir lo que el agente recibe, no sólo los gists. toolRecall lo apaga
+// cuando corre el juez y corta después de él.
+func (s *McpServer) opcionesDeRecall(ctx context.Context, tokenBudget int) memory.RecallOptions {
+	opts := memory.RecallOptions{
+		TokenBudget:            s.memory.RecallTokenBudget,
+		CandidatePool:          s.memory.CandidatePool,
+		GistMaxTokens:          s.memory.GistMaxTokens,
+		GraphCentrality:        s.memory.RecallGraphCentrality,
+		Cooccurrence:           s.memory.RecallCooccurrence,
+		Stemming:               s.memory.RecallStemming,
+		VectorFloor:            s.memory.VectorFloor,
+		MMRLambda:              s.memory.MMRLambda,
+		PresupuestoDeRespuesta: true,
+	}
+	// Enforcement del aislamiento por proyecto (Track 16 F1 16.1c-3): el scope del recall se
+	// DERIVA del principal autenticado (su project_id sale de la credencial, no se auto-declara).
+	opts.ProjectScope, opts.Federate = recallScopeFor(principalFrom(ctx))
+	if tokenBudget > 0 {
+		opts.TokenBudget = tokenBudget
+		if opts.TokenBudget > maxRecallBudget {
+			opts.TokenBudget = maxRecallBudget
+		}
+	}
+	return opts
+}
+
 func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
 		Query       string `json:"query"`
@@ -1489,25 +1519,14 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 		return nil, rpcErrorf(codeInvalidParams, "query es obligatorio")
 	}
 
-	opts := memory.RecallOptions{
-		TokenBudget:     s.memory.RecallTokenBudget,
-		CandidatePool:   s.memory.CandidatePool,
-		GistMaxTokens:   s.memory.GistMaxTokens,
-		GraphCentrality: s.memory.RecallGraphCentrality,
-		Cooccurrence:    s.memory.RecallCooccurrence,
-		Stemming:        s.memory.RecallStemming,
-		VectorFloor:     s.memory.VectorFloor,
-		MMRLambda:       s.memory.MMRLambda,
-	}
-	// Enforcement del aislamiento por proyecto (Track 16 F1 16.1c-3): el scope del recall se
-	// DERIVA del principal autenticado (su project_id sale de la credencial, no se auto-declara).
-	opts.ProjectScope, opts.Federate = recallScopeFor(principalFrom(ctx))
-	if args.TokenBudget > 0 {
-		opts.TokenBudget = args.TokenBudget
-		if opts.TokenBudget > maxRecallBudget {
-			opts.TokenBudget = maxRecallBudget
-		}
-	}
+	opts := s.opcionesDeRecall(ctx, args.TokenBudget)
+	// CON JUEZ, EL CORTE AL TECHO DE LA RESPUESTA VA DESPUÉS DE ÉL. El juez reordena la cabeza del
+	// empaquetado de siempre (hasta 12 candidatos); cortar antes se la achicaría con un token_budget
+	// chico y el primer resultado podría ser otro. El precio: con juez, el bump de accesos cuenta el
+	// empaquetado entero, como antes del corte. Sin juez, el corte va adentro del motor, antes del
+	// bump, y cuenta como acceso sólo lo que viaja.
+	juez := s.juezVaACorrer(args.Rerank)
+	opts.PresupuestoDeRespuesta = !juez
 
 	// TRAMO 0 — RLock ACOTADO. El corrector de tipeo, ANTES de embeber: el texto corregido es el que
 	// se embebe y se busca. Lee la base, así que va bajo el candado de lectura; lo acota su propio
@@ -1557,6 +1576,9 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 	// único que todavía puede bajar los items que respondieron a la palabra equivocada. Y la caché
 	// del juez sigue indexada por lo que llegó.
 	res = s.rerankSiCorresponde(ctx, args.Query, res, args.Rerank)
+	if juez {
+		res = memory.AlTechoDeLaRespuesta(res, res.Budget)
+	}
 	res.Correcciones = correcciones
 	return jsonResult(res)
 }

@@ -957,6 +957,20 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Changed
+- **`musubi_recall`: `token_budget` pasa a ser el techo de la respuesta entera, no sólo de los gists.**
+  El presupuesto contaba el gist de cada item y el resto —id, `topic_key`, fecha, score,
+  atribución y los nombres de las claves— viajaba gratis: en 104 llamadas reales la respuesta
+  pesaba ~3,4 veces lo pedido. Ahora cada item cuesta su gist más su sobre estimado como JSON, el
+  score viaja con 3 cifras significativas, y el corte es SÓLO de la cola: lo que queda es un
+  prefijo exacto del empaquetado de antes, así que el tope del ranking no cambia. Sobre una copia
+  de la base real, 14 consultas: con `token_budget` 1500, de ~20.600 a ~4.100 caracteres (de 69 a
+  14 items); con 2500, de ~27.000 a ~7.000; el top-10 idéntico en las 14. El default de
+  `recall_token_budget` sube de 400 a 1500 porque cambió lo que mide: aquellos 400 devolvían ~18
+  items en ~5.500 caracteres, y 1500 devuelve ~14 en ~4.100 con el mismo top-10. Lo prende sólo la
+  tool (`RecallOptions.PresupuestoDeRespuesta`): el hook del turno, el priming, `musubi_ask` y el
+  banco siguen con el empaquetado de siempre. Con `rerank`, el corte va después del juez, que ve
+  la misma cabeza que antes. La medición se repite con
+  `go test -tags sonda ./internal/mcp -run TestSondaRecallLiviano` y `MUSUBI_SONDA_RECALL_DIR`.
 - **El embebedor completo tokeniza con `tokenizer.idx`: arranca en ~0,56 s en vez de ~1,5 s y
   tokeniza la memoria real ~55 veces más rápido, con los mismos ids.**
   `NewStaticProvider` (daemon, serve, capture, ingest y los backfill de embeddings y conflictos)

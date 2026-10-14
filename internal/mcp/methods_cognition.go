@@ -388,7 +388,7 @@ func (s *McpServer) quiereJuez(pedido *bool) bool {
 // —freno de gasto, caché, timeout, degradación best-effort— es IDÉNTICO: un `rerank:true` compra el
 // intento, no un privilegio. Sin presupuesto o con el motor caído degrada igual que siempre.
 func (s *McpServer) rerankSiCorresponde(ctx context.Context, query string, res memory.RecallResult, pedido *bool) memory.RecallResult {
-	if !s.quiereJuez(pedido) || !cognition.Enabled(s.cognition) || len(res.Items) < 2 {
+	if !s.juezVaACorrer(pedido) || len(res.Items) < 2 {
 		return res
 	}
 	topK := s.cognitionCfg.ReadTimeRerankTopK
@@ -491,4 +491,10 @@ func rerankCachePut(key string, order []string) {
 		rerankCache = map[string][]string{}
 	}
 	rerankCache[key] = order
+}
+
+// juezVaACorrer: la llamada lo pide (o la config, sin pedido) y hay un motor configurado.
+// musubi_recall lo consulta ANTES del recall para saber dónde va el corte al techo de la respuesta.
+func (s *McpServer) juezVaACorrer(pedido *bool) bool {
+	return s.quiereJuez(pedido) && cognition.Enabled(s.cognition)
 }
