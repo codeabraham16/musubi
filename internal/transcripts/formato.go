@@ -67,6 +67,13 @@ const (
 
 	// JournalDeWorkflow es la bitácora de un workflow: vive entre los transcripts y no es uno.
 	JournalDeWorkflow = "journal.jsonl"
+
+	// RegistroTituloIA y RegistroTituloPropio son los registros que llevan el título de la sesión:
+	// el que le pone Claude Code (`aiTitle`) y el puesto a mano (`customTitle`). Medido el
+	// 2026-10-14: 35.920 y 33.254 registros en 22 y 10 de 30 sesiones, sin `uuid` y reescritos a lo
+	// largo de la sesión, así que vale el último. Los lee `musubi sesiones --titulos`.
+	RegistroTituloIA     = "ai-title"
+	RegistroTituloPropio = "custom-title"
 )
 
 // Registro es una línea de un transcript, con sólo los campos que alguien de este repo lee.
@@ -83,6 +90,9 @@ type Registro struct {
 	Message          *Mensaje        `json:"message"`
 	Attachment       *Adjunto        `json:"attachment"`
 	ToolUseResult    json.RawMessage `json:"toolUseResult"`
+	// AITitle y CustomTitle son de los registros de título (RegistroTituloIA, RegistroTituloPropio).
+	AITitle     string `json:"aiTitle"`
+	CustomTitle string `json:"customTitle"`
 }
 
 // Mensaje es el `message` de un registro `user` o `assistant`.

@@ -8,6 +8,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **`musubi sesiones` lista las sesiones de Claude Code guardadas en disco y borra las que el dueño
+  elige.** Lista las del proyecto actual (`--todas`, todos los proyectos; `--viejas N`, las que no
+  cambiaron hace N días o más; `--titulos`, el título puesto a mano o el automático) con su id,
+  carpeta, fecha, tamaño (el `.jsonl` más su carpeta `<id>/`) y si está «posiblemente activa», y
+  el subtotal por carpeta. `musubi sesiones borrar <id>…` o `--viejas N` muestra el plan y cuánto
+  libera y pregunta (s/N; `--si` no pregunta). Lo que no borra nunca, sin bandera para saltearlo:
+  `memory/` (la memoria automática de Claude Code), nada fuera de `projects` ni a través de un
+  enlace o una junction, y una sesión tocada en los últimos 15 minutos —en el `.jsonl` o en su
+  carpeta— o registrada como abierta en `sessions/<pid>.json`: puede ser la que corre el comando.
+  Las comprobaciones se repiten contra el disco justo antes de borrar, después del «s». Respeta
+  `CLAUDE_CONFIG_DIR`. «Archivada» no se muestra: Claude Code no la deja en el disco.
 - **Las notas de cada release salen solas del CHANGELOG, y el README cuenta lo último que pasó.**
   130 de las 131 releases publicadas tienen el cuerpo vacío: el job `create-release` de
   `release.yml` sólo le pasaba `tag_name` a la acción. Lo que faltaba ya estaba escrito, en este
