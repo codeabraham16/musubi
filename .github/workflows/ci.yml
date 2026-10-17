@@ -497,6 +497,26 @@ jobs:
           go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
           "$(go env GOPATH)/bin/golangci-lint" run ./...
 
+      # TRINQUETE DE CÓDIGO MUERTO (A2). `deadcode` (RTA, alcanzabilidad whole-program) encuentra
+      # funciones DEFINIDAS y sin conectar —una guarda registrada con cero callers, una pieza que se
+      # construye y no se enciende—, el patrón de error que ya mordió tres veces documentadas y que
+      # hoy se descubre a ojo y tarde. El helper compara su salida contra `.deadcode-baseline.txt`:
+      # una inalcanzable NUEVA falla el gate nombrando el símbolo; las conocidas están grandfathereadas
+      # y la deuda sólo puede bajar. Complementa a golangci-lint `unused`, que NO ve el caso
+      # exportado/registrado-con-cero-callers-reales que justamente dejó pasar la guarda.
+      #
+      # DETERMINISTA EN LA FLOTA: el binario se compila para el HOST con `go install`, pero el ANÁLISIS
+      # corre con GOOS/GOARCH FIJO (linux/amd64) —go/packages respeta el entorno para el target—, así
+      # el baseline no depende de la máquina que lo mida. En este runner (ubuntu/amd64) es un no-op; en
+      # Windows o macOS, no. La versión va PINEADA: con @latest, un cambio del analizador se leería como
+      # deuda nueva y daría un rojo espurio. Y es fail-closed: si `deadcode` o el helper no pueden
+      # correr, el step falla (no pasa en verde por no haber podido mirar).
+      - name: Trinquete de código muerto
+        run: |
+          go install golang.org/x/tools/cmd/deadcode@v0.30.0
+          GOOS=linux GOARCH=amd64 "$(go env GOPATH)/bin/deadcode" -test ./... > deadcode-raw.txt
+          go run ./internal/deadcode/cmd/ratchet -salida deadcode-raw.txt -baseline .deadcode-baseline.txt
+
   sast:
     # Análisis estático de seguridad (Track 16 F4): gosec complementa a govulncheck. govulncheck
     # atrapa dependencias con CVE conocido; gosec atrapa PATRONES inseguros en NUESTRO código

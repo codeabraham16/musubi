@@ -8,6 +8,18 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Trinquete de código muerto en CI (A2).** Musubi arrastra un patrón de error caro y repetido:
+  código que se DEFINE y no se CONECTA —una guarda registrada con cero callers reales, un grafo sin
+  lectores, una pieza que se construye y no se enciende—. Hoy se descubre a ojo y tarde. Un paso
+  nuevo del job `lint` corre `golang.org/x/tools/cmd/deadcode` (alcanzabilidad whole-program por RTA,
+  donde el grafo AST propio tiene puntos ciegos) y compara su salida contra `.deadcode-baseline.txt`:
+  una función inalcanzable NUEVA falla el gate nombrando el símbolo exacto; las 9 conocidas quedan
+  grandfathereadas y la deuda sólo puede bajar. Complementa a golangci-lint `unused`, que no ve el
+  caso exportado/registrado. Determinista en la flota (análisis con `GOOS=linux GOARCH=amd64` fijo,
+  analizador pinneado a `@v0.30.0`) y fail-closed (una salida no parseable es rojo, no verde). Un
+  meta-test (`ErroresDelTrinqueteDeCodigoMuerto`) impide que el gate se borre, se desactive o se
+  afloje en silencio. El helper es `internal/deadcode/cmd/ratchet` y regenera el baseline con
+  `--update`.
 - **Después de compactar, Musubi devuelve la memoria que el resumen perdió.** Al compactar, Claude
   Code cambia la conversación por un resumen y dispara `SessionStart` con source `compact` y el
   mismo `session_id`. El delta de la sesión seguía diciendo que el agente tenía lo inyectado, así que

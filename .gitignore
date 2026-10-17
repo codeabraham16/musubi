@@ -75,3 +75,8 @@ coverage.html
 
 CLAUDE.md
 deploy/docker/.env
+
+# Salida cruda del trinquete de código muerto (A2): la escribe el analizador `deadcode` en cada
+# corrida del CI y en las regeneraciones locales del baseline. Es transitoria; lo versionado es
+# `.deadcode-baseline.txt`, que vive al lado. Ignorarla evita que un `git add` la suba por error.
+/deadcode-raw.txt
