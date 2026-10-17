@@ -20,6 +20,21 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   meta-test (`ErroresDelTrinqueteDeCodigoMuerto`) impide que el gate se borre, se desactive o se
   afloje en silencio. El helper es `internal/deadcode/cmd/ratchet` y regenera el baseline con
   `--update`.
+- **Censo de tools vivas (A3).** El complemento dinámico del trinquete de código muerto: A2 atrapa el
+  código estáticamente inalcanzable; A3 atrapa la tool que SÍ está cableada (pasa A2) pero que el
+  catálogo sumó sin que nadie decidiera si su silencio en el ledger es esperado o DUELE —el patrón «se
+  construye y no se enciende», que el censo manual repitió cada una de las tres veces que se rehízo a
+  mano—. Un mapa commiteado (`internal/censo`, dato tipado con un enum de cinco clases, no un `.txt`)
+  asigna a cada tool `musubi_*` del registro su clase de invocación esperada: administrativa,
+  cubierta-por-ciclo, sin-productor, camino-cli o debe-invocarse. Una guarda model-free
+  (`internal/mcp/censo_test.go`) sella por contrato —en el job de tests existente, sin tocar `ci.yml`,
+  sin red ni ledger— que TODA tool del registro vivo esté censada y que el censo no nombre ninguna que
+  ya no exista: una tool nueva sin clasificar pone la suite en rojo hasta que un humano decida su
+  clase. Y un check del doctor (`tool_census`) confirma la clase debe-invocarse contra el ledger de
+  uso: una tool que debería ejercerse en el turno y no registra ni una invocación se reporta como
+  HIPÓTESIS en el Message —Status siempre `ok`, nunca un rojo de arranque— citando que el ledger sólo
+  ve el camino MCP de esta máquina y conserva una ventana acotada (`usage_ledger.retention_days`), así
+  que el cero se confirma contra el central antes de darlo por muerto. Aditivo, sin migración.
 - **Después de compactar, Musubi devuelve la memoria que el resumen perdió.** Al compactar, Claude
   Code cambia la conversación por un resumen y dispara `SessionStart` con source `compact` y el
   mismo `session_id`. El delta de la sesión seguía diciendo que el agente tenía lo inyectado, así que

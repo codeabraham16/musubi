@@ -27,10 +27,12 @@ var menciónDeTool = regexp.MustCompile(`musubi_[a-z0-9_]+`)
 //
 // ES ESTRUCTURAL A PROPÓSITO. Arreglar los diez y fijarlos uno por uno deja abierto el undécimo:
 // esto recorre por AST TODO literal de texto del código de producción de cmd/ e internal/ y lo
-// cruza con las dormidas que el REGISTRO declara. Lo único que se exceptúa es la propia entrada de
-// cada dormida en el registro (su nombre y su descripción), que es donde tiene que estar. Dormir
-// una tool que algún texto nombra pone esta prueba en rojo, y el arreglo es elegir: despertarla, o
-// cambiar el texto.
+// cruza con las dormidas que el REGISTRO declara. Se exceptúan dos enumeraciones legítimas del
+// catálogo, las únicas donde el nombre de una dormida TIENE que estar: la propia entrada de cada
+// dormida en el registro (su nombre y su descripción), y el mapa del CENSO DE TOOLS VIVAS
+// (internal/censo), que clasifica TODA tool —dormida incluida, porque TestCadaToolVivaEstaCensada lo
+// exige— y es dato de clasificación, no texto que le llegue al agente. Dormir una tool que algún OTRO
+// texto nombra pone esta prueba en rojo, y el arreglo es elegir: despertarla, o cambiar el texto.
 //
 // Los comentarios no cuentan: no le llegan al agente. Un nombre armado por concatenación
 // ("musubi_" + x) tampoco se ve; es el límite declarado.
@@ -69,6 +71,7 @@ func TestNingunTextoNombraUnaToolDormida(t *testing.T) {
 		}
 		barridos++
 		propias := entradasDeToolsDormidas(f, dormidasDelRegistro)
+		propias = append(propias, clavesDelCensoMap(f)...)
 		ast.Inspect(f, func(n ast.Node) bool {
 			lit, ok := n.(*ast.BasicLit)
 			if !ok || lit.Kind != token.STRING {
@@ -126,6 +129,35 @@ func entradasDeToolsDormidas(f *ast.File, dormidas map[string]bool) []ast.Node {
 					out = append(out, cl)
 				}
 			}
+		}
+		return true
+	})
+	return out
+}
+
+// clavesDelCensoMap exime el mapa del CENSO DE TOOLS VIVAS (internal/censo): el map[string]Clase cuyas
+// claves son, a propósito, TODOS los nombres de tool —dormidas incluidas—. Es la otra enumeración
+// legítima del catálogo, hermana del registro: TestCadaToolVivaEstaCensada EXIGE que toda tool del
+// registro (dormida o no) esté censada, así que el censo DEBE nombrarlas, y esos nombres son dato de
+// clasificación, no texto que le llegue al agente. Se exime el literal del mapa ENTERO (sólo sus
+// claves son strings; los valores son constantes Clase), no el archivo: una prosa que nombre una
+// dormida FUERA del mapa sigue cayendo. Se reconoce por el tipo del literal (map[string]Clase, sin
+// calificar), que sólo existe dentro del paquete censo y sólo en el censo.
+func clavesDelCensoMap(f *ast.File) []ast.Node {
+	var out []ast.Node
+	ast.Inspect(f, func(n ast.Node) bool {
+		cl, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		mt, ok := cl.Type.(*ast.MapType)
+		if !ok {
+			return true
+		}
+		kid, kok := mt.Key.(*ast.Ident)
+		vid, vok := mt.Value.(*ast.Ident)
+		if kok && vok && kid.Name == "string" && vid.Name == "Clase" {
+			out = append(out, cl)
 		}
 		return true
 	})
