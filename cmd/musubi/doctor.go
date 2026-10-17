@@ -64,6 +64,16 @@ func configCheck(root, code string) (memory.CheckResult, bool) {
 //	musubi doctor repair --check <code> [--plan|--dry-run|--apply]
 func runDoctor(args []string) {
 	root := workspaceDir()
+
+	// --probe: foto de salud de SÓLO LECTURA, antes de abrir para escribir. El resto de `doctor` abre
+	// con NewDbEngine, que MIGRA la base al abrirla —y eso deja a un binario viejo de la flota sin
+	// poder reabrirla—; el probe contesta la pregunta previa, «¿en qué esquema está y la puedo leer?»,
+	// sin tocarla. Va ANTES de NewDbEngine a propósito: si ramificara después, ya habría migrado, que
+	// es justo lo que viene a evitar.
+	if hasFlag(args, "--probe") {
+		os.Exit(runDoctorProbe(root, hasFlag(args, "--json")))
+	}
+
 	engine, err := memory.NewDbEngine(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error al abrir la base de datos: %v\n", err)
