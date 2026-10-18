@@ -8,6 +8,21 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Una sesión que compacta mucho lo avisa, y la sesión nueva recupera su último resumen con `musubi traspaso`.**
+  Cada compactación vuelve a pagar el contexto entero. Medido el 2026-10-14: las compactaciones son el
+  16 % del gasto del agente principal; una sesión de altura-erp queda en ~132K tokens después de
+  compactar contra ~97K de una sesión nueva, porque vuelve a inyectar las skills invocadas (~42K
+  caracteres) y los esquemas de las tools (~13K); y la sala de mando del dueño pasó las 143
+  compactaciones en una sola sesión. Seguir en una sesión nueva salía más barato, pero costaba el hilo.
+  - El hook de arranque cuenta las compactaciones de cada sesión en la meta del proyecto. A las 3, y
+    cada 3 más, le avisa al dueño (`systemMessage`, una línea) y al agente (una línea de contexto) que
+    conviene seguir en una sesión nueva (`/clear` o una ventana nueva).
+  - En el arranque y tras `/clear`, si otra sesión del proyecto llegó al aviso en las últimas 12 h y
+    nadie recuperó su resumen, el agente recibe una sola línea: el id corto, cuántas compactaciones y
+    hace cuánto. El resumen no se inyecta solo.
+  - `musubi traspaso` lee del transcript el último resumen de compactación de esa sesión, lo pasa por
+    el redactor, lo imprime y lo marca recuperado. No se guarda en la memoria, que viaja al cerebro
+    central, y no hay tool MCP nueva.
 - **Las notas de cada release salen solas del CHANGELOG, y el README cuenta lo último que pasó.**
   130 de las 131 releases publicadas tienen el cuerpo vacío: el job `create-release` de
   `release.yml` sólo le pasaba `tag_name` a la acción. Lo que faltaba ya estaba escrito, en este

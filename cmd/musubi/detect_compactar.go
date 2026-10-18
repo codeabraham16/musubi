@@ -32,6 +32,10 @@ import (
 //     es del turno, para quien acaba de tipear (decisión 2 del dueño); la consulta sí sale corregida.
 //
 // Sin pedidos guardados calla, pero el delta queda limpio igual: el próximo turno trae su memoria.
+//
+// Aparte, cuenta la compactación para el traspaso (traspaso.go): a las 3, 6, 9… de la misma sesión
+// avisa —al dueño y al agente— que conviene seguir en una sesión nueva, y ese aviso sale aunque el
+// recall calle.
 
 // surfaceCompactRecall es la superficie del ledger de la memoria que vuelve tras compactar.
 const surfaceCompactRecall = "compact_recall"
@@ -44,7 +48,7 @@ var marcasQueOlvidaLaCompactacion = []string{metaPhaseInjected, metaBatchInjecte
 
 // detectOutputDeCompactacion abre la memoria del proyecto y arma la salida del hook para una
 // compactación. Best-effort como todo hook: si la memoria no abre, lo dice por stderr y calla.
-func detectOutputDeCompactacion(root string, cfg config.Config, sessionID string) string {
+func detectOutputDeCompactacion(root string, cfg config.Config, in entradaDeArranque) string {
 	engine, err := memory.NewDbEngine(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "musubi detect: memoria no disponible tras compactar: %v\n", err)
@@ -54,12 +58,22 @@ func detectOutputDeCompactacion(root string, cfg config.Config, sessionID string
 	// El proyecto propio y el embebedor salen de las MISMAS funciones que usa el hook del turno: este
 	// recall tiene que ser el del turno, no un pariente que envejece por su lado.
 	propio := resolveProjectID(cfg, root)
-	return buildHookOutputDeCompactacion(engine, cfg.Loop, cfg.Memory, sessionID, propio, embebedorDelHook(cfg, root, engine))
+	// Y la cuenta del traspaso (traspaso.go): esta compactación suma una a la sesión, y a las 3, 6, 9…
+	// el aviso viaja con lo que traiga el recall.
+	aviso := contarCompactacion(engine, in, time.Now())
+	return buildHookOutputDeCompactacionConAviso(engine, cfg.Loop, cfg.Memory, in.SessionID, propio, embebedorDelHook(cfg, root, engine), aviso)
 }
 
 // buildHookOutputDeCompactacion es la rama «compact» del hook de arranque. Ver el comentario del
 // archivo: limpia, olvida, y vuelve a buscar sobre el último pedido.
 func buildHookOutputDeCompactacion(store turnStore, loopCfg config.LoopConfig, memCfg config.MemoryConfig, sessionID, propio string, embedder embedding.Provider) string {
+	return buildHookOutputDeCompactacionConAviso(store, loopCfg, memCfg, sessionID, propio, embedder, avisoDeRenovacion{})
+}
+
+// buildHookOutputDeCompactacionConAviso es buildHookOutputDeCompactacion con el aviso del traspaso
+// (traspaso.go), que calcula quien corre el hook de verdad. El aviso viaja aunque el recall calle:
+// sin pedidos guardados, o con el recall por turno apagado, sale solo.
+func buildHookOutputDeCompactacionConAviso(store turnStore, loopCfg config.LoopConfig, memCfg config.MemoryConfig, sessionID, propio string, embedder embedding.Provider, aviso avisoDeRenovacion) string {
 	if store == nil {
 		return ""
 	}
@@ -68,11 +82,11 @@ func buildHookOutputDeCompactacion(store turnStore, loopCfg config.LoopConfig, m
 		olvidarMarcaDeSesion(store, key, sessionID)
 	}
 	if !loopCfg.PerTurnRecall {
-		return ""
+		return soloElAvisoDelTraspaso(store, sessionID, aviso)
 	}
 	ps := leerPedidos(store, sessionID)
 	if len(ps) == 0 {
-		return ""
+		return soloElAvisoDelTraspaso(store, sessionID, aviso)
 	}
 	ultimo := ps[len(ps)-1].Texto
 	bloque := buildTurnRecall(store, parametrosDelTurno{
@@ -87,9 +101,10 @@ func buildHookOutputDeCompactacion(store turnStore, loopCfg config.LoopConfig, m
 		otrosMax:             loopCfg.RecallOtrosMax,
 		sinAvisoDeCorreccion: true,
 	})
-	return assembleAccounted(store, "SessionStart", sessionID, []accountedBlock{
+	return conMensajeAlDueno(assembleAccounted(store, "SessionStart", sessionID, []accountedBlock{
 		{surface: surfaceCompactRecall, text: bloque},
-	})
+		{surface: surfaceAvisoDeTraspaso, text: aviso.alAgente},
+	}), aviso.alDueno)
 }
 
 // ── El aviso de salud: un repo sin el hook de compactación ───────────────────────────────────

@@ -72,6 +72,8 @@ func main() {
 		runPrecheck()
 	case "precompact":
 		runPrecompact()
+	case "traspaso":
+		runTraspaso(os.Args[2:])
 	case "capture":
 		runCapture(os.Args[2:])
 	case "ingest":
@@ -223,6 +225,7 @@ func printUsage() {
 	cmd("precheck --hook-mode", "PreToolUse: gist antes de leer; radio de impacto antes de editar")
 	cmd("capture --hook-mode", "Stop: captura los commits nuevos como memoria (red de seguridad)")
 	cmd("precompact --hook-mode", "PreCompact: le dice al resumen qué conservar (reglas, decisiones, estado del trabajo)")
+	cmd("traspaso", "Trae el último resumen (redactado) de la sesión que llegó al aviso de compactaciones")
 }
 
 // avisarQueConfigGobierna escribe en stderr, al arrancar, CUÁL config.yaml se cargó — y avisa si
