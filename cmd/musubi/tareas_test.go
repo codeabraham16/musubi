@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"musubi/internal/config"
 	"musubi/internal/memory"
 	"musubi/internal/memory/memtest"
 )
@@ -362,15 +363,15 @@ func TestElPluginTraeElSubagenteDeTareas(t *testing.T) {
 // EL HOOK REAL POSTEA Y AVISA, Y `musubi tareas` MUESTRA LO QUE HIZO EL SUBAGENTE.
 //
 // Se mide sobre el proceso: el cableado vive en runTurn, y una prueba sobre buildTurnTareas mediría
-// el ayudante y no el hook.
+// el ayudante y no el hook. El proyecto prende el aviso (`multiagent.tareas`), que nace apagado.
 //
 // Sabotaje que la hace fallar: que el hook del turno no pase las tareas.
 // arnes: archivo="cmd/musubi/turn.go"
-// arnes: de="\ttareas := &tareasDelTurno{store: engine, subagente: subagenteDeTareasDisponible(), ahora: time.Now()}\n"
-// arnes: a="\tvar tareas *tareasDelTurno\n"
+// arnes: de="\t\ttareas = &tareasDelTurno{store: engine, subagente: subagenteDeTareasDisponible(), ahora: time.Now()}\n"
+// arnes: a="\t\ttareas = nil\n"
 func TestElHookDelTurnoLeDejaLasTareasAlAgente(t *testing.T) {
 	home := t.TempDir()
-	repo := proyectoConMemoria(t, home)
+	repo := proyectoConMemoria(t, home, func(c *config.Config) { c.MultiAgent.Tareas = true })
 	plugin := filepath.Join(home, ".claude", "skills", "musubi")
 	if err := instalarPlugin(plugin, "musubi", "0.0.0-prueba"); err != nil {
 		t.Fatal(err)
@@ -422,6 +423,46 @@ func TestElHookDelTurnoLeDejaLasTareasAlAgente(t *testing.T) {
 		if !strings.Contains(tabla.String(), quiere) {
 			t.Errorf("musubi tareas no dice %q:\n%s", quiere, tabla.String())
 		}
+	}
+}
+
+// SIN PRENDERLO, EL HOOK NI POSTEA NI AVISA.
+//
+// El aviso nace apagado (decisión del dueño, 2026-10-14): cada aviso lanza un subagente que gasta
+// tokens del agente, y medido en davantis-1 del 28/09 al 14/10 esos subagentes fueron el 3,2 % de
+// todo el gasto. Se mide sobre el proceso, como la prueba de arriba, y con todo lo demás a favor:
+// modo auto, turno de la persona, el subagente instalado y una propuesta esperando veredicto.
+//
+// Sabotaje que la hace fallar: que el hook pase las tareas sin mirar la config.
+// arnes: archivo="cmd/musubi/turn.go"
+// arnes: de="\tif cfg.MultiAgent.Tareas {\n"
+// arnes: a="\tif true {\n"
+func TestSinPrenderloElHookNiPosteaNiAvisa(t *testing.T) {
+	home := t.TempDir()
+	repo := proyectoConMemoria(t, home)
+	plugin := filepath.Join(home, ".claude", "skills", "musubi")
+	if err := instalarPlugin(plugin, "musubi", "0.0.0-prueba"); err != nil {
+		t.Fatal(err)
+	}
+	e, err := memory.NewDbEngine(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proponer(t, e, "t/estado", "estado del trabajo")
+	e.Close()
+
+	evento := `{"session_id":"s","prompt":"seguimos con lo de ayer","permission_mode":"auto"}`
+	out := correrMusubiCon(t, repo, home, evento, []string{"CLAUDE_PLUGIN_ROOT=" + plugin}, "turn", "--hook-mode")
+	if strings.Contains(out, "[Musubi — tareas]") {
+		t.Fatalf("sin prenderlo, el hook avisó las tareas:\n%s", out)
+	}
+	e, err = memory.NewDbEngine(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	if lote := loteDeCuarentena(t, e); lote.Total != 0 {
+		t.Errorf("sin prenderlo, el hook posteó %d unidad(es) en el tablero", lote.Total)
 	}
 }
 

@@ -1298,7 +1298,12 @@ func runTurn() {
 
 	embedder := embebedorDelHook(cfg, root, engine)
 
-	tareas := &tareasDelTurno{store: engine, subagente: subagenteDeTareasDisponible(), ahora: time.Now()}
+	// El aviso de tareas lanza un subagente que gasta tokens del agente: sólo si el proyecto lo prendió
+	// (multiagent.tareas, que nace apagado). Sin él, el turno ni postea ni avisa.
+	var tareas *tareasDelTurno
+	if cfg.MultiAgent.Tareas {
+		tareas = &tareasDelTurno{store: engine, subagente: subagenteDeTareasDisponible(), ahora: time.Now()}
+	}
 	// El proyecto de este repo, resuelto con la MISMA función con que el daemon estampa cada nota al
 	// guardarla: así «ajena» quiere decir lo mismo al escribir y al leer.
 	propio := resolveProjectID(cfg, root)

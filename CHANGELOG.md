@@ -957,6 +957,25 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Changed
+- **El aviso de tareas nace apagado: el hook del turno ya no le pide al agente que lance el
+  subagente `musubi-tareas` salvo que el proyecto lo prenda con `multiagent.tareas: true`.**
+  Cada aviso lanza un subagente que gasta tokens del agente, no de Musubi. Medido en davantis-1 del
+  28/09 al 14/10, esos subagentes fueron el 3,2 % de todo el gasto, y el 14/10 llegaron al 26 % y al
+  49 % de dos sesiones de Altura. Decisión del dueño (2026-10-14): apagarlo por defecto.
+
+  Apagado, el hook ni postea en el tablero ni avisa. Las propuestas de memoria esperan en cuarentena,
+  fuera del recall, hasta que alguien las juzgue (`musubi_corroborate` o `musubi_discard_proposal`).
+  Para volver a lo de antes, en `.musubi/config.yaml`:
+
+  ```yaml
+  multiagent:
+    enabled: true
+    tareas: true
+  ```
+
+  Si el bloque `multiagent:` es nuevo, escribí también `enabled: true`: un bloque presente sin
+  `enabled` apaga el recordatorio de lote. Es una regla previa de la config, no de este cambio.
+
 - **El embebedor completo tokeniza con `tokenizer.idx`: arranca en ~0,56 s en vez de ~1,5 s y
   tokeniza la memoria real ~55 veces más rápido, con los mismos ids.**
   `NewStaticProvider` (daemon, serve, capture, ingest y los backfill de embeddings y conflictos)
