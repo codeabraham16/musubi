@@ -37,6 +37,12 @@ import (
 // cambio de tabla del toolchain o un refactor propio mueven los vectores SIN mover la procedencia,
 // y los viejos se comparan por coseno contra los nuevos como si fueran del mismo modelo.
 //
+// DOS CAMINOS, LA MISMA HUELLA. El embebedor completo y la consulta liviana tokenizan con
+// tokenizer.idx, no con el mapa: el normalizer viaja adentro del índice tal cual vino (`normCrudo`)
+// y se vuelve a armar con `parseNormalizer`. Por eso la huella se mide también por el índice
+// armado desde el mismo asset. Si ese viaje perdiera algo, el mapa seguiría dando la huella
+// fijada y producción no.
+//
 // MECANIZADA. El sabotaje es el typo de UN BIT que la parió. El arreglo es la MISMA línea
 // reescrita de forma equivalente —extraer el bit 8 con máscara en vez de con corrimiento—: una
 // huella que se pusiera roja ahí estaría fijando la FORMA del decodificador y no su salida, que
@@ -63,6 +69,18 @@ func TestLaTokenizacionDelCharsmapEstaFijada(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadTokenizer(real): %v", err)
 	}
+	u, ok := tok.(*unigram)
+	if !ok {
+		t.Fatalf("el tokenizer real no es Unigram: %T", tok)
+	}
+	idx, err := escribirIndiceTokenizer(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexado, err := leerIndiceTokenizer(idx)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// CADA CASO ESTÁ ACÁ PORQUE ATRAVIESA EL CHARSMAP, no por variedad decorativa: descompuestos
 	// que el NFC recompone, ancho completo y kana de media anchura que el NFKC pliega, ligaduras,
@@ -84,11 +102,8 @@ func TestLaTokenizacionDelCharsmapEstaFijada(t *testing.T) {
 		"ᾀ ᾳ",            // griego politónico con iota suscrita
 	}
 
-	h := sha256.New()
-	for _, c := range casos {
-		fmt.Fprintf(h, "%q=%v\n", c, tok.EncodeIDs(c))
-	}
-	huella := hex.EncodeToString(h.Sum(nil))[:16]
+	huella := huellaDelCharsmap(tok, casos)
+	porElIndice := huellaDelCharsmap(indexado, casos)
 
 	// MEDIDA el 2026-09-12 contra el tokenizer real de potion-multilingual-128M, con x/text
 	// v0.42.0. No está derivada de nada de este repo: es el valor que salió de correr esto.
@@ -109,6 +124,17 @@ SI EL CAMBIO ES DELIBERADO Y CORRECTO: actualizá la huella acá Y re-embebé la
 (`+"`musubi embed backfill --all`"+`), porque los vectores ya guardados quedaron con otra
 tokenización.`, huella, esperada)
 	}
+	if porElIndice != esperada {
+		t.Errorf(`POR EL ÍNDICE, LA TOKENIZACIÓN DEL CHARSMAP NO ES LA FIJADA.
+  huella por el índice : %s
+  huella por el mapa   : %s
+  huella fijada        : %s
+
+El índice se armó desde el mismo tokenizer.json, así que lo que cambió es el viaje: algo del
+normalizer o del vocab no sale de tokenizer.idx igual que entró. El embebedor completo y la
+consulta liviana tokenizan con el índice: producción da otros vectores que el mapa con el mismo
+model_id.`, porElIndice, huella, esperada)
+	}
 
 	// EL CONTROL: que estos casos de verdad produzcan tokens. Una huella sobre catorce listas
 	// vacías también sería estable, y estaría custodiando la nada.
@@ -119,5 +145,15 @@ tokenización.`, huella, esperada)
 			t.Errorf("el caso %q no produjo NI UN token: no ejercita nada", c)
 		}
 	}
-	t.Logf("huella=%s sobre %d casos, %d vacíos", huella, len(casos), vacios)
+	t.Logf("huella=%s (por el índice %s) sobre %d casos, %d vacíos", huella, porElIndice, len(casos), vacios)
+}
+
+// huellaDelCharsmap resume en 16 hex los ids de cada caso. El formato de la línea es el de la
+// medición original: cambiarlo cambia la huella sin que cambie la tokenización.
+func huellaDelCharsmap(tok tokenizer, casos []string) string {
+	h := sha256.New()
+	for _, c := range casos {
+		fmt.Fprintf(h, "%q=%v\n", c, tok.EncodeIDs(c))
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
 }

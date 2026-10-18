@@ -1,18 +1,14 @@
 <div align="center">
 
-![Musubi — persistent-memory MCP server](.github/assets/hero.svg)
+<img src=".github/assets/hero.en.svg" alt="Musubi (結び): persistent memory for AI agents. MCP server in Go, local-first and model-free." width="100%">
 
-<h1>Musubi</h1>
+[![Release](https://img.shields.io/github/v/release/codeabraham16/musubi?sort=semver&style=flat-square&labelColor=0C1020&color=6366F1)](https://github.com/codeabraham16/musubi/releases/latest)
+[![CI](https://img.shields.io/github/actions/workflow/status/codeabraham16/musubi/ci.yml?branch=main&style=flat-square&labelColor=0C1020&label=CI)](https://github.com/codeabraham16/musubi/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/github/go-mod/go-version/codeabraham16/musubi?style=flat-square&labelColor=0C1020&color=22D3EE&logo=go&logoColor=white)](go.mod)
+[![License: MIT](https://img.shields.io/github/license/codeabraham16/musubi?style=flat-square&labelColor=0C1020&color=98A0C0)](LICENSE)
+[![Commits on main since the latest release](https://img.shields.io/github/commits-since/codeabraham16/musubi/latest?style=flat-square&labelColor=0C1020&color=98A0C0)](https://github.com/codeabraham16/musubi/commits/main)
 
-<p><strong>Persistent memory for AI agents · MCP server in Go · local-first · model-free</strong></p>
-
-[![CI](https://github.com/codeabraham16/musubi/actions/workflows/ci.yml/badge.svg)](https://github.com/codeabraham16/musubi/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/codeabraham16/musubi?sort=semver)](https://github.com/codeabraham16/musubi/releases)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go&logoColor=white)](go.mod)
-[![Changelog](https://img.shields.io/badge/changelog-keep--a--changelog-orange.svg)](CHANGELOG.md)
-
-<strong>English</strong> · <a href="README.md">Español</a>
+<strong>English</strong> · <a href="README.md">Español</a> · <a href="CHANGELOG.md">Changelog</a>
 
 </div>
 
@@ -27,8 +23,60 @@ token optimization, ranking and skill resolution are deterministic and offline.
 
 ---
 
+## What's new
+
+<!-- sin-publicar:inicio base=0.141.0 -->
+
+> **Already on `main`, not released yet** · snapshot of Oct 3, 2026 ·
+> [everything that changed since v0.141.0](https://github.com/codeabraham16/musubi/compare/v0.141.0...main)
+>
+> - `musubi agente instalar` installs Musubi as a plugin, active in every project ([#674](https://github.com/codeabraham16/musubi/pull/674))
+> - After compaction, Musubi brings back the memory the summary lost ([#718](https://github.com/codeabraham16/musubi/pull/718))
+> - Token savings ship with the install: the conversation is summarized at 250k ([#694](https://github.com/codeabraham16/musubi/pull/694), [#696](https://github.com/codeabraham16/musubi/pull/696))
+> - Search tolerates typos ([#713](https://github.com/codeabraham16/musubi/pull/713))
+> - Each turn brings your own project's notes first, and other projects' notes with a cap ([#714](https://github.com/codeabraham16/musubi/pull/714))
+> - Sync travels compressed both ways: on real notes, what goes up weighs 55 % and what comes down, 39 % ([#704](https://github.com/codeabraham16/musubi/pull/704), [#705](https://github.com/codeabraham16/musubi/pull/705))
+
+<!-- sin-publicar:fin -->
+
+<!-- novedades:inicio -->
+
+**[v0.141.0](https://github.com/codeabraham16/musubi/releases/tag/v0.141.0)** · Sep 14, 2026
+
+- The code graph now re-indexes itself, at startup and then every hour (it used to wait 6), and only pushes to the central brain when there is something new.
+- `musubi update` can now verify a release's signature: the binary embeds the public key, and the private key stays out of the repo and out of CI.
+- Recalled memory reaches the prompt as quoted material: a foreign note can no longer forge a new line or a header inside that block.
+- Loading the embedding table no longer duplicates it in memory: the peak drops from 1,321 MB to 833 MB, and vectors already stored stay valid.
+
+And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.141.0/CHANGELOG.md#01410---2026-09-14)
+
+**[v0.140.0](https://github.com/codeabraham16/musubi/releases/tag/v0.140.0)** · Sep 10, 2026
+
+- The central brain now maintains its own memory (consolidate, forget, purge) without depending on another process, and exposes how long ago it last ran.
+- `/readyz` now probes writes too: a "ready" brain is one that accepts memory, and when it fails it says which probe failed.
+- If the memory can't be opened, the daemon no longer dies silently: it answers the handshake and states the cause, instead of looking like Musubi isn't installed.
+- A memory database newer than the binary opens read-only when the binary can still read it: you can query it, and anything that writes is refused with an explanation.
+
+And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.140.0/CHANGELOG.md#01400---2026-09-10)
+
+**[v0.131.0](https://github.com/codeabraham16/musubi/releases/tag/v0.131.0)** · Sep 3, 2026
+
+- The code graph is now offered instead of waiting to be asked: when an agent reads an indexed file, Musubi shows it the file's symbols and who calls them. Turn it off with `MUSUBI_CODEGRAPH_HOOK=0`.
+- When the graph can't find a symbol, it now says why (file not indexed, from another branch, or no such symbol) instead of returning a silent empty answer.
+- `musubi_code_context` stops "explaining" symbols that don't exist.
+- The graph index now records which commit it was built from.
+
+And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.131.0/CHANGELOG.md#01310---2026-09-03)
+
+_The changelog is written in Spanish._
+
+<!-- novedades:fin -->
+
+---
+
 ## Table of contents
 
+- [What's new](#whats-new)
 - [Why Musubi](#why-musubi)
 - [Architecture](#architecture)
 - [Quick start](#quick-start)
@@ -51,15 +99,15 @@ token optimization, ranking and skill resolution are deterministic and offline.
 
 ## Why Musubi
 
-| | |
+| Capability | What it does |
 |---|---|
-| 🧠 **Persistent memory** | Observations, facts (graph) and code gists that survive across sessions, in local SQLite. |
-| 🔎 **Hybrid retrieval** | Full-text (FTS5), semantic similarity (IVF vector index at scale) and graph traversal — combinable. |
-| 🪙 **Token-efficient** | Session governor: it measures **every** surface it injects, bounds them by budget, and injects by **delta** (only what's new). Model-free. |
-| 🛠️ **Automatic skills** | Detects the stack and generates project skills; discovers community Agent Skills filtered by your stack. |
-| 🔗 **Model-free orchestration** | Resumable DAG workflow engine (conditions, loops) and a multi-agent blackboard — Musubi sequences, the agent executes. |
-| 🔒 **Local-first & private** | No mandatory external services. Optional embeddings (local Ollama or OpenAI-compatible). The secret never touches the YAML. |
-| ⚙️ **Zero friction** | One command (`musubi agente instalar`) makes Musubi active in all your projects; `musubi setup` wires a single one. Idempotent. |
+| **Persistent memory** | Observations, facts (graph) and code gists that survive across sessions, in local SQLite. |
+| **Hybrid retrieval** | Full-text (FTS5), semantic similarity (IVF vector index at scale) and graph traversal — combinable. |
+| **Token-efficient** | Session governor: it measures **every** surface it injects, bounds them by budget, and injects by **delta** (only what's new). Model-free. |
+| **Automatic skills** | Detects the stack and generates project skills; discovers community Agent Skills filtered by your stack. |
+| **Model-free orchestration** | Resumable DAG workflow engine (conditions, loops) and a multi-agent blackboard — Musubi sequences, the agent executes. |
+| **Local-first & private** | No mandatory external services. Optional embeddings (local Ollama or OpenAI-compatible). The secret never touches the YAML. |
+| **Zero friction** | One command (`musubi agente instalar`) makes Musubi active in all your projects; `musubi setup` wires a single one. Idempotent. |
 
 ---
 
@@ -71,11 +119,13 @@ flowchart LR
         direction TB
         H1["SessionStart"]
         H2["UserPromptSubmit"]
-        H3["PreToolUse(Read)"]
+        H3["PreToolUse<br/>(Read · edit)"]
+        H4["PreCompact"]
+        H5["Stop"]
     end
     subgraph M["Musubi · Go daemon"]
         direction TB
-        RPC["JSON-RPC 2.0 / stdio<br/>27 MCP tools"]
+        RPC["JSON-RPC 2.0 / stdio<br/>80 MCP tools"]
         COG["skill resolver · graph<br/>token governor<br/>conflicts · workflows"]
     end
     DB[("SQLite<br/>local-first")]
@@ -83,17 +133,22 @@ flowchart LR
     H1 -- "detect" --> RPC
     H2 -- "turn" --> RPC
     H3 -- "precheck" --> RPC
+    H4 -- "precompact" --> RPC
+    H5 -- "capture" --> RPC
     RPC --> COG
     COG -- "save / recall" --> DB
     DB -- "gist · delta" --> CC
 
-    classDef cc fill:#0d1422,stroke:#2dd4bf,color:#adbac7;
-    classDef mm fill:#120e22,stroke:#a78bfa,color:#adbac7;
-    classDef db fill:#0d1422,stroke:#4ade80,color:#adbac7;
+    classDef cc fill:#121734,stroke:#2A335C,color:#E9ECF7;
+    classDef mm fill:#182042,stroke:#6366F1,color:#E9ECF7;
+    classDef db fill:#121734,stroke:#22D3EE,color:#E9ECF7;
+    classDef nd fill:#0C1020,stroke:#2A335C,color:#E9ECF7;
     class CC cc; class M mm; class DB db;
+    class H1,H2,H3,H4,H5,RPC,COG nd;
+    linkStyle default stroke:#6366F1,stroke-width:1.5px;
 ```
 
-Four hooks feed the daemon; the daemon speaks MCP and persists everything to SQLite. What flows
+Five hooks feed the daemon; the daemon speaks MCP and persists everything to SQLite. What flows
 back to the agent (code gist, per-turn context) is **measured** and injected as a **delta** — only
 what's new relative to the previous turn.
 
@@ -203,7 +258,7 @@ go build -o musubi ./cmd/musubi
 
 | Agent | MCP config | Hooks |
 |--------|-----------|-------|
-| `claude` (default) | `.mcp.json` | SessionStart · UserPromptSubmit · PreToolUse (two matchers: Read, and edits) · Stop |
+| `claude` (default) | `.mcp.json` | SessionStart · UserPromptSubmit · PreToolUse (two matchers: Read, and edits) · Stop · PreCompact |
 | `cursor` | `.cursor/mcp.json` | — (Cursor has no hook system) |
 
 ```bash
@@ -531,7 +586,7 @@ internal/
   detector/        # DetectStack + ExtractDeps (manifests, mtime cache)
   embedding/       # Provider: Ollama + OpenAI-compatible + Noop
   logx/            # structured logging to stderr
-  mcp/             # JSON-RPC 2.0 server + the 27 MCP tools
+  mcp/             # JSON-RPC 2.0 server + the 80 MCP tools (85 registered − 5 dormant)
   memory/          # SQLite: observations, FTS5, embeddings, graph, IVF index,
                    #   telemetry, code memory, token ledger, workflows
   selfupdate/      # `musubi update`: download + checksum + self-replace

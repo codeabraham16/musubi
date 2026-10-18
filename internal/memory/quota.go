@@ -137,10 +137,13 @@ func (e *DbEngine) coldestEvictable(project string, excess int, opts QuotaOption
 	// INDESALOJABLE todo lo bajado —la mayoría del corpus en un nodo de equipo— y la cuota no
 	// hubiera podido liberar nada.
 	// La saliencia y la edad se computan en Go con la MISMA fórmula del olvido, para que "frío"
-	// signifique exactamente lo mismo en ambos y no haya divergencia float Go/SQLite.
+	// signifique exactamente lo mismo en ambos y no haya divergencia float Go/SQLite. La edad de lo
+	// bajado cuenta desde su llegada, con el mismo sello y el mismo helper (ver edadDesde).
 	rows, err := e.db.Query(`
-		SELECT o.id, o.access_count, o.importance, COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), COALESCE(o.mem_type,'')
+		SELECT o.id, o.access_count, o.importance, COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), COALESCE(o.mem_type,''),
+		       COALESCE(esp.created_at,'')
 		FROM observations o
+		LEFT JOIN outbox esp ON esp.obs_id = o.id AND esp.status = 'espejo'
 		WHERE o.archived = 0 AND COALESCE(o.project_id,'') = ?
 		  AND NOT EXISTS (SELECT 1 FROM outbox b WHERE b.obs_id = o.id AND b.status NOT IN ('sent','espejo'))`,
 		project)
@@ -157,9 +160,9 @@ func (e *DbEngine) coldestEvictable(project string, excess int, opts QuotaOption
 			access                int
 			importance            float64
 			createdAt, lastAccess string
-			memType               string
+			memType, llegada      string
 		)
-		if err := rows.Scan(&id, &access, &importance, &createdAt, &lastAccess, &memType); err != nil {
+		if err := rows.Scan(&id, &access, &importance, &createdAt, &lastAccess, &memType, &llegada); err != nil {
 			return nil, fmt.Errorf("error al escanear candidata a evicción: %w", err)
 		}
 		// Protección por importancia: el conocimiento deliberado cuenta para la cuota pero no
@@ -167,12 +170,8 @@ func (e *DbEngine) coldestEvictable(project string, excess int, opts QuotaOption
 		if opts.ProtectImportance > 0 && importance >= opts.ProtectImportance {
 			continue
 		}
-		ts := lastAccess
-		if strings.TrimSpace(ts) == "" {
-			ts = createdAt
-		}
-		t, perr := time.Parse(sqliteTimeLayout, ts)
-		if perr != nil {
+		t, ok := edadDesde(createdAt, lastAccess, llegada)
+		if !ok {
 			continue // sin timestamp parseable: no se evicta (no podemos datarla)
 		}
 		ageDays := now.Sub(t).Hours() / 24

@@ -8,6 +8,51 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Las notas de cada release salen solas del CHANGELOG, y el README cuenta lo último que pasó.**
+  130 de las 131 releases publicadas tienen el cuerpo vacío: el job `create-release` de
+  `release.yml` sólo le pasaba `tag_name` a la acción. Lo que faltaba ya estaba escrito, en este
+  archivo; ahora baja solo.
+  - `deploy/cmd/notas-release` (sólo stdlib, sin red) lee el CHANGELOG. `-version X.Y.Z` imprime el
+    cuerpo de la release (el `### Destacado` de esa versión, los titulares de cada grupo con su
+    «… y N más» y el enlace a su sección) y `-readme` reescribe el bloque «Novedades» de los dos
+    README. El workflow lo corre con `continue-on-error`: si el generador falla, la release se
+    crea igual, sin texto, como hasta hoy, y los binarios se suben igual. Los jobs de `build`
+    suben sus archivos sin pisar el cuerpo ya publicado.
+  - `### Destacado` (español) y `### Highlights` (inglés) son grupos nuevos de cada versión,
+    escritos a mano por quien corta el release: tres o cuatro oraciones llanas, en lugar de los
+    titulares derivados del texto, que son notas de ingeniería con jerga. Van primero y completos
+    y no cuentan como un grupo más. Están escritos para v0.141.0, v0.140.0 y v0.131.0.
+  - «Novedades» en `README.md` y `README.en.md` muestra las tres versiones más nuevas entre
+    `<!-- novedades:inicio -->` y `<!-- novedades:fin -->` y no se edita a mano:
+    `TestReadmeNovedadesAlDia` falla si el bloque no coincide con lo que sale del CHANGELOG. El
+    bloque «Ya en `main`, todavía sin publicar» sí es a mano y lleva `base=X.Y.Z`:
+    `TestSinPublicarDeLosReadmeReales` lo canta cuando la foto queda vieja.
+  - `CONTRIBUTING.md` y `CONTRIBUTING.en.md` suman al paso de publicar un release el Destacado, el
+    comando de «Novedades» y lo que hace solo el workflow.
+- **La portada del repo vuelve a ser la de Musubi: banner animado, badges que se calculan solos y
+  un diagrama con los cinco hooks.** El README seguía con el banner de la v0.50.0 («v0.50.0» y
+  «GO 1.26» dibujados en la imagen, y un pie escrito a mano: «19 640 LOC · 27 tools · 0 panics»,
+  cuando hoy son 80 herramientas MCP), con los badges de Go, licencia y changelog como texto fijo y
+  con un diagrama de Arquitectura en la paleta vieja que dibujaba tres de los cinco hooks.
+  - `.github/assets/hero.svg` (y `hero.en.svg`, el de `README.en.md`) es un SVG de 1200×460 en la
+    paleta del cuerpo: un nudo de vidrio en el centro que une a tu agente con tu disco. Lo que el
+    agente guarda cruza el nudo hasta SQLite y vuelve por abajo como «solo lo relevante, solo lo
+    nuevo». GitHub sirve el SVG como imagen (corre CSS, no scripts), así que el movimiento es CSS
+    y corre siempre, también con `prefers-reduced-motion` puesto: Windows la activa al apagar los
+    «efectos de animación» y la portada se veía quieta. No lleva ninguna cifra, para que no se
+    pudra. Los dos SVG salen de
+    `.github/assets/src/hero.py` (`python .github/assets/src/hero.py`), que trae al lado la curva
+    del nudo y los contornos del sello; la salida es determinista, byte a byte.
+  - Los badges salen de shields.io y no se editan: el último release, el CI, la versión de Go leída
+    de `go.mod`, la licencia y los commits en `main` desde el último release.
+  - El diagrama muestra los cinco hooks que instala `musubi agente instalar` (`SessionStart`,
+    `UserPromptSubmit`, `PreToolUse`, `Stop` y `PreCompact`) y el texto deja de decir «cuatro».
+    La tabla «Por qué Musubi» pierde los emojis de adorno.
+- **La guarda de «cuántas herramientas hay» también lee «N MCP tools».**
+  `TestReadmeToolCountMatchesRegistry` sólo veía el número pegado a la palabra («80 tools»). El
+  README en inglés decía «27 MCP tools» en dos lugares (el diagrama y el árbol de paquetes) con el
+  catálogo en 80, y la guarda pasaba en verde. La expresión regular ahora admite `MCP` en el medio;
+  probada en rojo (dos fallos, uno por lugar) antes de corregir ambos.
 - **Después de compactar, Musubi devuelve la memoria que el resumen perdió.** Al compactar, Claude
   Code cambia la conversación por un resumen y dispara `SessionStart` con source `compact` y el
   mismo `session_id`. El delta de la sesión seguía diciendo que el agente tenía lo inyectado, así que
@@ -911,7 +956,79 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     hermana de diseño, que no tenía sabotaje, ahora tiene uno), y la compuerta de procesos daba un
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
+### Changed
+- **El embebedor completo tokeniza con `tokenizer.idx`: arranca en ~0,56 s en vez de ~1,5 s y
+  tokeniza la memoria real ~55 veces más rápido, con los mismos ids.**
+  `NewStaticProvider` (daemon, serve, capture, ingest y los backfill de embeddings y conflictos)
+  armaba en cada arranque el mapa de 500.353 piezas de `tokenizer.json` y tokenizaba con él: en
+  cada posición del texto buscaba en el mapa todas las subcadenas de hasta 186 runas. La consulta
+  liviana ya tokenizaba con el índice ordenado; ahora el completo también. Con los sidecars al día
+  toma el tokenizer de `tokenizer.idx` y no deserializa `tokenizer.json` (lo sigue leyendo, porque
+  el checksum lo necesita). Si faltan o están vencidos, arma el mapa, escribe el índice y tokeniza
+  con el que acaba de escribir: el ahorro no espera al arranque siguiente. Si no queda índice que
+  usar —por ejemplo, en una carpeta sin escritura—, tokeniza con el mapa, como antes.
+
+  Medido en davantis sobre POTION:
+  - El arranque de `NewStaticProvider`, cinco procesos frescos por lado con la caché caliente: de
+    1,45-1,59 s a 0,51-0,67 s (medianas 1,49 y 0,56 s), y el pico de memoria (VmHWM) de ~846 a
+    ~533 MiB. El tokenizer solo: 0,03 s y 13,9 MB de heap vivo con el índice, contra 1,2-1,3 s y
+    39,7 MB con el mapa.
+  - Las 2907 notas de la memoria (8.019.075 runas) dan los mismos ids por los dos caminos.
+    Tokenizarlas cuesta 26 min 17 s con el mapa y 28,9 s con el índice (54,6×). Se corrió con
+    GOMAXPROCS=1 y nice 19, así que los absolutos están inflados; la razón no. Depende del largo:
+    4,2× en textos de menos de 100 runas, 69,9× entre 100 y 1.000, 62,7× entre 1.000 y 10.000 y
+    22,4× por encima. Ahí pesa el armado de la secuencia en `viterbi` (`spm.go`), cuadrático en la
+    cantidad de tokens y común a los dos caminos: pasando de 10.000 runas, los dos suben casi lo
+    mismo por cada 1.000 runas.
+
+  «Al día» quiere decir ahora que el índice se puede USAR (`indiceAlDia`): la identidad coincide y
+  `leerIndiceTokenizer` lo acepta. Un índice con la identidad vigente que no se puede leer se
+  reescribe en el arranque siguiente; antes quedaba ahí para siempre y la consulta liviana se
+  quedaba sin atajo. La limpieza de temporales huérfanos pasó a `NewStaticProvider`, antes del
+  camino rápido, así corre aunque no haya nada que escribir.
+
+  Los vectores no cambian: las pruebas comparan bit a bit contra el mapa, también pieza por pieza
+  sobre las 500.353 del vocabulario real, y la huella del charsmap da lo mismo por los dos caminos.
+  Como el completo ahora confía en un `tokenizer.idx` que pudo escribir otro binario,
+  `TestElIndiceRealEstaAtadoASuFormato` ata los bytes del índice de POTION a `formatoIndice`: si la
+  derivación cambia y el formato no sube, se pone roja. Corre en `recall-gate`.
+
 ### Fixed
+- **Las skills y las tools ya no mandan a lanzar sub-agentes con una tool que no existe.**
+  `orchestrate-multiagent`, `adversarial-review`, `musubi_work` y `musubi_debate` decían que se
+  lanzaran con el «Task tool», pasándole `mcpServers:[musubi]`. Esa tool hoy se llama Agent y no
+  tiene ese parámetro, así que el agente que seguía la receta buscaba algo que no existe. El texto
+  nuevo pide lanzarlos con Agent. La orquestación y las dos tools piden además nombrar en el prompt
+  de cada sub-agente las tools de Musubi que le sirven; en `adversarial-review` eso ya lo dicen las
+  instrucciones del servidor. El motivo, medido el 2026-09-25: el sub-agente hereda los MCP de la
+  sesión, pero esas tools le llegan diferidas y los avisos de los hooks no le llegan. La skill de
+  orquestación suma además el heartbeat, para que la unidad de un sub-agente lento no venza y la
+  retome otro.
+
+- **Lo que baja del central ya no se olvida apenas llega.** Desde que la nota bajada guarda la fecha
+  en que el central la recibió (#711), una de hace tres meses entraba con tres meses encima y sin un
+  solo acceso, y el primer mantenimiento de un cliente nuevo la archivaba antes de que nadie la
+  pudiera usar. Medido el 2026-09-30 sobre la base del central, en sólo lectura, simulando un cliente
+  nuevo que baja las 3.295 notas visibles y compartidas: el primer mantenimiento archivaba 1.046. Con
+  la gracia, 0. Ahora el olvido y la cuota cuentan la edad de una nota bajada desde su llegada —el
+  `created_at` de su sello `'espejo'` en el outbox, que una re-bajada no renueva— cuando llegó
+  después de su último uso o de su creación. La gracia es la de siempre (14 días), y después la nota
+  se enfría al mismo ritmo que las demás, contando desde la llegada. Una nota con la fecha ilegible
+  sigue sin archivarse aunque el sello se lea. Sin migración.
+
+  En el olvido esto sólo archiva menos. En la cuota, no: desaloja el mismo excedente, y si una nota
+  recién bajada queda en su gracia, su lugar lo ocupa la siguiente más fría, que puede ser una nota
+  local que nunca subió. Con el tope que escribe `musubi init` (50.000 activas por proyecto) no pasa
+  en ninguna base medida: la más grande, el central, tiene 5.023 activas en total. Y el sello no
+  siempre es una llegada: una nota propia cuyo envío murió y que vuelve del central, o una `'sent'`
+  que el sello de #656 pasó a `'espejo'` hasta #693, lleva la fecha de su encolado, y ahí la nota
+  sólo se archiva más tarde. En davantis-1, medido el mismo día, archiva lo mismo en el momento (0
+  contra 0) y una nota menos a los 7 días (72 contra 73): el central todavía no manda la fecha de
+  origen, así que lo que bajó ya guarda la de su llegada. **Los clientes se
+  actualizan antes que el central:** con #711 el central manda la fecha de origen, y un cliente con
+  #711 y sin esta gracia archivaría lo que baja apenas llega. Límites conocidos: una nota bajada que
+  se edita acá deja el sello `'espejo'` y pierde la gracia, y una purgada que vuelve a bajar conserva
+  el sello viejo.
 - **El respaldo de la laptop espera la red antes de mandar la copia (A139).** Su timer es
   `Persistent=true`: con la máquina apagada a la hora, corre apenas arranca, antes de que levante el
   tailnet. El 2026-09-29 los dos timers de la laptop dispararon juntos al arrancar: `musubi-comparar`
@@ -1915,6 +2032,26 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [0.141.0] - 2026-09-14
 
+### Destacado
+- El grafo de código se reindexa solo, al arrancar y después cada hora (antes cada 6), y sólo se
+  manda al central cuando hay algo nuevo.
+- `musubi update` ahora puede verificar la firma del release: el binario trae la clave pública y la
+  privada queda fuera del repo y del CI.
+- La memoria que vuelve al prompt llega como material citado: una nota ajena ya no puede fabricar
+  una línea nueva ni una cabecera en ese bloque.
+- Cargar la tabla de embeddings ya no la duplica en memoria: el pico baja de 1321 a 833 MB y los
+  vectores ya guardados siguen valiendo.
+
+### Highlights
+- The code graph now re-indexes itself, at startup and then every hour (it used to wait 6), and
+  only pushes to the central brain when there is something new.
+- `musubi update` can now verify a release's signature: the binary embeds the public key, and the
+  private key stays out of the repo and out of CI.
+- Recalled memory reaches the prompt as quoted material: a foreign note can no longer forge a new
+  line or a header inside that block.
+- Loading the embedding table no longer duplicates it in memory: the peak drops from 1,321 MB to
+  833 MB, and vectors already stored stay valid.
+
 ### Added
 - **El grafo de código se mantiene al día solo, y el central lo recibe sin el push de cada tick.**
   Tres cambios que van juntos:
@@ -2454,6 +2591,26 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   vacía afirmando que vigila algo.
 
 ## [0.140.0] - 2026-09-10
+
+### Destacado
+- El cerebro central mantiene su propia memoria (consolidar, olvidar, purgar) sin depender de otro
+  proceso, y expone cuánto hace que corrió por última vez.
+- `/readyz` ahora prueba también la escritura: un cerebro «listo» es uno que acepta memoria, y si
+  falla dice cuál sonda cayó.
+- Si la memoria no abre, el daemon ya no muere mudo: contesta el handshake y declara la causa, en
+  vez de parecer que Musubi no está instalado.
+- Una base de memoria más nueva que el binario se abre en sólo lectura cuando éste todavía puede
+  leerla: se consulta, y lo que escribe se rechaza con una explicación.
+
+### Highlights
+- The central brain now maintains its own memory (consolidate, forget, purge) without depending on
+  another process, and exposes how long ago it last ran.
+- `/readyz` now probes writes too: a "ready" brain is one that accepts memory, and when it fails
+  it says which probe failed.
+- If the memory can't be opened, the daemon no longer dies silently: it answers the handshake and
+  states the cause, instead of looking like Musubi isn't installed.
+- A memory database newer than the binary opens read-only when the binary can still read it: you
+  can query it, and anything that writes is refused with an explanation.
 
 ### Added
 
@@ -3412,6 +3569,23 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     test declara. `Rules` de `adversarial-review` pasa de 3.120 a 3.936 runas (umbral 5.000).
 
 ## [0.131.0] - 2026-09-03
+
+### Destacado
+- El grafo de código se ofrece solo: al leer un archivo indexado, Musubi le muestra al agente sus
+  símbolos y quién los llama. Se apaga con `MUSUBI_CODEGRAPH_HOOK=0`.
+- Cuando el grafo no encuentra un símbolo, ahora dice por qué (archivo sin indexar, de otra rama o
+  símbolo inexistente) en vez de devolver un vacío mudo.
+- `musubi_code_context` deja de «explicar» símbolos que no existen.
+- El índice del grafo declara de qué commit es.
+
+### Highlights
+- The code graph is now offered instead of waiting to be asked: when an agent reads an indexed
+  file, Musubi shows it the file's symbols and who calls them. Turn it off with
+  `MUSUBI_CODEGRAPH_HOOK=0`.
+- When the graph can't find a symbol, it now says why (file not indexed, from another branch, or no
+  such symbol) instead of returning a silent empty answer.
+- `musubi_code_context` stops "explaining" symbols that don't exist.
+- The graph index now records which commit it was built from.
 
 ### Changed
 - **El grafo de código se OFRECE en vez de esperar a que lo llamen.** La inyección de estructura al

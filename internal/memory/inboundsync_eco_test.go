@@ -165,12 +165,14 @@ func TestEspejoNoPisaUnaPendienteLocal(t *testing.T) {
 func TestCuotaDesalojaElEspejo(t *testing.T) {
 	e := newTestEngine(t)
 
-	// Techo 1, dos activas frías; la más fría bajó del central (sellada espejo).
+	// Techo 1, dos activas frías; la más fría bajó del central (sellada espejo) hace 500 días. El
+	// sello lleva la fecha de la llegada: uno de ahora sería una nota recién bajada, y ésa está en su
+	// gracia (ver TestLaCuotaNoDesalojaLoQueRecienBajo).
 	seedQuotaObs(t, e, "bajada", "p", 500, 1.0, 0)
 	seedQuotaObs(t, e, "local", "p", 200, 1.0, 0)
 	if _, err := e.db.Exec(
 		`INSERT INTO outbox (obs_id, enqueued_hash, status, attempts, next_attempt_at, created_at, updated_at)
-		 VALUES ('bajada', 'h', 'espejo', 0, datetime('now'), datetime('now'), datetime('now'))`,
+		 VALUES ('bajada', 'h', 'espejo', 0, datetime('now'), datetime('now','-500 days'), datetime('now'))`,
 	); err != nil {
 		t.Fatal(err)
 	}
