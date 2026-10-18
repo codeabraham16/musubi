@@ -143,6 +143,16 @@ type PrincipalRegistry struct {
 	// que alguien revoca a otro no puede sostener «lleva siete días sin usarse». Nil en un registro
 	// armado a mano (las pruebas): no cuenta.
 	legacyAciertos *atomic.Uint64
+	// usos lleva, por principal NOMBRADO, cuántas veces autenticó y cuándo fue la última vez. Es el
+	// mismo instrumento que legacyAciertos —la señal de «nadie lo usa» con la que se decide retirar
+	// una credencial— extendido del único bearer legacy a cada identidad del registro.
+	//
+	// Se arma UNA vez en loadPrincipals (una entrada por principal, llave = nombre en minúsculas) y
+	// su forma NO vuelve a mutar: la recarga en caliente construye un mapa nuevo y le pasa los
+	// punteros de los principals que siguen (principals_reload.go), así que resolve() sólo LEE el
+	// mapa y muta valores atómicos — sin tomar ningún lock en el camino de autenticación. Nil en un
+	// registro armado a mano o legacy-only (no hay principals nombrados que contar).
+	usos map[string]*usoStat
 }
 
 type principalEntry struct {
@@ -177,10 +187,66 @@ type principalEntry struct {
 	// de una ausente, y `yaml` con un time.Time convierte «basura» en «cero» sin decir nada —
 	// o sea, convierte un error de configuración en una credencial eterna.
 	Expires string `yaml:"expires,omitempty"`
+	// CreatedAt / CreatedBy / TokenPrefix son la AUDITORÍA DE ALTA de la credencial. Los tres son
+	// OPCIONALES (omitempty): un principals.yaml viejo carga idéntico y sin significado nuevo, y el
+	// diff de un alta nueva se limita a las líneas del principal nuevo.
+	//   - CreatedAt: cuándo se dio de alta, en RFC3339.
+	//   - CreatedBy: QUIÉN la creó — el nombre del principal admin que la minteó por la red, o "cli"
+	//     cuando se creó por línea de comandos en el server.
+	//   - TokenPrefix: los primeros chars del token crudo (`msb_` + 4). Es un IDENTIFICADOR para
+	//     reconocer la credencial en `token list` sin tener el token; NUNCA la credencial —el
+	//     SHA-256 sigue siendo el único secreto guardado— y nunca alcanza para autenticar.
+	CreatedAt   string `yaml:"created_at,omitempty"`
+	CreatedBy   string `yaml:"created_by,omitempty"`
+	TokenPrefix string `yaml:"token_prefix,omitempty"`
 }
 
 type principalsFileYAML struct {
 	Principals []principalEntry `yaml:"principals"`
+}
+
+// usoStat es el instrumento de uso de UN principal: cuántas veces autenticó y el instante (unix
+// segundos) del último acierto. Los dos campos son atómicos porque resolve() los toca desde
+// cualquier goroutine que autentique, sin lock. La resolución de segundos alcanza para la pregunta
+// que este dato contesta: «¿cuántos días lleva sin usarse?».
+type usoStat struct {
+	aciertos   atomic.Uint64
+	ultimoUnix atomic.Int64
+}
+
+// registrar anota un acierto: suma uno y sella el instante. nil-safe a propósito, para que el hot
+// path de resolve() no tenga que chequear si existe la entrada (un registro armado a mano no tiene
+// mapa de usos, y leer una llave ausente de un mapa devuelve el puntero nil).
+func (u *usoStat) registrar(ahora time.Time) {
+	if u == nil {
+		return
+	}
+	u.aciertos.Add(1)
+	u.ultimoUnix.Store(ahora.Unix())
+}
+
+// UsoIdentidad es la foto (sólo lectura) del uso de un principal, para token_list. No lleva átomos:
+// es un valor tomado en un instante, no el contador vivo. UltimoUnix 0 ⇒ nunca autenticó.
+type UsoIdentidad struct {
+	Aciertos   uint64
+	UltimoUnix int64
+}
+
+// usoDeIdentidades saca una foto del uso de cada principal nombrado, por nombre en minúsculas.
+//
+// Es dato SÓLO para admin (lo consume toolTokenList): a diferencia de resumenDeVencimientos, SÍ
+// lleva los nombres, y por eso NO alimenta /metrics —una etiqueta `principal=` ahí le entregaría la
+// lista de identidades a cualquiera que scrapee (ver principals_metricas.go)—. Incluye a los que
+// nunca autenticaron (aciertos 0, ultimo 0): ese cero es justamente la señal de retiro.
+func (r *PrincipalRegistry) usoDeIdentidades() map[string]UsoIdentidad {
+	if r == nil || len(r.usos) == 0 {
+		return nil
+	}
+	out := make(map[string]UsoIdentidad, len(r.usos))
+	for nombre, u := range r.usos {
+		out[nombre] = UsoIdentidad{Aciertos: u.aciertos.Load(), UltimoUnix: u.ultimoUnix.Load()}
+	}
+	return out
 }
 
 // hashToken devuelve el SHA-256 hex de un token. Lo usan el registro y (a futuro) el CLI
@@ -311,6 +377,16 @@ func loadPrincipals(path, legacyToken string) (*PrincipalRegistry, error) {
 			Expires:   vence,
 			hash:      h,
 		})
+	}
+	// Un instrumento de uso por principal nombrado (la misma señal que legacyAciertos, extendida a
+	// cada identidad). Se arma acá una vez; la recarga en caliente le pasa los punteros de los que
+	// siguen (principals_reload.go) y resolve() sólo muta sus átomos. Llave = nombre en minúsculas,
+	// la MISMA con la que arriba se rechazan los duplicados, así que el carry machea sin ambigüedad.
+	if len(reg.principals) > 0 {
+		reg.usos = make(map[string]*usoStat, len(reg.principals))
+		for i := range reg.principals {
+			reg.usos[strings.ToLower(reg.principals[i].Name)] = &usoStat{}
+		}
 	}
 	return reg, nil
 }
@@ -665,6 +741,15 @@ func (r *PrincipalRegistry) resolve(token string) (*Principal, bool) {
 		if match.Vencida(ahoraParaVencimiento()) {
 			return nil, false
 		}
+		// Acierto de un principal NOMBRADO: la misma señal que legacyAciertos lleva del bearer
+		// legacy, ahora por identidad, para poder retirar un token que nadie usa. Va DESPUÉS del
+		// loop de ConstantTimeCompare (no toca su tiempo constante) y sólo LEE el mapa inmutable y
+		// muta átomos —registrar es nil-safe y leer una llave ausente de un mapa (o de uno nil) da
+		// el puntero nil—, así que no toma ningún lock. El reloj se vuelve a leer acá a propósito:
+		// así el `if match.Vencida(...)` de arriba queda idéntico a su forma histórica (hay un
+		// sabotaje anclado a ese bloque), y una segunda lectura sólo cambia last_used en el borde
+		// de un segundo, que ya es aproximado.
+		r.usos[strings.ToLower(match.Name)].registrar(ahoraParaVencimiento())
 		return match, true
 	}
 	if r.legacyHash != "" && subtle.ConstantTimeCompare([]byte(h), []byte(r.legacyHash)) == 1 {
