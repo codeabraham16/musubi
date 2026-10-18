@@ -53,6 +53,12 @@ var pruebasExcluidasAProposito = map[string]string{
 	// build por eso se apaga sola a la semana». CI no puede depender de la red.
 	"internal/mcp/sonda_diseno_test.go": "instrumento contra el central real; CI no la CORRE porque no debe depender de la red ni de una credencial, pero SÍ la compila (`go vet -tags sonda`)",
 
+	// Necesita una COPIA de la base real (MUSUBI_SONDA_RECALL_DIR) y sin ella se saltea: mide cuánto
+	// pesa la respuesta de musubi_recall antes y después del techo de la respuesta. El mismo contrato
+	// —sólo se corta la cola, used_tokens no pasa el techo— lo cuida en CI
+	// TestRecallElTechoEsTresPresupuestos, sobre una base sembrada.
+	"internal/mcp/sonda_recall_test.go": "instrumento sobre una copia de la base real, que CI no tiene; CI SÍ la compila (`go vet -tags sonda`) y la compuerta del mismo contrato es TestRecallElTechoEsTresPresupuestos",
+
 	// Éstas SÍ corren en CI, con su tag encendido, así que no son pruebas muertas: van acá porque
 	// esta guarda evalúa sin tags. `-race` define el tag `race` solo; `treesitter` va explícito en
 	// el job de codeintel/mcp (`go test -tags "$TAGS" ./internal/codeintel/ ./internal/mcp/`).

@@ -73,7 +73,14 @@ type SourcingConfig struct {
 
 // MemoryConfig controla el recall por presupuesto de tokens (memoria eficiente).
 type MemoryConfig struct {
-	// RecallTokenBudget es el techo de tokens por defecto de musubi_recall.
+	// RecallTokenBudget es el presupuesto por defecto de musubi_recall: lo que se reparte entre los
+	// gists. La respuesta ENTERA —el gist de cada item más su sobre (id, topic_key, fecha, score,
+	// atribución)— se corta en 3 veces esto (ver memory.AlTechoDeLaRespuesta).
+	//
+	// 650 y no los 400 de antes porque antes la respuesta no tenía techo: aquellos 400 devolvían
+	// ~18,5 items y ~5.500 caracteres, y con el techo se cortarían en 1200 tokens (~3.400
+	// caracteres). Con 650 el techo cae en 1950: sobre una copia de la base real, 14 consultas dan
+	// 19 items en ~5.400 caracteres y el mismo top-10. El recall sin presupuesto queda como estaba.
 	RecallTokenBudget int `yaml:"recall_token_budget"`
 	// GistMaxTokens es el tope de tokens de un gist (titular extractivo).
 	GistMaxTokens int `yaml:"gist_max_tokens"`
@@ -1278,7 +1285,7 @@ func Default() Config {
 			// externo es opt-in (contenido no confiable de GitHub arbitrario).
 		},
 		Memory: MemoryConfig{
-			RecallTokenBudget:     400,
+			RecallTokenBudget:     650,
 			GistMaxTokens:         24,
 			CandidatePool:         50,
 			SessionTokenBudget:    8000,
