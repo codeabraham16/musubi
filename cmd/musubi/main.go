@@ -66,6 +66,8 @@ func main() {
 		runArnes(os.Args[2:])
 	case "uso-agente":
 		runUsoAgente(os.Args[2:])
+	case "sesiones":
+		runSesiones(os.Args[2:])
 	case "receipt":
 		runReceipt(os.Args[2:])
 	case "precheck":
@@ -201,6 +203,10 @@ func printUsage() {
 	section("Medición")
 	cmd("uso-agente [--desde F] [--hasta F]", "Lee los transcripts de Claude Code: ¿el agente USA las tools y skills de Musubi? (sólo lectura; --dir, --json, --excluir; las carpetas temporales no se miden salvo --incluir-temporales)")
 	cmd("uso-agente --contexto [--desde F]", "Lo que Musubi puso en el contexto, ¿se repite, se pierde o descarrila? M1-M7 de las sesiones principales (sólo lectura; mismos flags)")
+
+	section("Sesiones de Claude Code")
+	cmd("sesiones [--todas] [--viejas N] [--titulos]", "Lista las sesiones guardadas en disco: id, carpeta, fecha, tamaño y si puede estar activa (sólo lectura)")
+	cmd("sesiones borrar <id>… | --viejas N [--todas]", "Borra sesiones: muestra el plan y pregunta (--si no pregunta; con --viejas, de 7 días en adelante); nunca toca memory/, nada fuera de projects ni una sesión tocada en los últimos 15 min")
 
 	section("Ingesta")
 	cmd("ingest [--as ...] [--lang ...] [--json] <url>", "Convierte un link (video/red social/artículo) en texto; --save lo guarda en memoria")
