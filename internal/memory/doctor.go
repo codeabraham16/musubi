@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"musubi/internal/censo"
 	"musubi/internal/logx"
 )
 
@@ -83,7 +85,88 @@ func (e *DbEngine) doctorChecks() []doctorCheck {
 			count: countSwallowedImportance, apply: applySwallowedImportance},
 		// No es deep: es un COUNT con LEFT JOIN sobre un índice, no recorre content.
 		{code: "embedding_coverage", run: checkEmbeddingCoverage},
+		// deep: agrega sobre tool_invocations en una ventana de consulta de 400 d (GROUP BY + p95 por tool, el
+		// mismo camino que musubi_tool_usage). Confirma el CENSO DE TOOLS VIVAS (A3) contra el ledger;
+		// Status SIEMPRE ok, la hipótesis va en el Message y nunca vuelca el rollup a issues.
+		{code: "tool_census", deep: true, run: checkToolCensus},
 	}
+}
+
+// censusWindowDays es la ventana de CONSULTA que checkToolCensus pasa a ToolUsage (R6). 400 d esquiva
+// el cero-falso silencioso de ToolUsage/musubi_tool_usage en ventanas enormes (medido). Es un TOPE de
+// consulta, no la cobertura real: el ledger purga según usage_ledger.retention_days (90 d por defecto,
+// config.go), así que la ventana efectiva es min(400 d, retención). Por eso el Message NO promete
+// "400 d" de historia —sería mentir bajo la retención por defecto—: nombra la retención como el límite.
+const censusWindowDays = 400
+
+// checkToolCensus confirma el CENSO DE TOOLS VIVAS (A3, internal/censo) contra el ledger de uso: para
+// cada tool de clase DebeInvocarse que no registró NI UNA invocación en la ventana, la nombra como
+// HIPÓTESIS en el Message. Es el complemento en runtime de la guarda internal/mcp/censo_test.go: la
+// guarda sella que toda tool esté CLASIFICADA; este check pregunta si las que DEBERÍAN ejercerse de
+// verdad se ejercen.
+//
+// POR QUÉ NO SENTENCIA, Y ÉSTE ES EL DISEÑO (R5). Un cero en el ledger es una HIPÓTESIS, no un
+// veredicto (medido: bff1cee5). El ledger local sólo ve el camino MCP de ESTA máquina —el CLI y los
+// hooks no escriben acá, y en stdio local el principal va vacío—, así que un cero local es una señal
+// débil: puede ser una tool muerta de verdad o una que se ejerce por un camino que esta tabla no ve.
+// Por eso el Status es SIEMPRE `ok`: la hipótesis viaja en el Message y nunca vuelca el rollup a
+// `issues`. Un `warning` acá saltaría en el arranque de CADA sesión vía buildHealthContext —la misma
+// fatiga de alarma que checkEmbeddingCoverage documenta y evita a propósito—. El censo se LEE cuando
+// uno corre `musubi doctor`, no es un nag permanente.
+//
+// SIN HISTORIA → `ok` + Unmeasured: una base recién nacida o recién purgada no tiene de qué sacar la
+// hipótesis. No se afirma un verde medido donde no se midió nada (mismo patrón de tres estados que
+// checkEmbeddingCoverage).
+//
+// REUSA ToolUsage, no SQL a mano: es la MISMA agregación que respalda musubi_tool_usage, con la misma
+// ventana y el mismo criterio de «usada». Así la hipótesis del doctor y la tabla que ve el operador
+// con musubi_tool_usage nunca pueden discrepar sobre qué cuenta como uso.
+func checkToolCensus(e *DbEngine) CheckResult {
+	// Contexto pelado a propósito: sin ProjectScope, ToolUsage no filtra por proyecto y ve TODO el
+	// ledger local (projectScopeFrom de un ctx vacío ⇒ ProjectScope{} ⇒ scopeClause sin AND).
+	ctx, cancel := context.WithTimeout(context.Background(), opStatsTimeout)
+	defer cancel()
+
+	rows, err := e.ToolUsage(ctx, censusWindowDays)
+	if err != nil {
+		return CheckResult{Code: "tool_census", Status: "error",
+			Message: "no se pudo leer el ledger de uso (tool_invocations): " + err.Error()}
+	}
+
+	usadas := make(map[string]bool, len(rows))
+	totalCalls := 0
+	for _, r := range rows {
+		if r.Calls > 0 {
+			usadas[r.Tool] = true
+			totalCalls += r.Calls
+		}
+	}
+	// Sin una sola invocación en la ventana no hay ledger del que sacar una hipótesis: base nueva o
+	// recién purgada, no una flota de tools muertas. ok + Unmeasured en vez de un falso verde.
+	if totalCalls == 0 {
+		return CheckResult{Code: "tool_census", Status: "ok", Unmeasured: true,
+			Message: "sin invocaciones en este ledger: no hay historia para confirmar el censo de tools vivas"}
+	}
+
+	debenInvocarse := censo.DebenInvocarse()
+	var silenciosas []string
+	for _, name := range debenInvocarse { // ya viene ordenado, así el Message es determinista
+		if !usadas[name] {
+			silenciosas = append(silenciosas, name)
+		}
+	}
+	// El nombre de la clase sale de censo.DebeInvocarse.String(), no del literal "debe-invocarse": es
+	// el único caller del método (inlinear el literal lo deja inalcanzable y el trinquete A2 se pone
+	// rojo) y ata el Message a la fuente del enum.
+	if len(silenciosas) == 0 {
+		return CheckResult{Code: "tool_census", Status: "ok",
+			Message: fmt.Sprintf("las %d tools de clase %s registran uso en este ledger", len(debenInvocarse), censo.DebeInvocarse.String())}
+	}
+	return CheckResult{Code: "tool_census", Status: "ok",
+		Message: fmt.Sprintf("hipótesis: %d de %d tool(s) de clase %s sin invocaciones en este ledger (%s). "+
+			"Un cero local es señal débil —el ledger sólo ve el camino MCP de esta máquina y conserva una ventana acotada "+
+			"(usage_ledger.retention_days, 90 d por defecto)—: confirmá contra tool_invocations del central y el disparador de cada una antes de darla por muerta",
+			len(silenciosas), len(debenInvocarse), censo.DebeInvocarse.String(), strings.Join(silenciosas, ", "))}
 }
 
 // checkEmbeddingCoverage avisa cuando hay memoria que la búsqueda semántica NO puede encontrar.

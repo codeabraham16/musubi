@@ -1,0 +1,9 @@
+internal/cerebro/alcance.go	Sondear
+internal/guiones/compuerta.go	Compuerta.ComandoCtx
+internal/mcp/banco_diseno.go	IdsDeCorpus
+internal/mcp/banco_diseno.go	Jaccard
+internal/mcp/banco_diseno.go	TocaLosEjes
+internal/mcp/banco_diseno.go	cabeza
+internal/mcp/principals_reload.go	ImpactoDeNombre.Vacio
+internal/memory/tareas_del_sistema.go	EsLoteDelSistema
+internal/testbudget/ci_expresion.go	tri.String
