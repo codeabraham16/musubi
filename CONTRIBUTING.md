@@ -63,12 +63,32 @@ por test) y `musubi version` (inyectado desde el tag). No hay que sincronizarlas
    `TestVersioninfoMatchesVERSION` falla si divergen. **No edites los `.syso` a mano**:
    `release.yml` los regenera desde `versioninfo.json` con `goversioninfo` pineado.
 2. Pasá el contenido de `[Unreleased]` a una sección `[X.Y.Z]` con fecha en `CHANGELOG.md`
-   y actualizá los links de comparación al final del archivo.
-3. Commiteá, mergeá a `main` y creá el tag: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
+   y actualizá los links de comparación al final del archivo. **Al pasarlo, escribí a mano el
+   resumen de la versión**, arriba de `### Added`: `### Destacado` con tres o cuatro viñetas en
+   español, una oración llana cada una, y `### Highlights` con las mismas ideas en inglés. Es lo
+   que ve quien llega a la portada del repo y a la página del release. Sin ese resumen salen los
+   titulares del CHANGELOG tal como están escritos, que son notas de ingeniería con jerga.
+3. Regenerá «Novedades» en los dos README: `go run ./deploy/cmd/notas-release -readme`. Lee
+   `CHANGELOG.md` —por eso va **después** del paso 2— y reescribe lo que hay entre
+   `<!-- novedades:inicio -->` y `<!-- novedades:fin -->` en `README.md` y `README.en.md`: las tres
+   versiones más nuevas, con las viñetas de su `### Destacado` (en el README inglés, las de
+   `### Highlights`) y el enlace a su sección; si una versión no lo trae, hasta cuatro titulares
+   sacados del texto. **Ese bloque no se edita a mano**: `TestReadmeNovedadesAlDia` falla si no
+   coincide con lo que sale del CHANGELOG.
+
+   Arriba de ese bloque vive «Ya en `main`, todavía sin publicar», que sí se escribe a mano y
+   lleva `base=X.Y.Z` en su marcador de inicio. Al publicar una versión nueva queda vieja y
+   `TestSinPublicarDeLosReadmeReales` lo canta: cambiá `base=` a la versión nueva y rehacé los
+   titulares con lo que quedó fuera, o borrá el bloque entero.
+4. Commiteá, mergeá a `main` y creá el tag: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
    El workflow [`release.yml`](.github/workflows/release.yml) **aborta si el tag no coincide
    con `VERSION`**, regenera el recurso de Windows y compila los binarios cross-platform
-   (Windows/Linux/macOS, amd64+arm64) con checksums SHA-256, y publica el release.
-4. **Firmá el release A MANO, en tu máquina, con las claves montadas el rato que dura.** El
+   (Windows/Linux/macOS, amd64+arm64) con checksums SHA-256, y publica el release. Las notas
+   del release en GitHub salen solas: el job `create-release` corre
+   `go run ./deploy/cmd/notas-release -version "$TAG"` y usa lo que imprime como cuerpo (el
+   `### Destacado` de la sección `[X.Y.Z]`, después los titulares de sus grupos y un enlace al
+   CHANGELOG). Si ese paso falla, el release se publica igual, con el cuerpo vacío.
+5. **Firmá el release A MANO, en tu máquina, con las claves montadas el rato que dura.** El
    `sha256sums.txt` que produce el CI dice que el archivo llegó entero, no que sea nuestro: lo
    publica el mismo que publica el binario. Y como el cerebro y el agente son el MISMO binario, un
    release ajeno no entrega una máquina: entrega la flota. **Las claves privadas no viven en el CI**

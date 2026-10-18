@@ -21,6 +21,7 @@ var seriesDeVencimiento = []string{
 	nombreCredencialesEternas,
 	nombreLegacyHabilitado,
 	nombreLegacyAciertos,
+	nombreNuncaUsadas,
 	nombreRegistroSinRecargar,
 	nombreRegistroRecargasMal,
 }
@@ -142,7 +143,9 @@ func TestMetricsDiceCuantoFaltaParaElProximoVencimiento(t *testing.T) {
 		nombreCredencialesEternas:  "1",
 		nombreLegacyHabilitado:     "1",
 		// El scrape entró con su propia credencial: el legacy no se usó.
-		nombreLegacyAciertos:      "0",
+		nombreLegacyAciertos: "0",
+		// Cinco nombrados, sólo scrape autenticó: los otros cuatro nunca se usaron.
+		nombreNuncaUsadas:         "4",
 		nombreRegistroSinRecargar: "0",
 		nombreRegistroRecargasMal: "0",
 	}

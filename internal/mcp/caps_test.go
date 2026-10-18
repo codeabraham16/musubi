@@ -197,14 +197,14 @@ func TestRegistroRechazaWriteOwnSinProyecto(t *testing.T) {
 func TestAddPrincipalWithCapsGuardaYPersiste(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "principals.yaml")
 
-	if _, err := AddPrincipalWithCaps(path, "roto", "", RoleWriter, ReadAll, WriteOwn); err == nil {
+	if _, err := AddPrincipalWithCaps(path, "roto", "", RoleWriter, ReadAll, WriteOwn, "cli"); err == nil {
 		t.Error("write=own sin --project debe rechazarse")
 	}
-	if _, err := AddPrincipalWithCaps(path, "mando", "musubi", RoleWriter, ReadAll, WriteOwn); err != nil {
+	if _, err := AddPrincipalWithCaps(path, "mando", "musubi", RoleWriter, ReadAll, WriteOwn, "cli"); err != nil {
 		t.Fatalf("la sala de mando es válida: %v", err)
 	}
 	// Una cabina NO necesita proyecto: no escribe.
-	if _, err := AddPrincipalWithCaps(path, "cabina", "", RoleReader, ReadAll, WriteNone); err != nil {
+	if _, err := AddPrincipalWithCaps(path, "cabina", "", RoleReader, ReadAll, WriteNone, "cli"); err != nil {
 		t.Fatalf("la cabina no necesita proyecto (no escribe): %v", err)
 	}
 

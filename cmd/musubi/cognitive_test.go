@@ -149,10 +149,26 @@ func TestOrchestrateSkillDocumentaProtocolo(t *testing.T) {
 	if !ok {
 		t.Fatal("falta la skill orchestrate-multiagent")
 	}
-	// Debe documentar las tres patas del protocolo y pasar mcpServers a los sub-agentes.
-	for _, must := range []string{"musubi_work", "claim", "mcpServers"} {
+	// Debe documentar las patas del protocolo y cómo le llegan las tools al sub-agente: por la
+	// tool Agent, que no acepta mcpServers, y con las de Musubi DIFERIDAS, que el sub-agente
+	// carga con ToolSearch sólo si alguien se las nombró. Sin heartbeat, la unidad de un
+	// sub-agente lento vence y la retoma otro.
+	for _, must := range []string{"musubi_work", "claim", "heartbeat", "tool Agent", "ToolSearch"} {
 		if !strings.Contains(sk.Rules, must) {
 			t.Errorf("la skill debe mencionar %q en sus reglas: %q", must, sk.Rules)
+		}
+	}
+}
+
+// TestSkillsNoMandanAUnaToolQueNoExiste: el «Task tool» pasó a llamarse Agent y nunca tuvo un
+// parámetro mcpServers. Una skill que lo pide manda al agente a buscar algo que no está, y el
+// texto viejo vivía en DOS skills: se barren todas, no sólo la que se corrigió primero.
+func TestSkillsNoMandanAUnaToolQueNoExiste(t *testing.T) {
+	for _, sk := range cognitiveSkills(nil) {
+		for _, viejo := range []string{"Task tool", "mcpServers:[musubi]"} {
+			if strings.Contains(sk.Rules, viejo) {
+				t.Errorf("la skill %s todavía dice %q: el agente no tiene esa tool ni ese parámetro", sk.Name, viejo)
+			}
 		}
 	}
 }
