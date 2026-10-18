@@ -33,7 +33,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.9'
 
       - name: Vet
         run: go vet ./...
@@ -191,7 +191,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.9'
 
       - name: Vet
         run: go vet ./...
@@ -227,7 +227,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.9'
 
       - name: Maintain complexity guard (memoria sub-cuadrática)
         # Corre BenchmarkMaintain a n=1k y n=10k y verifica que la MEMORIA asignada por
@@ -317,7 +317,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.9'
 
       - name: Cache POTION table
         id: potion
@@ -466,7 +466,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.9'
 
       # LOS .syso CORRESPONDEN A versioninfo.json — la misma valla que el bundle, en el hermano
       # que no la tenía.
@@ -556,7 +556,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.9'
 
       - name: gosec
         run: |
