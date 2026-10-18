@@ -1,0 +1,5 @@
+schema_version: "1.1"
+# costo-usd-por-corrida: 0.15 0.40 1.00  (mínimo, típico y máximo por corrida de UN brazo, a precio de lista; lo lee correr.sh)
+name: impacto-subtotal
+context:
+  scaffold_script: andamio.sh
