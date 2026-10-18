@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"musubi/internal/config"
 )
@@ -54,7 +55,13 @@ func (s *McpServer) toolTokenNew(ctx context.Context, raw json.RawMessage) (inte
 	if role == "" {
 		role = RoleWriter
 	}
-	token, err := AddPrincipalWithCaps(s.principalsFilePath(), args.Name, args.Project, role, args.Read, args.Write)
+	// El actor que queda en la auditoría de alta es el admin que la minteó por la red (su nombre;
+	// "legacy" si fue el bearer legacy). Vacío ⇒ AddPrincipalWithCaps lo marca "cli" (stdio local).
+	actor := ""
+	if caller := principalFrom(ctx); caller != nil {
+		actor = caller.Name
+	}
+	token, err := AddPrincipalWithCaps(s.principalsFilePath(), args.Name, args.Project, role, args.Read, args.Write, actor)
 	if err != nil {
 		// Toda la validación (nombre vacío, rol/eje inválido, tenancy fail-closed, duplicado) vive en
 		// AddPrincipalWithCaps: acá se propaga como argumento inválido, no como error interno.
@@ -81,9 +88,15 @@ func (s *McpServer) toolTokenList(ctx context.Context, _ json.RawMessage) (inter
 	if err != nil {
 		return nil, rpcErrorf(codeInternalError, "no se pudo leer el registro de principals: %v", err)
 	}
+	// El USO vive en el registro en memoria, no en el YAML: lo pedimos al mismo resolver que
+	// autentica (nil en stdio local / test ⇒ el listado sale sin uso, no rompe).
+	var usos map[string]UsoIdentidad
+	if s.buscarPrincipal != nil {
+		usos = s.buscarPrincipal.usoDeIdentidades()
+	}
 	out := make([]map[string]interface{}, 0, len(infos))
 	for _, p := range infos {
-		out = append(out, map[string]interface{}{
+		fila := map[string]interface{}{
 			"name":       p.Name,
 			"project_id": p.ProjectID,
 			"role":       p.Role,
@@ -94,7 +107,23 @@ func (s *McpServer) toolTokenList(ctx context.Context, _ json.RawMessage) (inter
 			// pregunta. `vencimiento` es el estado ya resuelto; nunca dice «no sé» en silencio.
 			"expires":     p.Expires, // tal cual el registro; "" ⇒ no vence
 			"vencimiento": p.Vencimiento,
-		})
+			// Auditoría de alta (del registro en disco): quién creó la credencial, cuándo, y un
+			// identificador corto del token para aparearlo con el que alguien tiene a mano, sin hash.
+			"created_at":   p.CreatedAt,
+			"created_by":   p.CreatedBy,
+			"token_prefix": p.TokenPrefix,
+		}
+		// Uso VIVO: cuántas veces autenticó y cuándo la última. Es la señal de retiro —un token
+		// nombrado en cero, igual que el legacy en cero—. "nunca" si todavía no autenticó o no hay
+		// registro vivo que consultar.
+		u := usos[strings.ToLower(p.Name)]
+		fila["aciertos"] = u.Aciertos
+		if u.UltimoUnix > 0 {
+			fila["last_used"] = time.Unix(u.UltimoUnix, 0).UTC().Format(time.RFC3339)
+		} else {
+			fila["last_used"] = "nunca"
+		}
+		out = append(out, fila)
 	}
 	return jsonResult(map[string]interface{}{"principals": out})
 }

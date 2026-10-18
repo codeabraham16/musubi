@@ -73,6 +73,11 @@ type principalResolver interface {
 	// falta a la próxima), sin nombres. Va acá por el mismo motivo que las otras: tiene que salir
 	// del MISMO snapshot que autentica, o la alerta describiría un registro que ya no es el vigente.
 	resumenDeVencimientos(ahora time.Time) ResumenVencimientos
+	// usoDeIdentidades es la foto del uso por principal NOMBRADO (aciertos + último acierto). Va acá
+	// por el mismo motivo que las otras: tiene que salir del MISMO snapshot que autentica, o
+	// `token list` describiría un registro que ya no es el vigente. A diferencia de
+	// resumenDeVencimientos, SÍ lleva nombres: es sólo para admin y NO alimenta /metrics.
+	usoDeIdentidades() map[string]UsoIdentidad
 }
 
 // principalsReloadInterval es cada cuánto se chequea el mtime del registro. 10s da una revocación
@@ -176,6 +181,15 @@ func (rr *reloadableRegistry) resumenDeVencimientos(ahora time.Time) ResumenVenc
 	return res
 }
 
+// usoDeIdentidades delega en el snapshot VIGENTE, igual que las otras: el uso que ve `token list`
+// sale del mismo registro que autentica, y la recarga en caliente conserva la cuenta (reloadIfChanged).
+func (rr *reloadableRegistry) usoDeIdentidades() map[string]UsoIdentidad {
+	if reg := rr.cur.Load(); reg != nil {
+		return reg.usoDeIdentidades()
+	}
+	return nil
+}
+
 // watch re-lee el registro cuando cambia el mtime, hasta que ctx se cancela (shutdown del server).
 func (rr *reloadableRegistry) watch(ctx context.Context) {
 	t := time.NewTicker(rr.intervalo)
@@ -214,11 +228,20 @@ func (rr *reloadableRegistry) reloadIfChanged() {
 		logx.Warn("recarga en caliente del registro de principals falló; se conserva el vigente", "path", rr.path, "error", err)
 		return
 	}
-	// EL CONTADOR DEL LEGACY PASA AL SNAPSHOT NUEVO. loadPrincipals arma uno en cero, y sin esto
-	// cada edición de principals.yaml borraría la cuenta de usos del bearer legacy — que es la
-	// que tiene que llegar a «siete días en cero» para poder retirarlo.
-	if prev := rr.cur.Load(); prev != nil && prev.legacyAciertos != nil {
-		reg.legacyAciertos = prev.legacyAciertos
+	// EL CONTADOR DEL LEGACY Y LOS DE CADA PRINCIPAL PASAN AL SNAPSHOT NUEVO. loadPrincipals arma
+	// uno en cero, y sin esto cada edición de principals.yaml borraría la cuenta de usos —la que
+	// tiene que llegar a «siete días en cero» para poder retirar una credencial—. Para los nombrados
+	// el carry es POR NOMBRE: el que sigue en el registro conserva su puntero (y con él su cuenta);
+	// el que se agregó arranca en cero; al que se revocó, su contador se va con él.
+	if prev := rr.cur.Load(); prev != nil {
+		if prev.legacyAciertos != nil {
+			reg.legacyAciertos = prev.legacyAciertos
+		}
+		for nombre, u := range prev.usos {
+			if _, sigue := reg.usos[nombre]; sigue {
+				reg.usos[nombre] = u
+			}
+		}
 	}
 	rr.lastModNano = fi.ModTime().UnixNano()
 	rr.cur.Store(reg)

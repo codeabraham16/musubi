@@ -28,6 +28,7 @@ const (
 	nombreCredencialesEternas  = "musubi_principals_without_expiry"
 	nombreLegacyHabilitado     = "musubi_legacy_token_enabled"
 	nombreLegacyAciertos       = "musubi_legacy_token_auth_total"
+	nombreNuncaUsadas          = "musubi_principals_never_used"
 	nombreRegistroSinRecargar  = "musubi_principals_reload_failing"
 	nombreRegistroRecargasMal  = "musubi_principals_reload_failures_total"
 )
@@ -74,6 +75,21 @@ func (s *McpServer) renderVencimientoDeCredenciales(b *strings.Builder, reg prin
 	fmt.Fprintf(b, "# HELP %s Veces que autenticó el bearer legacy desde que arrancó el proceso, por CUALQUIER puerta (/mcp, /metrics, /api/*). Es lo que dice si se puede retirar: el ledger de tools no ve las puertas que no son tools.\n# TYPE %s counter\n",
 		nombreLegacyAciertos, nombreLegacyAciertos)
 	fmt.Fprintf(b, "%s %d\n", nombreLegacyAciertos, r.LegacyAciertos)
+
+	// Contracara nombrada del legacy: cuántos principals de `musubi token list` nunca autenticaron
+	// desde que arrancó el proceso. Es la señal de retiro de los tokens NOMBRADOS, igual que
+	// LegacyAciertos lo es del bearer legacy. Sin nombre a propósito —cuál es, lo dice token list—;
+	// el conteo sale del mismo snapshot vivo que la lista, no del YAML (el disco no sabe quién usó).
+	// El legacy no cuenta acá: `usoDeIdentidades` sólo cubre los principals del registro.
+	nuncaUsadas := 0
+	for _, u := range reg.usoDeIdentidades() {
+		if u.UltimoUnix == 0 {
+			nuncaUsadas++
+		}
+	}
+	fmt.Fprintf(b, "# HELP %s Principals de principals.yaml que NO autenticaron ni una vez desde que arrancó el proceso: candidatos a retirar. Se reinicia en cada arranque (el uso vive en memoria), así que sólo significa algo con proceso de pie hace rato. Sin nombre a propósito: cuál es, lo dice `musubi token list`.\n# TYPE %s gauge\n",
+		nombreNuncaUsadas, nombreNuncaUsadas)
+	fmt.Fprintf(b, "%s %d\n", nombreNuncaUsadas, nuncaUsadas)
 
 	fmt.Fprintf(b, "# HELP %s 1 si principals.yaml cambió y la relectura en caliente se rechazó: el registro que autentica NO es el del disco (una revocación nueva no se aplicó) y el próximo reinicio no va a arrancar con ese archivo.\n# TYPE %s gauge\n",
 		nombreRegistroSinRecargar, nombreRegistroSinRecargar)

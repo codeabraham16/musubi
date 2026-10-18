@@ -39,6 +39,13 @@ type PrincipalInfo struct {
 	// llenan cuando Vencimiento es «por vencer». Hacia arriba a propósito: hacia abajo, a la que
 	// le quedan doce horas el listado le diría «faltan 0 días», que se lee como «ya está».
 	DiasParaVencer int
+	// CreatedAt / CreatedBy / TokenPrefix son la auditoría de alta, tal cual figura en el registro
+	// (vacíos en una credencial dada de alta antes de que esto existiera). Van en el listado porque
+	// ésta es la superficie donde se pregunta QUIÉN tiene acceso: created_by contesta quién la creó,
+	// y token_prefix deja aparear la fila con el token que alguien tiene a mano, sin exponer el hash.
+	CreatedAt   string
+	CreatedBy   string
+	TokenPrefix string
 }
 
 // Los cinco estados de vencimiento de un principal listado. Ninguno significa «no sé»: el «no
@@ -107,6 +114,19 @@ func GenerateToken() (string, error) {
 	return "msb_" + base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
+// prefijoDeToken devuelve un identificador corto y NO secreto del token: su prefijo (`msb_` más
+// unos pocos chars), tope 8. Alcanza para reconocer la credencial en `musubi token list` sin tener
+// el token; NUNCA para autenticar —el registro compara el SHA-256 del token ENTERO (resolve())—.
+// Un token real tiene 47 chars; el tope de 8 deja fuera 39, así que el prefijo no acota la búsqueda
+// del resto a nada útil.
+func prefijoDeToken(token string) string {
+	max := 8
+	if len(token) < max {
+		max = len(token)
+	}
+	return token[:max]
+}
+
 // validRole normaliza y valida un rol.
 func validRole(role string) (string, error) {
 	r := strings.ToLower(strings.TrimSpace(role))
@@ -149,7 +169,7 @@ func writePrincipalsFile(path string, f *principalsFileYAML) error {
 // AddPrincipal genera un token con las capacidades por DEFAULT del rol (compat: la firma de
 // siempre). Para expresar alcance y autoridad por separado, usar AddPrincipalWithCaps.
 func AddPrincipal(path, name, projectID, role string) (string, error) {
-	return AddPrincipalWithCaps(path, name, projectID, role, "", "")
+	return AddPrincipalWithCaps(path, name, projectID, role, "", "", "cli")
 }
 
 // EffectiveCaps resuelve el par (alcance, autoridad) final: el del rol, salvo que se declaren
@@ -173,7 +193,7 @@ func EffectiveCaps(role, read, write string) (string, string) {
 //
 //	sala de mando (el repo de Musubi): read=all + write=own  ⇒ diagnostica todo, muta sólo lo suyo
 //	cabina (el CRM, el gateway):       read=all + write=none ⇒ ve todo, no muta nada
-func AddPrincipalWithCaps(path, name, projectID, role, read, write string) (string, error) {
+func AddPrincipalWithCaps(path, name, projectID, role, read, write, actor string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return "", fmt.Errorf("el nombre del principal es obligatorio")
@@ -225,6 +245,15 @@ func AddPrincipalWithCaps(path, name, projectID, role, read, write string) (stri
 	if dr, dw := capsFromRole(r); efRead != dr || efWrite != dw {
 		e.Read, e.Write = efRead, efWrite
 	}
+	// Auditoría de alta: cuándo, quién y un identificador corto NO secreto del token. El actor vacío
+	// cae a "cli" — un alta por línea de comandos en el server, sin principal que la firme.
+	e.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	if a := strings.TrimSpace(actor); a != "" {
+		e.CreatedBy = a
+	} else {
+		e.CreatedBy = "cli"
+	}
+	e.TokenPrefix = prefijoDeToken(token)
 	f.Principals = append(f.Principals, e)
 	if err := writePrincipalsFile(path, f); err != nil {
 		return "", err
@@ -249,6 +278,9 @@ func ListPrincipalsInfo(path string) ([]PrincipalInfo, error) {
 			// justamente el que no lo decía.
 			Expires:     strings.TrimSpace(p.Expires),
 			Vencimiento: estadoDeVencimiento(p.Name, p.Expires),
+			CreatedAt:   strings.TrimSpace(p.CreatedAt),
+			CreatedBy:   strings.TrimSpace(p.CreatedBy),
+			TokenPrefix: strings.TrimSpace(p.TokenPrefix),
 		}
 		// Y CUÁNTO LE QUEDA, cuando le queda poco: «por vencer» sin los días obliga a hacer la
 		// cuenta de cabeza contra la fecha, que es lo mismo que el estado vino a ahorrar.

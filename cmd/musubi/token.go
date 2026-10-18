@@ -59,7 +59,9 @@ func tokenNew(args []string) {
 	if path == "" {
 		path = defaultPrincipalsPath()
 	}
-	token, err := mcp.AddPrincipalWithCaps(path, *name, *project, *role, *read, *write)
+	// Alta por CLI local en el disco del server ⇒ el actor de la auditoría es "cli" (no hay un
+	// principal admin de la red detrás). AddPrincipalWithCaps cae a "cli" igual si se le pasa "".
+	token, err := mcp.AddPrincipalWithCaps(path, *name, *project, *role, *read, *write, "cli")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
