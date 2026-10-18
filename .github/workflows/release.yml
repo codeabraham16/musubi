@@ -36,7 +36,7 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.9'
 
       # El cuerpo del release sale del CHANGELOG de ESTE tag (el checkout es del commit
       # taggeado), con el mismo comando que mantiene al día la sección «Novedades» de los
@@ -89,7 +89,7 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: '1.26.6'
+          go-version: '1.26.9'
 
       # Regenera el recurso de versión de Windows (.syso) desde versioninfo.json —que
       # check-version ya garantizó == VERSION == tag— con goversioninfo PINEADO. Elimina
