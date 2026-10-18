@@ -8,6 +8,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **La identidad del build pliega el contrato de seguridad por-tool (E2).** La huella del catálogo
+  —el `catalog_sha256` que cada extremo publica en el handshake para detectar deriva— hasheaba sólo
+  el CABLE de cada tool (nombre, descripción y `inputSchema`), no su CONTRATO: una tool que pasara de
+  LEER a ESCRIBIR (`readOnly: true → false`) con la misma descripción conservaba la MISMA identidad de
+  build, y la divergencia viajaba silenciosa por la malla. Ninguna guarda lo cantaba:
+  `TestEveryReadOnlyToolClassified` sólo recorre las tools readOnly, así que una que deja de serlo se
+  le escapa por abajo. Ahora `huellaDelCatalogo` pliega, además del cable, el contrato por-tool
+  `{readOnly, actuaAfuera}` (efecto: lee vs escribe; alcance: toca flota o credenciales → política
+  «ask»), con separador `\x1f` para que el cable y el contrato no puedan fundirse. Los dos extremos
+  —el servidor vivo y la CLI de `musubi version --json`— pasan por la misma función, así que no
+  divergen (lo custodia el test I5). La guarda de verdad es un golden commiteado
+  (`internal/mcp/testdata/contrato-tools.golden.json`) que sella el contrato del catálogo COMPLETO:
+  `TestContratoPorToolFijado` pone rojo el CI NOMBRANDO la tool cuyo `readOnly` o `actuaAfuera` cambió
+  —incluida un alta o una baja— y la receta de regeneración exige entender por qué cambió;
+  `TestLaHuellaCubreElEfecto` prueba el plegado invirtiendo un `readOnly` sin tocar el cable. Aditivo:
+  mueve el valor del `catalog_sha256`, no su forma ni la cuenta de tools.
 - **Trinquete de código muerto en CI (A2).** Musubi arrastra un patrón de error caro y repetido:
   código que se DEFINE y no se CONECTA —una guarda registrada con cero callers reales, un grafo sin
   lectores, una pieza que se construye y no se enciende—. Hoy se descubre a ojo y tarde. Un paso

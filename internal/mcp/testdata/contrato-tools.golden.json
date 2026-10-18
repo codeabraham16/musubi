@@ -1,0 +1,427 @@
+[
+  {
+    "name": "musubi_ask",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_author_skill",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_brain_graph",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_code_context",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_code_graph",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_code_graph_viz",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_codegraph_index",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_codegraph_push",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_cognition_stats",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_conflicts",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_corroborate",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_debate",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_design",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_detect_changes",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_detect_stack",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_discard_proposal",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_discover_skills",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_distill",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_doctor",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_entity_context",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_fleet_approvals",
+    "read_only": false,
+    "actua_afuera": true
+  },
+  {
+    "name": "musubi_fleet_approve",
+    "read_only": false,
+    "actua_afuera": true
+  },
+  {
+    "name": "musubi_fleet_consent",
+    "read_only": false,
+    "actua_afuera": true
+  },
+  {
+    "name": "musubi_fleet_contexto",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_fleet_cronologia",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_fleet_enroll",
+    "read_only": false,
+    "actua_afuera": true
+  },
+  {
+    "name": "musubi_fleet_exec",
+    "read_only": false,
+    "actua_afuera": true
+  },
+  {
+    "name": "musubi_fleet_list",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_fleet_log",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_fleet_maintenance",
+    "read_only": false,
+    "actua_afuera": true
+  },
+  {
+    "name": "musubi_fleet_metrics",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_fleet_probe",
+    "read_only": false,
+    "actua_afuera": true
+  },
+  {
+    "name": "musubi_fleet_rename",
+    "read_only": false,
+    "actua_afuera": true
+  },
+  {
+    "name": "musubi_fleet_require_approval",
+    "read_only": false,
+    "actua_afuera": true
+  },
+  {
+    "name": "musubi_fleet_revoke",
+    "read_only": false,
+    "actua_afuera": true
+  },
+  {
+    "name": "musubi_fleet_rotate",
+    "read_only": false,
+    "actua_afuera": true
+  },
+  {
+    "name": "musubi_fleet_screen",
+    "read_only": false,
+    "actua_afuera": true
+  },
+  {
+    "name": "musubi_fleet_service_declare",
+    "read_only": false,
+    "actua_afuera": true
+  },
+  {
+    "name": "musubi_fleet_services",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_fleet_sessions",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_fleet_shell",
+    "read_only": false,
+    "actua_afuera": true
+  },
+  {
+    "name": "musubi_fleet_shell_log",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_impact",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_ingest_url",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_insights",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_install_skill",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_judge",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_list_skills",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_log_error",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_log_skill_decision",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_maintain",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_map",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_memory_expand",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_phase",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_promote",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_promote_skill",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_propose_facts",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_propose_observation",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_readiness",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_recall",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_recall_code",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_recall_facts",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_resolve_skills",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_resolve_telemetry",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_save_code",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_save_fact",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_save_observation",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_save_skill",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_sdd",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_search_keyword",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_search_semantic",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_search_skills",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_sharpen",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_skill_usage",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_sync_pull",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_sync_requeue",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_sync_status",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_token_list",
+    "read_only": false,
+    "actua_afuera": true
+  },
+  {
+    "name": "musubi_token_new",
+    "read_only": false,
+    "actua_afuera": true
+  },
+  {
+    "name": "musubi_token_revoke",
+    "read_only": false,
+    "actua_afuera": true
+  },
+  {
+    "name": "musubi_tokens",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_tool_usage",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_whoami",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_work",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_workflow",
+    "read_only": false,
+    "actua_afuera": false
+  }
+]
