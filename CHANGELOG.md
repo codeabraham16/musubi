@@ -8,6 +8,23 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **La guardia de instrucciones: el arranque avisa cuando un CLAUDE.md o el MEMORY.md pasa el
+  tope.** Claude Code carga en cada sesión, y otra vez tras cada compactación, los CLAUDE.md del
+  proyecto y de las carpetas de arriba, el `~/.claude/CLAUDE.md` y el `MEMORY.md` de la memoria
+  automática, y nada avisaba cuando crecían: el CLAUDE.md de altura-erp llegó a 499 líneas y 79 mil
+  caracteres antes de que alguien lo notara.
+  - En SessionStart `startup`/`clear` (nunca en `compact`), si un archivo pasa de 200 líneas o de
+    25 KB, sale una línea al dueño (`systemMessage`) y otra al agente (`additionalContext`): nombra
+    los archivos con sus números y sugiere mover lo específico de un área a `.claude/rules/` con
+    `paths:`, que carga sólo al tocar esos archivos. Del `MEMORY.md` avisa además que lo que pasa
+    de ahí no llega al modelo. A lo sumo una vez por día por proyecto (marca en la meta).
+  - Se mide como Claude Code (leído del binario 2.1.299: `XF=200`, `Zse=25000`): el texto recortado,
+    los saltos de línea más uno, y el largo en unidades UTF-16. Un CLAUDE.md suma lo que importa por
+    `@ruta` (hasta cuatro saltos, fuera de bloques de código). La carpeta de la memoria sale del
+    checkout principal del repo y se busca sin distinguir la mayúscula de la letra de unidad.
+  - `go test -run TestSondaGuardiaDeInstrucciones -v ./cmd/musubi/` con
+    `MUSUBI_SONDA_RAICES` mide los archivos reales de la PC, sin escribir nada; sin esa variable
+    se saltea, y compila en CI como cualquier prueba.
 - **Las notas de cada release salen solas del CHANGELOG, y el README cuenta lo último que pasó.**
   130 de las 131 releases publicadas tienen el cuerpo vacío: el job `create-release` de
   `release.yml` sólo le pasaba `tag_name` a la acción. Lo que faltaba ya estaba escrito, en este
