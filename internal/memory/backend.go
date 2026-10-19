@@ -79,6 +79,11 @@ type ObservationStore interface {
 	PromoteObservation(id string) error
 	// PromoteObservationCtx es PromoteObservation acotada al proyecto de la credencial (aislamiento #11).
 	PromoteObservationCtx(ctx context.Context, id string) error
+	// ContentHashDe devuelve el content_hash ALMACENADO de una observación por id (lectura pura
+	// por PK) y si la fila existe. Lo usa el recibo del push de observaciones para confirmar la
+	// persistencia CONTRA la base —no contra el valor de retorno del save— y para distinguir un
+	// guardado real de un drop silencioso.
+	ContentHashDe(id string) (hash string, found bool, err error)
 
 	// --- Cuarentena de escritura y procedencia (Murallas 2+3 · F4) ---
 

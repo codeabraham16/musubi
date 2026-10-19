@@ -240,10 +240,13 @@ func TestLaSubidaComprimidaLlegaEnteraAlCentralReal(t *testing.T) {
 // arnes: de="c.trafico.subidaCrudos.Add(crudo)"
 // arnes: a="c.trafico.subidaCrudos.Add(int64(len(payload)))\n\t_ = crudo"
 //
-// Sabotaje que la pone roja: contar un rechazo por su JSON y no por su cable.
+// Sabotaje que la pone roja: contar un rechazo por su JSON y no por su cable. El `de` arrastra el
+// `return rechazo` porque E3 sumó otros dos sitios que cuentan rechazos por cable (drop y corrupción
+// del recibo), y sin esa cola el literal apuntaría a tres lugares: el `return rechazo` es el único de
+// esta rama (las otras dos devuelven fmt.Errorf).
 // arnes: archivo="internal/mcp/syncclient.go"
-// arnes: de="c.trafico.bytesRechazados.Add(int64(len(payload)))"
-// arnes: a="c.trafico.bytesRechazados.Add(crudo)"
+// arnes: de="c.trafico.bytesRechazados.Add(int64(len(payload)))\n\t\treturn rechazo"
+// arnes: a="c.trafico.bytesRechazados.Add(crudo)\n\t\treturn rechazo"
 //
 // Sabotaje que la pone roja: que el reintento mande otros bytes del mismo largo (el MTIME del
 // encabezado gzip toma un valor que cambia de un intento al otro: los POST contados hasta ahí).
