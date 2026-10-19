@@ -296,39 +296,3 @@ func cablearProcedenciaDelVector(engine *memory.DbEngine, embedder embedding.Pro
 	engine.SetVectorModelID(embedder.Name())
 	return true
 }
-
-// embedderCaroDeConstruir dice si construir el embebedor de esta config es una operación PESADA,
-// sin construirlo.
-//
-// EXISTE POR UNA REGRESIÓN MEDIDA, y el número es el argumento entero. El provider "static" carga
-// la tabla completa con os.ReadFile (static.go:55): son 512 MB de model.safetensors más 18 MB de
-// tokenizer.json, EN CADA CONSTRUCCIÓN. En un servidor eso se paga una vez y no se nota. En el
-// hook por turno —que es un PROCESO EFÍMERO, uno nuevo por prompt— se paga siempre: medido en esta
-// máquina, `musubi turn --hook-mode` pasó de 0,29 s a 11-23 s con picos de 1,0-1,3 GB de RSS.
-//
-// Y el hook tiene `"timeout": 10` en .claude/settings.json. O sea que no es «lento»: es MATADO, y
-// el turno queda sin memoria inyectada. La guarda de 2 s que puse adentro de buildTurnRecall no lo
-// cubría porque el costo está ANTES, en la construcción, no en el Embed.
-//
-// La señal vectorial en el turno sigue valiendo la pena —medido: nDCG@1 0.294→0.353— pero no se
-// puede entregar cargando la tabla por prompt. Hasta entonces el hook va léxico, que es lo que
-// hacía antes y funciona.
-//
-// SOBRE EL CAMINO DE SALIDA, CORREGIDO EL 2026-09-11. Acá decía «mapear la tabla en memoria en vez
-// de leerla». MEDIDO (internal/embedding/arranque_real_test.go), eso SOLO deja el arranque PEOR:
-// el mmap vuelve gratis la carga de la tabla (1553 ms → 0,6 ms), pero entonces staticTableChecksum
-// —que recorre las 488 MB para derivar la identidad (N1)— pasa de 86 ms sobre un buffer residente
-// a 2-3 SEGUNDOS sobre el mapeo, porque obliga a traer cada página. El mmap sólo rinde si la
-// identidad deja de tocar la tabla entera.
-//
-// Con las dos cosas juntas el piso queda en ~1013 ms y ~188 MB de RSS (hoy: ~3298 ms y ~1325 MB),
-// o sea que ENTRA bajo el techo de 10 s. Y ahí el que manda pasa a ser el TOKENIZER: ~1009 ms de
-// ese piso, el 97 %, armando un mapa de 500.353 entradas. Quien retome esto empieza por ahí, no
-// por la tabla. El detalle y los números están en specs/vector-en-el-turno/proposal.md.
-func embedderCaroDeConstruir(cfg config.Config, root string) bool {
-	ec := cfg.Embedding
-	if ec.Provider == "" || ec.Provider == "none" {
-		return hasStaticTable(filepath.Join(root, ".musubi", "embeddings", defaultEmbedModel))
-	}
-	return ec.Provider == "static"
-}

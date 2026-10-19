@@ -1240,23 +1240,34 @@ func formatGists(titulo string, res memory.RecallResult, propio string) string {
 }
 
 // embebedorDelHook construye el embebedor de un hook que busca memoria (el turno, y la memoria que
-// vuelve tras compactar), CON DOS GUARDAS QUE SON CONSECUENCIA DE MEDIR. Devuelve nil cuando no hay
-// que construirlo: el recall sigue, léxico.
+// vuelve tras compactar). Devuelve nil cuando no hay que construirlo: el recall sigue, léxico.
 //
-// (1) SÓLO SI EL RECALL POR TURNO ESTÁ ENCENDIDO. Antes se construía siempre, así que una
-// instalación con per_turn_recall en false pagaba igual el costo de construirlo para después no
-// usarlo nunca.
+// (1) SÓLO SI EL RECALL POR TURNO ESTÁ ENCENDIDO. Una instalación con per_turn_recall en false no
+// paga el costo de construir un embebedor que no va a usar.
 //
-// (2) SÓLO SI CONSTRUIRLO ES BARATO. Ver embedderCaroDeConstruir: con la tabla estática, cada
-// invocación del hook leía 512 MB de disco. Medido acá: el hook pasó de 0,29 s a 11-23 s con picos
-// de 1,3 GB, contra un timeout de 10 s en .claude/settings.json — o sea que el turno se quedaba SIN
-// memoria inyectada, que es peor que el léxico que tenía antes. Degradar acá es estrictamente mejor
-// que morir: el recall léxico funciona.
+// (2) POR EL CAMINO LIVIANO (NewProviderDeConsulta), NUNCA por NewStaticProvider. El hook es un
+// proceso efímero —uno nuevo por prompt—, y cargar la tabla entera lo llevaba de 0,29 s a 11-23 s
+// con picos de 1,3 GB: matado por el timeout de 10 s de .claude/settings.json, que dejaba el turno
+// SIN memoria inyectada, peor que el léxico. La consulta liviana (consulta_liviana.go) lee el índice
+// del tokenizer + el header de la tabla + el ReadAt de las filas del texto; medido acá sobre POTION:
+// ~17 ms de construcción y ~24 MB de RSS, con el MISMO vector que el índice (invariante E2). Entra
+// holgada bajo el tope de 2 s de buildTurnRecall. Si faltan los sidecars del tokenizer al lado de la
+// tabla, NewProviderDeConsulta devuelve error y acá se cae a léxico: degradar es mejor que morir.
 func embebedorDelHook(cfg config.Config, root string, engine *memory.DbEngine) embedding.Provider {
-	if !cfg.Loop.PerTurnRecall || embedderCaroDeConstruir(cfg, root) {
+	if !cfg.Loop.PerTurnRecall {
 		return nil
 	}
-	embedder := resolveEmbedder(cfg, root)
+	// configDelEmbebedor (no cfg.Embedding pelado) para que el embebedor de CONSULTA salga de la
+	// MISMA config que el del daemon —con la auto-detección de la tabla aplicada—, o el vector de la
+	// consulta dejaría de ser comparable con los del índice.
+	ec, _ := configDelEmbebedor(cfg, root)
+	embedder, err := embedding.NewProviderDeConsulta(ec)
+	if err != nil {
+		// Sin tabla usable, o sin los sidecars del tokenizer al lado (ErrSinAtajo /
+		// ErrIdentidadVencida): el turno sigue léxico. NewProviderDeConsulta NUNCA cae a cargar la
+		// tabla entera, que es justo el costo que este proceso efímero no puede pagar.
+		return nil
+	}
 	if embedding.Enabled(embedder) {
 		// La MISMA procedencia que estampa cualquier save: sin esto SearchObservations no
 		// puede aplicar la regla de homogeneidad y el pool vectorial sale vacío.
