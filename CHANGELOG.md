@@ -8,18 +8,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
-- **Cuarto nivel de revisión: `critica`, con firma humana obligatoria.** La escala de profundidad
+- **Cuarto nivel de revisión: `critica`, con firma humana (hoy un aviso).** La escala de profundidad
   derivada del diff topaba en `profunda` (5 jueces · 2 rondas · quórum 3), que es también el techo
   del motor de debate: más allá de ahí no se compra más revisión automática —agregar buckets no mueve
   el panel, porque `AdvanceDebate` no soporta una tercera ronda—. El tope real de la escala (>=11
   puntos sobre 13 — ~4% de los PRs reales de este repo medido con el spike F8, estable entre el corpus
-  reciente y el completo y sin un solo caso de radio ciego) ahora cruza a un cuarto nivel, `critica`,
-  cuya ÚNICA acción nueva es una firma humana: `Panel.Humano` marca que el recuento automático del
-  panel es necesario pero NO suficiente, y una persona firma el veredicto final antes de cerrar. El
-  corte es de puntos puro, igual que los otros dos, para poder rehacerlo de cabeza.
-  `musubi_detect_changes` lo nombra en el resumen que se lee de un vistazo («FIRMA HUMANA
-  OBLIGATORIA») y la skill `adversarial-review` instruye no cerrar un cambio crítico sólo con el
-  tally automático. Aditivo: los tres niveles previos no cambian y siguen sin firma.
+  reciente y el completo) ahora cruza a un cuarto nivel, `critica`, cuya ÚNICA acción nueva es una
+  firma humana: `Panel.Humano` marca que el recuento automático del panel es necesario pero NO
+  suficiente, y una persona firma el veredicto final antes de cerrar. Ese ~4% es un PISO, no un techo:
+  un radio de impacto ciego sólo resta puntos (8 de los 26 PRs de la banda lo tenían, y el detector del
+  spike no dispara ahí por construcción), así que el corte queda por lo bajo. El corte es de puntos
+  puro, igual que los otros dos, para poder rehacerlo de cabeza. HOY la firma es un AVISO:
+  `musubi_detect_changes` la nombra en el resumen que se lee de un vistazo («FIRMA HUMANA REQUERIDA,
+  hoy sin bloqueo») y la skill `adversarial-review` instruye no cerrar un cambio crítico sólo con el
+  tally automático — pero el gate DURO (que rechace el cierre o el push hasta la firma) está DIFERIDO
+  a una decisión del dueño, porque cambia el comportamiento hacia afuera. Aditivo: los tres niveles
+  previos no cambian y siguen sin firma.
 - **Trinquete de código muerto en CI (A2).** Musubi arrastra un patrón de error caro y repetido:
   código que se DEFINE y no se CONECTA —una guarda registrada con cero callers reales, un grafo sin
   lectores, una pieza que se construye y no se enciende—. Hoy se descubre a ojo y tarde. Un paso

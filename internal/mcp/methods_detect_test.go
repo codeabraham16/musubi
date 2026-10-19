@@ -92,6 +92,13 @@ func TestDetectChangesReportsSymbolsStaleAndMemory(t *testing.T) {
 	}
 	rep := decodeDetect(t, res)
 
+	// El resumen que se lee de un vistazo tiene que nombrar el nivel de revisión del JSON: sin esto,
+	// el cableado toolDetectChanges -> resumenRevision(report.Revision) queda sin guarda (el helper
+	// se prueba suelto, pero nadie comprueba que el reporte real lo consuma).
+	if !strings.Contains(rep.Summary, string(rep.Revision.Nivel)) {
+		t.Errorf("el summary debería nombrar el nivel de revisión %q; summary=%q", rep.Revision.Nivel, rep.Summary)
+	}
+
 	fc, ok := fileByPath(rep, "foo.go")
 	if !ok {
 		t.Fatalf("foo.go no está en el reporte: %+v", rep)

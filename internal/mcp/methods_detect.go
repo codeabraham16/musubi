@@ -142,7 +142,7 @@ func (s *McpServer) toolDetectChanges(ctx context.Context, raw json.RawMessage) 
 func resumenRevision(archivos, simbolos int, rev codeintel.Veredicto) string {
 	firma := ""
 	if rev.Panel.Humano {
-		firma = " — FIRMA HUMANA OBLIGATORIA: el recuento del panel no alcanza, una persona firma el veredicto final antes de cerrar"
+		firma = " — FIRMA HUMANA REQUERIDA (hoy es aviso, sin bloqueo automático): el recuento del panel no alcanza, una persona firma el veredicto final antes de cerrar"
 	}
 	return fmt.Sprintf("%d archivo(s) cambiados, %d símbolo(s) afectados. Revisión sugerida: %s (%d/13 puntos) — %d juez/jueces, %d ronda(s), quórum %d.%s",
 		archivos, simbolos, rev.Nivel, rev.Puntos,
