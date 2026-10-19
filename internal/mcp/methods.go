@@ -272,6 +272,12 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 		// el fingerprint de cada uno y el recall vuelve a derivarlo del disco para MARCAR la
 		// observación si cambió. Vacío ⇒ se guarda exactamente como siempre.
 		OriginPaths []string `json:"origin_paths"`
+		// Huella es el ContentHash que el cliente de sync dice haber mandado (content-addressing de
+		// transporte). Su PRESENCIA es el opt-in al recibo: con huella, el result lleva
+		// {stored,hash,transformed} para que el push confirme la persistencia; sin ella, la tool
+		// responde el texto de siempre y el camino interactivo queda intacto. NO está en el input
+		// schema del registry a propósito —el handler la lee del raw—, así el catálogo no se mueve.
+		Huella string `json:"huella"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -367,9 +373,9 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 			case err != nil:
 				rpcErr = errorDeGuardado(err)
 			case deduped:
-				res = textResult("Observación ya existente, no se duplicó (id: " + id + ").")
+				res = s.resultadoDeGuardado(args.Huella, id, args.Content, "Observación ya existente, no se duplicó (id: "+id+").")
 			default:
-				res = textResult("Observación guardada con éxito (id: " + id + ")." + s.detectAndSurface(id))
+				res = s.resultadoDeGuardado(args.Huella, id, args.Content, "Observación guardada con éxito (id: "+id+")."+s.detectAndSurface(id))
 			}
 			return
 		}
@@ -386,9 +392,54 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 			rpcErr = errorDeGuardado(err)
 			return
 		}
-		res = textResult("Observación guardada con éxito (id: " + args.ID + ")." + s.detectAndSurface(args.ID))
+		res = s.resultadoDeGuardado(args.Huella, args.ID, args.Content, "Observación guardada con éxito (id: "+args.ID+")."+s.detectAndSurface(args.ID))
 	})
 	return res, rpcErr
+}
+
+// resultadoDeGuardado arma la respuesta del save: el texto humano de siempre, o —si el cliente
+// mandó huella (opt-in del sync, content-addressing de transporte)— un recibo content-hash que
+// deja al push confirmar la persistencia. Sin huella el camino interactivo queda byte-idéntico.
+func (s *McpServer) resultadoDeGuardado(huella, id, recibido, mensaje string) interface{} {
+	if huella == "" {
+		return textResult(mensaje)
+	}
+	return s.reciboDeGuardado(id, recibido, mensaje)
+}
+
+// reciboDeGuardado confirma el guardado CONTRA la base (read-back por id) y arma el recibo
+// {mensaje, stored, hash, transformed} que SyncClient.Push sabe leer:
+//   - stored  : la fila existe bajo ese id (found). false ⇒ el 200 no persistió: DROP silencioso.
+//   - hash    : el content_hash ALMACENADO (lo que quedó), no lo que el save dijo haber hecho.
+//   - transformed : el central guardó algo distinto de lo que RECIBIÓ (hoy, sólo la redacción de
+//     secretos del borde a 'shared'). Se compara contra `recibido` CRUDO —NO contra el contenido
+//     ya redactado—: comparar contra el redactado haría que una redacción legítima pareciera
+//     corrupción y el cliente la mandaría a dead-letter (el pecado capital que esto evita).
+//
+// FAIL-SAFE: si el read-back FALLA, se degrada al texto de siempre ⇒ el cliente cierra por 200
+// como antes del recibo. Un error de lectura es incertidumbre, no señal de drop; permanente sólo
+// ante señal CLARA (asimetría: tirar memoria es irreversible, reintentar es barato).
+func (s *McpServer) reciboDeGuardado(id, recibido, mensaje string) interface{} {
+	hash, found, err := s.engine.ContentHashDe(id)
+	if err != nil {
+		return textResult(mensaje)
+	}
+	out, mErr := jsonResult(struct {
+		Mensaje     string `json:"mensaje"`
+		Stored      bool   `json:"stored"`
+		Hash        string `json:"hash"`
+		Transformed bool   `json:"transformed"`
+	}{
+		Mensaje:     mensaje,
+		Stored:      found,
+		Hash:        hash,
+		Transformed: found && hash != memory.ContentHash(recibido),
+	})
+	if mErr != nil {
+		// Inalcanzable para un struct de strings y bools; degradar igual antes que devolver nil.
+		return textResult(mensaje)
+	}
+	return out
 }
 
 // errorDeGuardado traduce un fallo de guardado al código JSON-RPC que corresponde. Lo que se
