@@ -23,6 +23,14 @@ import "fmt"
 // cambio está bien sigue siendo el panel. Y es pura a propósito —las señales entran como
 // números, no se van a buscar— para que la pueda llamar tanto el MCP (que tiene el grafo)
 // como el gate del turno (que no tiene ni base ni MCP).
+//
+// EL CUARTO NIVEL Y LA ÚNICA ACCIÓN NUEVA. Sobre `profunda` hay un escalón más, `critica`, para
+// el tope de la escala (>=11 puntos, ~4% de los PRs reales de este repo, medido con el spike F8).
+// No existe para comprar MÁS revisión automática —el panel ya topa en profunda: cinco jueces y
+// dos rondas es todo lo que el motor de debate soporta—, sino para AGREGAR UNA ACCIÓN que la
+// aritmética sola no da: una firma humana obligatoria. En critica el recuento del panel es
+// necesario pero no suficiente. Y como todo lo demás acá, el disparo es un corte de puntos puro,
+// no una señal privilegiada: así se rehace de cabeza y no se acepta por inercia.
 
 // NivelRevision es cuánta revisión pide un cambio.
 type NivelRevision string
@@ -31,6 +39,8 @@ const (
 	NivelMinimo   NivelRevision = "minima"
 	NivelEstandar NivelRevision = "estandar"
 	NivelProfundo NivelRevision = "profunda"
+	// NivelCritico es el tope: el único nivel que pide, además del panel, una firma humana.
+	NivelCritico NivelRevision = "critica"
 )
 
 // Panel es la forma concreta del debate para un nivel: a cuántos escépticos convocar, cuántas
@@ -39,18 +49,28 @@ type Panel struct {
 	Jueces int `json:"jueces"`
 	Rondas int `json:"rondas"`
 	Quorum int `json:"quorum"`
+	// Humano es la ÚNICA acción que agrega el cuarto nivel. Cuando es true, el recuento
+	// automático del panel es NECESARIO PERO NO SUFICIENTE: una persona firma el veredicto final
+	// antes de cerrar. No se gana con más jueces ni más rondas —el techo del debate ya está en
+	// profunda—, se gana sacando la decisión del piloto automático.
+	Humano bool `json:"humano"`
 }
 
-// Los tres paneles. El piso y el techo no son gustos:
+// Los cuatro paneles. El piso y el techo no son gustos:
 //
 //   - PISO: nunca menos de un juez y una ronda. Un cambio "mínimo" igual se mira; lo que baja
 //     es el costo, no la existencia de la revisión.
 //   - TECHO: nunca más de dos rondas, porque DOS es lo que el motor de debate soporta —con más,
 //     AdvanceDebate se vuelve un no-op mudo y el panel cree que debatió cuando no debatió—.
+//
+// panelCritico tiene la MISMA forma automática que panelProfundo —el techo ya está ahí— y lo
+// único que agrega es la firma humana. Por eso el cuarto nivel no es «un panel más grande»: es
+// el mismo panel con una acción que la aritmética no puede ejecutar sola.
 var (
 	panelMinimo   = Panel{Jueces: 1, Rondas: 1, Quorum: 1}
 	panelEstandar = Panel{Jueces: 3, Rondas: 2, Quorum: 2}
 	panelProfundo = Panel{Jueces: 5, Rondas: 2, Quorum: 3}
+	panelCritico  = Panel{Jueces: 5, Rondas: 2, Quorum: 3, Humano: true}
 )
 
 // Senales son las siete entradas del cálculo. Las seis primeras puntúan 0-2; la séptima, 0-1.
@@ -141,15 +161,23 @@ const (
 	// Los cortes de nivel sobre el total de 0..13.
 	corteMinima   = 2
 	corteEstandar = 7
+	// corteCritica: a partir de acá (>=11) el cambio pide firma humana. Medido con el spike F8
+	// sobre los PRs reales de este repo, >=11 cae en ~4% —estable entre el corpus reciente y el
+	// completo— y cada PR de esa banda tenía radio de impacto medido (ninguno ciego): es el tope
+	// genuino de la escala, no un artefacto. Un gate humano obligatorio tiene que ser raro, o se
+	// firma por inercia; ~4% lo mantiene con dientes. Es un corte de puntos PURO, igual que los
+	// otros dos: sin señal privilegiada, para poder rehacerlo de cabeza.
+	corteCritica = 11
 )
 
 // Profundidad convierte las señales en un nivel de revisión.
 //
 // El total va de 0 a 13 (seis señales de hasta 2 puntos, más la de borrados). Los cortes:
 //
-//	0-2   mínima     1 juez  · 1 ronda  · quórum 1
-//	3-7   estándar   3 jueces· 2 rondas · quórum 2
-//	>=8   profunda   5 jueces· 2 rondas · quórum 3
+//	0-2    mínima     1 juez  · 1 ronda  · quórum 1
+//	3-7    estándar   3 jueces· 2 rondas · quórum 2
+//	8-10   profunda   5 jueces· 2 rondas · quórum 3
+//	>=11   crítica    5 jueces· 2 rondas · quórum 3 · + FIRMA HUMANA
 func Profundidad(s Senales) Veredicto {
 	puntoBorrados := 0
 	if s.HayBorrados {
@@ -176,10 +204,16 @@ func Profundidad(s Senales) Veredicto {
 		v.Nivel = NivelMinimo
 	case puntos <= corteEstandar:
 		v.Nivel = NivelEstandar
-	default:
+	case puntos < corteCritica:
 		v.Nivel = NivelProfundo
+	default:
+		v.Nivel = NivelCritico
 	}
 	v.Motivos = append(v.Motivos, fmt.Sprintf("%d punto(s) sobre 13 ⇒ %s", puntos, v.Nivel))
+	if v.Nivel == NivelCritico {
+		v.Motivos = append(v.Motivos,
+			"critica: el recuento automatico del panel es necesario pero no suficiente — una persona firma el veredicto final antes de cerrar")
+	}
 	aplicarPisoDeHonestidad(&v, s)
 	v.Panel = panelDe(v.Nivel)
 	return v
@@ -222,6 +256,8 @@ func panelDe(n NivelRevision) Panel {
 		return panelMinimo
 	case NivelProfundo:
 		return panelProfundo
+	case NivelCritico:
+		return panelCritico
 	default:
 		return panelEstandar
 	}

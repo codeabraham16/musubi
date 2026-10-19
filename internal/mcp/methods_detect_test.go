@@ -35,6 +35,22 @@ func fileByPath(rep detectReport, path string) (fileChange, bool) {
 	return fileChange{}, false
 }
 
+func TestResumenRevisionSurfaceaLaFirmaHumana(t *testing.T) {
+	// Un veredicto crítico (panel con firma) tiene que GRITAR la firma en la línea que se lee de
+	// un vistazo; uno profundo con el MISMO panel automático, no. El campo panel.humano del JSON
+	// es la verdad, pero el que escala a una persona primero lee este resumen.
+	crit := codeintel.Veredicto{Nivel: codeintel.NivelCritico, Puntos: 12,
+		Panel: codeintel.Panel{Jueces: 5, Rondas: 2, Quorum: 3, Humano: true}}
+	if s := resumenRevision(14, 50, crit); !strings.Contains(s, "FIRMA HUMANA") {
+		t.Errorf("un veredicto crítico tiene que nombrar la firma humana en el resumen; obtuve %q", s)
+	}
+	prof := codeintel.Veredicto{Nivel: codeintel.NivelProfundo, Puntos: 9,
+		Panel: codeintel.Panel{Jueces: 5, Rondas: 2, Quorum: 3}}
+	if s := resumenRevision(10, 40, prof); strings.Contains(s, "FIRMA HUMANA") {
+		t.Errorf("sin firma en el panel, el resumen no debe inventarla; obtuve %q", s)
+	}
+}
+
 func TestDetectChangesReportsSymbolsStaleAndMemory(t *testing.T) {
 	dir := t.TempDir()
 	// Archivo actual: Parse() vive en las líneas 8-10 (tras varias líneas arriba).
