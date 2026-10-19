@@ -7,6 +7,7 @@ import (
 
 	"musubi/internal/config"
 	"musubi/internal/embedding"
+	"musubi/internal/memory"
 )
 
 func TestHasStaticTable(t *testing.T) {
@@ -61,61 +62,70 @@ func TestResolveEmbedderExplicitBadDegrades(t *testing.T) {
 	}
 }
 
-// TestEmbedderCaroDeConstruirProtegeElHookPorTurno fija la guarda que impide que el hook por turno
-// vuelva a cargar la tabla estática en cada prompt.
+// TestElHookPorTurnoUsaLaConsultaLiviana fija el ENCENDIDO del embebedor en el hook por turno
+// (decisión #2): con la tabla estática presente y per_turn_recall en true, embebedorDelHook arma el
+// embebedor por el camino LIVIANO (ConsultaLiviana) y NO por NewStaticProvider.
 //
-// LA REGRESIÓN QUE FIJA, con sus números: al cablear el embebedor en el hook, `musubi turn
-// --hook-mode` pasó de 0,29 s a 11-23 s con picos de 1,0-1,3 GB de RSS, porque NewStaticProvider
-// hace os.ReadFile de 512 MB en CADA construcción y el hook es un proceso efímero. Con el
-// `"timeout": 10` de .claude/settings.json eso no es lentitud: es el hook MATADO y el turno sin
-// memoria — peor que el léxico que tenía antes.
+// Antes acá había TestEmbedderCaroDeConstruirProtegeElHookPorTurno, que fijaba la guarda inversa: el
+// hook devolvía nil con la tabla presente, para no pagar os.ReadFile de 512 MB por prompt (0,29 s →
+// 11-23 s / 1,3 GB, matado por el timeout de 10 s). Esa guarda se retiró junto con
+// embedderCaroDeConstruir: el camino liviano da el MISMO vector sin cargar la tabla (~17 ms / ~24 MB
+// medidos), así que la premisa «static es caro» dejó de ser cierta para el hook.
 //
-// La guarda de 2 s que vive adentro de buildTurnRecall NO cubría esto: el costo está en la
-// CONSTRUCCIÓN, antes de que exista un ctx al que ponerle timeout.
-func TestEmbedderCaroDeConstruirProtegeElHookPorTurno(t *testing.T) {
-	root := t.TempDir()
-
-	t.Run("static declarado es caro", func(t *testing.T) {
-		cfg := config.Config{}
-		cfg.Embedding.Provider = "static"
-		if !embedderCaroDeConstruir(cfg, root) {
-			t.Error("el provider static carga la tabla entera: tiene que declararse caro")
-		}
-	})
-
-	t.Run("sin tabla bajada NO es caro", func(t *testing.T) {
-		cfg := config.Config{} // provider vacío, sin tabla en disco
-		if embedderCaroDeConstruir(cfg, root) {
-			t.Error("sin tabla no hay nada que cargar: no puede declararse caro")
-		}
-	})
-
-	t.Run("auto-deteccion de la tabla es cara", func(t *testing.T) {
-		// El caso REAL de esta máquina: provider vacío pero la tabla bajada, así que
-		// resolveEmbedder la auto-detecta y construye el static.
-		dir := filepath.Join(root, ".musubi", "embeddings", defaultEmbedModel)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+// La equivalencia liviano==daemon la fijan TestEmbebedorDeConsultaIgualAlDelDaemon[ConLaTablaReal].
+// Esto fija lo otro: que el HOOK efectivamente rutea por ahí.
+func TestElHookPorTurnoUsaLaConsultaLiviana(t *testing.T) {
+	t.Run("recall por turno apagado ⇒ nil aunque esté la tabla", func(t *testing.T) {
+		root := t.TempDir()
+		escribirTablaUnigramDeJuguete(t, filepath.Join(root, ".musubi", "embeddings", defaultEmbedModel))
+		_ = resolveEmbedder(config.Config{}, root) // escribe los sidecars, como el daemon
+		engine, err := memory.NewDbEngine(root)
+		if err != nil {
 			t.Fatal(err)
 		}
-		for _, f := range []string{"model.safetensors", "tokenizer.json"} {
-			if err := os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if !hasStaticTable(dir) {
-			t.Skip("hasStaticTable no reconoce esta tabla de juguete; el caso se cubre en el de arriba")
-		}
-		cfg := config.Config{} // vacío: dispara la auto-detección
-		if !embedderCaroDeConstruir(cfg, root) {
-			t.Error("con la tabla bajada la auto-detección construye el static: tiene que declararse caro")
+		defer engine.Close()
+		cfg := config.Config{} // Loop.PerTurnRecall queda en false
+		if emb := embebedorDelHook(cfg, root, engine); emb != nil {
+			t.Errorf("con per_turn_recall apagado el hook no construye nada, y devolvió %T", emb)
 		}
 	})
 
-	t.Run("un provider por red NO es caro de construir", func(t *testing.T) {
+	t.Run("tabla presente + encendido ⇒ consulta liviana, no la tabla entera", func(t *testing.T) {
+		root := t.TempDir()
+		escribirTablaUnigramDeJuguete(t, filepath.Join(root, ".musubi", "embeddings", defaultEmbedModel))
+		// El daemon corre una vez y deja los sidecars (tokenizer.idx + identidad.json) que el camino
+		// liviano necesita; sin ellos NewProviderDeConsulta falla y el hook cae a léxico.
+		_ = resolveEmbedder(config.Config{}, root)
+		engine, err := memory.NewDbEngine(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer engine.Close()
 		cfg := config.Config{}
-		cfg.Embedding.Provider = "ollama"
-		if embedderCaroDeConstruir(cfg, root) {
-			t.Error("construir un cliente HTTP no lee 512 MB: no puede declararse caro")
+		cfg.Loop.PerTurnRecall = true
+		emb := embebedorDelHook(cfg, root, engine)
+		if !embedding.Enabled(emb) {
+			t.Fatal("con la tabla y el recall por turno encendido el hook tiene que traer un embebedor vivo (antes devolvía nil acá)")
+		}
+		if _, ok := emb.(*embedding.ConsultaLiviana); !ok {
+			t.Errorf("el hook tiene que armar la consulta liviana; es %T (¿volvió a resolveEmbedder / NewStaticProvider?)", emb)
+		}
+	})
+
+	t.Run("tabla sin sidecars ⇒ léxico, no pánico", func(t *testing.T) {
+		root := t.TempDir()
+		// Tabla presente (dispara la auto-detección) pero SIN que el daemon haya escrito los
+		// sidecars: el camino liviano no tiene el índice del tokenizer, así que degrada a léxico.
+		escribirTablaUnigramDeJuguete(t, filepath.Join(root, ".musubi", "embeddings", defaultEmbedModel))
+		engine, err := memory.NewDbEngine(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer engine.Close()
+		cfg := config.Config{}
+		cfg.Loop.PerTurnRecall = true
+		if emb := embebedorDelHook(cfg, root, engine); embedding.Enabled(emb) {
+			t.Errorf("sin los sidecars del tokenizer el hook tiene que caer a léxico, y trajo %T vivo", emb)
 		}
 	})
 }
