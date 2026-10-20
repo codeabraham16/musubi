@@ -9,10 +9,12 @@ package embedding
 //   - las filas de la tabla, con ReadAt sobre model.safetensors, sólo las de los tokens del texto;
 //   - el nombre (el model_id, que es la procedencia del vector), de identidad.json.
 //
-// Los dos archivos de al lado —tokenizer.idx e identidad.json— los escribe NewStaticProvider cada
-// vez que construye el proveedor completo (daemon, serve, embed pull, backfill) y faltan o están
-// vencidos. Si no están, o si la tabla cambió desde que se escribieron, no hay atajo: el
-// constructor devuelve error y quien lo pidió sigue sin vector, como hoy. Degradar, no romper.
+// Los dos archivos de al lado —tokenizer.idx e identidad.json— los escribe NewStaticProvider cuando
+// construye el proveedor completo y faltan o están vencidos (static.go). Eso pasa en el 1er arranque
+// del completo: daemon, serve, backfill. `embed pull` NO los escribe: sólo BAJA la tabla (runEmbedPull
+// → PullModel), sin armar el proveedor, así que los sidecars los escribe recién el completo la primera
+// vez que arranca sobre esa tabla. Si no están, o si la tabla cambió desde que se escribieron, no hay
+// atajo: el constructor devuelve error y quien lo pidió sigue sin vector, como hoy. Degradar, no romper.
 //
 // El proveedor completo también tokeniza con tokenizer.idx: lo toma cuando está al día
 // (indiceAlDia) y, si no, usa el que acaba de escribir. Así el vector que se indexa y el que se
