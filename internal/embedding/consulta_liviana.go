@@ -474,15 +474,20 @@ func (c *ConsultaLiviana) Dimensions() int { return c.dim }
 // El orden en que se leen las filas no toca el vector: la suma la hace mediaNormalizada en el orden
 // del texto, sobre las mismas filas.
 //
-// RESPETA EL CONTEXTO, a diferencia de StaticProvider, que tiene todo en memoria y no tiene en qué
-// esperar. Éste lee del disco, y en frío un prompt largo son cientos de lecturas: el plazo que le
-// pone quien lo llama (el hook del turno le da 2 s) tiene que poder cortarlo entre una lectura y
-// la siguiente.
+// RESPETA EL CONTEXTO EN LOS BORDES Y ENTRE LECTURAS, a diferencia de StaticProvider, que tiene todo
+// en memoria y no tiene en qué esperar. El plazo se chequea antes y después de tokenizar y entre una
+// lectura de fila y la siguiente (leerFilas). La tokenización (EncodeIDs) NO es interrumpible: una
+// vez que arranca corre entera, así que su costo lo acota quien llama, topeando el texto que le pasa.
+// Lo caro es leer del disco: en frío un prompt largo son cientos de lecturas, y ahí el plazo (el hook
+// del turno le da 2 s) tiene que poder cortar.
 func (c *ConsultaLiviana) Embed(ctx context.Context, text string) ([]float32, error) {
 	if err := ctx.Err(); err != nil { // quien pidió el vector ya no lo espera
 		return nil, err
 	}
 	ids := c.tok.EncodeIDs(text)
+	if err := ctx.Err(); err != nil { // EncodeIDs no es interrumpible: si el plazo venció tokenizando, no abras la tabla ni lances lecturas
+		return nil, err
+	}
 	leidas, err := c.leerFilas(ctx, ids)
 	if err != nil {
 		return nil, err
