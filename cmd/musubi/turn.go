@@ -553,6 +553,41 @@ const (
 // mucho más dura que los 30 s que se da la tool musubi_recall.
 const turnEmbedTimeout = 2 * time.Second
 
+// turnRecallMaxRunes acota el texto del prompt que entra al recall del turno (corrector, embebedor y
+// búsqueda). NO recorta el prompt que ve el modelo —sólo la CONSULTA con que se busca memoria—: un
+// prompt largo sigue llegando entero al modelo, lo único acotado es con qué se recupera.
+//
+// POR QUÉ EXISTE. El hook corre con "timeout":10 (ver agente_plugin.go): si `turn --hook-mode` pasa
+// 10 s, Claude Code lo mata y ese turno va SIN bloque de memoria. El costo que se dispara es el FTS
+// de Recall, y escala con la cantidad de términos de la consulta POR su frecuencia en el corpus —no
+// con el corpus solo—. Medido sobre la base real (3802 docs) en davantis-1, con PROSA real (el peor
+// caso: palabras del vocabulario que matchean muchos docs, no tokens inventados que no matchean
+// nada): 4000 runas → 0,4 s; 8000 → 1,1 s; 16000 → 3,6 s; 32000 → 12,6 s (ya pasa el kill); 64000 →
+// se cuelga MINUTOS adentro del sorter del FTS5, que no chequea cancelación de ctx. El corrector no
+// entra en la cuenta: está acotado a 40 términos (ver maxTerminosDeTipeo en tipeo.go), 0-2 ms.
+//
+// 4000 runas deja el peor caso en ~0,4 s acá y ~1-2 s en una máquina lenta o con el corpus más grande
+// (crece con el tiempo), muy por debajo del kill y con lugar para el resto de las superficies del
+// turno. Son varios párrafos: un prompt de turno normal no se acerca, así que el tope sólo muerde
+// pegados patológicos, que es para lo que está.
+const turnRecallMaxRunes = 4000
+
+// acotarConsultaDelTurno recorta s a lo sumo a maxRunas runas, siempre en frontera de rune (nunca
+// parte un carácter multibyte), sin construir un []rune del prompt entero. maxRunas <= 0 ⇒ s intacto.
+func acotarConsultaDelTurno(s string, maxRunas int) string {
+	if maxRunas <= 0 {
+		return s
+	}
+	n := 0
+	for i := range s {
+		if n == maxRunas {
+			return s[:i]
+		}
+		n++
+	}
+	return s
+}
+
 // parametrosDelTurno es lo que buildTurnRecall necesita saber del turno. Es un struct y no una lista
 // posicional porque varios frentes le van a agregar datos (el proyecto propio, el corrector, el
 // vector): con una firma posicional cada campo nuevo rompía a todos los callers y a sus pruebas, y
@@ -584,6 +619,11 @@ type parametrosDelTurno struct {
 // (bloque silencioso). Contabiliza en el ledger solo lo que realmente inyecta.
 func buildTurnRecall(store turnStore, p parametrosDelTurno) string {
 	sessionID, prompt, embedder := p.sesion, p.prompt, p.embebedor
+	// EL TOPE DE TEXTO, ANTES DE CORREGIR / EMBEBER / BUSCAR: una sola palanca acota las tres etapas,
+	// y la que importa es la búsqueda (el FTS escala con los términos del prompt entero). Ver
+	// turnRecallMaxRunes para el porqué —el kill de 10 s del hook— y los números. Acota la CONSULTA
+	// con que se recupera, no el prompt que ve el modelo.
+	prompt = acotarConsultaDelTurno(prompt, turnRecallMaxRunes)
 	// Las opciones salen de UN solo lugar, el mismo que usa el banco (recalleval.ConfigTurno): si
 	// el hook y el banco las armaran cada uno por su lado, el banco mediría un ranker que el hook no
 	// corre. Ver memory.OpcionesDeRecallDelTurno.
