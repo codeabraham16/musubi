@@ -119,7 +119,13 @@ func (u *unigram) viterbi(runes []rune) []int {
 	}
 	var ids []int
 	for pos := n; pos > 0; pos = bpPrev[pos] {
-		ids = append([]int{bpID[pos]}, ids...)
+		ids = append(ids, bpID[pos])
+	}
+	// El backtrack recorre del final al principio; darlo vuelta deja los ids en orden del texto.
+	// Antes se prependía (append([]int{..}, ids...)), que reasigna y copia todo el acumulado en cada
+	// token: O(k²) en el largo de la tokenización. Agregar al final y revertir una vez es O(k).
+	for i, j := 0, len(ids)-1; i < j; i, j = i+1, j-1 {
+		ids[i], ids[j] = ids[j], ids[i]
 	}
 	return ids
 }
