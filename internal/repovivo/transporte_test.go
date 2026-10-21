@@ -3,15 +3,16 @@ package repovivo
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := guiones.Herramienta(t, "git", args...)
 	if dir != "" {
 		cmd.Dir = dir
 	}
@@ -38,7 +39,7 @@ func repoConRemoto(t *testing.T) (f *fotografo, dir, remoto, bare string) {
 // shaEnBare lee el sha de una ref en el repo bare; "" si no existe.
 func shaEnBare(t *testing.T, bare, ref string) string {
 	t.Helper()
-	cmd := exec.Command("git", "--git-dir="+bare, "rev-parse", "--verify", "--quiet", ref)
+	cmd := guiones.Herramienta(t, "git", "--git-dir="+bare, "rev-parse", "--verify", "--quiet", ref)
 	out, _ := cmd.Output() // exit 1 + salida vacía si la ref no existe
 	return strings.TrimSpace(string(out))
 }

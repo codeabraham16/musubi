@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"musubi/internal/config"
+	"musubi/internal/guiones"
 	"musubi/internal/repovivo"
 )
 
@@ -83,7 +83,7 @@ func TestRunRepoVivoEnciendeSegunConfigConSyncApagado(t *testing.T) {
 			dir, bare := t.TempDir(), t.TempDir()
 			runGit := func(d string, args ...string) {
 				t.Helper()
-				cmd := exec.Command("git", args...)
+				cmd := guiones.Herramienta(t, "git", args...)
 				if d != "" {
 					cmd.Dir = d
 				}
@@ -126,7 +126,7 @@ func TestRunRepoVivoEnciendeSegunConfigConSyncApagado(t *testing.T) {
 			go func() { s.RunRepoVivo(ctx, cfg); close(done) }() // BLOQUEA en el bucle: su goroutine, como en el daemon.
 
 			refs := func() string {
-				out, _ := exec.Command("git", "--git-dir="+bare, "for-each-ref", "--format=%(refname)", "refs/vivo/").Output()
+				out, _ := guiones.Herramienta(t, "git", "--git-dir="+bare, "for-each-ref", "--format=%(refname)", "refs/vivo/").Output()
 				return strings.TrimSpace(string(out))
 			}
 
@@ -166,7 +166,7 @@ func TestRunRepoVivoEnciendeSegunConfigConSyncApagado(t *testing.T) {
 
 			// El secreto-extra NO debe estar en el árbol de la foto; app.txt SÍ. Fija que el SecretosExtra
 			// de la config llegó hasta la exclusión (mata un call-site que lo anule a nil).
-			arbol, err := exec.Command("git", "--git-dir="+bare, "ls-tree", "-r", "--name-only", ref).Output()
+			arbol, err := guiones.Herramienta(t, "git", "--git-dir="+bare, "ls-tree", "-r", "--name-only", ref).Output()
 			if err != nil {
 				t.Fatalf("%s: no pude leer el árbol de %s: %v", c.nombre, ref, err)
 			}

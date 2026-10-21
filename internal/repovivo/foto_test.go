@@ -5,12 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 // repoEnVivo monta un repo con un working tree "en vivo": las tres clases de cambio a la vez,
@@ -21,7 +22,7 @@ func repoEnVivo(t *testing.T) string {
 	dir := t.TempDir()
 	git := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		cmd := guiones.Herramienta(t, "git", args...)
 		cmd.Dir = dir
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v falló: %v\n%s", args, err, out)
@@ -70,7 +71,7 @@ func snapshotUsuario(t *testing.T, dir string) string {
 
 func gitSalida(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := guiones.Herramienta(t, "git", args...)
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
@@ -226,7 +227,7 @@ func repoConArbol(t *testing.T) (string, func(...string), func(string, string)) 
 	dir := t.TempDir()
 	git := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		cmd := guiones.Herramienta(t, "git", args...)
 		cmd.Dir = dir
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v falló: %v\n%s", args, err, out)

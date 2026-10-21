@@ -189,7 +189,13 @@ func (f *fotografo) escribirTree(ctx context.Context) (string, error) {
 	}
 
 	// (R1) captura TODO el working tree en el índice temporal (sobre lo sembrado desde el índice real).
-	if _, err := gf.run(ctx, nil, "add", "-A"); err != nil {
+	// `-c core.autocrlf=false`: una foto-respaldo debe guardar los bytes del working tree TAL CUAL, sin que
+	// git reescriba finales de línea según la config del usuario. Donde core.autocrlf=true (Windows es el
+	// caso típico) el add normalizaría los LF y emitiría "LF will be replaced by CRLF the next time Git
+	// touches it" por cada archivo —ruido que en el runner de Windows del CI acompaña a un exit 1 que
+	// pausaba la foto—; con el flag no hay conversión ni warnings y el blob queda fiel al disco. No-op
+	// donde autocrlf ya es false (Linux por defecto).
+	if _, err := gf.run(ctx, nil, "-c", "core.autocrlf=false", "add", "-A"); err != nil {
 		return "", fmt.Errorf("add -A: %w", err)
 	}
 	// (R6) exclusión DURA: saca los secretos del índice temporal. --cached no toca el working

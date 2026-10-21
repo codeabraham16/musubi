@@ -150,14 +150,26 @@ func TestObservadorCorrerLimpioBajoRace(t *testing.T) {
 		_ = os.WriteFile(filepath.Join(dir, "cambia.txt"), []byte(time.Duration(i).String()), 0o644)
 		time.Sleep(3 * time.Millisecond)
 	}
+	// Dejamos de escribir y le damos al bucle una ventana EN REPOSO para fotografiar: mientras el working
+	// tree cambia cada 3ms, un `git add -A` lento (Windows) puede toparse una y otra vez con cambia.txt a
+	// medio reescribir y no completar nunca; en producción el árbol se queda quieto entre ráfagas y la
+	// foto sale. El assert sigue estricto: si no publica ni en reposo (5s), falla.
+	var publicada bool
+	for inicio := time.Now(); time.Since(inicio) < 5*time.Second; {
+		if shaEnBare(t, bare, refTest) != "" {
+			publicada = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("correr() no terminó tras cancelar el ctx")
 	}
-	if shaEnBare(t, bare, refTest) == "" {
-		t.Error("el bucle no publicó ninguna foto en toda la corrida")
+	if !publicada {
+		t.Error("el bucle no publicó ninguna foto ni en una ventana en reposo tras los cambios")
 	}
 }
 

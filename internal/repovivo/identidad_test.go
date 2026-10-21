@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"musubi/internal/guiones"
 )
 
 func TestSanitizarRefComponent(t *testing.T) {
@@ -155,7 +157,7 @@ func TestDestinoEsGitHubResuelveAliasSSH(t *testing.T) {
 	viejo := salidaSSHMenosG
 	t.Cleanup(func() { salidaSSHMenosG = viejo })
 	salidaSSHMenosG = func(ctx context.Context, host string) (string, error) {
-		out, err := exec.CommandContext(ctx, "ssh", "-F", sshCfg, "-G", host).Output()
+		out, err := guiones.HerramientaCtx(ctx, t, "ssh", "-F", sshCfg, "-G", host).Output()
 		return string(out), err
 	}
 

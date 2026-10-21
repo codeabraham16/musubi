@@ -5,12 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"musubi/internal/guiones"
 )
 
 // repoJuguete monta un repo git real y mínimo en un dir temporal: un commit inicial para
@@ -20,7 +21,7 @@ func repoJuguete(t *testing.T) string {
 	dir := t.TempDir()
 	git := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		cmd := guiones.Herramienta(t, "git", args...)
 		cmd.Dir = dir
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v falló: %v\n%s", args, err, out)
@@ -256,7 +257,7 @@ func TestGitRunnerWaitDelayNoSeCuelgaConNietoVivo(t *testing.T) {
 	dir := t.TempDir()
 	git := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		cmd := guiones.Herramienta(t, "git", args...)
 		cmd.Dir = dir
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
