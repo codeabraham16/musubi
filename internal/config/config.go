@@ -1013,6 +1013,11 @@ type Config struct {
 	// es la flota de MÁQUINAS. Se conservan los dos nombres porque cada uno es el correcto en su
 	// contexto y renombrar el otro rompería configuraciones desplegadas.
 	Fleet FleetConfig `yaml:"fleet,omitempty"`
+	// RepoVivo es la ZONA EN VIVO del repo en vivo empresarial: un subsistema del daemon
+	// fotografía el working tree y lo sube a refs/vivo/<nodo>/<slug> del remoto Forgejo cada
+	// pocos segundos, como respaldo 24/7 que no toca el estado git del usuario. Opt-in por
+	// defecto sólo en proyectos team_mode con un remoto que NO sea github.com.
+	RepoVivo RepoVivoConfig `yaml:"repo_vivo,omitempty"`
 }
 
 // FleetConfig configura el latido de fondo de la flota de máquinas (S10).
@@ -1253,6 +1258,46 @@ func (f FleetConfig) EffectiveOutputRetentionDays() int {
 	return f.CommandOutputRetentionDays
 }
 
+// RepoVivoConfig configura la ZONA EN VIVO (repo en vivo empresarial): el subsistema de fondo
+// que fotografía el working tree y lo sube a Forgejo sin tocar el estado git del usuario.
+//
+// Nace OPT-IN POR DEFECTO (Enabled "auto"): se enciende sola cuando el proyecto es team_mode Y
+// tiene un remoto declarado que NO resuelve a github.com — nunca sube a github.com, que es el
+// espejo de producción (su job `espejo` replica refs/heads/* a GitHub y dispararía Vercel). Las
+// fotos viven en refs/vivo/<nodo>/<slug>, FUERA de refs/heads/, para que ese espejo no las arrastre.
+type RepoVivoConfig struct {
+	// Enabled es la perilla de tres estados: "auto" (default, enciende si el proyecto califica),
+	// "on" (fuerza el encendido aunque falte team_mode) u "off" (apagado total: cero observador,
+	// cero refs, el git del usuario idéntico a no tener la feature). Un valor inválido o vacío
+	// degrada a "auto" (ver normalizeRepoVivoEnabled): un typo nunca apaga ni fuerza nada.
+	Enabled string `yaml:"enabled"`
+	// Remote es el nombre del remoto git al que suben las fotos (default "origin"). Debe apuntar
+	// al Forgejo empresarial; si resuelve a github.com, el subsistema se niega a arrancar.
+	Remote string `yaml:"remote"`
+	// IntervaloSegundos es cada cuánto el observador muestrea el working tree (default 5). El poll
+	// ES el debounce natural: una ráfaga de escrituras entre dos ticks produce UNA sola foto.
+	IntervaloSegundos int `yaml:"intervalo_segundos"`
+	// SecretosExtra son patrones de archivo excluidos de la foto ADEMÁS de los patrones por
+	// defecto (*.env, *.pem, id_rsa, *.key…), aunque no estén en .gitignore (exclusión dura).
+	SecretosExtra []string `yaml:"secretos_extra,omitempty"`
+}
+
+// normalizeRepoVivoEnabled acota repo_vivo.enabled al conjunto {auto,on,off}. Reconoce además las
+// grafías booleanas usuales para que un apagador funcione como apagador: false/no/0/off/disabled =>
+// "off" (un kill-switch DEBE fallar cerrado), true/yes/1/on/enabled => "on". Un valor realmente
+// desconocido —o vacío/con espacios— degrada a "auto", el opt-in por defecto: un typo nunca cambia
+// en silencio el encendido, pero `enabled: false` NO es un typo, es una orden de apagar.
+func normalizeRepoVivoEnabled(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "on", "true", "yes", "1", "enabled":
+		return "on"
+	case "off", "false", "no", "0", "disabled":
+		return "off"
+	default:
+		return "auto"
+	}
+}
+
 // Default devuelve la configuración por defecto (local-first, embeddings desactivados).
 func Default() Config {
 	return Config{
@@ -1400,6 +1445,11 @@ func Default() Config {
 			Enabled:               false,
 			Addr:                  "127.0.0.1:7717",
 			RequestTimeoutSeconds: 60,
+		},
+		RepoVivo: RepoVivoConfig{
+			Enabled:           "auto",
+			Remote:            "origin",
+			IntervaloSegundos: 5,
 		},
 		Sync: SyncConfig{
 			Enabled:               false,
@@ -1886,5 +1936,16 @@ func (c *Config) applyDefaults(present map[string]bool) {
 		if c.Sync.RequestTimeoutSeconds == 0 {
 			c.Sync.RequestTimeoutSeconds = d.Sync.RequestTimeoutSeconds
 		}
+	}
+
+	// RepoVivo: enabled se normaliza SIEMPRE. Reconoce las grafías booleanas (false/no/0/disabled =>
+	// "off"; true/yes/1 => "on") para que un apagador apague, y un valor desconocido o vacío degrada
+	// a "auto" (el opt-in por defecto). remote e intervalo rellenan su default si quedaron en cero/vacío.
+	c.RepoVivo.Enabled = normalizeRepoVivoEnabled(c.RepoVivo.Enabled)
+	if c.RepoVivo.Remote == "" {
+		c.RepoVivo.Remote = d.RepoVivo.Remote
+	}
+	if c.RepoVivo.IntervaloSegundos <= 0 {
+		c.RepoVivo.IntervaloSegundos = d.RepoVivo.IntervaloSegundos
 	}
 }
