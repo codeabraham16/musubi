@@ -26,8 +26,18 @@ func sanitizarRefComponent(s string) string {
 		}
 	}
 	out := strings.ReplaceAll(b.String(), "..", "-")
-	out = strings.TrimSuffix(out, ".lock")
-	out = strings.Trim(out, "-.")
+	// git rechaza un componente que termine en ".lock", y recortarlo UNA sola vez no basta: quitar el
+	// sufijo puede destapar otro (".lock.lock"), y recortar primero la basura de borde puede re-exponer
+	// un ".lock" que estaba tapado ("a.lock-" → "a.lock"). Alternamos TrimSuffix(".lock") y Trim("-.")
+	// hasta el punto fijo. Converge porque cada vuelta que cambia algo ACORTA out; y como sólo se
+	// recorta de los bordes, nunca se recrea el ".." que el ReplaceAll de arriba ya colapsó.
+	for {
+		recortado := strings.Trim(strings.TrimSuffix(out, ".lock"), "-.")
+		if recortado == out {
+			break
+		}
+		out = recortado
+	}
 	if out == "" {
 		return "x"
 	}
