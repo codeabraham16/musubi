@@ -124,6 +124,11 @@ func runDoctor(args []string) {
 			printJSON(res)
 		} else {
 			fmt.Printf("[%s] %s — %s\n", res.Status, res.Code, res.Message)
+			// El detalle (nombres de filas, p.ej. las candidatas de anchor_coverage) va en su propia
+			// línea. El CLI es local: muestra todo. El borde MCP lo borra para lectores no-admin.
+			if res.Detail != "" {
+				fmt.Printf("    %s\n", res.Detail)
+			}
 		}
 		if res.Status == "error" {
 			os.Exit(1)
@@ -167,7 +172,13 @@ func formatCheckLine(c memory.CheckResult) string {
 	if c.Repairable && c.Status != "ok" {
 		repair = "  (reparable: musubi doctor repair --check " + c.Code + " --apply)"
 	}
-	return fmt.Sprintf("  %s %s — %s%s", mark, c.Code, c.Message, repair)
+	line := fmt.Sprintf("  %s %s — %s%s", mark, c.Code, c.Message, repair)
+	// El detalle (nombres de filas sensibles, p.ej. las candidatas de anchor_coverage) va en una
+	// línea aparte. El CLI es local y lo muestra entero; el borde MCP lo borra para lectores no-admin.
+	if c.Detail != "" {
+		line += "\n      " + c.Detail
+	}
+	return line
 }
 
 func runDoctorRepair(engine *memory.DbEngine, args []string) {

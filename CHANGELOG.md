@@ -74,6 +74,22 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   HIPÓTESIS en el Message —Status siempre `ok`, nunca un rojo de arranque— citando que el ledger sólo
   ve el camino MCP de esta máquina y conserva una ventana acotada (`usage_ledger.retention_days`), así
   que el cero se confirma contra el central antes de darlo por muerto. Aditivo, sin migración.
+- **Cobertura de origin-anchoring (A3/F4): el check `anchor_coverage`.** El ancla
+  (`observation_origins`, `origins.go`) es lo que deja marcar RANCIA una nota de estado cuando el
+  símbolo que describe cambia; una nota que habla de código SIN ancla es invisible a ese mecanismo. El
+  check mide qué fracción de las notas visibles que CITAN código (excluyendo los mensajes de commit, que
+  nombran archivos por naturaleza) tiene ancla, y nombra las de mayor `salience()` —la MISMA vara del
+  olvido— que todavía no la tienen. Es un RATIO, no un conteo, a propósito: medido sobre la base real,
+  el anchoring está ~1,7% adoptado, y un check que gritara «1429 notas sin ancla» sería fatiga de alarma
+  pura —el patrón «se construye y no se enciende», no una avería—. Status SIEMPRE `ok` (la hipótesis
+  viaja en el Message, nunca un rojo de arranque vía `buildHealthContext`); sin población anclable →
+  `ok` + `Unmeasured`, no un falso verde. **Y las candidatas NO van en el Message.** Es el primer check
+  que nombraría FILAS concretas (topic_key + token de notas) y no sólo agregados, y el diagnóstico sin
+  repair está abierto a cualquier LECTOR sobre un registry GLOBAL (sin scope de tenant): volcarlas al
+  Message las filtraría entre tenants en el central. Van en un campo nuevo `CheckResult.Detail`
+  (`omitempty`, no cambia el contrato de los demás checks) que el borde MCP BORRA para principals
+  no-admin; el agregado sí viaja, y el CLI y el stdio local (principal nil → admin) muestran todo.
+  Aditivo, sin migración.
 - **Las notas de cada release salen solas del CHANGELOG, y el README cuenta lo último que pasó.**
   130 de las 131 releases publicadas tienen el cuerpo vacío: el job `create-release` de
   `release.yml` sólo le pasaba `tag_name` a la acción. Lo que faltaba ya estaba escrito, en este

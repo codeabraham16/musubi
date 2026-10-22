@@ -697,6 +697,9 @@ func (s *McpServer) toolDoctor(ctx context.Context, raw json.RawMessage) (interf
 		if err != nil {
 			return nil, rpcErrorf(codeInvalidParams, "%v", err)
 		}
+		if !principalFrom(ctx).isAdmin() {
+			res.Detail = "" // ver redactarDetalleDeChecks
+		}
 		return jsonResult(res)
 	}
 
@@ -724,10 +727,25 @@ func (s *McpServer) toolDoctor(ctx context.Context, raw json.RawMessage) (interf
 	// promueve los campos de DiagnoseReport, así que el contrato existente no cambia;
 	// solo se suma un campo extra.
 	last, _, _ := s.engine.GetMeta("last_maintenance")
+	if !principalFrom(ctx).isAdmin() {
+		redactarDetalleDeChecks(rep.Checks)
+	}
 	return jsonResult(struct {
 		memory.DiagnoseReport
 		LastMaintenance string `json:"last_maintenance,omitempty"`
 	}{DiagnoseReport: rep, LastMaintenance: last})
+}
+
+// redactarDetalleDeChecks borra el Detail (texto potencialmente sensible: nombres de filas, p.ej. las
+// candidatas a anclar que lista anchor_coverage) de cada check. El diagnóstico sin repair está abierto
+// a cualquier LECTOR (ver toolDoctor), pero los checks del registry son GLOBALES —func(*DbEngine), sin
+// ctx ni scope de tenant—: un lector no-admin de otro tenant no debe ver topic_key/tokens de notas
+// ajenas en el central. El Message (agregado) sí viaja. El CLI y el stdio local (principal nil →
+// isAdmin) conservan el detalle entero. Ver review/doctor-rancidez-silenciosa (B1).
+func redactarDetalleDeChecks(checks []memory.CheckResult) {
+	for i := range checks {
+		checks[i].Detail = ""
+	}
 }
 
 // phaseView es la respuesta de musubi_phase: el estado actual + su directiva.

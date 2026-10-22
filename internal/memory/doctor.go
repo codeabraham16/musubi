@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -32,6 +34,16 @@ type CheckResult struct {
 	// mentir un 'ok medido' — el consumidor (el cuerpo) lo puede pintar distinto ("sin dato" gris,
 	// no verde). omitempty: los checks que SÍ miden no lo emiten, así el contrato no cambia para ellos.
 	Unmeasured bool `json:"unmeasured,omitempty"`
+	// Detail es texto adicional, potencialmente SENSIBLE (nombres de FILAS concretas: topic_key +
+	// token de notas), que acompaña al Message AGREGADO. El Message de todo check es un agregado
+	// —conteos, fechas, rutas de sistema—; cuando un check además quiere NOMBRAR filas (anchor_coverage:
+	// las candidatas a anclar), eso va acá, nunca en el Message. El borde MCP (toolDoctor) BORRA este
+	// campo para principals NO-admin, porque el diagnóstico sin repair está abierto a cualquier lector y
+	// los checks son GLOBALES (sin scope de tenant): sin esto, un lector de otro tenant vería topic_key/
+	// tokens de notas ajenas en el central. El CLI y el stdio local (principal nil → admin) lo muestran
+	// entero. omitempty: los checks que no emiten detalle no cambian su contrato. Ver B1 en
+	// review/doctor-rancidez-silenciosa.
+	Detail string `json:"detail,omitempty"`
 }
 
 // DiagnoseReport agrupa los resultados de todos los checks.
@@ -89,6 +101,10 @@ func (e *DbEngine) doctorChecks() []doctorCheck {
 		// mismo camino que musubi_tool_usage). Confirma el CENSO DE TOOLS VIVAS (A3) contra el ledger;
 		// Status SIEMPRE ok, la hipótesis va en el Message y nunca vuelca el rollup a issues.
 		{code: "tool_census", deep: true, run: checkToolCensus},
+		// deep: recorre el content de TODAS las observaciones visibles con un regexp (RE2, no SQL) y
+		// rankea las sin ancla con salience() en Go — mismo perfil que swallowed_envelope. Reporta la
+		// COBERTURA de origin-anchoring (A3); Status SIEMPRE ok, la hipótesis va en el Message.
+		{code: "anchor_coverage", deep: true, run: checkAnchorCoverage},
 	}
 }
 
@@ -167,6 +183,165 @@ func checkToolCensus(e *DbEngine) CheckResult {
 			"Un cero local es señal débil —el ledger sólo ve el camino MCP de esta máquina y conserva una ventana acotada "+
 			"(usage_ledger.retention_days, 90 d por defecto)—: confirmá contra tool_invocations del central y el disparador de cada una antes de darla por muerta",
 			len(silenciosas), len(debenInvocarse), censo.DebeInvocarse.String(), strings.Join(silenciosas, ", "))}
+}
+
+// referencesCodeRE reconoce, SIN tocar el repo, que un texto CITA CÓDIGO: un token con forma de
+// <ruta/>nombre.ext (ext de archivo fuente), con el ':línea' o '#Símbolo' opcional que vendría
+// después. Compilado una vez (RE2, determinista). Es deliberadamente SHAPE-ONLY: no verifica que el
+// archivo exista —eso lo hace origins.go al anclar—, sólo que la nota hable de un archivo de código.
+// "doctor.go", "internal/memory/decay.go:66" y "scope.go#visibleObsPredicateDe" matchean; "v0.141.0"
+// y una prosa sin archivo, no.
+var referencesCodeRE = regexp.MustCompile(`(?i)[A-Za-z0-9_./-]*[A-Za-z0-9_-]\.(go|rs|ts|tsx|js|jsx|py|sql|sh|yml|yaml)\b`)
+
+// anchorExcludedTopics son los topic_key que NO cuentan como anclables aunque citen código: son
+// HECHOS HISTÓRICOS, no notas de estado que una ruta pueda volver rancias. Los mensajes de commit
+// (git-commit) nombran archivos .go por su naturaleza —"fix(doctor): ..."— y anclarlos no tendría
+// sentido: describen un cambio puntual del pasado, no el estado vigente de un símbolo. Son ~1200 de
+// las 2654 que citan código en la base real (medido 2026-10-22); sin excluirlos, la cobertura
+// mediría sobre todo el ruido de los commits.
+var anchorExcludedTopics = map[string]bool{CommitTopicKey: true}
+
+// anchorCandidateTop es cuántas candidatas a anclar lista el Detail, las de mayor salience. Un
+// número chico y accionable ("anclá estas 8"), no un volcado de mil.
+const anchorCandidateTop = 8
+
+// checkAnchorCoverage reporta la COBERTURA de origin-anchoring (origins.go) sobre la memoria que
+// CITA CÓDIGO: qué fracción de esas notas tiene un ancla en observation_origins, y nombra las de
+// mayor salience que todavía no la tienen como candidatas concretas a anclar. Es la realización en
+// runtime de A3/F4 del roadmap engram→Musubi: el ancla es lo que permite que una nota de estado
+// ("X está pendiente", "Y funciona así") se marque RANCIA cuando el símbolo que describe cambia (ver
+// save_observation/origin_paths); una nota que habla de código sin ancla es invisible a ese mecanismo.
+//
+// POR QUÉ UN RATIO Y NO UN CONTEO, Y ÉSTE ES EL DISEÑO. Medido sobre la base real el 2026-10-22: de
+// las notas visibles, 2654 citan código y, excluyendo los 1200 mensajes de commit, quedan 1454
+// anclables con sólo 25 ancladas —el anchoring está ~1.7% adoptado—. Un check que gritara "1429 notas
+// sin ancla" sería fatiga de alarma pura: el problema no es que haya mil notas sueltas, es que una
+// feature construida casi no se usó (el patrón `se-construye-y-no-se-enciende`). El ratio dice eso en
+// un número chico y estable; las top-N por salience lo vuelven accionable sin volcar mil.
+//
+// POR QUÉ NO ES WARNING (R2). Baja adopción de una feature OPCIONAL no es una avería de la base: el
+// recall funciona perfecto sin una sola ancla. Un warning acá saltaría en el arranque de CADA sesión
+// vía buildHealthContext —la misma fatiga que checkToolCensus y checkEmbeddingCoverage evitan a
+// propósito—. Status SIEMPRE `ok`: la hipótesis viaja en el Message y se LEE con `musubi doctor` o el
+// panel de salud del cuerpo, no es un nag permanente. `error` sólo si falla la lectura de la base.
+//
+// SIN POBLACIÓN ANCLABLE → `ok` + Unmeasured: una base sin notas que citen código no tiene cobertura
+// que medir (mismo patrón de tres estados que checkEmbeddingCoverage).
+//
+// REUSA salience() (decay.go), la MISMA función del olvido (halfLife=defaultHalfLifeDays, peso por
+// tipo, edad vía edadDesde con el sello 'espejo'): así "la más salient sin ancla" se mide con la misma
+// vara que el decay, no con una tercera definición de "importante". Con K=0 (sin refuerzo por acceso),
+// que coincide con el olvido cuando access_count=0 —no con el recall, que no usa salience()—. Un
+// timestamp ilegible cuenta en el denominador pero no entra al ranking.
+func checkAnchorCoverage(e *DbEngine) CheckResult {
+	// visibleObsPredicateDe('o'), no una copia con alias: el LEFT JOIN a outbox obliga a calificar, y
+	// escribir el predicado a mano es exactamente cómo buildObsGraph se salteó la cuarentena (scope.go).
+	q := `
+		SELECT o.id, o.topic_key, o.content, o.access_count, o.importance,
+		       COALESCE(o.created_at,''), COALESCE(o.last_accessed,''), COALESCE(o.mem_type,''),
+		       COALESCE(esp.created_at,'') AS llegada,
+		       (o.id IN (SELECT observation_id FROM observation_origins)) AS anclada
+		FROM observations o
+		LEFT JOIN outbox esp ON esp.obs_id = o.id AND esp.status = 'espejo'
+		WHERE ` + visibleObsPredicateDe("o")
+	rows, err := e.db.Query(q)
+	if err != nil {
+		return CheckResult{Code: "anchor_coverage", Status: "error",
+			Message: "no se pudo medir la cobertura de anclaje: " + err.Error()}
+	}
+	defer rows.Close()
+
+	type candidata struct {
+		id, topic, token string
+		sal              float64
+	}
+	now := time.Now().UTC()
+	var anclable, ancladas int
+	var sinAncla []candidata
+	for rows.Next() {
+		var (
+			id, topic, content             string
+			access                         int
+			importance                     float64
+			createdAt, lastAccess, memType string
+			llegada                        string
+			anclada                        int
+		)
+		if err := rows.Scan(&id, &topic, &content, &access, &importance,
+			&createdAt, &lastAccess, &memType, &llegada, &anclada); err != nil {
+			return CheckResult{Code: "anchor_coverage", Status: "error",
+				Message: "no se pudo leer una observación al medir la cobertura de anclaje: " + err.Error()}
+		}
+		// Hechos históricos (commits): citan archivos por naturaleza, no son anclables.
+		if anchorExcludedTopics[topic] {
+			continue
+		}
+		// Shape-only: ¿la nota habla de un archivo de código?
+		if !referencesCodeRE.MatchString(content) {
+			continue
+		}
+		anclable++
+		if anclada != 0 {
+			ancladas++
+			continue
+		}
+		// Sin ancla: candidata. Se rankea con la MISMA salience del olvido. Un timestamp ilegible
+		// cuenta en el denominador (anclable) pero no se puede rankear: no entra al top-N.
+		t, ok := edadDesde(createdAt, lastAccess, llegada)
+		if !ok {
+			continue
+		}
+		ageDays := now.Sub(t).Hours() / 24
+		if ageDays < 0 {
+			ageDays = 0
+		}
+		sal := salience(importance, access, ageDays, defaultHalfLifeDays, memTypeSalienceWeight(memType), 0)
+		sinAncla = append(sinAncla, candidata{id: id, topic: topic, token: referencesCodeRE.FindString(content), sal: sal})
+	}
+	if err := rows.Err(); err != nil {
+		return CheckResult{Code: "anchor_coverage", Status: "error",
+			Message: "error al iterar observaciones para la cobertura de anclaje: " + err.Error()}
+	}
+
+	// Sin NADA que cite código no hay cobertura que medir: ok + Unmeasured, no un falso verde.
+	if anclable == 0 {
+		return CheckResult{Code: "anchor_coverage", Status: "ok", Unmeasured: true,
+			Message: "sin notas visibles que citen código: no hay cobertura de anclaje que medir"}
+	}
+	if ancladas == anclable {
+		return CheckResult{Code: "anchor_coverage", Status: "ok",
+			Message: fmt.Sprintf("las %d nota(s) visibles que citan código tienen ancla de origen (observation_origins)", anclable)}
+	}
+
+	// Top-N por salience desc, desempate id asc (determinista).
+	sort.Slice(sinAncla, func(i, j int) bool {
+		if sinAncla[i].sal != sinAncla[j].sal {
+			return sinAncla[i].sal > sinAncla[j].sal
+		}
+		return sinAncla[i].id < sinAncla[j].id
+	})
+	top := sinAncla
+	if len(top) > anchorCandidateTop {
+		top = top[:anchorCandidateTop]
+	}
+	var nombres []string
+	for _, c := range top {
+		nombres = append(nombres, fmt.Sprintf("%s (%s)", c.topic, c.token))
+	}
+	// Las candidatas (topic_key + token de notas) van en Detail, NO en el Message: el Message es el
+	// AGREGADO (ratio), como el de todo check; el Detail lo borra el borde MCP para lectores no-admin,
+	// que en el central pueden ser de otro tenant (ver CheckResult.Detail y toolDoctor). El CLI y el
+	// stdio local lo muestran entero.
+	detalle := ""
+	if len(nombres) > 0 {
+		detalle = "candidatas a anclar, por salience: " + strings.Join(nombres, "; ")
+	}
+	cobertura := 100.0 * float64(ancladas) / float64(anclable)
+	return CheckResult{Code: "anchor_coverage", Status: "ok", Detail: detalle,
+		Message: fmt.Sprintf("hipótesis: %d de %d nota(s) que citan código tienen ancla de origen (%.1f%%). "+
+			"El ancla (observation_origins, origins.go) es lo que deja marcar RANCIA una nota cuando el símbolo que describe cambia; "+
+			"una cobertura baja NO es una avería —el recall anda sin anclas— sino una feature poco adoptada que conviene ir cerrando anclando lo más vivo",
+			ancladas, anclable, cobertura)}
 }
 
 // checkEmbeddingCoverage avisa cuando hay memoria que la búsqueda semántica NO puede encontrar.
