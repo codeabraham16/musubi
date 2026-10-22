@@ -1058,8 +1058,11 @@ func (c *ctxVenceEnLaLlamada) Err() error {
 // leerFilas y abrirTabla devolvería ErrIdentidadVencida —un error DISTINTO de context.Canceled—. Con
 // el chequeo, corta con context.Canceled sin tocar la tabla.
 //
-// Sabotaje: borrar el 2º `if err := ctx.Err(); err != nil` de ConsultaLiviana.Embed ⇒ el error pasa
-// a ErrIdentidadVencida.
+// Sabotaje: desactivar el 2º `if err := ctx.Err()` de Embed (el de después de EncodeIDs) ⇒ el error
+// pasa de context.Canceled a ErrIdentidadVencida.
+// arnes: archivo="internal/embedding/consulta_liviana.go"
+// arnes: de="if err := ctx.Err(); err != nil { // EncodeIDs no es interrumpible: si el plazo venció tokenizando, no abras la tabla ni lances lecturas"
+// arnes: a="if err := ctx.Err(); err != nil && false { // EncodeIDs no es interrumpible: si el plazo venció tokenizando, no abras la tabla ni lances lecturas"
 func TestConsultaLivianaCortaTrasTokenizarSiVencioElPlazo(t *testing.T) {
 	dir, _ := tablaDeJugueteConSidecars(t, 400, 16)
 	liv, err := NewConsultaLiviana(dir)
