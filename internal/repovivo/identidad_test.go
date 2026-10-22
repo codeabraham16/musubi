@@ -20,12 +20,42 @@ func TestSanitizarRefComponent(t *testing.T) {
 		{"...puntos...", "puntos"},
 		{"rama..doble", "rama-doble"},
 		{"algo.lock", "algo"},
+		// git rechaza un componente que termine en ".lock". Recortarlo una sola vez no basta: estos
+		// tres sobrevivían como "a.lock" con el saneo viejo (TrimSuffix antes de Trim), que es un
+		// refname que git NO acepta. El saneo a punto fijo los lleva hasta "a".
+		{"a.lock-", "a"},     // ".lock" tapado por basura de borde
+		{"a.lock.", "a"},     // ídem con punto final
+		{"a.lock.lock", "a"}, // ".lock" repetido: recortar uno destapa el otro
+		{".lock", "x"},       // sólo el sufijo → vacío → "x"
 		{"", "x"},
 		{"@@@", "x"},
 	}
 	for _, c := range casos {
 		if got := sanitizarRefComponent(c.in); got != c.want {
 			t.Errorf("sanitizarRefComponent(%q) = %q, esperaba %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestNodoSiempreProduceRefnameValido es un test de PROPIEDAD que cierra el contrato del saneo contra
+// el árbitro REAL: para cualquier texto hostil que pueda llegar a repo_vivo.nodo —o al basename de un
+// checkout—, la ref derivada refs/vivo/<nodo>/<slug> tiene que ser un refname que git ACEPTE. Sin esto,
+// un override como "a.lock-" sobrevivía como "a.lock", `git push` lo rechazaba (fatal: invalid refspec)
+// y la zona en vivo fallaba muda en cada tick. No afirmamos la forma del componente: validamos la ref
+// COMPLETA con `git check-ref-format`, que es quien decide de verdad en el push.
+func TestNodoSiempreProduceRefnameValido(t *testing.T) {
+	// Un slug real y válido: el riesgo vive en el <nodo>, pero validamos la ref entera igual.
+	slug := slugDeCheckout("/home/davantis/musubi")
+	hostiles := []string{
+		"a.lock-", "a.lock.", "a.lock.lock", ".lock", "mi.lock-x", // el sufijo .lock en sus formas
+		"../../x", "...", "..", "@@@", "con espacios", "rama..doble", // bordes, puntos y chars raros
+		"davantis-1", "Davantis", "musubi-server.local", // los nombres reales del par davantis/davantis-1
+	}
+	for _, in := range hostiles {
+		ref := refDeCheckout(nodo(in), slug)
+		cmd := guiones.Herramienta(t, "git", "check-ref-format", ref)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("nodo(%q) → %q: git check-ref-format lo RECHAZA (%v)\n%s", in, ref, err, out)
 		}
 	}
 }
@@ -58,6 +88,30 @@ func TestRefDeCheckout(t *testing.T) {
 	}
 	if !strings.HasPrefix(ref, prefijoRefVivo) {
 		t.Errorf("la ref debe estar bajo %s", prefijoRefVivo)
+	}
+}
+
+// TestNodo fija la identidad por máquina: un override de repo_vivo.nodo MANDA (sanitizado), y es lo
+// que distingue dos máquinas con el mismo hostname (el caso davantis/davantis-1, ambas "Davantis").
+// Sin override (vacío o sólo espacios) cae al hostname sanitizado.
+func TestNodo(t *testing.T) {
+	if got := nodo("davantis-1"); got != "davantis-1" {
+		t.Errorf(`nodo("davantis-1") = %q, esperaba "davantis-1"`, got)
+	}
+	// el override se sanitiza igual que cualquier componente de refname
+	if got := nodo("  mi nodo raro  "); got != "mi-nodo-raro" {
+		t.Errorf(`nodo(" mi nodo raro ") = %q, esperaba "mi-nodo-raro"`, got)
+	}
+	// sin override: hostname sanitizado. Es el fallback, y debe coincidir byte a byte con lo que
+	// derivaría Arrancar, o el poll miraría una ref que nunca se crea.
+	if h, err := os.Hostname(); err == nil && strings.TrimSpace(h) != "" {
+		want := sanitizarRefComponent(h)
+		if got := nodo(""); got != want {
+			t.Errorf(`nodo("") = %q, esperaba el hostname sanitizado %q`, got, want)
+		}
+		if got := nodo("   "); got != want {
+			t.Errorf("nodo(sólo espacios) = %q, esperaba caer al hostname %q", got, want)
+		}
 	}
 }
 

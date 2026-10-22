@@ -26,18 +26,34 @@ func sanitizarRefComponent(s string) string {
 		}
 	}
 	out := strings.ReplaceAll(b.String(), "..", "-")
-	out = strings.TrimSuffix(out, ".lock")
-	out = strings.Trim(out, "-.")
+	// git rechaza un componente que termine en ".lock", y recortarlo UNA sola vez no basta: quitar el
+	// sufijo puede destapar otro (".lock.lock"), y recortar primero la basura de borde puede re-exponer
+	// un ".lock" que estaba tapado ("a.lock-" → "a.lock"). Alternamos TrimSuffix(".lock") y Trim("-.")
+	// hasta el punto fijo. Converge porque cada vuelta que cambia algo ACORTA out; y como sólo se
+	// recorta de los bordes, nunca se recrea el ".." que el ReplaceAll de arriba ya colapsó.
+	for {
+		recortado := strings.Trim(strings.TrimSuffix(out, ".lock"), "-.")
+		if recortado == out {
+			break
+		}
+		out = recortado
+	}
 	if out == "" {
 		return "x"
 	}
 	return out
 }
 
-// nodo es el nombre de esta máquina, sanitizado para un refname. Es la identidad POR MÁQUINA
-// de la ref: dos máquinas distintas publican bajo refs/vivo/<nodo>/… distintos aunque trabajen
-// el mismo checkout. Si el hostname no se puede leer, cae a un nombre fijo (no aborta).
-func nodo() string {
+// nodo es la identidad POR MÁQUINA de la ref: dos máquinas publican bajo refs/vivo/<nodo>/…
+// distintos aunque trabajen el mismo checkout. override viene de repo_vivo.nodo en la config: si
+// trae algo (tras recortar espacios), MANDA —sanitizado para un refname—. Es lo que permite
+// distinguir dos máquinas que comparten hostname: la laptop y davantis-1 informan ambas "Davantis"
+// en os.Hostname(), así que sin override las dos escribirían bajo el mismo <nodo>. Con override
+// vacío cae al hostname; si ni eso se puede leer, a un nombre fijo. Nunca devuelve vacío.
+func nodo(override string) string {
+	if t := strings.TrimSpace(override); t != "" {
+		return sanitizarRefComponent(t)
+	}
 	h, err := os.Hostname()
 	if err != nil || strings.TrimSpace(h) == "" {
 		return "nodo-desconocido"

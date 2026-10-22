@@ -46,5 +46,6 @@ func opcionesDeConfig(projectPath string, teamMode bool, cfg config.RepoVivoConf
 		TeamMode:      teamMode,
 		Intervalo:     time.Duration(cfg.IntervaloSegundos) * time.Second,
 		SecretosExtra: cfg.SecretosExtra,
+		Nodo:          cfg.Nodo,
 	}
 }

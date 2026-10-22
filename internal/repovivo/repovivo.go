@@ -31,6 +31,9 @@ type Opciones struct {
 	TeamMode      bool
 	Intervalo     time.Duration
 	SecretosExtra []string
+	// Nodo es el nombre de ESTA máquina en la ref (refs/vivo/<nodo>/…), de repo_vivo.nodo. Vacío usa
+	// el hostname; se declara para distinguir dos máquinas que comparten hostname (ver nodo()).
+	Nodo string
 }
 
 // Arrancar decide si la zona en vivo debe correr para este checkout y, si corresponde, corre el
@@ -66,7 +69,7 @@ func Arrancar(ctx context.Context, o Opciones) (bool, string, error) {
 	if err != nil {
 		return false, "no se pudo preparar el fotógrafo", err
 	}
-	ref := refDeCheckout(nodo(), slugDeCheckout(toplevel))
+	ref := refDeCheckout(nodo(o.Nodo), slugDeCheckout(toplevel))
 	trans, err := nuevoTransporte(foto.git, o.Remoto, ref)
 	if err != nil {
 		return false, "ref o remoto inválidos", err

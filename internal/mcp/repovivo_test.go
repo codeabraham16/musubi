@@ -29,6 +29,7 @@ func TestOpcionesDeConfigCablea(t *testing.T) {
 		Remote:            "centinela-remoto",
 		IntervaloSegundos: 7,
 		SecretosExtra:     []string{"secretos/", "*.zzsecreto"},
+		Nodo:              "centinela-nodo",
 	}
 	got := opcionesDeConfig("/ruta/proyecto", true, cfg)
 	esperado := repovivo.Opciones{
@@ -38,6 +39,7 @@ func TestOpcionesDeConfigCablea(t *testing.T) {
 		TeamMode:      true,
 		Intervalo:     7 * time.Second,
 		SecretosExtra: []string{"secretos/", "*.zzsecreto"},
+		Nodo:          "centinela-nodo",
 	}
 	if !reflect.DeepEqual(got, esperado) {
 		t.Errorf("opcionesDeConfig cableó mal:\n got=%+v\n esp=%+v", got, esperado)
