@@ -27,7 +27,8 @@ import "fmt"
 // EL CUARTO NIVEL Y LA ÚNICA ACCIÓN NUEVA. Sobre `profunda` hay un escalón más, `critica`, para
 // el tope de la escala (>=11 puntos, ~4% de los PRs reales de este repo, medido con el spike F8).
 // No existe para comprar MÁS revisión automática —el panel ya topa en profunda: cinco jueces y
-// dos rondas es todo lo que el motor de debate soporta—, sino para AGREGAR UNA ACCIÓN que la
+// dos rondas es lo que piden los paneles por diseño, no un límite del motor (lo fija `TestP6`; el
+// motor acepta cualquier `rounds>=1`)—, sino para AGREGAR UNA ACCIÓN que la
 // aritmética sola no da: una firma humana. En critica el recuento del panel es necesario pero no
 // suficiente. HOY esa firma es un AVISO (va en el veredicto y en el resumen), no un bloqueo: el
 // gate duro que RECHACE el cierre hasta la firma está DIFERIDO —es del dueño, cambia el
@@ -62,8 +63,10 @@ type Panel struct {
 //
 //   - PISO: nunca menos de un juez y una ronda. Un cambio "mínimo" igual se mira; lo que baja
 //     es el costo, no la existencia de la revisión.
-//   - TECHO: nunca más de dos rondas, porque DOS es lo que el motor de debate soporta —con más,
-//     AdvanceDebate se vuelve un no-op mudo y el panel cree que debatió cuando no debatió—.
+//   - TECHO: nunca más de dos rondas. No es un tope del motor —acepta cualquier `rounds>=1`—, sino
+//     una decisión de diseño de la tabla de paneles, protegida por `TestP6`. (El no-op mudo de
+//     `AdvanceDebate` sólo aparece si un caller avanza más veces que las rondas con que abrió el
+//     debate: es un desajuste del caller, no un límite del motor.)
 //
 // panelCritico tiene la MISMA forma automática que panelProfundo —el techo ya está ahí— y lo
 // único que agrega es la firma humana. Por eso el cuarto nivel no es «un panel más grande»: es

@@ -9,9 +9,11 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ### Added
 - **Cuarto nivel de revisión: `critica`, con firma humana (hoy un aviso).** La escala de profundidad
-  derivada del diff topaba en `profunda` (5 jueces · 2 rondas · quórum 3), que es también el techo
-  del motor de debate: más allá de ahí no se compra más revisión automática —agregar buckets no mueve
-  el panel, porque `AdvanceDebate` no soporta una tercera ronda—. El tope real de la escala (>=11
+  derivada del diff topaba en `profunda` (5 jueces · 2 rondas · quórum 3), que es el techo que fija
+  la TABLA DE PANELES (`panelProfundo`, protegido por `TestP6`): más allá de ahí no se compra más
+  revisión automática —agregar buckets no mueve el panel, porque los paneles no piden más de 5 jueces
+  ni más de 2 rondas por decisión de diseño, no por un límite del motor (`AdvanceDebate` acepta
+  cualquier `rounds>=1`)—. El tope real de la escala (>=11
   puntos sobre 13 — ~4% de los PRs reales de este repo medido con el spike F8, estable entre el corpus
   reciente y el completo) ahora cruza a un cuarto nivel, `critica`, cuya ÚNICA acción nueva es una
   firma humana: `Panel.Humano` marca que el recuento automático del panel es necesario pero NO
