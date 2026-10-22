@@ -94,7 +94,12 @@ func TestDetectChangesReportsSymbolsStaleAndMemory(t *testing.T) {
 
 	// El resumen que se lee de un vistazo tiene que nombrar el nivel de revisión del JSON: sin esto,
 	// el cableado toolDetectChanges -> resumenRevision(report.Revision) queda sin guarda (el helper
-	// se prueba suelto, pero nadie comprueba que el reporte real lo consuma).
+	// se prueba suelto, pero nadie comprueba que el reporte real lo consuma). Y un Nivel vacío volvería
+	// VACUA la comprobación de abajo (strings.Contains(x, "") == true), así que primero exigimos que el
+	// reporte real traiga Revision.Nivel, y recién después que el resumen lo nombre.
+	if rep.Revision.Nivel == "" {
+		t.Fatalf("el reporte real no trae Revision.Nivel; el cableado a resumenRevision no se ejerció: %+v", rep.Revision)
+	}
 	if !strings.Contains(rep.Summary, string(rep.Revision.Nivel)) {
 		t.Errorf("el summary debería nombrar el nivel de revisión %q; summary=%q", rep.Revision.Nivel, rep.Summary)
 	}
