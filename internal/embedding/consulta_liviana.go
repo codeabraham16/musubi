@@ -9,10 +9,12 @@ package embedding
 //   - las filas de la tabla, con ReadAt sobre model.safetensors, sólo las de los tokens del texto;
 //   - el nombre (el model_id, que es la procedencia del vector), de identidad.json.
 //
-// Los dos archivos de al lado —tokenizer.idx e identidad.json— los escribe NewStaticProvider cada
-// vez que construye el proveedor completo (daemon, serve, embed pull, backfill) y faltan o están
-// vencidos. Si no están, o si la tabla cambió desde que se escribieron, no hay atajo: el
-// constructor devuelve error y quien lo pidió sigue sin vector, como hoy. Degradar, no romper.
+// Los dos archivos de al lado —tokenizer.idx e identidad.json— los escribe NewStaticProvider cuando
+// construye el proveedor completo y faltan o están vencidos (static.go). Eso pasa en el 1er arranque
+// del completo: daemon, serve, backfill. `embed pull` NO los escribe: sólo BAJA la tabla (runEmbedPull
+// → PullModel), sin armar el proveedor, así que los sidecars los escribe recién el completo la primera
+// vez que arranca sobre esa tabla. Si no están, o si la tabla cambió desde que se escribieron, no hay
+// atajo: el constructor devuelve error y quien lo pidió sigue sin vector, como hoy. Degradar, no romper.
 //
 // El proveedor completo también tokeniza con tokenizer.idx: lo toma cuando está al día
 // (indiceAlDia) y, si no, usa el que acaba de escribir. Así el vector que se indexa y el que se
@@ -474,15 +476,20 @@ func (c *ConsultaLiviana) Dimensions() int { return c.dim }
 // El orden en que se leen las filas no toca el vector: la suma la hace mediaNormalizada en el orden
 // del texto, sobre las mismas filas.
 //
-// RESPETA EL CONTEXTO, a diferencia de StaticProvider, que tiene todo en memoria y no tiene en qué
-// esperar. Éste lee del disco, y en frío un prompt largo son cientos de lecturas: el plazo que le
-// pone quien lo llama (el hook del turno le da 2 s) tiene que poder cortarlo entre una lectura y
-// la siguiente.
+// RESPETA EL CONTEXTO EN LOS BORDES Y ENTRE LECTURAS, a diferencia de StaticProvider, que tiene todo
+// en memoria y no tiene en qué esperar. El plazo se chequea antes y después de tokenizar y entre una
+// lectura de fila y la siguiente (leerFilas). La tokenización (EncodeIDs) NO es interrumpible: una
+// vez que arranca corre entera, así que su costo lo acota quien llama, topeando el texto que le pasa.
+// Lo caro es leer del disco: en frío un prompt largo son cientos de lecturas, y ahí el plazo (el hook
+// del turno le da 2 s) tiene que poder cortar.
 func (c *ConsultaLiviana) Embed(ctx context.Context, text string) ([]float32, error) {
 	if err := ctx.Err(); err != nil { // quien pidió el vector ya no lo espera
 		return nil, err
 	}
 	ids := c.tok.EncodeIDs(text)
+	if err := ctx.Err(); err != nil { // EncodeIDs no es interrumpible: si el plazo venció tokenizando, no abras la tabla ni lances lecturas
+		return nil, err
+	}
 	leidas, err := c.leerFilas(ctx, ids)
 	if err != nil {
 		return nil, err
