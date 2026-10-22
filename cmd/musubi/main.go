@@ -411,6 +411,10 @@ func runServe(args []string) {
 	// para el drain. Best-effort: un error de config del cliente NO impide arrancar el serve.
 	startOutboxDrain(ctx, server, cfg.Sync)
 
+	// ZONA EN VIVO (internal/repovivo): subir fotos del working tree al remoto empresarial, solas,
+	// sin tocar el estado git del usuario. No depende del sync de MEMORIA; su config la gobierna.
+	startRepoVivo(ctx, server, cfg.RepoVivo)
+
 	// Auto-drain del acervo de diseño (pilar Musubi Renaissance, el "molino continuo"): destila los
 	// blobs ingeridos en tarjetas de a tandas chicas, sin intervención. No-op sin motor de cognición o
 	// con el intervalo en 0 — sólo el central con motor lo enciende. Sale con el mismo ctx (SIGINT/SIGTERM).
@@ -599,6 +603,10 @@ func runDaemon() {
 	// retornar de runDaemon por señal o EOF) también lo detiene.
 	startOutboxDrain(maintCtx, server, cfg.Sync)
 
+	// ZONA EN VIVO (internal/repovivo): subir fotos del working tree al remoto empresarial, solas.
+	// Mismo ciclo de vida que el mantenimiento (maintCtx): el apagado del daemon la corta también.
+	startRepoVivo(maintCtx, server, cfg.RepoVivo)
+
 	// Capturar SIGINT/SIGTERM para graceful shutdown: el select espera hasta que el
 	// servidor termine (EOF de stdin) o llegue una señal. En ambos casos se retorna
 	// de runDaemon y el defer engine.Close() cierra la DB limpiamente.
@@ -698,6 +706,19 @@ func startOutboxDrain(ctx context.Context, server *mcp.McpServer, cfg config.Syn
 	// Sync ENTRANTE (C5.3b): baja la memoria shared del proyecto DESDE el central. RunInboundScheduler
 	// gatea internamente en team_mode (un proyecto local no baja nada). Mismo intervalo que el drain.
 	go server.RunInboundScheduler(ctx, time.Duration(cfg.DrainIntervalSeconds)*time.Second)
+}
+
+// startRepoVivo arranca la ZONA EN VIVO (internal/repovivo): la goroutine que sube fotos del
+// working tree del checkout al remoto empresarial. Va APARTE de startOutboxDrain a propósito: la
+// zona en vivo NO depende del sync de MEMORIA —enabled=on debe arrancar aun con el sync apagado—,
+// así que su único gate acá es su propia config. enabled=off es un no-op total (ni se lanza la
+// goroutine); auto/on lo resuelve RunRepoVivo con las guardas de repovivo (team_mode, remoto
+// empresarial, y la guarda DURA anti-github.com). Compartido por runServe y runDaemon.
+func startRepoVivo(ctx context.Context, server *mcp.McpServer, cfg config.RepoVivoConfig) {
+	if strings.EqualFold(strings.TrimSpace(cfg.Enabled), "off") {
+		return
+	}
+	go server.RunRepoVivo(ctx, cfg)
 }
 
 // servirSoloLectura atiende con la memoria abierta en el escalón de sólo lectura.

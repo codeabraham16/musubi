@@ -198,6 +198,10 @@ type syncSaveArguments struct {
 	MemType    string  `json:"mem_type,omitempty"`
 	ProjectID  string  `json:"project_id,omitempty"`
 	Scope      string  `json:"scope"`
+	// Huella es el ContentHash del contenido que mandamos (content-addressing de transporte). Su
+	// presencia le PIDE recibo al central; el valor nos deja comparar lo que el central dice haber
+	// guardado contra lo que creíamos mandar. omitempty ⇒ un payload sin huella es idéntico al de antes.
+	Huella string `json:"huella,omitempty"`
 }
 
 // syncRPCResponse es el sobre de respuesta. Éxito ⇔ HTTP 200 + result presente + error ausente.
@@ -213,11 +217,35 @@ type rpcErrorBody struct {
 	Message string `json:"message"`
 }
 
+// contenidoQueViaja devuelve el Content tal como el central lo decodifica tras el transporte JSON:
+// json.Marshal reemplaza cada byte UTF-8 inválido por U+FFFD. Replayar el round-trip es la única forma
+// FIEL (strings.ToValidUTF8 colapsa runs de bytes inválidos en un solo U+FFFD y NO coincide con json
+// byte-a-byte). Para un string el marshal nunca falla; ante la duda, el crudo (degrada al comportamiento
+// de antes del arreglo, nunca peor).
+func contenidoQueViaja(content string) string {
+	b, err := json.Marshal(content)
+	if err != nil {
+		return content
+	}
+	var viaja string
+	if err := json.Unmarshal(b, &viaja); err != nil {
+		return content
+	}
+	return viaja
+}
+
 // Push empuja un item del outbox al central. Devuelve nil en éxito (R10: HTTP 200 + result sin
 // error). Ante fallo devuelve un error envuelto en errTransient (reintentar) o errPermanent
 // (dead-letter), según classifyErr. El contexto acota la vida del request (además del timeout
 // del http.Client).
 func (c *SyncClient) Push(item memory.OutboxItem) error {
+	// La huella viaja con el pedido Y queda acá para comparar contra lo que el central diga haber
+	// guardado. Se calcula sobre lo que CRUZA EL CABLE, no sobre los bytes crudos: json.Marshal
+	// coacciona el UTF-8 inválido a U+FFFD, así que el central recibe —y hashea— esa versión. Hashear
+	// los bytes crudos haría que un Content con un byte inválido (no un secreto, no corrupción: sólo
+	// no-representable en JSON) diera hash≠huella con transformed=false ⇒ dead-letter permanente de una
+	// nota viva. Para UTF-8 válido —el caso normal— contenidoQueViaja es identidad y la huella no cambia.
+	huella := memory.ContentHash(contenidoQueViaja(item.Content))
 	reqBody := syncRPCRequest{
 		JsonRpc: "2.0",
 		ID:      item.ObsID,
@@ -232,6 +260,7 @@ func (c *SyncClient) Push(item memory.OutboxItem) error {
 				MemType:    item.MemType,
 				ProjectID:  item.ProjectID,
 				Scope:      memory.ScopeShared,
+				Huella:     huella,
 			},
 		},
 	}
@@ -287,13 +316,43 @@ func (c *SyncClient) Push(item memory.OutboxItem) error {
 	// De acá para abajo `payload` es lo que cruzó la red —comprimido si viajó comprimido— y `crudo`
 	// el largo del JSON de la nota. Cable sobre crudos es lo que ahorró la compresión.
 	c.trafico.subidaPosts.Add(1)
-	if rechazo := classifyResponse(resp); rechazo != nil {
+	result, rechazo := leerRespuesta(resp)
+	if rechazo != nil {
 		// Viajó y le costó al central, pero no dejó ninguna nota: sus bytes van APARTE. Sumados al
 		// cable de las aceptadas, un corte reintentado N veces se leería como notas más pesadas. Son
 		// los del cable, porque lo que se mide acá es la red.
 		c.trafico.rechazados.Add(1)
 		c.trafico.bytesRechazados.Add(int64(len(payload)))
 		return rechazo
+	}
+	// RECIBO CONTENT-HASH (E3): el 200 sin error ya no alcanza. Si el central mandó recibo —se lo
+	// pedimos con la huella—, confirmamos que guardó ESTO bajo ESTE id. Un central anterior al
+	// recibo devuelve texto plano: leerReciboDeObs da ok=false y no se compara (como hoy, compat
+	// por omisión). La asimetría manda: sólo se dead-lettea ante señal CLARA (drop, o corrupción).
+	if rec, ok := leerReciboDeObs(result); ok {
+		switch {
+		case !*rec.Stored:
+			// 200 pero la fila no está bajo ese id: drop silencioso. Reenviar lo mismo no cambia
+			// nada ⇒ permanente (dead-letter recuperable con musubi_sync_requeue).
+			c.trafico.rechazados.Add(1)
+			c.trafico.bytesRechazados.Add(int64(len(payload)))
+			return fmt.Errorf("%w: %w: el central contestó 200 pero no persistió la observación %s", errPermanent, errReciboNoCuadra, item.ObsID)
+		case rec.Hash == huella:
+			// Verbatim: lo que quedó en el central es lo que mandamos.
+		case rec.Transformed:
+			// El central guardó una versión transformada (hoy: redacción de un secreto que su
+			// redactor —quizá más nuevo que el nuestro— atrapó). Es LEGÍTIMO: la nota viva es la del
+			// central y NO se dead-lettea. Se avisa, no se rechaza.
+			logx.Warn("sync: el central guardó una versión transformada de la nota (redacción); la nota viva es la del central",
+				"id", item.ObsID)
+		default:
+			// Dice verbatim y aun así sus bytes difieren de los nuestros ⇒ corrupción (de la fila o
+			// del transporte). Reenviar lo mismo tampoco ayuda ⇒ permanente.
+			c.trafico.rechazados.Add(1)
+			c.trafico.bytesRechazados.Add(int64(len(payload)))
+			return fmt.Errorf("%w: %w: el central dice haber guardado verbatim la observación %s pero el hash no coincide (mandé %s, guardó %s)",
+				errPermanent, errReciboNoCuadra, item.ObsID, huella, rec.Hash)
+		}
 	}
 	c.trafico.subidaCable.Add(int64(len(payload)))
 	c.trafico.subidaCrudos.Add(crudo)
@@ -452,6 +511,35 @@ func leerReciboDelPush(result json.RawMessage) (reciboDelPush, bool) {
 	return recibo, true
 }
 
+// reciboDeObs es lo que musubi_save_observation contesta —adentro de content[0].text— cuando el
+// cliente pidió recibo (mandó huella). Stored es PUNTERO para la compat por omisión: un central
+// anterior al recibo devuelve texto plano, el Unmarshal del JSON falla y leerReciboDeObs da
+// ok=false; un JSON sin `stored` (otra forma) también ⇒ no se compara nada.
+type reciboDeObs struct {
+	Stored      *bool  `json:"stored"`
+	Hash        string `json:"hash"`
+	Transformed bool   `json:"transformed"`
+}
+
+// leerReciboDeObs desenvuelve el recibo del save igual que leerReciboDelPush. false si no se
+// entiende como recibo: texto plano (central viejo), JSON ilegible, o sin `stored` (sin la señal
+// de persistencia no hay nada que comparar).
+func leerReciboDeObs(result json.RawMessage) (reciboDeObs, bool) {
+	var envoltura struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(result, &envoltura) != nil || len(envoltura.Content) == 0 {
+		return reciboDeObs{}, false
+	}
+	var recibo reciboDeObs
+	if json.Unmarshal([]byte(envoltura.Content[0].Text), &recibo) != nil || recibo.Stored == nil {
+		return reciboDeObs{}, false
+	}
+	return recibo, true
+}
+
 // reciboQueNoCuadra compara lo que el central dice haber GUARDADO con lo que se le mandó, y arma el
 // motivo con los números («el central guardó 2 de 3 nodos»). Sin `guardados` —un central anterior al
 // recibo, o un stub que contesta `result:{}`— no compara: la ausencia de recibo no es un recibo malo.
@@ -589,7 +677,7 @@ func (c *SyncClient) Pull(afterRowID int64, limit int) ([]memory.SharedObs, int6
 		return nil, afterRowID, "", fmt.Errorf("%w: decodificar pull: %v", errTransient, err)
 	}
 	if rpcResp.Error != nil {
-		// Misma disciplina que classifyResponse: permanente SÓLO si el central RECHAZÓ el pedido
+		// Misma disciplina que leerRespuesta: permanente SÓLO si el central RECHAZÓ el pedido
 		// (params / tool / credencial). Un fallo INTERNO suyo (-32603: SQLITE_BUSY, disco) o la
 		// cuota se reintentan — antes cortaban el pull y la máquina se quedaba sin bajar memoria.
 		kind := errTransient
@@ -667,17 +755,12 @@ var permanentRPCCodes = map[int]bool{
 	codeUnauthorized: true,
 }
 
-// classifyResponse traduce la respuesta HTTP+JSON-RPC a nil / errTransient / errPermanent
-// (R10, D7). Éxito ⇔ 200 + result + sin error JSON-RPC. 5xx/429 → transitorio; otro no-2xx →
-// permanente. Un error JSON-RPC es permanente SÓLO si está en permanentRPCCodes (ver arriba).
-// Un body ilegible o no-JSON en un 200 se trata como transitorio (el POST pudo llegar).
-func classifyResponse(resp *http.Response) error {
-	_, err := leerRespuesta(resp)
-	return err
-}
-
-// leerRespuesta es classifyResponse devolviendo además el `result` de un 200 sin error, para el
-// llamador que necesita mirarlo (PushGraphDe).
+// leerRespuesta traduce la respuesta HTTP+JSON-RPC a (result, error) y es el clasificador ÚNICO del
+// sync (R10, D7): devuelve el `result` de un 200 sin error para el llamador que lo mira —Push el
+// recibo de la obs, PushGraphDe el del grafo—. Éxito ⇔ 200 + result + sin error JSON-RPC. 5xx/429 →
+// transitorio; otro no-2xx → permanente. Un error JSON-RPC es permanente SÓLO si está en
+// permanentRPCCodes (ver arriba). Un body ilegible o no-JSON en un 200 se trata como transitorio
+// (el POST pudo llegar).
 func leerRespuesta(resp *http.Response) (json.RawMessage, error) {
 	switch {
 	case resp.StatusCode == http.StatusOK:

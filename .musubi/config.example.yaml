@@ -173,6 +173,37 @@ mode: local # local | team
 #                           # devuelven a un pedido por tick. 0 o ausente = 300. Negativo = ritmo fijo,
 #                           # un pedido por tick como antes. El alta (`musubi provision`) no lo escribe
 
+# --- Repo en vivo empresarial (ZONA EN VIVO) ------------------------------------------------------
+# El daemon fotografía el working tree de ESTE checkout y sube cada foto, sola, a un remoto
+# EMPRESARIAL (Forgejo), bajo refs/vivo/<nodo>/<slug> — FUERA de refs/heads/, para que el espejo
+# público a github.com no las arrastre. No toca tu git (ni índice, ni HEAD, ni ramas) y tolera
+# código roto: es un respaldo continuo del trabajo en curso, no un commit.
+#
+# repo_vivo:
+#   # Perilla de TRES estados. Reconoce además las grafías booleanas usuales, para que un apagador
+#   # funcione como apagador:
+#   #   off   (= false / no / 0 / disabled)  apagado TOTAL: ni observador, ni refs; tu git idéntico
+#   #                                        a no tener la feature. Un kill-switch falla cerrado.
+#   #   on    (= true / yes / 1 / enabled)   fuerza el encendido aunque falte team_mode.
+#   #   auto  (DEFAULT, y a lo que degrada cualquier valor inválido o vacío: un typo nunca apaga ni
+#   #                                        fuerza) enciende SOLA si el proyecto es team_mode Y el
+#   #                                        remoto no resuelve a github.com.
+#   enabled: auto
+#   # Remoto git al que suben las fotos (default "origin"). Debe apuntar al Forgejo empresarial: si
+#   # resuelve a github.com —por su url, por un pushurl, o por ser una url directa acá— el subsistema
+#   # se NIEGA a arrancar (guarda dura anti-espejo), pase lo que pase en `enabled`.
+#   remote: origin
+#   # Cada cuántos segundos se muestrea el working tree (default 5). El poll ES el debounce: una
+#   # ráfaga de escrituras entre dos ticks produce UNA sola foto. <= 0 cae al default, no apaga.
+#   intervalo_segundos: 5
+#   # Patrones excluidos de la foto ADEMÁS de los de fábrica (*.env, *.pem, *.key, id_rsa,
+#   # id_ed25519…), aunque NO estén en .gitignore (exclusión DURA, en cualquier nivel del árbol).
+#   # Son patrones glob (estilo gitignore): un corchete es una CLASE de caracteres. Para un nombre
+#   # con corchetes LITERALES, escapalos: "credenc\[1\].txt" excluye el archivo credenc[1].txt.
+#   secretos_extra:
+#     - "*.pfx"
+#     - secretos/
+
 # --- Flota de máquinas (track «Control de flota», S10) --------------------------------------------
 # El LATIDO PROPIO del cerebro sobre la flota: sondear a los que no tienen agente, dejar caducar las
 # salidas de comandos y, si se declaran, aplicar políticas de auto-heal.

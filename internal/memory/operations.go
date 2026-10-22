@@ -268,6 +268,22 @@ func (e *DbEngine) FindByContentHash(hash string) (string, bool, error) {
 	return e.findByContentHashIn("", hash)
 }
 
+// ContentHashDe devuelve el content_hash ALMACENADO de la observación con ese id, y si la fila
+// existe. Es una lectura pura por clave primaria: el recibo del push de observaciones la usa para
+// confirmar la persistencia CONTRA la base (no contra el nil-error del save) y para distinguir un
+// guardado real de un drop silencioso. found=false con err=nil significa "no hay fila con ese id".
+func (e *DbEngine) ContentHashDe(id string) (string, bool, error) {
+	var hash string
+	err := e.db.QueryRow(`SELECT content_hash FROM observations WHERE id = ?`, id).Scan(&hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("error al leer el content_hash de %q: %w", id, err)
+	}
+	return hash, true, nil
+}
+
 // findByContentHashIn es FindByContentHash ACOTADO a un tenant: sólo considera candidatas las
 // observaciones del proyecto que escribe (o las sin atribuir, para no romper el dedup de las filas
 // legacy anteriores a Track 16, que tienen project_id vacío). projectID == "" ⇒ sin filtro.

@@ -553,6 +553,41 @@ const (
 // mucho más dura que los 30 s que se da la tool musubi_recall.
 const turnEmbedTimeout = 2 * time.Second
 
+// turnRecallMaxRunes acota el texto del prompt que entra al recall del turno (corrector, embebedor y
+// búsqueda). NO recorta el prompt que ve el modelo —sólo la CONSULTA con que se busca memoria—: un
+// prompt largo sigue llegando entero al modelo, lo único acotado es con qué se recupera.
+//
+// POR QUÉ EXISTE. El hook corre con "timeout":10 (ver agente_plugin.go): si `turn --hook-mode` pasa
+// 10 s, Claude Code lo mata y ese turno va SIN bloque de memoria. El costo que se dispara es el FTS
+// de Recall, y escala con la cantidad de términos de la consulta POR su frecuencia en el corpus —no
+// con el corpus solo—. Medido sobre la base real (3802 docs) en davantis-1, con PROSA real (el peor
+// caso: palabras del vocabulario que matchean muchos docs, no tokens inventados que no matchean
+// nada): 4000 runas → 0,4 s; 8000 → 1,1 s; 16000 → 3,6 s; 32000 → 12,6 s (ya pasa el kill); 64000 →
+// se cuelga MINUTOS adentro del sorter del FTS5, que no chequea cancelación de ctx. El corrector no
+// entra en la cuenta: está acotado a 40 términos (ver maxTerminosDeTipeo en tipeo.go), 0-2 ms.
+//
+// 4000 runas deja el peor caso en ~0,4 s acá y ~1-2 s en una máquina lenta o con el corpus más grande
+// (crece con el tiempo), muy por debajo del kill y con lugar para el resto de las superficies del
+// turno. Son varios párrafos: un prompt de turno normal no se acerca, así que el tope sólo muerde
+// pegados patológicos, que es para lo que está.
+const turnRecallMaxRunes = 4000
+
+// acotarConsultaDelTurno recorta s a lo sumo a maxRunas runas, siempre en frontera de rune (nunca
+// parte un carácter multibyte), sin construir un []rune del prompt entero. maxRunas <= 0 ⇒ s intacto.
+func acotarConsultaDelTurno(s string, maxRunas int) string {
+	if maxRunas <= 0 {
+		return s
+	}
+	n := 0
+	for i := range s {
+		if n == maxRunas {
+			return s[:i]
+		}
+		n++
+	}
+	return s
+}
+
 // parametrosDelTurno es lo que buildTurnRecall necesita saber del turno. Es un struct y no una lista
 // posicional porque varios frentes le van a agregar datos (el proyecto propio, el corrector, el
 // vector): con una firma posicional cada campo nuevo rompía a todos los callers y a sus pruebas, y
@@ -584,6 +619,11 @@ type parametrosDelTurno struct {
 // (bloque silencioso). Contabiliza en el ledger solo lo que realmente inyecta.
 func buildTurnRecall(store turnStore, p parametrosDelTurno) string {
 	sessionID, prompt, embedder := p.sesion, p.prompt, p.embebedor
+	// EL TOPE DE TEXTO, ANTES DE CORREGIR / EMBEBER / BUSCAR: una sola palanca acota las tres etapas,
+	// y la que importa es la búsqueda (el FTS escala con los términos del prompt entero). Ver
+	// turnRecallMaxRunes para el porqué —el kill de 10 s del hook— y los números. Acota la CONSULTA
+	// con que se recupera, no el prompt que ve el modelo.
+	prompt = acotarConsultaDelTurno(prompt, turnRecallMaxRunes)
 	// Las opciones salen de UN solo lugar, el mismo que usa el banco (recalleval.ConfigTurno): si
 	// el hook y el banco las armaran cada uno por su lado, el banco mediría un ranker que el hook no
 	// corre. Ver memory.OpcionesDeRecallDelTurno.
@@ -1240,23 +1280,34 @@ func formatGists(titulo string, res memory.RecallResult, propio string) string {
 }
 
 // embebedorDelHook construye el embebedor de un hook que busca memoria (el turno, y la memoria que
-// vuelve tras compactar), CON DOS GUARDAS QUE SON CONSECUENCIA DE MEDIR. Devuelve nil cuando no hay
-// que construirlo: el recall sigue, léxico.
+// vuelve tras compactar). Devuelve nil cuando no hay que construirlo: el recall sigue, léxico.
 //
-// (1) SÓLO SI EL RECALL POR TURNO ESTÁ ENCENDIDO. Antes se construía siempre, así que una
-// instalación con per_turn_recall en false pagaba igual el costo de construirlo para después no
-// usarlo nunca.
+// (1) SÓLO SI EL RECALL POR TURNO ESTÁ ENCENDIDO. Una instalación con per_turn_recall en false no
+// paga el costo de construir un embebedor que no va a usar.
 //
-// (2) SÓLO SI CONSTRUIRLO ES BARATO. Ver embedderCaroDeConstruir: con la tabla estática, cada
-// invocación del hook leía 512 MB de disco. Medido acá: el hook pasó de 0,29 s a 11-23 s con picos
-// de 1,3 GB, contra un timeout de 10 s en .claude/settings.json — o sea que el turno se quedaba SIN
-// memoria inyectada, que es peor que el léxico que tenía antes. Degradar acá es estrictamente mejor
-// que morir: el recall léxico funciona.
+// (2) POR EL CAMINO LIVIANO (NewProviderDeConsulta), NUNCA por NewStaticProvider. El hook es un
+// proceso efímero —uno nuevo por prompt—, y cargar la tabla entera lo llevaba de 0,29 s a 11-23 s
+// con picos de 1,3 GB: matado por el timeout de 10 s de .claude/settings.json, que dejaba el turno
+// SIN memoria inyectada, peor que el léxico. La consulta liviana (consulta_liviana.go) lee el índice
+// del tokenizer + el header de la tabla + el ReadAt de las filas del texto; medido acá sobre POTION:
+// ~17 ms de construcción y ~24 MB de RSS, con el MISMO vector que el índice (invariante E2). Entra
+// holgada bajo el tope de 2 s de buildTurnRecall. Si faltan los sidecars del tokenizer al lado de la
+// tabla, NewProviderDeConsulta devuelve error y acá se cae a léxico: degradar es mejor que morir.
 func embebedorDelHook(cfg config.Config, root string, engine *memory.DbEngine) embedding.Provider {
-	if !cfg.Loop.PerTurnRecall || embedderCaroDeConstruir(cfg, root) {
+	if !cfg.Loop.PerTurnRecall {
 		return nil
 	}
-	embedder := resolveEmbedder(cfg, root)
+	// configDelEmbebedor (no cfg.Embedding pelado) para que el embebedor de CONSULTA salga de la
+	// MISMA config que el del daemon —con la auto-detección de la tabla aplicada—, o el vector de la
+	// consulta dejaría de ser comparable con los del índice.
+	ec, _ := configDelEmbebedor(cfg, root)
+	embedder, err := embedding.NewProviderDeConsulta(ec)
+	if err != nil {
+		// Sin tabla usable, o sin los sidecars del tokenizer al lado (ErrSinAtajo /
+		// ErrIdentidadVencida): el turno sigue léxico. NewProviderDeConsulta NUNCA cae a cargar la
+		// tabla entera, que es justo el costo que este proceso efímero no puede pagar.
+		return nil
+	}
 	if embedding.Enabled(embedder) {
 		// La MISMA procedencia que estampa cualquier save: sin esto SearchObservations no
 		// puede aplicar la regla de homogeneidad y el pool vectorial sale vacío.

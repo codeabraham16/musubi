@@ -1027,6 +1027,60 @@ func TestConsultaLivianaRespetaElPlazo(t *testing.T) {
 	})
 }
 
+// ctxVenceEnLaLlamada devuelve Err()==nil hasta la llamada número venceEn a Err(), y context.Canceled
+// de ahí en más. Permite poner el plazo a vencer EN UN PUNTO EXACTO del flujo —entre dos chequeos de
+// ctx.Err()— sin depender de un timer: EncodeIDs tarda nanosegundos, así que ningún timeout cae justo
+// entre el chequeo de entrada y el de después de tokenizar.
+type ctxVenceEnLaLlamada struct {
+	context.Context
+	mu       sync.Mutex
+	llamadas int
+	venceEn  int
+}
+
+func (c *ctxVenceEnLaLlamada) Err() error {
+	c.mu.Lock()
+	c.llamadas++
+	n := c.llamadas
+	c.mu.Unlock()
+	if n >= c.venceEn {
+		return context.Canceled
+	}
+	return c.Context.Err()
+}
+
+// TestConsultaLivianaCortaTrasTokenizarSiVencioElPlazo: un plazo que vence DURANTE EncodeIDs (que no
+// es interrumpible) tiene que cortar ANTES de abrir la tabla y lanzar las lecturas. El caso "ya
+// cancelado" de arriba no lo prueba: ahí corta el chequeo de entrada y nunca se llega al de después
+// de tokenizar. Acá el contexto está VIVO en el 1er chequeo a Err() y VENCIDO en el 2º (venceEn: 2).
+//
+// NO VACUO: la tabla se vence tras construir, así que si faltara el 2º chequeo, Embed entraría a
+// leerFilas y abrirTabla devolvería ErrIdentidadVencida —un error DISTINTO de context.Canceled—. Con
+// el chequeo, corta con context.Canceled sin tocar la tabla.
+//
+// Sabotaje: desactivar el 2º `if err := ctx.Err()` de Embed (el de después de EncodeIDs) ⇒ el error
+// pasa de context.Canceled a ErrIdentidadVencida.
+// arnes: archivo="internal/embedding/consulta_liviana.go"
+// arnes: de="if err := ctx.Err(); err != nil { // EncodeIDs no es interrumpible: si el plazo venció tokenizando, no abras la tabla ni lances lecturas"
+// arnes: a="if err := ctx.Err(); err != nil && false { // EncodeIDs no es interrumpible: si el plazo venció tokenizando, no abras la tabla ni lances lecturas"
+func TestConsultaLivianaCortaTrasTokenizarSiVencioElPlazo(t *testing.T) {
+	dir, _ := tablaDeJugueteConSidecars(t, 400, 16)
+	liv, err := NewConsultaLiviana(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Vencer la tabla (misma receta que RechazaIdentidadVencida): abrirTabla fallará con
+	// ErrIdentidadVencida, el observable que distingue "cortó a tiempo" de "entró a leer".
+	masTarde := time.Now().Add(time.Hour)
+	if err := os.Chtimes(filepath.Join(dir, archivoTabla), masTarde, masTarde); err != nil {
+		t.Fatal(err)
+	}
+	ctx := &ctxVenceEnLaLlamada{Context: context.Background(), venceEn: 2}
+	if _, err := liv.Embed(ctx, "deploy la tabla del hook"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("con el plazo vencido tras tokenizar, Embed devolvió err=%v; tenía que cortar con context.Canceled antes de tocar la tabla", err)
+	}
+}
+
 // TestConsultaLivianaLeeLasFilasEnParalelo: un prompt largo son cientos de filas distintas, y con
 // la tabla fría cada una espera al disco. Medido en davantis-1 sobre POTION, leídas de a una tardaban
 // 1,3-1,7 s con 7 KB de prompt y 2,7-2,9 s con 20 KB, contra una meta de p95 de 450 ms para el hook
