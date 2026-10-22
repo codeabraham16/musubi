@@ -1280,6 +1280,11 @@ type RepoVivoConfig struct {
 	// SecretosExtra son patrones de archivo excluidos de la foto ADEMÁS de los patrones por
 	// defecto (*.env, *.pem, id_rsa, *.key…), aunque no estén en .gitignore (exclusión dura).
 	SecretosExtra []string `yaml:"secretos_extra,omitempty"`
+	// Nodo es el nombre de ESTA máquina en las refs (refs/vivo/<nodo>/<slug>). Vacío (default) usa el
+	// hostname; se declara cuando dos máquinas comparten hostname y hay que distinguirlas en el remoto
+	// (p.ej. dos equipos que informan "Davantis"): poné "davantis" en una y "davantis-1" en la otra.
+	// Se sanitiza a un componente de refname válido (ver repovivo.nodo).
+	Nodo string `yaml:"nodo,omitempty"`
 }
 
 // normalizeRepoVivoEnabled acota repo_vivo.enabled al conjunto {auto,on,off}. Reconoce además las

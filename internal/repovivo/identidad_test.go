@@ -61,6 +61,30 @@ func TestRefDeCheckout(t *testing.T) {
 	}
 }
 
+// TestNodo fija la identidad por máquina: un override de repo_vivo.nodo MANDA (sanitizado), y es lo
+// que distingue dos máquinas con el mismo hostname (el caso davantis/davantis-1, ambas "Davantis").
+// Sin override (vacío o sólo espacios) cae al hostname sanitizado.
+func TestNodo(t *testing.T) {
+	if got := nodo("davantis-1"); got != "davantis-1" {
+		t.Errorf(`nodo("davantis-1") = %q, esperaba "davantis-1"`, got)
+	}
+	// el override se sanitiza igual que cualquier componente de refname
+	if got := nodo("  mi nodo raro  "); got != "mi-nodo-raro" {
+		t.Errorf(`nodo(" mi nodo raro ") = %q, esperaba "mi-nodo-raro"`, got)
+	}
+	// sin override: hostname sanitizado. Es el fallback, y debe coincidir byte a byte con lo que
+	// derivaría Arrancar, o el poll miraría una ref que nunca se crea.
+	if h, err := os.Hostname(); err == nil && strings.TrimSpace(h) != "" {
+		want := sanitizarRefComponent(h)
+		if got := nodo(""); got != want {
+			t.Errorf(`nodo("") = %q, esperaba el hostname sanitizado %q`, got, want)
+		}
+		if got := nodo("   "); got != want {
+			t.Errorf("nodo(sólo espacios) = %q, esperaba caer al hostname %q", got, want)
+		}
+	}
+}
+
 // TestHostDeURL fija el parser LÉXICO del host, incluidas las cuatro formas que una guarda que
 // sólo pelaba prefijos fijos y cortaba en el PRIMER '@' dejaba eludir: el userinfo con varios '@'
 // (ssh://a@b@h → gana el último), el esquema compuesto (git+ssh://, ssh+git://), el puerto, y el

@@ -79,9 +79,11 @@ func TestArrancarEnciendeYPublica(t *testing.T) {
 	// La ref que Arrancar va a derivar, calculada IGUAL que él: desde el toplevel real del checkout.
 	// slugDeCheckout hashea ese path, así que si no coincidiera byte a byte el poll miraría una ref que
 	// nunca se crea y el test expiraría por el motivo equivocado en vez de medir el push. gitSalida ya
-	// trima, igual que el strings.TrimSpace de Arrancar.
+	// trima, igual que el strings.TrimSpace de Arrancar. Pasamos un Nodo EXPLÍCITO (no el hostname) y lo
+	// esperamos EN la ref: así el test también fija que Arrancar cablea o.Nodo hasta la ref —un
+	// nodo(o.Nodo) cambiado por nodo("") publicaría bajo el hostname y el poll expiraría.
 	toplevel := gitSalida(t, dir, "rev-parse", "--show-toplevel")
-	ref := refDeCheckout(nodo(), slugDeCheckout(toplevel))
+	ref := refDeCheckout(nodo("nodo-de-prueba"), slugDeCheckout(toplevel))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -94,7 +96,7 @@ func TestArrancarEnciendeYPublica(t *testing.T) {
 	hecho := make(chan salida, 1) // buffer 1: la goroutine nunca bloquea al mandar su resultado
 	go func() {
 		// Arrancar BLOQUEA en el bucle del observador hasta que ctx muera: corre en su propia goroutine.
-		enc, razon, err := Arrancar(ctx, Opciones{Dir: dir, Remoto: remoto, Modo: "on", Intervalo: 20 * time.Millisecond})
+		enc, razon, err := Arrancar(ctx, Opciones{Dir: dir, Remoto: remoto, Modo: "on", Intervalo: 20 * time.Millisecond, Nodo: "nodo-de-prueba"})
 		hecho <- salida{enc, razon, err}
 	}()
 
