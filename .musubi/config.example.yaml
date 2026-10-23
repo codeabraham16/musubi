@@ -17,11 +17,13 @@ mode: local # local | team
 #   team_mode: true       # las observaciones nuevas nacen `shared` y fluyen al cerebro central
 #   recall_token_budget: 700
 #   gist_max_tokens: 24   # techo del resumen extractivo que trae el recall
-#   mmr_lambda: 0.75      # diversidad del recall. LO APAGAN LOS DOS EXTREMOS: 1 (o más) Y 0 (o menos)
-#                         # devuelven el orden bit-idéntico al de antes. Entre medio se diversifica MÁS
-#                         # cuanto MÁS BAJO. O sea que poner 0 buscando diversidad máxima APAGA MMR y te
-#                         # deja con la MAYOR redundancia medida (0,7453 @10, contra 0,6313 del default).
-#                         # Y por debajo de ~0.72 empieza a promover items sin relación con la consulta.
+#   mmr_lambda: 1.0       # diversidad del recall. EL DEFAULT ES 1 = APAGADO (orden bit-idéntico al
+#                         # histórico): medido dos veces (local y cerebro central, con etiqueta de
+#                         # tópico Y de expansión), diversificar cuesta recall/nDCG sin beneficio.
+#                         # LO APAGAN LOS DOS EXTREMOS: 1 (o más) Y 0 (o menos). Entre medio se
+#                         # diversifica MÁS cuanto MÁS BAJO; poner 0 buscando diversidad máxima APAGA
+#                         # MMR igual y deja la MAYOR redundancia, y por debajo de ~0.72 empieza a
+#                         # promover items sin relación con la consulta. Para volver a diversificar: 0.75.
 
 # --- Hooks del agente: la memoria del turno y del arranque --------------------------------------
 # loop:

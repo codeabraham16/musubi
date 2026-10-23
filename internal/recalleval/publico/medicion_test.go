@@ -326,7 +326,11 @@ func brazosDeAblacion() []recalleval.Config {
 // arnes: de="\t\tc := recalleval.ConfigProduccion()\n\t\tc.Name = nombre\n"
 // arnes: a="\t\tc := recalleval.ConfigHibrida()\n\t\tc.Name = nombre\n"
 func TestBrazosDeAblacionMMR(t *testing.T) {
+	// La baseline de esta ablación lleva MMR ENCENDIDO a propósito (0,75, el valor que el default traía
+	// antes de pasar a apagado — ver CHANGELOG y brazosDeAblacionMMR): sin eso no habría MMR que
+	// ablacionar. Tiene que coincidir con la baseline del helper.
 	prod := recalleval.ConfigProduccion()
+	prod.Opts.MMRLambda = 0.75
 	if !prod.CorregirTipeo || prod.Opts.MMRLambda <= 0 || prod.Opts.MMRLambda >= 1 {
 		t.Fatalf("la ablación supone producción con el corrector y MMR encendidos: corrector %v, λ %v",
 			prod.CorregirTipeo, prod.Opts.MMRLambda)
@@ -382,6 +386,10 @@ func brazosDeAblacionMMR() []recalleval.Config {
 	brazo := func(nombre string, cambiar func(*recalleval.Config)) recalleval.Config {
 		c := recalleval.ConfigProduccion()
 		c.Name = nombre
+		// Baseline MMR-on: el objeto de estudio de esta ablación ES MMR, y el default de producción
+		// ahora lo trae apagado (mmr_lambda 1.0, ver CHANGELOG), así que se re-enciende acá o no hay
+		// nada que ablacionar. Coincide con la baseline de TestBrazosDeAblacionMMR.
+		c.Opts.MMRLambda = 0.75
 		cambiar(&c)
 		return c
 	}
