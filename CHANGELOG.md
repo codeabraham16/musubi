@@ -34,6 +34,10 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   central todavía es viejo, el central lo ignora (R9) y la fila viaja lavada a `human/1.0` sin
   auto-curarse (R5 ⇒ un re-push posterior no la corrige), así que actualizar el central antes que sus
   clientes cierra esa ventana.
+
+## [0.142.0] - 2026-10-23
+
+### Added
 - **Cuarto nivel de revisión: `critica`, con firma humana (hoy un aviso).** La escala de profundidad
   derivada del diff topaba en `profunda` (5 jueces · 2 rondas · quórum 3), que es el techo que fija
   la TABLA DE PANELES (`panelProfundo`, protegido por `TestP6`): más allá de ahí no se compra más
@@ -9367,7 +9371,8 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.141.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.142.0...HEAD
+[0.142.0]: https://github.com/codeabraham16/musubi/compare/v0.141.0...v0.142.0
 [0.141.0]: https://github.com/codeabraham16/musubi/compare/v0.140.3...v0.141.0
 [0.140.3]: https://github.com/codeabraham16/musubi/compare/v0.140.0...v0.140.3
 [0.140.0]: https://github.com/codeabraham16/musubi/compare/v0.131.0...v0.140.0
