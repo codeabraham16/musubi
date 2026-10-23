@@ -45,6 +45,14 @@ type SharedObs struct {
 	// del cable: un central viejo no la manda —llega vacía e IngestShared hace lo de siempre— y un
 	// cliente viejo la ignora, porque decodifica con json.Unmarshal, que no rechaza campos de más.
 	CreatedAt string `json:"created_at,omitempty"`
+	// Provenance y Confidence son el SELLO de procedencia que el central guarda y la bajada escribe
+	// VERBATIM (incluido 'human'): el central es el relay CONFIABLE del propio tenant, que ya saneó
+	// en el borde del push, así que B espeja su sello exacto en vez de re-aplicar la regla no-human.
+	// omitempty en los dos sentidos del cable: un central viejo no los manda —llegan vacíos e
+	// IngestShared cae a human/1.0, lo de siempre— y un cliente viejo los ignora (json.Unmarshal no
+	// rechaza campos de más). Un confidence 0.0 legítimo de un 'llm' se omite y se reconstruye 0.0.
+	Provenance string  `json:"provenance,omitempty"`
+	Confidence float64 `json:"confidence,omitempty"`
 }
 
 // Ingesta es lo que IngestShared hizo con una fila bajada del central.
@@ -127,7 +135,7 @@ func (e *DbEngine) ListSharedForPull(ctx context.Context, afterRowID int64, limi
 	// está guardada («2026-07-11 20:21:25»): viaja la forma guardada, que es la que el cliente
 	// escribe. Y un NULL no corta la página —Scan de NULL a string es un error, y una página que no
 	// se lee deja sin bajar todo lo que venía detrás—: viaja vacío y el cliente pone la suya.
-	q := `SELECT sync_seq, id, topic_key, content, importance, COALESCE(mem_type,''), COALESCE(author,''), COALESCE(project_id,''), COALESCE(created_at,'')
+	q := `SELECT sync_seq, id, topic_key, content, importance, COALESCE(mem_type,''), COALESCE(author,''), COALESCE(project_id,''), COALESCE(created_at,''), COALESCE(provenance,''), COALESCE(confidence,1.0)
 		FROM observations
 		WHERE ` + visibleObsPredicate + ` AND scope = 'shared' AND sync_seq > ?` + scopeSQL + `
 		ORDER BY sync_seq ASC
@@ -145,7 +153,7 @@ func (e *DbEngine) ListSharedForPull(ctx context.Context, afterRowID int64, limi
 	var out []SharedObs
 	for rows.Next() {
 		var o SharedObs
-		if err := rows.Scan(&o.RowID, &o.ID, &o.TopicKey, &o.Content, &o.Importance, &o.MemType, &o.Author, &o.ProjectID, &o.CreatedAt); err != nil {
+		if err := rows.Scan(&o.RowID, &o.ID, &o.TopicKey, &o.Content, &o.Importance, &o.MemType, &o.Author, &o.ProjectID, &o.CreatedAt, &o.Provenance, &o.Confidence); err != nil {
 			return nil, fmt.Errorf("error al escanear shared para pull: %w", err)
 		}
 		out = append(out, o)
@@ -267,9 +275,23 @@ func (e *DbEngine) IngestShared(o SharedObs) (Ingesta, error) {
 	// suya, y eso cubre a la nota creada ACÁ que vuelve del central con la fecha en que el central
 	// la recibió, que es posterior. Por lo mismo, las filas que ya bajaron con la fecha de la bajada
 	// no se reparan re-entregándolas: esa reparación la decide el dueño.
+	// EL SELLO DE PROCEDENCIA, ESCRITO VERBATIM (D5). El central es el relay CONFIABLE del propio
+	// tenant y ya saneó el sello en el borde del push, así que la bajada NO re-aplica la regla
+	// no-human: espeja lo que el central guarda. validProvenance es sólo el portón default-vs-verbatim
+	// —un central viejo manda '' y la fila cae a human/1.0, lo de siempre—; para 'human' la confianza
+	// es 1.0 por convención (nunca se toma una confidence a medida de una fila humana), igual que en
+	// el borde del push. El INSERT los escribe; el DO UPDATE NO (espejo de R5: un re-ingest o una
+	// edición que baja no cambia el sello de una fila existente, como el UPSERT del central tampoco lo degrada).
+	prov, conf := provenanceHuman, 1.0
+	if validProvenance(o.Provenance) {
+		prov = o.Provenance
+		if prov != provenanceHuman {
+			conf = o.Confidence
+		}
+	}
 	_, err = tx.Exec(`INSERT INTO observations
-		(id, topic_key, content, gist, content_hash, tokens, importance, mem_type, scope, project_id, author, created_at, sync_seq)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'shared', ?, ?, COALESCE(?, CURRENT_TIMESTAMP), (SELECT IFNULL(MAX(sync_seq),0)+1 FROM observations))
+		(id, topic_key, content, gist, content_hash, tokens, importance, mem_type, scope, project_id, author, provenance, confidence, created_at, sync_seq)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'shared', ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP), (SELECT IFNULL(MAX(sync_seq),0)+1 FROM observations))
 		ON CONFLICT(id) DO UPDATE SET
 			topic_key=excluded.topic_key,
 			content=excluded.content,
@@ -279,7 +301,7 @@ func (e *DbEngine) IngestShared(o SharedObs) (Ingesta, error) {
 			importance=excluded.importance,
 			mem_type=CASE WHEN excluded.mem_type != '' THEN excluded.mem_type ELSE observations.mem_type END,
 			sync_seq=(SELECT IFNULL(MAX(sync_seq),0)+1 FROM observations)`,
-		o.ID, o.TopicKey, clean, gist, hash, tokens, o.Importance, memType, o.ProjectID, o.Author, fechaDeOrigen(o.CreatedAt, time.Now()))
+		o.ID, o.TopicKey, clean, gist, hash, tokens, o.Importance, memType, o.ProjectID, o.Author, prov, conf, fechaDeOrigen(o.CreatedAt, time.Now()))
 	if err != nil {
 		return Ingesta{}, fmt.Errorf("error al ingerir observación shared: %w", err)
 	}

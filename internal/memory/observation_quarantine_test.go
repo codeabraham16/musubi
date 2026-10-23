@@ -193,6 +193,35 @@ func TestQ2UnSavePosteriorNoLavaElSello(t *testing.T) {
 	}
 }
 
+// R5, mitad de confidence — un save_observation plano (stamp nil ⇒ default human/1.0) sobre el id de
+// una fila ya sellada NO pisa su confidence: el DO UPDATE SET de saveObservation no toca la columna.
+// TestQ2UnSavePosteriorNoLavaElSello cubre provenance+cuarentena y DESCARTA la confidence (prov, _,
+// quar); ésta cubre la mitad que quedaba sin test, por donde un `confidence=excluded.confidence` en el
+// UPSERT entraría sin que nada se pusiera rojo.
+//
+// Sabotaje: el DO UPDATE pisa la confidence con la del save entrante (1.0 por default) ⇒ el 0.7 se infla.
+// arnes: archivo="internal/memory/operations.go"
+// arnes: de="tokens=excluded.tokens,"
+// arnes: a="tokens=excluded.tokens,\n\t\t\tconfidence=excluded.confidence,"
+func TestR5LaConfidenceSelladaSobreviveAUnSavePlano(t *testing.T) {
+	e := newTestEngine(t)
+	id := proponerObs(t, e, "t/x", obsQuarantineText) // sella 'llm:modelo-de-prueba' + confidence 0.7
+
+	if err := e.SaveObservation(id, "t/x", "contenido reescrito por el camino normal", nil); err != nil {
+		t.Fatalf("save sobre el id sellado: %v", err)
+	}
+	prov, conf, _, err := e.ObservationStamp(id)
+	if err != nil {
+		t.Fatalf("ObservationStamp: %v", err)
+	}
+	if !strings.HasPrefix(prov, provenanceLLMPrefix) {
+		t.Fatalf("precondición: el save plano no debía lavar la procedencia (ya lo prueba Q2), quedó %q", prov)
+	}
+	if conf != 0.7 {
+		t.Errorf("FUGA R5: un save plano (default 1.0) pisó la confidence sellada a %v; el DO UPDATE no debe tocarla (esperaba 0.7)", conf)
+	}
+}
+
 // Q2 — propose NO deduplica. Si dedupara, un texto igual a una observación autoritativa devolvería
 // el id de ésta y la propuesta quedaría "confirmada" sin que nadie la corroborara.
 func TestQ2ProposeNoDeduplicaContraLoAutoritativo(t *testing.T) {

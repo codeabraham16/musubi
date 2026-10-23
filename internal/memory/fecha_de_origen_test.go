@@ -113,10 +113,11 @@ func TestUnaFilaSinFechaNoCortaLaPagina(t *testing.T) {
 // que la llamada real juzga si una fecha viene del futuro: corrido hacia atrás, una fecha reciente
 // pasa por futura y cae a la de la bajada, y las de junio ni se enteran.
 //
-// Sabotaje: el INSERT no escribe la fecha (la fila toma la de la bajada, como antes).
+// Sabotaje: el INSERT no escribe la fecha (la fila toma la de la bajada, como antes). El ancla lleva
+// `confidence,` delante porque el sello de procedencia agregó esa columna entre `author` y `created_at`.
 // arnes: archivo="internal/memory/inboundsync.go"
-// arnes: de="author, created_at, sync_seq)"
-// arnes: a="author, last_accessed, sync_seq)"
+// arnes: de="confidence, created_at, sync_seq)"
+// arnes: a="confidence, last_accessed, sync_seq)"
 //
 // Sabotaje: guardar la fecha tal como llega, sin normalizarla.
 // arnes: archivo="internal/memory/inboundsync.go"

@@ -83,6 +83,33 @@ func validProvenance(p string) bool {
 	}
 }
 
+// HonrarSello decide si el receptor de un push aplica el sello del payload como stamp. Devuelve
+// true SÓLO si la procedencia es válida Y NO es 'human'. Es la regla no-human del borde de sync:
+//
+//   - un 'llm:*' o 'deterministic' entrante se HONRA (se escribe tal cual): el nodo origen ya lo
+//     selló en su columna por la puerta Q2, y perderlo acá sería el lavado que todo esto evita;
+//   - un 'human' entrante se IGNORA y cae al default human/1.0: 'human' es siempre por-default,
+//     nunca por-claim, así un payload no puede afirmarse 'human' con una confidence a medida.
+//
+// El sello sólo puede BAJAR o MANTENER la autoridad del contenido, nunca SUBIRLA: un 'human'
+// forjado cae al default y no gana nada, así que honrar el sello entrante no abre un agujero
+// nuevo. La procedencia es metadato de CONTENIDO (qué clase de proceso lo generó), no un eje de
+// atribución —ese lo gobierna writeOriginFor para project_id, independiente—, así que honrarla
+// tampoco toca el aislamiento de tenant en la escritura.
+func HonrarSello(provenance string) bool {
+	return validProvenance(provenance) && provenance != provenanceHuman
+}
+
+// SelloFueraDeTaxonomia es la contracara de HonrarSello para el TERCER caso del receptor: un sello
+// PRESENTE que no es ni 'human' ni una procedencia válida. El receptor lo RECHAZA en vez de lavarlo
+// a 'human': un 'llm:groq/llama-3.3' truncado a 'll' que cayera al default humano quedaría estampado
+// 'human', es decir contenido de un modelo lavado como decisión de una persona — justo el lavado que
+// este borde existe para impedir. Un sello vacío ("") NO cuenta acá: es la AUSENCIA de sello, que
+// cae al default human/1.0 sin ser un error (un emisor viejo que no manda el campo, R9).
+func SelloFueraDeTaxonomia(provenance string) bool {
+	return provenance != "" && !validProvenance(provenance)
+}
+
 // ProposeObservation escribe una observación EN CUARENTENA con procedencia de modelo. Es la
 // puerta de escritura para todo lo que produjo un LLM.
 //

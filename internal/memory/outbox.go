@@ -70,6 +70,11 @@ type OutboxItem struct {
 	Importance float64
 	MemType    string
 	ProjectID  string
+	// Provenance y Confidence son el SELLO de la fila (observations.provenance/confidence). Viajan al
+	// central para que NO se laven a human/1.0: lo que se sube es lo que el Q2 del nodo origen ya selló
+	// en la columna, nunca algo que el caller elija. loadOutboxPayloads los lee; Push los copia al payload.
+	Provenance string
+	Confidence float64
 	Attempts   int
 	Hash       string
 	Reclamo    string
@@ -304,7 +309,7 @@ func (e *DbEngine) loadOutboxPayloads(ids []string, attemptsByID map[string]int)
 		args[i] = id
 	}
 	q := `SELECT id, topic_key, content, COALESCE(importance, 1.0), COALESCE(mem_type, ''), COALESCE(project_id, ''),
-			COALESCE(content_hash, '')
+			COALESCE(content_hash, ''), COALESCE(provenance, ''), COALESCE(confidence, 1.0)
 		FROM observations WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 	rows, err := e.db.Query(q, args...)
 	if err != nil {
@@ -314,7 +319,7 @@ func (e *DbEngine) loadOutboxPayloads(ids []string, attemptsByID map[string]int)
 	byID := make(map[string]OutboxItem, len(ids))
 	for rows.Next() {
 		var it OutboxItem
-		if err := rows.Scan(&it.ObsID, &it.TopicKey, &it.Content, &it.Importance, &it.MemType, &it.ProjectID, &it.Hash); err != nil {
+		if err := rows.Scan(&it.ObsID, &it.TopicKey, &it.Content, &it.Importance, &it.MemType, &it.ProjectID, &it.Hash, &it.Provenance, &it.Confidence); err != nil {
 			return nil, fmt.Errorf("error al escanear payload del outbox: %w", err)
 		}
 		it.Attempts = attemptsByID[it.ObsID]

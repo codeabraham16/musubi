@@ -189,6 +189,18 @@ func (e *DbEngine) SaveObservationTypedWithOrigins(originProjectID, author, id, 
 	return e.saveObservation(id, topicKey, content, importance, true, memType, scope, originProjectID, author, originPaths, embedding, nil)
 }
 
+// SaveObservationSyncStamped es la puerta del RECEPTOR de sync: guarda una obs con el SELLO que
+// viajó en el payload (provenance+confidence), en vez de los defaults human/1.0. La llama sólo el
+// borde de sync autenticado (toolSaveObservation, camino con-id) y SÓLO cuando HonrarSello aprobó
+// el sello — nunca la puerta pública. No exporta obsStamp: arma el stamp acá y delega en
+// saveObservation, que valida la taxonomía y el rango de confianza en su único INSERT, y cuyo
+// UPSERT PRESERVA el sello de una fila existente (R5: un re-push no degrada un 'llm:*' a 'human').
+// quarantined:false porque una obs que llega por sync ya está fuera de cuarentena (Q6: una fila en
+// cuarentena nunca es candidata al central).
+func (e *DbEngine) SaveObservationSyncStamped(originProjectID, author, id, topicKey, content string, importance float64, memType, scope string, originPaths []string, embedding []float32, provenance string, confidence float64) error {
+	return e.saveObservation(id, topicKey, content, importance, true, memType, scope, originProjectID, author, originPaths, embedding, &obsStamp{provenance: provenance, confidence: confidence, quarantined: false})
+}
+
 // SaveObservationDedupedTypedFromWithOrigins es SaveObservationDedupedTypedFrom más las ANCLAS
 // al estado del proyecto. Si el contenido ya existía NO se ancla nada: la observación devuelta
 // es la de antes y anclarla ahora reescribiría el origen de una memoria que no acabamos de
@@ -477,13 +489,24 @@ func (e *DbEngine) saveObservation(id, topicKey, content string, importance floa
 			quar = 1
 		}
 	}
-	// LA TAXONOMÍA SE VALIDA ACÁ, que es el único INSERT que escribe la columna `provenance` de
-	// `observations`. Hasta ahora `validProvenance` existía, tenía su test en verde y NO LA LLAMABA
+	// LA TAXONOMÍA SE VALIDA ACÁ, en el INSERT del camino de save/push, donde la entrada NO es
+	// confiable y un sello fuera de taxonomía se RECHAZA. (La bajada —IngestShared, inboundsync.go—
+	// tiene su propio INSERT que también escribe `provenance`/`confidence`, pero ahí `validProvenance`
+	// es sólo el portón default-vs-verbatim: lo inválido cae a human, no se rechaza, porque el central
+	// ya saneó en el push.) Hasta ahora `validProvenance` existía, tenía su test en verde y NO LA LLAMABA
 	// NADIE: el grafo de código lo decía sin que nadie lo mirara — «1 directo, 0 fuera de tests».
 	// Una guarda definida y desconectada es peor que ninguna, porque su test verde afirma que algo
 	// se está cuidando. Así entró `llm:llm:claude-opus-5` al libro mayor.
 	if !validProvenance(prov) {
 		return fmt.Errorf("%w: %q", ErrInvalidProvenance, prov)
+	}
+	// La confianza se valida en el MISMO cuello que la procedencia (este INSERT del camino de
+	// save/push), así que un sello entrante por sync con confidence fuera de
+	// [0,1] se RECHAZA acá en vez de recortarse (R6). Recortar en silencio convertiría el error de
+	// quien empuja en un dato plausible y equivocado guardado para siempre — la misma razón por la
+	// que ProposeObservation ya rechazaba. Para el camino de siempre (stamp nil ⇒ conf 1.0) es no-op.
+	if conf < 0 || conf > 1 {
+		return fmt.Errorf("%w: %v", ErrInvalidConfidence, conf)
 	}
 	queryObs := `INSERT INTO observations (id, topic_key, content, gist, content_hash, tokens, importance, mem_type, scope, project_id, author, provenance, confidence, quarantined)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

@@ -292,8 +292,12 @@ func TestLaSubidaComprimidaCuadraByteAByte(t *testing.T) {
 	// pasaba una comparación de largos.
 	a := rebotada[0].args
 	antes := nodo.syncClient.foto()
+	// El sello (provenance/confidence) también viaja en el push, así que el reintento tiene que
+	// reconstruirlo con el que cruzó la primera vez; sin él, el payload sale 20 B más corto y los bytes
+	// no cuadran aunque la nota sea la misma.
 	if err := nodo.syncClient.Push(memory.OutboxItem{ObsID: a.ID, TopicKey: a.TopicKey, Content: a.Content,
-		Importance: a.Importance, MemType: a.MemType, ProjectID: a.ProjectID}); err != nil {
+		Importance: a.Importance, MemType: a.MemType, ProjectID: a.ProjectID,
+		Provenance: a.Provenance, Confidence: a.Confidence}); err != nil {
 		t.Fatalf("el reintento de la rebotada falló: %v", err)
 	}
 	rebotada = mirador.visto("rebotada")
