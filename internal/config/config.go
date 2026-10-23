@@ -1338,7 +1338,7 @@ func Default() Config {
 			RecallStemming:        true,
 			RecallTypoCorrection:  true,
 			VectorFloor:           0.30,
-			MMRLambda:             0.75,
+			MMRLambda:             1.0, // MMR apagado por defecto (1 = orden histórico, bit-idéntico al RRF). Medido 2× (local + cerebro central, etiqueta de tópico Y de expansión): diversificar cuesta recall/nDCG sin beneficio. Ver CHANGELOG.
 		},
 		Maintenance: MaintenanceConfig{
 			DedupThreshold:      0.85,

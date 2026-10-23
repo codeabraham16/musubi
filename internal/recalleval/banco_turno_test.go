@@ -138,11 +138,17 @@ func TestElBancoCorreElMotorDelHook(t *testing.T) {
 	}
 	defer eng.Close()
 
+	// El default de producción pasó a MMR apagado (mmr_lambda 1.0, ver CHANGELOG), así que los dos
+	// brazos que necesitan MMR ENCENDIDO para que esta prueba mida algo lo fijan en 0,75 a mano —el
+	// valor que el default traía antes—. Queda desacoplada del default: esta prueba es sobre el motor,
+	// no sobre cuánto vale el default.
 	hook := ConfigTurno()
+	hook.Opts.MMRLambda = 0.75
 	sinMMR := ConfigTurno()
 	sinMMR.Opts.MMRLambda = 1
 	conEmbebedor := ConfigTurno()
 	conEmbebedor.SinEmbebedor = false
+	conEmbebedor.Opts.MMRLambda = 0.75
 
 	distintasConEmbebedor := 0
 	for _, q := range fx.Queries {

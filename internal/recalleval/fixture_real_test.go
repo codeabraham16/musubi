@@ -350,10 +350,11 @@ func TestBarridoVectorFloorFixtureReal(t *testing.T) {
 			UseVector: true,
 		})
 	}
-	// Y el de producción de verdad: piso 0.30 CON MMR encendido en 0.75.
+	// Y el de producción de verdad: piso 0.30 con el MMRLambda que declara el default (hoy 1 = MMR
+	// apagado). Se lee de config.Default() para no volver a quedar desfasado si el default cambia.
 	prod := base
 	prod.VectorFloor = 0.30
-	prod.MMRLambda = 0.75
+	prod.MMRLambda = config.Default().Memory.MMRLambda
 	configs = append(configs, Config{Name: "hybrid-PRODUCCION", Opts: prod, UseVector: true})
 
 	ks := []int{1, 5, 10}

@@ -1057,6 +1057,29 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
     rojo «sospechoso» porque un `t.Logf` del censo salía antes que la acusación.*
 
 ### Changed
+- **MMR apagado por defecto (`mmr_lambda` 0.75 → 1.0): el recall diversificado costaba relevancia
+  sin devolver utilidad, medido dos veces.** El dial de diversidad del recall (MMR) venía en 0.75;
+  `diversify` lo apaga en los dos extremos (`lambda >= 1 || lambda <= 0`), así que 1.0 devuelve el
+  orden bit-idéntico al RRF histórico, así que esto es un REVERT al default que rigió antes de dialar
+  MMR a 0,75 —terreno conocido, no un salto—. Se midió con el banco `recalleval` sobre memoria REAL,
+  con dos etiquetas de relevancia distintas (ver `mmr_real_test.go`): la del `topic_key` —estructural,
+  premia el parecido; penaliza a MMR por construcción, porque diversificar cambia items del mismo
+  tópico por otros, así que marca una COTA SUPERIOR del costo de MMR— y la de `expand_count`
+  —conductual: lo que un agente eligió expandir con el gist a la vista, que NO deriva de la similitud—.
+  Apagar MMR gana en las dos etiquetas y en las dos bases:
+  - **local** (davantis-1): tópico R@10 0,28 → 0,42; expansión (17 q) R@10 0,34 → 0,49, nDCG 0,34 → 0,43.
+  - **central** (toda la malla: corpus 5045, señal de expansión mesh-wide, 23 q): tópico R@10 0,29 → 0,46;
+    expansión R@10 0,48 → 0,68, nDCG 0,42 → 0,56.
+  MMR SÍ hacía su trabajo mecánico —la redundancia@10 bajaba 0,73 → 0,56—, pero sacaba material que el
+  `topic_key` marca como relevante y el agente no expandía. CAVEAT honesto: `expand_count` tiene un
+  sesgo de EXPOSICIÓN —sólo se expande lo que el ranker SIRVIÓ— y su dirección es INCIERTA, no
+  conservadora: el hook del turno sirvió el orden RRF/off hasta #751 (merge 19/10) y `musubi_recall`
+  sirvió 0,75 siempre, así que las etiquetas se juntaron bajo una MEZCLA de rankers (con el lado off
+  probablemente dominante). Por eso el peso cae en el `topic_key`, que es INDEPENDIENTE de qué ranker
+  sirvió —se evalúa re-rankeando el corpus fijo contra conjuntos relevantes definidos por metadato—:
+  ahí off gana sin ese sesgo. Ninguna etiqueta favorece a MMR. Un `mmr_lambda` explícito en el
+  `config.yaml` se sigue respetando (incluido 0.75, para volver a diversificar); sólo cambia el
+  default de quien no lo declara.
 - **El embebedor completo tokeniza con `tokenizer.idx`: arranca en ~0,56 s en vez de ~1,5 s y
   tokeniza la memoria real ~55 veces más rápido, con los mismos ids.**
   `NewStaticProvider` (daemon, serve, capture, ingest y los backfill de embeddings y conflictos)
