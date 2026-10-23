@@ -202,6 +202,13 @@ type syncSaveArguments struct {
 	// presencia le PIDE recibo al central; el valor nos deja comparar lo que el central dice haber
 	// guardado contra lo que creíamos mandar. omitempty ⇒ un payload sin huella es idéntico al de antes.
 	Huella string `json:"huella,omitempty"`
+	// Provenance y Confidence son el SELLO de procedencia de la fila. Viajan para que el central NO
+	// los lave a human/1.0. omitempty los hace compatibles en los dos sentidos: un central viejo los
+	// ignora sin romper; un emisor viejo que no los manda cae EXACTAMENTE al human/1.0 de hoy. Un
+	// confidence 0.0 legítimo de un 'llm' se omite y el receptor lo reconstruye como 0.0 (zero value)
+	// en la rama no-human, donde el default 1.0 NO se aplica.
+	Provenance string  `json:"provenance,omitempty"`
+	Confidence float64 `json:"confidence,omitempty"`
 }
 
 // syncRPCResponse es el sobre de respuesta. Éxito ⇔ HTTP 200 + result presente + error ausente.
@@ -261,6 +268,8 @@ func (c *SyncClient) Push(item memory.OutboxItem) error {
 				ProjectID:  item.ProjectID,
 				Scope:      memory.ScopeShared,
 				Huella:     huella,
+				Provenance: item.Provenance,
+				Confidence: item.Confidence,
 			},
 		},
 	}

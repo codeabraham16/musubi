@@ -8,6 +8,32 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **El sello de procedencia `llm:` y su `confidence` viajan al central y a las máquinas del tenant.**
+  Hasta ahora una inferencia de un modelo corroborada y promovida salía al cerebro central LAVADA a
+  `human/1.0`: el push reconstruía el payload desde la fila por JOIN pero no leía su `provenance`, así
+  que el pilar «la procedencia es parte del producto» se cortaba en el primer salto de red (medido: 466
+  observaciones ya enviadas, todas estampadas `human`). Ahora el sello viaja de punta a punta —el outbox
+  lo lee de la fila (`loadOutboxPayloads`), `SyncClient.Push` lo copia al payload, el central lo aplica
+  bajo la REGLA NO-HUMAN y la bajada (`IngestShared`) lo espeja en la fila de cada máquina del tenant—
+  lo que viaja en un push es el sello que el Q2 del nodo origen ya puso en la columna, no un valor que
+  arme el emisor: el push lo reconstruye de la fila. (El borde público con-id también puede portar un
+  sello, pero la regla no-human lo vuelve inofensivo; ver abajo.)
+  La regla no-human en el receptor: un `llm:*`/`deterministic` válido se HONRA con su `confidence`; un
+  `human` entrante se IGNORA y cae al default `human/1.0` (siempre por-default, nunca por-claim); un
+  sello fuera de la taxonomía se RECHAZA (`ErrInvalidProvenance` ⇒ dead-letter permanente), NO se lava a
+  `human`; una `confidence` fuera de `[0,1]` se rechaza en vez de recortarse (dead-letter, no reintento
+  infinito); y un `0.0` legítimo de un `llm` sobrevive sin re-inflarse a `1.0`. El sello NO entra al
+  input schema del registry (se lee del `raw`, como `huella`), así que el golden de `tools/list` no se
+  mueve (el campo no está anunciado en el catálogo, pero al leerse del `raw` NO es una compuerta: la
+  seguridad la da la regla no-human, no la ocultación). Sin compuerta por principal: un tenant
+  `write=own` empuja
+  sus propios `llm:*` y se honran igual, porque el sello sólo BAJA la autoridad del contenido, nunca la
+  sube; `project_id` lo sigue gobernando `writeOriginFor`, ortogonal. Forward-only: las filas ya lavadas
+  no se corrigen solas (su backfill es un track aparte y gated).
+  Despliegue: el central va PRIMERO. En la ventana en que un cliente nuevo ya manda el sello pero el
+  central todavía es viejo, el central lo ignora (R9) y la fila viaja lavada a `human/1.0` sin
+  auto-curarse (R5 ⇒ un re-push posterior no la corrige), así que actualizar el central antes que sus
+  clientes cierra esa ventana.
 - **Cuarto nivel de revisión: `critica`, con firma humana (hoy un aviso).** La escala de profundidad
   derivada del diff topaba en `profunda` (5 jueces · 2 rondas · quórum 3), que es el techo que fija
   la TABLA DE PANELES (`panelProfundo`, protegido por `TestP6`): más allá de ahí no se compra más

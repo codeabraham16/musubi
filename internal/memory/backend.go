@@ -39,6 +39,13 @@ type ObservationStore interface {
 	// variantes de arriba.
 	SaveObservationTypedWithOrigins(originProjectID, author, id, topicKey, content string, importance float64, memType, scope string, originPaths []string, embedding []float32) error
 	SaveObservationDedupedTypedFromWithOrigins(originProjectID, author, topicKey, content string, importance float64, memType, scope string, originPaths []string, embedding []float32) (string, bool, error)
+	// SaveObservationSyncStamped es la variante SELLADA del save: guarda con el SELLO de
+	// procedencia (provenance+confidence) que viajó en el payload, en vez de los defaults
+	// human/1.0. La invoca el camino con-id de save_observation cuando el payload trae un sello
+	// HONRABLE (HonrarSello: válido y != human); el caso típico es un push del outbox, pero NO está
+	// restringida a un principal de sync: cualquier caller write que cuele un 'llm:*' válido entra
+	// por acá. Es seguro porque el sello sólo baja o mantiene la autoridad (D2).
+	SaveObservationSyncStamped(originProjectID, author, id, topicKey, content string, importance float64, memType, scope string, originPaths []string, embedding []float32, provenance string, confidence float64) error
 	SearchObservations(ctx context.Context, queryEmbedding []float32, limit int) ([]SearchResult, error)
 	SearchObservationsFTS(ctx context.Context, queryText string, limit int) ([]Observation, error)
 	// LatestObservationByTopicInProject devuelve el contenido de la obs visible más reciente con ese

@@ -278,6 +278,16 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 		// responde el texto de siempre y el camino interactivo queda intacto. NO está en el input
 		// schema del registry a propósito —el handler la lee del raw—, así el catálogo no se mueve.
 		Huella string `json:"huella"`
+		// Provenance y Confidence son el SELLO que viaja en un push del outbox (el sello de la fila
+		// del nodo origen). Como Huella, se leen del raw y NO están en el input schema del registry
+		// (R4): el catálogo de tools no se mueve. Esto NO es una compuerta: al leerse del raw, cualquier
+		// caller write puede mandarlos (no están "ocultos", sólo no anunciados). Es seguro igual porque
+		// HonrarSello sólo honra un sello que BAJA o MANTIENE la autoridad: ignora 'human' y lo vacío
+		// (caen al camino de siempre, human/1.0) y un 'llm:*'/'deterministic' es autoridad MENOR que
+		// human, así que un caller sólo puede AUTO-DEGRADARSE, nunca subir. El aislamiento por tenant lo
+		// gobierna project_id (writeOriginFor), ortogonal al sello.
+		Provenance string  `json:"provenance"`
+		Confidence float64 `json:"confidence"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -384,7 +394,26 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 		// puede escribir memoria de otro tenant, ni siquiera "de vuelta" a la propia: el UPSERT preserva
 		// la atribución, así que reenviarla sólo corrompería la fila ajena). El caller debe usar una id
 		// nueva; reasignar el tenant de una fila existente sólo puede hacerlo un admin en el central.
-		if err := s.engine.SaveObservationTypedWithOrigins(origin, author, args.ID, topicKey, content, importance, args.MemType, scope, args.OriginPaths, emb); err != nil {
+		//
+		// EL SELLO DE PROCEDENCIA SE APLICA ACÁ, SÓLO EN EL CAMINO CON-ID (la forma de un push del
+		// outbox). Tres caminos, según el sello del payload:
+		//   - honrable ('llm:*'/'deterministic' válido) ⇒ se guarda con su sello y su confidence
+		//     (SaveObservationSyncStamped). El nodo origen ya lo selló por su Q2; perderlo sería lavado.
+		//   - vacío o 'human' ⇒ camino de siempre (human/1.0). Así 'human' es siempre por-default y
+		//     nunca por-claim: la puerta pública no puede declararse 'human' con una confidence a medida.
+		//   - presente pero FUERA de la taxonomía ⇒ se RECHAZA (ErrInvalidProvenance). No se lava a
+		//     'human' un sello corrupto; errorDeGuardado lo manda a dead-letter permanente, no a
+		//     reintento infinito. Un save SIN id (dedup) ni mira el sello: no es la forma de un push.
+		var err error
+		switch {
+		case memory.HonrarSello(args.Provenance):
+			err = s.engine.SaveObservationSyncStamped(origin, author, args.ID, topicKey, content, importance, args.MemType, scope, args.OriginPaths, emb, args.Provenance, args.Confidence)
+		case memory.SelloFueraDeTaxonomia(args.Provenance):
+			err = fmt.Errorf("%w: %q", memory.ErrInvalidProvenance, args.Provenance)
+		default:
+			err = s.engine.SaveObservationTypedWithOrigins(origin, author, args.ID, topicKey, content, importance, args.MemType, scope, args.OriginPaths, emb)
+		}
+		if err != nil {
 			if errors.Is(err, memory.ErrCrossTenant) {
 				rpcErr = rpcErrorf(codeUnauthorized, "%v — guardala con un id nuevo", err)
 				return
@@ -455,7 +484,15 @@ func (s *McpServer) reciboDeGuardado(id, recibido, mensaje string) interface{} {
 // lo que una guarda rechazó mirando el pedido; ante un error desconocido —disco, contención, un
 // bug nuestro— mentir en la otra dirección haría que el cliente TIRE memoria que era buena.
 func errorDeGuardado(err error) *RpcError {
-	if errors.Is(err, memory.ErrPayloadInvalido) {
+	// ErrPayloadInvalido, y el sello entrante inválido (procedencia fuera de la taxonomía o
+	// confidence fuera de [0,1]), son culpa del PEDIDO: reenviar el mismo payload nunca va a servir,
+	// así que van como permanentes (dead-letter) y no como «el central tuvo un mal día» que el
+	// cliente reintentaría sin tope. Sin esto, un push con un sello malformado sería una fila
+	// inmortal reintentada para siempre — exactamente lo que el default codeInternalError evita para
+	// los errores DESCONOCIDOS, y lo que acá sería un error.
+	if errors.Is(err, memory.ErrPayloadInvalido) ||
+		errors.Is(err, memory.ErrInvalidProvenance) ||
+		errors.Is(err, memory.ErrInvalidConfidence) {
 		return rpcErrorf(codeInvalidParams, "%v", err)
 	}
 	return rpcErrorf(codeInternalError, "error al guardar observación: %v", err)
