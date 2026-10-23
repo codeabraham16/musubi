@@ -25,21 +25,16 @@ optimización de tokens, el ranking y la resolución de skills son deterministas
 
 ## Novedades
 
-<!-- sin-publicar:inicio base=0.141.0 -->
-
-> **Ya en `main`, todavía sin publicar** · foto del 3 oct 2026 ·
-> [todo lo que cambió desde v0.141.0](https://github.com/codeabraham16/musubi/compare/v0.141.0...main)
->
-> - `musubi agente instalar` instala Musubi como plugin, activo en todos los proyectos ([#674](https://github.com/codeabraham16/musubi/pull/674))
-> - Después de compactar, Musubi devuelve la memoria que el resumen perdió ([#718](https://github.com/codeabraham16/musubi/pull/718))
-> - El ahorro de tokens viene con la instalación: la conversación se resume a los 250k ([#694](https://github.com/codeabraham16/musubi/pull/694), [#696](https://github.com/codeabraham16/musubi/pull/696))
-> - La búsqueda tolera el tipeo ([#713](https://github.com/codeabraham16/musubi/pull/713))
-> - El turno trae lo propio primero, y lo de otros proyectos con tope ([#714](https://github.com/codeabraham16/musubi/pull/714))
-> - El sync viaja comprimido en los dos sentidos: con notas reales, lo que sube pesa el 55 % y lo que baja, el 39 % ([#704](https://github.com/codeabraham16/musubi/pull/704), [#705](https://github.com/codeabraham16/musubi/pull/705))
-
-<!-- sin-publicar:fin -->
-
 <!-- novedades:inicio -->
+
+**[v0.142.0](https://github.com/codeabraham16/musubi/releases/tag/v0.142.0)** · 23 oct 2026
+
+- Cuarto nivel de revisión: `critica`, con firma humana (hoy un aviso)
+- La identidad del build pliega el contrato de seguridad por-tool (E2)
+- El push de observaciones confirma la persistencia con un recibo content-hash (E3)
+- Trinquete de código muerto en CI (A2)
+
+… y 58 más en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.142.0/CHANGELOG.md#01420---2026-10-23)
 
 **[v0.141.0](https://github.com/codeabraham16/musubi/releases/tag/v0.141.0)** · 14 sep 2026
 
@@ -58,15 +53,6 @@ Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob
 - Una base de memoria más nueva que el binario se abre en sólo lectura cuando éste todavía puede leerla: se consulta, y lo que escribe se rechaza con una explicación.
 
 Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.140.0/CHANGELOG.md#01400---2026-09-10)
-
-**[v0.131.0](https://github.com/codeabraham16/musubi/releases/tag/v0.131.0)** · 3 sep 2026
-
-- El grafo de código se ofrece solo: al leer un archivo indexado, Musubi le muestra al agente sus símbolos y quién los llama. Se apaga con `MUSUBI_CODEGRAPH_HOOK=0`.
-- Cuando el grafo no encuentra un símbolo, ahora dice por qué (archivo sin indexar, de otra rama o símbolo inexistente) en vez de devolver un vacío mudo.
-- `musubi_code_context` deja de «explicar» símbolos que no existen.
-- El índice del grafo declara de qué commit es.
-
-Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.131.0/CHANGELOG.md#01310---2026-09-03)
 
 <!-- novedades:fin -->
 
