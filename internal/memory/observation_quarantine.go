@@ -104,7 +104,7 @@ func HonrarSello(provenance string) bool {
 // PRESENTE que no es ni 'human' ni una procedencia válida. El receptor lo RECHAZA en vez de lavarlo
 // a 'human': un 'llm:groq/llama-3.3' truncado a 'll' que cayera al default humano quedaría estampado
 // 'human', es decir contenido de un modelo lavado como decisión de una persona — justo el lavado que
-// este borde existe para impedir. Un sello vacío ('') NO cuenta acá: es la AUSENCIA de sello, que
+// este borde existe para impedir. Un sello vacío ("") NO cuenta acá: es la AUSENCIA de sello, que
 // cae al default human/1.0 sin ser un error (un emisor viejo que no manda el campo, R9).
 func SelloFueraDeTaxonomia(provenance string) bool {
 	return provenance != "" && !validProvenance(provenance)

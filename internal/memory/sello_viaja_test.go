@@ -169,7 +169,7 @@ func TestReingestarNoPisaElSello(t *testing.T) {
 // llega con Provenance vacío y la fila espejo toma el default human/1.0, la conducta de siempre.
 // validProvenance es sólo el portón default-vs-verbatim: lo vacío cae al default, no es un error.
 //
-// Sabotaje: escribir el sello vacío verbatim ⇒ la fila nace con provenance='' en vez de 'human'.
+// Sabotaje: escribir el sello vacío verbatim ⇒ la fila nace con provenance="" en vez de 'human'.
 // arnes: archivo="internal/memory/inboundsync.go"
 // arnes: de="prov, conf := provenanceHuman, 1.0"
 // arnes: a="prov, conf := o.Provenance, o.Confidence"
