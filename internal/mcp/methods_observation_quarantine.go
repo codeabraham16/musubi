@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"musubi/internal/logx"
 	"musubi/internal/memory"
 )
 
@@ -98,7 +99,8 @@ func (s *McpServer) toolCorroborate(ctx context.Context, raw json.RawMessage) (i
 
 	// Variante Ctx: lleva adentro la guarda multi-tenant, la misma que promote. Sin ella,
 	// conocer un id ajeno alcanzaría para volver visible memoria de otro proyecto.
-	if err := s.engine.CorroborateObservationCtx(s.scopedCtx(ctx), args.ID); err != nil {
+	sc := s.scopedCtx(ctx)
+	if err := s.engine.CorroborateObservationCtx(sc, args.ID); err != nil {
 		if errors.Is(err, memory.ErrObservationNotFound) {
 			return nil, rpcErrorf(codeInvalidParams, "no existe una observación con id %q", args.ID)
 		}
@@ -113,14 +115,34 @@ func (s *McpServer) toolCorroborate(ctx context.Context, raw json.RawMessage) (i
 		return nil, rpcErrorf(codeInternalError, "error al corroborar la observación: %v", err)
 	}
 
+	// "Automático, todo" (decisión del dueño, 2026-10-22): en TEAM MODE, corroborar no sólo hace
+	// visible la observación — además la PROMUEVE a 'shared' para que viaje al cerebro central y
+	// llegue a las otras máquinas. Espeja defaultScope (server.go): el camino de save ya comparte
+	// solo en team mode; éste era el hueco del camino propose→corroborate, que clavaba 'local'.
+	//
+	// Va DESPUÉS de corroborar y es best-effort: PromoteObservationCtx exige que la fila NO esté en
+	// cuarentena, así que el orden importa. Si la promoción falla —p.ej. la guarda del sobre-de-
+	// llamada bloquea el cruce a 'shared'—, la corroboración ya hecha QUEDA (estado válido "visible
+	// local, no compartida", reintentable) y se informa; no se revierte lo que el usuario pidió. La
+	// atribución por tenant la cierra el central: write=own re-estampa el proyecto de la credencial.
+	promo := ""
+	if s.memory.TeamMode {
+		if err := s.engine.PromoteObservationCtx(sc, args.ID); err != nil {
+			logx.Warn("corroborate: corroborada pero no promovida a shared", "id", args.ID, "error", err)
+			promo = fmt.Sprintf("\nNO se promovió a compartida (sigue local, reintentable): %v", err)
+		} else {
+			promo = "\nPromovida a compartida: viaja al cerebro central y a tus otras máquinas."
+		}
+	}
+
 	prov, conf, _, err := s.engine.ObservationStamp(args.ID)
 	if err != nil {
-		return textResult("Observación corroborada (id: " + args.ID + "); ya aparece en el recall."), nil
+		return textResult("Observación corroborada (id: " + args.ID + "); ya aparece en el recall." + promo), nil
 	}
 	return textResult(fmt.Sprintf(
 		"Observación corroborada (id: %s); ya aparece en el recall.\n"+
-			"Conserva su sello: procedencia %s, confianza %.2f. Corroborar la hace visible, no la vuelve un hecho humano.",
-		args.ID, prov, conf)), nil
+			"Conserva su sello: procedencia %s, confianza %.2f. Corroborar la hace visible, no la vuelve un hecho humano.%s",
+		args.ID, prov, conf, promo)), nil
 }
 
 // toolDiscardProposal es el veredicto opuesto a corroborar: archiva la propuesta sin volverla
