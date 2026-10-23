@@ -135,25 +135,33 @@ func (e *DbEngine) ProposeObservation(originProjectID, author, topicKey, content
 // salió, y el recall lo sigue marcando (Q3). Si esto pisara la procedencia, la muralla 3 duraría
 // exactamente hasta la primera corroboración.
 func (e *DbEngine) CorroborateObservation(id string) error {
-	var quarantined int
-	err := e.db.QueryRow(`SELECT quarantined FROM observations WHERE id = ?`, id).Scan(&quarantined)
-	if errors.Is(err, sql.ErrNoRows) {
+	var existe int
+	if err := e.db.QueryRow(`SELECT COUNT(*) FROM observations WHERE id = ?`, id).Scan(&existe); err != nil {
+		return fmt.Errorf("error al leer el estado de %s: %w", id, err)
+	}
+	if existe == 0 {
 		return fmt.Errorf("%w: %s", ErrObservationNotFound, id)
 	}
-	if err != nil {
-		return fmt.Errorf("error al leer el estado de cuarentena de %s: %w", id, err)
-	}
-	if quarantined == 0 {
-		return fmt.Errorf("%w: %s", ErrNotQuarantined, id)
-	}
-	// Se bumpea sync_seq porque la fila pasa a ser visible: sin eso, una observación corroborada
-	// que además sea shared no se re-entregaría al pull entrante.
-	if _, err := e.db.Exec(
+	// LA GUARDA ES EL WHERE, igual que en DescartarPropuesta: sólo una propuesta VIVA en cuarentena
+	// sale a la luz. Una ya DESCARTADA (archived=1) o REEMPLAZADA (superseded_by) no se corrobora.
+	//
+	// EL archived=0 IMPORTA MÁS DESDE QUE CORROBORAR PROMUEVE (team mode, toolCorroborate). Antes,
+	// corroborar una propuesta descartada sólo la volvía quarantined=0 y el daño quedaba LOCAL e
+	// invisible (archived=1 la esconde del recall). Ahora la promoción la marcaría 'shared' y la
+	// encolaría: una nota que alguien DESCARTÓ viajaría al cerebro central y a las otras máquinas
+	// como nota viva (archived no viaja en el outbox). La carrera corroborar/descartar sobre el
+	// tablero musubi/cuarentena es el escenario real. El bump de sync_seq se conserva: la fila pasa
+	// a ser visible y, si además fuera shared, debe re-entregarse al pull entrante.
+	res, err := e.db.Exec(
 		`UPDATE observations
 		 SET quarantined = 0,
 		     sync_seq = (SELECT IFNULL(MAX(sync_seq),0) FROM observations) + 1
-		 WHERE id = ?`, id); err != nil {
+		 WHERE id = ? AND quarantined = 1 AND archived = 0 AND superseded_by IS NULL`, id)
+	if err != nil {
 		return fmt.Errorf("error al corroborar la observación %s: %w", id, err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return fmt.Errorf("%w: %s", ErrNotQuarantined, id)
 	}
 	return nil
 }

@@ -162,8 +162,10 @@ type NoViajan struct {
 	Locales int `json:"locales"`
 	// EnCuarentena: propuestas de un LLM que nadie corroboró. No son visibles ni viajan.
 	EnCuarentena int `json:"en_cuarentena"`
-	// LLMCorroboradasLocales: escritas por un LLM, ya corroboradas, y todavía 'local'. Corroborar
-	// las hace visibles pero no las promueve, y nada más las promueve.
+	// LLMCorroboradasLocales: escritas por un LLM, ya corroboradas, y todavía 'local'. En TEAM MODE
+	// corroborar ahora TAMBIÉN las promueve (toolCorroborate), así que las nuevas ya no caen acá;
+	// este contador queda para las corroboradas ANTES de ese cambio y para los proyectos sin team
+	// mode (donde corroborar sólo las hace visibles, sin promoverlas).
 	LLMCorroboradasLocales int `json:"llm_corroboradas_locales"`
 }
 
