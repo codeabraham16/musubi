@@ -131,10 +131,22 @@ func (s *McpServer) toolDetectChanges(ctx context.Context, raw json.RawMessage) 
 	}
 
 	report.Revision = s.profundidadDe(scoped, diffs, changedSymbols, clavesGrafo)
-	report.Summary = fmt.Sprintf("%d archivo(s) cambiados, %d símbolo(s) afectados. Revisión sugerida: %s (%d/13 puntos) — %d juez/jueces, %d ronda(s), quórum %d.",
-		changedFiles, changedSymbols, report.Revision.Nivel, report.Revision.Puntos,
-		report.Revision.Panel.Jueces, report.Revision.Panel.Rondas, report.Revision.Panel.Quorum)
+	report.Summary = resumenRevision(changedFiles, changedSymbols, report.Revision)
 	return jsonResult(report)
+}
+
+// resumenRevision arma la línea que el que revisa lee de un vistazo. La firma humana del cuarto
+// nivel se nombra ACÁ y no sólo en el JSON: un panel.humano enterrado en la estructura no escala
+// a nadie. Es una función aparte para poder probar esa superficie sin un grafo que llegue a
+// crítica (>=11 puntos pide radio del grafo, que un diff solo no alcanza: topea en 9).
+func resumenRevision(archivos, simbolos int, rev codeintel.Veredicto) string {
+	firma := ""
+	if rev.Panel.Humano {
+		firma = " — FIRMA HUMANA REQUERIDA (hoy es aviso, sin bloqueo automático): el recuento del panel no alcanza, una persona firma el veredicto final antes de cerrar"
+	}
+	return fmt.Sprintf("%d archivo(s) cambiados, %d símbolo(s) afectados. Revisión sugerida: %s (%d/13 puntos) — %d juez/jueces, %d ronda(s), quórum %d.%s",
+		archivos, simbolos, rev.Nivel, rev.Puntos,
+		rev.Panel.Jueces, rev.Panel.Rondas, rev.Panel.Quorum, firma)
 }
 
 // readProjectFile lee el contenido actual de un path relativo a la raíz del proyecto.

@@ -138,7 +138,8 @@ func TestP4LosCortesDeNivel(t *testing.T) {
 	casos := []struct {
 		puntosBuscados int
 		quiero         NivelRevision
-	}{{0, NivelMinimo}, {2, NivelMinimo}, {3, NivelEstandar}, {7, NivelEstandar}, {8, NivelProfundo}, {13, NivelProfundo}}
+	}{{0, NivelMinimo}, {2, NivelMinimo}, {3, NivelEstandar}, {7, NivelEstandar},
+		{8, NivelProfundo}, {10, NivelProfundo}, {11, NivelCritico}, {13, NivelCritico}}
 	for _, c := range casos {
 		s := senalesQueSuman(c.puntosBuscados)
 		v := Profundidad(s)
@@ -194,7 +195,9 @@ func TestP5UnRadioCiegoNoPuedeDarMinima(t *testing.T) {
 }
 
 func TestP5ElPisoNoBajaUnNivelYaAlto(t *testing.T) {
-	s := senalesQueSuman(13)
+	// 8 puntos = profunda (>= corteEstandar+1 y < corteCritica): un nivel ya alto no lo toca el
+	// piso, que sólo rescata a «mínima».
+	s := senalesQueSuman(8)
 	s.RadioCiego = true
 	if v := Profundidad(s); v.Nivel != NivelProfundo {
 		t.Errorf("el piso sólo SUBE: un cambio profundo con el radio ciego sigue profundo, obtuve %q", v.Nivel)
@@ -221,6 +224,52 @@ func TestP6NingunPanelSeSaleDelPisoNiDelTecho(t *testing.T) {
 		if p.Quorum > p.Jueces {
 			t.Errorf("%d puntos: un quórum de %d con %d jueces es inalcanzable", n, p.Quorum, p.Jueces)
 		}
+	}
+}
+
+// --- P11: el cuarto nivel sólo agrega una firma humana ----------------------------------
+//
+// EL INVARIANTE DEL CUARTO NIVEL. `critica` existe para UNA cosa: pedir una firma humana en el
+// tope de la escala. No es «un panel más grande» —su forma automática es la misma que la de
+// profunda— y la firma no aparece en ningún otro nivel. Si cualquiera de esas dos cosas se
+// rompe, el nivel dejó de ser lo que se diseñó.
+
+func TestP11ElNivelCriticoAgregaFirmaHumana(t *testing.T) {
+	// Frontera exacta del corte: 10 puntos sigue siendo profunda sin firma; 11 cruza a crítica.
+	diez := Profundidad(senalesQueSuman(10))
+	if diez.Nivel != NivelProfundo || diez.Panel.Humano {
+		t.Errorf("10 puntos deben ser profunda sin firma humana, obtuve %q humano=%v", diez.Nivel, diez.Panel.Humano)
+	}
+	once := Profundidad(senalesQueSuman(11))
+	if once.Nivel != NivelCritico {
+		t.Fatalf("11 puntos deben cruzar a crítica, obtuve %q", once.Nivel)
+	}
+	if !once.Panel.Humano {
+		t.Error("crítica tiene que pedir firma humana, y el panel vino sin ella")
+	}
+
+	// La firma es EXCLUSIVA de crítica: ningún otro nivel la enciende.
+	for n := 0; n <= 13; n++ {
+		v := Profundidad(senalesQueSuman(n))
+		if quiere := v.Nivel == NivelCritico; v.Panel.Humano != quiere {
+			t.Errorf("%d puntos (%q): Humano=%v y debía ser %v — la firma es exclusiva de crítica",
+				n, v.Nivel, v.Panel.Humano, quiere)
+		}
+	}
+
+	// Crítica NO es un panel más grande: su forma automática (jueces/rondas/quórum) es idéntica a
+	// la de profunda. Lo único que cambia es la firma. Si alguien «sube» crítica agrandando el
+	// panel, acá se cae — porque el techo del debate ya estaba en profunda.
+	prof := Profundidad(senalesQueSuman(8)).Panel
+	crit := once.Panel
+	if crit.Jueces != prof.Jueces || crit.Rondas != prof.Rondas || crit.Quorum != prof.Quorum {
+		t.Errorf("la forma automática de crítica debe igualar la de profunda: profunda=%+v crítica=%+v", prof, crit)
+	}
+
+	// Y el motivo de la firma tiene que viajar ESCRITO en el veredicto, no quedar implícito en el
+	// nombre del nivel: el que lee el veredicto tiene que ver POR QUÉ se le pide una persona.
+	if !strings.Contains(strings.Join(once.Motivos, " "), "firma el veredicto final") {
+		t.Errorf("el motivo de la firma humana tiene que estar en el veredicto; motivos=%v", once.Motivos)
 	}
 }
 

@@ -8,6 +8,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ## [Unreleased]
 
 ### Added
+- **Cuarto nivel de revisión: `critica`, con firma humana (hoy un aviso).** La escala de profundidad
+  derivada del diff topaba en `profunda` (5 jueces · 2 rondas · quórum 3), que es el techo que fija
+  la TABLA DE PANELES (`panelProfundo`, protegido por `TestP6`): más allá de ahí no se compra más
+  revisión automática —agregar buckets no mueve el panel, porque los paneles no piden más de 5 jueces
+  ni más de 2 rondas por decisión de diseño, no por un límite del motor (`AdvanceDebate` acepta
+  cualquier `rounds>=1`)—. El tope real de la escala (>=11
+  puntos sobre 13 — ~4% de los PRs reales de este repo medido con el spike F8, estable entre el corpus
+  reciente y el completo) ahora cruza a un cuarto nivel, `critica`, cuya ÚNICA acción nueva es una
+  firma humana: `Panel.Humano` marca que el recuento automático del panel es necesario pero NO
+  suficiente, y una persona firma el veredicto final antes de cerrar. Ese ~4% es un PISO, no un techo:
+  un radio de impacto ciego sólo resta puntos (8 de los 26 PRs de la banda lo tenían, y el detector del
+  spike no dispara ahí por construcción), así que el corte queda por lo bajo. El corte es de puntos
+  puro, igual que los otros dos, para poder rehacerlo de cabeza. HOY la firma es un AVISO:
+  `musubi_detect_changes` la nombra en el resumen que se lee de un vistazo («FIRMA HUMANA REQUERIDA,
+  hoy sin bloqueo») y la skill `adversarial-review` instruye no cerrar un cambio crítico sólo con el
+  tally automático — pero el gate DURO (que rechace el cierre o el push hasta la firma) está DIFERIDO
+  a una decisión del dueño, porque cambia el comportamiento hacia afuera. Aditivo: los tres niveles
+  previos no cambian y siguen sin firma.
 - **La identidad del build pliega el contrato de seguridad por-tool (E2).** La huella del catálogo
   —el `catalog_sha256` que cada extremo publica en el handshake para detectar deriva— hasheaba sólo
   el CABLE de cada tool (nombre, descripción y `inputSchema`), no su CONTRATO: una tool que pasara de
