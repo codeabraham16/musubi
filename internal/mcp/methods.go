@@ -1664,6 +1664,17 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 	// del juez sigue indexada por lo que llegó.
 	res = s.rerankSiCorresponde(ctx, args.Query, res, args.Rerank)
 	res.Correcciones = correcciones
+	// used_tokens honesto: TokenBudget sólo acota el PACKING de gists (internal/memory.empaquetar),
+	// pero lo que realmente entra al contexto —y se re-lee en cada turno hasta compactar— es el
+	// payload serializado entero: id, topic_key, created_at, las claves JSON repetidas. Medido sobre
+	// transcripts reales es ~3,4× el gist, así que UsedTokens, que venía informando sólo la suma de
+	// gists, engañaba a quien presupuesta su contexto contra este número. Medir el JSON final lo deja
+	// honesto SIN tocar el empaquetado: Budget y el corte por gist siguen idénticos; sólo cambia lo
+	// que se REPORTA. (El valor medido no incluye los pocos dígitos del propio used_tokens: es una
+	// estimación, como todo EstimateTokens.)
+	if raw, mErr := json.Marshal(res); mErr == nil {
+		res.UsedTokens = memory.EstimateTokens(string(raw))
+	}
 	return jsonResult(res)
 }
 

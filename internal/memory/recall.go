@@ -120,11 +120,12 @@ type RecallItem struct {
 	ID       string `json:"id"`
 	TopicKey string `json:"topic_key"`
 	Gist     string `json:"gist"`
-	// Score es el puntaje MODEL-FREE y explica el orden SÓLO mientras nadie reordene la lista.
-	// Cuando el juez de pertinencia interviene (RecallResult.Reranked) el orden pasa a ser suyo y
-	// este puntaje deja de corresponderse con él, así que se omite: publicar un número que
-	// contradice el orden que lo acompaña es una invitación a re-ordenar por él y deshacer, en
-	// silencio, un juicio que costó ~8,5 s. Ver rerankSiCorresponde.
+	// Score es el puntaje MODEL-FREE que ORDENA la lista. VIAJA en la respuesta porque consumidores
+	// externos lo leen —musubi-body (cmd/musubi-body-ui/memoria.go) lo copia a su Item para la vista
+	// MEMORIA—: quitarlo del payload los dejaría con 0 en silencio. empaquetar lo fija y, cuando el
+	// juez de pertinencia reordena (RecallResult.Reranked), rerankSiCorresponde lo pone en 0 y omitempty
+	// lo omite: el tope reranked sale sin score, y esa ausencia —más la marca Reranked— avisa que el
+	// orden ya no es el del ranking por defecto.
 	Score      float64 `json:"score,omitempty"`
 	FullTokens int     `json:"full_tokens"` // costo de hidratar el contenido completo
 	// CreatedAt es la fecha ISO8601 de creación. Viaja para que la superficie (los gists que el hook
@@ -170,9 +171,10 @@ type RecallResult struct {
 	UsedTokens int          `json:"used_tokens"`
 	Count      int          `json:"count"`
 	Items      []RecallItem `json:"items"`
-	// Reranked declara que el ORDEN de Items lo decidió el juez de pertinencia y no el puntaje
-	// model-free. Va explícito porque es la única explicación de por qué los items del tope vienen
-	// sin `score`: sin esta marca, un caller vería campos faltantes y lo leería como un bug.
+	// Reranked declara que el ORDEN de Items lo decidió el juez de pertinencia, no el puntaje
+	// model-free. Al reordenar, el score de los items del tope se pone en 0 y omitempty lo omite, así
+	// que el tope viaja SIN score: esta marca es lo que explica esa ausencia y avisa que el orden ya
+	// no responde al ranking por defecto.
 	// omitempty ⇒ el camino model-free (el default) no paga ni un token por esto.
 	Reranked bool `json:"reranked,omitempty"`
 	// Correcciones es lo que el corrector de tipeo cambió en la consulta ANTES de buscar (ver
@@ -438,6 +440,19 @@ func loPropioPrimero(r RecallResult, propio string) RecallResult {
 	return r
 }
 
+// soloFecha recorta una marca de tiempo a su fecha (YYYY-MM-DD). La EDAD de una memoria —para lo
+// único que CreatedAt viaja al modelo— se lee en días («ayer» vs «hace 8 meses»), no en segundos,
+// así que la hora son ~10 chars de envoltorio por ítem que el agente re-lee en cada turno sin
+// usarlos. Toca SÓLO lo que se emite en el RecallItem; la fecha de la fila en la base y la del sync
+// (SharedObs) quedan intactas, con su precisión completa. Defensivo: si no tiene forma de fecha
+// ISO (YYYY-MM-DD…), lo devuelve igual.
+func soloFecha(ts string) string {
+	if len(ts) >= 10 && ts[4] == '-' && ts[7] == '-' {
+		return ts[:10]
+	}
+	return ts
+}
+
 // empaquetar es UNA pasada de packByBudget. Con el reparto cero es el empaquetado de siempre; con
 // uno, saltea lo ajeno que pasa del tope y sigue con lo que viene detrás.
 func empaquetar(ranked []scoredCandidate, budget, gistMax int, rep reparto) RecallResult {
@@ -468,7 +483,7 @@ func empaquetar(ranked []scoredCandidate, budget, gistMax int, rep reparto) Reca
 			Gist:        gist,
 			Score:       c.score,
 			FullTokens:  c.fullTokens,
-			CreatedAt:   c.createdAt,
+			CreatedAt:   soloFecha(c.createdAt),
 			Author:      c.author,
 			ProjectID:   c.projectID,
 			ContentHash: c.contentHash,

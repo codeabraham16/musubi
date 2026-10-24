@@ -61,7 +61,7 @@
           },
           "token_budget": {
             "type": "number",
-            "description": "Techo de tokens del resultado (opcional; usa el default de la config)"
+            "description": "Cuántos tokens de GISTS traer; acota la selección, no el payload final. used_tokens informa el costo real y puede superarlo. Opcional; default de la config."
           }
         },
         "required": [
