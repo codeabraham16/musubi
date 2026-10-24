@@ -27,6 +27,10 @@ token optimization, ranking and skill resolution are deterministic and offline.
 
 <!-- novedades:inicio -->
 
+**[v0.143.0](https://github.com/codeabraham16/musubi/releases/tag/v0.143.0)** · Oct 24, 2026
+
+- El sello de procedencia `llm:` y su `confidence` viajan al central y a las máquinas del tenant
+
 **[v0.142.0](https://github.com/codeabraham16/musubi/releases/tag/v0.142.0)** · Oct 23, 2026
 
 - Cuarto nivel de revisión: `critica`, con firma humana (hoy un aviso)
@@ -44,15 +48,6 @@ token optimization, ranking and skill resolution are deterministic and offline.
 - Loading the embedding table no longer duplicates it in memory: the peak drops from 1,321 MB to 833 MB, and vectors already stored stay valid.
 
 And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.141.0/CHANGELOG.md#01410---2026-09-14)
-
-**[v0.140.0](https://github.com/codeabraham16/musubi/releases/tag/v0.140.0)** · Sep 10, 2026
-
-- The central brain now maintains its own memory (consolidate, forget, purge) without depending on another process, and exposes how long ago it last ran.
-- `/readyz` now probes writes too: a "ready" brain is one that accepts memory, and when it fails it says which probe failed.
-- If the memory can't be opened, the daemon no longer dies silently: it answers the handshake and states the cause, instead of looking like Musubi isn't installed.
-- A memory database newer than the binary opens read-only when the binary can still read it: you can query it, and anything that writes is refused with an explanation.
-
-And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.140.0/CHANGELOG.md#01400---2026-09-10)
 
 _The changelog is written in Spanish._
 

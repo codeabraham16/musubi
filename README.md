@@ -27,6 +27,10 @@ optimización de tokens, el ranking y la resolución de skills son deterministas
 
 <!-- novedades:inicio -->
 
+**[v0.143.0](https://github.com/codeabraham16/musubi/releases/tag/v0.143.0)** · 24 oct 2026
+
+- El sello de procedencia `llm:` y su `confidence` viajan al central y a las máquinas del tenant
+
 **[v0.142.0](https://github.com/codeabraham16/musubi/releases/tag/v0.142.0)** · 23 oct 2026
 
 - Cuarto nivel de revisión: `critica`, con firma humana (hoy un aviso)
@@ -44,15 +48,6 @@ optimización de tokens, el ranking y la resolución de skills son deterministas
 - Cargar la tabla de embeddings ya no la duplica en memoria: el pico baja de 1321 a 833 MB y los vectores ya guardados siguen valiendo.
 
 Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.141.0/CHANGELOG.md#01410---2026-09-14)
-
-**[v0.140.0](https://github.com/codeabraham16/musubi/releases/tag/v0.140.0)** · 10 sep 2026
-
-- El cerebro central mantiene su propia memoria (consolidar, olvidar, purgar) sin depender de otro proceso, y expone cuánto hace que corrió por última vez.
-- `/readyz` ahora prueba también la escritura: un cerebro «listo» es uno que acepta memoria, y si falla dice cuál sonda cayó.
-- Si la memoria no abre, el daemon ya no muere mudo: contesta el handshake y declara la causa, en vez de parecer que Musubi no está instalado.
-- Una base de memoria más nueva que el binario se abre en sólo lectura cuando éste todavía puede leerla: se consulta, y lo que escribe se rechaza con una explicación.
-
-Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.140.0/CHANGELOG.md#01400---2026-09-10)
 
 <!-- novedades:fin -->
 
