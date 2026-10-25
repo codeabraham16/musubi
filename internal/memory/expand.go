@@ -118,21 +118,53 @@ func (e *DbEngine) hydrateByIDs(ctx context.Context, ids []string, budget int) (
 		return []Observation{}, 0, nil, nil
 	}
 
-	placeholders := make([]string, len(ids))
-	args := make([]interface{}, len(ids))
-	for i, id := range ids {
-		placeholders[i] = "?"
-		args[i] = id
+	// Un token pedido es o bien un id COMPLETO (camino exacto por PK, el de siempre) o bien una REF
+	// CORTA de 8 hex (ver IDCorto). Se parten en dos grupos y se consultan juntos. MIENTRAS el emisor
+	// del hook no esté encendido (fase 2), ningún caller manda refs cortas: todo cae en `exactos` y el
+	// empaquetado toma la rama temprana BIT-IDÉNTICA a como venía. El camino de prefijos (con dedup y
+	// grupo ambiguo indivisible) sólo se activa cuando aparece al menos una ref corta.
+	var exactos, prefijos []string
+	for _, id := range ids {
+		if esRefCorta(id) {
+			prefijos = append(prefijos, id)
+		} else {
+			exactos = append(exactos, id)
+		}
 	}
+
+	var cond []string
+	var args []interface{}
+	if len(exactos) > 0 {
+		ph := make([]string, len(exactos))
+		for i, id := range exactos {
+			ph[i] = "?"
+			args = append(args, id)
+		}
+		cond = append(cond, "id IN ("+strings.Join(ph, ",")+")")
+	}
+	if len(prefijos) > 0 {
+		// substr(id,1,8) NO usa el índice de la PK: escanea la tabla. Es tolerable porque este camino
+		// lo dispara sólo un memory_expand del agente con una ref corta —bajo volumen, a demanda—; los
+		// callers internos (recall, grounding) pasan ids completos y se quedan en el camino exacto.
+		ph := make([]string, len(prefijos))
+		for i, p := range prefijos {
+			ph[i] = "?"
+			args = append(args, p)
+		}
+		cond = append(cond, "substr(id,1,8) IN ("+strings.Join(ph, ",")+")")
+	}
+	// cond nunca queda vacío: len(ids) > 0 ⇒ cada id cae en exactos o en prefijos.
+
 	// Aislamiento por proyecto (Track 17): la hidratación por id arbitrario era una fuga total
 	// (memory_expand traía contenido de cualquier proyecto). Acota a la credencial del caller
-	// (ausente ⇒ federado). Conserva las filas sin atribuir (project_id NULL o '').
+	// (ausente ⇒ federado). Conserva las filas sin atribuir (project_id NULL o ''). El prefijo matchea
+	// sólo dentro de este alcance, así que no reabre la fuga.
 	scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("")
 	args = append(args, scopeArgs...)
 
 	rows, err := e.db.QueryContext(ctx,
 		`SELECT id, topic_key, content, COALESCE(created_at,''), COALESCE(project_id,'')
-		 FROM observations WHERE id IN (`+strings.Join(placeholders, ",")+`)`+scopeSQL,
+		 FROM observations WHERE (`+strings.Join(cond, " OR ")+`)`+scopeSQL,
 		args...,
 	)
 	if err != nil {
@@ -141,12 +173,17 @@ func (e *DbEngine) hydrateByIDs(ctx context.Context, ids []string, budget int) (
 	defer rows.Close()
 
 	byID := make(map[string]Observation, len(ids))
+	porPrefijo := map[string][]Observation{} // sólo se llena si hay refs cortas que resolver
 	for rows.Next() {
 		var o Observation
 		if err := rows.Scan(&o.ID, &o.TopicKey, &o.Content, &o.CreatedAt, &o.ProjectID); err != nil {
 			return nil, 0, nil, fmt.Errorf("error al escanear observación: %w", err)
 		}
 		byID[o.ID] = o
+		if len(prefijos) > 0 && len(o.ID) >= 8 {
+			p := o.ID[:8]
+			porPrefijo[p] = append(porPrefijo[p], o)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, nil, fmt.Errorf("error al iterar observaciones: %w", err)
@@ -155,26 +192,83 @@ func (e *DbEngine) hydrateByIDs(ctx context.Context, ids []string, budget int) (
 	out := make([]Observation, 0, len(ids))
 	found := make([]string, 0, len(ids))
 	used := 0
-	for _, id := range ids {
-		o, ok := byID[id]
-		if !ok {
-			continue
+
+	// `agregar` empaqueta UNA observación respetando el presupuesto; devuelve false cuando el budget
+	// ya se agotó y el bucle debe cortar. Dos flags:
+	//   dedup  — no emitir dos veces la misma obs (una ref corta y el id completo de la misma fila se
+	//            pisan; una ref corta ambigua trae varias filas). El camino exacto puro NO deduplica,
+	//            para quedar bit-idéntico a como venía (ver rama temprana abajo).
+	//   forzar — meter la obs aunque exceda el presupuesto, sin truncarla. Lo usa SÓLO el grupo de una
+	//            ref corta ambigua: no se puede adivinar cuál de las colisiones vio el agente, así que
+	//            entran todas antes que perder en silencio la que pidió (principio: cero pérdida).
+	emitido := make(map[string]bool, len(ids))
+	agregar := func(o Observation, dedup, forzar bool) bool {
+		if dedup && emitido[o.ID] {
+			return true // ya estaba; seguir sin gastar presupuesto
 		}
 		cost := EstimateTokens(o.Content)
-		if budget > 0 {
+		if budget > 0 && !forzar {
 			if len(out) == 0 && cost > budget {
 				// Garantizar el primero, truncado al presupuesto.
 				o.Content = truncateToTokens(o.Content, budget)
 				cost = EstimateTokens(o.Content)
 			} else if used+cost > budget {
-				continue // no entra; probamos el siguiente (puede ser más chico)
+				return true // no entra; probamos el siguiente (puede ser más chico)
 			}
 		}
+		if dedup {
+			emitido[o.ID] = true
+		}
 		out = append(out, o)
-		found = append(found, id)
+		found = append(found, o.ID)
 		used += cost
-		if budget > 0 && used >= budget {
-			break
+		return !(budget > 0 && used >= budget)
+	}
+
+	// CAMINO EXACTO PURO: ninguna ref corta. Es el 100% de los callers hasta que el emisor del hook se
+	// encienda (fase 2). Se empaqueta sin dedup, para que desplegar sólo el resolvedor sea un no-op
+	// demostrable: mismo orden, mismos duplicados si se pidiera un id dos veces, mismo corte de budget.
+	if len(prefijos) == 0 {
+		for _, id := range ids {
+			if o, ok := byID[id]; ok {
+				if !agregar(o, false, false) {
+					break
+				}
+			}
+		}
+		return out, used, found, nil
+	}
+
+	// CAMINO CON REFS CORTAS: resolvemos prefijos y deduplicamos. Preserva el ORDEN de los ids pedidos.
+loop:
+	for _, id := range ids {
+		if esRefCorta(id) {
+			candidatos := porPrefijo[id]
+			if len(candidatos) >= 2 {
+				// Ref corta AMBIGUA: el prefijo de 8 hex matchea más de una observación. Entran TODAS
+				// (superconjunto), y el presupuesto NO parte el grupo —aunque esta colisión rara
+				// (~1/2^32 por expansión) lo exceda—: perder la que el agente pidió es peor que un
+				// payload algo más grande. `used` sube con el costo real, así que used_tokens sigue
+				// siendo honesto.
+				for _, o := range candidatos {
+					agregar(o, true, true)
+				}
+				if budget > 0 && used >= budget {
+					break loop
+				}
+				continue
+			}
+			for _, o := range candidatos { // 0 ó 1 candidato
+				if !agregar(o, true, false) {
+					break loop
+				}
+			}
+			continue
+		}
+		if o, ok := byID[id]; ok {
+			if !agregar(o, true, false) {
+				break loop
+			}
 		}
 	}
 
