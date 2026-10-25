@@ -77,6 +77,7 @@ func contenidoDe(t *testing.T, e *DbEngine, id string) string {
 // arnes: archivo="internal/memory/outbox.go"
 // arnes: de="COALESCE(content_hash, \x27\x27)"
 // arnes: a="\x27\x27"
+// arnes: colision_ok="TestElSelloLlmViajaEnElPush"
 //
 // Sabotaje: que la vuelta de v1 deje la fila 'claimed' (en hora, pero con el estado de un vuelo que
 // ya terminó).

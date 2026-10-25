@@ -21,12 +21,13 @@ import (
 // bajada. Después el hook del turno corre con la base local y la viñeta de esa nota queda en el log
 // de la prueba, literal.
 //
-// Lo que NO fija, y por qué: que la viñeta diga «· hace 3m». Hoy la viñeta no dice NINGUNA edad,
-// ni la verdadera ni «· hoy»: gistAge sólo lee RFC3339 y la base guarda «2006-01-02 15:04:05», así
-// que el sufijo sale vacío en todas las notas (0 de 7.177 viñetas en siete transcripts reales). Eso
-// es un defecto aparte, del formateador, y queda anotado para su propio cambio. Lo que esta prueba
-// fija es la fecha GUARDADA, la que gistAge va a leer. La edad que diga la viñeta no la fija
-// todavía ninguna aserción: queda en el log (ver el Logf del final).
+// Esta prueba fija DOS cosas: (1) la fecha GUARDADA —que la nota bajada conserve sus 90 días en vez
+// de nacer con la fecha de la bajada— y (2) que esos 90 días lleguen hasta la viñeta del hook como
+// « · hace 3m». La (2) une al productor (soloFecha, internal/memory, que recorta created_at a
+// «2006-01-02») con el parser (gistAge, cmd/musubi) por el camino real central→sync→base→hook.
+// Antes gistAge leía sólo RFC3339 y la base guarda «2006-01-02 15:04:05», así que el sufijo salía
+// vacío en TODAS las notas (0 de 7.177 viñetas en siete transcripts reales); desde que gistAge lee
+// los layouts de la base y el día a secas, la viñeta vuelve a decir la edad.
 //
 // Sabotaje: la fecha no sale en el JSON del central.
 // arnes: archivo="internal/memory/inboundsync.go"
@@ -99,8 +100,12 @@ func TestLaNotaBajadaConservaSuEdad(t *testing.T) {
 	if vineta == "" {
 		t.Fatalf("el hook del turno no trajo la nota bajada; la prueba no mide la viñeta:\n%s", salida)
 	}
-	// Cuando se arregle gistAge (que lea el layout de la base), este Logf pasa a ser una aserción
-	// sobre el sufijo « · hace 3m» de la viñeta, entre el gist y el [id:…]. Hoy fijarla fijaría
-	// el defecto: la viñeta sale sin edad.
-	t.Logf("viñeta literal del hook: %s", vineta)
+	// gistAge YA lee el layout de la base y la fecha a secas que empaqueta soloFecha: el Logf de
+	// antes es ahora ESTA aserción. La nota nació hace 90 días → la viñeta la cierra « · hace 3m»
+	// entre el gist y el [id:…]. Es el ÚNICO test que une al productor (soloFecha, internal/memory)
+	// con el parser (gistAge, acá) por el camino real; si cualquiera cambia de forma, el sufijo
+	// vuelve a salir vacío y la prueba cae.
+	if !strings.Contains(vineta, " · hace 3m") {
+		t.Errorf("la viñeta de una nota de hace 90 días debería cerrar con « · hace 3m»; salió: %q", vineta)
+	}
 }

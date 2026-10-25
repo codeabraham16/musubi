@@ -1149,12 +1149,35 @@ func buildTurnConflicts(store turnStore, sessionID string) string {
 	return fmt.Sprintf("[Musubi — conflictos] Hay %d relación(es) de memoria sin resolver. Revisalas con musubi_conflicts y resolvé cada una con musubi_judge.", len(pending))
 }
 
+// layoutsDeCreatedAt son las formas en que una fecha de creación puede llegarle a gistAge, probadas
+// en orden: RFC3339 por si un caller pasa la marca entera; el layout que guarda SQLite —con espacio
+// y sin zona—; y la fecha a secas «2006-01-02», que es lo que empaqueta soloFecha (internal/memory)
+// en RecallItem.CreatedAt desde que el envoltorio del recall se adelgazó.
+var layoutsDeCreatedAt = []string{
+	time.RFC3339,
+	"2006-01-02 15:04:05",
+	"2006-01-02",
+}
+
+// parseCreatedAt prueba cada layout conocido y devuelve ok=false si ninguno matchea. Antes gistAge
+// leía SÓLO RFC3339 y la base nunca entrega ese layout, así que el sufijo de edad salía vacío en
+// TODAS las viñetas (0 de 7.177 en siete transcripts reales) sin que nada lo marcara.
+func parseCreatedAt(createdAt string) (time.Time, bool) {
+	s := strings.TrimSpace(createdAt)
+	for _, layout := range layoutsDeCreatedAt {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
 // gistAge devuelve un sufijo compacto con la EDAD de la memoria (" · hoy", " · hace 3d", " · hace
 // 5m", " · hace 2a") para que el agente vea de un vistazo si un gist es fresco o viejo y no trate
 // una nota de hace meses como verdad actual. Vacío si la fecha no parsea (degradación segura).
 func gistAge(createdAt string) string {
-	t, err := time.Parse(time.RFC3339, strings.TrimSpace(createdAt))
-	if err != nil {
+	t, ok := parseCreatedAt(createdAt)
+	if !ok {
 		return ""
 	}
 	d := time.Since(t)
