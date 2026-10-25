@@ -7,6 +7,24 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.144.0] - 2026-10-25
+
+### Destacado
+- El envoltorio que Musubi le agrega a cada recuerdo en el hook del turno adelgaza: gasta menos tokens del agente sin tocar una coma de lo que el recuerdo dice.
+- El presupuesto de tokens del recall ahora se mide por lo que de verdad se serializa y envía, no por una suma aproximada de las fichas, así que el corte es fiel al costo real.
+- Primer paso —sólo el resolvedor— para poder nombrar cada recuerdo con una referencia corta de 8 hex en lugar del UUID entero. No cambia nada hacia afuera todavía: habilita el ahorro, que se enciende en una segunda fase.
+
+### Highlights
+- The wrapper Musubi adds around each memory in the turn hook gets leaner: it spends fewer of the agent's tokens without changing a word of what the memory says.
+- The recall token budget is now measured by what is actually serialized and sent, not an approximate sum of the gists, so the cut is faithful to the real cost.
+- First step —resolver only— toward naming each memory with a short 8-hex reference instead of the full UUID. Nothing changes externally yet: it enables the saving, switched on in a second phase.
+
+### Added
+- **`musubi_memory_expand` resuelve una referencia corta de 8 hex además del id completo (fase 1 de un despliegue en dos fases).** El `[id:…]` que el hook del turno pega a cada viñeta es overhead del envoltorio y no cuenta contra el presupuesto del recall; acortarlo del UUID de 36 caracteres a sus primeros 8 hex ahorra tokens en cada turno. Esta versión trae sólo la mitad RESOLVEDORA del contrato: `hydrateByIDs` acepta una referencia corta por prefijo además del id exacto, mientras el hook sigue emitiendo el id entero —así desplegar esto es un no-op observable—. El EMISOR (el que acorta de verdad) se enciende en una segunda fase, recién cuando el resolvedor esté en todos los procesos que hidratan (el daemon por sesión y el cerebro central); al revés, un hook nuevo contra un resolvedor viejo perdería la hidratación en silencio. Dos invariantes cubiertos con prueba: una referencia corta ambigua (colisión de ~1 en 2^32) forma un grupo indivisible que entra entero aunque exceda el presupuesto —cero riesgo de perder una observación que el agente ya vio—, y sin ninguna referencia corta el empaquetado es bit-idéntico al anterior.
+
+### Fixed
+- **`used_tokens` informa el costo real del payload serializado, no la suma de las fichas, y el envoltorio del recall adelgaza.** El conteo que devuelve el recall ahora mide lo que de verdad se serializa; el envoltorio se achica dejando `created_at` a resolución de día (`soloFecha`) y conservando `score` para `musubi-body`. En el hook por turno, `gistAge` lee el layout de la base y el día a secas.
+
 ## [0.143.0] - 2026-10-24
 
 ### Added
@@ -9373,7 +9391,8 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.143.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.144.0...HEAD
+[0.144.0]: https://github.com/codeabraham16/musubi/compare/v0.143.0...v0.144.0
 [0.143.0]: https://github.com/codeabraham16/musubi/compare/v0.142.0...v0.143.0
 [0.142.0]: https://github.com/codeabraham16/musubi/compare/v0.141.0...v0.142.0
 [0.141.0]: https://github.com/codeabraham16/musubi/compare/v0.140.3...v0.141.0

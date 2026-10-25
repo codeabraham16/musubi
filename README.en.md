@@ -27,6 +27,14 @@ token optimization, ranking and skill resolution are deterministic and offline.
 
 <!-- novedades:inicio -->
 
+**[v0.144.0](https://github.com/codeabraham16/musubi/releases/tag/v0.144.0)** · Oct 25, 2026
+
+- The wrapper Musubi adds around each memory in the turn hook gets leaner: it spends fewer of the agent's tokens without changing a word of what the memory says.
+- The recall token budget is now measured by what is actually serialized and sent, not an approximate sum of the gists, so the cut is faithful to the real cost.
+- First step —resolver only— toward naming each memory with a short 8-hex reference instead of the full UUID. Nothing changes externally yet: it enables the saving, switched on in a second phase.
+
+And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.144.0/CHANGELOG.md#01440---2026-10-25)
+
 **[v0.143.0](https://github.com/codeabraham16/musubi/releases/tag/v0.143.0)** · Oct 24, 2026
 
 - El sello de procedencia `llm:` y su `confidence` viajan al central y a las máquinas del tenant
@@ -39,15 +47,6 @@ token optimization, ranking and skill resolution are deterministic and offline.
 - Trinquete de código muerto en CI (A2)
 
 … and 58 more in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.142.0/CHANGELOG.md#01420---2026-10-23)
-
-**[v0.141.0](https://github.com/codeabraham16/musubi/releases/tag/v0.141.0)** · Sep 14, 2026
-
-- The code graph now re-indexes itself, at startup and then every hour (it used to wait 6), and only pushes to the central brain when there is something new.
-- `musubi update` can now verify a release's signature: the binary embeds the public key, and the private key stays out of the repo and out of CI.
-- Recalled memory reaches the prompt as quoted material: a foreign note can no longer forge a new line or a header inside that block.
-- Loading the embedding table no longer duplicates it in memory: the peak drops from 1,321 MB to 833 MB, and vectors already stored stay valid.
-
-And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.141.0/CHANGELOG.md#01410---2026-09-14)
 
 _The changelog is written in Spanish._
 
