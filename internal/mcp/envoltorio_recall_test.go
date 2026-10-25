@@ -46,12 +46,20 @@ func TestRecallAdelgazaElEnvoltorio(t *testing.T) {
 	// items traen score > 0, así que la clave está presente. Esta guarda frena que alguien vuelva a
 	// ponerle json:"-" al campo y rompa a ese consumidor sin que ningún test lo note.
 	// Sabotaje: ponerle a RecallItem.Score el tag `json:"-"`.
+	// arnes: archivo="internal/memory/recall.go"
+	// arnes: de="json:\"score,omitempty\""
+	// arnes: a="json:\"-\""
+	// arnes: prueba="TestRecallAdelgazaElEnvoltorio"
 	if !strings.Contains(texto, `"score"`) {
 		t.Errorf("el puntaje model-free no viajó en la respuesta del recall (lo lee musubi-body): %s", texto)
 	}
 
 	// 1.2 — created_at viaja a resolución de DÍA (YYYY-MM-DD), sin hora.
 	// Sabotaje: quitar soloFecha() en empaquetar (volver a `CreatedAt: c.createdAt`).
+	// arnes: archivo="internal/memory/recall.go"
+	// arnes: de="CreatedAt:   soloFecha(c.createdAt),"
+	// arnes: a="CreatedAt:   c.createdAt,"
+	// arnes: prueba="TestRecallAdelgazaElEnvoltorio"
 	for _, it := range res.Items {
 		if it.CreatedAt == "" {
 			continue // una nota sin fecha sale sin la clave: no es lo que este invariante mide
@@ -68,6 +76,10 @@ func TestRecallAdelgazaElEnvoltorio(t *testing.T) {
 	//       La (b) es la que mide de verdad: la (a) sola la pasa un subconteo de hasta el 50%.
 	// Sabotaje: quitar en toolRecall `res.UsedTokens = memory.EstimateTokens(string(raw))` ⇒ caen (a) y (b);
 	// devolver la mitad, `EstimateTokens(string(raw)) / 2` ⇒ (a) sobrevive, (b) cae.
+	// arnes: archivo="internal/mcp/methods.go"
+	// arnes: de="res.UsedTokens = memory.EstimateTokens(string(raw))"
+	// arnes: a="res.UsedTokens = memory.EstimateTokens(string(raw)) / 2"
+	// arnes: prueba="TestRecallAdelgazaElEnvoltorio"
 	gistSum := 0
 	for _, it := range res.Items {
 		gistSum += memory.EstimateTokens(it.Gist)
