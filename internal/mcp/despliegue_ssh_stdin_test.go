@@ -59,6 +59,7 @@ func TestTodoSSHDeDespliegueLlevaMenosNSalvoLosQueDeclaranUsarStdin(t *testing.T
 		"deploy/verificar-despliegue.sh:config_curl | ssh":                                                "le pipea la config de curl al servidor",
 		"deploy/comparar-y-latir.sh:printf '%s' \"$PAYLOAD\" | ssh":                                       "le pipea el sobre OTLP del latido",
 		"deploy/verificar-cobertura.sh:ssh -o BatchMode=yes -o ConnectTimeout=10 \"$SSH_HOST\" 'bash -s'": "le manda el guion por stdin con `< \"$TMP/consulta.sh\"`",
+		"deploy/desplegar-release.sh:ssh -t server 'sudo ./deploy/redesplegar-cerebro.sh":                 "ejemplo del runbook que se IMPRIME (no se ejecuta); el sudo interactivo del cerebro usa la TTY (ssh -t)",
 	}
 
 	raiz := filepath.Join("..", "..", "deploy")
