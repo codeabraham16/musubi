@@ -190,6 +190,18 @@ type ResumenDelSync struct {
 	PaginasDeEseDia    int64  `json:"-"`
 }
 
+// llmCorroboradasLocalesWhere es el predicado SQL de las observaciones escritas por un LLM que YA
+// fueron corroboradas pero quedaron sin viajar: visibles (quarantined=0 vía visibleObsPredicate ⇒
+// salieron de cuarentena ⇒ fueron corroboradas), scope='local' y provenance con el prefijo llm. Lo
+// COMPARTEN ResumenDelSync (que las cuenta como NoViajan.LLMCorroboradasLocales) y el check del
+// doctor `llm_corroboradas_locales` (que las promueve), para que el AVISO y el REMEDIO midan
+// exactamente el mismo conjunto; si uno reimplementara el predicado, nace un bug (ver calibrate.go).
+// Columnas desnudas: una sola tabla `observations` en el scope.
+func llmCorroboradasLocalesWhere() string {
+	esLLM := "provenance LIKE '" + strings.ReplaceAll(provenanceLLMPrefix, "'", "''") + "%'"
+	return visibleObsPredicate + " AND scope = 'local' AND " + esLLM
+}
+
 // ResumenDelSync junta los contadores nuevos del sync. Sólo lee.
 //
 // LO QUE MIRA OBSERVACIONES VA ACOTADO AL PROYECTO DEL ctx (scopeClause), porque musubi_sync_status
@@ -250,7 +262,7 @@ func (e *DbEngine) ResumenDelSync(ctx context.Context) (ResumenDelSync, error) {
 		SELECT
 			COALESCE(SUM(CASE WHEN `+visibleObsPredicate+` AND scope = 'local' AND NOT (`+esLLM+`) THEN 1 ELSE 0 END), 0),
 			COALESCE(SUM(CASE WHEN quarantined = 1 AND archived = 0 AND superseded_by IS NULL THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN `+visibleObsPredicate+` AND scope = 'local' AND `+esLLM+` THEN 1 ELSE 0 END), 0)
+			COALESCE(SUM(CASE WHEN `+llmCorroboradasLocalesWhere()+` THEN 1 ELSE 0 END), 0)
 		FROM observations WHERE 1 = 1`+scope, args...).Scan(&r.NoViajan.Locales, &r.NoViajan.EnCuarentena, &r.NoViajan.LLMCorroboradasLocales); err != nil {
 		return r, fmt.Errorf("error al contar lo que no viaja: %w", err)
 	}

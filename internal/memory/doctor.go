@@ -91,6 +91,11 @@ func (e *DbEngine) doctorChecks() []doctorCheck {
 		{code: "offhost_backup", run: checkOffhostBackup},
 		{code: "snapshot_local", run: checkSnapshotLocal},
 		{code: "outbox_stall", run: checkOutboxStall},
+		// No es deep: COUNT sobre columnas indexadas (scope/provenance/visibilidad), no recorre
+		// content. Reparable (promueve en lote reusando PromoteObservation), pero FUERA de
+		// autoHealCodes: el empuje al central va con --apply explícito, nunca en el auto-heal.
+		{code: "llm_corroboradas_locales", run: checkLlmCorroboradasLocales,
+			count: countLlmCorroboradasLocales, apply: applyPromoteLlmCorroboradasLocales},
 		{code: "abandoned_runs", run: checkAbandonedRuns},
 		// deep: recorre el content de las observaciones que matchean el LIKE y decide en Go.
 		{code: "swallowed_envelope", deep: true, run: checkSwallowedEnvelope,
@@ -1012,6 +1017,75 @@ func applyBackfillDigests(e *DbEngine) (int, error) {
 	n, _ := countMissingDigests(e)
 	if err := e.backfillDigests(); err != nil {
 		return 0, err
+	}
+	return n, nil
+}
+
+// checkLlmCorroboradasLocales señala las observaciones escritas por un LLM que YA fueron corroboradas
+// (salieron de cuarentena) pero quedaron scope='local' sin viajar — el backlog de antes de que
+// corroborar promoviera solo. Es reparable: la promoción en lote reusa PromoteObservation. El Status
+// es `warning` (no `ok`-con-hipótesis como tool_census): hay un conjunto concreto y un remedio de un
+// comando. Queda FUERA de autoHealCodes a propósito: promover empuja al cerebro central, y eso NUNCA
+// es sin supervisión (regla de oro) — el `--apply` explícito es el gate. El Message es un agregado
+// (el conteo); no emite Detail, así que no hay nombres de filas que filtrar en el borde MCP.
+func checkLlmCorroboradasLocales(e *DbEngine) CheckResult {
+	n, err := countLlmCorroboradasLocales(e)
+	if err != nil {
+		return CheckResult{Code: "llm_corroboradas_locales", Status: "error", Message: err.Error(), Repairable: true}
+	}
+	if n > 0 {
+		return CheckResult{Code: "llm_corroboradas_locales", Status: "warning", Repairable: true,
+			Message: fmt.Sprintf("%d observación(es) llm ya corroboradas quedaron locales y no viajan; corré 'musubi doctor repair --check llm_corroboradas_locales --apply' para promoverlas", n)}
+	}
+	return CheckResult{Code: "llm_corroboradas_locales", Status: "ok",
+		Message: "toda observación llm corroborada ya es compartida"}
+}
+
+func countLlmCorroboradasLocales(e *DbEngine) (int, error) {
+	var n int
+	if err := e.db.QueryRow(`SELECT COUNT(*) FROM observations WHERE ` + llmCorroboradasLocalesWhere()).Scan(&n); err != nil {
+		return 0, fmt.Errorf("error al contar llm corroboradas-locales: %w", err)
+	}
+	return n, nil
+}
+
+// applyPromoteLlmCorroboradasLocales promueve en lote (a 'shared', encolando al outbox) las
+// observaciones del predicado, reusando PromoteObservation: redacta C2, re-hashea, bumpea sync_seq y
+// encola idempotente, todo por fila en su propia tx. NO escribe lógica de encolado nueva. Best-effort:
+// una fila que falla —p. ej. su "sobre de llamada" dañado, que PromoteObservation rechaza a
+// propósito— se registra y se saltea, sin abortar el resto. Idempotente: tras promover, scope='shared'
+// sale del predicado, así que una 2ª corrida no toma nada (y promover una ya-shared sería no-op).
+func applyPromoteLlmCorroboradasLocales(e *DbEngine) (int, error) {
+	// Se materializan los ids y se CIERRA el cursor ANTES de promover: cada PromoteObservation abre
+	// su propia transacción de escritura (Begin), y mantener abierto un cursor de lectura sobre la
+	// misma base mientras se escribe puede trabar el write en SQLite.
+	rows, err := e.db.Query(`SELECT id FROM observations WHERE ` + llmCorroboradasLocalesWhere())
+	if err != nil {
+		return 0, fmt.Errorf("error al listar llm corroboradas-locales: %w", err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("error al leer id de llm corroborada-local: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("error al recorrer llm corroboradas-locales: %w", err)
+	}
+	rows.Close()
+
+	n := 0
+	for _, id := range ids {
+		if err := e.PromoteObservation(id); err != nil {
+			logx.Warn("no se pudo promover una observación llm corroborada-local; se saltea (best-effort)",
+				"id", id, "error", err)
+			continue
+		}
+		n++
 	}
 	return n, nil
 }
