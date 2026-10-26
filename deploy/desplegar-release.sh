@@ -64,7 +64,7 @@ fi
 # 2. git: rama, árbol y qué commit tiene el tag.
 echo "· git"
 rama="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
-if [[ "$rama" == "main" ]]; then ok "estás en main"; else warn "estás en «$rama», no en main"; fi
+if [[ "$rama" == "main" ]]; then ok "estás en main"; else warn "estás en «${rama}», no en main"; fi
 if [[ -z "$(git status --porcelain 2>/dev/null)" ]]; then ok "árbol limpio"; else warn "hay cambios sin commitear en el árbol"; fi
 if git rev-parse "$TAG" >/dev/null 2>&1; then
   if git merge-base --is-ancestor "$TAG" HEAD 2>/dev/null; then
@@ -180,7 +180,7 @@ DEPLOY DEL CEREBRO (con el visto bueno del dueño, en el momento — el server e
   2. Copialo al server y redesplegá (redesplegar-cerebro.sh saca su propio respaldo de binario+base
      y vuelve atrás solo si algo falla; necesita root, que pide contraseña):
        scp /tmp/$TAG/musubi-linux-amd64 server:/tmp/musubi-nuevo
-       ssh server 'sudo ./deploy/redesplegar-cerebro.sh /tmp/musubi-nuevo $sha_server'
+       ssh -t server 'sudo ./deploy/redesplegar-cerebro.sh /tmp/musubi-nuevo $sha_server'
   3. Actualizá el resto de la flota según corresponda, y VERIFICÁ el alcance del cerebro:
        musubi cerebro --alcance    # tiene que dar 200
 
