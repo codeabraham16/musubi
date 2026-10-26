@@ -7,6 +7,25 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.145.0] - 2026-10-26
+
+### Destacado
+- Se enciende el emisor del id corto (fase 2, y última). El `[id:…]` que el hook del turno le pega a cada recuerdo ahora sale como una referencia corta de 8 hex en lugar del UUID de 36 caracteres. La 0.144.0 trajo sólo el resolvedor; ésta acorta de verdad, así que de acá en más cada turno gasta menos tokens del agente sin cambiar una coma de lo que el recuerdo dice.
+- El "viaje de comandos" para cortar un release queda automatizado: una herramienta hace las ediciones mecánicas del corte (VERSION, versioninfo, CHANGELOG) y otra imprime el runbook del despliegue con los valores reales ya puestos, sin ejecutar nada hacia afuera.
+- `musubi doctor` suma un check reparable que detecta observaciones de un modelo ya corroboradas que quedaron sólo en local y las promueve al cerebro central.
+
+### Highlights
+- The short-id emitter is switched on (phase 2, the last one). The `[id:…]` the turn hook attaches to each memory now goes out as a short 8-hex reference instead of the 36-character UUID. 0.144.0 shipped only the resolver; this one actually shortens, so from here on every turn spends fewer of the agent's tokens without changing a word of what the memory says.
+- Cutting a release is now automated: one tool makes the mechanical edits of the cut (VERSION, versioninfo, CHANGELOG) and another prints the deployment runbook with the real values already filled in, without executing anything outward.
+- `musubi doctor` gains a repairable check that detects a model's already-corroborated observations left only locally and promotes them to the central brain.
+
+### Added
+- **`deploy/cmd/preparar-release` y los wrappers `desplegar-release.sh` / `firmar-y-subir.sh` automatizan el viaje de comandos de un release.** `preparar-release` (Go, con pruebas) hace las ediciones mecánicas del corte —VERSION, `cmd/musubi/versioninfo.json` (round-trip byte-exacto, fail-closed si aparece un campo nuevo sin reflejar) y el corte del CHANGELOG (`## [Unreleased]` → `## [X.Y.Z] - fecha`, con los enlaces del pie corridos)— y se niega a cortar si Unreleased no tiene ni una viñeta o le falta lo editorial (`-estricto` lo vuelve error). `desplegar-release.sh` hace un preflight read-only (GO/NO-GO: tag≡VERSION, guardas, release y binarios en GitHub, firma presente, cerebro vivo) e imprime el runbook del despliegue con los valores reales, sin ejecutar el viaje que cruza máquinas y usa `sudo`. `firmar-y-subir.sh` descifra la clave de firma offline, verifica la pública derivada, firma el manifiesto y gatea la subida detrás de una confirmación tipeada en el momento —la clave privada no se automatiza a propósito—.
+- **`musubi doctor` gana un check reparable que promueve las observaciones `llm:` corroboradas que habían quedado sólo en local.** Detecta las inferencias de un modelo que fueron corroboradas pero cuya promoción al cerebro central no llegó a salir, y las vuelve a encolar; es reparable (`--fix`) y no toca las que ya viajaron.
+
+### Changed
+- **El hook del turno emite el `[id:…]` como referencia corta de 8 hex (fase 2: el emisor).** Los cuatro puntos que escriben `[id:%s]` en el envoltorio del recall —`formatGists` y `formatDeltaGists`, cada uno con y sin topic— pasan el id por `memory.IDCorto` antes de emitirlo. El `[id:…]` es overhead PURO del envoltorio: no cuenta contra el presupuesto del recall (que se gasta en el contenido del gist), así que un UUID de 36 caracteres pagaba ~7 tokens por viñeta en cada turno sin significarle nada al modelo; 8 hex alcanzan para nombrar la observación en el acervo acotado del proyecto, y el resolvedor de la fase 1 (`hydrateByIDs`) la re-expande por prefijo. Es la segunda y última fase del contrato expand-contract: el resolvedor viajó primero (0.144.0) y recién ahora se enciende el emisor —emisor y resolvedor viajan en el mismo binario, así que no hay desfasaje interno, y el único resolvedor ajeno, el cerebro central para memoria federada, ya corre 0.144.0—.
+
 ## [0.144.0] - 2026-10-25
 
 ### Destacado
@@ -9391,7 +9410,8 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.144.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.145.0...HEAD
+[0.145.0]: https://github.com/codeabraham16/musubi/compare/v0.144.0...v0.145.0
 [0.144.0]: https://github.com/codeabraham16/musubi/compare/v0.143.0...v0.144.0
 [0.143.0]: https://github.com/codeabraham16/musubi/compare/v0.142.0...v0.143.0
 [0.142.0]: https://github.com/codeabraham16/musubi/compare/v0.141.0...v0.142.0

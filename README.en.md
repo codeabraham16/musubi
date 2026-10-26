@@ -27,6 +27,14 @@ token optimization, ranking and skill resolution are deterministic and offline.
 
 <!-- novedades:inicio -->
 
+**[v0.145.0](https://github.com/codeabraham16/musubi/releases/tag/v0.145.0)** · Oct 26, 2026
+
+- The short-id emitter is switched on (phase 2, the last one). The `[id:…]` the turn hook attaches to each memory now goes out as a short 8-hex reference instead of the 36-character UUID. 0.144.0 shipped only the resolver; this one actually shortens, so from here on every turn spends fewer of the agent's tokens without changing a word of what the memory says.
+- Cutting a release is now automated: one tool makes the mechanical edits of the cut (VERSION, versioninfo, CHANGELOG) and another prints the deployment runbook with the real values already filled in, without executing anything outward.
+- `musubi doctor` gains a repairable check that detects a model's already-corroborated observations left only locally and promotes them to the central brain.
+
+And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.145.0/CHANGELOG.md#01450---2026-10-26)
+
 **[v0.144.0](https://github.com/codeabraham16/musubi/releases/tag/v0.144.0)** · Oct 25, 2026
 
 - The wrapper Musubi adds around each memory in the turn hook gets leaner: it spends fewer of the agent's tokens without changing a word of what the memory says.
@@ -38,15 +46,6 @@ And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/
 **[v0.143.0](https://github.com/codeabraham16/musubi/releases/tag/v0.143.0)** · Oct 24, 2026
 
 - El sello de procedencia `llm:` y su `confidence` viajan al central y a las máquinas del tenant
-
-**[v0.142.0](https://github.com/codeabraham16/musubi/releases/tag/v0.142.0)** · Oct 23, 2026
-
-- Cuarto nivel de revisión: `critica`, con firma humana (hoy un aviso)
-- La identidad del build pliega el contrato de seguridad por-tool (E2)
-- El push de observaciones confirma la persistencia con un recibo content-hash (E3)
-- Trinquete de código muerto en CI (A2)
-
-… and 58 more in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.142.0/CHANGELOG.md#01420---2026-10-23)
 
 _The changelog is written in Spanish._
 
