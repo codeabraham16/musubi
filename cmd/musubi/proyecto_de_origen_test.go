@@ -171,8 +171,9 @@ func TestLaVinetaAjenaDiceDeQueProyecto(t *testing.T) {
 //
 // Sabotaje: el formateador del priming calcula la marca y no la escribe.
 // arnes: archivo="cmd/musubi/turn.go"
-// arnes: de="\t\t\tfmt.Fprintf(&b, \"- %s(%s) %s%s [id:%s]\\n\", marca, topic, gist, age, it.ID)\n"
-// arnes: a="\t\t\tfmt.Fprintf(&b, \"- %s(%s) %s%s [id:%s]\\n\", \"\", topic, gist, age, it.ID)\n"
+// arnes: de="\t\t\tfmt.Fprintf(&b, \"- %s(%s) %s%s [id:%s]\\n\", marca, topic, gist, age, memory.IDCorto(it.ID))\n"
+// arnes: a="\t\t\tfmt.Fprintf(&b, \"- %s(%s) %s%s [id:%s]\\n\", \"\", topic, gist, age, memory.IDCorto(it.ID))\n"
+// arnes: colision_ok="TestElEmisorAcortaElIdEnLosCuatroSitios"
 func TestElPrimingMarcaIgualQueElTurno(t *testing.T) {
 	items := notasDeTresProyectos()
 	priming := primingConPropio(t, items, "musubi")

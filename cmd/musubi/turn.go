@@ -1101,9 +1101,9 @@ func formatDeltaGists(titulo string, items []memory.RecallItem, updated []bool, 
 			huboMarcas = true
 		}
 		if topic != "" {
-			fmt.Fprintf(&b, "- %s(%s) %s%s%s [id:%s]\n", marca, topic, gist, age, suffix, it.ID)
+			fmt.Fprintf(&b, "- %s(%s) %s%s%s [id:%s]\n", marca, topic, gist, age, suffix, memory.IDCorto(it.ID))
 		} else {
-			fmt.Fprintf(&b, "- %s%s%s%s [id:%s]\n", marca, gist, age, suffix, it.ID)
+			fmt.Fprintf(&b, "- %s%s%s%s [id:%s]\n", marca, gist, age, suffix, memory.IDCorto(it.ID))
 		}
 	}
 	if b.Len() == 0 {
@@ -1293,9 +1293,9 @@ func formatGists(titulo string, res memory.RecallResult, propio string) string {
 			huboMarcas = true
 		}
 		if topic != "" {
-			fmt.Fprintf(&b, "- %s(%s) %s%s [id:%s]\n", marca, topic, gist, age, it.ID)
+			fmt.Fprintf(&b, "- %s(%s) %s%s [id:%s]\n", marca, topic, gist, age, memory.IDCorto(it.ID))
 		} else {
-			fmt.Fprintf(&b, "- %s%s%s [id:%s]\n", marca, gist, age, it.ID)
+			fmt.Fprintf(&b, "- %s%s%s [id:%s]\n", marca, gist, age, memory.IDCorto(it.ID))
 		}
 	}
 	// El priming no corrige tipeos: no hay prompt todavía, y el aviso es sólo del turno.

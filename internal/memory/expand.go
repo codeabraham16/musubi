@@ -119,10 +119,11 @@ func (e *DbEngine) hydrateByIDs(ctx context.Context, ids []string, budget int) (
 	}
 
 	// Un token pedido es o bien un id COMPLETO (camino exacto por PK, el de siempre) o bien una REF
-	// CORTA de 8 hex (ver IDCorto). Se parten en dos grupos y se consultan juntos. MIENTRAS el emisor
-	// del hook no esté encendido (fase 2), ningún caller manda refs cortas: todo cae en `exactos` y el
-	// empaquetado toma la rama temprana BIT-IDÉNTICA a como venía. El camino de prefijos (con dedup y
-	// grupo ambiguo indivisible) sólo se activa cuando aparece al menos una ref corta.
+	// CORTA de 8 hex (ver IDCorto). Se parten en dos grupos y se consultan juntos. Los callers internos
+	// (recall, grounding) pasan siempre ids completos: todo cae en `exactos` y el empaquetado toma la
+	// rama temprana BIT-IDÉNTICA a como venía. El camino de prefijos (con dedup y grupo ambiguo
+	// indivisible) lo dispara el memory_expand del agente: desde la fase 2 el envoltorio del hook emite
+	// el id acortado y el agente lo devuelve tal cual, así que aparece al menos una ref corta por ahí.
 	var exactos, prefijos []string
 	for _, id := range ids {
 		if esRefCorta(id) {
