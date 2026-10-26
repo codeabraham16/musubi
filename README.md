@@ -27,6 +27,14 @@ optimización de tokens, el ranking y la resolución de skills son deterministas
 
 <!-- novedades:inicio -->
 
+**[v0.144.0](https://github.com/codeabraham16/musubi/releases/tag/v0.144.0)** · 25 oct 2026
+
+- El envoltorio que Musubi le agrega a cada recuerdo en el hook del turno adelgaza: gasta menos tokens del agente sin tocar una coma de lo que el recuerdo dice.
+- El presupuesto de tokens del recall ahora se mide por lo que de verdad se serializa y envía, no por una suma aproximada de las fichas, así que el corte es fiel al costo real.
+- Primer paso —sólo el resolvedor— para poder nombrar cada recuerdo con una referencia corta de 8 hex en lugar del UUID entero. No cambia nada hacia afuera todavía: habilita el ahorro, que se enciende en una segunda fase.
+
+Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.144.0/CHANGELOG.md#01440---2026-10-25)
+
 **[v0.143.0](https://github.com/codeabraham16/musubi/releases/tag/v0.143.0)** · 24 oct 2026
 
 - El sello de procedencia `llm:` y su `confidence` viajan al central y a las máquinas del tenant
@@ -39,15 +47,6 @@ optimización de tokens, el ranking y la resolución de skills son deterministas
 - Trinquete de código muerto en CI (A2)
 
 … y 58 más en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.142.0/CHANGELOG.md#01420---2026-10-23)
-
-**[v0.141.0](https://github.com/codeabraham16/musubi/releases/tag/v0.141.0)** · 14 sep 2026
-
-- El grafo de código se reindexa solo, al arrancar y después cada hora (antes cada 6), y sólo se manda al central cuando hay algo nuevo.
-- `musubi update` ahora puede verificar la firma del release: el binario trae la clave pública y la privada queda fuera del repo y del CI.
-- La memoria que vuelve al prompt llega como material citado: una nota ajena ya no puede fabricar una línea nueva ni una cabecera en ese bloque.
-- Cargar la tabla de embeddings ya no la duplica en memoria: el pico baja de 1321 a 833 MB y los vectores ya guardados siguen valiendo.
-
-Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.141.0/CHANGELOG.md#01410---2026-09-14)
 
 <!-- novedades:fin -->
 
