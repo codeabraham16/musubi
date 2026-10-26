@@ -15,12 +15,12 @@ package memory
 // mismo código (esRefCorta) para reconocerla: emisor y resolvedor no pueden divergir. Si el extremo
 // del resolvedor dejara de aceptar prefijos, el agente no podría hidratar y esto hay que revertirlo.
 //
-// FASE. Esta es la mitad EMISORA del contrato y hoy NO la llama producción: el hook sigue emitiendo el
-// id entero. El resolvedor (esRefCorta + hydrateByIDs) viaja PRIMERO y se despliega en todos los
-// procesos que hidratan —daemon por sesión y cerebro central—; recién cuando esté en todos lados se
-// enciende este emisor, en una segunda fase. Al revés —un hook nuevo que acorte contra un resolvedor
-// viejo— el resolvedor viejo responde vacío sin error en cada ref y el agente pierde la hidratación.
-// idcorto_test.go la ejercita, así que `deadcode -test` la ve viva aunque aún no tenga caller de prod.
+// FASE. Esta es la mitad EMISORA del contrato y DESDE LA FASE 2 la llama producción: formatGists y
+// formatDeltaGists (cmd/musubi/turn.go) acortan el id de cada viñeta del envoltorio del hook. El
+// resolvedor (esRefCorta + hydrateByIDs) viajó PRIMERO —fase 1, release 0.144.0— y se desplegó en
+// todos los procesos que hidratan (daemon por sesión y cerebro central) ANTES de encender esto; ese
+// orden importa, porque al revés —un hook nuevo que acorta contra un resolvedor viejo— el viejo
+// responde vacío sin error en cada ref y el agente pierde la hidratación en silencio.
 func IDCorto(id string) string {
 	if esUUIDCanonico(id) {
 		return id[:8]
@@ -32,9 +32,10 @@ func IDCorto(id string) string {
 // IDCorto— y no un id completo. Es exactamente 8 hex en minúscula; nada más entra por el camino de
 // prefijo. OJO: un id entero que YA mida 8 hex (p. ej. un id de prueba «deadbeef») también cae por el
 // prefijo, y entonces trae su propia fila MÁS cualquier UUID que empiece con esos 8 hex —un
-// superconjunto, no la fila exacta a secas—. Hoy es latente: ningún id canónico mide 8 hex (los UUID
-// miden 36, los demás son «commit-…»), así que nadie pide uno. Si en fase 2 algún consumidor pudiera
-// crear ids de 8 hex, hay que revisitarlo.
+// superconjunto, no la fila exacta a secas—. Sigue latente: ningún id canónico mide 8 hex (los UUID
+// miden 36, los demás son «commit-…»), y la fase 2 emite refs cortas pero NO guarda ids de 8 hex en la
+// base (son prefijos de UUID que ya existen), así que nadie pide una fila con ese id. Si algún día un
+// consumidor creara ids de 8 hex, hay que revisitarlo.
 func esRefCorta(s string) bool {
 	return len(s) == 8 && hexMinuscula(s)
 }
