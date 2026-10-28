@@ -27,6 +27,12 @@ token optimization, ranking and skill resolution are deterministic and offline.
 
 <!-- novedades:inicio -->
 
+**[v0.146.0](https://github.com/codeabraham16/musubi/releases/tag/v0.146.0)** · Oct 28, 2026
+
+- Promoting, discarding and saving a memory now understand the short 8-hex reference the hook has emitted since 0.145.0. Before, doing it by the short id the agent sees in recall failed silently —the stale proposal stayed alive— or, on save, could overwrite or duplicate another observation; now the short id resolves to the exact observation before acting, and saving with a short id is rejected with instructions. Zero loss.
+
+And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.146.0/CHANGELOG.md#01460---2026-10-28)
+
 **[v0.145.0](https://github.com/codeabraham16/musubi/releases/tag/v0.145.0)** · Oct 26, 2026
 
 - The short-id emitter is switched on (phase 2, the last one). The `[id:…]` the turn hook attaches to each memory now goes out as a short 8-hex reference instead of the 36-character UUID. 0.144.0 shipped only the resolver; this one actually shortens, so from here on every turn spends fewer of the agent's tokens without changing a word of what the memory says.
@@ -42,10 +48,6 @@ And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/
 - First step —resolver only— toward naming each memory with a short 8-hex reference instead of the full UUID. Nothing changes externally yet: it enables the saving, switched on in a second phase.
 
 And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.144.0/CHANGELOG.md#01440---2026-10-25)
-
-**[v0.143.0](https://github.com/codeabraham16/musubi/releases/tag/v0.143.0)** · Oct 24, 2026
-
-- El sello de procedencia `llm:` y su `confidence` viajan al central y a las máquinas del tenant
 
 _The changelog is written in Spanish._
 

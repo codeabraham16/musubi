@@ -174,6 +174,9 @@ func (s *McpServer) toolDiscardProposal(ctx context.Context, raw json.RawMessage
 		if errors.Is(err, memory.ErrCrossTenant) {
 			return nil, rpcErrorf(codeUnauthorized, "%v", err)
 		}
+		if errors.Is(err, memory.ErrRefCortaAmbigua) {
+			return nil, rpcErrorf(codeInvalidParams, "%v — usá el id completo (expandilo con musubi_memory_expand)", err)
+		}
 		if errors.Is(err, memory.ErrNotQuarantined) {
 			return nil, rpcErrorf(codeInvalidParams, "la observación %q no es una propuesta viva en cuarentena: no hay nada que descartar", id)
 		}

@@ -40,6 +40,15 @@ func esRefCorta(s string) bool {
 	return len(s) == 8 && hexMinuscula(s)
 }
 
+// EsRefCorta expone esRefCorta al límite del tool (internal/mcp). save_observation con id= la usa para
+// RECHAZAR un id corto: resolverlo convertiría un alta en sobrescritura de otra fila, y no resolverlo
+// insertaría un duplicado de 8 hex (ver el handler). promote/discard, en cambio, SÍ resuelven el corto
+// con ResolverRefCortaCtx porque ahí el intent es inequívoco. La forma canónica vive en esRefCorta: el
+// emisor (IDCorto), el resolvedor (hydrateByIDs, ResolverRefCortaCtx) y este rechazo comparten una.
+func EsRefCorta(s string) bool {
+	return esRefCorta(s)
+}
+
 // esUUIDCanonico reconoce SÓLO un UUID canónico en minúscula (8-4-4-4-12, guiones en 8/13/18/23 y el
 // resto hex). Estricto a propósito: lo que no es exactamente esto no se acorta y viaja verbatim, que
 // es el lado seguro —el id entero siempre resuelve por el camino exacto—.

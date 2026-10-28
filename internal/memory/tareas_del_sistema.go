@@ -116,6 +116,19 @@ func (e *DbEngine) DescartarPropuesta(id, reemplazadaPor string) error {
 // guarda que CorroborateObservationCtx: conocer un id ajeno no alcanza para archivar memoria de otro
 // tenant. La que la reemplaza también tiene que ser del proyecto.
 func (e *DbEngine) DescartarPropuestaCtx(ctx context.Context, id, reemplazadaPor string) error {
+	// Resolución de refs cortas (fase 2): `superseded_by` suele ser el id de una NOTA VISIBLE que el
+	// agente sacó del recall, y desde que el envoltorio del hook emite 8 hex ese id llega CORTO. Sin
+	// resolverlo, el COUNT por PK exacta de DescartarPropuesta nunca matchea y la propuesta rancia
+	// queda viva (el modo «la memoria empieza a fallar»). Se resuelve ESTRICTO —una fila o error—
+	// porque archivar es por-PK: actuar sobre la equivocada es el daño. Un id completo pasa verbatim,
+	// y el "" también (no-op), así que el caso sin `superseded_by` no cambia.
+	var err error
+	if id, err = e.ResolverRefCortaCtx(ctx, id); err != nil {
+		return err
+	}
+	if reemplazadaPor, err = e.ResolverRefCortaCtx(ctx, reemplazadaPor); err != nil {
+		return err
+	}
 	for _, cual := range []string{id, reemplazadaPor} {
 		if strings.TrimSpace(cual) == "" {
 			continue
