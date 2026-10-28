@@ -7,6 +7,17 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.146.0] - 2026-10-28
+
+### Destacado
+- Promover, descartar y guardar un recuerdo entienden la referencia corta de 8 hex que el hook emite desde la 0.145.0. Antes, hacerlo por el id corto que el agente ve en el recall fallaba en silencio —la propuesta rancia quedaba viva— o, al guardar, podía pisar o duplicar otra observación; ahora el id corto se resuelve a la observación exacta antes de actuar, y guardar con un id corto se rechaza con instrucciones. Cero pérdida.
+
+### Highlights
+- Promoting, discarding and saving a memory now understand the short 8-hex reference the hook has emitted since 0.145.0. Before, doing it by the short id the agent sees in recall failed silently —the stale proposal stayed alive— or, on save, could overwrite or duplicate another observation; now the short id resolves to the exact observation before acting, and saving with a short id is rejected with instructions. Zero loss.
+
+### Fixed
+- **Los consumidores por-PK del id —`promote`, `discard`, `save`— resuelven la referencia corta de 8 hex, cerrando una regresión que abrió el emisor de la 0.145.0.** La fase 1 (0.144.0) enseñó a *hidratar* por prefijo (`hydrateByIDs`), pero `PromoteObservationCtx` y `DescartarPropuestaCtx` seguían buscando por igualdad literal de PK: una referencia corta nunca matcheaba, así que promover o descartar por el id que el agente devuelve del recall fallaba en silencio y la propuesta rancia quedaba viva (`superseded_by` jamás se seteaba) —el modo «la memoria empieza a fallar»—. El nuevo `ResolverRefCortaCtx` traduce la referencia corta al id completo de forma estricta y acotada al scope de la credencial (hereda `scopeClause`), con el dominio = rango del emisor (reúsa la misma `esUUIDCanonico` que `IDCorto`, para que emisor y resolvedor no diverjan): 0 coincidencias ⇒ no encontrada, 1 ⇒ id completo, ≥2 ⇒ ambigua. `promote` y `discard` resuelven las dos mitades (`id` y `reemplazadaPor`) antes del lookup por PK. Y `save_observation` con `id=` RECHAZA la referencia corta —un UPSERT por prefijo convertiría un alta en sobrescritura de otra fila, o insertaría un duplicado silencioso de 8 hex que el `ON CONFLICT(id)` no ve—, con un error que indica cómo traer el id completo (`musubi_memory_expand`). Cero pérdida.
+
 ## [0.145.0] - 2026-10-26
 
 ### Destacado
@@ -9410,7 +9421,8 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.145.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.146.0...HEAD
+[0.146.0]: https://github.com/codeabraham16/musubi/compare/v0.145.0...v0.146.0
 [0.145.0]: https://github.com/codeabraham16/musubi/compare/v0.144.0...v0.145.0
 [0.144.0]: https://github.com/codeabraham16/musubi/compare/v0.143.0...v0.144.0
 [0.143.0]: https://github.com/codeabraham16/musubi/compare/v0.142.0...v0.143.0

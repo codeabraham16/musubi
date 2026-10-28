@@ -27,6 +27,12 @@ optimización de tokens, el ranking y la resolución de skills son deterministas
 
 <!-- novedades:inicio -->
 
+**[v0.146.0](https://github.com/codeabraham16/musubi/releases/tag/v0.146.0)** · 28 oct 2026
+
+- Promover, descartar y guardar un recuerdo entienden la referencia corta de 8 hex que el hook emite desde la 0.145.0. Antes, hacerlo por el id corto que el agente ve en el recall fallaba en silencio —la propuesta rancia quedaba viva— o, al guardar, podía pisar o duplicar otra observación; ahora el id corto se resuelve a la observación exacta antes de actuar, y guardar con un id corto se rechaza con instrucciones. Cero pérdida.
+
+Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.146.0/CHANGELOG.md#01460---2026-10-28)
+
 **[v0.145.0](https://github.com/codeabraham16/musubi/releases/tag/v0.145.0)** · 26 oct 2026
 
 - Se enciende el emisor del id corto (fase 2, y última). El `[id:…]` que el hook del turno le pega a cada recuerdo ahora sale como una referencia corta de 8 hex en lugar del UUID de 36 caracteres. La 0.144.0 trajo sólo el resolvedor; ésta acorta de verdad, así que de acá en más cada turno gasta menos tokens del agente sin cambiar una coma de lo que el recuerdo dice.
@@ -42,10 +48,6 @@ Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob
 - Primer paso —sólo el resolvedor— para poder nombrar cada recuerdo con una referencia corta de 8 hex en lugar del UUID entero. No cambia nada hacia afuera todavía: habilita el ahorro, que se enciende en una segunda fase.
 
 Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.144.0/CHANGELOG.md#01440---2026-10-25)
-
-**[v0.143.0](https://github.com/codeabraham16/musubi/releases/tag/v0.143.0)** · 24 oct 2026
-
-- El sello de procedencia `llm:` y su `confidence` viajan al central y a las máquinas del tenant
 
 <!-- novedades:fin -->
 
