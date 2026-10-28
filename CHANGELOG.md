@@ -7,6 +7,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.147.0] - 2026-10-28
+
+### Destacado
+- El proxy `musubi cerebro` ya no puede marcar el cerebro central como caído por un pico de red en el arranque. Antes reenviaba el saludo MCP (`initialize`) al central —el primer dial en frío de la sesión—, y si la red se demoraba más de 5 s, Claude Code dejaba el server MCP en `failed` para TODA la sesión aunque el central estuviera vivo y contestara en ~250-780 ms. Ahora el saludo se responde localmente, sin discar: el handshake ya no depende de la red y la sesión siempre inicializa.
+
+### Highlights
+- The `musubi cerebro` proxy can no longer mark the central brain as down because of a startup network spike. It used to forward the MCP handshake (`initialize`) to the central —the session's first cold dial—, and if the network took more than 5s, Claude Code left the MCP server stuck in `failed` for the WHOLE session even though the central was alive and answering in ~250-780 ms. Now the handshake is answered locally, without dialing: it no longer depends on the network and the session always initializes.
+
 ### Fixed
 - **El proxy `musubi cerebro` responde el handshake MCP (`initialize` + `notifications/initialized`) LOCALMENTE, sin discar el central.** Antes reenviaba el `initialize` —el primer dial en frío del arranque—, y un pico de red que lo pasara de los 5 s dejaba al cliente MCP (Claude Code) marcando el server `failed` para TODA la sesión, aunque el central estuviera vivo y `musubi cerebro --alcance` diera 200 en ~250-780 ms (medido 2026-10-28). Al responderlo local, el handshake ya no puede fallar por la red: el `initialize` no toca el central, así que la sesión siempre inicializa. Se puede porque el `/mcp` del central es STATELESS —despacha cada POST por separado y no exige un `initialize` previo—, así que `tools/list` y `tools/call` siguen funcionando sin haberle reenviado el saludo. El saludo replica el shape del central (protocolVersion, `capabilities.tools`, serverInfo) y ecoa el id; la notificación de cierre se traga en vez de reenviarla. Un `initialize` sin id o una `notifications/initialized` con id —que un cliente conforme nunca manda— caen al reenvío de siempre, para no violar la regla JSON-RPC de request-vs-notificación. El timeout de dial (5 s) y el de request (60 s) quedan intactos (invariante del #275). **El riesgo del dial en frío no desaparece: se MUEVE del handshake al primer `tools/list`** (en el peor caso, central caído, de 3 dials en frío en el arranque a 1 — medido 16,9 s → 5,8 s). Cerrarlo del todo —reintento acotado sobre los pedidos idempotentes como `tools/list`, nunca sobre `tools/call` para no duplicar escrituras, y/o un cache local de `tools/list`— queda como seguimiento.
 
@@ -9424,7 +9432,8 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.146.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.147.0...HEAD
+[0.147.0]: https://github.com/codeabraham16/musubi/compare/v0.146.0...v0.147.0
 [0.146.0]: https://github.com/codeabraham16/musubi/compare/v0.145.0...v0.146.0
 [0.145.0]: https://github.com/codeabraham16/musubi/compare/v0.144.0...v0.145.0
 [0.144.0]: https://github.com/codeabraham16/musubi/compare/v0.143.0...v0.144.0

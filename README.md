@@ -27,6 +27,12 @@ optimización de tokens, el ranking y la resolución de skills son deterministas
 
 <!-- novedades:inicio -->
 
+**[v0.147.0](https://github.com/codeabraham16/musubi/releases/tag/v0.147.0)** · 28 oct 2026
+
+- El proxy `musubi cerebro` ya no puede marcar el cerebro central como caído por un pico de red en el arranque. Antes reenviaba el saludo MCP (`initialize`) al central —el primer dial en frío de la sesión—, y si la red se demoraba más de 5 s, Claude Code dejaba el server MCP en `failed` para TODA la sesión aunque el central estuviera vivo y contestara en ~250-780 ms. Ahora el saludo se responde localmente, sin discar: el handshake ya no depende de la red y la sesión siempre inicializa.
+
+Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.147.0/CHANGELOG.md#01470---2026-10-28)
+
 **[v0.146.0](https://github.com/codeabraham16/musubi/releases/tag/v0.146.0)** · 28 oct 2026
 
 - Promover, descartar y guardar un recuerdo entienden la referencia corta de 8 hex que el hook emite desde la 0.145.0. Antes, hacerlo por el id corto que el agente ve en el recall fallaba en silencio —la propuesta rancia quedaba viva— o, al guardar, podía pisar o duplicar otra observación; ahora el id corto se resuelve a la observación exacta antes de actuar, y guardar con un id corto se rechaza con instrucciones. Cero pérdida.
@@ -40,14 +46,6 @@ Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob
 - `musubi doctor` suma un check reparable que detecta observaciones de un modelo ya corroboradas que quedaron sólo en local y las promueve al cerebro central.
 
 Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.145.0/CHANGELOG.md#01450---2026-10-26)
-
-**[v0.144.0](https://github.com/codeabraham16/musubi/releases/tag/v0.144.0)** · 25 oct 2026
-
-- El envoltorio que Musubi le agrega a cada recuerdo en el hook del turno adelgaza: gasta menos tokens del agente sin tocar una coma de lo que el recuerdo dice.
-- El presupuesto de tokens del recall ahora se mide por lo que de verdad se serializa y envía, no por una suma aproximada de las fichas, así que el corte es fiel al costo real.
-- Primer paso —sólo el resolvedor— para poder nombrar cada recuerdo con una referencia corta de 8 hex en lugar del UUID entero. No cambia nada hacia afuera todavía: habilita el ahorro, que se enciende en una segunda fase.
-
-Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.144.0/CHANGELOG.md#01440---2026-10-25)
 
 <!-- novedades:fin -->
 
