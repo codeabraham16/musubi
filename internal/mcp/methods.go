@@ -298,6 +298,17 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 	if strings.TrimSpace(args.Content) == "" {
 		return nil, rpcErrorf(codeInvalidParams, "content es obligatorio")
 	}
+	// save_observation NO actualiza por REF CORTA. Un id de 8 hex es el handle que emite el envoltorio
+	// del hook (memory.IDCorto) y que el agente devuelve del recall; acá llega por el camino con-id, que
+	// es un UPSERT. Resolverlo convertiría un alta en sobrescritura de OTRA fila, y si NO resolviera
+	// insertaría una fila nueva de 8 hex —un duplicado silencioso que el ON CONFLICT(id) no ve—: las dos
+	// rompen «cero pérdida». Por eso se RECHAZA y se avisa (fase 2 de id-corto en el límite del tool).
+	// promote/discard SÍ resuelven el corto (ResolverRefCortaCtx): ahí el intent —actuar sobre la fila
+	// que el agente ya identificó— es inequívoco; crear/actualizar por un prefijo no lo es.
+	if sid := strings.TrimSpace(args.ID); sid != "" && memory.EsRefCorta(sid) {
+		return nil, rpcErrorf(codeInvalidParams,
+			"id %q es una ref corta de 8 hex (del recall): save_observation no actualiza por ref corta. Para ACTUALIZAR, traé el id completo con musubi_memory_expand y usá ése; para CREAR una nota nueva, omití el id.", sid)
+	}
 	// scope de la memoria híbrida: "" (default local), "local" o "shared". Cualquier otro
 	// valor es un error de parámetro (no se coacciona silenciosamente).
 	if !memory.ValidScopeParam(args.Scope) {
@@ -517,6 +528,9 @@ func (s *McpServer) toolPromote(ctx context.Context, raw json.RawMessage) (inter
 		}
 		if errors.Is(err, memory.ErrCrossTenant) {
 			return nil, rpcErrorf(codeUnauthorized, "%v", err)
+		}
+		if errors.Is(err, memory.ErrRefCortaAmbigua) {
+			return nil, rpcErrorf(codeInvalidParams, "%v — usá el id completo (expandilo con musubi_memory_expand)", err)
 		}
 		return nil, rpcErrorf(codeInternalError, "error al promover observación: %v", err)
 	}

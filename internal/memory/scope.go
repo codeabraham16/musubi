@@ -273,6 +273,14 @@ func (e *DbEngine) obsInScope(ctx context.Context, id string) (bool, error) {
 // acotado NO puede forzar a 'shared' (y al outbox central) la observación de OTRO tenant con sólo
 // conocer su id. Auditoría 2026-07-26 #11.
 func (e *DbEngine) PromoteObservationCtx(ctx context.Context, id string) error {
+	// Resolución de ref corta (fase 2): si el id llega como ref de 8 hex (del envoltorio del hook, ver
+	// IDCorto/ResolverRefCortaCtx), se traduce al UUID completo —estricto, acotado al scope— antes del
+	// lookup por PK. Un id completo pasa verbatim, así que corroborate (que llama acá con el id del
+	// board) no cambia en nada.
+	id, err := e.ResolverRefCortaCtx(ctx, id)
+	if err != nil {
+		return err
+	}
 	ok, err := e.obsInScope(ctx, id)
 	if err != nil {
 		return err
