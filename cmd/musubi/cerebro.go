@@ -138,13 +138,34 @@ func runCerebro(args []string) {
 		// una línea corrupta DESAPAREZCA EN SILENCIO y el cliente espere para siempre una respuesta
 		// que nunca va a llegar. Un JSON ilegible se responde con un error de parseo, no se traga.
 		var probe struct {
-			ID json.RawMessage `json:"id"`
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
 		}
 		if err := json.Unmarshal(req, &probe); err != nil {
 			writeLine(out, errorRPC(nil, -32700, "musubi cerebro: JSON ilegible en stdin: "+err.Error()))
 			continue
 		}
 		esNotificacion := len(probe.ID) == 0
+
+		// EL HANDSHAKE MCP SE TERMINA ACÁ, SIN DISCAR EL CENTRAL. Antes se reenviaba, y un dial en
+		// frío que pasara de los 5 s dejaba al cliente MCP marcando este server `failed` para TODA
+		// la sesión aunque el central estuviera vivo (medido 2026-10-28). Se puede responder local
+		// porque el central es STATELESS: su /mcp despacha cada POST por separado y NO exige un
+		// initialize previo (internal/mcp/http.go), así que tools/list y tools/call siguen
+		// funcionando sin haberle reenviado este saludo.
+		// Se respeta la distinción request/notificación que fija el comentario de arriba: el
+		// initialize es SIEMPRE un request (lleva id) y la notificación de cierre NUNCA lo lleva. Un
+		// mensaje malformado que invierta eso NO toma este atajo —cae al forward de siempre—, para no
+		// contradecir esa regla por un caso que un cliente conforme jamás manda.
+		switch {
+		case probe.Method == "initialize" && !esNotificacion:
+			writeLine(out, saludoLocal(probe.ID))
+			continue
+		case probe.Method == "notifications/initialized" && esNotificacion:
+			// Cierre del handshake: una notificación no lleva respuesta y el central no la
+			// necesita. Se traga en vez de reenviarla, que sería un dial en frío extra al pedo.
+			continue
+		}
 
 		resp, err := forward(client, endpoint, token, req)
 		if err != nil {
@@ -207,6 +228,27 @@ func writeLine(w *bufio.Writer, b []byte) {
 	if err := w.Flush(); err != nil {
 		fmt.Fprintf(os.Stderr, "musubi cerebro: no se pudo enviar la respuesta: %v\n", err)
 	}
+}
+
+// saludoLocal arma la respuesta al `initialize` SIN discar el central. Replica el shape que
+// devuelve el server central (internal/mcp, handleInitialize) para que el cliente lo acepte igual:
+// protocolVersion fijo (el que el central ya negocia hoy), capabilities.tools y serverInfo. El `id`
+// se ecoa tal cual. NO trae `_meta` (identity/readonly): es diagnóstico, no lo exige el handshake, y
+// traerlo obligaría a consultar al central — justo el dial que este saludo existe para evitar.
+func saludoLocal(id json.RawMessage) []byte {
+	if len(id) == 0 {
+		id = json.RawMessage("null")
+	}
+	b, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"result": map[string]any{
+			"protocolVersion": "2024-11-05",
+			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"serverInfo":      map[string]any{"name": "musubi-cerebro", "version": version},
+		},
+	})
+	return b
 }
 
 func errorRPC(id json.RawMessage, code int, msg string) []byte {
