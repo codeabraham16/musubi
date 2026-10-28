@@ -27,6 +27,12 @@ token optimization, ranking and skill resolution are deterministic and offline.
 
 <!-- novedades:inicio -->
 
+**[v0.147.0](https://github.com/codeabraham16/musubi/releases/tag/v0.147.0)** · Oct 28, 2026
+
+- The `musubi cerebro` proxy can no longer mark the central brain as down because of a startup network spike. It used to forward the MCP handshake (`initialize`) to the central —the session's first cold dial—, and if the network took more than 5s, Claude Code left the MCP server stuck in `failed` for the WHOLE session even though the central was alive and answering in ~250-780 ms. Now the handshake is answered locally, without dialing: it no longer depends on the network and the session always initializes.
+
+And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.147.0/CHANGELOG.md#01470---2026-10-28)
+
 **[v0.146.0](https://github.com/codeabraham16/musubi/releases/tag/v0.146.0)** · Oct 28, 2026
 
 - Promoting, discarding and saving a memory now understand the short 8-hex reference the hook has emitted since 0.145.0. Before, doing it by the short id the agent sees in recall failed silently —the stale proposal stayed alive— or, on save, could overwrite or duplicate another observation; now the short id resolves to the exact observation before acting, and saving with a short id is rejected with instructions. Zero loss.
@@ -40,14 +46,6 @@ And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/
 - `musubi doctor` gains a repairable check that detects a model's already-corroborated observations left only locally and promotes them to the central brain.
 
 And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.145.0/CHANGELOG.md#01450---2026-10-26)
-
-**[v0.144.0](https://github.com/codeabraham16/musubi/releases/tag/v0.144.0)** · Oct 25, 2026
-
-- The wrapper Musubi adds around each memory in the turn hook gets leaner: it spends fewer of the agent's tokens without changing a word of what the memory says.
-- The recall token budget is now measured by what is actually serialized and sent, not an approximate sum of the gists, so the cut is faithful to the real cost.
-- First step —resolver only— toward naming each memory with a short 8-hex reference instead of the full UUID. Nothing changes externally yet: it enables the saving, switched on in a second phase.
-
-And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.144.0/CHANGELOG.md#01440---2026-10-25)
 
 _The changelog is written in Spanish._
 
