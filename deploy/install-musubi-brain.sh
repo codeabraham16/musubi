@@ -189,6 +189,38 @@ CFG="$BRAIN_HOME/.musubi/config.yaml"
 # Se borra hasta la proxima clave de primer nivel (una linea que empieza sin espacio y no es
 # comentario), que es lo que "el bloque service" significa en YAML.
 log "Configurando bloque service (addr=$BRAIN_ADDR)"
+# QUE SE PIERDE EN CADA REINSTALACION, Y POR QUE ESTE RESCATE EXISTE (2026-10-31).
+#
+# El heredoc de abajo reescribe `service:` COMPLETO, asi que toda clave que el admin declaro a mano
+# y que el heredoc no conoce desaparece en silencio. `force_redact` es la que tiene dientes: el
+# cerebro la DEDUCE del bind (internal/mcp/http.go: `s.forceRedact = !loopback || cfg.ForceRedact`),
+# y desde que escucha en 127.0.0.1 detras de `tailscale serve` el `!loopback` da false, asi que
+# toma por LOCAL una maquina que sigue expuesta al tailnet y la redaccion del ingest queda APAGADA.
+# Encenderla pide declararla a mano. Paso de verdad: se encendio el 2026-10-31 y los ghosts del
+# grafo del central cayeron de 2705 a 0 -- y hasta este cambio, el proximo `install` la apagaba sin
+# decir una palabra.
+#
+# Se rescata el valor previo ANTES del awk que borra el bloque: despues leeria un config ya
+# mutilado y daria vacio siempre. Si no habia ninguno queda `false`, que es el default del codigo,
+# asi que esta linea no cambia el comportamiento de nadie: solo deja de perderlo, y de paso vuelve
+# la clave VISIBLE en el config generado, que es la otra mitad del problema.
+FORCE_REDACT_PREVIO="$(awk '
+  /^service:/ { dentro=1; next }
+  dentro && /^[^[:space:]#]/ { dentro=0 }
+  dentro && /^[[:space:]]*force_redact:/ {
+    sub(/^[[:space:]]*force_redact:[[:space:]]*/, "")
+    sub(/[[:space:]]*#.*$/, "")
+    gsub(/[[:space:]]/, "")
+    print; exit
+  }
+' "$CFG")"
+# Solo `true` sobrevive; vacio, basura o cualquier otra cosa cae al default del codigo. Normalizar
+# aca y no en el heredoc evita emitir un YAML invalido con lo que hubiera en el archivo.
+case "$(printf '%s' "$FORCE_REDACT_PREVIO" | tr '[:upper:]' '[:lower:]')" in
+  true) FORCE_REDACT_PREVIO=true ;;
+  *)    FORCE_REDACT_PREVIO=false ;;
+esac
+log "  force_redact que se conserva: $FORCE_REDACT_PREVIO"
 cp -f "$CFG" "$CFG.bak"
 awk '
   /^service:/ { dentro=1; next }
@@ -240,6 +272,15 @@ service:
     # Con un addr NO loopback y sin proxy no cambia nada: las peticiones llegan con la IP real
     # del cliente, que no esta en 127.0.0.1/32, y el header no se lee.
     trusted_proxies: ["127.0.0.1/32"]
+    # Por el MISMO motivo que la linea de arriba, y es el caso que mas cuesta: el cerebro no puede
+    # deducir su exposicion del bind cuando escucha en loopback detras de un proxy. `trusted_proxies`
+    # arregla de que IP se cree el pedido; `force_redact` arregla si el ingest se redacta. Con la
+    # deduccion sola, un cerebro expuesto al tailnet se cree local y NO redacta.
+    #
+    # El valor sale del rescate de mas arriba, no de un literal: lo que el admin haya declarado
+    # sobrevive a la reinstalacion. Cambiar de que depende el DEFAULT es otra discusion (toca a
+    # todos los clientes, no solo al central) y no se decide aca.
+    force_redact: $FORCE_REDACT_PREVIO
 EOF
 chown "$BRAIN_USER:$BRAIN_USER" "$CFG"
 ok "Bloque service configurado"

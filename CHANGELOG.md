@@ -7,6 +7,9 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Fixed
+- **El instalador del cerebro ya no apaga `force_redact` al reinstalar.** `deploy/install-musubi-brain.sh` reescribe el bloque `service:` completo en cada corrida, asi que toda clave que el administrador haya declarado a mano y que su heredoc no conozca desaparecia en silencio. `force_redact` es la que cuesta: el cerebro la DEDUCE del bind (`s.forceRedact = !loopback || cfg.ForceRedact`), y desde que el central escucha en `127.0.0.1` detras de `tailscale serve` el `!loopback` da false, asi que toma por local una maquina que sigue expuesta al tailnet y la redaccion del ingest queda apagada. Encenderla pide declararla a mano — y hasta ahora el proximo `install` la volvia a apagar sin un aviso: el daemon arrancaba igual, nada fallaba, y lo unico que cambiaba era que volvia a guardar sin redactar. Ahora el valor previo se rescata ANTES del `awk` que borra el bloque y se re-emite en el heredoc, con el default del codigo (`false`) cuando no habia ninguno: no cambia el comportamiento de ninguna instalacion, solo deja de perder lo declarado, y de paso vuelve la clave visible en el config generado. **De que depende el default sigue igual** — eso toca a todos los clientes, no solo al central, y es una decision aparte. Custodiado por `TestElInstaladorDelCerebroConservaForceRedact`, que caza las tres formas de romperlo (emitir un literal, rescatar de un config ya mutilado, o rescatar despues del `awk`); los tres sabotajes verificados en rojo.
+
 ## [0.147.0] - 2026-10-28
 
 ### Destacado
