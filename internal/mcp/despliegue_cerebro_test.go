@@ -190,3 +190,94 @@ func TestElInstaladorDelCerebroNoSeComeLoQueVieneDespuesDeService(t *testing.T) 
 		t.Fatal("el instalador dejó de escribir el bloque `service:`: el cerebro no expondría su daemon")
 	}
 }
+
+// EL INSTALADOR NO PUEDE APAGAR `force_redact` AL REINSTALAR.
+//
+// El heredoc de `install-musubi-brain.sh` reescribe el bloque `service:` COMPLETO, asi que toda
+// clave que el admin declaro a mano y que el heredoc no conoce desaparece. `force_redact` es la que
+// tiene dientes: el cerebro la DEDUCE del bind (`s.forceRedact = !loopback || cfg.ForceRedact`,
+// internal/mcp/http.go), y desde que escucha en 127.0.0.1 detras de `tailscale serve` el `!loopback`
+// da false, asi que toma por LOCAL una maquina que sigue expuesta al tailnet y la redaccion del
+// ingest queda apagada. Encenderla pide declararla a mano, y hasta este custodio el proximo
+// `install` la apagaba SIN UN AVISO -- el daemon arrancaba igual, nada fallaba, y lo unico que
+// cambiaba era que volvia a guardar sin redactar.
+//
+// Se custodian las TRES formas de romperlo, porque la primera es la obvia y las otras dos son las
+// que pasan desapercibidas:
+//  1. emitir un literal en vez de la variable: la clave queda clavada y no preserva nada;
+//  2. rescatar de un archivo que no es el config INTEGRO: `$CFG.sin-service` es el config ya
+//     mutilado, y leer de ahi devuelve vacio siempre -- el codigo se ve bien y preserva nada;
+//  3. rescatar DESPUES del awk que borra el bloque, con el mismo efecto que (2).
+//
+// LIMITE DECLARADO, para que nadie lea de mas: esto mide el TEXTO del guion, como los otros
+// despliegue_*. No ejecuta el instalador, asi que no prueba que el awk parsee bien -- eso se midio
+// a mano contra seis configs sinteticos (declarado true, ausente, declarado FUERA del bloque,
+// `TRUE`, basura, comentado) y dio true/false/false/true/false/false.
+//
+// Sabotaje que la hace fallar: clavar el valor en vez de emitir la variable del rescate.
+// arnes: archivo="deploy/install-musubi-brain.sh"
+// arnes: de="    force_redact: $FORCE_REDACT_PREVIO\n"
+// arnes: a="    force_redact: false\n"
+//
+// Sabotaje que la hace fallar: rescatar del config ya mutilado, que devuelve vacio siempre.
+// arnes: archivo="deploy/install-musubi-brain.sh"
+// arnes: de="' \"$CFG\")\"\n"
+// arnes: a="' \"$CFG.sin-service\")\"\n"
+//
+// Sabotaje que la hace fallar: pisar lo rescatado con una reasignacion despues del awk.
+// arnes: archivo="deploy/install-musubi-brain.sh"
+// arnes: de="cat >> \"$CFG\" <<EOF\n"
+// arnes: a="FORCE_REDACT_PREVIO=false\ncat >> \"$CFG\" <<EOF\n"
+func TestElInstaladorDelCerebroConservaForceRedact(t *testing.T) {
+	guion := leerDeploy(t, "install-musubi-brain.sh")
+
+	// (1) la clave se emite, y desde la variable del rescate.
+	const emision = "force_redact: $FORCE_REDACT_PREVIO"
+	if !strings.Contains(guion, emision) {
+		if i := strings.Index(guion, "force_redact:"); i >= 0 {
+			fin := strings.IndexByte(guion[i:], '\n')
+			if fin < 0 {
+				fin = len(guion) - i
+			}
+			t.Fatalf("el instalador emite `force_redact` con un valor CLAVADO:\n  %s\n"+
+				"tiene que salir del rescate (%s), o una reinstalacion pisa lo que el admin declaro.",
+				strings.TrimSpace(guion[i:i+fin]), emision)
+		}
+		t.Fatalf("el instalador dejo de emitir `force_redact` en el bloque `service:`: una\n" +
+			"reinstalacion la borra y la redaccion del ingest del central se apaga en silencio.")
+	}
+
+	// (2) el rescate lee el config INTEGRO. `$CFG.sin-service` es el config ya mutilado.
+	iRescate := strings.Index(guion, `FORCE_REDACT_PREVIO="$(awk`)
+	if iRescate < 0 {
+		t.Fatal("no esta el rescate del `force_redact` previo: sin el, el heredoc no tiene de donde\n" +
+			"sacar el valor y la clave emitida arriba es decorativa.")
+	}
+	finRescate := strings.Index(guion[iRescate:], `)"`)
+	if finRescate < 0 {
+		t.Fatal("el rescate del `force_redact` no cierra su sustitucion `$(...)`")
+	}
+	cuerpo := guion[iRescate : iRescate+finRescate]
+	if !strings.Contains(cuerpo, `' "$CFG"`) {
+		t.Fatalf("el rescate no lee el config INTEGRO (`$CFG`). Lee:\n  %s\n"+
+			"leer `$CFG.sin-service` -o cualquier temporal- devuelve vacio siempre, porque ese\n"+
+			"archivo es el config con el bloque `service:` YA borrado.", cuerpo)
+	}
+
+	// (3) el rescate corre antes de que el awk borre el bloque, y nada lo reasigna despues.
+	iBorra := strings.Index(guion, `"$CFG" > "$CFG.sin-service"`)
+	if iBorra < 0 {
+		t.Fatal("no esta el awk que reescribe el bloque `service:`: cambio la forma del instalador\n" +
+			"y este custodio quedo midiendo otra cosa. Revisarlo, no borrarlo.")
+	}
+	if iRescate > iBorra {
+		t.Fatalf("el rescate del `force_redact` (byte %d) corre DESPUES del awk que borra el bloque\n"+
+			"(byte %d): a esa altura el config ya perdio la clave y el rescate devuelve vacio\n"+
+			"siempre. Tiene que ir antes.", iRescate, iBorra)
+	}
+	if i := strings.Index(guion[iBorra:], "FORCE_REDACT_PREVIO="); i >= 0 {
+		t.Fatalf("hay una asignacion de FORCE_REDACT_PREVIO despues del awk que borra el bloque\n"+
+			"(byte %d): lo que se rescato antes queda pisado por un valor que ya no sale del\n"+
+			"config del admin.", iBorra+i)
+	}
+}
