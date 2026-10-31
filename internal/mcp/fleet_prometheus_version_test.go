@@ -222,9 +222,17 @@ func TestUnaVersionSuciaQueNoEntraNoSeGuardaComoUnBuildLimpio(t *testing.T) {
 // Sabotaje: sacar `mcp.WithVersion(version)` de cualquiera de las TRES construcciones de
 // `cmd/musubi/main.go` (daemon, serve, sólo lectura) → falla acá. Verificado en las tres el
 // 2026-09-07, después de pasar la guarda de leer un renglón a leer la llamada entera.
+//
+// EL `de` TIENE QUE NOMBRAR AL VECINO, y por eso se mueve cuando alguien agrega una option.
+// `mcp.WithVersion(version))` solo aparece DOS veces —serve y daemon— así que no identifica una
+// construcción; hay que pegarle la option de al lado, que es justo lo que se pudre. Ya pasó: el
+// `de` anclaba en `WithUsageLedger(…), mcp.WithVersion(version))` y el 2026-10-29 el motor de
+// turnos (`WithMotor`) entró EN MEDIO de esas dos, así que el sabotaje dejó de aplicarse. Lo
+// cazó `TestLaDeudaDeSabotajesNoCreceYElCorpusNoSePodre`, que es exactamente para esto: sin esa
+// guarda el sabotaje habría seguido «en verde» queriendo decir «no lo apliqué».
 // arnes: archivo="cmd/musubi/main.go"
-// arnes: de="mcp.WithUsageLedger(engine, cfg.UsageLedger), mcp.WithVersion(version))"
-// arnes: a="mcp.WithUsageLedger(engine, cfg.UsageLedger))"
+// arnes: de="mcp.WithMotor(motorDeTurnos), mcp.WithVersion(version))"
+// arnes: a="mcp.WithMotor(motorDeTurnos))"
 func TestTodoServidorQueSeSirveDeclaraSuVersion(t *testing.T) {
 	crudo, err := os.ReadFile("../../cmd/musubi/main.go")
 	if err != nil {
