@@ -45,6 +45,16 @@ func Desde(cfg config.MotorConfig) (Motor, error) {
 		return nil, nil
 
 	case ProveedorCLI:
+		// 🔴 EL PLAZO SE ACOTA ACÁ, AL CONSTRUIR, por la misma razón que la credencial de más
+		// abajo: es un error de configuración, y el único que puede corregirlo es quien editó el
+		// yaml. Dejarlo pasar no daría un turno largo —daría un espejo cuyo listener no vence
+		// nunca, o un tope de 290 ms—, y el síntoma no apunta al yaml por ningún lado. La doc de
+		// TopeDelPlazo tiene los dos números y el porqué de chequear el ENTERO.
+		if plazoFueraDeRango(cfg.TurnTimeoutSeconds) {
+			return nil, fmt.Errorf(
+				"motor.turn_timeout_seconds=%d se pasa del tope de %s: arriba de ahí la conversión a Duration desborda y el plazo que rige deja de ser el que dice el yaml",
+				cfg.TurnTimeoutSeconds, TopeDelPlazo)
+		}
 		return &Lanzador{
 			Binario: cfg.Binary,
 			// Un 0 en el yaml NO es «timeout cero»: el Lanzador lo lee como su default de
@@ -101,6 +111,15 @@ func DescribirMotor(cfg config.MotorConfig) string {
 		bin := cfg.Binary
 		if bin == "" {
 			bin = "claude"
+		}
+		// NO SE ANUNCIA EL NÚMERO RESUELTO CUANDO ESTÁ FUERA DE RANGO, porque el resuelto es
+		// basura envuelta y se lee como un dato: con 9223372036 esta línea diría «tope por turno
+		// 2562047h47m16s» —292 años— y con 18446744074 diría «290.448384ms», mandando a buscar el
+		// problema a cualquier lado menos al yaml. `Desde` ya rechazó este motor; lo único útil
+		// que puede decir el arranque es POR QUÉ no arrancó.
+		if plazoFueraDeRango(cfg.TurnTimeoutSeconds) {
+			return fmt.Sprintf("motor: cli (binario %s, turn_timeout_seconds=%d FUERA DE RANGO —el tope es %s—: el motor no arranca)",
+				bin, cfg.TurnTimeoutSeconds, TopeDelPlazo)
 		}
 		espera := plazoDelTurno(time.Duration(cfg.TurnTimeoutSeconds) * time.Second)
 		return fmt.Sprintf("motor: cli (binario %s, tope por turno %s, factura la suscripción)", bin, espera)

@@ -129,9 +129,15 @@ const margenDelIdle = time.Minute
 //
 // `espera` ES EL PLAZO REAL DEL TURNO, no el default del motor, y de ahí sale el `IdleTimeout`
 // del listener. Colgarlo de la constante era el defecto: `Lanzador.Espera` viene de
-// `turn_timeout_seconds` del yaml ([factory.go](factory.go)), que nadie acota, así que con 700 s
-// el idle de 660 s cortaba ANTES que el reloj del lanzador — justo lo que el comentario de abajo
-// promete que no pasa. Cero ⇒ DemoraPorDefecto, el mismo acuerdo que `Lanzador.Espera`.
+// `turn_timeout_seconds` del yaml ([factory.go](factory.go)), así que con 700 s el idle de 660 s
+// cortaba ANTES que el reloj del lanzador — justo lo que el comentario de abajo promete que no
+// pasa. Cero ⇒ DemoraPorDefecto, el mismo acuerdo que `Lanzador.Espera`.
+//
+// Y EL OTRO BORDE LO CIERRA LA FÁBRICA, NO ESTA FUNCIÓN. La suma de abajo desborda con un
+// `turn_timeout_seconds` cerca de 2⁶³ ns, y acá llega tarde: el desborde ya ocurrió y el valor es
+// indistinguible de un plazo legítimo. Por eso `Desde` RECHAZA lo que pasa `TopeDelPlazo` —ver su
+// doc, que tiene los dos modos con sus números—, y por eso este comentario ya no dice «nadie
+// acota el yaml»: alguien lo acota, y es de lo que depende la promesa de abajo.
 //
 // FALLA EN VEZ DE DEGRADAR, y es deliberado. Si el listener no abre, la alternativa sería correr
 // el turno sin tools: el modelo contestaría algo —no un error— sobre una conversación en la que
@@ -196,8 +202,16 @@ func abrirEspejo(p Pedido, espera time.Duration) (*espejo, error) {
 		//
 		// 🔴 Y «SIEMPRE» ERA FALSO MIENTRAS ESTO COLGABA DE `DemoraPorDefecto`. Ver la doc de
 		// abrirEspejo: el plazo del turno sale del yaml, así que la constante y el plazo real
-		// se despegaban y con 700 s el orden de los relojes quedaba invertido. Ahora la
-		// promesa se cumple con cualquier valor, sin depender de que alguien acote el yaml.
+		// se despegaban y con 700 s el orden de los relojes quedaba invertido. Colgarlo del
+		// plazo real arregló ese orden.
+		//
+		// ⚠️ PERO «CON CUALQUIER VALOR» TAMBIÉN ERA FALSO, y es la otra mitad: ESTA SUMA
+		// DESBORDA. Con `turn_timeout_seconds` entre 9223371977 y 9223372036 el IdleTimeout
+		// queda NEGATIVO, y net/http no lee un negativo como «ya vencido» sino como «sin
+		// deadline» (`if d := c.server.idleTimeout(); d > 0`, server.go:2113): el listener no
+		// vence nunca, que es lo contrario exacto de lo que promete el párrafo de arriba. Hoy
+		// la promesa vale porque `Desde` ACOTA el yaml y rechaza lo que pasa `TopeDelPlazo`
+		// —cuya doc tiene los dos modos de desborde—, no porque la suma sea segura por sí sola.
 		IdleTimeout: espera + margenDelIdle,
 		// Escribir la respuesta. El hijo es local y lo que sale es un handshake o un
 		// tools/list, así que esto sólo acota al cliente que pide y después no lee.

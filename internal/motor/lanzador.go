@@ -50,6 +50,34 @@ var _ Motor = (*Lanzador)(nil)
 // largo sobre un contexto grande tarda, y cortarlo por reloj es peor que esperarlo.
 const DemoraPorDefecto = 10 * time.Minute
 
+// TopeDelPlazo es el techo de `turn_timeout_seconds`, y es la otra mitad del acuerdo que
+// DemoraPorDefecto abre por abajo. Un día es absurdamente holgado —144× el defecto— a propósito:
+// no está para disciplinar a nadie sobre cuánto puede tardar un turno, sino porque arriba de
+// cierto número el valor DEJA DE SIGNIFICAR LO QUE DICE.
+//
+// 🔴 EL PROBLEMA NO ES UN TURNO LARGO: ES QUE LA ARITMÉTICA ENVUELVE Y EL RESULTADO SIGUE SIENDO
+// POSITIVO, así que `plazoDelTurno` lo deja pasar y nadie se entera. Dos modos, los dos medidos
+// con el compilador y no derivados a mano:
+//
+//	9223371977 … 9223372036 → la multiplicación todavía entra en int64 (`dur>0` da true), pero la
+//	  suma `espera + margenDelIdle` de espejo.go desborda y deja el IdleTimeout NEGATIVO. Y
+//	  net/http no lee un negativo como «ya vencido» sino como «sin deadline» —`if d := c.server.
+//	  idleTimeout(); d > 0`, server.go:2113—, así que el listener del espejo no vence NUNCA: lo
+//	  contrario exacto de lo que ese comentario promete tres líneas más arriba. ⚠️ Esa ventana
+//	  CUELGA DE margenDelIdle: con otro margen se corre, así que el número que importa no es el
+//	  borde sino que el borde EXISTA. El custodio pide que la suma crezca, no que valga esto.
+//	18446744074 y para arriba → envuelve la MULTIPLICACIÓN: 18446744074e9 − 2⁶⁴ = +290448384 ns.
+//	  Un tope de 290 ms, positivo y plausible, que mata cada turno antes de la primera palabra con
+//	  un error que dice «por tiempo» — el mismo síntoma que el negativo, por la causa opuesta. Y
+//	  no es un valor mágico suelto: de 11 enteros consecutivos muestreados ahí, 7 dan un plazo
+//	  positivo de menos de una hora (290 ms, 1,29 s, 2,29 s, …).
+//
+// Y LOS DOS SÓLO SE PUEDEN VER SOBRE EL ENTERO. Después de la multiplicación el desborde ya
+// ocurrió y lo que queda es indistinguible de un plazo que alguien quiso de verdad: no hay
+// guarda posible aguas abajo. Por eso esto se chequea en la fábrica y no acá en `plazoDelTurno`,
+// que recibe un Duration y llega tarde.
+const TopeDelPlazo = 24 * time.Hour
+
 // plazoDelTurno resuelve el tope de un turno: CUALQUIER valor no positivo cae a
 // DemoraPorDefecto.
 //
@@ -76,6 +104,18 @@ func plazoDelTurno(d time.Duration) time.Duration {
 		return DemoraPorDefecto
 	}
 	return d
+}
+
+// plazoFueraDeRango dice si `turn_timeout_seconds` se pasa de TopeDelPlazo.
+//
+// Toma el ENTERO DEL YAML y no un Duration, y eso es la función entera: ver el desborde exige
+// mirar el valor ANTES de convertirlo. La doc de TopeDelPlazo tiene los dos números.
+//
+// EL NEGATIVO NO CAE ACÁ A PROPÓSITO. Es el error que `plazoDelTurno` ya manda al defecto, y
+// contestarlo también desde esta función sería una segunda copia del mismo acuerdo — justo lo
+// que `plazoDelTurno` existe para cerrar. Acá se mira un solo borde: el de arriba.
+func plazoFueraDeRango(seg int) bool {
+	return seg > int(TopeDelPlazo/time.Second)
 }
 
 // topeDeLinea es el tamaño máximo de una línea del stream. Hace falta subirlo del default

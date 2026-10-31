@@ -392,16 +392,22 @@ func runServe(args []string) {
 	// «bien» y contesta 405 justo en la ruta que alguien acaba de configurar es peor que uno que no
 	// arranca, porque el síntoma no nombra la causa. Con el motor apagado —el estado de toda
 	// instalación de hoy— `Desde` devuelve (nil, nil) y esto no hace nada.
+	// Y SALE UNA LÍNEA SIEMPRE, incluso apagado, que es justo el caso en que el 405 sorprende. Es lo
+	// más barato que convierte el único síntoma de un motor mal configurado —un 405 silencioso en
+	// una ruta que el cliente tiene hardcodeada— en algo averiguable. Nombra la variable de la
+	// credencial, nunca su valor (ver DescribirMotor).
+	//
+	// 🔴 «SIEMPRE» ERA FALSO, Y JUSTO EN LOS CASOS QUE LA LÍNEA EXISTE PARA EXPLICAR. Estaba
+	// DESPUÉS del `os.Exit(1)` de abajo, así que las tres formas en que `Desde` falla —proveedor
+	// desconocido, credencial ausente y plazo fuera de rango— se iban sin que el diagnóstico
+	// saliera, y lo único impreso era el error pelado. La descripción no depende del motor
+	// construido: la arma desde `cfg.Motor`, así que puede —y tiene que— salir antes.
+	fmt.Fprintf(os.Stderr, "musubi: %s\n", motor.DescribirMotor(cfg.Motor))
 	motorDeTurnos, err := motor.Desde(cfg.Motor)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "musubi serve: %v\n", err)
 		os.Exit(1)
 	}
-	// Y SALE UNA LÍNEA SIEMPRE, incluso apagado, que es justo el caso en que el 405 sorprende. Es lo
-	// más barato que convierte el único síntoma de un motor mal configurado —un 405 silencioso en
-	// una ruta que el cliente tiene hardcodeada— en algo averiguable. Nombra la variable de la
-	// credencial, nunca su valor (ver DescribirMotor).
-	fmt.Fprintf(os.Stderr, "musubi: %s\n", motor.DescribirMotor(cfg.Motor))
 
 	// ⚠️ `WithMotor` no va pegado a `WithMotorQuota`: apuntan al revés y el nombre no lo dice. El
 	// freno de cuota es del motor que Musubi CONSUME (el 3er pilar, con `WithCognition`); esto es el

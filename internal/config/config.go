@@ -805,7 +805,12 @@ type MotorConfig struct {
 	Binary string `yaml:"binary,omitempty"`
 	// TurnTimeoutSeconds es el tope de UN turno. 0 ⇒ el default del motor (10 min), que es
 	// generoso a propósito: cortar por reloj un turno con thinking largo es peor que
-	// esperarlo.
+	// esperarlo. Un negativo cae al mismo default.
+	//
+	// TIENE UN TECHO, y el motor RECHAZA el valor que lo pasa en vez de recortarlo: arriba de
+	// ahí la conversión a `time.Duration` envuelve y el plazo que rige deja de ser el que dice
+	// esta línea. El número y los dos modos de desborde están en `motor.TopeDelPlazo`; acá no
+	// se repite para que no queden dos versiones del mismo tope.
 	TurnTimeoutSeconds int `yaml:"turn_timeout_seconds,omitempty"`
 	// KeepAPIKey deja pasar ANTHROPIC_API_KEY al proceso hijo. Por defecto se saca, y no es
 	// cosmético: el sentido de `cli` es facturar con la suscripción, y una API key en el

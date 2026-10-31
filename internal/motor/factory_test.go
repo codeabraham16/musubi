@@ -334,3 +334,142 @@ func TestElDiagnosticoNoFiltraElCrudoDelYamlEnNingunFormato(t *testing.T) {
 		t.Errorf("la descripción anuncia el -1 del yaml en algún formato: %s", d)
 	}
 }
+
+// ── EL BORDE DE ARRIBA: UN NÚMERO QUE ENVUELVE Y SIGUE PARECIENDO UN PLAZO ────────────────────
+//
+// El borde de abajo —el cero y el negativo— lo cierra `plazoDelTurno` y lo miden los tests de más
+// arriba. El de arriba no lo cerraba nadie, y la doc de TopeDelPlazo tiene los dos modos con sus
+// números medidos. Lo que miden estos tres es que la guarda EXISTA (M47), que ALCANCE (M48) y que
+// el arranque no mienta cuando dispara (M49).
+
+// Sabotaje M47: la guarda del borde de arriba no mira nada y el desborde pasa
+// arnes: archivo="internal/motor/lanzador.go"
+// arnes: de="\treturn seg > int(TopeDelPlazo/time.Second)"
+// arnes: a="\treturn false"
+func TestUnPlazoQueDesbordaNoConstruyeMotor(t *testing.T) {
+	// 🔴 LOS DOS VALORES ENTRAN POR `plazoDelTurno` COMO SI FUERAN PLAZOS LEGÍTIMOS —a los dos
+	// `d > 0` les da true—, y es la razón entera de que la guarda viva en la fábrica y mire el
+	// ENTERO: aguas abajo el desborde ya pasó y es indistinguible de un plazo que alguien quiso.
+	casos := []struct {
+		nombre  string
+		seg     int
+		sintoma string
+	}{
+		{
+			nombre:  "la suma del idle desborda y el listener del espejo no vence nunca",
+			seg:     9223372036,
+			sintoma: "espera+margenDelIdle queda negativo, y net/http no pone deadline (server.go:2113 pide d > 0)",
+		},
+		{
+			nombre:  "la multiplicacion envuelve y deja un tope de 290ms",
+			seg:     18446744074,
+			sintoma: "time.Duration(seg)*time.Second da +290.448384ms, positivo y plausible",
+		},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			// Se mide primero que el caso SIGA SIENDO el caso. Si un día `plazoDelTurno`
+			// aprendiera a cazar esto, el test pasaría por el motivo equivocado y nadie se
+			// enteraría de que mide otra cosa.
+			if d := time.Duration(c.seg) * time.Second; plazoDelTurno(d) != d {
+				t.Fatalf("el caso dejó de ser el caso: plazoDelTurno ya resuelve %d (%s)", c.seg, c.sintoma)
+			}
+			m, err := Desde(config.MotorConfig{Provider: "cli", TurnTimeoutSeconds: c.seg})
+			if err == nil {
+				t.Fatalf("Desde aceptó turn_timeout_seconds=%d: %s", c.seg, c.sintoma)
+			}
+			if m != nil {
+				t.Errorf("Desde devolvió un motor Y un error con turn_timeout_seconds=%d", c.seg)
+			}
+			// EL ERROR NOMBRA EL CAMPO Y EL TOPE, por lo mismo que el de provider nombra los
+			// válidos: sin eso, quien editó el yaml queda adivinando qué línea corregir.
+			if !strings.Contains(err.Error(), "turn_timeout_seconds") {
+				t.Errorf("el error no nombra el campo del yaml: %v", err)
+			}
+			if !strings.Contains(err.Error(), TopeDelPlazo.String()) {
+				t.Errorf("el error no nombra el tope (%s): %v", TopeDelPlazo, err)
+			}
+		})
+	}
+}
+
+// 🔴 EL TOPE TIENE QUE ALCANZAR, NO SÓLO EXISTIR, y es la lección que margenDelIdle ya pagó una
+// vez: una aserción escrita en términos de la constante que vigila se mueve con ella y deja de
+// medir. Subir TopeDelPlazo hasta un valor que vuelve a desbordar es exactamente el cambio que
+// alguien apurado haría para «no limitarle el turno al usuario», y con una guarda que sólo pide
+// que la constante exista, ese cambio entra en verde.
+//
+// ⚠️ Y SU SABOTAJE TAMBIÉN DEJA ROJO AL CUSTODIO DE M47, sin que eso sea una colisión declarable:
+// `colision_ok` contesta el aviso TEXTUAL —aplicar un sabotaje rompe el ancla `de` de otro—, y acá
+// las dos anclas son líneas distintas. Lo que se pisa es el COMPORTAMIENTO: con el tope en
+// 9223372036 segundos, `plazoFueraDeRango(9223372036)` pasa a ser falso y el primer caso de M47
+// deja de ser rechazado. Son dos guardas con motivos distintos sobre la misma constante, y vale
+// saberlo al leer un rojo doble: el de M47 sería un daño colateral, no una segunda medición.
+//
+// Sabotaje M48: el tope sube a un valor que vuelve a desbordar la suma del idle
+// arnes: archivo="internal/motor/lanzador.go"
+// arnes: de="const TopeDelPlazo = 24 * time.Hour"
+// arnes: a="const TopeDelPlazo = 9223372036 * time.Second"
+func TestElTopeDelPlazoAlcanzaYNoSoloExiste(t *testing.T) {
+	// (a) LO QUE EL ESPEJO HACE CON ÉL. `IdleTimeout: espera + margenDelIdle` es la suma que
+	// desbordaba; con el máximo que la fábrica acepta todavía tiene que CRECER.
+	//
+	// ⚠️ LA SUMA PASA POR UNA VARIABLE, Y NO ES ESTILO. Escrita `TopeDelPlazo+margenDelIdle` es
+	// una EXPRESIÓN CONSTANTE, y entonces esta aserción NO PUEDE FALLAR NUNCA: cualquier tope que
+	// la volviera verdadera lo rechaza el compilador —«constant 9223372096000000000 … overflows
+	// int64»—, así que el paquete no compila y la prueba no llega a correr. Medido el 2026-10-31
+	// con el sabotaje M48 puesto: `arnes -overlay` devolvía «sin veredicto», que es exactamente lo
+	// que acá no cuenta como medición. Por la variable la suma es de RUNTIME y desborda en
+	// silencio, que además es lo que de verdad hace `espejo.go`: ahí `espera` sale de
+	// `plazoDelTurno` y es un Duration de runtime, no una constante.
+	tope := TopeDelPlazo
+	if tope+margenDelIdle <= tope {
+		t.Errorf("TopeDelPlazo (%d ns) + margenDelIdle desborda: el IdleTimeout del espejo queda "+
+			"negativo y net/http deja de poner deadline", int64(TopeDelPlazo))
+	}
+	// (b) UN PISO DE CORDURA CON SU NÚMERO PROPIO, escrito acá y no derivado del tope. Sin esto,
+	// (a) se satisface con cualquier valor astronómico que por casualidad no desborde y el tope
+	// deja de acotar nada en la práctica: un turno de meses es un proceso colgado con un cliente
+	// esperando del otro lado.
+	if TopeDelPlazo > 7*24*time.Hour {
+		t.Errorf("TopeDelPlazo = %s, y arriba de una semana ya no acota nada que sea un turno", TopeDelPlazo)
+	}
+	// (c) Y EL BORDE DE ABAJO NO SE CRUZÓ CON EL DE ARRIBA: un tope por debajo del defecto dejaría
+	// fuera de rango a todo turno que no configura nada, que es el caso normal.
+	if TopeDelPlazo < DemoraPorDefecto {
+		t.Errorf("TopeDelPlazo (%s) < DemoraPorDefecto (%s): el default quedaría fuera de rango",
+			TopeDelPlazo, DemoraPorDefecto)
+	}
+}
+
+// EL ARRANQUE DICE POR QUÉ NO ARRANCÓ, y nombrar el valor del yaml acá NO contradice al test de
+// más arriba que prohíbe filtrarlo. Lo que ese test protege es que no se anuncie como el tope QUE
+// RIGE —con `-1` el Lanzador cae al defecto, y un «-1s» manda a buscar el problema al lugar
+// equivocado—; acá no rige ningún tope porque `Desde` rechazó el motor, y el número es lo único
+// con lo que alguien encuentra la línea en el yaml. La diferencia es «éste es tu plazo» contra
+// «esto escribiste y no se puede usar».
+//
+// Sabotaje M49: el diagnostico de fuera de rango anuncia el plazo resuelto, que es basura envuelta
+// arnes: archivo="internal/motor/factory.go"
+// arnes: de="\t\t\treturn fmt.Sprintf(\"motor: cli (binario %s, turn_timeout_seconds=%d FUERA DE RANGO —el tope es %s—: el motor no arranca)\",\n\t\t\t\tbin, cfg.TurnTimeoutSeconds, TopeDelPlazo)"
+// arnes: a="\t\t\treturn fmt.Sprintf(\"motor: cli (binario %s, tope por turno %s, factura la suscripción)\", bin, plazoDelTurno(time.Duration(cfg.TurnTimeoutSeconds)*time.Second))"
+func TestElDiagnosticoDeUnPlazoFueraDeRangoNoAnunciaElResuelto(t *testing.T) {
+	const seg = 9223372036
+	d := DescribirMotor(config.MotorConfig{Provider: "cli", TurnTimeoutSeconds: seg})
+
+	// LO QUE NO PUEDE DECIR: el plazo resuelto, que con este valor son 292 años y se lee como un
+	// dato. Se CALCULA en vez de escribirse, para que la aserción siga apuntando al número de
+	// verdad si alguien cambia el caso de arriba.
+	basura := plazoDelTurno(time.Duration(seg) * time.Second).String()
+	if strings.Contains(d, basura) {
+		t.Errorf("el diagnóstico anuncia el plazo envuelto (%s) como si rigiera: %s", basura, d)
+	}
+	// LO QUE SÍ TIENE QUE DECIR: el valor del yaml, que es con lo que se encuentra la línea...
+	if !strings.Contains(d, "9223372036") {
+		t.Errorf("el diagnóstico no nombra el valor que sobra, así que no se puede ubicar en el yaml: %s", d)
+	}
+	// ...y la consecuencia, que es que no hay motor.
+	if !strings.Contains(d, "no arranca") {
+		t.Errorf("el diagnóstico no dice que el motor no arranca: %s", d)
+	}
+}
