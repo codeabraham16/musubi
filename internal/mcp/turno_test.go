@@ -1420,6 +1420,11 @@ func TestElValorDelPanicNoViajaAlCliente(t *testing.T) {
 // log de producción que este change-set agrega, y medido el 2026-10-29 se la podía dejar sin la
 // traza, o sin el valor del panic, con el paquete compilando y los tres tests del recover en
 // verde. Sin la traza no se sabe QUÉ motor rompió, que es lo único que un operador necesita.
+//
+// Sabotaje T34: el log del panic guarda el TAMANO de la traza en vez de la traza
+// arnes: archivo="internal/mcp/turno.go"
+// arnes: de="logx.Error(\"panic en el motor del turno\", \"panic\", r, \"stack\", string(debug.Stack()))"
+// arnes: a="logx.Error(\"panic en el motor del turno\", \"panic\", r, \"stack\", len(debug.Stack()))"
 func TestElDetalleDelPanicDelMotorVaAlLog(t *testing.T) {
 	var log bytes.Buffer
 	restaurar := logx.Capturar(&log)

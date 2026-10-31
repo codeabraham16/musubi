@@ -416,23 +416,38 @@ espejo vive dentro de este proceso).
 | M41 | Y en el cliente de la API, donde el negativo **viaja**: con la igualdad a cero, un `MaxTokens` de -1 se serializa tal cual en el request y la pasarela contesta 400; con `MinInt64`, viaja el mínimo de la máquina. | `TestUnMaxTokensNegativoNoViajaALaAPI` | ROJO |
 | M42 | El resolvedor cura **todo** el dominio no positivo, no sólo el cero. Y el aislamiento se midió: con un `== 0 \|\| == -1s \|\| == -5s` —los tres puntos exactos que los tests viejos usaban— los dos custodios del negativo quedan VERDES y un `-2` sigue naciendo vencido. Es lo que distingue un dominio de un punto. | `TestElPlazoDelTurnoCuraTodoElDominioNoPositivo` | ROJO |
 | M43 | El **valor** del defecto está anclado por igualdad. Las 30 menciones de `DemoraPorDefecto` en el paquete la usan todas como referencia y ninguna la compara contra un valor, así que bajarla a `1 * time.Second` dejaba el paquete entero en verde —medido: el único `--- FAIL` es este custodio— con todos los turnos largos muriendo por reloj. | `TestElDefectoDelPlazoSonDiezMinutos` | ROJO |
+| M44 | Y cura **todo el dominio**, no el punto que M41 mide. Esa guarda atrapa el -1 porque es el valor que sale de un yaml a mano; con un `== 0 \|\| == -1` el -2 de un `pi` mal poblado se serializa tal cual y vuelve con el mismo 400 —medido el 2026-10-30: el custodio de M41 queda **VERDE** y sólo cae éste—. Por eso las dos colisiones están declaradas de los dos lados: son dos guardas sobre el mismo `if`, no una contada dos veces. | `TestNingunMaxTokensNegativoViajaALaAPI` | ROJO |
+| M45 | El diagnóstico nombra el tope **configurado**, que es la otra mitad de lo que M40 promete en su nombre. Con el tope negativo alcanza para ver que no se filtra el crudo, pero no para distinguir «informa el que rige» de «informa siempre el defecto»: un cuerpo que pisara el plazo con `DemoraPorDefecto` dejaba M40 y M46 en **VERDE**, y un `turn_timeout_seconds: 120` se anunciaba como 10m0s. | `TestElDiagnosticoNombraElTopePositivoConfigurado` | ROJO |
+| M46 | Y no filtra el crudo **en ningún formato**. M40 busca la subcadena `-1s`, que es el `Duration.String()` del valor, y eso ata la guarda al FORMATO: el mismo -1 pegado al nombre del binario —`claude [yaml=-1]`— pasaba limpio con M40 y M45 en **VERDE**. La aserción tiene que decir «no anuncia el valor del yaml», no «no contiene esos tres caracteres». | `TestElDiagnosticoNoFiltraElCrudoDelYamlEnNingunFormato` | ROJO |
 
-**43/43**, medidos al disco con un script que **lee las directivas `arnes:` de los propios archivos
+**46/46**, medidos al disco con un script que **lee las directivas `arnes:` de los propios archivos
 de test**: un script que repitiera los strings a mano podría estar midiendo algo distinto de lo que
 quedó escrito, y entonces el veredicto sería de otra cosa.
 
 ⚠️ **Y hay que declarar QUÉ cuenta, porque el script que esta frase cita devuelve otro número.**
-`internal/motor` tiene hoy **81** directivas `arnes: de=`, no 43: son las **43** de la serie `M`
+`internal/motor` tiene hoy **84** directivas `arnes: de=`, no 46: son las **46** de la serie `M`
 —41 contra el espejo y su lanzador (28 directivas en `espejo_test.go` y 13 en `lanzador_test.go`),
-más M40 en la fábrica y M41 en el cliente de la API— más **29** de la serie `E` (el traductor de
-entrada, en `entrada_test.go`) y **9** de la serie `C` (la fábrica, en `factory_test.go`), que son
-de otras fases. Contar las directivas sin separar las series da 81 y parece refutar esta tabla: no
-la refuta, cuenta otra cosa. Esta tabla es la serie `M`, y 43 + 29 + 9 = 81 cierra la aritmética.
+más M40, M45 y M46 en la fábrica y M41 y M44 en el cliente de la API— más **29** de la serie `E`
+(el traductor de entrada, en `entrada_test.go`) y **9** de la serie `C` (la fábrica, en
+`factory_test.go`), que son de otras fases. Contar las directivas sin separar las series da 84 y
+parece refutar esta tabla: no la refuta, cuenta otra cosa. Esta tabla es la serie `M`, y
+46 + 29 + 9 = 84 cierra la aritmética.
 
-Y el mismo script verifica que las etiquetas vayan de `M1` a `M43` **sin huecos ni repetidos**, que
+Y el mismo script verifica que las etiquetas vayan de `M1` a `M46` **sin huecos ni repetidos**, que
 es lo que esta tabla no puede probar de sí misma: un hueco significaría una directiva borrada sin
 sacar su fila —la fila queda afirmando una cobertura que no existe— y un repetido, dos sabotajes
 peleándose una etiqueta, con la fila describiendo a uno y el arnés corriendo el otro.
+
+⚠️ **Y el cuarto sabotaje de esta vuelta no está en esta tabla, porque no está en este paquete.**
+El log del panic del motor lo escribe el handler del turno, que vive en `internal/mcp/turno.go`, así
+que su directiva es **T34** y cuelga de la serie `T` de `turno_test.go` (T1–T34, sin huecos). Ponerla
+acá habría dejado una fila `M` apuntando a un archivo de otro paquete, que es justo lo que el
+verificador de huecos no puede ver. El sabotaje cambia `string(debug.Stack())` por
+`len(debug.Stack())`: la línea sigue compilando y logueando, y lo único que se pierde es QUÉ motor
+rompió. Medido: cae sólo `TestElDetalleDelPanicDelMotorVaAlLog` y los otros dos tests del recover
+quedan en verde. Quitar la traza del todo **no** sirve como sabotaje: deja el import de
+`runtime/debug` sin usar y el paquete no compila, así que el rojo sería de la compilación y no de
+la cobertura —la primera versión de esta medición cayó justo ahí—.
 
 🔑 **M35 y M36 existen porque el panel preguntó por el listener, y tenía razón.** Todos los demás
 tests del espejo llaman `ServeHTTP` a mano con un `httptest.Recorder` —que es lo correcto para

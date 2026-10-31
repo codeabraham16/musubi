@@ -640,6 +640,10 @@ func TestAlCerrarElTurnoSeCortaLaConexion(t *testing.T) {
 // arnes: archivo="internal/motor/api.go"
 // arnes: de="\ttope := p.MaxTokens\n\tif tope <= 0 {"
 // arnes: a="\ttope := p.MaxTokens\n\tif tope == 0 {"
+// arnes: colision_ok="TestNingunMaxTokensNegativoViajaALaAPI"
+// El de abajo pisa a este en el mismo `if`, y las dos son guardas de verdad: esta mide el -1
+// que sale del yaml, la otra el dominio entero. Medido el 2026-10-29: con la guarda curando
+// `== 0 || == -1` este test queda VERDE y el otro ROJO, o sea que cubren cosas distintas.
 func TestUnMaxTokensNegativoNoViajaALaAPI(t *testing.T) {
 	cuerpo, err := cuerpoDelRequest(Pedido{
 		Modelo:    "m",
@@ -670,6 +674,12 @@ func TestUnMaxTokensNegativoNoViajaALaAPI(t *testing.T) {
 // el mismo 400 — medido con una sonda de mutación el 2026-10-29, y el paquete entero quedaba
 // verde. El dominio se recorre entero porque un test de PUNTO no distingue «cura el cero y el
 // negativo» de «cura el cero y el -1».
+//
+// Sabotaje M44: la guarda del tope cura el cero y el -1, pero deja pasar el resto del dominio
+// arnes: archivo="internal/motor/api.go"
+// arnes: de="\ttope := p.MaxTokens\n\tif tope <= 0 {"
+// arnes: a="\ttope := p.MaxTokens\n\tif tope == 0 || tope == -1 {"
+// arnes: colision_ok="TestUnMaxTokensNegativoNoViajaALaAPI"
 func TestNingunMaxTokensNegativoViajaALaAPI(t *testing.T) {
 	for _, caso := range []struct {
 		nombre string

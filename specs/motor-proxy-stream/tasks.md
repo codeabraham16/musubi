@@ -304,6 +304,15 @@ configuración.
       repetidos** y repartida en 28 contra `espejo.go`, 13 contra `lanzador.go`, una contra
       `factory.go` y una contra `api.go`. La aritmética cierra y el script la verifica sola.
 
+### Los cuatro tests que la vuelta 4 dejó sin arnés (vuelta 5 de la revisión)
+
+- [x] **Lo que había que mecanizar eran cuatro, y el recuerdo decía cuatro por casualidad.** El censo al disco dice que `internal/motor` tiene **79 de 142** tests de nivel superior sin directiva propia: los cuatro de esta vuelta son los que la vuelta 4 **agregó**, no los únicos sin cobertura del arnés. Los otros 75 no entran acá —el ítem de las filas sin directiva ya está en el plan siguiente—, y decirlo importa porque «mecanizamos los que faltaban» habría sido falso.
+- [x] **El cuarto no estaba en este paquete.** `TestElDetalleDelPanicDelMotorVaAlLog` vive en `internal/mcp/turno_test.go`, porque el `logx.Error` del recover lo escribe el handler del turno. Es otra serie de etiquetas (`T`, no `M`) y otro censo, y ponerlo en la tabla `M` de la spec habría dejado una fila apuntando a un archivo de otro paquete — justo lo que el verificador de huecos no puede ver.
+- [x] 🔑 **Un sabotaje que no compila da un rojo que no es cobertura**, y la primera medición cayó entera en esa trampa: tres de los cuatro mutantes dejaban una variable o un import sin usar, el paquete no compilaba y los cuatro custodios se ponían rojos con sus siete hermanas. El veredicto decía «muerde» y lo que pasaba era otra cosa. La sonda ahora corre `go vet` sobre cada mutante **antes** de mirar un test, y el corte de T34 cambió de «quitar la traza» a `len(debug.Stack())` por eso: conserva el uso del import, logra el mismo daño y deja medible lo que el test promete.
+- [x] **El aislamiento de los cuatro, medido**: cada custodio ROJO y las **siete** hermanas VERDES, con el detalle de cuál deja viva a cuál en la tabla de la spec. Es lo que distingue un corte propio de «elegí el que ya tenía dueño».
+- [x] **La colisión la denunció el arnés, no la predije yo.** Se escribieron las cuatro directivas y `arnes -validar` denunció **una sola**, en sus dos sentidos: M44 ↔ M41, sobre el mismo `if` de `api.go`. Declarada de los dos lados con el motivo de cada una, porque la detección es direccional y cada directiva responde por el daño que hace ella. M45 y M46 comparten el `de` de la línea del `Sprintf` y **no** colisionan: las dos sólo insertan, así que tras aplicar una el ancla de la otra sigue apareciendo una vez.
+- [x] Censo al disco después de escribirlas: **84 directivas en `internal/motor`** = 9 `C` + 29 `E` + **46 `M`** (28 `espejo.go` + 13 `lanzador.go` + 3 `factory.go` + 2 `api.go`), serie `M` de M1 a M46 sin huecos ni repetidos; y **34 de la serie `T`** en `turno_test.go`, de T1 a T34, con 31 contra `turno.go` y 3 contra `http.go`. `arnes -validar`: **2175 mecanizadas · 0 ROTAS · 0 colisiones sin contestar · 99,4 %**.
+
 ## F5 · El cableado en `musubi serve` — CERRADO
 
 - [x] **No es un subcomando**, que es como lo nombraba el plan. No hay un `musubi motor` nuevo: el
@@ -369,9 +378,10 @@ configuración.
 ## Entrega
 
 - [x] `specs/motor-proxy-stream/{proposal,spec,design,tasks}.md`.
-- [x] Entrada en CHANGELOG `[Unreleased]` — **siete** viñetas en `### Added`, contadas al disco: el
+- [x] Entrada en CHANGELOG `[Unreleased]` — **ocho** viñetas en `### Added`, contadas al disco: el
       paquete, el endpoint, el cableado en `serve`, el MCP espejo, su endurecimiento (M21–M27), el
-      del listener con los dos contadores (M28–M36) y los dos plazos del cable (M37–M38 y T26–T33).
+      del listener con los dos contadores (M28–M36), los dos plazos del cable (M37–M38 y T26–T33) y
+      la mecanización de los cuatro custodios de la vuelta 4 (M44–M46 y T34).
       ⚠️ Acá decía **seis** y enumeraba seis: la séptima se agregó en la vuelta 3 y el conteo se
       quedó atrás. La vuelta 4 no suma una octava —lo suyo entra en la cuarta, que es la que habla
       de los sabotajes de la pieza—, así que el número de viñetas y el de vueltas no coinciden y no

@@ -297,6 +297,11 @@ func TestElDiagnosticoInformaElTopeQueRigeYNoElDelYaml(t *testing.T) {
 // defecto a secas pasaba el custodio del negativo con el paquete entero en verde, y un
 // `turn_timeout_seconds: 120` se anunciaba como 10m0s. La pista del arranque es lo único que un
 // operador tiene para saber qué plazo rige, así que mentir ahí es peor que no imprimir nada.
+//
+// Sabotaje M45: el diagnostico pisa el plazo configurado y anuncia siempre el defecto
+// arnes: archivo="internal/motor/factory.go"
+// arnes: de="\t\treturn fmt.Sprintf(\"motor: cli (binario %s, tope por turno %s, factura la suscripción)\", bin, espera)"
+// arnes: a="\t\tespera = DemoraPorDefecto\n\t\treturn fmt.Sprintf(\"motor: cli (binario %s, tope por turno %s, factura la suscripción)\", bin, espera)"
 func TestElDiagnosticoNombraElTopePositivoConfigurado(t *testing.T) {
 	d := DescribirMotor(config.MotorConfig{Provider: "cli", TurnTimeoutSeconds: 120})
 	if !strings.Contains(d, "2m0s") {
@@ -311,6 +316,11 @@ func TestElDiagnosticoNombraElTopePositivoConfigurado(t *testing.T) {
 // "-1s", que es el `time.Duration.String()` del valor: eso ata la guarda al FORMATO, así que el
 // mismo valor impreso como "-1" o como "-1000ms" pasaría limpio. La aserción tiene que decir «no
 // anuncia el valor del yaml», no «no contiene esos tres caracteres».
+//
+// Sabotaje M46: el diagnostico agrega el crudo del yaml al binario, en otro formato que -1s
+// arnes: archivo="internal/motor/factory.go"
+// arnes: de="\t\treturn fmt.Sprintf(\"motor: cli (binario %s, tope por turno %s, factura la suscripción)\", bin, espera)"
+// arnes: a="\t\tbin += fmt.Sprintf(\" [yaml=%d]\", cfg.TurnTimeoutSeconds)\n\t\treturn fmt.Sprintf(\"motor: cli (binario %s, tope por turno %s, factura la suscripción)\", bin, espera)"
 func TestElDiagnosticoNoFiltraElCrudoDelYamlEnNingunFormato(t *testing.T) {
 	d := DescribirMotor(config.MotorConfig{Provider: "cli", TurnTimeoutSeconds: -1})
 	if strings.Contains(d, "-1") {
