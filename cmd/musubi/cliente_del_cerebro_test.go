@@ -103,8 +103,9 @@ func TestTodoClienteDelCerebroPasaPorElConstructor(t *testing.T) {
 			"mirar y esta guarda estaría verde sin haber comprobado nada", archivos)
 	}
 	if len(marcados) < 11 {
-		t.Fatalf("sólo %d cliente(s) quedaron marcados como ajenos al cerebro, y hay CATORCE en el "+
-			"repo: Anthropic, la bajada de URLs de `musubi ingest`, OpenAI ×2, Ollama, el mirror de "+
+		t.Fatalf("sólo %d cliente(s) quedaron marcados como ajenos al cerebro, y hay QUINCE en el "+
+			"repo: Anthropic ×2 (el conteo de tokens de `musubi calibrate` y el /v1/messages del "+
+			"motor), la bajada de URLs de `musubi ingest`, OpenAI ×2, Ollama, el mirror de "+
 			"modelos, el raspado de métricas, dos de ingesta, GitHub (selfupdate), el colector OTLP "+
 			"y los tres de skillsource.\n"+
 			"  O el reconocedor de literales se rompió, o el de la marca. En los dos casos el cero "+
