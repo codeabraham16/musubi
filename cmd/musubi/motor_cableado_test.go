@@ -127,7 +127,7 @@ func llama(n ast.Node, nombre string) bool { return cuentaLlamadas(n, nombre) > 
 // arnes: archivo="cmd/musubi/main.go"
 // arnes: de="\tmotorDeTurnos, err := motor.Desde(cfg.Motor)\n"
 // arnes: a="\tvar motorDeTurnos motor.Motor\n\t_, err = motor.Desde(cfg.Motor)\n"
-// arnes: colision_ok="TestServeNoArrancaSiElMotorEstaMalConfigurado"
+// arnes: colision_ok="TestServeNoArrancaSiElMotorEstaMalConfigurado TestElDiagnosticoDelMotorSaleAntesDeConstruirlo"
 //
 // Sabotaje W3: cablear el motor TAMBIÉN en el daemon (le voltea el arranque a cada sesión del agente).
 // arnes: archivo="cmd/musubi/main.go"
@@ -236,6 +236,7 @@ func TestSoloServeCableaElMotorDeTurnos(t *testing.T) {
 // arnes: archivo="cmd/musubi/main.go"
 // arnes: de="\tmotorDeTurnos, err := motor.Desde(cfg.Motor)\n\tif err != nil {\n\t\tfmt.Fprintf(os.Stderr, \"musubi serve: %v\\n\", err)\n\t\tos.Exit(1)\n\t}"
 // arnes: a="\tmotorDeTurnos, err := motor.Desde(cfg.Motor)\n\tif err != nil {\n\t\tfmt.Fprintf(os.Stderr, \"musubi serve: aviso: %v\\n\", err)\n\t}"
+// arnes: colision_ok="TestElDiagnosticoDelMotorSaleAntesDeConstruirlo"
 func TestServeNoArrancaSiElMotorEstaMalConfigurado(t *testing.T) {
 	f := mainParseado(t)
 	serve := funcionDeMain(t, f, "runServe")
@@ -342,6 +343,7 @@ func TestElDaemonNoConstruyeElMotorDeTurnos(t *testing.T) {
 // arnes: archivo="cmd/musubi/main.go"
 // arnes: de="\tfmt.Fprintf(os.Stderr, \"musubi: %s\\n\", motor.DescribirMotor(cfg.Motor))"
 // arnes: a="\tif cfg.Motor.Provider != \"\" {\n\t\tfmt.Fprintf(os.Stderr, \"musubi: %s\\n\", motor.DescribirMotor(cfg.Motor))\n\t}"
+// arnes: colision_ok="TestElDiagnosticoDelMotorSaleAntesDeConstruirlo"
 func TestServeDiceQueMotorQuedoAunqueEsteApagado(t *testing.T) {
 	f := mainParseado(t)
 	serve := funcionDeMain(t, f, "runServe")
@@ -369,4 +371,69 @@ func TestServeDiceQueMotorQuedoAunqueEsteApagado(t *testing.T) {
 	}
 	t.Error("la llamada a `motor.DescribirMotor` no cuelga de ninguna sentencia de primer nivel de " +
 		"`runServe`: está dentro de una condición, un bucle o una clausura")
+}
+
+// TestElDiagnosticoDelMotorSaleAntesDeConstruirlo: «sin condición» no alcanza para «siempre».
+//
+// ES EL HUECO QUE DEJÓ ABIERTO LA GUARDA DE ARRIBA, Y LO DEJÓ ABIERTO ENTERO. La línea del
+// diagnóstico vivió DESPUÉS del `os.Exit(1)` de `motor.Desde` siendo todo ese tiempo una sentencia
+// suelta de primer nivel llamada exactamente una vez —o sea, VERDE en las dos aserciones de
+// arriba— y aun así no salía en ninguna de las tres formas en que `Desde` falla: proveedor
+// desconocido, credencial ausente y plazo fuera de rango. Lo único impreso era el error pelado.
+// La lección es del instrumento, no del cableado: la POSICIÓN EN EL AST no ve una salida de más
+// arriba, así que una guarda que pregunta «¿está detrás de un `if`?» nunca va a contestar «¿sale
+// siempre?».
+//
+// LO QUE NO SE MIDE, Y NO ES OLVIDO: «que no haya ninguna salida antes». Sería falso en el árbol
+// sano —`runServe` ya sale cuatro veces antes de acá, por flags, config y engine— y además sería
+// falso a propósito: en esos casos no hay motor del que hablar todavía. Lo que se mide es el ORDEN
+// contra el ÚNICO vecino que importa. El invariante sale del porqué: la descripción se arma desde
+// `cfg.Motor` y no depende del motor construido, así que puede —y entonces tiene que— salir antes
+// de la llamada que puede voltear el arranque.
+//
+// ⚠️ EL `de` ARRASTRA EL BLOQUE DEL `err`, y acá eso NO es el vicio que el archivo denuncia más
+// arriba (un `de` que suma vecinos para ser único se pudre cuando el vecino cambia). El bloque
+// está adentro porque el invariante ES relativo a él: el sabotaje tiene que dejar la descripción
+// DESPUÉS de la salida, y moverla sólo una línea la pondría entre `Desde` y su `if err != nil`,
+// que es lo que `TestServeNoArrancaSiElMotorEstaMalConfigurado` ya custodia — el rojo saldría de
+// esa guarda y no de ésta, que es el sitio equivocado. Por arrastrarlo, dos directivas que viven
+// dentro del tramo lo rompen al aplicarse y lo declaran con `colision_ok`; al revés no, porque
+// este sabotaje sólo REORDENA y deja los dos textos apareciendo una vez cada uno.
+//
+// Sabotaje W5: la descripción vuelve a quedar detrás del bloque que puede salir (restaura el bug)
+// arnes: archivo="cmd/musubi/main.go"
+// arnes: de="\tfmt.Fprintf(os.Stderr, \"musubi: %s\\n\", motor.DescribirMotor(cfg.Motor))\n\tmotorDeTurnos, err := motor.Desde(cfg.Motor)\n\tif err != nil {\n\t\tfmt.Fprintf(os.Stderr, \"musubi serve: %v\\n\", err)\n\t\tos.Exit(1)\n\t}\n"
+// arnes: a="\tmotorDeTurnos, err := motor.Desde(cfg.Motor)\n\tif err != nil {\n\t\tfmt.Fprintf(os.Stderr, \"musubi serve: %v\\n\", err)\n\t\tos.Exit(1)\n\t}\n\tfmt.Fprintf(os.Stderr, \"musubi: %s\\n\", motor.DescribirMotor(cfg.Motor))\n"
+func TestElDiagnosticoDelMotorSaleAntesDeConstruirlo(t *testing.T) {
+	f := mainParseado(t)
+	serve := funcionDeMain(t, f, "runServe")
+
+	iDesc, iDesde := -1, -1
+	for i, st := range serve.Body.List {
+		if iDesc < 0 && llama(st, "motor.DescribirMotor") {
+			iDesc = i
+		}
+		if iDesde < 0 && llama(st, "motor.Desde") {
+			iDesde = i
+		}
+	}
+
+	// EL CONTROL ANTES DEL VEREDICTO: las dos tienen que existir. Que falte una es un caso que las
+	// otras guardas ya denuncian con su propio mensaje, pero acá importa por una razón distinta:
+	// un `-1` compara «bien» por accidente y dejaría pasar la comparación de abajo sin medir nada.
+	if iDesc < 0 || iDesde < 0 {
+		t.Fatalf("no encontré las dos sentencias de primer nivel que comparo en `runServe` "+
+			"(DescribirMotor=%d, Desde=%d): sin las dos esta guarda pasa sin medir", iDesc, iDesde)
+	}
+
+	// `>=` Y NO `>`: si las dos cayeran en la MISMA sentencia, el orden ya no lo decide la posición
+	// —estarían anidadas en un `if` o una clausura común— y esta guarda no puede afirmar que el
+	// diagnóstico salga primero. No poder afirmarlo es rojo, no verde.
+	if iDesc >= iDesde {
+		t.Errorf("`motor.DescribirMotor` está en la sentencia %d de `runServe` y `motor.Desde` en "+
+			"la %d: el diagnóstico sale DESPUÉS de la llamada que puede cortar el arranque, así que "+
+			"las tres formas en que `Desde` falla —proveedor desconocido, credencial ausente, plazo "+
+			"fuera de rango— se van sin que salga, y lo único impreso es el error pelado. Se arma "+
+			"desde `cfg.Motor` y no del motor construido: puede salir antes", iDesc, iDesde)
+	}
 }
