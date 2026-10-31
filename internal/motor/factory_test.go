@@ -253,17 +253,24 @@ func TestLaDescripcionDelMotorApagadoExplicaEl405(t *testing.T) {
 	}
 }
 
-func TestLosDosProveedoresCumplenLaInterfaz(t *testing.T) {
-	// La fábrica es el único lugar donde los dos motores se usan como el MISMO tipo. Las
-	// aserciones `var _ Motor` de cada archivo cubren la firma, pero no que la fábrica los
-	// devuelva por la interfaz: eso se ve recién acá.
+func TestLaFabricaEntregaLosDosProveedoresSinError(t *testing.T) {
+	// ESTE TEST NO MIDE QUE LOS MOTORES CUMPLAN LA INTERFAZ, aunque así se llamaba. `Desde`
+	// DEVUELVE `(Motor, error)`, así que eso lo garantiza el compilador por la firma y ningún
+	// test puede agregarle nada. Acá había un `var _ Motor = m` puesto para custodiarlo que no
+	// custodiaba nada —`m` YA era de tipo `Motor`—, y el comentario de arriba afirmaba justo lo
+	// contrario: que las aserciones de cada archivo «no cubren que la fábrica los devuelva por
+	// la interfaz». Sí lo cubren, en tiempo de compilación. Lo delató `golangci-lint` con
+	// QF1011 el 2026-10-31, y lo que se borró es una guarda vacua, no una aserción útil.
+	//
+	// Lo que SÍ queda medido, y no es gratis: que para los dos providers válidos la fábrica
+	// devuelva sin error y con un motor NO NIL. Un `(nil, nil)` compila, respeta la firma y
+	// revienta recién en el primer turno, que es donde más caro sale.
 	t.Setenv("ANTHROPIC_API_KEY", "sk-de-prueba")
 	for _, prov := range []string{ProveedorCLI, ProveedorAPI} {
 		m, err := Desde(config.MotorConfig{Provider: prov})
 		if err != nil {
 			t.Fatalf("provider=%q: %v", prov, err)
 		}
-		var _ Motor = m
 		if m == nil {
 			t.Errorf("provider=%q: motor nil sin error", prov)
 		}
