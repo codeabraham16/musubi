@@ -761,6 +761,74 @@ type CognitionConfig struct {
 	Effort string `yaml:"effort,omitempty"`
 }
 
+// MotorConfig elige con qué motor sirve Musubi un turno de modelo pedido por un cliente
+// externo (el `POST /api/stream` del track «motor»).
+//
+// ⚠️ OJO CON LA PALABRA «MOTOR», QUE EN ESTE ARCHIVO YA SIGNIFICA OTRA COSA Y APUNTA AL
+// REVÉS. Dentro de `cognition:` hay `motor_quota_per_hour` y una `fleet` de «motores»: ésos
+// son los modelos que Musubi CONSUME para su propia cognición (destilar, juzgar, rerankear).
+// Esto es la dirección contraria: el motor que Musubi OFRECE a un cliente que le pide un
+// turno. Los dos nombres son correctos en su contexto —igual que los dos `fleet:` de más
+// abajo— pero confundirlos manda a configurar el bloque equivocado, y el síntoma es un
+// endpoint que contesta 405 mientras el yaml «ya tiene un motor».
+//
+// NACE APAGADO Y NO TIENE DEFAULT, y es la decisión central de este bloque: `provider` vacío
+// significa «nadie pidió un motor» —el estado de toda instalación de hoy— y entonces el POST
+// del turno contesta 405.
+//
+// ⚠️ LO QUE NO PASA ES QUE «LA RUTA NO SE REGISTRE», y este comentario lo decía al revés hasta
+// el 2026-10-29. `/api/stream` se registra SIEMPRE (internal/mcp/http.go:476, incondicional)
+// porque la comparte con el feed SSE, que no depende del motor: GET es el feed y POST es el
+// turno. Lo que nace apagado es el MÉTODO — `servirTurno` ve `s.motor == nil` y contesta 405
+// con `Allow: GET` (turno.go:48-55), que es exactamente el síntoma que describe el párrafo de
+// arriba. La diferencia importa para diagnosticar: con la frase vieja, alguien que recibe un 405
+// se va a buscar en el mux por qué no se registró una ruta que SÍ está.
+//
+// No hay un motor «por defecto» porque LOS DOS FACTURAN DISTINTO:
+// `cli` gasta la suscripción del usuario y `api` gasta tokens de una API key. Adivinar uno
+// sería elegirle la forma de pago, y el stream sale igual por los dos lados, así que nadie
+// se enteraría hasta ver la factura.
+type MotorConfig struct {
+	// Provider elige la implementación: "" (apagado) | "cli" | "api".
+	//
+	//   cli  lanza el binario `claude -p` y factura contra la SUSCRIPCIÓN del usuario.
+	//   api  llama a /v1/messages y factura TOKENS contra una API key.
+	//
+	// Un valor mal escrito es un ERROR, no un apagado silencioso: alguien que escribió
+	// "claude" en vez de "cli" quiso prender el motor, y dejarlo apagado le devolvería un
+	// 405 sin ninguna pista de por qué.
+	Provider string `yaml:"provider,omitempty"`
+
+	// ─── sólo para provider: cli ───
+
+	// Binary es el ejecutable a lanzar. Vacío ⇒ "claude", resuelto por PATH.
+	Binary string `yaml:"binary,omitempty"`
+	// TurnTimeoutSeconds es el tope de UN turno. 0 ⇒ el default del motor (10 min), que es
+	// generoso a propósito: cortar por reloj un turno con thinking largo es peor que
+	// esperarlo.
+	TurnTimeoutSeconds int `yaml:"turn_timeout_seconds,omitempty"`
+	// KeepAPIKey deja pasar ANTHROPIC_API_KEY al proceso hijo. Por defecto se saca, y no es
+	// cosmético: el sentido de `cli` es facturar con la suscripción, y una API key en el
+	// entorno la haría facturar por API sin que se note desde el cliente.
+	KeepAPIKey bool `yaml:"keep_api_key,omitempty"`
+	// SessionVersion es la versión que se escribe en el archivo de sesión del CLI. Vacío ⇒
+	// el default del motor. Se expone para poder seguir un cambio de formato del binario
+	// sin recompilar: el formato es INTERNO del CLI y puede cambiar sin aviso.
+	SessionVersion string `yaml:"session_version,omitempty"`
+
+	// ─── sólo para provider: api ───
+
+	// Endpoint es la URL de /v1/messages. Vacío ⇒ el de Anthropic.
+	Endpoint string `yaml:"endpoint,omitempty"`
+	// APIKeyEnv es el NOMBRE de la variable de entorno con la credencial, nunca la
+	// credencial: los secretos no van al yaml. Vacío ⇒ ANTHROPIC_API_KEY.
+	APIKeyEnv string `yaml:"api_key_env,omitempty"`
+	// APIVersion es la cabecera `anthropic-version`. Vacío ⇒ la que este binario conoce.
+	APIVersion string `yaml:"api_version,omitempty"`
+	// Betas son las cabeceras `anthropic-beta` a pedir. Vacío ⇒ ninguna.
+	Betas []string `yaml:"betas,omitempty"`
+}
+
 // UsageLedgerConfig configura el LEDGER DE USO (F0 · track «Potencia medida»): la historia
 // persistente de qué tools se invocaron, cuánto tardaron y cómo terminaron.
 //
@@ -1002,6 +1070,13 @@ type Config struct {
 	// Cognition configura el 3er pilar (Cognición LLM): OPT-IN, apagado por defecto (provider "" => Noop).
 	// F0 sólo cablea el andamiaje; no hace ninguna llamada real a un LLM.
 	Cognition CognitionConfig `yaml:"cognition,omitempty"`
+	// Motor elige con qué implementación sirve Musubi un turno de modelo PEDIDO POR UN
+	// CLIENTE EXTERNO. Nace apagado (provider "" ⇒ el POST de `/api/stream` contesta 405 con
+	// `Allow: GET`; la ruta en sí se registra siempre, porque la comparte con el feed SSE).
+	//
+	// ⚠️ No confundir con los «motores» de `cognition:`, que apuntan al revés: ésos son los
+	// modelos que Musubi consume para sí. Ver el comentario de MotorConfig.
+	Motor MotorConfig `yaml:"motor,omitempty"`
 	// UsageLedger es la historia persistente de invocaciones de tools (F0 · «Potencia medida»).
 	// Nace encendido; ver el comentario del tipo para el porqué.
 	UsageLedger UsageLedgerConfig `yaml:"usage_ledger,omitempty"`
