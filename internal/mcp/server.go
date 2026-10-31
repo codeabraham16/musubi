@@ -24,6 +24,7 @@ import (
 	"musubi/internal/fleet"
 	"musubi/internal/logx"
 	"musubi/internal/memory"
+	"musubi/internal/motor"
 	"musubi/internal/skills"
 )
 
@@ -193,6 +194,12 @@ type McpServer struct {
 	embedder       embedding.Provider
 	// cognition es el motor del 3er pilar (Cognición LLM); NoopProvider ⇒ pilar apagado (default).
 	cognition cognition.Provider
+	// motor sirve los turnos de modelo que pide un cliente externo por `POST /api/stream`
+	// (turno.go). nil ⇒ apagado, y entonces esa ruta contesta 405 mientras el GET —el feed en
+	// vivo, que comparte la ruta— sigue andando.
+	//
+	// ⚠️ Apunta al REVÉS que `cognition`: éste es el motor que Musubi OFRECE, no el que consume.
+	motor motor.Motor
 	// cognitionCfg trae las guardas de CALIDAD del 3er pilar (F3): el vocabulario controlado de
 	// predicados para propuestas (AllowedPredicates) y el TTL de cuarentena (ProposalTTLHours).
 	// Zero-value ⇒ enum allow-all + sin barrido ⇒ comportamiento bit-idéntico.
@@ -465,6 +472,23 @@ func WithCognition(c cognition.Provider) Option {
 	return func(s *McpServer) {
 		if c != nil {
 			s.cognition = c
+		}
+	}
+}
+
+// WithMotor habilita el MOTOR DE TURNOS: el `POST /api/stream` que sirve un turno de modelo a
+// un cliente externo (hoy, el `streamProxy` de pi-agent-core).
+//
+// ⚠️ No confundirlo con el «motor» del 3er pilar, que apunta al revés: `WithCognition` inyecta el
+// modelo que Musubi CONSUME para su propia cognición. Esto es el que Musubi OFRECE.
+//
+// Sin esta option la ruta POST contesta 405 y el GET —el feed en vivo, que comparte la ruta
+// porque el cliente la tiene hardcodeada— sigue funcionando igual. Un nil se ignora, así que
+// `WithMotor(motor.Desde(cfg))` con el motor apagado es seguro de pasar sin preguntar.
+func WithMotor(m motor.Motor) Option {
+	return func(s *McpServer) {
+		if m != nil {
+			s.motor = m
 		}
 	}
 }

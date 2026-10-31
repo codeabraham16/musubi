@@ -468,9 +468,25 @@ func (s *McpServer) HTTPHandler(opt httpOptions) http.Handler {
 	// header Authorization, y la alternativa —el token en la query string— lo deja escrito en los
 	// logs de acceso y en el historial del navegador. Con fetch + ReadableStream el bearer viaja
 	// donde tiene que viajar.
+	// Y DESDE EL TRACK «MOTOR», LA MISMA RUTA SIRVE DOS COSAS SEGÚN EL MÉTODO: GET es este feed
+	// y POST es un TURNO de modelo (turno.go). No se eligió compartirla: el cliente del motor
+	// —el `streamProxy` de pi-agent-core— tiene `/api/stream` HARDCODEADO (proxy.ts:147) y sólo
+	// deja configurar el host, así que no había otra ruta posible. Son dos operaciones
+	// distintas sobre el mismo recurso: leer el flujo de lo que pasa, o pedir que pase algo.
 	mux.Handle("/api/stream", puertaDePersona(opt, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			s.servirTurno(opt, w, r)
+			return
+		}
 		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", "GET")
+			// El `Allow` dice la VERDAD de este servidor, no la del endpoint en abstracto:
+			// sin motor configurado, POST no está disponible y anunciarlo mandaría al cliente
+			// a un 405 por otra puerta.
+			permitidos := "GET"
+			if s.motor != nil {
+				permitidos = "GET, POST"
+			}
+			w.Header().Set("Allow", permitidos)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}

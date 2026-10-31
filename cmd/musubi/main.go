@@ -20,6 +20,7 @@ import (
 	"musubi/internal/embedding"
 	"musubi/internal/mcp"
 	"musubi/internal/memory"
+	"musubi/internal/motor"
 )
 
 // resolveProjectID determina el identificador de proyecto que se estampa en cada
@@ -378,7 +379,34 @@ func runServe(args []string) {
 		autoBackfill(engine, embedder)
 	}
 
-	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithMotorQuota(cfg.Cognition.EffectiveMotorQuotaPerHour()), mcp.WithCognition(resolveCognition(cfg)), mcp.WithCognitionConfig(cfg.Cognition), mcp.WithUsageLedger(engine, cfg.UsageLedger), mcp.WithVersion(version))
+	// EL MOTOR DE TURNOS (`POST /api/stream`): lo que convierte a Musubi en el proveedor de modelo
+	// de un cliente externo. Va SÓLO acá y no en `daemon`, porque el motor no es una capacidad del
+	// proceso sino de una RUTA: un daemon stdio no tiene por dónde servirlo, y construirlo ahí sólo
+	// serviría para que un `provider: api` sin credencial le voltee el arranque a cada sesión del
+	// agente — un servicio que nadie le pidió, rompiendo el que sí.
+	//
+	// Se construye ANTES del servidor porque un proveedor mal escrito o una credencial ausente son
+	// errores de CONFIGURACIÓN, y el que los puede arreglar es quien editó el yaml — no el cliente
+	// remoto, que sólo vería un 405 o un turno que falla. Es fatal a propósito, con el mismo
+	// criterio que la validación de las políticas de flota de más abajo: un servicio que arranca
+	// «bien» y contesta 405 justo en la ruta que alguien acaba de configurar es peor que uno que no
+	// arranca, porque el síntoma no nombra la causa. Con el motor apagado —el estado de toda
+	// instalación de hoy— `Desde` devuelve (nil, nil) y esto no hace nada.
+	motorDeTurnos, err := motor.Desde(cfg.Motor)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "musubi serve: %v\n", err)
+		os.Exit(1)
+	}
+	// Y SALE UNA LÍNEA SIEMPRE, incluso apagado, que es justo el caso en que el 405 sorprende. Es lo
+	// más barato que convierte el único síntoma de un motor mal configurado —un 405 silencioso en
+	// una ruta que el cliente tiene hardcodeada— en algo averiguable. Nombra la variable de la
+	// credencial, nunca su valor (ver DescribirMotor).
+	fmt.Fprintf(os.Stderr, "musubi: %s\n", motor.DescribirMotor(cfg.Motor))
+
+	// ⚠️ `WithMotor` no va pegado a `WithMotorQuota`: apuntan al revés y el nombre no lo dice. El
+	// freno de cuota es del motor que Musubi CONSUME (el 3er pilar, con `WithCognition`); esto es el
+	// que Musubi OFRECE. Separarlos en la lista es lo único que evita leerlos como un par.
+	server := mcp.NewMcpServer(engine, root, embedder, mcp.WithSourcing(cfg.Sourcing), mcp.WithMemory(cfg.Memory), mcp.WithMaintenance(cfg.Maintenance), mcp.WithGraph(cfg.Graph), mcp.WithConflicts(cfg.Conflicts), mcp.WithPipeline(cfg.Pipeline), mcp.WithMultiAgent(cfg.MultiAgent), mcp.WithQuota(cfg.Service.EffectiveQuotaPerMinute()), mcp.WithMotorQuota(cfg.Cognition.EffectiveMotorQuotaPerHour()), mcp.WithCognition(resolveCognition(cfg)), mcp.WithCognitionConfig(cfg.Cognition), mcp.WithUsageLedger(engine, cfg.UsageLedger), mcp.WithMotor(motorDeTurnos), mcp.WithVersion(version))
 	defer server.CloseLedger() // baja lo que quede en el buffer del ledger de uso (F0)
 
 	// Un nodo que SIRVE sin sync saliente es TERMINAL — el caso del cerebro central: no tiene
