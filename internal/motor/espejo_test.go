@@ -1084,6 +1084,31 @@ func TestElEspejoTieneLosCuatroTimeoutsYElIdleLeGanaAlTurno(t *testing.T) {
 // arnes: de="\t\tIdleTimeout: espera + margenDelIdle,"
 // arnes: a="\t\tIdleTimeout: DemoraPorDefecto + margenDelIdle,"
 // arnes: colision_ok="TestElEspejoTieneLosCuatroTimeoutsYElIdleLeGanaAlTurno"
+//
+// ⚠️ LA LÍNEA QUE RESUELVE EL PLAZO DENTRO DEL ESPEJO TENÍA CUSTODIO Y NO ESTABA DECLARADA, y
+// una guarda que nadie declaró es una guarda que el próximo refactor borra sin enterarse: el
+// censo del arnés no la cuenta, así que la pregunta «¿esto tiene cobertura?» se contesta mal.
+// Medido el 2026-10-31 borrándola bajo overlay: este test cae con `con espera=0 el IdleTimeout
+// quedó en 1m0s`, o sea el cero se iba al `espera + margenDelIdle` y daba un minuto pelado. El
+// custodio existía; lo que faltaba era que el arnés lo supiera.
+//
+// Y LAS DOS RESOLUCIONES NO SON UNA COPIA QUE SE TAPEN, que es el riesgo obvio de tener
+// `plazoDelTurno` acá y en `lanzador.go`. Medido EN LAS DOS DIRECCIONES el 2026-10-31: con M39
+// puesto —el lanzador se queda con el crudo del yaml— ESTE test queda VERDE y el que cae es
+// `TestUnTopeNegativoNoMataElTurnoEnElActo`, con `context deadline exceeded`, que es su camino
+// (el ctx); con la línea de acá borrada cae este y aquél queda verde. Cada resolución tiene su
+// custodio y su camino, así que ninguna enmascara el sabotaje de la otra — que es lo único que
+// justifica dejar las dos.
+//
+// LO QUE ESTE SABOTAJE NO MIDE, Y NO ES UN HUECO: el NEGATIVO acá. Desde producción no puede
+// llegar, porque `lanzador.go` resuelve ANTES de llamar, así que una aserción con un negativo
+// estaría midiendo el mismo `plazoDelTurno` que M42 ya cubre sobre la función, con los ocho
+// casos del dominio hasta `-1<<63`. El dominio no-positivo se custodia UNA vez, donde vive.
+//
+// Sabotaje M50: el espejo confía en que el caller ya resolvió el plazo
+// arnes: archivo="internal/motor/espejo.go"
+// arnes: de="\tespera = plazoDelTurno(espera)\n"
+// arnes: a=""
 func TestElIdleDelEspejoCuelgaDelPlazoRealDelTurno(t *testing.T) {
 	const tools = `[{"name":"leer","input_schema":{"type":"object"}}]`
 
