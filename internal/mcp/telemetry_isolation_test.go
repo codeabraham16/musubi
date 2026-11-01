@@ -123,7 +123,7 @@ func TestLogErrorRedactsAndAttributes(t *testing.T) {
 	defer engine.Close()
 	engine.SetProjectID("")
 	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{})
-	s.forceRedact = true
+	s.pozoCompartido = true
 
 	crm := &Principal{Name: "alice", Role: RoleWriter, ProjectID: "crm"}
 	raw, _ := json.Marshal(map[string]any{

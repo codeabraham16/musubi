@@ -338,6 +338,100 @@ type cgNodeView struct {
 	Stale bool   `json:"stale,omitempty"`
 }
 
+// arbolAusenteEn dice si un cerebro con este directorio de trabajo NO puede estar describiendo
+// código de este disco. El criterio es NO HAY UN SOLO ARCHIVO INDEXABLE bajo el árbol, con las
+// mismas reglas que `walkSourceTree` —misma función de extensiones, mismos directorios salteados—,
+// porque es exactamente la pregunta que decide: si el indexador no puede encontrar nada acá, todo
+// nodo del grafo vino de otra parte y preguntarle al disco por su archivo no significa nada.
+//
+// SE MIDE, NO SE DEDUCE, y ahí está el cambio. Antes este hecho salía de `s.forceRedact`, o sea
+// del bind del proceso y de una política de redacción, que son dos preguntas distintas de ésta;
+// la consecuencia era que poner la redacción en `true` en un daemon LOCAL —donde el árbol sí
+// está en disco— apagaba en silencio las tres rutas que lo consultan. Es el mismo movimiento que
+// ya hizo `confianzaLocal` en http.go: dejar de deducir del bind y preguntar lo que decide.
+//
+// 🔴 EL CRITERIO NO PUEDE SER «EL DIRECTORIO CONTIENE EXACTAMENTE .musubi», QUE ES LO QUE DECÍA
+// ESTA FUNCIÓN Y FALLABA EN LAS DOS DIRECCIONES. Lo encontró el panel adversarial de este PR,
+// medido con el `ListenAndServeHTTP` real, y el mecanismo es que esa firma LA PLANTA EL PROPIO
+// ARRANQUE: `cmd/musubi/main.go:316` llama `ensureWorkspace(root)` —que hace
+// `os.MkdirAll(root/.musubi)` y escribe `config.yaml`— ANTES del `ListenAndServeHTTP` de `:492`.
+// O sea que en cualquier carpeta nueva el daemon se auto-firmaba como «soy el central»:
+//
+//	A/B contra el padre 674d3366 — loopback sin force_redact, carpeta nueva, el código llega después:
+//	  padre            → stale=1   (medía bien)
+//	  la firma .musubi → stale=0   ← apagado EN SILENCIO, la dirección que este archivo declara peor
+//
+// Y erraba también al revés: un `nohup.out`, un `lost+found/` o un `.gitignore` al lado de
+// `.musubi` bastaban para que el central federado se declarara CON árbol y reportara fantasmas en
+// masa. Son los dos errores opuestos de la misma medición, y eran mutuamente excluyentes: ningún
+// despliegue sufría los dos, y todos sufrían uno. «Hay archivos de código» no tiene ese filo —no
+// la voltea un archivo ajeno— y es lo que de verdad se quiere saber.
+//
+// ANTE LA DUDA DICE «PRESENTE», a propósito, y por eso la raíz ilegible se trata aparte del árbol
+// sin código: equivocarse hacia presente es RUIDOSO —`graphFreshness` reporta fantasmas en masa—,
+// mientras que equivocarse hacia ausente APAGA LA MEDICIÓN EN SILENCIO, y el indicador que uno
+// miraría para comprobarlo —`ghosts: 0`— es exactamente lo que devuelve un grafo que dejó de
+// mirar el disco.
+//
+// ⚠️ EL BORDE QUE ESTE CRITERIO ACEPTA, DECLARADO: `codeintel.IndexableForGraph` depende de los
+// build tags —TS/JS/Py sólo cuentan con `-tags treesitter`—, así que un binario compilado sin
+// ellos sobre un repo de TypeScript mide «ausente» aunque el árbol esté ahí. Se acepta porque ese
+// binario tampoco puede poblar el grafo con esos archivos: el próximo índice poda los nodos que
+// dejarían de medirse, y el caso sólo existe mientras el grafo tenga nodos de otro binario.
+func arbolAusenteEn(dir string) bool {
+	if dir == "" {
+		return false // sin workspace no hay nada que afirmar ⇒ presente, que es la dirección ruidosa
+	}
+	hayCodigo, raizIlegible := false, false
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if p == dir {
+				raizIlegible = true // ni la raíz se pudo abrir: no se midió nada
+			}
+			return nil // best-effort: saltar lo ilegible, igual que walkSourceTree
+		}
+		if d.IsDir() {
+			if p != dir {
+				name := d.Name()
+				if strings.HasPrefix(name, ".") || name == "vendor" || name == "testdata" ||
+					name == "node_modules" || name == "dist" || name == "coverage" {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if codeintel.IndexableForGraph(d.Name()) {
+			hayCodigo = true
+			return fs.SkipAll // corta en el PRIMERO: en el caso común no recorre el repo entero
+		}
+		return nil
+	})
+	if raizIlegible {
+		return false // de los dos errores, el ruidoso es el bueno
+	}
+	return !hayCodigo
+}
+
+// remedirArbol vuelve a fijar el hecho con lo que el indexador acaba de ver en disco, y existe
+// porque MEDIRLO UNA SOLA VEZ AL ARRANQUE NO ALCANZA: el árbol puede llegar después —un `git
+// clone` en una carpeta nueva, o el primer archivo de un proyecto que empieza— y el valor
+// congelado deja la frescura apagada hasta el próximo reinicio.
+//
+// SE RE-MIDE EN EL ÍNDICE Y NO CON UN RELOJ. El TTL se midió y es peor por dos motivos: dentro de
+// la ventana el silencio sigue (no cierra el caso, lo acota), y re-muestrear para siempre expone al
+// central a cualquier archivo transitorio que pase por su home —medido: un `nohup.out` que aparece
+// y se va deja los fantasmas pegados hasta el reinicio—. El índice, en cambio, es el momento en que
+// el grafo vuelve a leer el disco, así que es exactamente cuando este hecho pudo haber cambiado; y
+// es determinista, así que el test que lo cubre no depende de cuánto tarda la máquina.
+//
+// `hayIndexables` NO SE VUELVE A CALCULAR: sale del `walkSourceTree` que el índice ya pagó, que es
+// la MISMA enumeración con la que `arbolAusenteEn` decide. Por eso la costura recibe el dato en vez
+// de volver a mirar el disco, y por eso vive acá y no en los handlers: así la comparten los dos
+// modos del índice y el scheduler, sin que ninguno tenga que acordarse de llamarla.
+func (s *McpServer) remedirArbol(hayIndexables bool) {
+	s.arbolAusente.Store(!hayIndexables)
+}
+
 // arbolFueraDeAlcance dice si este servidor NO tiene en disco el árbol que su grafo describe.
 //
 // En el central COMPARTIDO el grafo es FEDERADO: los nodos vienen de otros proyectos y sus archivos
@@ -351,7 +445,11 @@ type cgNodeView struct {
 // existe en el árbol indexado […] el miss es correcto». Categórico, y falso cuando lo que pasa es
 // que el índice central está viejo. Con un nombre compartido, el día que la condición cambie,
 // cambia para los tres.
-func (s *McpServer) arbolFueraDeAlcance() bool { return s.forceRedact }
+//
+// Y LA CONDICIÓN CAMBIÓ ACÁ: el cuerpo era `return s.forceRedact`, o sea el helper tenía el
+// nombre correcto y el origen equivocado —una política de redacción deducida del bind—. Hoy
+// devuelve un hecho medido en el disco; el por qué del medidor está en `arbolAusenteEn`.
+func (s *McpServer) arbolFueraDeAlcance() bool { return s.arbolAusente.Load() }
 
 // cgStale compara el fingerprint guardado de un nodo con el ACTUAL del archivo (en la capa MCP,
 // que tiene fs — como gistStale). Los nodos sin archivo (paquetes externos) nunca son stale. Un
@@ -449,7 +547,10 @@ func (s *McpServer) graphSize(scoped context.Context) (nodes, edges int) {
 // La segunda pasada NO re-deriva todo: sólo los paquetes que reportaron pendientes sin resolver.
 // Y re-derivar es idempotente (borra por src_path y re-inserta), así que repetir uno no duplica nada.
 func (s *McpServer) indexAllPackages(ctx context.Context) (map[string]interface{}, error) {
-	dirs, _, ignorados := s.walkSourceTree()
+	dirs, archivos, ignorados := s.walkSourceTree()
+	// El índice acaba de enumerar el disco con LA MISMA regla que usa `arbolAusenteEn`, así que
+	// aprovechamos el recorrido para re-fijar el hecho en vez de volver a caminar el árbol.
+	s.remedirArbol(len(archivos) > 0)
 	pkgs := 0
 	var pendientes []string
 	var salteados []string
@@ -619,6 +720,10 @@ func (s *McpServer) planearIncremental(ctx context.Context) (planIncremental, er
 	// `walkSourceTree` devuelve tres valores desde que esta rama agregó `ignorados` (qué quedó
 	// afuera por lenguaje); main usa `dirsDisco` para el barrido del derivador. Los dos hacen falta.
 	dirsDisco, diskFiles, ignorados := s.walkSourceTree()
+	// Mismo aprovechamiento que en `indexAllPackages`: el disco ya quedó enumerado con la regla de
+	// `arbolAusenteEn`, así que el hecho se re-fija gratis. Va acá y no en el handler para que los
+	// dos modos del índice —y el scheduler, que llama por este mismo camino— lo compartan.
+	s.remedirArbol(len(diskFiles) > 0)
 
 	plan := planIncremental{dirtyDirs: map[string]bool{}, ignorados: ignorados, diskFiles: diskFiles}
 	plan.gistsAutoViejo, _, _ = s.engine.GetMeta(memory.MetaGistsAutomaticos)
@@ -1405,7 +1510,30 @@ func (s *McpServer) pistaDelMiss(ctx context.Context, symbol string) map[string]
 	}
 
 	// El archivo no está en el grafo. Que exista o no en disco separa «falta indexar» de «otra rama».
-	if _, err := os.Stat(filepath.Join(s.projectPath, filepath.FromSlash(archivo))); err == nil {
+	//
+	// 🔴 Y LA PREGUNTA SE LE HACE AL DISCO CON UNA RUTA QUE MANDÓ EL CLIENTE, así que primero hay que
+	// comprobar que caiga adentro del proyecto. `archivo` es el prefijo del `symbol` que llega por
+	// `musubi_code_graph`, `musubi_impact` y `musubi_code_context`, sin pasar por ninguna validación:
+	// sin esta guarda, un `symbol` como «../../../etc/passwd#func:x» convertía el hint en un oráculo
+	// de existencia sobre todo el filesystem del servidor. Es el idioma que el repo YA usa para una
+	// ruta del cliente —`methods.go:2131` y `:2288`—; esta ruta se lo había salteado.
+	//
+	// LA GUARDA VA PRIMERO Y CORTOCIRCUITA EL `os.Stat`, no al revés: con el Stat adelante la
+	// respuesta saldría igual, pero la corrección dependería del orden de evaluación de un `&&` y el
+	// próximo que reordene la línea reabre el agujero sin darse cuenta. Y «afuera» cae en la MISMA
+	// rama que «no existe», a propósito: dos respuestas distintas volverían a distinguir los casos,
+	// que es justo lo que el oráculo necesita.
+	//
+	// ⚠️ REDUCE EL ORÁCULO, NO LO CIERRA DEL TODO, y conviene saberlo: `dentroDelProyecto` compara
+	// cadenas y nunca llama `EvalSymlinks`, así que un symlink dentro del proyecto que apunte afuera
+	// sigue siendo seguible; y con `projectPath` vacío falla ABIERTA (`:79-81`). Las dos son
+	// preexistentes y tienen otros cuatro call sites, así que se arreglan aparte.
+	existeEnElProyecto := false
+	if s.dentroDelProyecto(archivo) {
+		_, serr := os.Stat(filepath.Join(s.projectPath, filepath.FromSlash(archivo)))
+		existeEnElProyecto = serr == nil
+	}
+	if existeEnElProyecto {
 		res[pathConocido] = true
 		// Y si existe pero su LENGUAJE no se indexa, indexar no lo va a arreglar nunca. El grafo
 		// deriva del AST: Go siempre, y TS/TSX/JS/JSX/Py sólo con `-tags treesitter`. C/C++, SQL,
@@ -1574,10 +1702,14 @@ func (s *McpServer) graphFreshness(scoped context.Context) (stale, ghosts, missi
 	// Igual que cgStale: en el central compartido el grafo es federado y sus archivos no están en disco,
 	// así que la frescura por fingerprint no aplica (todo saldría fantasma). No inventar podredumbre. #3
 	//
-	// Se conserva `arbolFueraDeAlcance()` de esta rama y no el `s.forceRedact` pelado de main: son
-	// lo mismo —el helper es literalmente `return s.forceRedact`— pero el nombre dice POR QUÉ se
-	// mira, y los otros cinco usos de este archivo ya van por ahí. Dos formas de preguntar lo
-	// mismo en el mismo archivo es como una de las dos se queda vieja.
+	// Se conserva `arbolFueraDeAlcance()` de esta rama y no el `s.forceRedact` pelado de main: el
+	// nombre dice POR QUÉ se mira, y los otros cinco usos de este archivo ya van por ahí. Dos
+	// formas de preguntar lo mismo en el mismo archivo es como una de las dos se queda vieja.
+	//
+	// Y ESA APUESTA PAGÓ. Entonces eran lo mismo —el helper era literalmente
+	// `return s.forceRedact`— y dejaron de serlo: hoy el árbol se MIDE del disco y la redacción
+	// sigue siendo una política declarada. El cambio entró en un cuerpo de función y estos cinco
+	// call sites no se tocaron.
 	if s.arbolFueraDeAlcance() {
 		return 0, 0, 0
 	}

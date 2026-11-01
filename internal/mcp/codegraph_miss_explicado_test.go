@@ -348,7 +348,7 @@ func gitInit(t *testing.T, dir string) {
 //
 // Sabotaje verificado que lo pone en rojo: que `arbolFueraDeAlcance` devuelva `false` siempre.
 // arnes: archivo="internal/mcp/methods_codegraph.go"
-// arnes: de="func (s *McpServer) arbolFueraDeAlcance() bool { return s.forceRedact }"
+// arnes: de="func (s *McpServer) arbolFueraDeAlcance() bool { return s.arbolAusente.Load() }"
 // arnes: a="func (s *McpServer) arbolFueraDeAlcance() bool { return false }"
 func TestEnElCentralElMissNoAfirmaQueElArchivoEsDeOtraRama(t *testing.T) {
 	s, dir := proyectoIndexado(t)
@@ -366,7 +366,7 @@ func TestEnElCentralElMissNoAfirmaQueElArchivoEsDeOtraRama(t *testing.T) {
 	}
 
 	// ── central: el MISMO símbolo, y ya no puede decir por qué ──────────────────────────────────
-	s.forceRedact = true
+	s.arbolAusente.Store(true)
 	central := decodeCG(t, mustCall(t, s, "musubi_code_graph", map[string]interface{}{"symbol": simbolo}))
 	hint, _ := central["hint"].(string)
 	if hint == "" {

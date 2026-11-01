@@ -246,7 +246,7 @@ func grafoPublicado(t *testing.T, s *McpServer, huellas map[string]string) {
 // arnes: a="return strings.TrimSpace(n.SrcFingerprint[:0])"
 func TestElCentralJuzgaLaFrescuraContraElGrafoPublicado(t *testing.T) {
 	s := newTestServerWithPath(t, t.TempDir())
-	s.forceRedact = true // el central: el árbol no está en este disco
+	s.arbolAusente.Store(true) // el central: el árbol no está en este disco
 	grafoPublicado(t, s, map[string]string{"pkg/a.go": "huella-publicada", "pkg/sin-huella.go": ""})
 
 	casos := []struct {

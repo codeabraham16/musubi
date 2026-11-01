@@ -27,7 +27,7 @@ func TestForceRedactScrubsLocalIngest(t *testing.T) {
 		}
 		defer engine.Close()
 		s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{})
-		s.forceRedact = forceRedact
+		s.pozoCompartido = forceRedact
 
 		args := map[string]any{
 			"topic_key": "cfg/x",

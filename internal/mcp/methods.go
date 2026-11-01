@@ -322,8 +322,9 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 	}
 	// Redacción forzada server-side (16.1d): en infra compartida (el central) TODO ingest se
 	// trata como shared, así se redactan los secretos aunque el cliente declare scope=local.
-	// Cierra el hueco por el que un secreto crudo entraba al pozo compartido.
-	if s.forceRedact {
+	// Cierra el hueco por el que un secreto crudo entraba al pozo compartido. Es el ÚNICO sitio
+	// que pisa un scope EXPLÍCITO, y por eso tiene predicado propio: ver pisaElScopeExplicito.
+	if s.pisaElScopeExplicito() {
 		scope = memory.ScopeShared
 	}
 	importance := args.Importance
@@ -344,10 +345,11 @@ func (s *McpServer) toolSaveObservation(ctx context.Context, raw json.RawMessage
 	// que la memoria compartida de un equipo registre QUIÉN aportó cada cosa. Sellado server-side.
 	author := authorFrom(principalFrom(ctx))
 
-	// Redacción ANTES del embedding (Track 17 T17.2): con forceRedact el vector debe derivarse del
-	// contenido YA redactado (antes se embebía el crudo, dejando un vector at-rest derivado del
-	// secreto en infra compartida). topic_key también se redacta (antes cruzaba crudo al central en
-	// su propia tool guardada). Idempotente con la redacción de la capa de memoria (scope shared).
+	// Redacción ANTES del embedding (Track 17 T17.2): con la redacción forzada el vector debe
+	// derivarse del contenido YA redactado (antes se embebía el crudo, dejando un vector at-rest
+	// derivado del secreto en infra compartida). topic_key también se redacta (antes cruzaba crudo
+	// al central en su propia tool guardada). Idempotente con la redacción de la capa de memoria
+	// (scope shared).
 	content := s.redactIfForced(args.Content)
 	topicKey := s.redactIfForced(args.TopicKey)
 
@@ -2464,7 +2466,7 @@ func (s *McpServer) alcanceDelPull(ctx context.Context) string {
 // cubría save_observation, dejando save_fact y save_code escribiendo secretos crudos al pozo
 // compartido. Idempotente (redactar algo ya redactado es no-op).
 func (s *McpServer) redactIfForced(text string) string {
-	if !s.forceRedact {
+	if !s.redactaTodoIngest() {
 		return text
 	}
 	clean, _ := redact.Redact(text)
