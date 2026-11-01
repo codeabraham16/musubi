@@ -360,11 +360,36 @@ type McpServer struct {
 	pipeline config.PipelineConfig
 	// multiagent contiene los parámetros de la pizarra compartida del multi-agente.
 	multiagent config.MultiAgentConfig
-	// forceRedact fuerza la redacción de secretos en TODO ingest (Track 16 F1 16.1d): el
-	// central es infra compartida, así que redacta independientemente del scope declarado por
-	// el cliente (cierra el hueco scope=local → secreto crudo). Lo enciende ListenAndServeHTTP
-	// cuando el bind es no-loopback (o service.force_redact). En stdio local queda false.
-	forceRedact bool
+	// pozoCompartido dice si este servidor es infra de MÁS DE UNA PERSONA (Track 16 F1 16.1d).
+	// Es una POLÍTICA declarada, no un hecho medible, y de ella cuelgan dos mecanismos con la
+	// misma razón: redactar los secretos de TODO ingest, y rutear a `shared` aunque el cliente
+	// haya declarado `scope=local`. Los dos cierran el mismo hueco —un secreto crudo marcado
+	// local—. Lo enciende ListenAndServeHTTP cuando el bind es no-loopback (o
+	// service.force_redact). En stdio local queda false.
+	//
+	// ANTES SE LLAMABA `forceRedact` Y DECIDÍA UNA TERCERA COSA SIN RELACIÓN: si el árbol de
+	// código está en este disco. Eso era un hecho disfrazado de política, y se pagaba caro —
+	// encender la redacción en un daemon LOCAL, donde el árbol sí está, apagaba en silencio las
+	// tres rutas que miden la frescura del grafo. Ahora se mide: ver `arbolAusente`.
+	pozoCompartido bool
+	// arbolAusente dice que el grafo de este cerebro NO describe código de este disco. Es un
+	// HECHO MEDIDO —`arbolAusenteEn` en el arranque, y `remedirArbol` cada vez que el índice
+	// vuelve a mirar el disco—, no una decisión de operación.
+	//
+	// EL NOMBRE ESTÁ EN NEGATIVO A PROPÓSITO Y NO ES COSMÉTICA: los tests construyen con
+	// NewMcpServer, que no pasa por ListenAndServeHTTP, así que el campo queda en el cero-value.
+	// Con `arbolAusente` ese cero significa «hay árbol», idéntico al `forceRedact: false` que
+	// tenían antes. Con el nombre al revés (`arbolEnDisco`) significaría «no hay árbol» y el
+	// predicado se invertiría en toda la suite, hacia el lado silencioso.
+	//
+	// ES ATÓMICO PORQUE DEJÓ DE ESCRIBIRSE UNA SOLA VEZ, y el candado del despacho NO alcanza
+	// para cubrirlo: `musubi_codegraph_index` declara `lockSelf` —el despachador no le toma
+	// candado, para que el POST al central y el `git rev-parse` no corran con el servidor
+	// congelado—, así que su re-medición concurre con los seis lectores del predicado sin
+	// sincronización de por medio. Un `bool` plano ahí es una carrera, y `-race` no corre en
+	// Windows (sin cgo), o sea que no habría quien avisara. Medido por el panel: 2,66 ns/op a
+	// ocho hilos, contra 48,85 de un mutex, que además empeora con la contención.
+	arbolAusente atomic.Bool
 	// gitRunner obtiene el diff para musubi_detect_changes; nil → GitRunner real sobre
 	// projectPath. Los tests lo inyectan (codeintel.FakeRunner) para no depender de git.
 	gitRunner codeintel.Runner
@@ -449,6 +474,35 @@ type McpServer struct {
 	// de alta/baja miembros por la red, sin SSH ni CLI. Vacía en stdio local/tests ⇒ default.
 	principalsFile string
 }
+
+// Las TRES PREGUNTAS que antes contestaba un solo booleano (`forceRedact`), cada una con su
+// predicado nombrado y su origen declarado:
+//
+//	redactaTodoIngest()    ← pozoCompartido   POLÍTICA: ¿este pozo es de más de una persona?
+//	pisaElScopeExplicito() ← pozoCompartido   la misma política, aplicada al ruteo
+//	arbolFueraDeAlcance()  ← arbolAusente     HECHO: ¿el grafo describe código que no está acá?
+//	                                          (vive en methods_codegraph.go, con sus consumidores)
+//
+// SON TRES PREDICADOS Y NO DOS, aunque hoy dos devuelvan el mismo campo, porque lo que hacía
+// falta era poder cambiar una sin tocar las otras. El día que el ruteo del scope necesite su
+// propia política se cambia UN cuerpo de una línea y nadie más se entera. El número importa
+// menos que el reparto, y los dos están medidos: en producción hay 7 lecturas de estos dos
+// campos, cada una detrás de su predicado —1 de redacción, 1 de scope, 5 del árbol—, así que
+// mover una no obliga a leer las otras seis. Con la bandera compartida eso era imposible:
+// había que elegir cuál de las tres respuestas sacrificar.
+
+// redactaTodoIngest dice si hay que redactar secretos en TODO ingest, sea cual sea el scope que
+// declare el cliente. Cierra el hueco de un cliente que manda `scope=local` con un secreto crudo
+// (PR #777); el default es FAIL-CLOSED y esta separación no lo afloja.
+func (s *McpServer) redactaTodoIngest() bool { return s.pozoCompartido }
+
+// pisaElScopeExplicito dice si un `scope=local` EXPLÍCITO del cliente se fuerza a `shared`.
+//
+// NO CUELGA DE `memory.TeamMode`, que parecería la señal natural, y la razón es su propio
+// contrato: TeamMode promete que «un scope explícito siempre se respeta (escape hatch)». Usarlo
+// acá sería romper ese escape hatch para arreglar otra cosa. TeamMode decide el scope AUSENTE
+// (defaultScope); esto decide el scope EXPLÍCITO, que es otra pregunta.
+func (s *McpServer) pisaElScopeExplicito() bool { return s.pozoCompartido }
 
 // WithQuota devuelve un Option que activa la cuota de uso por-principal: máximo perMinute
 // llamadas a tools/call por principal por minuto. perMinute<=0 ⇒ sin cuota (default).

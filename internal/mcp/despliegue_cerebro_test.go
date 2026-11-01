@@ -195,7 +195,7 @@ func TestElInstaladorDelCerebroNoSeComeLoQueVieneDespuesDeService(t *testing.T) 
 //
 // El heredoc de `install-musubi-brain.sh` reescribe el bloque `service:` COMPLETO, asi que toda
 // clave que el admin declaro a mano y que el heredoc no conoce desaparece. `force_redact` es la que
-// tiene dientes: el cerebro la DEDUCE del bind (`s.forceRedact = !loopback || cfg.ForceRedact`,
+// tiene dientes: el cerebro la DEDUCE del bind (`s.pozoCompartido = !loopback || cfg.ForceRedact`,
 // internal/mcp/http.go), y desde que escucha en 127.0.0.1 detras de `tailscale serve` el `!loopback`
 // da false, asi que toma por LOCAL una maquina que sigue expuesta al tailnet y la redaccion del
 // ingest queda apagada. Encenderla pide declararla a mano, y hasta este custodio el proximo

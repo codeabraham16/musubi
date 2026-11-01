@@ -930,8 +930,19 @@ func (s *McpServer) ListenAndServeHTTP(ctx context.Context, cfg config.ServiceCo
 	}
 	// Redacción forzada server-side (16.1d): un bind no-loopback es infra compartida ⇒
 	// redactar SIEMPRE (fail-closed, no se puede desactivar); un loopback puede optar por
-	// config. Cierra el hueco de un cliente que manda scope=local con un secreto crudo.
-	s.forceRedact = !loopback || cfg.ForceRedact
+	// config. Cierra el hueco de un cliente que manda scope=local con un secreto crudo. La
+	// expresión es IDÉNTICA a la que tenía `forceRedact`: separar las preguntas no afloja nada.
+	s.pozoCompartido = !loopback || cfg.ForceRedact
+	// Y acá va la pregunta que ANTES compartía ese booleano y no debía: si el grafo de este
+	// cerebro describe código que no está en este disco. Es un hecho, así que se mide.
+	//
+	// ACÁ SE MIDE LA PRIMERA VEZ, NO LA ÚNICA. `cgStale` se llama POR NODO, así que el camino
+	// caliente no puede recorrer el árbol y tiene que leer un campo; pero congelar el valor en el
+	// arranque dejaba un hueco medido —el árbol que llega DESPUÉS, por un `git clone` o por el
+	// primer archivo de un proyecto nuevo, no se veía nunca—. Lo cierra `remedirArbol`, que
+	// re-fija el hecho con lo que el índice ya vio en disco; el por qué de ese momento y no de un
+	// reloj está en su comentario.
+	s.arbolAusente.Store(arbolAusenteEn(s.projectPath))
 	timeout := time.Duration(cfg.RequestTimeoutSeconds * float64(time.Second))
 	if timeout <= 0 {
 		timeout = 60 * time.Second

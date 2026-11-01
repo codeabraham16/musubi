@@ -37,7 +37,7 @@ func TestCodegraphPushRedactaConForceRedact(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newTestServer(t, embedding.NoopProvider{})
-			s.forceRedact = tc.forceRedact
+			s.pozoCompartido = tc.forceRedact
 			pushear(t, s, map[string]interface{}{
 				"nodes": []memory.GraphNode{
 					{Key: "cfg/aws.go#const:KEY", Kind: "const", Name: secret, Path: "cfg/aws.go", StartLine: 3, EndLine: 3},

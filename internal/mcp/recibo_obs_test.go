@@ -156,7 +156,7 @@ func TestElReciboDeLaObsConfirmaContraLaBaseYMarcaLaRedaccion(t *testing.T) {
 	reciboDelHandler := func(t *testing.T, id, content string, conHuella bool) (reciboDeObs, bool) {
 		t.Helper()
 		s := newTestServer(t, embedding.NoopProvider{})
-		s.forceRedact = true
+		s.pozoCompartido = true
 		args := map[string]any{"id": id, "topic_key": "cfg/x", "content": content, "scope": "shared"}
 		if conHuella {
 			args["huella"] = memory.ContentHash(content)
@@ -218,7 +218,7 @@ func TestElReciboDeLaObsConfirmaContraLaBaseYMarcaLaRedaccion(t *testing.T) {
 // cierra en nil —NO dead-letter—. Es el capstone del pecado capital: la foto de los dos lados juntos.
 func TestUnaRedaccionDelCentralNoMandaLaNotaADeadLetter(t *testing.T) {
 	central := newTestServer(t, embedding.NoopProvider{})
-	central.forceRedact = true
+	central.pozoCompartido = true
 	ts := httptest.NewServer(central.HTTPHandler(httpOptions{reqTimeout: 30 * time.Second}))
 	t.Cleanup(ts.Close)
 	c := newTestSyncClient(t, ts.URL)

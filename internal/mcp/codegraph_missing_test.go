@@ -121,7 +121,7 @@ func TestGraphFreshnessNoJuzgaEnElCentralCompartido(t *testing.T) {
 	escribirGo(t, raiz, "suelto.go", "package p\n")
 
 	s := NewMcpServer(engine, raiz, embedding.NoopProvider{})
-	s.forceRedact = true
+	s.arbolAusente.Store(true)
 	stale, ghosts, missing := s.graphFreshness(s.scopedCtx(context.Background()))
 	if stale != 0 || ghosts != 0 || missing != 0 {
 		t.Errorf("en el central compartido no se juzga frescura: stale=%d ghosts=%d missing=%d",

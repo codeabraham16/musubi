@@ -24,7 +24,7 @@ func TestForceRedactCoversAllIngest(t *testing.T) {
 		}
 		t.Cleanup(func() { _ = engine.Close() })
 		s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{})
-		s.forceRedact = forceRedact
+		s.pozoCompartido = forceRedact
 		return s, engine
 	}
 	call := func(s *McpServer, tool string, args map[string]any) {
