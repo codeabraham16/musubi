@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 )
 
@@ -65,10 +66,61 @@ func TestLaDeteccionNoPisaElVeredicto(t *testing.T) {
 }
 
 // La contracara, para que la guarda no se vuelva un CANDADO: un upsert que trae un veredicto
-// explícito sí tiene que pisar al anterior. Es el camino de RestoreDuplicate (deshacer una fusión
-// marca el par not_duplicate en el mismo commit); si esto se rompe, deshacer una fusión dejaría el
-// veredicto viejo y nada se quejaría.
+// explícito sí tiene que pisar al anterior, SEA DE QUIEN SEA EL ANTERIOR. Es el camino de
+// RestoreDuplicate (deshacer una fusión marca el par not_duplicate en el mismo commit); si esto se
+// rompe, deshacer una fusión dejaría el veredicto viejo y nada se quejaría.
+//
+// La firma del anterior se recorre a propósito: con el caso `heuristic` solo, la guarda podía
+// endurecerse hasta congelar también los veredictos HUMANOS y este test seguía verde, porque nunca
+// le ponía delante uno que no fuera del detector.
 func TestUnVeredictoExplicitoSiPisaAlAnterior(t *testing.T) {
+	for _, c := range []struct{ nombre, firmaPrevia, firmaNueva string }{
+		{"sobre uno del detector", RelResolvedByHeuristic, "user"},
+		{"sobre uno humano", "user", "agent"},
+		{"sobre uno de otro agente", "afilador", "user"},
+	} {
+		t.Run(c.nombre, func(t *testing.T) {
+			e := newTestEngine(t)
+			for _, id := range []string{"a", "b"} {
+				if err := e.SaveObservation(id, "topic/x", "contenido "+id, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := e.UpsertObsRelation(ObsRelation{
+				SourceID: "a", TargetID: "b", Relation: RelSupersedes,
+				Status: RelStatusResolved, ResolvedBy: c.firmaPrevia, Reason: "la más nueva reemplaza",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.UpsertObsRelation(ObsRelation{
+				SourceID: "a", TargetID: "b", Relation: RelNotDuplicate, Status: RelStatusResolved,
+				ResolvedBy: c.firmaNueva, Reason: "fusión deshecha", Confidence: 1.0,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			all, _ := e.AllObsRelations()
+			if len(all) != 1 {
+				t.Fatalf("esperaba 1 fila, obtuve %d", len(all))
+			}
+			if all[0].Relation != RelNotDuplicate || all[0].ResolvedBy != c.firmaNueva ||
+				all[0].Reason != "fusión deshecha" {
+				t.Errorf("un veredicto explícito debe pisar al anterior, quedó: %+v", all[0])
+			}
+		})
+	}
+}
+
+// LA FILA SIN FIRMA TAMBIÉN ES UN VEREDICTO, y es el caso que la guarda protege con un COALESCE que
+// se lee como decorativo y es PORTANTE: `resolved_by` es NULL-able, así que sin el COALESCE la
+// comparación `observation_relations.resolved_by<>'heuristic'` devuelve NULL, el CASE cae al ELSE y
+// el detector pisa la fila. Con él, un NULL cuenta como «no es del detector» y queda protegida.
+//
+// Que hoy la base viva no tenga ninguna fila así (medido el 2026-11-01: 0 de 1098) NO vuelve el
+// invariante teórico: `nullable("")` escribe NULL cada vez que un caller resuelve sin firmar, y la
+// guarda es fail-open por ese lado. El custodio existe para que el día que aparezca una, la
+// protección no se haya caído sin que nadie lo note — antes de esto, sabotear el COALESCE dejaba
+// los diez tests de conducta en verde y lo delataba sólo un golden del texto del SQL.
+func TestElDetectorNoPisaUnVeredictoSinFirma(t *testing.T) {
 	e := newTestEngine(t)
 	for _, id := range []string{"a", "b"} {
 		if err := e.SaveObservation(id, "topic/x", "contenido "+id, nil); err != nil {
@@ -76,14 +128,24 @@ func TestUnVeredictoExplicitoSiPisaAlAnterior(t *testing.T) {
 		}
 	}
 	if _, err := e.UpsertObsRelation(ObsRelation{
-		SourceID: "a", TargetID: "b", Relation: RelSupersedes,
-		Status: RelStatusResolved, ResolvedBy: "heuristic", Reason: "la más nueva reemplaza",
+		SourceID: "a", TargetID: "b", Relation: RelRelated, Status: RelStatusResolved,
+		ResolvedBy: "", Reason: "arbitrada por un caller que no firmó",
 	}); err != nil {
 		t.Fatal(err)
 	}
+	var firma sql.NullString
+	if err := e.db.QueryRow(
+		`SELECT resolved_by FROM observation_relations`).Scan(&firma); err != nil {
+		t.Fatal(err)
+	}
+	if firma.Valid {
+		t.Fatalf("precondición: la firma debía quedar NULL en la base, quedó %q", firma.String)
+	}
+
+	// El detector llega con su propio veredicto resuelto, que es la mitad 2 de la guarda.
 	if _, err := e.UpsertObsRelation(ObsRelation{
-		SourceID: "a", TargetID: "b", Relation: RelNotDuplicate,
-		Status: RelStatusResolved, ResolvedBy: "user", Reason: "fusión deshecha", Confidence: 1.0,
+		SourceID: "a", TargetID: "b", Relation: RelSupersedes, Status: RelStatusResolved,
+		ResolvedBy: RelResolvedByHeuristic, Reason: "la más nueva reemplaza",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -91,8 +153,8 @@ func TestUnVeredictoExplicitoSiPisaAlAnterior(t *testing.T) {
 	if len(all) != 1 {
 		t.Fatalf("esperaba 1 fila, obtuve %d", len(all))
 	}
-	if all[0].Relation != RelNotDuplicate || all[0].ResolvedBy != "user" || all[0].Reason != "fusión deshecha" {
-		t.Errorf("un veredicto explícito debe pisar al anterior, quedó: %+v", all[0])
+	if all[0].Relation != RelRelated || all[0].Reason != "arbitrada por un caller que no firmó" {
+		t.Errorf("el detector pisó un veredicto sin firma, quedó: %+v", all[0])
 	}
 }
 
@@ -106,16 +168,17 @@ func TestLaDeteccionRefrescaLosPuntajesDeUnaFilaResuelta(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	viejo := 0.42
+	viejoLex, viejoCos := 0.42, 0.11
 	if _, err := e.UpsertObsRelation(ObsRelation{
 		SourceID: "a", TargetID: "b", Relation: RelRelated, Status: RelStatusResolved,
-		ResolvedBy: "agent", Reason: "juzgada", Lex: &viejo,
+		ResolvedBy: "agent", Reason: "juzgada", Lex: &viejoLex, Cosine: &viejoCos,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	nuevo := 0.91
+	nuevoLex, nuevoCos := 0.91, 0.77
 	if _, err := e.UpsertObsRelation(ObsRelation{
-		SourceID: "a", TargetID: "b", Relation: RelPending, Status: RelStatusPending, Lex: &nuevo,
+		SourceID: "a", TargetID: "b", Relation: RelPending, Status: RelStatusPending,
+		Lex: &nuevoLex, Cosine: &nuevoCos,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -123,37 +186,15 @@ func TestLaDeteccionRefrescaLosPuntajesDeUnaFilaResuelta(t *testing.T) {
 	if all[0].Status != RelStatusResolved {
 		t.Fatalf("el veredicto debía sobrevivir, quedó %q", all[0].Status)
 	}
-	if all[0].Lex == nil || *all[0].Lex != nuevo {
-		t.Errorf("lex_score debía refrescarse a %v, quedó %v", nuevo, all[0].Lex)
+	// LAS DOS SEÑALES, cada una con su propio valor. Medirlas juntas con el mismo número no
+	// distingue «se refrescaron las dos» de «se refrescó una y la otra copió». Y medir sólo `lex`
+	// —como hacía este test— dejaba el COALESCE de `cosine_score` sin un solo custodio: congelarlo
+	// a mano pasaba el paquete entero en verde.
+	if all[0].Lex == nil || *all[0].Lex != nuevoLex {
+		t.Errorf("lex_score debía refrescarse a %v, quedó %v", nuevoLex, all[0].Lex)
 	}
-}
-
-// El SQL de la guarda se arma por concatenación, así que conviene poder LEERLO. Este test lo congela:
-// si la condición se invierte, o si una columna termina conservando lo entrante en vez de lo viejo,
-// la guarda se vuelve un no-op SILENCIOSO —nada falla y los veredictos se pisan otra vez—, y lo
-// único que lo delata es la forma del SQL.
-//
-// La condición pregunta `<> 'pending'` y NO `= 'resolved'`: así es fail-closed —un estado futuro
-// queda protegido por default— y es el MISMO predicado con el que readiness cuenta una relación como
-// resuelta, así que guarda y lector no pueden divergir sin que se note.
-func TestElSetDeLaGuardaConservaLoViejoSoloContraLaDeteccion(t *testing.T) {
-	const cond = "CASE WHEN observation_relations.status<>'pending'" +
-		" AND (excluded.status='pending' OR (excluded.resolved_by='heuristic'" +
-		" AND COALESCE(observation_relations.resolved_by,'')<>'heuristic'))"
-	casos := []struct{ col, entrante, want string }{
-		{"status", "excluded.status",
-			"status=" + cond + " THEN observation_relations.status ELSE excluded.status END"},
-		// El segundo caso no es decorativo: `updated_at` es la única de las cinco cuyo valor
-		// entrante NO es `excluded.<col>` sino el reloj, y es la que readiness lee como fecha del
-		// veredicto. Si la plantilla dejara de admitir un entrante arbitrario, esta columna sería la
-		// primera en romperse.
-		{"updated_at", "CURRENT_TIMESTAMP",
-			"updated_at=" + cond + " THEN observation_relations.updated_at ELSE CURRENT_TIMESTAMP END"},
-	}
-	for _, c := range casos {
-		if got := setConservandoVeredicto(c.col, c.entrante); got != c.want {
-			t.Errorf("el SET generado para %s cambió de forma:\n got %s\nwant %s", c.col, got, c.want)
-		}
+	if all[0].Cosine == nil || *all[0].Cosine != nuevoCos {
+		t.Errorf("cosine_score debía refrescarse a %v, quedó %v", nuevoCos, all[0].Cosine)
 	}
 }
 
@@ -293,7 +334,28 @@ func TestUnVeredictoQueDiceRelatedNoDejaOcultarPorLaPuertaDeAlLado(t *testing.T)
 	}
 	assertNotSuperseded(t, e, "c1") // precondición: el veredicto `related` no oculta nada
 
-	// El camino EXPLÍCITO, el que sí auto-supersede: es el que vuelve a decidir supersedes.
+	// La fecha se CLAVA en un literal viejo para poder preguntar si la re-detección la movió. Se
+	// compara DENTRO de SQL a propósito: el driver modernc devuelve los DATETIME reformateados a
+	// RFC3339, así que un literal sembrado acá y leído en Go nunca coincide y la comparación daría
+	// «movida» siempre. Es un falso positivo que ya costó una vuelta de revisión.
+	const fechaVieja = "2020-01-01 00:00:00"
+	if _, err := e.db.Exec(`UPDATE observation_relations SET updated_at=?`, fechaVieja); err != nil {
+		t.Fatal(err)
+	}
+	fechaIntacta := func() bool {
+		t.Helper()
+		var n int
+		if err := e.db.QueryRow(
+			`SELECT COUNT(*) FROM observation_relations WHERE updated_at=?`, fechaVieja,
+		).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n == 1
+	}
+
+	// El camino EXPLÍCITO, el que sí auto-supersede: es el que vuelve a decidir supersedes. Y es el
+	// de PRODUCCIÓN —detectAndSurface corre con DetectOnly=false en cada save_observation—, así que
+	// las cinco columnas del veredicto se miden por acá y no sólo por el camino de sólo-detectar.
 	rels, err := e.DetectRelations("c2", detectOnlyOpts(false))
 	if err != nil {
 		t.Fatalf("re-detección explícita: %v", err)
@@ -301,8 +363,36 @@ func TestUnVeredictoQueDiceRelatedNoDejaOcultarPorLaPuertaDeAlLado(t *testing.T)
 	if len(rels) != 1 || rels[0].Relation != RelRelated || rels[0].Status != RelStatusResolved {
 		t.Fatalf("el asiento debía seguir siendo related/resolved, quedó %+v", rels)
 	}
+	// LA FIRMA Y LA RAZÓN SON PARTE DEL VEREDICTO, y aseverar sólo relation/status las dejaba sin
+	// custodio: con la guarda recortada a su primera mitad, el asiento conserva `related` pero pasa
+	// a estar firmado `heuristic` con la razón del detector. Ahí la relación deja de ser de quien la
+	// arbitró —y como la mitad 2 sólo protege al que NO firmó heuristic, la re-detección siguiente ya
+	// la pisa libremente, que es el defecto original volviendo por la puerta de atrás.
+	if rels[0].ResolvedBy != "user" || rels[0].Reason != "no se tapan" {
+		t.Errorf("la firma y la razón del que arbitró debían sobrevivir, quedó %q/%q",
+			rels[0].ResolvedBy, rels[0].Reason)
+	}
+	if !fechaIntacta() {
+		t.Errorf("la re-detección por el camino de producción movió updated_at: readiness lo lee" +
+			" como la fecha del veredicto y contaría un arbitraje que nadie hizo")
+	}
 	// LO QUE IMPORTA: la observación sigue en el recall. Un asiento que dice `related` y una
 	// observación oculta son un cerebro que esconde memoria sin poder decir por qué.
+	assertNotSuperseded(t, e, "c1")
+
+	// LA SEGUNDA VUELTA ES LA QUE DUELE, y por eso va: si la primera dejó la fila firmada
+	// `heuristic`, la mitad 2 ya no la reconoce como ajena y esta vuelta la pisa con supersedes —
+	// c1 termina OCULTA. Con una sola re-detección el daño es invisible en relation/status.
+	if _, err := e.DetectRelations("c2", detectOnlyOpts(false)); err != nil {
+		t.Fatalf("segunda re-detección explícita: %v", err)
+	}
+	todas, _ := e.AllObsRelations()
+	if len(todas) != 1 || todas[0].Relation != RelRelated || todas[0].ResolvedBy != "user" {
+		t.Errorf("tras dos re-detecciones el veredicto debía seguir intacto, quedó %+v", todas)
+	}
+	if !fechaIntacta() {
+		t.Errorf("la segunda re-detección movió updated_at")
+	}
 	assertNotSuperseded(t, e, "c1")
 }
 
