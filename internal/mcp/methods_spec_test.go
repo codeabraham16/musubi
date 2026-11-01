@@ -23,6 +23,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -214,5 +215,150 @@ func TestSpecCreateHandlerRechazaIdQueNoRoundTrippea(t *testing.T) {
 	}
 	if !strings.Contains(e.Message, "round-trip") {
 		t.Errorf("el error debía señalar el round-trip; obtuve: %s", e.Message)
+	}
+}
+
+// escribirCodigo deja un archivo de CÓDIGO en la raíz del proyecto (al que anclar). No es una spec:
+// el índice scanea SPEC.md, así que un .go conviven sin afectarlo.
+func escribirCodigo(t *testing.T, dir, rel, contenido string) {
+	t.Helper()
+	p := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(contenido), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSpecValidateReportaRancedumbreSinVoltearValid fija R8/D8 en su sitio de declaración: validate
+// REPORTA las anclas rancias de todo el grafo en su propia sección, pero eso NO vuelve inválida una
+// spec que es estructuralmente sana. `valid` es integridad del grafo de specs (dangling/duplicados/
+// ciclos/tipos/rechazadas); la deriva de CÓDIGO es otra cosa, y un validate gateado en CI no debe
+// llorar porque alguien editó una función.
+//
+// Sabotaje que lo pone en ROJO: acoplar `valid` a que no haya anclas rancias (&& len(StaleAnchors)==0);
+// entonces esta spec sana con un ancla cambiada reportaría valid=false y el assert de abajo falla.
+// arnes: archivo="internal/mcp/methods_spec.go"
+// arnes: de="out.Valid = specgraph.IsValid(report) && len(unknown) == 0 && len(rejected) == 0"
+// arnes: a="out.Valid = specgraph.IsValid(report) && len(unknown) == 0 && len(rejected) == 0 && len(out.StaleAnchors) == 0"
+func TestSpecValidateReportaRancedumbreSinVoltearValid(t *testing.T) {
+	dir := t.TempDir()
+	s := newTestServerWithPath(t, dir)
+	escribirCodigo(t, dir, "code.go", "package p\n\nfunc Foo() int { return 1 }\n")
+	// Una spec estructuralmente VÁLIDA, anclada al símbolo Foo.
+	if _, e := call(t, s, "musubi_spec_create", map[string]interface{}{
+		"path": "specs/a/SPEC.md", "id": "s-a", "type": "task-spec", "title": "A",
+		"anchors": []string{"code.go#Foo"},
+	}); e != nil {
+		t.Fatalf("create con ancla no debía fallar: %+v", e)
+	}
+	// Se cambia el cuerpo de Foo: el ancla queda "changed".
+	escribirCodigo(t, dir, "code.go", "package p\n\nfunc Foo() int { return 999 }\n")
+
+	res, e := call(t, s, "musubi_spec_validate", map[string]interface{}{})
+	if e != nil {
+		t.Fatalf("validate falló: %+v", e)
+	}
+	var out struct {
+		Valid        bool `json:"valid"`
+		StaleAnchors []struct {
+			ID     string `json:"id"`
+			Path   string `json:"path"`
+			Reason string `json:"reason"`
+		} `json:"staleAnchors"`
+	}
+	if err := json.Unmarshal([]byte(specCallText(t, res)), &out); err != nil {
+		t.Fatalf("no se pudo parsear validate: %v", err)
+	}
+	// La rancedumbre se REPORTA, con el id de la spec dueña…
+	if len(out.StaleAnchors) != 1 || out.StaleAnchors[0].Reason != "changed" ||
+		out.StaleAnchors[0].ID != "s-a" || out.StaleAnchors[0].Path != "code.go#Foo" {
+		t.Errorf("validate debía reportar 1 ancla 'changed' en s-a/code.go#Foo, dio %+v", out.StaleAnchors)
+	}
+	// …pero NO voltea `valid`: la integridad estructural del grafo sigue intacta (D8).
+	if !out.Valid {
+		t.Error("una spec estructuralmente válida con un ancla rancia DEBE seguir siendo valid=true (D8)")
+	}
+}
+
+// TestSpecGetSurfaceaRancedumbre fija R4/R5 en el borde: get re-deriva las anclas de la spec y
+// adjunta la marca como CAMPO EXTRA (stale + staleWarning), sin tocar la identidad del nodo. El
+// "surface-only" es estructural: el handler arma `out` desde node.* y sólo AGREGA stale/staleWarning,
+// así que la identidad no puede cambiar por diseño (no hay línea que la mute); lo mecanizable —y lo
+// que acá se fija— es que la marca efectivamente APAREZCA en la salida de get.
+//
+// Sabotaje que lo pone en ROJO: anular la condición que adjunta la marca (len(stale) > 0 → < 0), con
+// lo que get nunca surfacea la rancedumbre y los asserts de `stale`/`staleWarning` fallan.
+// arnes: archivo="internal/mcp/methods_spec.go"
+// arnes: de="if stale := specgraph.StalenessOf(s.projectPath, node.Frontmatter); len(stale) > 0 {"
+// arnes: a="if stale := specgraph.StalenessOf(s.projectPath, node.Frontmatter); len(stale) < 0 {"
+func TestSpecGetSurfaceaRancedumbre(t *testing.T) {
+	dir := t.TempDir()
+	s := newTestServerWithPath(t, dir)
+	escribirCodigo(t, dir, "code.go", "package p\n\nfunc Foo() int { return 1 }\n")
+	if _, e := call(t, s, "musubi_spec_create", map[string]interface{}{
+		"path": "specs/a/SPEC.md", "id": "s-a", "type": "task-spec", "title": "A",
+		"anchors": []string{"code.go#Foo"},
+	}); e != nil {
+		t.Fatalf("create con ancla no debía fallar: %+v", e)
+	}
+	escribirCodigo(t, dir, "code.go", "package p\n\nfunc Foo() int { return 42 }\n")
+
+	res, e := call(t, s, "musubi_spec_get", map[string]interface{}{"id": "s-a"})
+	if e != nil {
+		t.Fatalf("get falló: %+v", e)
+	}
+	var out specNodeOut
+	if err := json.Unmarshal([]byte(specCallText(t, res)), &out); err != nil {
+		t.Fatalf("no se pudo parsear get: %v", err)
+	}
+	// La identidad del nodo queda intacta (surface-only).
+	if out.ID != "s-a" || out.Type != "task-spec" || out.Title != "A" {
+		t.Errorf("la marca no debe tocar la identidad del nodo: id=%q type=%q title=%q", out.ID, out.Type, out.Title)
+	}
+	// Y la marca aparece como campo extra, con su warning en prosa.
+	if len(out.Stale) != 1 || out.Stale[0].Reason != "changed" || out.Stale[0].Path != "code.go#Foo" {
+		t.Errorf("get debía surfacear el ancla cambiada, dio %+v", out.Stale)
+	}
+	if !strings.HasPrefix(out.StaleWarning, "⚠ posiblemente rancia") {
+		t.Errorf("el staleWarning en prosa debía estar presente, dio %q", out.StaleWarning)
+	}
+}
+
+// TestSpecCreateConAnchorRechazaSimboloRoto es cobertura del wiring de create (R2 en el borde): un
+// ancla a un símbolo inexistente hace FALLAR el create —no nace una spec con un ancla rota—, y una
+// ancla válida crea bien con el digest ya escrito en el frontmatter. El sabotaje mecanizado de R2
+// vive en internal/specgraph/anchors_test.go (BuildAnchorEntries); acá sólo se fija que el handler
+// propague el error en vez de tragárselo.
+func TestSpecCreateConAnchorRechazaSimboloRoto(t *testing.T) {
+	dir := t.TempDir()
+	s := newTestServerWithPath(t, dir)
+	escribirCodigo(t, dir, "code.go", "package p\n\nfunc Foo() int { return 1 }\n")
+
+	_, e := call(t, s, "musubi_spec_create", map[string]interface{}{
+		"path": "specs/a/SPEC.md", "id": "s-a", "type": "task-spec", "title": "A",
+		"anchors": []string{"code.go#NoExiste"},
+	})
+	if e == nil {
+		t.Fatal("un create con un ancla a un símbolo inexistente debía fallar")
+	}
+	if !strings.Contains(e.Message, "al archivo entero") {
+		t.Errorf("el error debía ofrecer la salida 'al archivo entero', dio: %s", e.Message)
+	}
+
+	// Un ancla BUENA crea bien, y el digest queda escrito en el frontmatter en disco.
+	if _, e := call(t, s, "musubi_spec_create", map[string]interface{}{
+		"path": "specs/b/SPEC.md", "id": "s-b", "type": "task-spec", "title": "B",
+		"anchors": []string{"code.go#Foo"},
+	}); e != nil {
+		t.Fatalf("create con un ancla válida no debía fallar: %+v", e)
+	}
+	res, e := call(t, s, "musubi_spec_get", map[string]interface{}{"id": "s-b"})
+	if e != nil {
+		t.Fatalf("get falló: %+v", e)
+	}
+	if !strings.Contains(specCallText(t, res), "code.go#Foo=") {
+		t.Errorf("el frontmatter debía llevar el ancla con su digest (code.go#Foo=…); salida: %s", specCallText(t, res))
 	}
 }

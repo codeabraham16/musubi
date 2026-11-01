@@ -2165,6 +2165,14 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "anchors": {
+            "type": "array",
+            "description": "Código del que habla la spec, como `ruta` o `ruta#símbolo` root-relative (p. ej. internal/foo/bar.go#Tipo.Metodo). Se valida que exista y se guarda una huella para avisar cuando el código cambie o desaparezca. Falla si la ruta o el símbolo no existen.",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          },
           "covers": {
             "type": "array",
             "description": "rutas o símbolos que esta spec cubre (no son aristas).",
@@ -2246,7 +2254,15 @@
         "properties": {
           "addList": {
             "type": "object",
-            "description": "Items a agregar a un campo lista (clave→items), con union-dedup."
+            "description": "Items a agregar a un campo lista (clave→items), con union-dedup. No admite anchors: usá el parámetro anchors."
+          },
+          "anchors": {
+            "type": "array",
+            "description": "Refs (`ruta` o `ruta#símbolo`) a anclar o re-vouchear: se validan, se les calcula la huella y se mergean por ref con las existentes (la nueva gana). No re-vouchea las que no nombres.",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
           },
           "id": {
             "type": "string",
@@ -2262,7 +2278,7 @@
           },
           "removeList": {
             "type": "object",
-            "description": "Items a quitar de un campo lista (clave→items)."
+            "description": "Items a quitar de un campo lista (clave→items). Para quitar un ancla, pasá su string exacto `ruta#símbolo=digest`."
           },
           "set": {
             "type": "object",

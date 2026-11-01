@@ -14,14 +14,21 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// FrontmatterEdit es una edición quirúrgica del frontmatter. Los cuatro campos
-// se aplican en orden: Set (escalares), Remove (borrar), y luego AddList/
-// RemoveList por cada campo lista.
+// FrontmatterEdit es una edición quirúrgica del frontmatter. Los campos se
+// aplican en orden: Set (escalares), Remove (borrar), luego AddList/RemoveList
+// por cada campo lista, y por último SetList (reemplazo wholesale de un campo
+// lista).
 type FrontmatterEdit struct {
 	Set        map[string]string
 	Remove     []string
 	AddList    map[string][]string
 	RemoveList map[string][]string
+	// SetList reemplaza un campo lista por EXACTAMENTE estos items (una lista
+	// vacía borra la clave). A diferencia de AddList —que hace union-dedup por
+	// string entero— acá el caller ya resolvió el conjunto final; es la vía que
+	// usa el manejo anchor-aware de anchors (dedup por ref, D7), donde un
+	// union-dedup por string dejaría `ruta#S` y `ruta#S=hash` como dos entradas.
+	SetList map[string][]string
 }
 
 var (
@@ -87,6 +94,22 @@ func UpdateFrontmatterText(fileText string, edit FrontmatterEdit) (string, error
 			next := filterOut(fmDocList(mapping, field), remove)
 			if len(next) > 0 {
 				fmSetList(mapping, field, next)
+			} else {
+				fmDelete(mapping, field)
+			}
+		}
+	}
+
+	// 3b) SetList: reemplazo wholesale de un campo lista. El caller ya resolvió el
+	//     conjunto final (p. ej. anchors deduplicadas por ref con el digest nuevo
+	//     ganando, D7), así que acá sólo se escribe. Corre DESPUÉS de AddList/
+	//     RemoveList y los pisa, y se recorre ListFields (orden fijo) para
+	//     determinismo. Una lista vacía borra la clave, igual que un RemoveList
+	//     que vacía el campo.
+	for _, field := range ListFields {
+		if items, ok := edit.SetList[field]; ok {
+			if len(items) > 0 {
+				fmSetList(mapping, field, items)
 			} else {
 				fmDelete(mapping, field)
 			}

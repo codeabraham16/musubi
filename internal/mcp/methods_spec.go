@@ -62,6 +62,11 @@ type specNodeOut struct {
 	Frontmatter specgraph.Frontmatter `json:"frontmatter"`
 	Forward     []specForwardLinkOut  `json:"forward"`
 	Reverse     []specReverseLinkOut  `json:"reverse"`
+	// Stale (F2): anclas de esta spec cuyo código cambió o desapareció. omitempty ⇒ ausente
+	// cuando no hay nada rancio (surface-only: la marca es un campo EXTRA, no cambia el nodo).
+	// StaleWarning es el mismo dato en prosa, para que el agente lo lea sin parsear Stale.
+	Stale        []specStaleAnchorOut `json:"stale,omitempty"`
+	StaleWarning string               `json:"staleWarning,omitempty"`
 }
 
 type specDanglingOut struct {
@@ -91,6 +96,20 @@ type specRejectOut struct {
 	Reason string `json:"reason"`
 }
 
+// specStaleAnchorOut es la marca de rancedumbre de un ancla en la salida de get (por nodo, así que
+// sin id). specStaleAnchorReport es lo mismo para validate, que recorre TODO el grafo y necesita
+// el id de la spec dueña del ancla. Las dos espejan specgraph.StaleAnchor con tags en minúscula.
+type specStaleAnchorOut struct {
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+}
+
+type specStaleAnchorReport struct {
+	ID     string `json:"id"`
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+}
+
 type specGrepOut struct {
 	Matches    []string `json:"matches"`
 	Truncated  bool     `json:"truncated"`
@@ -104,6 +123,11 @@ type specValidateOut struct {
 	ParentCycles  []specCycleOut       `json:"parentCycles"`
 	UnknownTypes  []specUnknownTypeOut `json:"unknownTypes"`
 	RejectedSpecs []specRejectOut      `json:"rejectedSpecs"`
+	// StaleAnchors (F2): anclas rancias de TODO el grafo, cada una con el id de su spec. Se
+	// reporta en su propia sección y NO voltea `valid` (D8): `valid` es integridad ESTRUCTURAL
+	// (dangling/duplicate/cycles/unknown-type/rejected); un ancla rancia es deriva de CÓDIGO, no
+	// un defecto del grafo de specs. [] nunca null (go-hygiene #6).
+	StaleAnchors []specStaleAnchorReport `json:"staleAnchors"`
 }
 
 // specGraphSliceOut y sus hijos taguean la salida de toolSpecGraph. GraphSliceResult,
@@ -250,7 +274,7 @@ func (s *McpServer) toolSpecGet(raw json.RawMessage) (interface{}, *RpcError) {
 		}
 	}
 
-	return jsonResult(specNodeOut{
+	out := specNodeOut{
 		ID:          node.ID,
 		Type:        node.Type,
 		Title:       node.Title,
@@ -258,7 +282,19 @@ func (s *McpServer) toolSpecGet(raw json.RawMessage) (interface{}, *RpcError) {
 		Frontmatter: node.Frontmatter,
 		Forward:     forward,
 		Reverse:     reverse,
-	})
+	}
+	// Rancedumbre (R4/D5): re-deriva las anclas de esta spec desde el disco. Es surface-only —un
+	// campo extra, nunca cambia el nodo (R5)— y para una spec sin anclas StalenessOf no lee nada.
+	// Sin marcas, Stale/StaleWarning quedan ausentes (omitempty), así que el get de siempre no cambia.
+	if stale := specgraph.StalenessOf(s.projectPath, node.Frontmatter); len(stale) > 0 {
+		staleOut := make([]specStaleAnchorOut, 0, len(stale))
+		for _, st := range stale {
+			staleOut = append(staleOut, specStaleAnchorOut{Path: st.Path, Reason: st.Reason})
+		}
+		out.Stale = staleOut
+		out.StaleWarning = specgraph.StaleWarning(stale)
+	}
+	return jsonResult(out)
 }
 
 // toolSpecGraph recorta el grafo desde un nodo raíz en una dirección
@@ -305,6 +341,7 @@ func (s *McpServer) toolSpecValidate(raw json.RawMessage) (interface{}, *RpcErro
 		ParentCycles:  make([]specCycleOut, 0, len(report.ParentCycles)),
 		UnknownTypes:  make([]specUnknownTypeOut, 0, len(unknown)),
 		RejectedSpecs: make([]specRejectOut, 0, len(rejected)),
+		StaleAnchors:  make([]specStaleAnchorReport, 0),
 	}
 	for _, d := range report.DanglingLinks {
 		out.DanglingLinks = append(out.DanglingLinks, specDanglingOut{
@@ -323,7 +360,26 @@ func (s *McpServer) toolSpecValidate(raw json.RawMessage) (interface{}, *RpcErro
 	for _, r := range rejected {
 		out.RejectedSpecs = append(out.RejectedSpecs, specRejectOut{Rel: r.Rel, Reason: r.Reason})
 	}
-	// Válido = los 3 chequeos del core limpios Y los 2 deltas de Musubi vacíos.
+	// Rancedumbre (R4/R8/D5/D8): se recorre el grafo y se re-deriva cada spec con anclas. Se
+	// reporta en su propia sección; NO entra en `valid` (abajo), que sigue siendo integridad
+	// estructural. graph.Nodes es un map (orden no determinista), así que se ordena por (id, path,
+	// reason) para una salida estable y testeable.
+	for _, node := range graph.Nodes {
+		for _, st := range specgraph.StalenessOf(s.projectPath, node.Frontmatter) {
+			out.StaleAnchors = append(out.StaleAnchors, specStaleAnchorReport{ID: node.ID, Path: st.Path, Reason: st.Reason})
+		}
+	}
+	slices.SortFunc(out.StaleAnchors, func(a, b specStaleAnchorReport) int {
+		if a.ID != b.ID {
+			return strings.Compare(a.ID, b.ID)
+		}
+		if a.Path != b.Path {
+			return strings.Compare(a.Path, b.Path)
+		}
+		return strings.Compare(a.Reason, b.Reason)
+	})
+	// Válido = los 3 chequeos del core limpios Y los 2 deltas de Musubi vacíos. La rancedumbre NO
+	// cuenta (D8): un `validate` gateado en CI no debe llorar por deriva de código.
 	out.Valid = specgraph.IsValid(report) && len(unknown) == 0 && len(rejected) == 0
 	return jsonResult(out)
 }
@@ -346,6 +402,7 @@ func (s *McpServer) toolSpecCreate(raw json.RawMessage) (interface{}, *RpcError)
 		Implements []string `json:"implements"`
 		Covers     []string `json:"covers"`
 		Tags       []string `json:"tags"`
+		Anchors    []string `json:"anchors"`
 	}
 	if rerr := parseSpecArgs(raw, &args); rerr != nil {
 		return nil, rerr
@@ -407,6 +464,17 @@ func (s *McpServer) toolSpecCreate(raw json.RawMessage) (interface{}, *RpcError)
 	setListField(fm, specgraph.FieldImplements, args.Implements)
 	setListField(fm, specgraph.FieldCovers, args.Covers)
 	setListField(fm, specgraph.FieldTags, args.Tags)
+	// anchors (F2): se validan y se les calcula la huella ANTES de escribir el archivo. Un ancla
+	// que no resuelve (ruta inexistente, directorio, símbolo ausente, lenguaje sin extractor, o el
+	// tope de 10) es un error de creación —no una spec que nacería con un ancla rota (R2)—.
+	// BuildAnchorEntries lee archivos de CÓDIGO del disco (diagnóstico), no el SPEC.md que aún no existe.
+	if len(args.Anchors) > 0 {
+		entries, aErr := specgraph.BuildAnchorEntries(s.projectPath, args.Anchors)
+		if aErr != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", aErr)
+		}
+		fm[specgraph.FieldAnchors] = entries
+	}
 
 	content := specgraph.SerializeFrontmatter(fm) + "\n" + specBodyForType(args.Type, args.Title)
 	// Guarda de round-trip (R15): SerializeFrontmatter emite los escalares SIN
@@ -453,6 +521,7 @@ func (s *McpServer) toolSpecUpdate(raw json.RawMessage) (interface{}, *RpcError)
 		Remove     []string            `json:"remove"`
 		AddList    map[string][]string `json:"addList"`
 		RemoveList map[string][]string `json:"removeList"`
+		Anchors    []string            `json:"anchors"`
 	}
 	if rerr := parseSpecArgs(raw, &args); rerr != nil {
 		return nil, rerr
@@ -478,11 +547,36 @@ func (s *McpServer) toolSpecUpdate(raw json.RawMessage) (interface{}, *RpcError)
 	if rErr != nil {
 		return nil, rpcErrorf(codeInternalError, "no se pudo leer %s: %v", record.Rel, rErr)
 	}
+	// anchors (F2) se gestionan por una vía anchor-aware, NO por el addList genérico: sumarlas con
+	// addList las metería sin digest y SIN validar existencia/símbolo/tope, violando R2. Para
+	// AGREGAR o re-vouchear se usa el parámetro anchors (valida + calcula huella + mergea por ref);
+	// para QUITAR, removeList con el string exacto `ruta#símbolo=digest` que muestran get/validate.
+	if _, ok := args.AddList[specgraph.FieldAnchors]; ok {
+		return nil, rpcErrorf(codeInvalidParams,
+			"no agregues anchors con addList (quedarían sin digest ni validar): usá el parámetro anchors")
+	}
+	var setList map[string][]string
+	if len(args.Anchors) > 0 {
+		// El parámetro anchors re-vouchea SÓLO las refs que trae: se les calcula la huella fresca y
+		// se mergean con las que ya tenía la spec (dedup por ref, digest nuevo gana). Un update que
+		// NO pasa anchors (p. ej. set status) ni entra acá, así que jamás re-vouchea de rebote (D7).
+		fresh, aErr := specgraph.BuildAnchorEntries(s.projectPath, args.Anchors)
+		if aErr != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", aErr)
+		}
+		existing := specgraph.List(specgraph.ParseFile(string(original)).Frontmatter, specgraph.FieldAnchors)
+		final, mErr := specgraph.MergeAnchorEntries(existing, fresh)
+		if mErr != nil {
+			return nil, rpcErrorf(codeInvalidParams, "%v", mErr)
+		}
+		setList = map[string][]string{specgraph.FieldAnchors: final}
+	}
 	updated, uErr := specgraph.UpdateFrontmatterText(string(original), specgraph.FrontmatterEdit{
 		Set:        args.Set,
 		Remove:     args.Remove,
 		AddList:    args.AddList,
 		RemoveList: args.RemoveList,
+		SetList:    setList,
 	})
 	if uErr != nil {
 		// Las guardas del core (renombrar id, set de list-field, remove de
@@ -671,6 +765,7 @@ func (s *McpServer) specToolEntries() []toolEntry {
 						"implements": {Type: "array", Description: "ids de specs que ésta implementa.", Items: &Property{Type: "string"}},
 						"covers":     {Type: "array", Description: "rutas o símbolos que esta spec cubre (no son aristas).", Items: &Property{Type: "string"}},
 						"tags":       {Type: "array", Description: "etiquetas libres (no son aristas).", Items: &Property{Type: "string"}},
+						"anchors":    {Type: "array", Description: "Código del que habla la spec, como `ruta` o `ruta#símbolo` root-relative (p. ej. internal/foo/bar.go#Tipo.Metodo). Se valida que exista y se guarda una huella para avisar cuando el código cambie o desaparezca. Falla si la ruta o el símbolo no existen.", Items: &Property{Type: "string"}},
 					},
 					Required: []string{"path", "id", "type", "title"},
 				},
@@ -687,8 +782,9 @@ func (s *McpServer) specToolEntries() []toolEntry {
 						"id":         {Type: "string", Description: "El id de la spec a editar."},
 						"set":        {Type: "object", Description: "Campos escalares a fijar (clave→valor). No admite id ni campos lista."},
 						"remove":     {Type: "array", Description: "Campos a borrar. No admite id ni type.", Items: &Property{Type: "string"}},
-						"addList":    {Type: "object", Description: "Items a agregar a un campo lista (clave→items), con union-dedup."},
-						"removeList": {Type: "object", Description: "Items a quitar de un campo lista (clave→items)."},
+						"addList":    {Type: "object", Description: "Items a agregar a un campo lista (clave→items), con union-dedup. No admite anchors: usá el parámetro anchors."},
+						"removeList": {Type: "object", Description: "Items a quitar de un campo lista (clave→items). Para quitar un ancla, pasá su string exacto `ruta#símbolo=digest`."},
+						"anchors":    {Type: "array", Description: "Refs (`ruta` o `ruta#símbolo`) a anclar o re-vouchear: se validan, se les calcula la huella y se mergean por ref con las existentes (la nueva gana). No re-vouchea las que no nombres.", Items: &Property{Type: "string"}},
 					},
 					Required: []string{"id"},
 				},
