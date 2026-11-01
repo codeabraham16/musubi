@@ -126,6 +126,38 @@ func (e *DbEngine) Readiness(ctx context.Context, days int) (ReadinessReport, er
 	return rep, nil
 }
 
+// Recalcular vuelve a derivar los puntajes desde los checks: el de cada dimensión como la fracción
+// cumplida, y el global como el promedio de las dimensiones. La necesita QUIEN LE AGREGA UN CHECK A
+// UNA DIMENSIÓN DESPUÉS de que Readiness la calculó — hoy la capa MCP, que puede medir cosas del
+// disco que este paquete no alcanza: la frescura del grafo de código sale de comparar fingerprints
+// de archivos, y acá no hay ni projectPath ni árbol.
+//
+// ⚠️ EXISTE PARA QUE LA FÓRMULA NO SE DUPLIQUE, y el modo de falla que evita es concreto: `puntaje`
+// y `redondear` son privadas, así que un llamador de afuera tenía como únicas salidas copiarlas —y
+// entonces la dimensión enriquecida se calcula con una fórmula que puede quedar vieja mientras las
+// otras cuatro usan la nueva, DENTRO DEL MISMO PROMEDIO— o que este paquete exponga dos primitivas
+// de cálculo que no significan nada por sí solas. Un método sobre el reporte dice qué se hace en
+// vez de cómo, y deja la regla donde se define.
+//
+// Es IDEMPOTENTE sobre un reporte intacto, y eso no es casualidad: las cinco dimensiones ponen
+// `Score = puntaje(Checks)`, y las que no tienen dato vuelven sin checks, donde `puntaje` da 0 —
+// el mismo cero que les toca por la regla de «no observado puntúa 0». Si algún día una dimensión
+// calcula su Score de otra manera, la idempotencia se rompe y el test lo dice.
+//
+// NO toca Observed ni Unobserved: agregar un check no vuelve observada a una dimensión que no lo
+// era, y quién tiene dato lo decide quien lo mide, no quien recalcula.
+func (r *ReadinessReport) Recalcular() {
+	if len(r.Dimensions) == 0 {
+		return
+	}
+	var suma float64
+	for i := range r.Dimensions {
+		r.Dimensions[i].Score = puntaje(r.Dimensions[i].Checks)
+		suma += r.Dimensions[i].Score
+	}
+	r.Score = redondear(suma / float64(len(r.Dimensions)))
+}
+
 // dimensionesDeUso arma las dos dimensiones que salen del ledger: si al cerebro lo invocan, y si
 // esas invocaciones salen bien. Van juntas porque comparten la misma consulta — y porque la
 // segunda depende de la primera: sin invocaciones no hay tasa de falla que medir, y ahí la

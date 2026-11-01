@@ -63,7 +63,7 @@ func TestGraphFreshnessCuentaLosQueNuncaSeIndexaron(t *testing.T) {
 	}
 
 	s := NewMcpServer(engine, raiz, embedding.NoopProvider{})
-	stale, ghosts, missing := s.graphFreshness(s.scopedCtx(context.Background()))
+	stale, ghosts, missing, _, _ := s.graphFreshness(s.scopedCtx(context.Background()))
 
 	if missing != 1 {
 		t.Errorf("missing = %d, esperaba 1 (nunca.go está en disco y no tiene un solo nodo)", missing)
@@ -99,7 +99,7 @@ func TestGraphFreshnessNoCuentaLoQueElIndexadorNiMira(t *testing.T) {
 	escribirGo(t, raiz, "visible.go", "package p\n")
 
 	s := NewMcpServer(engine, raiz, embedding.NoopProvider{})
-	_, _, missing := s.graphFreshness(s.scopedCtx(context.Background()))
+	_, _, missing, _, _ := s.graphFreshness(s.scopedCtx(context.Background()))
 
 	if missing != 1 {
 		t.Errorf("missing = %d, esperaba exactamente 1 (sólo visible.go): las rutas excluidas por el "+
@@ -122,7 +122,7 @@ func TestGraphFreshnessNoJuzgaEnElCentralCompartido(t *testing.T) {
 
 	s := NewMcpServer(engine, raiz, embedding.NoopProvider{})
 	s.arbolAusente.Store(true)
-	stale, ghosts, missing := s.graphFreshness(s.scopedCtx(context.Background()))
+	stale, ghosts, missing, _, _ := s.graphFreshness(s.scopedCtx(context.Background()))
 	if stale != 0 || ghosts != 0 || missing != 0 {
 		t.Errorf("en el central compartido no se juzga frescura: stale=%d ghosts=%d missing=%d",
 			stale, ghosts, missing)
