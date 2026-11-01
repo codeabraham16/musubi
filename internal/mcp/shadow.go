@@ -73,6 +73,11 @@ type shadowWorker struct {
 	tirados  int
 	medidos  int
 	fallidos int
+	// ajenos son las relaciones que llegaron con un veredicto que NO es del detector —la guarda del
+	// upsert lo conservó— y que por eso no se miden: ver encolarSombra. Se cuentan porque son la
+	// diferencia entre «el corpus de la sombra» y «todo lo que pasó por el detector», y sin el
+	// número la tabla se lee como si cubriera todo.
+	ajenos int
 }
 
 // timeoutSombra acota cada consulta al motor. Generoso porque nadie espera el resultado, pero
@@ -117,17 +122,53 @@ func (w *shadowWorker) encolar(t trabajoSombra) bool {
 // la sombra está apagada (s.shadow == nil), así el camino de guardado se escribe una sola vez y no
 // tiene una rama «si está midiendo».
 //
-// Se encolan TODAS las relaciones, no sólo las de señal. Filtrar acá parece un ahorro y es un
-// sesgo: sin los `related` no hay con qué comparar la tasa de acuerdo de los `supersedes`, y la
-// pregunta que motiva todo esto —«¿el umbral está bien puesto?»— se responde justamente mirando
-// qué pasa a los dos lados de la raya.
+// Se encolan TODAS las relaciones por FUERZA DE SEÑAL, no sólo las de señal alta. Filtrar por ahí
+// parece un ahorro y es un sesgo: sin los `related` no hay con qué comparar la tasa de acuerdo de
+// los `supersedes`, y la pregunta que motiva todo esto —«¿el umbral está bien puesto?»— se
+// responde justamente mirando qué pasa a los dos lados de la raya.
+//
+// LO QUE SÍ SE DESCARTA ES OTRA COSA, Y NO ES UN AHORRO: un VEREDICTO AJENO que la guarda del
+// upsert conservó. Desde que `DetectRelations` devuelve la fila PERSISTIDA —y no lo que el
+// detector decidió— las dos cosas divergen justo cuando alguien ya había arbitrado el par: la
+// guarda conserva el veredicto de la persona y es ÉSE el que llega acá. Guardarlo lo anotaría en
+// `heur_relation`, una columna de PROCEDENCIA que entonces mentiría, y lo compararía contra el
+// juez LLM como si fuera la lectura del heurístico. El desacuerdo medido dejaría de ser
+// heurístico-vs-juez para ser persona-vs-juez, que es otra pregunta — y la respondería mal, porque
+// sesga la muestra exactamente en los pares donde el heurístico y la persona discreparon, que son
+// los únicos informativos.
+//
+// La discriminación es `status<>pending && resolved_by<>heuristic`: conservar exige que la fila
+// tenga veredicto, así que un `pending` que llega acá es siempre propuesta del detector; y una fila
+// firmada `heuristic` es decisión del detector igual, porque la guarda lo deja refrescar lo suyo.
+//
+// ⚠️ LÍMITE ACEPTADO, para que no se lea como cobertura total: cuando lo conservado es un veredicto
+// PROPIO del detector contra un `pending` entrante, lo que se anota es una decisión suya VIEJA
+// pareada con los puntajes de hoy (lex/cosine sí se refrescan). La procedencia no miente —sigue
+// siendo del heurístico—, pero el pareo temporal queda corrido. Taparlo requiere que
+// `DetectRelations` le pase al llamador lo que decidió ADEMÁS de lo que quedó, o sea un cambio de
+// firma con sus callers; no entra en el alcance de este arreglo.
 func (s *McpServer) encolarSombra(rels []memory.ObsRelation) {
 	if s.shadow == nil {
 		return
 	}
 	for _, r := range rels {
+		if r.Status != memory.RelStatusPending && r.ResolvedBy != memory.RelResolvedByHeuristic {
+			s.shadow.contarAjeno()
+			continue
+		}
 		s.shadow.encolar(trabajoSombra{rel: r})
 	}
+}
+
+// contarAjeno registra una relación que no se midió porque el veredicto que quedó en la fila no es
+// del detector. Se cuenta en vez de descartarse en silencio: un corpus que se encogió sin dejar
+// rastro se lee después como «midió todo», y acá el recorte puede ser la enorme mayoría de la
+// tabla (medido el 2026-11-01 en el repo de Musubi: 996 de 1098 pares re-detectables tenían firma
+// ajena).
+func (w *shadowWorker) contarAjeno() {
+	w.mu.Lock()
+	w.ajenos++
+	w.mu.Unlock()
 }
 
 // RunShadowWorker corre el bucle del modo sombra hasta que se cancela el contexto. Es un no-op si
@@ -147,7 +188,7 @@ func (w *shadowWorker) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			w.mu.Lock()
-			logx.Info("modo sombra detenido", "medidos", w.medidos, "fallidos", w.fallidos, "descartados", w.tirados)
+			logx.Info("modo sombra detenido", "medidos", w.medidos, "fallidos", w.fallidos, "descartados", w.tirados, "veredictos_ajenos", w.ajenos)
 			w.mu.Unlock()
 			return
 		case t := <-w.cola:

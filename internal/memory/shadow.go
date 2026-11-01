@@ -25,7 +25,15 @@ type ShadowVerdict struct {
 	RelationID string
 	SourceID   string
 	TargetID   string
-	// HeurRelation y HeurStatus son la decisión que SÍ se aplicó.
+	// HeurRelation y HeurStatus son la decisión DEL DETECTOR MODEL-FREE, y el nombre es el contrato:
+	// toda la tabla existe para contestar «¿el umbral del heurístico está bien puesto?», así que
+	// estas dos columnas son de PROCEDENCIA y sólo admiten lo que decidió el heurístico.
+	//
+	// Decía «la decisión que SÍ se aplicó», que era lo mismo mientras el detector siempre escribiera
+	// lo que decidía. Desde que la guarda del upsert conserva los veredictos ajenos, las dos
+	// lecturas DIVERGEN: lo que se aplica puede ser de una persona. Quien llena esta fila filtra por
+	// procedencia antes de encolar (ver encolarSombra, en internal/mcp/shadow.go); si acá entrara un
+	// veredicto humano, el acuerdo medido dejaría de ser heurístico-vs-juez sin que nada lo avise.
 	HeurRelation string
 	HeurStatus   string
 	// Lex y Cosine son las señales tal como estaban en ese momento. Se copian en vez de leerse
