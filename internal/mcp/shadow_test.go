@@ -173,6 +173,58 @@ func TestSombraConColaLlenaDescartaSinBloquear(t *testing.T) {
 	}
 }
 
+// S6 — LA SOMBRA NO MIDE VEREDICTOS AJENOS. `DetectRelations` devuelve la fila PERSISTIDA, así que
+// cuando la guarda del upsert conserva el veredicto de una persona es ÉSE el que llega a encolar.
+// Guardarlo lo anotaría en `heur_relation` —una columna de procedencia— y lo compararía contra el
+// juez como si fuera la lectura del heurístico: el desacuerdo medido pasaría a ser persona-vs-juez,
+// sesgado justo en los pares donde el heurístico y la persona discreparon, que son los únicos que
+// informan. Medido el 2026-11-01 sobre la base viva del repo, el recorte es el caso DOMINANTE: 996
+// de 1098 pares re-detectables tenían firma ajena.
+func TestLaSombraNoMideUnVeredictoAjeno(t *testing.T) {
+	motor := &motorEspia{respuesta: memory.RelRelated}
+	s, _ := servidorConSombra(t, motor)
+
+	casos := []struct {
+		nombre    string
+		rel       memory.ObsRelation
+		seEncolan bool
+	}{
+		{"propuesta del detector", memory.ObsRelation{
+			ID: "r1", Relation: memory.RelPending, Status: memory.RelStatusPending}, true},
+		{"veredicto propio del detector", memory.ObsRelation{
+			ID: "r2", Relation: memory.RelSupersedes, Status: memory.RelStatusResolved,
+			ResolvedBy: memory.RelResolvedByHeuristic}, true},
+		{"veredicto de una persona", memory.ObsRelation{
+			ID: "r3", Relation: memory.RelRelated, Status: memory.RelStatusResolved,
+			ResolvedBy: "user"}, false},
+		{"veredicto de otro agente", memory.ObsRelation{
+			ID: "r4", Relation: memory.RelNotDuplicate, Status: memory.RelStatusResolved,
+			ResolvedBy: "afilador"}, false},
+		// La fila SIN firma también es ajena: `nullable("")` deja NULL cuando un caller resuelve sin
+		// firmar, y lo que no se puede atribuir al heurístico no puede ir en su columna.
+		{"veredicto sin firma", memory.ObsRelation{
+			ID: "r5", Relation: memory.RelRelated, Status: memory.RelStatusResolved}, false},
+	}
+	for _, c := range casos {
+		s.encolarSombra([]memory.ObsRelation{c.rel})
+		if entro := len(s.shadow.cola) == 1; entro != c.seEncolan {
+			t.Errorf("%s: encolada=%v, esperaba %v", c.nombre, entro, c.seEncolan)
+		}
+		// La cola se vacía entre casos para que cada uno se mida solo.
+		for len(s.shadow.cola) > 0 {
+			<-s.shadow.cola
+		}
+	}
+
+	s.shadow.mu.Lock()
+	ajenos := s.shadow.ajenos
+	s.shadow.mu.Unlock()
+	if ajenos != 3 {
+		t.Errorf("los veredictos ajenos deben CONTARSE y se contaron %d de 3: un corpus que se"+
+			" encogió sin dejar rastro se lee después como «midió todo»", ajenos)
+	}
+}
+
 // S5 — apagada (el default), la sombra no existe: ni worker, ni motor consultado. Encender un
 // tercer pilar por accidente sería gasto invisible.
 func TestSombraApagadaNoConsultaAlMotor(t *testing.T) {

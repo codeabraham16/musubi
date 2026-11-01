@@ -46,6 +46,14 @@ const (
 	RelStatusResolved = "resolved"
 )
 
+// RelResolvedByHeuristic es la firma con la que el DETECTOR se auto-resuelve (decideRelation). Todo
+// el resto de los escritores firma con su nombre —"agent", "user", "afilador", "destilador", el que
+// le pase el caller a RestoreDuplicate—, así que esta constante distingue exactamente «lo decidió la
+// heurística sola» de «alguien arbitró». La guarda del upsert la usa para no dejar que el detector
+// pise un veredicto ajeno, por eso es una constante y no un literal repartido: si el detector cambia
+// de firma, la guarda tiene que cambiar con él o se desconecta en silencio.
+const RelResolvedByHeuristic = "heuristic"
+
 // ObsRelation es una arista entre dos observaciones (source -> target).
 type ObsRelation struct {
 	ID       string `json:"id"`
@@ -74,20 +82,77 @@ type ObsRelation struct {
 // nuevo). Es idempotente por par: el mismo par actualiza el veredicto en vez de
 // duplicar.
 func (e *DbEngine) UpsertObsRelation(r ObsRelation) (string, error) {
-	r, err := upsertObsRelationCon(e.db, r)
+	// El RETURNING del upsert ya trae la fila persistida con su id CANÓNICO: el par pudo existir con
+	// otro id (ON CONFLICT no lo cambia). Antes esto se resolvía con una segunda consulta best-effort
+	// que, si fallaba, devolvía el id TENTATIVO — uno que no está en la base.
+	persistida, err := upsertObsRelationCon(e.db, r)
 	if err != nil {
 		return "", err
 	}
-	// El par puede haber existido con otro id (ON CONFLICT no cambia el id): devolver
-	// el id realmente persistido.
-	var id string
-	if err := e.db.QueryRow(
-		`SELECT id FROM observation_relations WHERE source_id=? AND target_id=?`,
-		r.SourceID, r.TargetID,
-	).Scan(&id); err != nil {
-		return r.ID, nil // best-effort: si falla la relectura, devolver el tentativo
-	}
-	return id, nil
+	return persistida.ID, nil
+}
+
+// setConservandoVeredicto arma el `col=<entrante>` del DO UPDATE para una columna QUE PERTENECE AL
+// VEREDICTO, de modo que LA DETECCIÓN NO PISE AL QUE ARBITRÓ. La regla no mira QUIÉN llama —eso
+// sería frágil— sino lo que ENTRA, y son DOS cosas distintas, cada una con su motivo:
+//
+//	1) UN `pending` ENTRANTE NUNCA DEGRADA UN VEREDICTO, sea de quien sea. Un entrante `pending` es
+//	   por definición la detección proponiendo, y degradar borra trabajo que alguien hizo a
+//	   propósito: el veredicto vuelve a la cola con su `reason` escrito en NULL, sin error y sin
+//	   aviso. Medido el 2026-11-01 contra la base viva, y es el defecto que abrió este expediente.
+//	   OJO con el alcance real, porque es tentador contarlo más grave de lo que es: un supersedes
+//	   YA APLICADO no entra por acá: markSuperseded oculta la target y conflictCandidates excluye
+//	   las superseded, así que ese par no se vuelve a detectar nunca. El daño alcanzable es sobre
+//	   los veredictos que NO ocultan —related, compatible, scoped, conflicts_with, not_conflict,
+//	   not_duplicate—, que son la enorme mayoría de la cola.
+//	2) EL DETECTOR NO PISA UN VEREDICTO AJENO. decideRelation también emite veredictos RESUELTOS
+//	   —el auto-supersede y el auto-related—, firmados RelResolvedByHeuristic. Sin esta mitad, la
+//	   regla (1) sólo tapaba medio agujero: alguien juzgaba el par `related` («no se tapan»), se
+//	   re-guardaba la observación, y el heurístico volvía a decidir `supersedes` y PISABA el
+//	   veredicto humano ocultando la target. Medido el 2026-11-01: entra por detectAndSurface, que
+//	   corre en CADA save_observation con DetectOnly=false.
+//
+// La asimetría de (2) importa: el detector SÍ puede refrescar un veredicto SUYO (un auto-related
+// que hoy da auto-supersede porque el texto cambió). Lo que no puede es ganarle a quien arbitró. Por
+// eso la condición pregunta también por la firma de la fila EXISTENTE, no sólo por la entrante.
+//
+// Y un veredicto de alguien —musubi_judge, RestoreDuplicate marcando not_duplicate, el afilador, el
+// destilador— pisa al anterior siempre: es un veredicto nuevo, no una propuesta.
+//
+// QUÉ CUENTA COMO «COLUMNA DEL VEREDICTO» NO ES UNA LISTA, ES UN CRITERIO: exactamente lo que
+// escribe ResolveObsRelation —relation, status, resolved_by, reason— y nada más. `confidence` NO
+// está, aunque lo parezca: es una señal DERIVADA de la detección (el struct de arriba documenta que
+// en una pendiente es max(léxico, coseno) y en una auto-resuelta el léxico solo), así que congelarla
+// mientras lex/cosine se refrescan dejaría la fila afirmando DOS similitudes a la vez — y braingraph
+// y pulse leen confidence sin filtrar por status, así que se ve.
+//
+// `updated_at` SÍ ESTÁ, y es la menos obvia de las cuatro: no existe `resolved_at`, así que para
+// readiness `updated_at` ES la fecha del veredicto (cuenta como arbitraje de la ventana todo lo que
+// tenga status<>pending y updated_at reciente). Conservar el veredicto y pisarle la fecha haría que
+// cada re-detección pareciera un arbitraje nuevo: la dimensión «alguien arbitra todavía» daría verde
+// sin que nadie arbitre, que es justo el autoengaño que esa métrica existe para evitar. Con la
+// guarda puesta la fecha se mueve SÓLO cuando hay veredicto. No es una política nueva: el backfill
+// ya decidió lo mismo para su caso («rellenar el desglose no es actividad sobre la relación»).
+//
+// LA GUARDA ES FAIL-CLOSED a propósito: pregunta por `status <> 'pending'` y no por `= 'resolved'`,
+// así un estado futuro queda protegido por default en vez de perder la guarda en silencio. Y ése es
+// el MISMO predicado con el que readiness cuenta una relación como resuelta: guarda y lector no
+// pueden divergir sin que se note.
+//
+// Se arma en Go y no a mano en el SQL por dos razones: la condición es idéntica para las cinco
+// columnas y repetirla invita a que una quede distinta, y así los estados y la firma del detector
+// salen de las constantes del paquete en vez de literales que podrían desalinearse en silencio. col
+// y entrante son texto del propio código, nunca entrada de nadie.
+func setConservandoVeredicto(col, entrante string) string {
+	// `la fila tiene veredicto` Y `el que llega es el detector`, con las dos formas en que el
+	// detector escribe: propuesta (`pending`) o veredicto propio (firmado heuristic, y sólo si la
+	// fila no es también suya, para que pueda refrescar lo que él mismo decidió).
+	const yo, fila = `excluded.`, `observation_relations.`
+	cond := fila + `status<>'` + RelStatusPending + `' AND (` +
+		yo + `status='` + RelStatusPending + `' OR (` +
+		yo + `resolved_by='` + RelResolvedByHeuristic + `' AND COALESCE(` +
+		fila + `resolved_by,'')<>'` + RelResolvedByHeuristic + `'))`
+	return col + `=CASE WHEN ` + cond + ` THEN ` + fila + col + ` ELSE ` + entrante + ` END`
 }
 
 // upsertObsRelationCon es el upsert de UpsertObsRelation sobre el ejecutor que le den: la base o una
@@ -104,27 +169,56 @@ func upsertObsRelationCon(ex execQuerier, r ObsRelation) (ObsRelation, error) {
 	if r.ID == "" {
 		r.ID = uuid.NewString()
 	}
-	// lex/cosine viajan como NULL cuando el caller no los conoce (un upsert a mano, un test, un
-	// veredicto que no re-scorea). El COALESCE del UPDATE conserva lo que ya había en vez de pisarlo
+	// LAS DOS DIRECCIONES ESTÁN BLINDADAS, Y CADA UNA POR SU MOTIVO.
+	//
+	// judge→detección: lex/cosine viajan como NULL cuando el caller no los conoce (un upsert a mano,
+	// un test, un veredicto que no re-scorea). El COALESCE conserva lo que ya había en vez de pisarlo
 	// con NULL: juzgar una relación no debería borrar cómo se la detectó.
-	_, err := ex.Exec(`
+	//
+	// detección→judge: el sentido inverso quedó sin blindar hasta el 2026-11-01, y borraba datos que
+	// alguien produjo a propósito. La detección corre en CADA save_observation, así que editar una
+	// nota devolvía sus relaciones ya juzgadas a `pending` con el `reason` escrito BORRADO, sin error
+	// y sin aviso: el trabajo de arbitrar la cola se deshacía solo y la cola parecía crecer sola.
+	// Y no sólo degradando: el detector también emite veredictos RESUELTOS, así que un auto-supersede
+	// podía pisar un `related` que una persona había escrito para decir «no se tapan». Ver
+	// setConservandoVeredicto, que es donde vive la regla y el alcance exacto de cada mitad.
+	//
+	// Y SE DEVUELVE LA FILA PERSISTIDA, NO LA ENTRANTE. Antes de la guarda las dos coincidían —el
+	// UPDATE pisaba la fila con esos mismos valores—, así que devolver la entrante era gratis. Con la
+	// guarda DIVERGEN, y quien lee el retorno decide por él: detectAndSurface clasifica por Status y,
+	// con la entrante, anunciaría «requiere tu veredicto» con el id canónico de una relación YA
+	// juzgada. El agente obedecería, y ResolveObsRelation no tiene guarda: pisaría el veredicto que
+	// esta función acaba de proteger, y con un reason vacío lo borraría. El RETURNING cierra eso y de
+	// paso hace innecesaria la relectura del id.
+	rows, err := ex.Query(`
 		INSERT INTO observation_relations (id, source_id, target_id, relation, confidence, status, resolved_by, reason, lex_score, cosine_score, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(source_id, target_id) DO UPDATE SET
-			relation=excluded.relation,
+			`+setConservandoVeredicto("relation", "excluded.relation")+`,
+			`+setConservandoVeredicto("status", "excluded.status")+`,
+			`+setConservandoVeredicto("resolved_by", "excluded.resolved_by")+`,
+			`+setConservandoVeredicto("reason", "excluded.reason")+`,
+			`+setConservandoVeredicto("updated_at", "CURRENT_TIMESTAMP")+`,
 			confidence=excluded.confidence,
-			status=excluded.status,
-			resolved_by=excluded.resolved_by,
-			reason=excluded.reason,
 			lex_score=COALESCE(excluded.lex_score, lex_score),
-			cosine_score=COALESCE(excluded.cosine_score, cosine_score),
-			updated_at=CURRENT_TIMESTAMP
+			cosine_score=COALESCE(excluded.cosine_score, cosine_score)
+		RETURNING `+colsObsRel("")+`
 	`, r.ID, r.SourceID, r.TargetID, r.Relation, r.Confidence, r.Status, nullable(r.ResolvedBy), nullable(r.Reason),
 		floatOrNil(r.Lex), floatOrNil(r.Cosine))
 	if err != nil {
 		return r, fmt.Errorf("error al upsertar relación de observaciones: %w", err)
 	}
-	return r, nil
+	persistidas, err := scanObsRelations(rows)
+	if err != nil {
+		return r, err
+	}
+	// El DO UPDATE corre siempre que haya conflicto, así que el RETURNING emite exactamente una fila.
+	// Cero filas sería una contradicción del motor, no un caso a tolerar en silencio.
+	if len(persistidas) != 1 {
+		return r, fmt.Errorf("el upsert de la relación %s->%s devolvió %d filas, esperaba 1",
+			r.SourceID, r.TargetID, len(persistidas))
+	}
+	return persistidas[0], nil
 }
 
 // PendingObsRelations devuelve las relaciones que aún esperan veredicto.
