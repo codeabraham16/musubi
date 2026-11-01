@@ -1698,7 +1698,15 @@ func (s *McpServer) toolImpact(ctx context.Context, raw json.RawMessage) (interf
 // El denominador sale de walkSourceTree —LA MISMA enumeración que usa el indexador, con sus mismas
 // exclusiones (vendor, testdata, node_modules, dist, coverage, ocultos)— y no de una propia: contra
 // un denominador inventado, `missing` mediría el desacuerdo entre dos listas en vez de la ceguera.
-func (s *McpServer) graphFreshness(scoped context.Context) (stale, ghosts, missing int) {
+//
+// ⚠️ Y DEVUELVE TAMBIÉN LOS DOS DENOMINADORES, que son DISTINTOS entre sí y no se pueden deducir de
+// afuera: `archivosEnGrafo` (= len(stored)) es contra qué se miden stale y ghosts, y
+// `archivosEnDisco` (= los indexables del árbol) es contra qué se mide missing. Quien quiera
+// expresar esto como proporción —readiness lo hace— los necesita, y recalcularlos afuera significa
+// volver a leer la base y volver a caminar el árbol para obtener dos números que esta función acaba
+// de calcular y tirar. Ojo con la tentación de usar la cuenta de NODOS como denominador: son 16.787
+// símbolos contra 1.395 archivos en este repo, así que el porcentaje saldría absurdo.
+func (s *McpServer) graphFreshness(scoped context.Context) (stale, ghosts, missing, archivosEnGrafo, archivosEnDisco int) {
 	// Igual que cgStale: en el central compartido el grafo es federado y sus archivos no están en disco,
 	// así que la frescura por fingerprint no aplica (todo saldría fantasma). No inventar podredumbre. #3
 	//
@@ -1711,12 +1719,13 @@ func (s *McpServer) graphFreshness(scoped context.Context) (stale, ghosts, missi
 	// sigue siendo una política declarada. El cambio entró en un cuerpo de función y estos cinco
 	// call sites no se tocaron.
 	if s.arbolFueraDeAlcance() {
-		return 0, 0, 0
+		return 0, 0, 0, 0, 0
 	}
 	stored, err := s.engine.GraphFileFingerprintsCtx(scoped)
 	if err != nil {
-		return 0, 0, 0
+		return 0, 0, 0, 0, 0
 	}
+	archivosEnGrafo = len(stored)
 	for path, fp := range stored {
 		cur, ferr := memory.FileFingerprint(s.projectPath, path)
 		if ferr != nil || cur == "" {
@@ -1729,12 +1738,13 @@ func (s *McpServer) graphFreshness(scoped context.Context) (stale, ghosts, missi
 	}
 	// Tres valores desde que esta rama agregó `ignorados`; acá sólo interesa el mapa de archivos.
 	_, enDisco, _ := s.walkSourceTree()
+	archivosEnDisco = len(enDisco)
 	for key := range enDisco {
 		if _, ok := stored[key]; !ok {
 			missing++
 		}
 	}
-	return stale, ghosts, missing
+	return stale, ghosts, missing, archivosEnGrafo, archivosEnDisco
 }
 
 func (s *McpServer) toolMap(ctx context.Context, _ json.RawMessage) (interface{}, *RpcError) {
@@ -1752,7 +1762,7 @@ func (s *McpServer) toolMap(ctx context.Context, _ json.RawMessage) (interface{}
 	if entry == nil {
 		entry = []string{}
 	}
-	stale, ghosts, missing := s.graphFreshness(scoped)
+	stale, ghosts, missing, _, _ := s.graphFreshness(scoped)
 	return jsonResult(map[string]interface{}{
 		"nodes": nodes, "edges": byKind, "god_nodes": god, "entry_points": entry,
 		"total_entry_points": totalEntry, "entry_points_truncated": totalEntry > len(entry),
