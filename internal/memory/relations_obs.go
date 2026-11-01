@@ -90,6 +90,23 @@ func (e *DbEngine) UpsertObsRelation(r ObsRelation) (string, error) {
 	return id, nil
 }
 
+// setConservandoVeredicto arma el `col=…` del DO UPDATE para una columna QUE PERTENECE AL VEREDICTO,
+// de modo que una re-detección no la pise. La regla no mira QUIÉN llama —eso sería frágil— sino lo
+// que ENTRA: un `status` entrante `pending` es, por definición, la detección proponiendo, y si la
+// fila ya está `resolved` se conserva lo que había. Un entrante CON veredicto (RestoreDuplicate
+// marcando not_duplicate, el auto-supersede de decideRelation) sí actualiza, porque es un veredicto
+// nuevo y no una propuesta.
+//
+// Se arma en Go y no a mano en el SQL por dos razones: la condición es la misma para las cinco
+// columnas y repetirla cinco veces invita a que una quede distinta, y así los estados salen de las
+// constantes del paquete en vez de literales que podrían desalinearse en silencio. col son nombres
+// de columna del propio código, nunca entrada de nadie.
+func setConservandoVeredicto(col string) string {
+	return col + `=CASE WHEN observation_relations.status='` + RelStatusResolved +
+		`' AND excluded.status='` + RelStatusPending + `'` +
+		` THEN observation_relations.` + col + ` ELSE excluded.` + col + ` END`
+}
+
 // upsertObsRelationCon es el upsert de UpsertObsRelation sobre el ejecutor que le den: la base o una
 // transacción. Existe para que quien tiene que escribir la relación JUNTO con otra cosa —deshacer una
 // fusión y marcar el par en el mismo commit— use este SQL y no una copia de él. Devuelve la relación
@@ -104,18 +121,27 @@ func upsertObsRelationCon(ex execQuerier, r ObsRelation) (ObsRelation, error) {
 	if r.ID == "" {
 		r.ID = uuid.NewString()
 	}
-	// lex/cosine viajan como NULL cuando el caller no los conoce (un upsert a mano, un test, un
-	// veredicto que no re-scorea). El COALESCE del UPDATE conserva lo que ya había en vez de pisarlo
+	// LAS DOS DIRECCIONES ESTÁN BLINDADAS, Y CADA UNA POR SU MOTIVO.
+	//
+	// judge→detección: lex/cosine viajan como NULL cuando el caller no los conoce (un upsert a mano,
+	// un test, un veredicto que no re-scorea). El COALESCE conserva lo que ya había en vez de pisarlo
 	// con NULL: juzgar una relación no debería borrar cómo se la detectó.
+	//
+	// detección→judge: el sentido inverso quedó sin blindar hasta el 2026-11-01, y borraba datos que
+	// alguien produjo a propósito. La detección corre en CADA save_observation, así que editar una
+	// nota devolvía sus relaciones ya juzgadas a `pending` con el `reason` escrito BORRADO, sin error
+	// y sin aviso: el trabajo de arbitrar la cola se deshacía solo y la cola parecía crecer sola.
+	// Peor con un supersedes auto-resuelto —markSuperseded ya ocultó la target, y degradar la
+	// relación NO la des-oculta—: quedaba el efecto aplicado sin veredicto que lo explique.
 	_, err := ex.Exec(`
 		INSERT INTO observation_relations (id, source_id, target_id, relation, confidence, status, resolved_by, reason, lex_score, cosine_score, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(source_id, target_id) DO UPDATE SET
-			relation=excluded.relation,
-			confidence=excluded.confidence,
-			status=excluded.status,
-			resolved_by=excluded.resolved_by,
-			reason=excluded.reason,
+			`+setConservandoVeredicto("relation")+`,
+			`+setConservandoVeredicto("confidence")+`,
+			`+setConservandoVeredicto("status")+`,
+			`+setConservandoVeredicto("resolved_by")+`,
+			`+setConservandoVeredicto("reason")+`,
 			lex_score=COALESCE(excluded.lex_score, lex_score),
 			cosine_score=COALESCE(excluded.cosine_score, cosine_score),
 			updated_at=CURRENT_TIMESTAMP
