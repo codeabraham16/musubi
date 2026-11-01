@@ -12,9 +12,7 @@ package memory
 // señal es una advertencia para que un humano —o musubi_judge— decida.
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -24,51 +22,18 @@ import (
 	"musubi/internal/codeintel"
 )
 
-// errSymbolNotFound distingue "el símbolo ya no está en el archivo" de un fallo de E/S. Lo
-// primero es deriva legítima (alguien borró o renombró la función); lo segundo no es evidencia
-// de nada y no debe marcar.
-var errSymbolNotFound = errors.New("símbolo no encontrado")
-
-// splitOriginRef parte un ancla `ruta#símbolo` en sus dos mitades. Sin '#', el símbolo queda
-// vacío y el ancla es del archivo entero.
-func splitOriginRef(ref string) (path, symbol string) {
-	if i := strings.LastIndex(ref, "#"); i > 0 {
-		return ref[:i], ref[i+1:]
-	}
-	return ref, ""
-}
-
-// symbolFingerprint calcula la identidad de UN SÍMBOLO: sha256 de las líneas que ocupa hoy en
-// el archivo. Se extrae del contenido ACTUAL con codeintel (model-free, tolerante a archivos
-// que no compilan), nunca del grafo de código persistido: los rangos del grafo valen para el
-// snapshot en que se indexó, y justo cuando el archivo cambia —el caso que nos importa— serían
-// los rangos equivocados.
-//
-// Anclar a un símbolo en vez de al archivo entero es lo que hace la marca UTIL: un archivo
-// grande cambia todo el tiempo por motivos ajenos a la nota, y una marca que salta siempre se
-// aprende a ignorar. El símbolo cambia cuando cambia lo que la nota describe.
-// symbolMatches decide si un símbolo extraído del archivo es el que pide el ancla, y acepta DOS
-// formas a propósito:
-//
-//	`Tipo.Metodo`  -> exacta. Es la clave que ya usa el grafo de código, así que la que devuelve
-//	                  `musubi_code_graph` se puede pegar tal cual en un origin_path. Y al exigir
-//	                  el receptor, NO funde métodos homónimos.
-//	`Nombre`       -> pelada, el comportamiento HISTÓRICO. Sigue matcheando funciones, tipos y
-//	                  también métodos de cualquier receptor.
-//
-// LA FORMA PELADA NO SE QUITA, y no es por comodidad: las anclas ya guardadas en la base están
-// escritas así. Angostarla haría que observaciones que hoy resuelven bien pasaran a `missing` de
-// un día para otro —una marca de rancio masiva y falsa—, que es justo el ruido que este mecanismo
-// existe para no producir. Se AGREGA precisión para quien la pida; no se le cambia el piso a nadie.
-//
-// El costo asumido: un ancla pelada a un nombre repetido sigue cubriendo a todos sus homónimos.
-// Quien quiera precisión ahora tiene cómo pedirla, y la lista de símbolos se la muestra calificada.
-func symbolMatches(s codeintel.Symbol, pedido string) bool {
-	if tipo, metodo, esCalificado := strings.Cut(pedido, "."); esCalificado {
-		return s.Recv == tipo && s.Name == metodo
-	}
-	return s.Name == pedido
-}
+// Estas primitivas puras se mudaron a internal/codeintel para que las comparta specgraph (que es
+// FS-nativo y no puede depender del motor de memoria). Se conservan los nombres locales como ALIAS
+// finos: así ni los call-sites de este paquete ni su suite de pruebas #326 cambian una línea, y el
+// fingerprint de un ancla de spec y el de un ancla de observación sobre el mismo símbolo salen byte
+// a byte iguales. errSymbolNotFound DEBE ser el mismo valor que el de codeintel, o el errors.Is de
+// más abajo dejaría de reconocer "el símbolo ya no está" como deriva.
+var (
+	errSymbolNotFound = codeintel.ErrSymbolNotFound
+	splitOriginRef    = codeintel.SplitOriginRef
+	symbolMatches     = codeintel.SymbolMatches
+	symbolFingerprint = codeintel.SymbolFingerprint
+)
 
 // prefijoDeclarado marca los fingerprints calculados sobre símbolos DECLARADOS en el gist en vez
 // de derivados del archivo.
@@ -98,19 +63,12 @@ const (
 	fuenteDeclarada                         // sólo lo declarado (re-cálculo de un ancla con prefijo)
 )
 
-// symbolFingerprint es la forma DERIVADA: sólo el extractor, sin fallback. Es la que existía y la
-// que usan las pruebas del camino de Go, donde el extractor nunca falla.
-func symbolFingerprint(root, path, symbol string) (string, error) {
-	return symbolFingerprintCon(root, path, symbol, fuenteDerivada, nil)
-}
-
 func symbolFingerprintCon(root, path, symbol string, fuente fuenteDeSimbolos, declaradosDe func(string) []codeintel.Symbol) (string, error) {
 	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
 	if err != nil {
 		return "", err
 	}
 	content := string(data)
-	lineas := strings.Split(content, "\n")
 
 	// PRECEDENCIA: el extractor manda. Lo declarado es el fallback de lo que el extractor no vio,
 	// así que Go —donde el extractor nunca falla— no cambia en un solo caso. Lo declarado sólo
@@ -126,27 +84,14 @@ func symbolFingerprintCon(root, path, symbol string, fuente fuenteDeSimbolos, de
 		}
 	}
 
-	h := sha256.New()
-	encontrado := false
-	for _, s := range syms {
-		if !symbolMatches(s, symbol) {
-			continue
-		}
-		encontrado = true
-		// Rangos 1-based inclusivos; se acotan por si el extractor estimó de más.
-		ini, fin := s.StartLine, s.EndLine
-		if ini < 1 {
-			ini = 1
-		}
-		if fin > len(lineas) {
-			fin = len(lineas)
-		}
-		fmt.Fprintf(h, "%s\x00%s\x00", s.Kind, strings.Join(lineas[ini-1:fin], "\n"))
+	// El núcleo del hash vive en codeintel.FingerprintSymbols: UN solo formato de byte, así que
+	// este fingerprint y el de un ancla de spec sobre el mismo símbolo son comparables.
+	fp, err := codeintel.FingerprintSymbols(content, syms, symbol)
+	if err != nil {
+		return "", err
 	}
-	if !encontrado {
-		return "", errSymbolNotFound
-	}
-	fp := hex.EncodeToString(h.Sum(nil))
+	// El prefijo deja ESCRITA la fuente en el fingerprint, para que el re-cálculo use la misma y un
+	// cambio de build no dispare una marca de rancio masiva y falsa. Ver prefijoDeclarado.
 	if usoDeclarados {
 		fp = prefijoDeclarado + fp
 	}
