@@ -316,12 +316,16 @@ func TestEveryReadOnlyToolClassified(t *testing.T) {
 		// Contadores EN MEMORIA del proceso (F5): no lee ninguna tabla, así que no hay nada que
 		// scopear. Y por invariante D5 nunca contiene un secreto, sólo conteos y TIPOS.
 		"musubi_cognition_stats": true,
-		// Las cuatro tools de LECTURA del spec-graph leen los SPEC.md del árbol de trabajo del
-		// proyecto local (grep sobre su texto, get de uno, el DAG, validar colgantes/ciclos/ids):
-		// filesystem, NUNCA una tabla con project_id. Son filesystem-scoped como detect_stack, así
-		// que el aislamiento por tenant no aplica. Si alguna empezara a leer una tabla scopeada,
-		// MOVERLA al barrido de arriba. (create/update/delete son write, no readOnly: no entran acá.)
+		// Las cinco tools de LECTURA del spec-graph leen los SPEC.md del árbol de trabajo del
+		// proyecto local (grep sobre su texto, recall rankeándolo por significado/keyword, get de
+		// uno, el DAG, validar colgantes/ciclos/ids): filesystem, NUNCA una tabla con project_id.
+		// recall además embebe el query, pero eso es una llamada al PROVEEDOR de embeddings, no la
+		// lectura de una tabla scopeada —el vector vive en el cache en memoria del Recaller—, así que
+		// sigue siendo filesystem-scoped como detect_stack y el aislamiento por tenant no aplica. Si
+		// alguna empezara a leer una tabla scopeada, MOVERLA al barrido de arriba. (create/update/
+		// delete son write, no readOnly: no entran acá.)
 		"musubi_spec_grep":     true,
+		"musubi_spec_recall":   true,
 		"musubi_spec_get":      true,
 		"musubi_spec_graph":    true,
 		"musubi_spec_validate": true,

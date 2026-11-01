@@ -1984,6 +1984,34 @@
       }
     },
     {
+      "name": "musubi_spec_recall",
+      "description": "Rankea las specs del repo por SIGNIFICADO (similitud semántica del cuerpo), el complemento del grep LITERAL de musubi_spec_grep: encontrá la spec que habla de un tema aunque no use esas palabras. Con proveedor de embeddings rankea por coseno; sin él —o si el embed falla— cae a un ranking por keyword determinista y NUNCA falla por eso (model-free). Filtro por type y paginado. Devuelve hits con id/type/title/path/score (0..1)/snippet, ordenados por score.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "Máximo de hits por página (1..200, default 20)."
+          },
+          "offset": {
+            "type": "integer",
+            "description": "Cuántos hits saltear para paginar (\u003e=0). Usá el nextOffset devuelto."
+          },
+          "query": {
+            "type": "string",
+            "description": "Texto de consulta. Se embebe y se rankea por similitud; sin embebedor se rankea por solapamiento de términos."
+          },
+          "type": {
+            "type": "string",
+            "description": "Filtrar por el campo type del frontmatter (opcional)."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
       "name": "musubi_spec_get",
       "description": "Devuelve una spec por id: su frontmatter (id/type/title/path y demás campos) y sus enlaces hacia adelante (los que declara) e inversos (quién la apunta). Sin el cuerpo en prosa — para eso está musubi_spec_grep.",
       "inputSchema": {

@@ -1,25 +1,32 @@
-// methods_spec.go son las 7 tools MCP del grafo de specs (spec-graph F1). La capa
-// de tools es de Musubi (frontera D1): el core portado vive en internal/specgraph
-// y acá se re-escribe la capa que thinkrail tenía acoplada a pi/typebox, con LA
-// convención de Musubi — schema JSON como el resto de registry.go, RpcError,
-// candados de dispatch, y los 3 goldens.
+// methods_spec.go son las 8 tools MCP del grafo de specs (spec-graph F1 + recall
+// F3-A). La capa de tools es de Musubi (frontera D1): el core portado vive en
+// internal/specgraph y acá se re-escribe la capa que thinkrail tenía acoplada a
+// pi/typebox, con LA convención de Musubi — schema JSON como el resto de
+// registry.go, RpcError, candados de dispatch, y los 3 goldens.
 //
-// Clasificación (D3/D8): grep/get/graph/validate son readOnly por su EFECTO sobre
-// el repo (no mutan archivos), aunque por dentro toquen el cache del índice —ese
-// cache lo protege el sync.Mutex interno del Index, no el candado del dispatch—.
-// create/update/delete son write (candado exclusivo). Las 7 actúan SÓLO sobre
-// archivos locales ⇒ actuaAfuera=false (permisos.go), fijado por el tripwire.
+// Clasificación (D3/D8): grep/get/graph/validate/recall son readOnly por su EFECTO
+// sobre el repo (no mutan archivos), aunque por dentro toquen el cache del índice
+// —ese cache lo protege el sync.Mutex interno del Index, no el candado del
+// dispatch—. recall además embebe el query (I/O de red), por lo que es lockSelf;
+// pero eso es concurrencia, no alcance: su EFECTO sobre el repo sigue siendo nulo
+// y actuaAfuera() lo deriva false por readOnly (permisos.go sólo mira flota/
+// credenciales, no el embebedor). create/update/delete son write (candado
+// exclusivo). Las 8 actúan SÓLO sobre archivos locales (recall LEE specs del disco;
+// el embebedor es opcional y no escribe) ⇒ actuaAfuera=false, fijado por el tripwire.
 
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
+	"musubi/internal/embedding"
 	"musubi/internal/specgraph"
 )
 
@@ -114,6 +121,25 @@ type specGrepOut struct {
 	Matches    []string `json:"matches"`
 	Truncated  bool     `json:"truncated"`
 	NextOffset int      `json:"nextOffset,omitempty"`
+}
+
+// specHitOut es una spec rankeada por recall semántico. Espeja specgraph.SpecHit con tags en
+// minúscula (musubi-rules #6). Score ∈ [0,1] sin importar el modo (coseno o keyword), así que el
+// agente lo lee igual degrade o no.
+type specHitOut struct {
+	ID      string  `json:"id"`
+	Type    string  `json:"type"`
+	Title   string  `json:"title,omitempty"`
+	Path    string  `json:"path"`
+	Score   float64 `json:"score"`
+	Snippet string  `json:"snippet,omitempty"`
+}
+
+// specRecallOut espeja RecallResult (y specGrepOut): paginado estable con Truncated + NextOffset.
+type specRecallOut struct {
+	Hits       []specHitOut `json:"hits"`
+	Truncated  bool         `json:"truncated"`
+	NextOffset int          `json:"nextOffset,omitempty"`
 }
 
 type specValidateOut struct {
@@ -230,6 +256,83 @@ func (s *McpServer) toolSpecGrep(raw json.RawMessage) (interface{}, *RpcError) {
 		Truncated:  result.Truncated,
 		NextOffset: result.NextOffset,
 	})
+}
+
+// toolSpecRecall rankea las specs por SIGNIFICADO (coseno sobre embeddings del cuerpo), el
+// complemento semántico del grep LITERAL. Es ctx-aware y lock=lockSelf: el embed del query es una
+// llamada de RED (techo 30 s) y NO debe correr bajo el candado del despacho.
+//
+// Model-free con degradación (R5): el embebedor viaja como una CLAUSURA definida acá, no como una
+// interfaz que specgraph llamaría. Es a propósito —y es lo que mantiene honesto al lockSelf—: la
+// guarda candado_no_cruza_la_red reconoce el borde `Embed` por nombre simple y SÓLO dentro de
+// internal/mcp. Con `s.embedder.Embed` LÉXICAMENTE en este handler, la guarda ve que llega al borde
+// y valida el lockSelf; si el embed viviera en specgraph, el borde quedaría invisible y el lockSelf
+// figuraría muerto. Sin embebedor la clausura es nil y Recall rankea TODO por keyword sin tocar red.
+func (s *McpServer) toolSpecRecall(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
+	var args struct {
+		Query  string `json:"query"`
+		Type   string `json:"type"`
+		Limit  int    `json:"limit"`
+		Offset int    `json:"offset"`
+	}
+	if rerr := parseSpecArgs(raw, &args); rerr != nil {
+		return nil, rerr
+	}
+	if strings.TrimSpace(args.Query) == "" {
+		return nil, rpcErrorf(codeInvalidParams, "query es obligatorio")
+	}
+	limit := args.Limit
+	if limit > specGrepLimitMax {
+		limit = specGrepLimitMax
+	}
+
+	// El embebedor viaja como clausura, nil cuando no hay proveedor configurado (embed==nil ⇒ keyword
+	// para todo, R5). El techo de 30 s cubre el embed del query Y los de cada spec: Recall threadea
+	// este ctx a cada embed(ctx,·), así que un embebedor colgado no cuelga el servidor. NO hay
+	// withReadLock: el handler sólo toca specIndex/specRecaller (cada uno con su propio mutex) y
+	// campos inmutables post-construcción; nunca toca el motor (memory.db), D6.
+	var embed specgraph.EmbedFunc
+	if embedding.Enabled(s.embedder) {
+		embCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		embed = func(ctx context.Context, text string) ([]float32, error) {
+			return s.embedder.Embed(ctx, text)
+		}
+		ctx = embCtx
+	}
+
+	result, err := s.specRecaller.Recall(ctx, s.specIndex.ContentEntries(), specgraph.RecallOptions{
+		Query:  args.Query,
+		Type:   args.Type,
+		Limit:  limit,
+		Offset: args.Offset,
+	}, embed)
+	if err != nil {
+		// El único error de Recall es offset negativo: culpa del llamador (espeja grep).
+		return nil, rpcErrorf(codeInvalidParams, "%v", err)
+	}
+	// El DTO con tags json se arma en toSpecRecallOut (misma frontera D1 que
+	// toSpecGraphSliceOut): el core no tiene tags y sin el mapeo la salida saldría
+	// en PascalCase. Tenerlo en un helper deja el sabotaje de R14 en una sola línea.
+	return jsonResult(toSpecRecallOut(result))
+}
+
+// toSpecRecallOut mapea el resultado del core (sin json tags) al DTO de salida con
+// claves en minúscula (musubi-rules #6). make([]…,0,…) y NO var: una página sin hits
+// serializa `"hits":[]`, no `null` (go-hygiene #6) — un cliente que itera la lista no
+// debe tragarse un null.
+func toSpecRecallOut(result specgraph.RecallResult) specRecallOut {
+	hits := make([]specHitOut, 0, len(result.Hits))
+	for _, h := range result.Hits {
+		hits = append(hits, specHitOut{
+			ID: h.ID, Type: h.Type, Title: h.Title, Path: h.Path, Score: h.Score, Snippet: h.Snippet,
+		})
+	}
+	return specRecallOut{
+		Hits:       hits,
+		Truncated:  result.Truncated,
+		NextOffset: result.NextOffset,
+	}
 }
 
 // toolSpecGet devuelve un nodo por id con sus enlaces hacia adelante (los que la
@@ -672,11 +775,14 @@ func specBodyForType(specType, title string) string {
 	return sb.String()
 }
 
-// specToolEntries son las 7 toolEntry del grafo de specs, en orden FIJO (lo
-// congela TestToolsListGolden). grep/get/graph/validate: readOnly (su efecto
-// sobre el repo es nulo; el cache del índice lo protege su propio mutex, D3).
-// create/update/delete: write (candado exclusivo). lock y ro quedan en su cero,
-// que deriva del readOnly (sin lockSelf: no hay red ni LLM en el camino, D8).
+// specToolEntries son las 8 toolEntry del grafo de specs, en orden FIJO (lo
+// congela TestToolsListGolden). grep/recall/get/graph/validate: readOnly (su
+// efecto sobre el repo es nulo; el cache del índice lo protege su propio mutex,
+// D3). create/update/delete: write (candado exclusivo). Casi todas dejan lock en
+// su cero: no hay red ni LLM en el camino. La EXCEPCIÓN es recall, que embebe el
+// query (llamada de red, techo 30 s) cuando hay embebedor: lleva lock=lockSelf
+// —el despacho NO toma candado y el handler no sostiene ninguno durante el
+// embed—, y la guarda candado_no_cruza_la_red lo exige y lo verifica.
 func (s *McpServer) specToolEntries() []toolEntry {
 	return []toolEntry{
 		{
@@ -701,6 +807,29 @@ func (s *McpServer) specToolEntries() []toolEntry {
 			},
 			handler:  noCtx(s.toolSpecGrep),
 			readOnly: true,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_spec_recall",
+				Description: "Rankea las specs del repo por SIGNIFICADO (similitud semántica del cuerpo), el complemento del grep LITERAL de musubi_spec_grep: encontrá la spec que habla de un tema aunque no use esas palabras. Con proveedor de embeddings rankea por coseno; sin él —o si el embed falla— cae a un ranking por keyword determinista y NUNCA falla por eso (model-free). Filtro por type y paginado. Devuelve hits con id/type/title/path/score (0..1)/snippet, ordenados por score.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"query":  {Type: "string", Description: "Texto de consulta. Se embebe y se rankea por similitud; sin embebedor se rankea por solapamiento de términos."},
+						"type":   {Type: "string", Description: "Filtrar por el campo type del frontmatter (opcional)."},
+						"limit":  {Type: "integer", Description: "Máximo de hits por página (1..200, default 20)."},
+						"offset": {Type: "integer", Description: "Cuántos hits saltear para paginar (>=0). Usá el nextOffset devuelto."},
+					},
+					Required: []string{"query"},
+				},
+			},
+			// handler DIRECTO (ctx-aware), no noCtx: necesita el ctx para el techo de 30 s del embed.
+			handler:  s.toolSpecRecall,
+			readOnly: true,
+			// lockSelf: el handler embebe el query (red, 30 s) y no sostiene candado durante el embed.
+			// readOnly a secas tomaría el candado COMPARTIDO del despacho, que bloquea a los escritores
+			// (la captura de memoria escribe) durante esos 30 s. La guarda candado_no_cruza_la_red lo exige.
+			lock: lockSelf,
 		},
 		{
 			Tool: Tool{

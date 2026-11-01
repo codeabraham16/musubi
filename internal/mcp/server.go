@@ -348,6 +348,12 @@ type McpServer struct {
 	// tools de lectura pueden correr concurrentes bajo RLock sin competir por su
 	// cache. Ver internal/specgraph/store.go.
 	specIndex *specgraph.Index
+	// specRecaller rankea specs por significado (coseno sobre embeddings) con fallback
+	// model-free a keyword. Vive junto a specIndex porque comparten el mismo corpus
+	// (ContentEntries); separado porque cachea vectores entre llamadas (D1) y su ciclo
+	// de vida es el del server, no el de una llamada. Su cache tiene su propio mutex,
+	// así que no compite con el RLock del dispatch. Ver internal/specgraph/recall.go.
+	specRecaller *specgraph.Recaller
 	// sourcing contiene la configuración de sourcing de skills desde catálogo remoto.
 	sourcing config.SourcingConfig
 	// sourceCache cachea las respuestas de red del sourcing (catálogo y marketplace) con
@@ -661,15 +667,19 @@ func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder emb
 		cognition:   cognition.NoopProvider{},
 		projectPath: projectPath,
 		specIndex:   specgraph.NewIndex(projectPath),
-		sourcing:    config.Default().Sourcing,
-		memory:      config.Default().Memory,
-		maintenance: config.Default().Maintenance,
-		graph:       config.Default().Graph,
-		conflicts:   config.Default().Conflicts,
-		pipeline:    config.Default().Pipeline,
-		multiagent:  config.Default().MultiAgent,
-		metrics:     &serverMetrics{},
-		live:        newLiveFeed(),
+		// embedder ya está normalizado a NoopProvider si venía nil (arriba), así que
+		// Name() es seguro y devuelve "none" cuando no hay embebedor. El nombre entra en
+		// la clave del cache para que un cambio de modelo no sirva vectores viejos.
+		specRecaller: specgraph.NewRecaller(embedder.Name()),
+		sourcing:     config.Default().Sourcing,
+		memory:       config.Default().Memory,
+		maintenance:  config.Default().Maintenance,
+		graph:        config.Default().Graph,
+		conflicts:    config.Default().Conflicts,
+		pipeline:     config.Default().Pipeline,
+		multiagent:   config.Default().MultiAgent,
+		metrics:      &serverMetrics{},
+		live:         newLiveFeed(),
 		// EL TECHO DEL EXPORT NACE EN SU DEFAULT Y NO EN CERO, porque acá cero significa SIN
 		// TECHO (así se escribe el apagado explícito, `services_per_project_export: -1`). Un
 		// servidor que nunca llamó a ConfigurarFlota —un entrypoint sin sección `fleet:`, media

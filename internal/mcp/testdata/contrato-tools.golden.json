@@ -395,6 +395,11 @@
     "actua_afuera": false
   },
   {
+    "name": "musubi_spec_recall",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
     "name": "musubi_spec_update",
     "read_only": false,
     "actua_afuera": false

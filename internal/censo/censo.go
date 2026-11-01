@@ -130,6 +130,7 @@ var censo = map[string]Clase{
 	"musubi_spec_get":      DebeInvocarse,
 	"musubi_spec_graph":    DebeInvocarse,
 	"musubi_spec_grep":     DebeInvocarse,
+	"musubi_spec_recall":   DebeInvocarse,
 	"musubi_spec_update":   DebeInvocarse,
 	"musubi_spec_validate": DebeInvocarse,
 	"musubi_sync_status":   DebeInvocarse,
