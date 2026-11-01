@@ -26,6 +26,7 @@ import (
 	"musubi/internal/memory"
 	"musubi/internal/motor"
 	"musubi/internal/skills"
+	"musubi/internal/specgraph"
 )
 
 // Códigos de error JSON-RPC 2.0 estándar usados por el servidor.
@@ -339,6 +340,14 @@ type McpServer struct {
 	// projectPath es la raíz del proyecto (== MUSUBI_HOME).
 	// La usan los handlers de detect_stack y save_skill para resolver rutas.
 	projectPath string
+	// specIndex es el índice en memoria del grafo de specs (spec-graph F1),
+	// enraizado en projectPath (D2: la misma raíz que camina el grafo de código).
+	// Lo construye NewMcpServer siempre: NewIndex no hace I/O, sólo guarda la raíz,
+	// así que es inofensivo aun en un server degradado/inerte o con projectPath "".
+	// Es internamente sincronizado (su propio sync.Mutex, D3), de modo que las 4
+	// tools de lectura pueden correr concurrentes bajo RLock sin competir por su
+	// cache. Ver internal/specgraph/store.go.
+	specIndex *specgraph.Index
 	// sourcing contiene la configuración de sourcing de skills desde catálogo remoto.
 	sourcing config.SourcingConfig
 	// sourceCache cachea las respuestas de red del sourcing (catálogo y marketplace) con
@@ -597,6 +606,7 @@ func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder emb
 		embedder:    embedder,
 		cognition:   cognition.NoopProvider{},
 		projectPath: projectPath,
+		specIndex:   specgraph.NewIndex(projectPath),
 		sourcing:    config.Default().Sourcing,
 		memory:      config.Default().Memory,
 		maintenance: config.Default().Maintenance,

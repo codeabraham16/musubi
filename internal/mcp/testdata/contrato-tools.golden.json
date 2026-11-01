@@ -370,6 +370,41 @@
     "actua_afuera": false
   },
   {
+    "name": "musubi_spec_create",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_spec_delete",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_spec_get",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_spec_graph",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_spec_grep",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_spec_update",
+    "read_only": false,
+    "actua_afuera": false
+  },
+  {
+    "name": "musubi_spec_validate",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
     "name": "musubi_sync_pull",
     "read_only": true,
     "actua_afuera": false

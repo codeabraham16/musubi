@@ -1699,5 +1699,10 @@ func (s *McpServer) buildRegistry() []toolEntry {
 	// OFFLINE admin+opt-in que junta las tarjetas `design-corpus/*` gemelas por COSENO (un juez LLM decide
 	// MERGE/KEEP); lockSelf porque hace I/O externa (juez) por par. Ver methods_dedup.go.
 	entries = append(entries, s.sharpenToolEntry())
+	// musubi_spec_* (spec-graph F1): las 7 tools del grafo de specs tipadas en SPEC.md,
+	// navegable como grafo. grep/get/graph/validate son readOnly (su efecto sobre el
+	// repo es nulo); create/update/delete son write (candado exclusivo). Las 7 actúan
+	// sólo sobre archivos locales ⇒ actuaAfuera=false. Ver methods_spec.go.
+	entries = append(entries, s.specToolEntries()...)
 	return entries
 }

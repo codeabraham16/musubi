@@ -120,11 +120,23 @@ var censo = map[string]Clase{
 	"musubi_search_skills":       DebeInvocarse,
 	"musubi_sharpen":             DebeInvocarse,
 	"musubi_skill_usage":         DebeInvocarse,
-	"musubi_sync_status":         DebeInvocarse,
-	"musubi_tokens":              DebeInvocarse,
-	"musubi_tool_usage":          DebeInvocarse,
-	"musubi_whoami":              DebeInvocarse,
-	"musubi_work":                DebeInvocarse,
+	// spec-graph F1: el agente DEBE consultar y validar el grafo de specs como parte del lazo del
+	// turno (leer el SPEC.md antes de tocar un contrato; validar colgantes/ciclos/ids al cerrar).
+	// Recién nacen: un cero persistente es el «se construye y no se enciende» que A3 surfacea, así
+	// que van acá y no a una clase que lo excuse. Las de escritura (create/update/delete) también:
+	// editar un SPEC.md es parte del lazo, igual que save_observation.
+	"musubi_spec_create":   DebeInvocarse,
+	"musubi_spec_delete":   DebeInvocarse,
+	"musubi_spec_get":      DebeInvocarse,
+	"musubi_spec_graph":    DebeInvocarse,
+	"musubi_spec_grep":     DebeInvocarse,
+	"musubi_spec_update":   DebeInvocarse,
+	"musubi_spec_validate": DebeInvocarse,
+	"musubi_sync_status":   DebeInvocarse,
+	"musubi_tokens":        DebeInvocarse,
+	"musubi_tool_usage":    DebeInvocarse,
+	"musubi_whoami":        DebeInvocarse,
+	"musubi_work":          DebeInvocarse,
 
 	// --- Administrativa: superficie de operación de flota/credenciales; cero esperado. ---
 	"musubi_fleet_approvals":        Administrativa,
