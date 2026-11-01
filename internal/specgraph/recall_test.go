@@ -285,6 +285,9 @@ func TestRecall_TypeFilter(t *testing.T) {
 // R10b: paginado estable espejando GrepResult (Truncated + NextOffset), y offset negativo = error.
 // SABOTAJE: si Truncated/NextOffset se calcularan mal, o el offset negativo no diera error, las
 // aserciones correspondientes se pondrían rojas.
+// arnes: archivo="internal/specgraph/recall.go"
+// arnes: de="if opts.Offset < 0 {"
+// arnes: a="if opts.Offset < 0 && false {"
 func TestRecall_Pagination(t *testing.T) {
 	entries := make([]SpecContentEntry, 0, 5)
 	for i := 0; i < 5; i++ {
