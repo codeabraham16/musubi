@@ -102,7 +102,7 @@ flowchart LR
     end
     subgraph M["Musubi · daemon Go"]
         direction TB
-        RPC["JSON-RPC 2.0 / stdio<br/>87 herramientas MCP"]
+        RPC["JSON-RPC 2.0 / stdio<br/>88 herramientas MCP"]
         COG["resolver de skills · grafo<br/>gobernador de tokens<br/>conflictos · workflows"]
     end
     DB[("SQLite<br/>local-first")]
@@ -429,7 +429,7 @@ explorar → planear → codear → verificar recordándole la fase al agente ca
 
 ## Herramientas MCP
 
-El servidor expone **87 herramientas**, agrupadas por dominio. Hay 92 registradas: cinco están
+El servidor expone **88 herramientas**, agrupadas por dominio. Hay 93 registradas: cinco están
 **dormidas** y `tools/list` no las devuelve, porque su costo en contexto no se pagaba con su uso
 medido. Se despiertan sin recompilar con `MUSUBI_TOOLS_ALL=1`, y la lista vive con su motivo al lado
 en `internal/mcp/tools_dormidas_test.go`:
@@ -841,7 +841,7 @@ internal/
   detector/        # DetectStack + ExtractDeps (manifests, mtime cache)
   embedding/       # Provider: Ollama + OpenAI-compatible + Noop
   logx/            # logging estructurado a stderr
-  mcp/             # servidor JSON-RPC 2.0 + las 87 herramientas MCP (92 registradas − 5 dormidas)
+  mcp/             # servidor JSON-RPC 2.0 + las 88 herramientas MCP (93 registradas − 5 dormidas)
   memory/          # SQLite: observaciones, FTS5, embeddings, grafo, índice IVF,
                    #   telemetría, code memory, ledger de tokens, workflows
   selfupdate/      # `musubi update`: descarga + checksum + auto-reemplazo

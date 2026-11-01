@@ -1,11 +1,11 @@
 package mcp
 
-// Tests de BORDE de las 7 tools del grafo de specs (spec-graph F1): se despachan
-// por handleToolsCall —el MISMO camino que un cliente MCP, con la clasificación
-// read/write y el candado del dispatch— y se afirma sobre la salida SERIALIZADA.
-// El core (GrepSpecs, ResolveSpecPath, BuildGraph) ya tiene su batería en
-// internal/specgraph; lo que se fija ACÁ son los invariantes que la spec declara
-// sobre la TOOL y cuyo sitio de declaración es este handler, no el core:
+// Tests de BORDE de las 8 tools del grafo de specs (spec-graph F1 + recall F3-A):
+// se despachan por handleToolsCall —el MISMO camino que un cliente MCP, con la
+// clasificación read/write y el candado del dispatch— y se afirma sobre la salida
+// SERIALIZADA. El core (GrepSpecs, ResolveSpecPath, BuildGraph, Recall) ya tiene
+// su batería en internal/specgraph; lo que se fija ACÁ son los invariantes que la
+// spec declara sobre la TOOL y cuyo sitio de declaración es este handler, no el core:
 //   - R12: musubi_spec_grep devuelve la lista aunque esté vacía como `[]`, no `null`.
 //   - R15: musubi_spec_create FALLA si el id ya está en uso.
 //   - R14/#6: musubi_spec_graph serializa el DTO con claves en minúscula, no los
@@ -13,12 +13,18 @@ package mcp
 //     un objeto vacío).
 //   - R15(b): musubi_spec_create rechaza un id que YAML no vuelve a leer igual
 //     (p. ej. "1.0" → float 1): la identidad en disco dejaría de ser la pedida.
+//   - musubi_spec_recall: query obligatorio (borde), hits vacíos como `[]` no `null`,
+//     DTO en minúscula, y —el invariante central model-free (R5)— rankea SIN embebedor
+//     (NoopProvider) en vez de rechazar como search_semantic. El sitio de la
+//     degradación es este handler (embed=nil cuando !embedding.Enabled); el core
+//     cubre el resto en recall_test.go.
 // Cada ancla «Sabotaje» lleva su directiva `// arnes:` mecanizada (archivo/de/a)
 // colgada debajo, así el censo del arnés (internal/mcp/arnes_censo_test.go) la
-// cuenta como mecanizada y no como deuda en prosa. Los cuatro sabotajes son una
+// cuenta como mecanizada y no como deuda en prosa. Los sabotajes son una
 // sustitución de texto que compila: R12 cambia el make por un slice nil, R15
 // desarma la compuerta del id duplicado, R14/#6 devuelve el struct crudo en vez
-// del DTO, y R15(b) anula la comparación del round-trip. storewindows_test.go no
+// del DTO, R15(b) anula la comparación del round-trip, y los tres de recall
+// (query, lista, DTO) espejan a los de grep/graph. storewindows_test.go no
 // entra en el censo porque su prosa no arranca con «Sabotaje» (no es un ancla).
 
 import (
@@ -360,5 +366,141 @@ func TestSpecCreateConAnchorRechazaSimboloRoto(t *testing.T) {
 	}
 	if !strings.Contains(specCallText(t, res), "code.go#Foo=") {
 		t.Errorf("el frontmatter debía llevar el ancla con su digest (code.go#Foo=…); salida: %s", specCallText(t, res))
+	}
+}
+
+// TestSpecRecallHandlerRechazaQueryVacio fija el BORDE de recall: query es obligatorio. Un query en
+// blanco no es "traeme todo" —para eso están grep sin patrón o validate—; es un llamado mal formado,
+// y el handler lo corta con codeInvalidParams ANTES de rankear (nada que embeber, nada que puntuar).
+// Un query de sólo espacios también cuenta como vacío (strings.TrimSpace), por eso el caso es "   ".
+//
+// Sabotaje que lo pone en ROJO: anular la compuerta del query vacío, con lo que un query en blanco
+// entra a Recall (keywordScore con qset vacío puntúa 0 para todo) y devuelve hits SIN error, así que
+// el "debía fallar" no se cumple.
+// arnes: archivo="internal/mcp/methods_spec.go"
+// arnes: de="if strings.TrimSpace(args.Query) == \"\" {"
+// arnes: a="if strings.TrimSpace(args.Query) == \"\" && false {"
+func TestSpecRecallHandlerRechazaQueryVacio(t *testing.T) {
+	s := newTestServerWithPath(t, t.TempDir())
+	_, e := call(t, s, "musubi_spec_recall", map[string]interface{}{"query": "   "})
+	if e == nil {
+		t.Fatal("un recall con query en blanco debía fallar, pero pasó")
+	}
+	if e.Code != codeInvalidParams {
+		t.Errorf("esperaba codeInvalidParams por query vacío, obtuve code=%d msg=%q", e.Code, e.Message)
+	}
+	if !strings.Contains(e.Message, "obligatorio") {
+		t.Errorf("el error debía señalar que el query es obligatorio; obtuve: %s", e.Message)
+	}
+}
+
+// TestSpecRecallHandlerSinHitsSerializaListaNoNull fija go-hygiene #6 en el borde de recall: un repo
+// sin specs devuelve "hits":[], no "hits":null. El core ya devuelve make([]SpecHit,0) en el corpus
+// vacío (recall.go), pero el DTO la RE-ARMA en toSpecRecallOut, así que el contrato de lista-no-null
+// tiene un segundo sitio de declaración ACÁ: un cliente MCP que itera la lista no debe tragarse null.
+//
+// Sabotaje que lo pone en ROJO: cambiar en toSpecRecallOut el
+// `hits := make([]specHitOut, 0, len(result.Hits))` por `var hits []specHitOut` (nil ⇒ "hits":null).
+// arnes: archivo="internal/mcp/methods_spec.go"
+// arnes: de="hits := make([]specHitOut, 0, len(result.Hits))"
+// arnes: a="var hits []specHitOut"
+func TestSpecRecallHandlerSinHitsSerializaListaNoNull(t *testing.T) {
+	// Repo sin specs: recall devuelve cero hits. El query es obligatorio pero su valor da igual, no
+	// hay corpus que rankear.
+	s := newTestServerWithPath(t, t.TempDir())
+	res, e := call(t, s, "musubi_spec_recall", map[string]interface{}{"query": "lo que sea"})
+	if e != nil {
+		t.Fatalf("recall sin specs NO debía dar error (model-free, R5): %+v", e)
+	}
+	text := specCallText(t, res)
+	if !strings.Contains(text, `"hits":[]`) {
+		t.Errorf("recall vacío debe serializar \"hits\":[] (no null); salida: %s", text)
+	}
+	if strings.Contains(text, `"hits":null`) {
+		t.Errorf("recall serializó la lista vacía como null (go-hygiene #6 roto); salida: %s", text)
+	}
+}
+
+// TestSpecRecallHandlerSerializaClavesMinuscula fija R14/#6 en el borde de recall: la salida cruza la
+// red con claves en minúscula (DTO con tags json), no con los nombres de campo Go de
+// specgraph.RecallResult/SpecHit, que NO tienen tags —serializarlos directo emitiría "Hits"/"ID"/
+// "Score", y un cliente MCP que parsea en minúscula leería un objeto vacío (musubi-rules #6)—. El
+// handler convierte con toSpecRecallOut. Se crea UNA spec para que haya al menos un hit y el assert
+// mire también las claves de la spec (id/type/path/score), no sólo las del contenedor.
+//
+// Sabotaje que lo pone en ROJO: devolver el resultado crudo en vez del DTO, con lo que la salida
+// vuelve a PascalCase y el assert de minúscula falla (espeja el sabotaje de graph).
+// arnes: archivo="internal/mcp/methods_spec.go"
+// arnes: de="return jsonResult(toSpecRecallOut(result))"
+// arnes: a="return jsonResult(result)"
+func TestSpecRecallHandlerSerializaClavesMinuscula(t *testing.T) {
+	s := newTestServerWithPath(t, t.TempDir())
+	if _, e := call(t, s, "musubi_spec_create", map[string]interface{}{
+		"path": "specs/a/SPEC.md", "id": "s-a", "type": "task-spec", "title": "Alfa",
+	}); e != nil {
+		t.Fatalf("create falló: %+v", e)
+	}
+	res, e := call(t, s, "musubi_spec_recall", map[string]interface{}{"query": "alfa"})
+	if e != nil {
+		t.Fatalf("recall falló: %+v", e)
+	}
+	text := specCallText(t, res)
+	// Las claves del DTO (contenedor + hit) en minúscula. truncated/id/type/path/score no tienen
+	// omitempty, así que aparecen siempre aunque el hit tenga score 0.
+	for _, k := range []string{`"hits":`, `"truncated":`, `"id":`, `"type":`, `"path":`, `"score":`} {
+		if !strings.Contains(text, k) {
+			t.Errorf("la salida de recall debía traer la clave %s en minúscula; salida: %s", k, text)
+		}
+	}
+	// Y NINGUNA en PascalCase: eso sería el struct crudo del core cruzando el borde.
+	for _, k := range []string{`"Hits":`, `"Truncated":`, `"ID":`, `"Type":`, `"Path":`, `"Score":`} {
+		if strings.Contains(text, k) {
+			t.Errorf("la salida de recall filtró la clave %s en PascalCase (DTO sin tags, R14/#6 roto); salida: %s", k, text)
+		}
+	}
+}
+
+// TestSpecRecallHandlerRankeaModelFree es el invariante CENTRAL en el borde (R5): SIN embebedor (el
+// server de test usa embedding.NoopProvider ⇒ Enabled==false ⇒ embed=nil), recall NO rechaza como
+// search_semantic: degrada a keyword y RANKEA. Dos specs, una con el término del query en el título y
+// otra sin él; la que matchea sale primera, con score > 0 y sin error. Es cobertura de comportamiento
+// (como el round-trip), por el camino real del dispatch; no lleva ancla mecanizada porque el sabotaje
+// de R5 vive en el core (recall_test.go) y acá sólo se fija que el borde no lo tape exigiendo embebedor.
+func TestSpecRecallHandlerRankeaModelFree(t *testing.T) {
+	s := newTestServerWithPath(t, t.TempDir())
+	// La que matchea el query ("reintentos" cae en el título ⇒ en el Content crudo que puntúa keyword).
+	if _, e := call(t, s, "musubi_spec_create", map[string]interface{}{
+		"path": "specs/retry/SPEC.md", "id": "spec-retry", "type": "task-spec", "title": "politica de reintentos",
+	}); e != nil {
+		t.Fatalf("create retry falló: %+v", e)
+	}
+	// La que NO matchea.
+	if _, e := call(t, s, "musubi_spec_create", map[string]interface{}{
+		"path": "specs/auth/SPEC.md", "id": "spec-auth", "type": "task-spec", "title": "autenticacion de usuarios",
+	}); e != nil {
+		t.Fatalf("create auth falló: %+v", e)
+	}
+	res, e := call(t, s, "musubi_spec_recall", map[string]interface{}{"query": "reintentos"})
+	if e != nil {
+		t.Fatalf("recall sin embebedor NO debía dar error (R5, model-free): %+v", e)
+	}
+	var out specRecallOut
+	if err := json.Unmarshal([]byte(specCallText(t, res)), &out); err != nil {
+		t.Fatalf("no se pudo parsear recall: %v", err)
+	}
+	if len(out.Hits) == 0 {
+		t.Fatal("recall model-free debía devolver hits, devolvió cero")
+	}
+	// La spec que matchea el query por keyword sale PRIMERA, con score positivo…
+	if out.Hits[0].ID != "spec-retry" {
+		t.Errorf("la spec que matchea el query debía rankear primera; hits[0].ID=%q", out.Hits[0].ID)
+	}
+	if out.Hits[0].Score <= 0 {
+		t.Errorf("el hit que matchea debía tener score > 0 (keyword), dio %v", out.Hits[0].Score)
+	}
+	// …ESTRICTAMENTE por encima de la que no matchea (score 0), probando que rankeó y no sólo listó.
+	if len(out.Hits) > 1 && out.Hits[0].Score <= out.Hits[1].Score {
+		t.Errorf("la spec que matchea (score %v) debía rankear estrictamente sobre la otra (score %v)",
+			out.Hits[0].Score, out.Hits[1].Score)
 	}
 }

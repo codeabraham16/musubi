@@ -62,8 +62,8 @@ func WithInstruccionesParaElAgente() Option {
 // tokens; TestElNucleoEsLoQueLasInstruccionesNombranYCabe acota ese costo.
 //
 // EL BLOQUE DE SPECS (las 4 últimas líneas) a propósito NO nombra ninguna musubi_spec_*: manda a la
-// skill spec-graph, no a las 7 tools. Nombrar una la metería al núcleo —que ya está a tope (ver
-// techoDelNucleo)—, y la skill, que el mapa de abajo igual lista, lleva el detalle de las 7 sin
+// skill spec-graph, no a las 8 tools. Nombrar una la metería al núcleo —que ya está a tope (ver
+// techoDelNucleo)—, y la skill, que el mapa de abajo igual lista, lleva el detalle de las 8 sin
 // costar tokens en cada sesión de cada repo. Nombrarlas acá «para ayudar» rompe
 // TestElNucleoEsLoQueLasInstruccionesNombranYCabe.
 const instruccionesAgente = `Musubi es la memoria persistente de este proyecto: lo aprendido en sesiones anteriores y en otras máquinas, y lo que decidió la persona. Usala por iniciativa propia, sin esperar a que te la pidan:
