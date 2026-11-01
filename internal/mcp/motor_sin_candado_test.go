@@ -563,6 +563,16 @@ func TestG8MapaDeAutorizacionIntacto(t *testing.T) {
 		// mismo matiz propio: sin concesiones, un reader recibe la actividad en cero y sus
 		// contadores de ocultos en más de cero — que es la respuesta correcta, no una vacía.
 		"musubi_fleet_contexto": true,
+		// Subsistema spec-graph · las CUATRO lecturas del grafo de specs tipadas. AMPLIACIÓN
+		// DELIBERADA: un reader navega las specs igual que lee el código o la memoria —get trae un
+		// nodo con sus enlaces directos e inversos, graph recorre el grafo, grep busca en contenido
+		// y metadata, validate reporta colgantes y ciclos—. Son read_only=true, así que canCall las
+		// abre. Las TRES escrituras (musubi_spec_create, musubi_spec_update, musubi_spec_delete)
+		// mutan archivos SPEC.md del repo y NO están en este mapa: un reader no las puede llamar.
+		"musubi_spec_get":      true,
+		"musubi_spec_graph":    true,
+		"musubi_spec_grep":     true,
+		"musubi_spec_validate": true,
 	}
 
 	for _, e := range s.tools {

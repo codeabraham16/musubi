@@ -57,7 +57,7 @@ func projectTriggers(stack []detector.StackResult) []string {
 	return triggers
 }
 
-// cognitiveSkills devuelve el bundle de 4 skills cognitivas, con los triggers de
+// cognitiveSkills devuelve el bundle de skills cognitivas de arranque, con los triggers de
 // análisis/deducción adaptados al stack detectado.
 func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 	stackTriggers := projectTriggers(stack)
@@ -157,6 +157,21 @@ func cognitiveSkills(stack []detector.StackResult) []skills.Skill {
 				"3. En implement NO releas lo ya visto: recuperá los artefactos previos con musubi_recall query='sdd/<change>' y los archivos con musubi_recall_code.\n" +
 				"4. En verify sé adversarial (ver la skill adversarial-review). Si una fase abarca trabajo paralelizable, delegá con la pizarra (orchestrate-multiagent) y medí el ahorro con musubi_work action=savings.\n" +
 				"5. El run es resumible: en otra sesión retomás con musubi_sdd action=status change=<c>.\n",
+		},
+		{
+			Name:          "spec-graph",
+			Description:   "Navegá y mantené las specs TIPADAS del repo (archivos SPEC.md en un grafo por tipo/parent/depends-on) con las 7 tools musubi_spec_*. Usá antes de cambiar el contrato o la responsabilidad de un módulo, al crear o enlazar una spec, y al validar el grafo cuando cerrás un cambio.",
+			Triggers:      []string{"*"},
+			Capabilities:  []string{},
+			AlwaysBecause: "las specs tipadas cruzan todo el ciclo de un cambio (consultar antes, actualizar durante, validar al cerrar); el disparador es la fase, no el archivo abierto",
+			AppliesTo:     []string{skills.FasePlanificar, skills.FaseImplementar, skills.FaseRevisar},
+			Rules: "Este repo lleva specs TIPADAS: un SPEC.md al lado de cada módulo, con frontmatter YAML (id, type, title obligatorios) enlazado en un grafo. Navegalas y editalas SÓLO con las 7 tools musubi_spec_*; nunca edites el frontmatter a mano (romperías el round-trip lossless que preserva comentarios, orden y CRLF):\n" +
+				"1. VOCABULARIO. 5 tipos, de lo general a lo específico, encadenados por parent: goal-and-requirements → architecture-design → module-design → submodule-design → task-spec. 4 enlaces: parent (árbol, un solo target), depends-on / references / implements (DAG, varios). 5 estados: draft, active, stale, done, deprecated. covers y tags son metadata, NO aristas.\n" +
+				"2. CONSULTAR antes de tocar un módulo: musubi_spec_get id=<id> trae su nodo + enlaces hacia adelante e inversos; musubi_spec_graph root=<id> direction=subtree|ancestors|neighbors recorre el grafo (depth default 1); musubi_spec_grep pattern=<texto> busca en contenido y metadata (filtros type/tag/parent/dependsOn, paginado).\n" +
+				"3. CREAR→ENLAZAR→VALIDAR cuando el cambio altera un contrato: musubi_spec_create path=<rel.md> id=<id> type=<uno de los 5> title=<…> [parent, dependsOn, references, implements] escribe el frontmatter + headings por tipo; la PROSA es tuya desde el minuto cero y las tools no la vuelven a tocar. Enlazá o reclasificá con musubi_spec_update id=<id> set={…} addList={depends-on:[<id>]} removeList={…}. El id NO se renombra ni se borra; el status lo pone una persona, ninguna tool lo auto-escribe.\n" +
+				"4. VALIDAR al cerrar o auditar un cambio que tocó specs: musubi_spec_validate (sin params) reporta enlaces colgantes, ids duplicados, ciclos de parent, type fuera del vocabulario, y archivos llamados SPEC.md que no parsean como spec. Corralo antes de dar el cambio por cerrado.\n" +
+				"5. musubi_spec_delete id=<id> borra la spec y su archivo; deja enlaces colgantes, así que corré musubi_spec_validate después.\n" +
+				"- El SPEC.md es fractal: va al lado del módulo que describe. Antes de crear uno, consultá el grafo para no duplicar id ni colgar el parent.\n",
 		},
 		{
 			Name:          "adversarial-review",

@@ -93,6 +93,15 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		// correlación, no un recall, y contarla como uso inflaría la señal de «esta nota se
 		// usa» con cada investigación de una máquina.
 		"musubi_fleet_contexto": true,
+		// Subsistema spec-graph (F1): las CUATRO lecturas del grafo de specs. No tocan la DB ni
+		// bumpean nada; por dentro consultan el cache del Index, que protege su PROPIO sync.Mutex
+		// interno —no dispatchMu—, así que son readOnly por su EFECTO sobre el repo, que es nulo.
+		// Las TRES escrituras (musubi_spec_create/update/delete) mutan archivos SPEC.md y quedan
+		// fuera de este mapa en su cero (readOnly=false), como corresponde a un candado exclusivo.
+		"musubi_spec_grep":     true,
+		"musubi_spec_get":      true,
+		"musubi_spec_graph":    true,
+		"musubi_spec_validate": true,
 	}
 	for i := range s.tools {
 		name := s.tools[i].Name
@@ -148,6 +157,16 @@ func TestConcurrentReadDispatch(t *testing.T) {
 		mkReq(2, "tools/call", callReqJSON("musubi_recall_facts", map[string]interface{}{"entity": "x"})),
 		mkReq(3, "tools/call", callReqJSON("musubi_conflicts", map[string]interface{}{})),
 		mkReq(4, "tools/list", nil),
+		// Las 4 lecturas del grafo de specs: todas pasan por s.specIndex.Graph()/ContentEntries(),
+		// que construye el cache bajo el Mutex interno del Index. Dispararlas desde 32 goroutines con
+		// dispatchMu en RLock las hace converger sobre ese cache a la vez: si al Index le faltara su
+		// candado, -race acusaría la escritura concurrente del map del grafo también por acá. (get
+		// resuelve a not-found sobre el índice vacío del temp dir, que es una respuesta válida: lo que
+		// se ejercita es el camino de LECTURA compartido, no el resultado.)
+		mkReq(5, "tools/call", callReqJSON("musubi_spec_grep", map[string]interface{}{"pattern": "x"})),
+		mkReq(6, "tools/call", callReqJSON("musubi_spec_get", map[string]interface{}{"id": "x"})),
+		mkReq(7, "tools/call", callReqJSON("musubi_spec_graph", map[string]interface{}{"root": "x", "direction": "subtree"})),
+		mkReq(8, "tools/call", callReqJSON("musubi_spec_validate", map[string]interface{}{})),
 	}
 
 	var wg sync.WaitGroup

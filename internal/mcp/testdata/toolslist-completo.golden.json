@@ -2057,6 +2057,238 @@
           }
         }
       }
+    },
+    {
+      "name": "musubi_spec_grep",
+      "description": "Busca un patrón (substring o regex) sobre el cuerpo de las specs del repo, con filtros de frontmatter (type/tag/parent/dependsOn) y paginado. Devuelve páginas 'path:line: snippet'. ignoreCase por defecto true. Model-free.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "dependsOn": {
+            "type": "string",
+            "description": "Filtrar por un target presente en depends-on."
+          },
+          "ignoreCase": {
+            "type": "boolean",
+            "description": "Ignorar mayúsculas/minúsculas (default true)."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Máximo de matches por página (1..200, default 200)."
+          },
+          "offset": {
+            "type": "integer",
+            "description": "Cuántos matches saltear para paginar (\u003e=0). Usá el nextOffset devuelto."
+          },
+          "parent": {
+            "type": "string",
+            "description": "Filtrar por el campo parent del frontmatter."
+          },
+          "pattern": {
+            "type": "string",
+            "description": "El patrón a buscar. Substring por defecto; regex si regex=true."
+          },
+          "regex": {
+            "type": "boolean",
+            "description": "Interpretar pattern como expresión regular (default false)."
+          },
+          "tag": {
+            "type": "string",
+            "description": "Filtrar por una tag presente en el frontmatter."
+          },
+          "type": {
+            "type": "string",
+            "description": "Filtrar por el campo type del frontmatter."
+          }
+        },
+        "required": [
+          "pattern"
+        ]
+      }
+    },
+    {
+      "name": "musubi_spec_get",
+      "description": "Devuelve una spec por id: su frontmatter (id/type/title/path y demás campos) y sus enlaces hacia adelante (los que declara) e inversos (quién la apunta). Sin el cuerpo en prosa — para eso está musubi_spec_grep.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "El id de la spec a traer."
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    {
+      "name": "musubi_spec_graph",
+      "description": "Recorta el grafo de specs desde un nodo raíz: subtree (descendientes por parent), ancestors (ascendientes por parent) o neighbors (vecinos por una clase de enlace, depends-on por defecto). Devuelve nodes + edges + missing (targets referenciados que no existen).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "depth": {
+            "type": "integer",
+            "description": "Profundidad en saltos (default 1)."
+          },
+          "direction": {
+            "type": "string",
+            "description": "Dirección del recorte: subtree | ancestors | neighbors."
+          },
+          "edge": {
+            "type": "string",
+            "description": "Para neighbors: la clase de enlace a seguir (default depends-on)."
+          },
+          "root": {
+            "type": "string",
+            "description": "El id del nodo raíz del recorte."
+          }
+        },
+        "required": [
+          "root",
+          "direction"
+        ]
+      }
+    },
+    {
+      "name": "musubi_spec_validate",
+      "description": "Valida el grafo de specs: enlaces colgantes, ids duplicados, ciclos de parent, type fuera del vocabulario, y archivos llamados SPEC.md que no son spec (id/type ausente o YAML malformado). Devuelve valid=true si no hay nada que reportar.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "musubi_spec_create",
+      "description": "Crea una spec nueva en path (root-relative, debe terminar en .md). Arma el frontmatter (id/type/title obligatorios) y un cuerpo con headings por type. Falla si el archivo ya existe, el id ya está en uso, o la ruta no resuelve dentro del repo.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "covers": {
+            "type": "array",
+            "description": "rutas o símbolos que esta spec cubre (no son aristas).",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          },
+          "dependsOn": {
+            "type": "array",
+            "description": "ids de specs de las que ésta depende.",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          },
+          "id": {
+            "type": "string",
+            "description": "Identidad de la spec, única en el repo."
+          },
+          "implements": {
+            "type": "array",
+            "description": "ids de specs que ésta implementa.",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          },
+          "parent": {
+            "type": "string",
+            "description": "id de la spec padre (árbol)."
+          },
+          "path": {
+            "type": "string",
+            "description": "Ruta root-relative del archivo nuevo, terminada en .md (p. ej. internal/foo/SPEC.md)."
+          },
+          "references": {
+            "type": "array",
+            "description": "ids de specs referenciadas.",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          },
+          "status": {
+            "type": "string",
+            "description": "Estado opcional: draft | active | stale | done | deprecated."
+          },
+          "tags": {
+            "type": "array",
+            "description": "etiquetas libres (no son aristas).",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          },
+          "title": {
+            "type": "string",
+            "description": "Título legible de la spec."
+          },
+          "type": {
+            "type": "string",
+            "description": "Uno de: goal-and-requirements, architecture-design, module-design, submodule-design, task-spec."
+          }
+        },
+        "required": [
+          "path",
+          "id",
+          "type",
+          "title"
+        ]
+      }
+    },
+    {
+      "name": "musubi_spec_update",
+      "description": "Edita el frontmatter de una spec SIN tocar la prosa (lossless: comentarios, orden de claves, BOM y line-ending intactos). set (escalares), remove, addList y removeList (campos lista). No se puede renombrar el id, hacer set de un campo lista, quitar id/type, ni dejar el archivo sin id+type.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "addList": {
+            "type": "object",
+            "description": "Items a agregar a un campo lista (clave→items), con union-dedup."
+          },
+          "id": {
+            "type": "string",
+            "description": "El id de la spec a editar."
+          },
+          "remove": {
+            "type": "array",
+            "description": "Campos a borrar. No admite id ni type.",
+            "items": {
+              "type": "string",
+              "description": ""
+            }
+          },
+          "removeList": {
+            "type": "object",
+            "description": "Items a quitar de un campo lista (clave→items)."
+          },
+          "set": {
+            "type": "object",
+            "description": "Campos escalares a fijar (clave→valor). No admite id ni campos lista."
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    {
+      "name": "musubi_spec_delete",
+      "description": "Borra la spec con ese id. Avisa de correr musubi_spec_validate: los enlaces que otras specs tenían hacia ésta quedan colgantes (F1 no los repara).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "El id de la spec a borrar."
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
     }
   ]
 }
