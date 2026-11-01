@@ -208,8 +208,8 @@ func esquemaDe(t *testing.T, e *DbEngine) map[string]string {
 // Sabotaje que la hace fallar: llamar a SembrarPlantillaDePruebas desde cualquier archivo que no
 // sea de prueba.
 // arnes: archivo="internal/memory/codepath.go"
-// arnes: de="\tsum := sha256.Sum256(data)\n\treturn hex.EncodeToString(sum[:]), nil\n}\n"
-// arnes: a="\tsum := sha256.Sum256(data)\n\treturn hex.EncodeToString(sum[:]), nil\n}\n\n// acelerarArranqueDeLaMemoria deja la base ya migrada antes de abrirla.\nfunc acelerarArranqueDeLaMemoria(dir string) error {\n\treturn SembrarPlantillaDePruebas(dir)\n}\n"
+// arnes: de="func FileFingerprint(root, path string) (string, error) { return codeintel.FileFingerprint(root, path) }"
+// arnes: a="func FileFingerprint(root, path string) (string, error) { return codeintel.FileFingerprint(root, path) }\n\n// acelerarArranqueDeLaMemoria deja la base ya migrada antes de abrirla.\nfunc acelerarArranqueDeLaMemoria(dir string) error {\n\treturn SembrarPlantillaDePruebas(dir)\n}\n"
 func TestLaPlantillaDePruebasNoTieneLlamadorDeProduccion(t *testing.T) {
 	raiz := filepath.Join("..", "..")
 	gos, err := arbol.ConSufijo(raiz, ".go")

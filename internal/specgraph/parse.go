@@ -36,6 +36,10 @@ const (
 	FieldImplements = "implements"
 	FieldCovers     = "covers"
 	FieldTags       = "tags"
+	// FieldAnchors (F2) ata una spec al código del que habla: una lista de `ruta` o
+	// `ruta#símbolo` relativos a la raíz del repo. NO es arista del grafo (como covers/tags);
+	// la rancedumbre de sus anclas se computa en anchors.go.
+	FieldAnchors = "anchors"
 )
 
 // Vocabulario cerrado. Se declaran como slices nuevos (no con append sobre
@@ -70,15 +74,15 @@ var (
 	// ListLinkFields: campos de enlace con múltiples targets (DAG).
 	ListLinkFields = []string{FieldDependsOn, FieldReferences, FieldImplements}
 
-	// ListFields: todos los campos lista (enlaces + covers + tags). covers y
-	// tags son listas pero NO aristas del grafo.
-	ListFields = []string{FieldDependsOn, FieldReferences, FieldImplements, FieldCovers, FieldTags}
+	// ListFields: todos los campos lista (enlaces + covers + tags + anchors). covers,
+	// tags y anchors son listas pero NO aristas del grafo.
+	ListFields = []string{FieldDependsOn, FieldReferences, FieldImplements, FieldCovers, FieldTags, FieldAnchors}
 
 	// FieldOrder: orden canónico al serializar frontmatter nuevo (create).
 	FieldOrder = []string{
 		FieldID, FieldType, FieldStatus, FieldTitle,
 		FieldParent,
-		FieldDependsOn, FieldReferences, FieldImplements, FieldCovers, FieldTags,
+		FieldDependsOn, FieldReferences, FieldImplements, FieldCovers, FieldTags, FieldAnchors,
 	}
 
 	// LinkKinds: las 4 clases de arista (parent + los 3 de lista). Definido en
