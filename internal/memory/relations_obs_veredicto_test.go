@@ -263,6 +263,31 @@ func TestUnaReDeteccionNoCuentaComoArbitrajeEnReadiness(t *testing.T) {
 	if n := resueltasEnVentana("tras re-arbitrar"); n != 1 {
 		t.Errorf("un veredicto NUEVO debe contar en la ventana, contó %d", n)
 	}
+
+	// Y LA CONTRACARA OTRA VEZ, PERO POR EL CAMINO GUARDADO, que es lo que la de arriba NO mide.
+	// ResolveObsRelation es un UPDATE sin guarda (su SET no pasa por setConservandoVeredicto), así que
+	// un candado DENTRO del upsert —`updated_at` recortado a la mitad 1 de la condición, o fijado a la
+	// fecha de la fila— la deja verde igual. El camino que sí cruza la guarda es UpsertObsRelation
+	// sobre un par QUE YA EXISTE, y es el que usan de verdad el dedup, RestoreDuplicate y el
+	// destilador cuando estacionan su veredicto.
+	if _, err := e.db.Exec(
+		`UPDATE observation_relations SET updated_at=datetime('now','-90 days')`); err != nil {
+		t.Fatal(err)
+	}
+	if n := resueltasEnVentana("re-envejecida"); n != 0 {
+		t.Fatalf("precondición de la 2ª contracara: la ventana debe ver 0, vio %d", n)
+	}
+	if _, err := e.UpsertObsRelation(ObsRelation{
+		SourceID: pend[0].SourceID, TargetID: pend[0].TargetID,
+		Relation: RelConflictsWith, Status: RelStatusResolved,
+		ResolvedBy: "user", Reason: "arbitrada por upsert, no por Resolve",
+	}); err != nil {
+		t.Fatalf("UpsertObsRelation (veredicto explícito): %v", err)
+	}
+	if n := resueltasEnVentana("tras el veredicto por upsert"); n != 1 {
+		t.Errorf("un veredicto explícito POR EL UPSERT no fechó su arbitraje (ventana vio %d): la"+
+			" guarda quedó de candado y readiness congela «alguien arbitra todavía» en el pasado", n)
+	}
 }
 
 // LO QUE SE DEVUELVE ES LO QUE QUEDÓ EN LA BASE, NO LO QUE ENTRÓ. Hasta que existió la guarda las dos
@@ -441,6 +466,13 @@ func TestElDetectorSiRefrescaUnVeredictoPropio(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// La fecha se envejece ANTES del refresco, y no es decorado: CURRENT_TIMESTAMP tiene resolución
+	// de segundos, así que dos upserts seguidos escriben la MISMA marca y una aserción de «la fecha
+	// se movió» pasaría con la fecha congelada. Con la fila a 90 días, sólo pasa si se movió.
+	if _, err := e.db.Exec(
+		`UPDATE observation_relations SET updated_at=datetime('now','-90 days')`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := e.UpsertObsRelation(ObsRelation{
 		SourceID: "a", TargetID: "b", Relation: RelSupersedes, Status: RelStatusResolved,
 		ResolvedBy: RelResolvedByHeuristic, Reason: "mismo topic_key y similitud alta",
@@ -454,6 +486,23 @@ func TestElDetectorSiRefrescaUnVeredictoPropio(t *testing.T) {
 	if all[0].Relation != RelSupersedes {
 		t.Errorf("el detector debe poder refrescar su PROPIO veredicto, quedó %q: la guarda se"+
 			" volvió un candado", all[0].Relation)
+	}
+	// LAS TRES COLUMNAS, UNA POR UNA. Aseverar sólo Relation dejaba pasar un candado parcial: recortar
+	// la condición a su primera mitad en `reason` o en `updated_at` congelaba ESA columna y el test
+	// seguía verde, porque mira otra. El refresco es de la FILA, no de una celda.
+	if all[0].Reason != "mismo topic_key y similitud alta" {
+		t.Errorf("el refresco dejó la razón VIEJA (%q): la fila afirma un veredicto con el"+
+			" fundamento del anterior", all[0].Reason)
+	}
+	var vieja int
+	if err := e.db.QueryRow(
+		`SELECT COUNT(*) FROM observation_relations WHERE updated_at < datetime('now','-1 day')`,
+	).Scan(&vieja); err != nil {
+		t.Fatal(err)
+	}
+	if vieja != 0 {
+		t.Errorf("el refresco del detector no movió updated_at: la fila sigue fechada a 90 días," +
+			" así que readiness lee el veredicto de hoy como arbitraje de hace tres meses")
 	}
 }
 
@@ -535,5 +584,61 @@ func TestLaDeteccionRefrescaLaConfianzaDeUnaFilaResuelta(t *testing.T) {
 	if all[0].Confidence != 0.91 {
 		t.Errorf("confidence debía refrescarse a 0.91, quedó %v: la fila afirma una similitud que"+
 			" no es la que se midió ahora", all[0].Confidence)
+	}
+}
+
+// LA GUARDA ES FAIL-CLOSED, Y ESO TENÍA QUE QUEDAR MEDIDO Y NO SÓLO ESCRITO. La condición pregunta
+// por `status <> 'pending'` y no por `= 'resolved'`, para que un estado FUTURO quede protegido por
+// default en vez de perder la guarda en silencio; es además el mismo predicado con el que readiness
+// cuenta una relación como resuelta, así que guarda y lector no pueden divergir sin que se note.
+//
+// Era la única mitad de la regla que vivía en prosa: un panel adversarial cambió el predicado a
+// `= 'resolved'` y el sabotaje sobrevivió al paquete entero y al repo entero, porque todos los demás
+// custodios usan uno de los dos status conocidos, donde los dos predicados son EQUIVALENTES. Una
+// tabla de verdad de 36 celdas tampoco lo veía: recorría exactamente esos dos valores.
+//
+// El status raro se siembra por SQL a propósito. No se puede llegar a él por la API —sólo existen
+// dos constantes y los escritores usan una de ellas—, pero la columna es `TEXT NOT NULL DEFAULT
+// 'pending'` SIN CHECK, así que el día que alguien agregue un estado (archivada, vencida, en
+// disputa) el camino existe. Esto es lo que avisa, en rojo, que agregarlo desprotege la fila.
+func TestUnStatusFuturoNoPierdeLaGuarda(t *testing.T) {
+	e := newTestEngine(t)
+	for _, id := range []string{"a", "b"} {
+		if err := e.SaveObservation(id, "topic/x", "contenido "+id, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := e.UpsertObsRelation(ObsRelation{
+		SourceID: "a", TargetID: "b", Relation: RelRelated, Status: RelStatusResolved,
+		ResolvedBy: "user", Reason: "las dos valen, no se tapan",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Un estado que la API todavía no sabe escribir, pero que el esquema acepta.
+	if _, err := e.db.Exec(
+		`UPDATE observation_relations SET status='archived'`); err != nil {
+		t.Fatal(err)
+	}
+
+	// La detección vuelve a proponer el par, como en cada save_observation.
+	if _, err := e.UpsertObsRelation(ObsRelation{
+		SourceID: "a", TargetID: "b", Relation: RelPending, Status: RelStatusPending,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var relation, status, resolvedBy, reason string
+	if err := e.db.QueryRow(
+		`SELECT relation, status, COALESCE(resolved_by,''), COALESCE(reason,'')
+		   FROM observation_relations`).Scan(&relation, &status, &resolvedBy, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if status != "archived" {
+		t.Errorf("un status que la guarda no conoce perdió la protección: quedó %q. La guarda tiene"+
+			" que ser fail-CLOSED, o agregar un estado desarma el blindaje en silencio", status)
+	}
+	if relation != RelRelated || resolvedBy != "user" || reason != "las dos valen, no se tapan" {
+		t.Errorf("el veredicto de la persona se perdió con un status desconocido:"+
+			" relation=%q resolved_by=%q reason=%q", relation, resolvedBy, reason)
 	}
 }

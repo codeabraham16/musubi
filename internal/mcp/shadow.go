@@ -141,12 +141,39 @@ func (w *shadowWorker) encolar(t trabajoSombra) bool {
 // tenga veredicto, así que un `pending` que llega acá es siempre propuesta del detector; y una fila
 // firmada `heuristic` es decisión del detector igual, porque la guarda lo deja refrescar lo suyo.
 //
-// ⚠️ LÍMITE ACEPTADO, para que no se lea como cobertura total: cuando lo conservado es un veredicto
-// PROPIO del detector contra un `pending` entrante, lo que se anota es una decisión suya VIEJA
-// pareada con los puntajes de hoy (lex/cosine sí se refrescan). La procedencia no miente —sigue
-// siendo del heurístico—, pero el pareo temporal queda corrido. Taparlo requiere que
-// `DetectRelations` le pase al llamador lo que decidió ADEMÁS de lo que quedó, o sea un cambio de
-// firma con sus callers; no entra en el alcance de este arreglo.
+// ⚠️ LÍMITE ACEPTADO, y el párrafo que decía esto estaba MAL DECLARADO hasta el 2026-11-01 (lo
+// midieron tres lentes de un panel adversarial, cada uno por su cuenta). Decía «el pareo temporal
+// queda corrido», y el desfasaje no es del TIEMPO: es DEL VALOR.
+//
+// Cuando lo conservado es un veredicto PROPIO del detector contra un `pending` entrante, la fila
+// retiene `relation`/`status`/`resolved_by` del veredicto viejo pero `lex_score` se refresca SIN
+// guarda (`relations_obs.go`: la línea de `lex_score` queda fuera de setConservandoVeredicto, sin
+// CASE, y la detección llena siempre Lex, así que el refresco es INCONDICIONAL). Resultado: una fila
+// `(related, resolved, heuristic, lex=0.464)` — una tupla que el heurístico NO PUEDE EMITIR, porque
+// sus dos únicas ramas de auto-resolución cuelgan de `lex >= AutoResolveThreshold` (0.7 por
+// defecto). La procedencia no miente, pero el PAR procedencia-señal sí: afirma que el heurístico
+// resolvió con un puntaje con el que nunca habría resuelto.
+//
+// DÓNDE SE VE, que es lo que lo hace algo más que una impureza interna: cae en el balde `related` de
+// la tabla de `musubi conflicts shadow`, justo en la columna rotulada RANGO LÉXICO —y esa columna es
+// la pregunta por la que esta medición existe, «¿el umbral está bien puesto?»—. El status raro no se
+// nota ahí, porque la tabla agrupa por `heur_relation`.
+//
+// CUÁNDO APARECE DE VERDAD: hacen falta tres cosas a la vez — que el valor refrescado CRUCE el
+// umbral, en el balde `related`, y tras una EDICIÓN de una de las dos notas. Medido sobre el corpus
+// real de este repo el 2026-11-01: 1101 relaciones, todas `resolved`, CERO pares imposibles
+// (`resolved`+`heuristic` con lex por debajo del umbral) y `shadow_verdicts` vacía. O sea: hoy la
+// exposición es nula, y por eso esto queda declarado y no tapado.
+//
+// Y EL COSTO DE TAPARLO TAMBIÉN ESTABA MAL DECLARADO: no hace falta un cambio de firma de
+// `DetectRelations` «con sus callers» —son TRES en producción, no los once que sugiere contar las
+// ocurrencias en los tests—. Alcanza una pantalla model-free acá mismo: descartar la relación cuyo
+// `Lex` quedó por debajo de `AutoResolveThreshold` mientras la fila dice `resolved`+`heuristic`, y
+// contarla aparte como se cuentan los ajenos. Queda sin hacer por decisión de alcance, no por costo.
+//
+// ⚠️ Y OJO CON EL RASTRO: `ajenos` y `tirados` llegan SÓLO a la línea de log del apagado (ver Run).
+// NO salen en la tabla de `musubi conflicts shadow`, así que quien la lea no se entera de cuánto se
+// recortó el corpus. Es log, no reporte: para saber el tamaño del recorte hay que mirar el journal.
 func (s *McpServer) encolarSombra(rels []memory.ObsRelation) {
 	if s.shadow == nil {
 		return
