@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -268,7 +269,9 @@ func TestEvidenciaDeFrescuraTraeLosCrudos(t *testing.T) {
 // llevaría a 2/3 = 0.67. Con los dos chequeos de volumen en verde el puntaje ya sería 1.0 y el
 // sabotaje no movería el número — el test pasaría sin medir el daño que declara.
 //
-// Sabotaje: borrar el `return` de la rama arbolFueraDeAlcance y agregar el chequeo igual.
+// Sabotaje: borrar el `return` de la rama arbolFueraDeAlcance. Lo que cae NO es el chequeo —la
+// guarda de los dos denominadores lo frena igual, y por eso este sabotaje quedaba VERDE— sino el
+// MOTIVO, que pasa a decir que no hay archivos cuando lo que pasa es que el árbol es federado.
 // arnes: archivo="internal/mcp/methods_readiness.go"
 // arnes: de="marcaría todo como fantasma\"\n\t\treturn\n\t}"
 // arnes: a="marcaría todo como fantasma\"\n\t}"
@@ -296,9 +299,29 @@ func TestDondeNoAplicaNoSeAgregaElChequeo(t *testing.T) {
 		t.Errorf("la dimensión puntúa %.2f, esperaba 0.50 (1 de 2 chequeos de volumen). "+
 			"0.67 significa que ganó un tercer chequeo gratis", d.Score)
 	}
-	if _, ok := d.Evidence["frescura_no_medida"]; !ok {
+	// EL MOTIVO TIENE QUE SER EL DE ESTA RAMA, Y NO SÓLO ESTAR. Que exista no alcanza: hay DOS
+	// guardas en serie que publican `frescura_no_medida` con textos distintos, y la de abajo
+	// SOBRESCRIBE a ésta si el flujo le llega. Verificar sólo la presencia dejaba el sabotaje de
+	// esta rama en VERDE —lo cazó `arnes -overlay`, que `-validar` no ve—: quitarle el `return` no
+	// deja pasar el chequeo, porque `graphFreshness` tiene su PROPIA guarda de
+	// `arbolFueraDeAlcance()` (methods_codegraph.go) y vuelve con los cinco en cero, así que el
+	// flujo cae en la guarda de los dos denominadores y sale por ahí. El chequeo sigue sin
+	// agregarse, los contadores siguen sin publicarse, y lo único que cambia es el DIAGNÓSTICO.
+	//
+	// Y eso es justo lo que no da igual. «No hay un solo archivo contra el que medir» le dice al
+	// operador que indexe; «el árbol no está en este disco» le dice que no hay nada que hacer. Dos
+	// remedios opuestos para el mismo campo del tablero, y el equivocado manda a trabajar al que no
+	// tiene trabajo. Un invariante con dos guardas no se custodia mirando lo que las dos comparten:
+	// se custodia mirando lo que las distingue.
+	motivo, _ := d.Evidence["frescura_no_medida"].(string)
+	switch {
+	case motivo == "":
 		t.Error("falta evidence[frescura_no_medida]: no medir es un hecho del reporte, " +
 			"y callarlo deja la dimensión indistinguible de una donde la frescura dio bien")
+	case !strings.Contains(motivo, "no está en este disco"):
+		t.Errorf("evidence[frescura_no_medida] = %q. El árbol está fuera de alcance, así que el "+
+			"motivo tiene que ser ÉSE y no el de los denominadores en cero: el primero no tiene "+
+			"remedio y el segundo manda a indexar", motivo)
 	}
 	// Y no inventa podredumbre: los contadores no se publican donde no se midieron.
 	for _, clave := range []string{"stale", "ghosts", "missing"} {
@@ -405,11 +428,21 @@ func TestElUmbralDeFrescuraEsProporcional(t *testing.T) {
 //
 // Si el grafo nunca se indexó, la dimensión vale 0 por la regla de oro de readiness: «una señal no
 // observada puntúa cero, no se saltea; no medir no puede subir el puntaje». Agregarle el chequeo de
-// frescura la rompe de la peor forma: en un proyecto sin código indexable los tres contadores dan
-// cero, el chequeo PASA, y una dimensión SIN DATO termina puntuando 1.00. O sea exactamente el
-// premio por no medir que ese archivo existe para impedir.
+// frescura la rompe por otro lado: la dimensión empieza a PUBLICAR un chequeo y cinco contadores
+// sobre un índice que no existe. La guarda protege el CONTRATO —una dimensión sin dato no trae
+// chequeos, ni en verde ni en rojo— y de paso el costo: medir frescura es leer y hashear el árbol
+// entero para un veredicto que ya está cerrado.
 //
-// Montaje: grafo vacío y un árbol sin un solo archivo indexable.
+// ⚠️ NO protege el PUNTAJE, aunque este comentario lo afirmó hasta que un panel adversarial lo midió
+// (2026-11-01). Decía que sin la guarda la dimensión terminaría «puntuando 1.00». Ese 1.00 es
+// INALCANZABLE: sin nodos el grafo no declara archivos, así que `enGrafo == 0` y el loop de
+// `graphFreshness` deja `missing == enDisco`, o sea el eje en 1.0 —ROJO SEGURO— si hay algo en
+// disco, y si no hay nada corta la guarda de los dos denominadores en cero. Medido: Score=0.00 en
+// base Y con el sabotaje. ESTE TEST CAE POR `len(Checks)`, no por el puntaje.
+//
+// Montaje: grafo vacío y un árbol con UN `.go` indexable que ese grafo jamás vio. El árbol vacío
+// —que es lo que este test montaba— no servía: con los dos denominadores en cero la guarda de abajo
+// corta antes, el chequeo no se agrega por otro motivo, y el sabotaje dejaba la suite en verde.
 //
 // Sabotaje: borrar la guarda `if !dim.Observed { return }`.
 // arnes: archivo="internal/mcp/methods_readiness.go"
@@ -421,7 +454,9 @@ func TestDimensionSinDatoNoGanaElChequeo(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { engine.Close() })
-	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{}) // árbol vacío, grafo vacío
+	raiz := t.TempDir() // el árbol TIENE un .go indexable que el grafo (vacío) jamás vio
+	escribirGo(t, raiz, "sin_indexar.go", "package p\n\nfunc X() {}\n")
+	s := NewMcpServer(engine, raiz, embedding.NoopProvider{})
 
 	// DENOMINADOR 1: por la rama del árbol fuera de alcance el chequeo tampoco se agregaría, y el
 	// test pasaría por el motivo equivocado — mediría I4, no esto.
@@ -438,14 +473,28 @@ func TestDimensionSinDatoNoGanaElChequeo(t *testing.T) {
 		t.Fatalf("la dimensión quedó observada con el grafo vacío: %+v", d.Evidence)
 	}
 
+	// DENOMINADOR 3: el árbol tiene que traer un indexable que el grafo no vio, o la guarda de los
+	// dos denominadores en cero corta antes y el chequeo falta por OTRO motivo — el test pasaría por
+	// la razón equivocada, que es justo lo que le pasaba. Se mide llamando a `graphFreshness`
+	// directo y NO leyendo la evidencia: en esta rama la guarda corta antes de publicarla.
+	_, _, missing, enGrafo, enDisco := s.graphFreshness(s.scopedCtx(context.Background()))
+	if enGrafo != 0 || enDisco < 1 || missing < 1 {
+		t.Fatalf("el montaje no reproduce el estado: enGrafo=%d (esperaba 0), enDisco=%d y missing=%d "+
+			"(esperaba >= 1 los dos). Hace falta un .go en la raíz que el grafo nunca haya visto",
+			enGrafo, enDisco, missing)
+	}
+
 	// NUMERADOR.
 	if len(d.Checks) != 0 {
-		t.Errorf("una dimensión sin dato trae %d chequeos: %+v", len(d.Checks), d.Checks)
+		t.Errorf("una dimensión sin dato trae %d chequeos: %+v. La guarda de `Observed` no está "+
+			"cortando: con el grafo vacío no hay nada contra qué medir, y publicar el chequeo convierte "+
+			"«no medí» en un veredicto", len(d.Checks), d.Checks)
 	}
 	if d.Score != 0 {
 		t.Errorf("una dimensión SIN DATO puntúa %.2f. La regla del archivo es que no observado "+
-			"vale 0: con un árbol vacío los tres contadores dan cero, el chequeo pasa gratis, "+
-			"y el puntaje premia no haber indexado nada", d.Score)
+			"vale 0: no medir no puede subir el puntaje. Ojo: este aserto es el CINTURÓN, no el "+
+			"custodio de la guarda — el chequeo que se publica sin ella sale en rojo, así que el "+
+			"puntaje sigue en 0 y el que cae es el de len(Checks)", d.Score)
 	}
 	hayGrafo := false
 	for _, k := range rep.Unobserved {
@@ -456,6 +505,38 @@ func TestDimensionSinDatoNoGanaElChequeo(t *testing.T) {
 	if !hayGrafo {
 		t.Error("`grafo` salió de Unobserved sin que nadie lo indexara")
 	}
+}
+
+// grafoSinNadaQueMedir monta el estado de los dos denominadores en cero: un nodo SIN archivo
+// —GraphStatsCtx lo cuenta, así que nodos > 0 y la dimensión queda observada, pero
+// GraphFileFingerprintsCtx lo descarta por `path != ”`, así que el grafo declara CERO archivos— y
+// un árbol en disco sin un solo `.go`. Lo comparten los dos custodios de esa rama.
+func grafoSinNadaQueMedir(t *testing.T) *McpServer {
+	t.Helper()
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	nodo := memory.GraphNode{Key: "#func:HuerfanoSinArchivo", Kind: "func", Name: "HuerfanoSinArchivo"}
+	if err := engine.UpsertPackageGraph(nil, []memory.GraphNode{nodo}, nil); err != nil {
+		t.Fatal(err)
+	}
+	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{}) // árbol sin un solo .go
+
+	// Por la rama del árbol fuera de alcance el chequeo tampoco se agregaría, y los dos custodios
+	// pasarían midiendo I4 en vez de lo suyo.
+	if s.arbolFueraDeAlcance() {
+		t.Fatal("el árbol salió fuera de alcance: este montaje tiene que llegar más allá de esa guarda")
+	}
+	// Y los dos denominadores tienen que venir en cero, que es la condición que se prueba. Se mide
+	// llamando a `graphFreshness` directo y NO leyendo la evidencia: esa rama ya no la publica, justo
+	// para no afirmar un cero que puede no haberse medido.
+	if _, _, _, enGrafo, enDisco := s.graphFreshness(s.scopedCtx(context.Background())); enGrafo != 0 || enDisco != 0 {
+		t.Fatalf("esperaba los dos denominadores en cero y llegaron archivos_en_grafo=%d "+
+			"archivos_en_disco=%d: el montaje no reproduce el estado sin nada que medir", enGrafo, enDisco)
+	}
+	return s
 }
 
 // I8 — SIN UN SOLO ARCHIVO CONTRA EL QUE MEDIR, EL CHEQUEO TAMPOCO SE GANA.
@@ -479,25 +560,7 @@ func TestDimensionSinDatoNoGanaElChequeo(t *testing.T) {
 // arnes: de="\tif enGrafo == 0 && enDisco == 0 {"
 // arnes: a="\tif false && enGrafo == 0 && enDisco == 0 {"
 func TestSinArchivosMediblesNoGanaElChequeo(t *testing.T) {
-	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { engine.Close() })
-
-	// Un nodo SIN archivo: GraphStatsCtx lo cuenta (nodos > 0 ⇒ Observed), GraphFileFingerprintsCtx
-	// lo descarta por `path != ''` ⇒ cero archivos en el grafo.
-	nodo := memory.GraphNode{Key: "#func:HuerfanoSinArchivo", Kind: "func", Name: "HuerfanoSinArchivo"}
-	if err := engine.UpsertPackageGraph(nil, []memory.GraphNode{nodo}, nil); err != nil {
-		t.Fatal(err)
-	}
-	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{}) // árbol sin un solo .go
-
-	// DENOMINADOR 1: por la rama del árbol fuera de alcance esto mediría I4, no esto.
-	if s.arbolFueraDeAlcance() {
-		t.Fatal("el árbol salió fuera de alcance: este test tiene que llegar más allá de esa guarda")
-	}
-
+	s := grafoSinNadaQueMedir(t)
 	rep := readinessComo(t, s, nil)
 	d := dimGrafo(t, rep)
 
@@ -506,14 +569,7 @@ func TestSinArchivosMediblesNoGanaElChequeo(t *testing.T) {
 		t.Fatalf("la dimensión quedó NO observada: con nodos = %v la guarda de `Observed` ya corta "+
 			"y este test no distingue la segunda puerta de la primera", d.Evidence["nodos"])
 	}
-	// DENOMINADOR 3: los dos denominadores tienen que ser cero, que es la condición que se prueba.
-	enGrafo, okG := d.Evidence["archivos_en_grafo"].(float64)
-	enDisco, okD := d.Evidence["archivos_en_disco"].(float64)
-	if !okG || !okD || enGrafo != 0 || enDisco != 0 {
-		t.Fatalf("esperaba los dos denominadores en cero y llegaron archivos_en_grafo=%v "+
-			"archivos_en_disco=%v: el montaje no reproduce el estado sin nada que medir",
-			d.Evidence["archivos_en_grafo"], d.Evidence["archivos_en_disco"])
-	}
+	// (el DENOMINADOR 3 —los dos en cero— lo verifica `grafoSinNadaQueMedir` por `graphFreshness`.)
 
 	if c := chequeo(d, nombreAlDia); c != nil {
 		t.Errorf("el chequeo %q se agregó con CERO archivos contra los que medir (Pass=%v, Why=%q): "+
@@ -527,5 +583,42 @@ func TestSinArchivosMediblesNoGanaElChequeo(t *testing.T) {
 	if _, hay := d.Evidence["frescura_no_medida"]; !hay {
 		t.Errorf("no se declaró POR QUÉ no hay chequeo de frescura: un chequeo que desaparece sin "+
 			"explicación se lee como que la dimensión no lo necesita. Evidencia: %v", d.Evidence)
+	}
+}
+
+// I9 — DONDE LA FRESCURA NO SE MIDIÓ, SUS CONTADORES NO SE PUBLICAN. (Lo pidió el panel adversarial
+// de `verify`; la rama hermana —árbol fuera de alcance— ya lo cumplía y ésta no.)
+//
+// La regla no es de forma. En esta rama los cinco ceros son EL CERO AMBIGUO que todo el cambio existe
+// para desarmar: `graphFreshness` tiene un retorno temprano por falla de la consulta que ocurre ANTES
+// de caminar el disco, así que por esa vía `archivos_en_disco: 0` no es una medición sino un valor de
+// fallo, y `missing: 0` tampoco. Desde `enriquecerGrafo` las dos situaciones son indistinguibles, así
+// que el diagnóstico va en `frescura_no_medida` —que nombra las dos— y no en un número que un
+// consumidor automático lee como «cero problemas». Un lector humano ve el texto; una alerta, no.
+//
+// Montaje: el mismo de I8, los dos denominadores en cero.
+//
+// Sabotaje: devolver una de las cinco asignaciones a donde estaba antes de este cambio, o sea
+// arriba de la guarda.
+// arnes: archivo="internal/mcp/methods_readiness.go"
+// arnes: de="\tstale, ghosts, missing, enGrafo, enDisco := s.graphFreshness(scoped)"
+// arnes: a="\tstale, ghosts, missing, enGrafo, enDisco := s.graphFreshness(scoped)\n\tdim.Evidence[\"archivos_en_disco\"] = enDisco"
+func TestSinArchivosMediblesNoPublicaContadores(t *testing.T) {
+	s := grafoSinNadaQueMedir(t)
+	d := dimGrafo(t, readinessComo(t, s, nil))
+
+	// DENOMINADOR: el motivo tiene que estar declarado, o esto no es la rama que se prueba.
+	motivo, hay := d.Evidence["frescura_no_medida"]
+	if !hay {
+		t.Fatalf("no es la rama sin nada que medir: falta `frescura_no_medida`. Evidencia: %v", d.Evidence)
+	}
+
+	// NUMERADOR: ni uno de los cinco.
+	for _, clave := range []string{"stale", "ghosts", "missing", "archivos_en_grafo", "archivos_en_disco"} {
+		if v, publicado := d.Evidence[clave]; publicado {
+			t.Errorf("evidence[%q] = %v se publicó en la rama donde la frescura NO se midió: ese cero "+
+				"puede ser un valor de fallo (la consulta vuelve antes de caminar el disco) y se lee "+
+				"como «cero problemas». El motivo ya está declarado: %q", clave, v, motivo)
+		}
 	}
 }

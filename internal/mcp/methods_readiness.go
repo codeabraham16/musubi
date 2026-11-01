@@ -102,11 +102,24 @@ func (s *McpServer) enriquecerGrafo(rep *memory.ReadinessReport, scoped context.
 	}
 
 	// El grafo nunca se indexó: Observed=false, y ahí la dimensión ya vale 0 por la regla de oro de
-	// readiness («una señal no observada puntúa cero»). AGREGARLE UN CHEQUEO LA ROMPERÍA: en un
-	// proyecto sin código indexable los tres contadores dan cero, el chequeo pasaría, y una
-	// dimensión SIN DATO terminaría puntuando 1.0 — exactamente el premio por no medir que ese
-	// archivo existe para impedir. Y de paso se ahorra el costo: medir frescura es leer y hashear
-	// el árbol entero para un veredicto que ya está cerrado.
+	// readiness («una señal no observada puntúa cero»). Lo que esta guarda protege es el CONTRATO:
+	// una dimensión sin dato NO TRAE CHEQUEOS, ni en verde ni en rojo. Y de paso se ahorra el costo:
+	// medir frescura es leer y hashear el árbol entero para un veredicto que ya está cerrado.
+	//
+	// ⚠️ NO protege el PUNTAJE, aunque este comentario lo afirmó hasta que el panel adversarial lo
+	// midió (2026-11-01). Decía que en un proyecto sin código indexable los tres contadores dan cero,
+	// el chequeo pasaría, y la dimensión terminaría puntuando 1.0. Ese 1.0 es INALCANZABLE desde que
+	// existe la guarda de los dos denominadores en cero, unas líneas más abajo, y se demuestra por
+	// agotamiento: `!dim.Observed` equivale a `nodos == 0 && aristas == 0` (ver `dimensionGrafo` en
+	// internal/memory/readiness.go); sin nodos, `GraphFileFingerprintsCtx` vuelve vacío, así que
+	// `enGrafo == 0`, y entonces el loop de `graphFreshness` deja `missing == enDisco` — o sea
+	// `pMissing` en 1.0 si hay algo en disco, que es ROJO SEGURO, y si no hay nada corta la guarda de
+	// abajo. Con el grafo vacío el chequeo NO PUEDE PASAR. Medido en los tres estados con esta guarda
+	// quitada: árbol vacío y un `.go` en un directorio salteado cortan abajo; un `.go` en la raíz
+	// agrega el chequeo EN ROJO («1/1 sin indexar»). Los tres dan score 0.00.
+	//
+	// Se deja escrito porque el custodio de esta guarda cae por `len(Checks)` y no por el puntaje, y
+	// quien lea sólo el mensaje de falla va a buscar un 1.0 que no existe.
 	if !dim.Observed {
 		return
 	}
@@ -123,11 +136,6 @@ func (s *McpServer) enriquecerGrafo(rep *memory.ReadinessReport, scoped context.
 	}
 
 	stale, ghosts, missing, enGrafo, enDisco := s.graphFreshness(scoped)
-	dim.Evidence["stale"] = stale
-	dim.Evidence["ghosts"] = ghosts
-	dim.Evidence["missing"] = missing
-	dim.Evidence["archivos_en_grafo"] = enGrafo
-	dim.Evidence["archivos_en_disco"] = enDisco
 
 	// LA SEGUNDA PUERTA AL MISMO PREMIO, y la guarda de `Observed` no la cubre: que no haya NADA contra
 	// qué medir. `GraphStatsCtx` cuenta TODOS los nodos, pero `GraphFileFingerprintsCtx` filtra
@@ -137,13 +145,30 @@ func (s *McpServer) enriquecerGrafo(rep *memory.ReadinessReport, scoped context.
 	// misma función. Y el mismo estado llega por otra vía: si la consulta de fingerprints falla,
 	// graphFreshness devuelve todo en cero, los dos denominadores incluidos. Con los dos en cero las
 	// tres proporciones son 0 POR CONSTRUCCIÓN —`proporcion` lo hace a propósito, para no publicar un
-	// NaN— y el chequeo pasaría sin haber mirado un archivo. Se declara y se sale, igual que la rama de
-	// alcance; la evidencia cruda ya quedó arriba, así que el diagnóstico no se pierde.
+	// NaN— y el chequeo pasaría sin haber mirado un archivo. Se declara y se sale, igual que la rama
+	// de alcance, y SIN publicar los cinco contadores: donde la frescura no se midió, sus números no
+	// se publican. No es un detalle de forma. Acá los ceros son EL CERO AMBIGUO que este archivo
+	// existe para desarmar: por la vía de la consulta fallada `graphFreshness` vuelve ANTES de
+	// caminar el disco, así que `archivos_en_disco: 0` no es una medición sino un valor de fallo
+	// disfrazado de valor tranquilizador, y `missing: 0` tampoco. Desde acá las dos situaciones son
+	// indistinguibles —distinguirlas es un cambio de firma de `graphFreshness`—, así que el
+	// diagnóstico va en el TEXTO, que nombra las dos cosas que pueden haber pasado, y no en un número
+	// que un consumidor automático va a leer como «cero problemas».
 	if enGrafo == 0 && enDisco == 0 {
-		dim.Evidence["frescura_no_medida"] = "no hay un solo archivo contra el que medir: ni " +
-			"archivos en el grafo (un nodo sin `path` no cuenta) ni indexables en disco"
+		dim.Evidence["frescura_no_medida"] = "no hay un solo archivo contra el que medir: los dos " +
+			"denominadores vinieron en cero. Puede ser que el grafo no declare archivos (un nodo " +
+			"sin `path` no cuenta) y que el disco no tenga indexables, o que la consulta de " +
+			"fingerprints haya fallado ANTES de caminar el disco: por esa vía el cero de disco no " +
+			"es una medición"
 		return
 	}
+
+	// Recién acá se publican: los cinco salen de una medición que SÍ tuvo contra qué medir.
+	dim.Evidence["stale"] = stale
+	dim.Evidence["ghosts"] = ghosts
+	dim.Evidence["missing"] = missing
+	dim.Evidence["archivos_en_grafo"] = enGrafo
+	dim.Evidence["archivos_en_disco"] = enDisco
 
 	// Los dos denominadores son DISTINTOS: stale y fantasmas se miden sobre los archivos que están
 	// en el grafo; los que faltan, sobre los indexables del disco. El chequeo mira el PEOR de los

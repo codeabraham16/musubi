@@ -18,6 +18,26 @@ status: draft
   Es la regla que el propio `musubi_readiness` declara en su `note`: *«la evidencia de cada
   dimensión son los números crudos»*.
 
+  > ⚠️ **Y la contracara, que esta spec NO escribió: donde la frescura no se midió, sus contadores
+  > NO se publican.** Un `ghosts: 0` al lado de `frescura_no_medida` se lee como «se midió y está
+  > sano», que es lo contrario de lo que pasó. Así que el **DEBE** de arriba rige en la rama que
+  > mide, y en cualquier rama que publique `frescura_no_medida` **se omiten los cinco** — los tres
+  > contadores y los dos denominadores.
+  >
+  > Los cinco, y no sólo los tres, porque en la rama del 0/0 esos ceros son **el cero ambiguo** que
+  > todo este cambio existe para desarmar: `graphFreshness` tiene un retorno temprano por falla de
+  > la consulta que ocurre **antes** de caminar el disco, así que por esa vía `archivos_en_disco: 0`
+  > no es una medición sino un valor de fallo. Desde `enriquecerGrafo` ese caso es indistinguible
+  > del proyecto que de verdad no tiene nada, así que el diagnóstico va en el **texto**, que nombra
+  > las dos cosas que pueden haber pasado, y no en un número que un consumidor automático lee como
+  > «cero problemas». Que `graphFreshness` distinga «falló la consulta» de «cero» —un retorno más, o
+  > un error— queda **fuera de alcance**: es un cambio de firma que esta spec no previó.
+  >
+  > Sin esta cláusula las dos ramas de «no medida» publicaban formas DISTINTAS —la de alcance sólo
+  > la declaración, la del 0/0 los cinco ceros— y la regla vivía únicamente en el comentario de
+  > `I4`: un contrato escrito por un test en vez de por la spec, que es como se vuelve invisible.
+  > Hoy la cumplen las dos, y `I9` la custodia con su propio sabotaje.
+
 - **R3** — Los checks de frescura **DEBEN** ser proporcionales con un umbral declarado, no binarios.
   Un solo archivo recién creado y todavía sin indexar no puede tirar abajo la dimensión. Es la
   convención que el resto de `readiness` ya usa (`«69/2580 fallaron (2.7 %, tope 5 %)»`), y el
@@ -28,6 +48,21 @@ status: draft
   **DEBE** declararlo en la evidencia y **NO DEBE** agregar los checks de frescura. Un check que
   pasa porque no se midió nada sube el puntaje por no mirar: es exactamente el cero ambiguo que
   `profundidadDe` ya documentó como *«el valor de fallo disfrazado de valor tranquilizador»*.
+
+  > **Calificador — el motivo que se publica tiene que ser el de ESTA rama, y no cualquiera.**
+  > R4 y R8 publican las dos la misma clave, `frescura_no_medida`, con textos distintos, y están en
+  > serie: si el flujo le llega, el de R8 **sobrescribe** el de R4. Y los dos textos mandan al
+  > operador a lados opuestos — «el árbol no está en este disco» no tiene remedio; «no hay un solo
+  > archivo contra el que medir» dice que indexe—, así que publicar el equivocado manda a trabajar
+  > a quien no tiene trabajo.
+  >
+  > Esto salió de medir, no de leer: el invariante está protegido por **dos** guardas de
+  > `arbolFueraDeAlcance()`, una en `enriquecerGrafo` y otra dentro de `graphFreshness`, así que
+  > quitarle el `return` a la primera **no deja pasar el check** —la segunda vuelve con los cinco
+  > en cero y el flujo sale por R8— y el custodio de R4 quedaba **VERDE bajo sabotaje**. Lo cazó
+  > `arnes -overlay`; `-validar` no lo ve, porque la directiva apuntaba a un literal que existe y
+  > es único. Un invariante con dos guardas no se custodia mirando lo que las dos comparten: se
+  > custodia mirando lo que las distingue.
 
 - **R5** — Los dos checks de volumen existentes (`hay símbolos indexados`, `hay relaciones, no sólo
   una lista`) **DEBEN** seguir intactos, con su mismo `Name` y su misma semántica. El contrato de
@@ -67,9 +102,31 @@ status: draft
   > el check pasaba en VERDE con el `Why` «0/0 desactualizados (0.0 %) · 0/0 fantasmas (0.0 %) · 0/0
   > sin indexar (0.0 %) · tope 5 %» — medido, no inferido.
   >
-  > Es **exactamente** el caso 0/0 y no uno más amplio: con cero en el grafo y archivos en disco,
-  > `missing/enDisco` ya da 100 % y el check cae en rojo solo; con archivos en el grafo y cero en
-  > disco, todos salen fantasmas y también. Los cuatro cuadrantes, revisados uno por uno.
+  > Es **exactamente** el caso 0/0 y no uno más amplio, pero **el motivo no es el que esta spec
+  > escribió primero**. Los cuatro cuadrantes, ahora MEDIDOS uno por uno en `verify`:
+  >
+  > | `enGrafo` | `enDisco` | Qué pasa | Medido |
+  > |---|---|---|---|
+  > | > 0 | > 0 | los tres ejes se miden; rojo si el peor pasa el tope | sí |
+  > | 0 | > 0 | `missing/enDisco` da 100 % y **cae en rojo solo** | sí |
+  > | > 0 | 0 | **DEPENDE** — ver abajo | sí |
+  > | 0 | 0 | las tres proporciones valen 0 por construcción y el check pasaba en VERDE | sí |
+  >
+  > ⚠️ **El cuadrante (grafo > 0, disco = 0) NO cae en rojo solo: puede dar VERDE.** Esta spec
+  > afirmaba que «todos salen fantasmas y también», y es FALSO. `ghosts` se cuenta leyendo cada
+  > archivo del grafo **directamente del disco**, mientras `enDisco` sale de `walkSourceTree`, que
+  > **saltea** `testdata`, `vendor`, `node_modules`, `dist`, `coverage` y todo directorio con punto
+  > ([methods_codegraph.go](../../internal/mcp/methods_codegraph.go)). Un archivo del grafo que vive
+  > en un directorio salteado **existe, se lee y coincide**: `ghosts` = 0, `stale` = 0, y
+  > `missing` = 0 por loop vacío. Medido: `Pass=true`, score **0.67**, con `archivos_en_disco: 0`.
+  > La segunda vía está documentada en el propio repo: `IndexableForGraph` depende de los build
+  > tags, así que un binario sin treesitter sobre un repo TS mide `enDisco = 0` con el grafo lleno.
+  > La afirmación original **sí** vale para el archivo BORRADO —medido: 1/1 fantasmas, 100 %, rojo,
+  > score 0.33— y es falsa para el «legible pero no caminado».
+  >
+  > Eso **no mueve la guarda**, y conviene decir por qué: en ese cuadrante los dos ejes que tienen
+  > un denominador real **sí se midieron** y dieron 0, así que el verde no es el premio por no
+  > mirar que R8 existe para impedir. Lo que estaba mal era la justificación, no la condición.
 
 ## Escenarios
 
@@ -84,8 +141,9 @@ status: draft
 - **Given** este repo tal como está hoy, medido: `stale:0, ghosts:0, missing:0`, 16.787 nodos,
   42.540 aristas
 - **When** se llama `musubi_readiness`
-- **Then** la dimensión `grafo` sigue puntuando **1.0**, ahora con cinco checks en verde en vez de
-  dos, y la evidencia trae los tres contadores en cero
+- **Then** la dimensión `grafo` sigue puntuando **1.0**, ahora con **tres** checks en verde en vez
+  de dos —`D1` decidió UN chequeo compuesto y no tres—, y la evidencia trae los tres contadores en
+  cero
 
 ### Escenario: hay archivos que el grafo nunca vio
 - **Given** un proyecto donde una parte del árbol es indexable y no tiene un solo nodo —el caso
@@ -134,12 +192,29 @@ status: draft
   ~0,03 s de walk ≈ 0,28 s**, y eso en Python, o sea un techo — Go es más rápido en las dos
   mitades. Para una tool de diagnóstico que no está en el camino caliente, es aceptable. **Decisión:
   se calcula siempre, sin flag.** Si algún día duele, el número está acá para discutirlo.
-- [ ] **¿Qué umbral?** R3 pide umbrales proporcionales; el valor concreto lo fija `design`. El resto
-  de `readiness` usa 5 % para errores y rechazos, pero `missing` y `stale` no son lo mismo entre sí
-  —un archivo nuevo sin indexar es rutina, un archivo fantasma es un borrado que nadie reconcilió—
-  así que pueden no compartir umbral.
-- [ ] **¿Tres checks o uno?** Afecta el puntaje: `puntaje()` es la fracción de checks cumplidos, así
-  que agregar tres a los dos existentes cambia el peso de cada uno. Lo decide `design`.
+- [x] **¿Qué umbral?** **Resuelto por `D2`: 5 %, el mismo para los tres ejes, y DERIVADO de los
+  commits reales de este repo** —mediana 4 archivos (0,29 % del grafo), p90 15, p95 22, máximo
+  medido 65 (4,66 %)—, no elegido a ojo. La duda era si `missing` y `stale` debían compartir umbral,
+  porque no son lo mismo: un archivo nuevo sin indexar es rutina, un fantasma es un borrado que
+  nadie reconcilió. La decisión fue UNO solo, y el motivo es `D1`: el chequeo es uno y mira el PEOR
+  de los tres, así que separar los topes sin separar los chequeos no cambiaría ningún veredicto.
+- [x] **¿Tres checks o uno?** **Resuelto por `D1`: UNO compuesto.** Afectaba el puntaje y así quedó:
+  `puntaje()` es la fracción de checks cumplidos, así que la dimensión pasa de 2 a 3 chequeos y cada
+  uno vale 1/3 en vez de 1/2 —un proyecto con nodos y sin aristas sube de 0.5 a 0.67—. Con tres la
+  distorsión sería peor (0.5 → 0.8). Y el motivo de fondo no es el peso: los tres ejes se curan con
+  el MISMO acto, así que tres chequeos sugerirían tres remedios donde hay uno.
+- [ ] 🔴 **¿Qué hace el chequeo cuando un eje no tiene denominador? — DECISIÓN DEL DUEÑO, abierta a
+  propósito.** No la previó ningún requisito y la midió el panel en `verify`: con archivos en el
+  grafo y **cero** indexables en disco —un `.go` que vive en un directorio que `walkSourceTree`
+  saltea, o un binario sin los build tags de treesitter sobre un repo que no sabe indexar— el eje
+  `missing` divide por cero, aporta 0 % **sin haber medido nada**, y el chequeo pasa en VERDE con
+  `archivos_en_disco: 0` a la vista. Los otros dos ejes sí se midieron y dieron 0, así que el verde
+  es DEFENDIBLE —los dos lentes que lo miraron coinciden en que no es una violación—, y por eso
+  este PR **no cambia la conducta: la documenta como está medida**. Las dos salidas honestas, y la
+  elección es del dueño: **(a)** mantener el chequeo sobre los ejes que sí tienen denominador y
+  DECLARAR en la evidencia y en el `Why` que `missing` no era medible —no tira información real, y
+  es lo que recomienda el lente de contrato—; **(b)** ampliar la guarda a `enDisco == 0` y no medir
+  frescura en ese estado, al precio de perder los dos ejes que sí se podían medir.
 
 ## Nota de método
 
