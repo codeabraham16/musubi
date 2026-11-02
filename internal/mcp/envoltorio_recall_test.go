@@ -95,3 +95,99 @@ func TestRecallAdelgazaElEnvoltorio(t *testing.T) {
 			res.UsedTokens, emitido, res.UsedTokens-emitido)
 	}
 }
+
+// TestRecallEmiteIdCortoResolvible fija el Tier 2a (specs/recall-envoltorio/tier2-id-corto.md): el
+// `id` del payload del tool viaja ACORTADO a 8 hex, y ese id corto SIGUE SIENDO EXPANDIBLE. Las dos
+// mitades son el invariante: (a) el acortado ocurrió —el UUID entero no viaja— y (b) cero pérdida
+// —el handle corto resuelve la MISMA observación por musubi_memory_expand—. La siembra usa
+// save_observation, que genera UUIDs REALES de 36 chars: sin el acortado el id mediría 36 y (a) caería.
+// El acortado vive en el LÍMITE del tool (toolRecall), no en empaquetar: adentro de Recall el id
+// entero lo necesitan la hidratación del grounding y el marcado de ranciedad (markStaleOrigins).
+//
+// Sabotaje: sacar el loop que acorta en toolRecall ⇒ el id viaja como UUID entero ⇒ (a) en ROJO.
+// arnes: archivo="internal/mcp/methods.go"
+// arnes: de="\tfor i := range res.Items {\n\t\tres.Items[i].ID = memory.IDCorto(res.Items[i].ID)\n\t}"
+// arnes: a=""
+// arnes: prueba="TestRecallEmiteIdCortoResolvible"
+func TestRecallEmiteIdCortoResolvible(t *testing.T) {
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
+	if err != nil {
+		t.Fatalf("NewDbEngine: %v", err)
+	}
+	t.Cleanup(func() { engine.Close() })
+	s := NewMcpServer(engine, t.TempDir(), embedding.NoopProvider{}, WithConflicts(config.ConflictConfig{}))
+	sembrar(t, s, 5)
+	exigeSembradas(t, engine, 5)
+
+	ctx := ctxPrincipal("p1")
+	params := json.RawMessage(`{"name":"musubi_recall","arguments":{"query":"` + preguntaSembrada + `","token_budget":4000}}`)
+	out, rpcErr := s.handleToolsCall(ctx, params)
+	if rpcErr != nil {
+		t.Fatalf("recall: %+v", rpcErr)
+	}
+	var res memory.RecallResult
+	if err := json.Unmarshal([]byte(out.(CallToolResponse).Content[0].Text), &res); err != nil {
+		t.Fatalf("la respuesta del recall no es JSON: %v", err)
+	}
+	if len(res.Items) < 2 {
+		t.Fatalf("esperaba varios items para medir el id, vinieron %d", len(res.Items))
+	}
+
+	// (a) cada id del payload es una ref corta de 8 hex: PRUEBA que el acortado ocurrió. Con el UUID
+	// entero (36 chars) este assert cae, que es lo que el sabotaje provoca.
+	for _, it := range res.Items {
+		if !esHex8(it.ID) {
+			t.Errorf("el id %q del payload no es una ref corta de 8 hex: el UUID entero viajó al agente", it.ID)
+		}
+	}
+
+	// (b) round-trip con IDENTIDAD, por CADA item: su id corto RESUELVE por musubi_memory_expand y trae
+	// LA MISMA observación, no otra. Antes esto miraba sólo Items[0] y exigía una frase COMPARTIDA por
+	// todas las notas sembradas, así que dejaba pasar dos sabotajes: (S4) acortar bien sólo el item 0 y
+	// darle al resto una ref de 8 hex que NO resuelve, y (S6) darle a cada item la ref corta del VECINO
+	// —resuelve, pero a OTRA observación—. sembrar() distingue cada nota por un marcador único «caso X»;
+	// verificar ese marcador POR ITEM cierra los dos huecos. Se expande con el MISMO ctx del recall para
+	// que el scope sea idéntico y no falle por aislamiento de proyecto.
+	for i := range res.Items {
+		marcador := casoSembrado(res.Items[i].Gist)
+		if marcador == "" {
+			t.Fatalf("item %d: no pude leer el marcador «caso X» en su gist %q (¿cambió sembrar()?); sin marcador no se prueba identidad", i, res.Items[i].Gist)
+		}
+		corto := res.Items[i].ID
+		expParams := json.RawMessage(`{"name":"musubi_memory_expand","arguments":{"ids":["` + corto + `"]}}`)
+		expOut, expErr := s.handleToolsCall(ctx, expParams)
+		if expErr != nil {
+			t.Fatalf("memory_expand de la ref corta %q (item %d): %+v", corto, i, expErr)
+		}
+		expTexto := expOut.(CallToolResponse).Content[0].Text
+		if !strings.Contains(expTexto, marcador) {
+			t.Errorf("el id corto %q del item %d no resolvió a SU observación (esperaba %q en el contenido): la mitad «cero pérdida» no se cumple; expand=%s",
+				corto, i, marcador, expTexto)
+		}
+	}
+}
+
+// casoSembrado extrae el marcador único «caso X» que sembrar() le pone a cada nota (…, caso a|b|c…),
+// o "" si no está. Es lo único que distingue una nota sembrada de otra, y por eso sirve para probar
+// IDENTIDAD en el round-trip del id corto: que resuelva a la MISMA observación, no sólo a alguna.
+func casoSembrado(s string) string {
+	i := strings.Index(s, "caso ")
+	if i < 0 || i+6 > len(s) {
+		return ""
+	}
+	return s[i : i+6]
+}
+
+// esHex8 dice si s es EXACTAMENTE 8 hex minúscula, la forma de una ref corta. Inline y no
+// memory.esRefCorta porque ésa es privada del paquete memory; acá sólo hace falta la forma.
+func esHex8(s string) bool {
+	if len(s) != 8 {
+		return false
+	}
+	for _, r := range s {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
