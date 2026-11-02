@@ -346,19 +346,39 @@ func (e *DbEngine) DetectRelations(obsID string, opts ConflictOptions) ([]ObsRel
 			// alguien se acuerde de no ocultar memoria: es imposible llegar ahí.
 			rel = pendingRel(src, c, lex, cos)
 		}
-		id, err := e.UpsertObsRelation(rel)
+		// DOS COSAS DISTINTAS, Y CONFUNDIRLAS ROMPE UN INVARIANTE EN CADA DIRECCIÓN:
+		//   `rel`        — lo que ESTA detección decidió.
+		//   `persistida` — lo que quedó en la base, que puede ser un veredicto anterior que la
+		//                  guarda del upsert conservó.
+		// Coincidían mientras el upsert pisaba la fila; desde que conserva el veredicto ajeno,
+		// divergen, y hay que elegir bien de cuál cuelga cada cosa.
+		//
+		// EL RETORNO ES `persistida`, porque quien lo lee decide por él: detectAndSurface clasifica
+		// por Status y, con `rel`, anunciaría «requiere tu veredicto» sobre algo YA juzgado.
+		persistida, err := upsertObsRelationCon(e.db, rel)
 		if err != nil {
 			return nil, err
 		}
-		rel.ID = id
 		// Efecto del supersede auto-resuelto: ocultar la observación obsoleta del
 		// recall marcando superseded_by (reversible, auditable).
-		if rel.Relation == RelSupersedes && rel.Status == RelStatusResolved {
-			if err := e.markSuperseded(rel.TargetID, rel.SourceID); err != nil {
+		//
+		// EL EFECTO EXIGE LAS DOS, y cada mitad sostiene un invariante propio:
+		//   · `rel` — ocultar es consecuencia de la decisión de AHORA. Con DetectOnly rel es
+		//     `pending` siempre, así que esta mitad es la que vuelve el markSuperseded INALCANZABLE
+		//     por construcción (M4). Sin ella, una fila supersedes/resolved preexistente lo
+		//     re-dispararía en cada re-detección automática.
+		//   · `persistida` — el efecto no puede contradecir al asiento. Si alguien juzgó el par
+		//     `related` y la re-detección vuelve a decidir supersedes, la guarda conserva `related`
+		//     en la base: ocultar ahí dejaría la observación tapada con un asiento que dice
+		//     `related`, o sea el efecto aplicado sin veredicto que lo explique — justo lo que la
+		//     guarda existe para evitar, entrando por la puerta de al lado.
+		if rel.Relation == RelSupersedes && rel.Status == RelStatusResolved &&
+			persistida.Relation == RelSupersedes && persistida.Status == RelStatusResolved {
+			if err := e.markSuperseded(persistida.TargetID, persistida.SourceID); err != nil {
 				return nil, err
 			}
 		}
-		out = append(out, rel)
+		out = append(out, persistida)
 	}
 	return out, nil
 }
@@ -438,7 +458,7 @@ func decideRelation(src, cand obsRow, lex float64, cos *float64, opts ConflictOp
 			Relation:   RelSupersedes,
 			Confidence: lex,
 			Status:     RelStatusResolved,
-			ResolvedBy: "heuristic",
+			ResolvedBy: RelResolvedByHeuristic,
 			Reason:     "mismo topic_key y similitud alta; la observación más reciente reemplaza a la anterior",
 		}, lex, cos)
 	case lex >= autoThreshold && src.topicKey == cand.topicKey:
@@ -453,7 +473,7 @@ func decideRelation(src, cand obsRow, lex float64, cos *float64, opts ConflictOp
 			Relation:   RelRelated,
 			Confidence: lex,
 			Status:     RelStatusResolved,
-			ResolvedBy: "heuristic",
+			ResolvedBy: RelResolvedByHeuristic,
 			Reason:     "alto solape léxico; relacionadas",
 		}, lex, cos)
 	default:
