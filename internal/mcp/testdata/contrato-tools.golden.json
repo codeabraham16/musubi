@@ -370,6 +370,11 @@
     "actua_afuera": false
   },
   {
+    "name": "musubi_spec_coverage",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
     "name": "musubi_spec_create",
     "read_only": false,
     "actua_afuera": false

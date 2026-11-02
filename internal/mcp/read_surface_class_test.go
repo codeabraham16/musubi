@@ -297,6 +297,14 @@ func TestEveryReadOnlyToolClassified(t *testing.T) {
 		// fijo, no federado): su test dedicado (TestDesignBriefTraeNucleoYAcervoScopeado) siembra un
 		// señuelo en otro tenant y exige que el corpus salga SÓLO de `musubi-design`.
 		"musubi_design",
+		// musubi_spec_coverage es la 1ª spec-tool que LEE TABLAS SCOPEADAS por proyecto
+		// (code_graph_nodes/_edges) para resolver anclas y medir el blast —a diferencia de las otras
+		// cinco spec-tools de lectura, que son filesystem-scoped y viven en noScopedRead—. NO entra al
+		// barrido por marcador porque su dirección forward necesita una SPEC EN DISCO con un ancla que
+		// apunte a un nodo del grafo, montaje que readSweepCases no arma. Su aislamiento cross-tenant
+		// está en su test dedicado, TestSpecCoverageCrossTenantIsolation (D8). Si algún día dejara de
+		// leer tablas scopeadas, MOVERLA a noScopedRead; si se volviera marker-sweepable, a readSweepCases.
+		"musubi_spec_coverage",
 	} {
 		swept[name] = true
 	}
@@ -340,5 +348,148 @@ func TestEveryReadOnlyToolClassified(t *testing.T) {
 			continue
 		}
 		t.Errorf("tool readOnly %q SIN clasificar: agregala al barrido de aislamiento (readSweepCases) si lee una tabla con project_id, o a noScopedRead si no", tl.Name)
+	}
+}
+
+// TestSpecCoverageCrossTenantIsolation custodia que musubi_spec_coverage —la 9ª spec-tool, la 1ª que
+// lee tablas SCOPEADAS por proyecto (code_graph_nodes/_edges) en vez del árbol de SPEC.md— no filtre el
+// grafo de un tenant a otro. Tiene test propio y NO entra al barrido por marcador (readSweepCases)
+// porque su dirección forward necesita una SPEC EN DISCO con un ancla que apunte a un nodo del grafo,
+// montaje que el barrido genérico no arma (D8).
+//
+// Reusa los markers del grafo de web: VictimCaller --CALLS--> VictimCallee. La spec ancla a
+// VictimCallee, cuyo único caller transitivo es VictimCaller, que SÓLO existe en el grafo de web. El
+// tenant crm tiene su PROPIO nodo (CrmCallee) en el mismo archivo, para que su grafo cuente como
+// indexado y el handler recorra el camino REAL —stats → resolución por archivo → blast— en vez del
+// atajo graph_not_indexed, y AUN ASÍ no alcance VictimCallee (es de web) ni su caller.
+//
+// Qué custodia cada aserción, para NO sobre-prometer (la versión vieja decía "cualquiera de los tres
+// cruces", y es falso: un strip de UNA sola lectura no mueve el marcador de texto):
+//   - El marcador "VictimCaller" sobre crm caza el strip TOTAL del scope del forward: es lo que muta la
+//     directiva de abajo, el único s.scopedCtx(ctx) del que cuelgan las tres lecturas. Sin scope, el
+//     blast de crm traería VictimCaller del grafo de web.
+//   - crm .Resolution==no_resuelto + nodeKeys vacío + blast 0 caza el strip de la lectura de RESOLUCIÓN
+//     por archivo aislada (X4): sin scope ahí, el ancla VictimCallee resolvería contra el nodo de web,
+//     y el marcador de texto NO lo vería (el nodeKey es VictimCallee, no VictimCaller).
+//   - vacio (tenant sin grafo propio) .Resolution==graph_not_indexed caza el strip de la lectura de
+//     STATS aislada (X5): sin scope ahí, GraphStatsCtx vería el grafo global como indexado y vacio
+//     saltaría a la resolución en vez del atajo.
+//
+// Queda FUERA el strip de la lectura de IMPACT aislada (X6): en este montaje el ancla de crm no resuelve,
+// así que GraphImpactCtx nunca corre para el atacante y ninguna aserción lo observa. Cazarlo pediría un
+// símbolo homónimo en ambos tenants con un caller cross-tenant; es endurecimiento de un plan siguiente, y
+// el código entregado usa el mismo `scoped` en las tres (la reserva del juez de seguridad, no un bug).
+//
+// Sabotaje que lo pone en ROJO: quitarle el scope a la lectura del grafo (s.scopedCtx(ctx) -> ctx), con
+// lo que el forward del atacante lee el grafo GLOBAL y el blast de crm arrastra VictimCaller del tenant
+// web; el assert de aislamiento cae.
+// arnes: archivo="internal/mcp/methods_spec_coverage.go"
+// arnes: de="s.specCoverageForward(s.scopedCtx(ctx), specID, args.MaxDepth)"
+// arnes: a="s.specCoverageForward(ctx, specID, args.MaxDepth)"
+func TestSpecCoverageCrossTenantIsolation(t *testing.T) {
+	engine, err := memory.NewDbEngine(memtest.DirSembrado(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.SetProjectID("")
+	dir := t.TempDir()
+	s := NewMcpServer(engine, dir, embedding.NoopProvider{})
+
+	// El archivo en disco: lo necesita el create de la spec para validar el ancla y fijar su baseline.
+	escribirCodigo(t, dir, "shared/auth.go",
+		"package shared\n\nfunc VictimCallee() {}\nfunc VictimCaller() { VictimCallee() }\n")
+
+	// La spec vive en DISCO (no es un dato por-tenant): se crea federada y ambos principales la ven. Lo
+	// único scopeado es el GRAFO que la tool consulta para resolver el ancla y medir el blast.
+	if _, e := call(t, s, "musubi_spec_create", map[string]interface{}{
+		"path": "specs/spec-iso/SPEC.md", "id": "spec-iso", "type": "task-spec", "title": "spec-iso",
+		"anchors": []string{"shared/auth.go#VictimCallee"},
+	}); e != nil {
+		t.Fatalf("create spec-iso: %+v", e)
+	}
+
+	// Grafo de WEB: el caller transitivo de VictimCallee es VictimCaller, el marker que NO debe cruzar.
+	if err := engine.UpsertPackageGraphFrom("web", []string{"shared/auth.go"},
+		[]memory.GraphNode{
+			{Key: "shared/auth.go#func:VictimCaller", Kind: "func", Name: "VictimCaller", Path: "shared/auth.go", SrcFingerprint: "h"},
+			{Key: "shared/auth.go#func:VictimCallee", Kind: "func", Name: "VictimCallee", Path: "shared/auth.go", SrcFingerprint: "h"},
+		},
+		[]memory.GraphEdge{
+			{FromKey: "shared/auth.go#func:VictimCaller", ToKey: "shared/auth.go#func:VictimCallee", Kind: "CALLS", Confidence: 1, Provenance: "EXTRACTED", SrcPath: "shared/auth.go", SrcFingerprint: "h"},
+		}); err != nil {
+		t.Fatal(err)
+	}
+	// Grafo de CRM: un nodo propio en el MISMO archivo. Fuerza graphIndexed=true para crm (hay nodos en
+	// su scope) y el camino de resolución por archivo —ListGraphNodesForFileCtx(crm, "shared/auth.go")—,
+	// que debe devolver SÓLO CrmCallee y por lo tanto no resolver el ancla VictimCallee del tenant web.
+	if err := engine.UpsertPackageGraphFrom("crm", []string{"shared/auth.go"},
+		[]memory.GraphNode{
+			{Key: "shared/auth.go#func:CrmCallee", Kind: "func", Name: "CrmCallee", Path: "shared/auth.go", SrcFingerprint: "h"},
+		}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	respText := func(p *Principal) string {
+		raw, _ := json.Marshal(map[string]any{"spec_id": "spec-iso"})
+		params, _ := json.Marshal(CallToolRequest{Name: "musubi_spec_coverage", Arguments: raw})
+		out, rpcErr := s.handleToolsCall(withPrincipal(context.Background(), p), params)
+		// Un error también es respuesta y también puede filtrar: se devuelve su texto para que la
+		// misma aserción de marcador corra sobre él (mismo criterio que TestReadSurfaceClassIsolation).
+		if rpcErr != nil {
+			return fmt.Sprintf("%+v", rpcErr)
+		}
+		return out.(CallToolResponse).Content[0].Text
+	}
+
+	// respForward parsea la respuesta exitosa a su DTO. Las aserciones de ESTADO (no sólo de texto) son
+	// las que cazan un strip de scope de UNA sola lectura: ese no cambia el marcador pero sí el ancla.
+	respForward := func(p *Principal) specCoverageForwardOut {
+		txt := respText(p)
+		var out specCoverageForwardOut
+		if err := json.Unmarshal([]byte(txt), &out); err != nil {
+			t.Fatalf("parse forward (%s): %v\nrespuesta: %s", p.ProjectID, err, txt)
+		}
+		return out
+	}
+
+	crm := &Principal{Name: "alice", Role: RoleWriter, ProjectID: "crm"}
+	admin := &Principal{Name: "root", Role: RoleAdmin}
+	vacio := &Principal{Name: "carol", Role: RoleWriter, ProjectID: "vacio"}
+
+	// El atacante (crm) NUNCA debe ver el caller del grafo de web (caza el strip TOTAL del forward).
+	if got := respText(crm); strings.Contains(got, "VictimCaller") {
+		t.Errorf("FUGA cross-tenant en musubi_spec_coverage: crm vio VictimCaller (grafo de web)\nrespuesta: %s", got)
+	}
+	// El admin federado SÍ: prueba que el ancla resuelve y el blast se mide cuando el scope corresponde
+	// (si no lo viera, el montaje estaría roto y el caso del atacante pasaría por la razón equivocada).
+	if got := respText(admin); !strings.Contains(got, "VictimCaller") {
+		t.Errorf("el admin federado debería ver VictimCaller (ancla resuelta + blast); montaje roto\nrespuesta: %s", got)
+	}
+
+	// X4 — el ancla de web NO debe resolver bajo crm. El marcador de texto no lo caza (el nodeKey sería
+	// VictimCallee, no VictimCaller); el estado del ancla sí.
+	fcrm := respForward(crm)
+	if len(fcrm.Anchors) != 1 {
+		t.Fatalf("crm: esperaba 1 ancla, dio %d: %+v", len(fcrm.Anchors), fcrm.Anchors)
+	}
+	if fcrm.Anchors[0].Resolution != "no_resuelto" {
+		t.Errorf("crm no debe resolver un ancla del grafo de web: esperaba no_resuelto, dio %q", fcrm.Anchors[0].Resolution)
+	}
+	if len(fcrm.Anchors[0].NodeKeys) != 0 {
+		t.Errorf("crm no debe matchear nodos de web: esperaba nodeKeys vacío, dio %v", fcrm.Anchors[0].NodeKeys)
+	}
+	if fcrm.Anchors[0].BlastCount != 0 {
+		t.Errorf("crm no debe medir blast de web: esperaba blastCount 0, dio %d", fcrm.Anchors[0].BlastCount)
+	}
+
+	// X5 — un tenant SIN grafo propio ve su scope vacío ⇒ graph_not_indexed, no la resolución del grafo
+	// global. Caza el strip de la lectura de stats.
+	fvac := respForward(vacio)
+	if len(fvac.Anchors) != 1 {
+		t.Fatalf("vacio: esperaba 1 ancla, dio %d: %+v", len(fvac.Anchors), fvac.Anchors)
+	}
+	if fvac.Anchors[0].Resolution != "graph_not_indexed" {
+		t.Errorf("un tenant sin grafo debe dar graph_not_indexed, dio %q", fvac.Anchors[0].Resolution)
 	}
 }

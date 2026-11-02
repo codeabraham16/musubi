@@ -263,3 +263,26 @@ func StalenessOf(root string, fm Frontmatter) []StaleAnchor {
 	}
 	return out
 }
+
+// Anchors parsea TODAS las anclas que declara una spec —no sólo las rancias, que es lo que filtra
+// StalenessOf—, cada una con sus dos mitades ya separadas. Es el punto de extensión para los
+// consumidores fuera de specgraph: el cross-link spec↔código (F3-B) necesita resolver cada ancla
+// contra el grafo, y para eso le hace falta el conjunto COMPLETO, no el subconjunto rancio. Vive
+// acá, y no en la capa MCP, porque el split `=`/`#` (parseAnchorEntry, D2) no debe duplicarse fuera
+// de este paquete (frontera D6): es la misma regla que ata la ranciedad, y dos copias divergen.
+//
+// Saltea las entradas degeneradas sin Path (p. ej. "=hash" escrito a mano), igual que StalenessOf:
+// no resuelven a ningún archivo, así que no son anclas útiles para cruzar. Devuelve una lista
+// (nunca nil) por higiene (go-hygiene #6).
+func Anchors(fm Frontmatter) []Anchor {
+	refs := List(fm, FieldAnchors)
+	out := make([]Anchor, 0, len(refs))
+	for _, entrada := range refs {
+		a := parseAnchorEntry(entrada)
+		if a.Path == "" {
+			continue // entrada degenerada: nada que resolver
+		}
+		out = append(out, a)
+	}
+	return out
+}

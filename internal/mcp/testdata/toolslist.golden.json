@@ -1156,10 +1156,15 @@
     },
     {
       "name": "musubi_map",
-      "description": "Panorama del proyecto desde el grafo de código (Track 20), sin leer archivos: conteo de nodos y aristas por tipo, los 'god-nodes' (símbolos con más llamadas incidentes), los entry points (funcs/métodos que nadie llama internamente: main, handlers, exports), ordenados por cuántas llamadas SALEN de cada uno —lo que separa un root de verdad de una función cuyo llamador el grafo no capturó— con 'total_entry_points' y 'entry_points_truncated' al lado, porque la lista viene recortada y la salud del índice: 'stale' (cambiaron desde el índice), 'ghosts' (están en el grafo pero ya no en disco) y 'missing' (indexables en disco y SIN UN SOLO NODO, o sea que el grafo no los vio nunca — `missing`\u003e0 significa que cualquier respuesta de alcance está incompleta y no puede saberlo). Si alguno es \u003e0 conviene correr musubi_codegraph_index. Requiere el grafo indexado. Sin parámetros.",
+      "description": "Panorama del proyecto desde el grafo de código (Track 20), sin leer archivos: conteo de nodos y aristas por tipo, los 'god-nodes' (símbolos con más llamadas incidentes), los entry points (funcs/métodos que nadie llama internamente: main, handlers, exports), ordenados por cuántas llamadas SALEN de cada uno —lo que separa un root de verdad de una función cuyo llamador el grafo no capturó— con 'total_entry_points' y 'entry_points_truncated' al lado, porque la lista viene recortada y la salud del índice: 'stale' (cambiaron desde el índice), 'ghosts' (están en el grafo pero ya no en disco) y 'missing' (indexables en disco y SIN UN SOLO NODO, o sea que el grafo no los vio nunca — `missing`\u003e0 significa que cualquier respuesta de alcance está incompleta y no puede saberlo). Si alguno es \u003e0 conviene correr musubi_codegraph_index. Requiere el grafo indexado. Con el flag opt-in 'coverage' agrega, por módulo, qué directorios de código tienen al menos una spec anclada dentro (F3-B); sin el flag la salida no cambia.",
       "inputSchema": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "coverage": {
+            "type": "boolean",
+            "description": "Opt-in: agrega un overlay de cobertura de specs por módulo (qué directorios de código tienen al menos una spec anclada dentro, cuáles no). Sin el flag la salida es byte-idéntica a la de siempre."
+          }
+        }
       }
     },
     {
@@ -2209,6 +2214,31 @@
         "required": [
           "id"
         ]
+      }
+    },
+    {
+      "name": "musubi_spec_coverage",
+      "description": "Cruza las specs con el grafo de código en DOS direcciones (Track 20 · spec-graph F3-B), read-only y model-free. spec→código: dado spec_id, resuelve cada ancla de la spec a su(s) símbolo(s) del grafo y devuelve el blast radius (callers transitivos, como musubi_impact). código→spec: dado symbol ('ruta#símbolo' o un node_key 'path#kind:name') o module (prefijo de ruta), devuelve las specs cuyas anclas lo cubren. Exactamente UNA dirección por llamada. Degrada SIN error: si el grafo no está indexado avisa y omite el blast radius; un ancla rancia se marca (changed/missing); un ancla que no resuelve a un nodo es 'no_resuelto'. Salida determinista y ordenada.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "max_depth": {
+            "type": "number",
+            "description": "spec→código: profundidad máxima del blast radius (opcional, default 5)."
+          },
+          "module": {
+            "type": "string",
+            "description": "código→spec: prefijo de ruta (p. ej. internal/foo); devuelve las specs con alguna ancla bajo él."
+          },
+          "spec_id": {
+            "type": "string",
+            "description": "spec→código: el id de la spec cuyas anclas resolver al grafo y medir su blast radius."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "código→spec: símbolo cubierto, como 'ruta#símbolo' root-relative o un node_key 'path#kind:name'."
+          }
+        }
       }
     }
   ]

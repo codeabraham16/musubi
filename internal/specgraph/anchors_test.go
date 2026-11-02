@@ -430,3 +430,42 @@ func TestSpecgraphNoDependeDeMemoria(t *testing.T) {
 		t.Error("el test no encontró el import a codeintel: ¿escaneó el paquete correcto?")
 	}
 }
+
+// TestAnchors fija el contrato de Anchors —el punto de extensión que F3-B consume para cruzar cada
+// ancla contra el grafo—: parsea TODAS las anclas (no sólo las rancias), separa las dos mitades con la
+// MISMA regla que la ranciedad (parseAnchorEntry, D2/D6), saltea las entradas degeneradas sin Path, y
+// nunca devuelve nil. El símbolo "" distingue un ancla de archivo entero de una de símbolo. Hasta F3-B
+// esta función exportada no tenía test directo (su verde salía de rebote de los de StalenessOf).
+//
+// Sabotaje que lo pone en ROJO: quitar el `continue` de la rama degenerada, con lo que la entrada
+// "=deadbeef" (Path vacío) se cuela en la salida y el conteo da 4 en vez de 3. Ataca la línea PROPIA de
+// Anchors: StalenessOf tiene su propio skip con otro comentario, así que la mutación no es ambigua.
+// arnes: archivo="internal/specgraph/anchors.go"
+// arnes: de="continue // entrada degenerada: nada que resolver"
+// arnes: a="// entrada degenerada: nada que resolver"
+func TestAnchors(t *testing.T) {
+	fm := Frontmatter{FieldAnchors: []string{
+		"p.go#Dos=abc123",  // símbolo, con baseline
+		"notas.txt=def456", // archivo entero, con baseline
+		"=deadbeef",        // degenerada: sin Path ⇒ se saltea
+		"x.go#Foo",         // símbolo, a mano (sin baseline)
+	}}
+	got := Anchors(fm)
+	quiero := []Anchor{
+		{Ref: "p.go#Dos", Path: "p.go", Symbol: "Dos", Baseline: "abc123"},
+		{Ref: "notas.txt", Path: "notas.txt", Symbol: "", Baseline: "def456"},
+		{Ref: "x.go#Foo", Path: "x.go", Symbol: "Foo", Baseline: ""},
+	}
+	if len(got) != len(quiero) {
+		t.Fatalf("Anchors debe saltear la entrada degenerada: esperaba %d, dio %d: %+v", len(quiero), len(got), got)
+	}
+	for i := range quiero {
+		if got[i] != quiero[i] { // Anchor es todo-strings: comparable con ==
+			t.Errorf("ancla %d:\n quiero %+v\n dio    %+v", i, quiero[i], got[i])
+		}
+	}
+	// Nunca nil (go-hygiene #6): una spec sin anclas devuelve [], no null.
+	if vacio := Anchors(Frontmatter{}); vacio == nil {
+		t.Error("Anchors de un frontmatter sin anclas debe ser no-nil (lista vacía)")
+	}
+}

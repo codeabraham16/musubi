@@ -1,18 +1,25 @@
-// methods_spec.go son las 8 tools MCP del grafo de specs (spec-graph F1 + recall
-// F3-A). La capa de tools es de Musubi (frontera D1): el core portado vive en
-// internal/specgraph y acá se re-escribe la capa que thinkrail tenía acoplada a
-// pi/typebox, con LA convención de Musubi — schema JSON como el resto de
-// registry.go, RpcError, candados de dispatch, y los 3 goldens.
+// methods_spec.go son las 9 tools MCP del grafo de specs (spec-graph F1 + recall
+// F3-A + cross-link F3-B). La capa de tools es de Musubi (frontera D1): el core
+// portado vive en internal/specgraph y acá se re-escribe la capa que thinkrail
+// tenía acoplada a pi/typebox, con LA convención de Musubi — schema JSON como el
+// resto de registry.go, RpcError, candados de dispatch, y los 3 goldens.
+// (coverage vive en su propio archivo, methods_spec_coverage.go, por tamaño.)
 //
-// Clasificación (D3/D8): grep/get/graph/validate/recall son readOnly por su EFECTO
-// sobre el repo (no mutan archivos), aunque por dentro toquen el cache del índice
-// —ese cache lo protege el sync.Mutex interno del Index, no el candado del
-// dispatch—. recall además embebe el query (I/O de red), por lo que es lockSelf;
-// pero eso es concurrencia, no alcance: su EFECTO sobre el repo sigue siendo nulo
-// y actuaAfuera() lo deriva false por readOnly (permisos.go sólo mira flota/
-// credenciales, no el embebedor). create/update/delete son write (candado
-// exclusivo). Las 8 actúan SÓLO sobre archivos locales (recall LEE specs del disco;
+// Clasificación (D3/D8): grep/get/graph/validate/recall/coverage son readOnly por
+// su EFECTO sobre el repo (no mutan archivos), aunque por dentro toquen el cache
+// del índice —ese cache lo protege el sync.Mutex interno del Index, no el candado
+// del dispatch—. recall además embebe el query (I/O de red), por lo que es
+// lockSelf; pero eso es concurrencia, no alcance: su EFECTO sobre el repo sigue
+// siendo nulo y actuaAfuera() lo deriva false por readOnly (permisos.go sólo mira
+// flota/credenciales, no el embebedor). create/update/delete son write (candado
+// exclusivo). Las 9 actúan SÓLO sobre archivos locales o tablas locales del grafo
+// (recall LEE specs del disco; coverage LEE el grafo de código scopeado por tenant;
 // el embebedor es opcional y no escribe) ⇒ actuaAfuera=false, fijado por el tripwire.
+//
+// ⚠️ coverage es la ÚNICA spec-tool que lee tablas scopeadas por tenant
+// (code_graph_nodes/_edges). El scope lo da s.scopedCtx(ctx), pero hay que
+// PROBARLO: su aislamiento va por un test dedicado (D8), no por el barrido genérico
+// —es la clase de fuga cross-tenant que el repo ya arregló tres veces—.
 
 package mcp
 
@@ -933,6 +940,28 @@ func (s *McpServer) specToolEntries() []toolEntry {
 				},
 			},
 			handler: noCtx(s.toolSpecDelete),
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_spec_coverage",
+				Description: "Cruza las specs con el grafo de código en DOS direcciones (Track 20 · spec-graph F3-B), read-only y model-free. spec→código: dado spec_id, resuelve cada ancla de la spec a su(s) símbolo(s) del grafo y devuelve el blast radius (callers transitivos, como musubi_impact). código→spec: dado symbol ('ruta#símbolo' o un node_key 'path#kind:name') o module (prefijo de ruta), devuelve las specs cuyas anclas lo cubren. Exactamente UNA dirección por llamada. Degrada SIN error: si el grafo no está indexado avisa y omite el blast radius; un ancla rancia se marca (changed/missing); un ancla que no resuelve a un nodo es 'no_resuelto'. Salida determinista y ordenada.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"spec_id":   {Type: "string", Description: "spec→código: el id de la spec cuyas anclas resolver al grafo y medir su blast radius."},
+						"symbol":    {Type: "string", Description: "código→spec: símbolo cubierto, como 'ruta#símbolo' root-relative o un node_key 'path#kind:name'."},
+						"module":    {Type: "string", Description: "código→spec: prefijo de ruta (p. ej. internal/foo); devuelve las specs con alguna ancla bajo él."},
+						"max_depth": {Type: "number", Description: "spec→código: profundidad máxima del blast radius (opcional, default 5)."},
+					},
+					// Sin Required: el XOR spec_id / (symbol|module) no se expresa en JSON Schema; lo
+					// valida el handler (R3/D4).
+				},
+			},
+			// handler DIRECTO (ctx-aware), no noCtx: necesita el ctx para scopear la lectura del grafo
+			// de código (code_graph_nodes/_edges están scopeadas por tenant). readOnly: lee, no muta.
+			// SIN lockSelf: no hay red ni LLM (a diferencia de recall), sólo lecturas locales de DB.
+			handler:  s.toolSpecCoverage,
+			readOnly: true,
 		},
 	}
 }

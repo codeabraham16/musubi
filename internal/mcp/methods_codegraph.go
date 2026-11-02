@@ -1747,7 +1747,7 @@ func (s *McpServer) graphFreshness(scoped context.Context) (stale, ghosts, missi
 	return stale, ghosts, missing, archivosEnGrafo, archivosEnDisco
 }
 
-func (s *McpServer) toolMap(ctx context.Context, _ json.RawMessage) (interface{}, *RpcError) {
+func (s *McpServer) toolMap(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	scoped := s.scopedCtx(ctx)
 	nodes, byKind, err := s.engine.GraphStatsCtx(scoped)
 	if err != nil {
@@ -1763,11 +1763,24 @@ func (s *McpServer) toolMap(ctx context.Context, _ json.RawMessage) (interface{}
 		entry = []string{}
 	}
 	stale, ghosts, missing, _, _ := s.graphFreshness(scoped)
-	return jsonResult(map[string]interface{}{
+	resp := map[string]interface{}{
 		"nodes": nodes, "edges": byKind, "god_nodes": god, "entry_points": entry,
 		"total_entry_points": totalEntry, "entry_points_truncated": totalEntry > len(entry),
 		"stale": stale, "ghosts": ghosts, "missing": missing,
-	})
+	}
+	// F3-B: overlay de cobertura de specs, OPT-IN por flag (R11/D9). Sin el flag la respuesta es
+	// byte-idéntica a la de siempre —el campo ni aparece—; con coverage=true se agrega el overlay
+	// ancla-based (qué módulos de código tienen una spec anclada dentro). coverageOverlay vive en
+	// methods_spec_coverage.go.
+	if len(raw) > 0 {
+		var args struct {
+			Coverage bool `json:"coverage"`
+		}
+		if json.Unmarshal(raw, &args) == nil && args.Coverage {
+			resp["coverage"] = s.coverageOverlay()
+		}
+	}
+	return jsonResult(resp)
 }
 
 // graphVizEngine es el sub-contrato para los grafos renderizables completos. Lo
