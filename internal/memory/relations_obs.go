@@ -96,21 +96,21 @@ func (e *DbEngine) UpsertObsRelation(r ObsRelation) (string, error) {
 // VEREDICTO, de modo que LA DETECCIÓN NO PISE AL QUE ARBITRÓ. La regla no mira QUIÉN llama —eso
 // sería frágil— sino lo que ENTRA, y son DOS cosas distintas, cada una con su motivo:
 //
-//	1) UN `pending` ENTRANTE NUNCA DEGRADA UN VEREDICTO, sea de quien sea. Un entrante `pending` es
-//	   por definición la detección proponiendo, y degradar borra trabajo que alguien hizo a
-//	   propósito: el veredicto vuelve a la cola con su `reason` escrito en NULL, sin error y sin
-//	   aviso. Medido el 2026-11-01 contra la base viva, y es el defecto que abrió este expediente.
-//	   OJO con el alcance real, porque es tentador contarlo más grave de lo que es: un supersedes
-//	   YA APLICADO no entra por acá: markSuperseded oculta la target y conflictCandidates excluye
-//	   las superseded, así que ese par no se vuelve a detectar nunca. El daño alcanzable es sobre
-//	   los veredictos que NO ocultan —related, compatible, scoped, conflicts_with, not_conflict,
-//	   not_duplicate—, que son la enorme mayoría de la cola.
-//	2) EL DETECTOR NO PISA UN VEREDICTO AJENO. decideRelation también emite veredictos RESUELTOS
-//	   —el auto-supersede y el auto-related—, firmados RelResolvedByHeuristic. Sin esta mitad, la
-//	   regla (1) sólo tapaba medio agujero: alguien juzgaba el par `related` («no se tapan»), se
-//	   re-guardaba la observación, y el heurístico volvía a decidir `supersedes` y PISABA el
-//	   veredicto humano ocultando la target. Medido el 2026-11-01: entra por detectAndSurface, que
-//	   corre en CADA save_observation con DetectOnly=false.
+//  1. UN `pending` ENTRANTE NUNCA DEGRADA UN VEREDICTO, sea de quien sea. Un entrante `pending` es
+//     por definición la detección proponiendo, y degradar borra trabajo que alguien hizo a
+//     propósito: el veredicto vuelve a la cola con su `reason` escrito en NULL, sin error y sin
+//     aviso. Medido el 2026-11-01 contra la base viva, y es el defecto que abrió este expediente.
+//     OJO con el alcance real, porque es tentador contarlo más grave de lo que es: un supersedes
+//     YA APLICADO no entra por acá: markSuperseded oculta la target y conflictCandidates excluye
+//     las superseded, así que ese par no se vuelve a detectar nunca. El daño alcanzable es sobre
+//     los veredictos que NO ocultan —related, compatible, scoped, conflicts_with, not_conflict,
+//     not_duplicate—, que son la enorme mayoría de la cola.
+//  2. EL DETECTOR NO PISA UN VEREDICTO AJENO. decideRelation también emite veredictos RESUELTOS
+//     —el auto-supersede y el auto-related—, firmados RelResolvedByHeuristic. Sin esta mitad, la
+//     regla (1) sólo tapaba medio agujero: alguien juzgaba el par `related` («no se tapan»), se
+//     re-guardaba la observación, y el heurístico volvía a decidir `supersedes` y PISABA el
+//     veredicto humano ocultando la target. Medido el 2026-11-01: entra por detectAndSurface, que
+//     corre en CADA save_observation con DetectOnly=false.
 //
 // La asimetría de (2) importa: el detector SÍ puede refrescar un veredicto SUYO (un auto-related
 // que hoy da auto-supersede porque el texto cambió). Lo que no puede es ganarle a quien arbitró. Por
