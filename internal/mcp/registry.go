@@ -1183,10 +1183,12 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		{
 			Tool: Tool{
 				Name:        "musubi_map",
-				Description: "Panorama del proyecto desde el grafo de código (Track 20), sin leer archivos: conteo de nodos y aristas por tipo, los 'god-nodes' (símbolos con más llamadas incidentes), los entry points (funcs/métodos que nadie llama internamente: main, handlers, exports), ordenados por cuántas llamadas SALEN de cada uno —lo que separa un root de verdad de una función cuyo llamador el grafo no capturó— con 'total_entry_points' y 'entry_points_truncated' al lado, porque la lista viene recortada y la salud del índice: 'stale' (cambiaron desde el índice), 'ghosts' (están en el grafo pero ya no en disco) y 'missing' (indexables en disco y SIN UN SOLO NODO, o sea que el grafo no los vio nunca — `missing`>0 significa que cualquier respuesta de alcance está incompleta y no puede saberlo). Si alguno es >0 conviene correr musubi_codegraph_index. Requiere el grafo indexado. Sin parámetros.",
+				Description: "Panorama del proyecto desde el grafo de código (Track 20), sin leer archivos: conteo de nodos y aristas por tipo, los 'god-nodes' (símbolos con más llamadas incidentes), los entry points (funcs/métodos que nadie llama internamente: main, handlers, exports), ordenados por cuántas llamadas SALEN de cada uno —lo que separa un root de verdad de una función cuyo llamador el grafo no capturó— con 'total_entry_points' y 'entry_points_truncated' al lado, porque la lista viene recortada y la salud del índice: 'stale' (cambiaron desde el índice), 'ghosts' (están en el grafo pero ya no en disco) y 'missing' (indexables en disco y SIN UN SOLO NODO, o sea que el grafo no los vio nunca — `missing`>0 significa que cualquier respuesta de alcance está incompleta y no puede saberlo). Si alguno es >0 conviene correr musubi_codegraph_index. Requiere el grafo indexado. Con el flag opt-in 'coverage' agrega, por módulo, qué directorios de código tienen al menos una spec anclada dentro (F3-B); sin el flag la salida no cambia.",
 				InputSchema: InputSchema{
-					Type:       "object",
-					Properties: map[string]Property{},
+					Type: "object",
+					Properties: map[string]Property{
+						"coverage": {Type: "boolean", Description: "Opt-in: agrega un overlay de cobertura de specs por módulo (qué directorios de código tienen al menos una spec anclada dentro, cuáles no). Sin el flag la salida es byte-idéntica a la de siempre."},
+					},
 				},
 			},
 			handler:  s.toolMap,
@@ -1699,10 +1701,10 @@ func (s *McpServer) buildRegistry() []toolEntry {
 	// OFFLINE admin+opt-in que junta las tarjetas `design-corpus/*` gemelas por COSENO (un juez LLM decide
 	// MERGE/KEEP); lockSelf porque hace I/O externa (juez) por par. Ver methods_dedup.go.
 	entries = append(entries, s.sharpenToolEntry())
-	// musubi_spec_* (spec-graph): las 8 tools del grafo de specs tipadas en SPEC.md,
-	// navegable como grafo. grep/get/graph/validate son readOnly (su efecto sobre el
-	// repo es nulo); recall es readOnly pero toma lockSelf (el embed de red corre fuera
-	// del candado); create/update/delete son write (candado exclusivo). Las 8 actúan
+	// musubi_spec_* (spec-graph): las 9 tools del grafo de specs tipadas en SPEC.md,
+	// navegable como grafo. grep/get/graph/validate/coverage son readOnly (su efecto sobre
+	// el repo es nulo); recall es readOnly pero toma lockSelf (el embed de red corre fuera
+	// del candado); create/update/delete son write (candado exclusivo). Las 9 actúan
 	// sólo sobre archivos locales ⇒ actuaAfuera=false. Ver methods_spec.go.
 	entries = append(entries, s.specToolEntries()...)
 	return entries

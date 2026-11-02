@@ -576,6 +576,11 @@ func TestG8MapaDeAutorizacionIntacto(t *testing.T) {
 		"musubi_spec_grep":     true,
 		"musubi_spec_recall":   true,
 		"musubi_spec_validate": true,
+		// spec-graph F3-B · el cross-link spec↔código: un reader lo llama igual que las demás lecturas
+		// del subsistema (es read_only=true, así que canCall lo abre). Lee el grafo de código y no sólo
+		// el de specs, pero eso es alcance de DATOS —lo custodia TestSpecCoverageCrossTenantIsolation—,
+		// no autorización: acá sólo importa que un reader pueda invocarlo.
+		"musubi_spec_coverage": true,
 	}
 
 	for _, e := range s.tools {

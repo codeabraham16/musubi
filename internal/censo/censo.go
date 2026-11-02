@@ -133,6 +133,10 @@ var censo = map[string]Clase{
 	"musubi_spec_recall":   DebeInvocarse,
 	"musubi_spec_update":   DebeInvocarse,
 	"musubi_spec_validate": DebeInvocarse,
+	// spec-graph F3-B: el cross-link spec↔código (musubi_spec_coverage). Mismo criterio que sus
+	// hermanas de lectura: recién nace, y un cero persistente es el «se construye y no se enciende»
+	// que A3 surfacea, así que va a DebeInvocarse y no a una clase que excuse el cero.
+	"musubi_spec_coverage": DebeInvocarse,
 	"musubi_sync_status":   DebeInvocarse,
 	"musubi_tokens":        DebeInvocarse,
 	"musubi_tool_usage":    DebeInvocarse,

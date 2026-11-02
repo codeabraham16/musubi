@@ -7,6 +7,9 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **`spec-graph` F3-B: `musubi_spec_coverage` cruza specs y código en los dos sentidos, y `musubi_map` gana una capa `coverage` opt-in.** Hacia adelante (`spec_id=<id>`) lista, para esa spec, qué anclas resuelven a un símbolo del grafo de código y cuáles quedan sin resolver, y adjunta el *blast radius*: el cierre transitivo de símbolos que dependen de los anclados —quién se rompe si ese código cambia—, deduplicado y ordenado por `node_key` para que la salida sea estable. Hacia atrás (`symbol=<ruta#símbolo>`) responde la pregunta inversa —qué specs anclan a ese código— y acepta además el nombre de un módulo o un `node_key`. La cobertura es **anchor-based, no co-locación**: un módulo cuenta como cubierto cuando alguna ancla apunta ADENTRO de él, porque Musubi —a diferencia de thinkrail— no pone un `SPEC.md` al lado de cada módulo; por eso `musubi_map coverage=true` (opt-in: el mapa sin la bandera no cambia en nada) deriva `modules_total` y `without_spec` de a dónde apuntan las anclas, no de qué carpetas tienen un archivo. Es **sólo lectura y model-free**: lee el grafo de código ya indexado y las anclas de las specs, sin un LLM ni un servicio externo, y si el grafo no está indexado lo dice en vez de medir sobre vacío. Con esto son nueve las tools `musubi_spec_*`.
+
 ## [0.148.0] - 2026-11-02
 
 ### Destacado

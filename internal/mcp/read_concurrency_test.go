@@ -105,6 +105,11 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		"musubi_spec_get":      true,
 		"musubi_spec_graph":    true,
 		"musubi_spec_validate": true,
+		// spec-graph F3-B · el cross-link spec↔código. A diferencia de las cinco de arriba, LEE el
+		// grafo de código (tablas code_graph_*, scopeadas por proyecto) para resolver anclas y medir el
+		// blast; sigue siendo readOnly porque su efecto sobre el repo es nulo. Su aislamiento por tenant
+		// lo custodia TestSpecCoverageCrossTenantIsolation, no este mapa de concurrencia.
+		"musubi_spec_coverage": true,
 	}
 	for i := range s.tools {
 		name := s.tools[i].Name
@@ -172,6 +177,10 @@ func TestConcurrentReadDispatch(t *testing.T) {
 		mkReq(7, "tools/call", callReqJSON("musubi_spec_graph", map[string]interface{}{"root": "x", "direction": "subtree"})),
 		mkReq(8, "tools/call", callReqJSON("musubi_spec_validate", map[string]interface{}{})),
 		mkReq(9, "tools/call", callReqJSON("musubi_spec_recall", map[string]interface{}{"query": "x"})),
+		// coverage inverso: resuelve las specs que cubren un símbolo. Sobre el temp dir vacío devuelve
+		// specs=[] (respuesta válida), y por dentro consulta el grafo de código bajo scopedCtx —otro
+		// camino de lectura compartido que -race vigila desde 32 goroutines—.
+		mkReq(10, "tools/call", callReqJSON("musubi_spec_coverage", map[string]interface{}{"symbol": "x#Y"})),
 	}
 
 	var wg sync.WaitGroup
