@@ -1680,6 +1680,19 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 	// del juez sigue indexada por lo que llegó.
 	res = s.rerankSiCorresponde(ctx, args.Query, res, args.Rerank)
 	res.Correcciones = correcciones
+
+	// TIER 2a (specs/recall-envoltorio/tier2-id-corto.md) — el `id` viaja al agente ACORTADO a 8 hex.
+	// El id del payload es un HANDLE opaco para expandir, no contenido que el modelo razone:
+	// musubi_memory_expand resuelve una ref corta igual que el uuid entero (hydrateByIDs/esRefCorta),
+	// así que el agente no pierde ninguna señal y el envoltorio que se re-lee cada turno adelgaza.
+	// Se hace ACÁ, en el límite del tool y DESPUÉS del rerank y de markStaleOrigins —que corren sobre
+	// el id COMPLETO, adentro de Recall—: acortar aguas arriba (en empaquetar) rompía la hidratación
+	// del grounding y el marcado de ranciedad, que buscan la fila por el id entero. La advertencia de
+	// ranciedad ya está prependida al Gist, así que acortar sólo el id no la toca.
+	for i := range res.Items {
+		res.Items[i].ID = memory.IDCorto(res.Items[i].ID)
+	}
+
 	// used_tokens honesto: TokenBudget sólo acota el PACKING de gists (internal/memory.empaquetar),
 	// pero lo que realmente entra al contexto —y se re-lee en cada turno hasta compactar— es el
 	// payload serializado entero: id, topic_key, created_at, las claves JSON repetidas. Medido sobre
