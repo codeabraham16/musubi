@@ -27,6 +27,12 @@ optimización de tokens, el ranking y la resolución de skills son deterministas
 
 <!-- novedades:inicio -->
 
+**[v0.148.0](https://github.com/codeabraham16/musubi/releases/tag/v0.148.0)** · 2 nov 2026
+
+- Musubi aprende a llevar las specs del proyecto como datos, no como prosa suelta: archivos `SPEC.md` tipados —de objetivo-y-requisitos hasta task-spec— enlazados en un grafo por `parent` y `depends-on`, que el agente navega y mantiene con ocho tools nuevas `musubi_spec_*` en vez de editarlos a mano. Es model-free y local-first como el resto de Musubi: el núcleo se portó del `spec-graph` de thinkrail (Apache-2.0) sin pedir ningún servicio externo ni un LLM. Al cerrar un cambio, `musubi_spec_validate` denuncia enlaces colgantes, ids duplicados y ciclos de `parent` antes de que el grafo mienta.
+
+Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.148.0/CHANGELOG.md#01480---2026-11-02)
+
 **[v0.147.0](https://github.com/codeabraham16/musubi/releases/tag/v0.147.0)** · 28 oct 2026
 
 - El proxy `musubi cerebro` ya no puede marcar el cerebro central como caído por un pico de red en el arranque. Antes reenviaba el saludo MCP (`initialize`) al central —el primer dial en frío de la sesión—, y si la red se demoraba más de 5 s, Claude Code dejaba el server MCP en `failed` para TODA la sesión aunque el central estuviera vivo y contestara en ~250-780 ms. Ahora el saludo se responde localmente, sin discar: el handshake ya no depende de la red y la sesión siempre inicializa.
@@ -38,14 +44,6 @@ Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob
 - Promover, descartar y guardar un recuerdo entienden la referencia corta de 8 hex que el hook emite desde la 0.145.0. Antes, hacerlo por el id corto que el agente ve en el recall fallaba en silencio —la propuesta rancia quedaba viva— o, al guardar, podía pisar o duplicar otra observación; ahora el id corto se resuelve a la observación exacta antes de actuar, y guardar con un id corto se rechaza con instrucciones. Cero pérdida.
 
 Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.146.0/CHANGELOG.md#01460---2026-10-28)
-
-**[v0.145.0](https://github.com/codeabraham16/musubi/releases/tag/v0.145.0)** · 26 oct 2026
-
-- Se enciende el emisor del id corto (fase 2, y última). El `[id:…]` que el hook del turno le pega a cada recuerdo ahora sale como una referencia corta de 8 hex en lugar del UUID de 36 caracteres. La 0.144.0 trajo sólo el resolvedor; ésta acorta de verdad, así que de acá en más cada turno gasta menos tokens del agente sin cambiar una coma de lo que el recuerdo dice.
-- El "viaje de comandos" para cortar un release queda automatizado: una herramienta hace las ediciones mecánicas del corte (VERSION, versioninfo, CHANGELOG) y otra imprime el runbook del despliegue con los valores reales ya puestos, sin ejecutar nada hacia afuera.
-- `musubi doctor` suma un check reparable que detecta observaciones de un modelo ya corroboradas que quedaron sólo en local y las promueve al cerebro central.
-
-Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.145.0/CHANGELOG.md#01450---2026-10-26)
 
 <!-- novedades:fin -->
 
