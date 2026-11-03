@@ -313,11 +313,11 @@ func TestPartirRemote(t *testing.T) {
 		wantErr  bool
 	}{
 		{"musubi@100.79.126.62:/srv/crudo", "musubi@100.79.126.62", "/srv/crudo", false},
-		{"  host:/r  ", "host", "/r", false},                                // se recorta
+		{"  host:/r  ", "host", "/r", false},                                 // se recorta
 		{"host:/ruta/con:dos:puntos", "host", "/ruta/con:dos:puntos", false}, // parte en el PRIMER ':'
 		{"", "", "", true},
-		{":/ruta", "", "", true}, // sin host
-		{"host:", "", "", true},  // sin ruta
+		{":/ruta", "", "", true},              // sin host
+		{"host:", "", "", true},               // sin ruta
 		{"-oProxyCommand=x:/r", "", "", true}, // BLINDAJE: host con '-' se rechaza
 	}
 	for _, c := range casos {
