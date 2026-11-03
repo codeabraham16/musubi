@@ -187,13 +187,14 @@ type SpecProjectionInput struct {
 //
 // Una proyección RECIBIDA no es suya para borrar. El discriminador tiene TRES capas, porque ninguna sola
 // cubre todas las topologías (D7):
-//   1) TENANT: el barrido sólo mira spec-proj:<tenant propio>:… El id lleva el tenant de ORIGEN (D2), así
-//      que lo empujado por otra máquina a un central —o bajado por pull— cae fuera y ni se enumera.
-//   2) RECEPTOR: en un nodo sin destino (e.outboxEnabled=false: el cerebro central) el barrido NO corre,
-//      por si un tenant ajeno colisiona con el propio. Lo empujado entra sin outbox y sin sello espejo,
-//      y antes se leía como huérfano local y se borraba en silencio en CADA arranque de `serve`.
-//   3) SELLO: una espejo del MISMO tenant (re-onboarding desde cursor 0, E4) se deja; su retiro es
-//      mesh-wide (R10b), fuera de F4.
+//  1. TENANT: el barrido sólo mira spec-proj:<tenant propio>:… El id lleva el tenant de ORIGEN (D2), así
+//     que lo empujado por otra máquina a un central —o bajado por pull— cae fuera y ni se enumera.
+//  2. RECEPTOR: en un nodo sin destino (e.outboxEnabled=false: el cerebro central) el barrido NO corre,
+//     por si un tenant ajeno colisiona con el propio. Lo empujado entra sin outbox y sin sello espejo,
+//     y antes se leía como huérfano local y se borraba en silencio en CADA arranque de `serve`.
+//  3. SELLO: una espejo del MISMO tenant (re-onboarding desde cursor 0, E4) se deja; su retiro es
+//     mesh-wide (R10b), fuera de F4.
+//
 // (La premisa vieja «una fila SIN outbox es de origen local» era FALSA para un central que recibió la fila.)
 func (e *DbEngine) ReconcileSpecProjections(sharedSpecs []SpecProjectionInput) error {
 	// expected: id determinista -> input, para las specs shared del FS. El project_id se resuelve acá
