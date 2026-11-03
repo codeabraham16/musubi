@@ -176,6 +176,13 @@ func (s *McpServer) handleToolsList() interface{} {
 		if nucleo[t.Name] {
 			t.Meta = map[string]interface{}{metaAlwaysLoad: true}
 		}
+		// readOnlyHint se deriva de los ejes que el registro YA declara: readOnly (no muta nada) o
+		// ro==roLeeConEscrituraIncidental (su única escritura es incidental —p.ej. musubi_recall, que
+		// refuerza el acceso de lo que devuelve—). Se setea en la copia local t, no en el spec: así
+		// huellaDelCatalogo, que marshalea el spec crudo, no la ve y catalog_sha256 no se mueve.
+		if s.tools[i].readOnly || s.tools[i].ro == roLeeConEscrituraIncidental {
+			t.Annotations = &ToolAnnotations{ReadOnlyHint: true}
+		}
 		tools = append(tools, t)
 	}
 	return map[string]interface{}{"tools": tools}

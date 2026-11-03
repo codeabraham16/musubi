@@ -67,6 +67,9 @@
         "required": [
           "query"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -111,6 +114,9 @@
         "required": [
           "ids"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -186,6 +192,9 @@
       "inputSchema": {
         "type": "object",
         "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -199,6 +208,9 @@
             "description": "Ventana en días hacia atrás (default 30)."
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -212,6 +224,9 @@
             "description": "Ventana en días para las dimensiones que salen del ledger (default 30)."
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -220,6 +235,9 @@
       "inputSchema": {
         "type": "object",
         "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -325,6 +343,9 @@
         "required": [
           "entity"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -345,6 +366,9 @@
         "required": [
           "entity"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -365,6 +389,9 @@
         "required": [
           "query"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -385,6 +412,9 @@
         "required": [
           "query_text"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -463,6 +493,9 @@
       "inputSchema": {
         "type": "object",
         "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -534,6 +567,9 @@
             "description": "Filtrar por ecosistema específico (ej. 'Go', 'Node.js') (opcional)"
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -551,6 +587,9 @@
             "description": "Texto de búsqueda (opcional; por defecto se deriva del stack del proyecto)"
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -572,6 +611,9 @@
             "description": "De dónde listar: 'local' (default, el disco de este proyecto), 'central' (el arsenal) o 'all' (ambas, sin duplicar lo ya instalado). 'central' y 'all' requieren sync.central_url configurado y fallan explícitamente si no lo está"
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -670,6 +712,9 @@
             "description": "recent (default, más nuevas primero) | confidence (mayor confianza primero) | oldest (FIFO, la pendiente más vieja primero). SI VAS A DRENAR LA COLA CON UN `limit`, USÁ oldest: los otros dos órdenes son ESTABLES, así que pedir siempre las primeras N devuelve siempre las mismas N y el fondo de la cola queda inalcanzable por construcción. Cuando eso pasa, la respuesta te lo avisa con `oldest_pending_at` y `tail_hint`."
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -970,6 +1015,9 @@
         "required": [
           "path"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -978,6 +1026,9 @@
       "inputSchema": {
         "type": "object",
         "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -1097,6 +1148,9 @@
             "description": "Si es true, compara el índice (git diff --staged); opcional"
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -1121,6 +1175,9 @@
       "inputSchema": {
         "type": "object",
         "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -1146,6 +1203,9 @@
             "description": "tope de observaciones en el lote (default 200)"
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -1229,6 +1289,9 @@
             "description": "node_key del símbolo, formato 'path#kind:name' (ej. 'internal/mcp/methods.go#func:toolSaveCode')"
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -1242,6 +1305,9 @@
             "description": "Máximo de nodos (default 400)"
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -1255,6 +1321,9 @@
             "description": "Máximo de neuronas (default 300)"
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -1275,6 +1344,9 @@
         "required": [
           "symbol"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -1288,6 +1360,9 @@
             "description": "Opt-in: agrega un overlay de cobertura de specs por módulo (qué directorios de código tienen al menos una spec anclada dentro, cuáles no). Sin el flag la salida es byte-idéntica a la de siempre."
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -1304,6 +1379,9 @@
         "required": [
           "symbol"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -1312,6 +1390,9 @@
       "inputSchema": {
         "type": "object",
         "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -1418,6 +1499,9 @@
             "description": "Cuánto silencio se tolera antes de dar una máquina por caída (default 90)"
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -1435,6 +1519,9 @@
             "description": "project_id a consultar. Sólo lo respeta un principal read=all"
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -1521,6 +1608,9 @@
             "description": "project_id. Sólo lo respeta un principal read=all"
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -1542,6 +1632,9 @@
             "description": "project_id. Sólo lo respeta un principal read=all"
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -1591,6 +1684,9 @@
             "description": "project_id. Sólo lo respeta un principal read=all"
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -1627,6 +1723,9 @@
         "required": [
           "device"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -1659,6 +1758,9 @@
         "required": [
           "device"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -1726,6 +1828,9 @@
             "description": "project_id a consultar. Sólo lo respeta un principal read=all"
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -2015,6 +2120,9 @@
         "required": [
           "prompt"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -2109,6 +2217,9 @@
         "required": [
           "pattern"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -2137,6 +2248,9 @@
         "required": [
           "query"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -2153,6 +2267,9 @@
         "required": [
           "id"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -2182,6 +2299,9 @@
           "root",
           "direction"
         ]
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -2190,6 +2310,9 @@
       "inputSchema": {
         "type": "object",
         "properties": {}
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     },
     {
@@ -2362,6 +2485,9 @@
             "description": "código→spec: símbolo cubierto, como 'ruta#símbolo' root-relative o un node_key 'path#kind:name'."
           }
         }
+      },
+      "annotations": {
+        "readOnlyHint": true
       }
     }
   ]
