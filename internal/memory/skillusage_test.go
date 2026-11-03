@@ -160,6 +160,96 @@ func TestA10LosTresPatrones(t *testing.T) {
 	}
 }
 
+// UNA CARGA SE CUENTA, Y ES UN EJE DISTINTO DE «MATCHEÓ».
+//
+// `loaded` lo escribe el hook PostToolUse(Skill): el agente abrió la skill por la tool, el camino
+// que el resolver no ve (spec skills-medir-cargas). Tiene que sumar en Loaded SIN tocar Resolved, y
+// entrar con evidence vacío (como body_requested).
+//
+// Sabotaje que la hace fallar: sacar `case UsoCargada: r.Loaded += n` del switch de SkillUsage
+// (Loaded queda en 0), o sacar `|| k == UsoCargada` de kindValido (la fila ni se escribe).
+// arnes: archivo="internal/memory/skillusage.go" de="r.Loaded += n" a="r.Loaded += 0"
+func TestUnaCargaSeCuentaEnSuPropioEje(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+
+	if !kindValido(UsoCargada) {
+		t.Fatal("UsoCargada tiene que ser un kind válido de la taxonomía cerrada")
+	}
+	for i := 0; i < 3; i++ {
+		contarSkill(t, e, ctx, SkillEvent{Skill: "sdd-flow", Evidence: "", Kind: UsoCargada})
+	}
+
+	rows, _ := e.SkillUsage(ctx)
+	r, ok := filaDe(rows, "sdd-flow")
+	if !ok {
+		t.Fatal("una carga tiene que dejar su fila")
+	}
+	if r.Loaded != 3 {
+		t.Errorf("esperaba loaded=3, obtuve %d", r.Loaded)
+	}
+	if r.Resolved != 0 || r.BodySent != 0 || r.BodyRequested != 0 {
+		t.Errorf("una carga NO es una resolución: esperaba los otros ejes en 0, obtuve %+v", r)
+	}
+}
+
+// UN `loaded` SOBREVIVE AUNQUE VENGA UN KIND BASURA EN EL MISMO LOTE —y un kind que se PARECE a
+// loaded pero no lo es se saltea igual (la taxonomía es exacta, no por prefijo).
+func TestUnaCargaSobreviveAlLadoDeUnKindInvalido(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+
+	contarSkill(t, e, ctx,
+		SkillEvent{Skill: "cargada", Evidence: "", Kind: UsoCargada},
+		SkillEvent{Skill: "basura", Evidence: "", Kind: "loaded_y_sirvio"},
+	)
+
+	rows, _ := e.SkillUsage(ctx)
+	if r, ok := filaDe(rows, "cargada"); !ok || r.Loaded != 1 {
+		t.Errorf("la carga buena tiene que llegar: ok=%v fila=%+v", ok, r)
+	}
+	if _, ok := filaDe(rows, "basura"); ok {
+		t.Error("un kind inválido no puede escribirse aunque se parezca a loaded")
+	}
+}
+
+// UNA SKILL QUE EL AGENTE CARGÓ NO ESTÁ «MUERTA», aunque el resolver nunca la haya matcheado.
+//
+// loaded y resolved son ejes disjuntos: una skill de `.claude/skills/` vive en loaded. Llamar
+// «muerta» a algo que se cargó sería mentir, y la mentira saldría el instante en que el hook corre.
+//
+// Sabotaje que la hace fallar: sacar `&& r.Loaded == 0` del caso «muerta» de MarcarCandidata.
+// arnes: archivo="internal/memory/skillusage.go" de="r.BodyRequested == 0 && r.Loaded == 0" a="r.BodyRequested == 0"
+func TestUnaSkillCargadaNoEstaMuerta(t *testing.T) {
+	cargada := SkillUsageRow{Skill: "x", Loaded: 5}
+	MarcarCandidata(&cargada)
+	if cargada.Candidata == "muerta" {
+		t.Errorf("una skill cargada %d veces no está muerta; quedó %q (%s)",
+			cargada.Loaded, cargada.Candidata, cargada.Porque)
+	}
+
+	// La «muerta» de verdad sigue siéndolo: sin ninguna señal, de ningún eje. (El guard no rompió
+	// el caso real.)
+	sinNada := SkillUsageRow{Skill: "y"}
+	MarcarCandidata(&sinNada)
+	if sinNada.Candidata != "muerta" {
+		t.Errorf("sin ninguna señal tiene que seguir siendo muerta, quedó %q", sinNada.Candidata)
+	}
+}
+
+// EL REPORTE MUESTRA «CARGÓ» por skill, sin llamarlo utilidad (R9, R11).
+func TestElReporteMuestraLasCargas(t *testing.T) {
+	txt := FormatSkillUsage([]SkillUsageRow{
+		{Skill: "sdd-flow", Loaded: 7},
+	}, nil)
+	if !strings.Contains(txt, "CARGÓ") {
+		t.Error("el encabezado tiene que nombrar la columna de cargas")
+	}
+	if !strings.Contains(txt, "7") {
+		t.Error("el conteo de cargas tiene que aparecer en la fila")
+	}
+}
+
 // ★ A9 — LA SALIDA NO LLAMA «UTILIDAD» A LO QUE MIDE, y dice explícitamente qué no midió.
 func TestA9NoSeLlamaUtilidadALoQueNoLoEs(t *testing.T) {
 	txt := FormatSkillUsage([]SkillUsageRow{

@@ -178,6 +178,7 @@ func injectLocalSetup(projectDir, exePath string) []provision.StepResult {
 	add("hook-precheck", writeCodeMemoryHook(projectDir, exePath), "PreToolUse Read+edición (memoria de código y radio de impacto)")
 	add("hook-stop", writeCaptureHook(projectDir, exePath), "Stop (captura de commits)")
 	add("hook-precompact", writePreCompactHook(projectDir, exePath), "PreCompact (el resumen conserva lo que importa)")
+	add("hook-skill-loaded", writeSkillLoadedHook(projectDir, exePath), "PostToolUse Skill (cuenta las cargas de skills)")
 	return steps
 }
 

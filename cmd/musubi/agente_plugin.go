@@ -65,6 +65,7 @@ var ganchosDelAgente = []struct{ evento, matcher, sub string }{
 	{"UserPromptSubmit", "", "turn --hook-mode"},
 	{"PreToolUse", "Read", "precheck --hook-mode"},
 	{"PreToolUse", matcherEdicion, "precheck --hook-mode"},
+	{"PostToolUse", "Skill", "skill-loaded --hook-mode"},
 	{"Stop", "", "capture --hook-mode"},
 	{"PreCompact", "", "precompact --hook-mode"},
 }
