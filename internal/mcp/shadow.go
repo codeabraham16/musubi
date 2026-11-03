@@ -171,9 +171,12 @@ func (w *shadowWorker) encolar(t trabajoSombra) bool {
 // `Lex` quedó por debajo de `AutoResolveThreshold` mientras la fila dice `resolved`+`heuristic`, y
 // contarla aparte como se cuentan los ajenos. Queda sin hacer por decisión de alcance, no por costo.
 //
-// ⚠️ Y OJO CON EL RASTRO: `ajenos` y `tirados` llegan SÓLO a la línea de log del apagado (ver Run).
-// NO salen en la tabla de `musubi conflicts shadow`, así que quien la lea no se entera de cuánto se
-// recortó el corpus. Es log, no reporte: para saber el tamaño del recorte hay que mirar el journal.
+// Y EL RASTRO YA NO ES SÓLO EL LOG. `ajenos` y `tirados` siguen saliendo únicamente en la línea del
+// apagado (ver Run) —son campos en memoria y mueren con el proceso—, pero el TAMAÑO DEL RECORTE ya
+// no hay que ir a buscarlo al journal: `musubi conflicts shadow` lo deriva del corpus con
+// ShadowCoverage y lo imprime como cabecera de la tabla, con el motivo de cada balde. Los
+// contadores siguen sirviendo para auditar UNA CORRIDA; la cobertura dice cómo está el corpus
+// AHORA, que es la pregunta que la tabla sola no podía responder.
 func (s *McpServer) encolarSombra(rels []memory.ObsRelation) {
 	if s.shadow == nil {
 		return
@@ -189,9 +192,15 @@ func (s *McpServer) encolarSombra(rels []memory.ObsRelation) {
 
 // contarAjeno registra una relación que no se midió porque el veredicto que quedó en la fila no es
 // del detector. Se cuenta en vez de descartarse en silencio: un corpus que se encogió sin dejar
-// rastro se lee después como «midió todo», y acá el recorte puede ser la enorme mayoría de la
-// tabla (medido el 2026-11-01 en el repo de Musubi: 996 de 1098 pares re-detectables tenían firma
-// ajena).
+// rastro se lee después como «midió todo», y acá el recorte es casi todo: corrido el 2026-11-02 en
+// el repo de Musubi, de 1.138 relaciones hay 901 re-detectables y 897 de ésas tienen firma ajena,
+// así que el techo de la sombra son 4 pares. La foto se mueve DENTRO del día, porque arbitrar un par
+// le cambia la firma.
+//
+// La cifra que decía este comentario —996 de 1098— estaba mal y conviene saber por qué: contaba
+// como re-detectable el par con UNA punta visible, sin exigir las dos, así que sobreestimaba el
+// denominador. El número de hoy lo da `musubi conflicts shadow`, que lo deriva del corpus en vez
+// de recordarlo.
 func (w *shadowWorker) contarAjeno() {
 	w.mu.Lock()
 	w.ajenos++

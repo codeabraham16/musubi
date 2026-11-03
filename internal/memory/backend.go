@@ -167,6 +167,11 @@ type ConflictDetector interface {
 	ShadowPairTexts(srcID, tgtID string) (string, string, error)
 	// ShadowAgreementByRelation resume el acuerdo entre el detector y el motor, por tipo.
 	ShadowAgreementByRelation() ([]ShadowAgreement, error)
+	// ShadowCoverage dice sobre QUÉ PARTE DEL CORPUS puede hablar ese resumen: cuántos pares son
+	// medibles y cuántos se recortan, con el motivo. Está en la interfaz y no sólo en el comando
+	// porque una tasa sin su denominador no se puede interpretar, y el denominador no vivía en
+	// ningún lugar durable: los contadores del worker mueren con el proceso.
+	ShadowCoverage() (ShadowCoverageReport, error)
 }
 
 // CodeMemoryStore — memoria de código (gist + símbolos por archivo, para no re-leer).
