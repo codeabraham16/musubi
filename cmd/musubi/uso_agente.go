@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -467,19 +466,6 @@ func medirUsoAgente(dir string, v transcripts.Ventana, exclusiones []string) (In
 	return inf, nil
 }
 
-// dirTranscriptsPorDefecto es donde Claude Code guarda los transcripts: `$CLAUDE_CONFIG_DIR/projects`
-// si la variable está puesta (así lo reubica Claude Code), y si no `~/.claude/projects`.
-func dirTranscriptsPorDefecto() (string, error) {
-	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
-		return filepath.Join(d, "projects"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".claude", "projects"), nil
-}
-
 func runUsoAgente(args []string) {
 	os.Exit(usoAgente(args, os.Stdout, os.Stderr))
 }
@@ -513,7 +499,7 @@ func usoAgente(args []string, out, errOut io.Writer) int {
 		return 2
 	}
 	if *dir == "" {
-		if *dir, err = dirTranscriptsPorDefecto(); err != nil {
+		if *dir, err = transcripts.DirPorDefecto(); err != nil {
 			fmt.Fprintln(errOut, "musubi uso-agente: no sé dónde están los transcripts:", err)
 			return 1
 		}
