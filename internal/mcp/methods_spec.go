@@ -1,5 +1,5 @@
-// methods_spec.go son las 9 tools MCP del grafo de specs (spec-graph F1 + recall
-// F3-A + cross-link F3-B). La capa de tools es de Musubi (frontera D1): el core
+// methods_spec.go son las 10 tools MCP del grafo de specs (spec-graph F1 + recall
+// F3-A + cross-link F3-B + federación/archive F4). La capa de tools es de Musubi (frontera D1): el core
 // portado vive en internal/specgraph y acá se re-escribe la capa que thinkrail
 // tenía acoplada a pi/typebox, con LA convención de Musubi — schema JSON como el
 // resto de registry.go, RpcError, candados de dispatch, y los 3 goldens.
@@ -30,10 +30,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"musubi/internal/embedding"
+	"musubi/internal/memory"
 	"musubi/internal/specgraph"
 )
 
@@ -513,6 +515,11 @@ func (s *McpServer) toolSpecCreate(raw json.RawMessage) (interface{}, *RpcError)
 		Covers     []string `json:"covers"`
 		Tags       []string `json:"tags"`
 		Anchors    []string `json:"anchors"`
+		// Shared es *bool a propósito (F4, R3): un booleano JSON entra limpio; cualquier otro valor
+		// —"si", 1, "true" entre comillas— rompe el Unmarshal y sale codeInvalidParams. La validación
+		// de tipo ocurre en el borde, antes de tocar el frontmatter: no hay coacción. nil ⇒ no lo
+		// declaró ⇒ local (opt-in, R2).
+		Shared *bool `json:"shared"`
 	}
 	if rerr := parseSpecArgs(raw, &args); rerr != nil {
 		return nil, rerr
@@ -566,6 +573,13 @@ func (s *McpServer) toolSpecCreate(raw json.RawMessage) (interface{}, *RpcError)
 	if args.Status != "" {
 		fm[specgraph.FieldStatus] = args.Status
 	}
+	// shared (F4): opt-in de federación. Se escribe el booleano SÓLO si el caller lo declaró; ausente
+	// ⇒ se omite la clave (default local, R2). El valor ya es un booleano validado por el tipo del
+	// parámetro (*bool), así que no hay coacción (R3). strconv.FormatBool ⇒ "true"/"false", el mismo
+	// dialecto que normaliza el frontmatter al releer.
+	if args.Shared != nil {
+		fm[specgraph.FieldShared] = strconv.FormatBool(*args.Shared)
+	}
 	if args.Parent != "" {
 		fm[specgraph.FieldParent] = args.Parent
 	}
@@ -599,6 +613,12 @@ func (s *McpServer) toolSpecCreate(raw json.RawMessage) (interface{}, *RpcError)
 			"el id %q no sobrevive el round-trip YAML (se re-parsea como %q): evitá ids que YAML lea como número, fecha, booleano o null",
 			args.ID, gotID)
 	}
+	// shared debe sobrevivir como booleano tras el round-trip YAML (R3). Desde el param *bool esto
+	// siempre pasa; la guarda está para que una regresión que empiece a escribir `shared` de otra
+	// fuente no cuele un valor no booleano en un SPEC.md nuevo (defensa en profundidad, T9).
+	if vErr := specgraph.ValidarShared(reparsed.Frontmatter); vErr != nil {
+		return nil, rpcErrorf(codeInvalidParams, "%v", vErr)
+	}
 	if mkErr := root.MkdirAll(filepath.Dir(rel), 0o755); mkErr != nil {
 		return nil, rpcErrorf(codeInternalError, "no se pudo crear el directorio de %s: %v", rel, mkErr)
 	}
@@ -618,7 +638,20 @@ func (s *McpServer) toolSpecCreate(raw json.RawMessage) (interface{}, *RpcError)
 	if cErr := f.Close(); cErr != nil {
 		return nil, rpcErrorf(codeInternalError, "no se pudo cerrar %s: %v", rel, cErr)
 	}
-	return textResult(fmt.Sprintf("Created %s (%s)", rel, args.ID)), nil
+	msg := fmt.Sprintf("Created %s (%s)", rel, args.ID)
+	// Proyección de federación (F4): si la spec nació `shared: true`, se proyecta al carril del outbox;
+	// si no, no hay nada que proyectar (id nuevo) y NO se toca la DB de observaciones —crear una spec
+	// local no debe depender de la salud de esa DB—. El fallo de proyección NO revierte la escritura
+	// (el SPEC.md ya es la fuente de verdad y la reconciliación de apertura lo cubre, R10): se REPORTA
+	// en el mensaje para no decir "federada" cuando no lo está (la última palabra la tiene la salida real).
+	if specgraph.IsShared(reparsed.Frontmatter) {
+		if pErr := s.renderAndProject(args.ID, reparsed.Frontmatter, reparsed.Body); pErr != nil {
+			msg += fmt.Sprintf("\n⚠️ shared, pero no se pudo proyectar al central (se reconcilia al reabrir): %v", pErr)
+		} else {
+			msg += " · proyectada al central (shared)"
+		}
+	}
+	return textResult(msg), nil
 }
 
 // toolSpecUpdate aplica una edición lossless al frontmatter de una spec: la prosa
@@ -632,6 +665,11 @@ func (s *McpServer) toolSpecUpdate(raw json.RawMessage) (interface{}, *RpcError)
 		AddList    map[string][]string `json:"addList"`
 		RemoveList map[string][]string `json:"removeList"`
 		Anchors    []string            `json:"anchors"`
+		// Shared es *bool (F4, R3): gobierna el opt-in de federación. nil ⇒ no se toca el campo
+		// `shared` (el update puede ser de otra cosa, p.ej. status). Va por un parámetro dedicado y NO
+		// por set/remove: eso es lo que fuerza la validación de tipo (abajo se prohíbe `shared` en los
+		// genéricos, igual que anchors no entra por addList).
+		Shared *bool `json:"shared"`
 	}
 	if rerr := parseSpecArgs(raw, &args); rerr != nil {
 		return nil, rerr
@@ -665,6 +703,25 @@ func (s *McpServer) toolSpecUpdate(raw json.RawMessage) (interface{}, *RpcError)
 		return nil, rpcErrorf(codeInvalidParams,
 			"no agregues anchors con addList (quedarían sin digest ni validar): usá el parámetro anchors")
 	}
+	// shared (F4) se gobierna SÓLO por el parámetro dedicado (bool validado), NUNCA por el set/remove
+	// genérico: un `shared: "banana"` por set saltearía la validación de tipo. Mismo principio que
+	// anchors+addList. Si el caller lo pasó, se inyecta como escalar "true"/"false" en el set efectivo
+	// (un set de un escalar ausente lo AGREGA, lossless; uno presente lo reemplaza).
+	if _, ok := args.Set[specgraph.FieldShared]; ok {
+		return nil, rpcErrorf(codeInvalidParams,
+			"no seteés 'shared' por set: usá el parámetro shared (booleano)")
+	}
+	if slices.Contains(args.Remove, specgraph.FieldShared) {
+		return nil, rpcErrorf(codeInvalidParams,
+			"no quites 'shared' por remove: usá el parámetro shared (booleano)")
+	}
+	set := args.Set
+	if args.Shared != nil {
+		if set == nil {
+			set = map[string]string{}
+		}
+		set[specgraph.FieldShared] = strconv.FormatBool(*args.Shared)
+	}
 	var setList map[string][]string
 	if len(args.Anchors) > 0 {
 		// El parámetro anchors re-vouchea SÓLO las refs que trae: se les calcula la huella fresca y
@@ -682,7 +739,7 @@ func (s *McpServer) toolSpecUpdate(raw json.RawMessage) (interface{}, *RpcError)
 		setList = map[string][]string{specgraph.FieldAnchors: final}
 	}
 	updated, uErr := specgraph.UpdateFrontmatterText(string(original), specgraph.FrontmatterEdit{
-		Set:        args.Set,
+		Set:        set,
 		Remove:     args.Remove,
 		AddList:    args.AddList,
 		RemoveList: args.RemoveList,
@@ -693,10 +750,33 @@ func (s *McpServer) toolSpecUpdate(raw json.RawMessage) (interface{}, *RpcError)
 		// id/type, des-espec-ear) son culpa del llamador.
 		return nil, rpcErrorf(codeInvalidParams, "%v", uErr)
 	}
+	// Validar `shared` ANTES de escribir (R3): atrapa un valor no booleano preexistente en el archivo
+	// aunque este update no lo tocara. El escape es pasar el parámetro shared, que lo reemplaza por uno
+	// válido. Reparsear `updated` (no `original`) para ver el frontmatter que se va a escribir.
+	reparsed := specgraph.ParseFile(updated)
+	if vErr := specgraph.ValidarShared(reparsed.Frontmatter); vErr != nil {
+		return nil, rpcErrorf(codeInvalidParams, "%v", vErr)
+	}
 	if wErr := root.WriteFile(record.Rel, []byte(updated), 0o644); wErr != nil {
 		return nil, rpcErrorf(codeInternalError, "no se pudo escribir %s: %v", record.Rel, wErr)
 	}
-	return textResult(fmt.Sprintf("Updated frontmatter of %s", record.Rel)), nil
+	msg := fmt.Sprintf("Updated frontmatter of %s", record.Rel)
+	// Sincronizar la proyección con el NUEVO estado en disco (F4): si quedó `shared: true` se proyecta
+	// (reemplaza la anterior por id, R6); si dejó de serlo —unshare, o nunca lo fue— se RETIRA la
+	// proyección local (R9, durable ante el pull incremental). El retiro corre SIEMPRE que no sea
+	// shared, porque este update pudo ser justamente el unshare; es idempotente si no había proyección.
+	// Fallo best-effort: la spec en disco ya es la fuente de verdad (reconciliación de apertura, R10);
+	// se REPORTA sin revertir la escritura.
+	if specgraph.IsShared(reparsed.Frontmatter) {
+		if pErr := s.renderAndProject(args.ID, reparsed.Frontmatter, reparsed.Body); pErr != nil {
+			msg += fmt.Sprintf("\n⚠️ shared, pero no se pudo proyectar al central (se reconcilia al reabrir): %v", pErr)
+		} else {
+			msg += " · proyectada al central (shared)"
+		}
+	} else if rtErr := s.engine.RetractSpecProjection(args.ID, ""); rtErr != nil {
+		msg += fmt.Sprintf("\n⚠️ no se pudo retirar la proyección local (se reconcilia al reabrir): %v", rtErr)
+	}
+	return textResult(msg), nil
 }
 
 // toolSpecDelete borra una spec. Avisa de correr validate porque los enlaces que
@@ -725,9 +805,17 @@ func (s *McpServer) toolSpecDelete(raw json.RawMessage) (interface{}, *RpcError)
 	if rErr := root.Remove(record.Rel); rErr != nil {
 		return nil, rpcErrorf(codeInternalError, "no se pudo borrar %s: %v", record.Rel, rErr)
 	}
-	return textResult(fmt.Sprintf(
+	msg := fmt.Sprintf(
 		"Deleted %s. Corré musubi_spec_validate para ver los enlaces que quedaron colgantes.",
-		record.Rel)), nil
+		record.Rel)
+	// Retiro de federación (F4, R9): borrar la spec retira su proyección local, SIEMPRE —el archivo pudo
+	// haber sido shared y no hay forma de saberlo ya que está borrado; el retiro es idempotente si no
+	// existía proyección, así que no se condiciona a leer el frontmatter previo—. Fallo best-effort: la
+	// ausencia del SPEC.md ya es la verdad y la reconciliación de apertura la cubre (R10); se REPORTA.
+	if rtErr := s.engine.RetractSpecProjection(args.ID, ""); rtErr != nil {
+		msg += fmt.Sprintf("\n⚠️ no se pudo retirar la proyección local (se reconcilia al reabrir): %v", rtErr)
+	}
+	return textResult(msg), nil
 }
 
 // --- Helpers ---
@@ -782,14 +870,56 @@ func specBodyForType(specType, title string) string {
 	return sb.String()
 }
 
-// specToolEntries son las 8 toolEntry del grafo de specs, en orden FIJO (lo
-// congela TestToolsListGolden). grep/recall/get/graph/validate: readOnly (su
-// efecto sobre el repo es nulo; el cache del índice lo protege su propio mutex,
-// D3). create/update/delete: write (candado exclusivo). Casi todas dejan lock en
-// su cero: no hay red ni LLM en el camino. La EXCEPCIÓN es recall, que embebe el
-// query (llamada de red, techo 30 s) cuando hay embebedor: lleva lock=lockSelf
-// —el despacho NO toma candado y el handler no sostiene ninguno durante el
-// embed—, y la guarda candado_no_cruza_la_red lo exige y lo verifica.
+// renderAndProject proyecta una spec `shared` al carril de federación (F4). El `content` se renderiza
+// de los campos PARSEADOS (id/type/title + cuerpo), NUNCA del SPEC.md crudo: así el fingerprint de las
+// anclas (F2) —que vive en el frontmatter— NO viaja al central (R8/D3, test T10). El embedding va nil a
+// propósito: create/update/delete son tools `write` (candado exclusivo del dispatch) y la guarda
+// candado_no_cruza_la_red prohíbe que una tool `write` toque la red; el gist solo alcanza para el recall
+// federado (R7, model-free). projectID "" ⇒ ProjectSpecShared resuelve el tenant propio del motor.
+func (s *McpServer) renderAndProject(specID string, fm specgraph.Frontmatter, body string) error {
+	return s.engine.ProjectSpecShared(specID, "", specgraph.RenderProjection(fm, body), nil)
+}
+
+// ReconcileSpecProjectionsOnStartup re-sincroniza las proyecciones de specs `shared` con el FS en la
+// apertura (F4, R10), AL LADO de BackfillOutbox y con el mismo contrato best-effort. Leer specs del
+// disco es POLICY y vive en esta capa (tools/daemon), no en internal/memory (D6): acá se enumeran las
+// shared del índice, se arma el input (content de campos parseados —D3—, sin embedding igual que los
+// hooks) y se delega en ReconcileSpecProjections, que siembra las faltantes, hard-deletea las huérfanas
+// de origen LOCAL y deja intactas las `espejo` que bajaron de otra máquina (E11). Idempotente.
+func (s *McpServer) ReconcileSpecProjectionsOnStartup() error {
+	entries := s.specIndex.ContentEntries()
+	shared := make([]memory.SpecProjectionInput, 0, len(entries))
+	for _, e := range entries {
+		if !specgraph.IsShared(e.Frontmatter) {
+			continue
+		}
+		id, ok := specgraph.Scalar(e.Frontmatter, specgraph.FieldID)
+		if !ok {
+			// Una spec shared sin id no tiene proyección determinista posible (el id es la clave de
+			// spec-proj:<tenant>:<id>). validate ya reporta la spec sin id; acá se saltea en vez de
+			// sembrar una proyección con id vacío que después nadie podría reconciliar.
+			continue
+		}
+		body := specgraph.ParseFile(e.Content).Body
+		shared = append(shared, memory.SpecProjectionInput{
+			SpecID:    id,
+			ProjectID: "",
+			Content:   specgraph.RenderProjection(e.Frontmatter, body),
+			Embedding: nil,
+		})
+	}
+	return s.engine.ReconcileSpecProjections(shared)
+}
+
+// specToolEntries son las 10 toolEntry del grafo de specs, en orden FIJO (lo
+// congela TestToolsListGolden). grep/recall/get/graph/validate/coverage: readOnly
+// (su efecto sobre el repo es nulo; el cache del índice lo protege su propio
+// mutex, D3). create/update/delete/archive: write (candado exclusivo; mutan el
+// SPEC.md). Casi todas dejan lock en su cero: no hay red ni LLM en el camino. La
+// EXCEPCIÓN es recall, que embebe el query (llamada de red, techo 30 s) cuando hay
+// embebedor: lleva lock=lockSelf —el despacho NO toma candado y el handler no
+// sostiene ninguno durante el embed—, y la guarda candado_no_cruza_la_red lo exige
+// y lo verifica.
 func (s *McpServer) specToolEntries() []toolEntry {
 	return []toolEntry{
 		{
@@ -895,6 +1025,7 @@ func (s *McpServer) specToolEntries() []toolEntry {
 						"type":       {Type: "string", Description: "Uno de: goal-and-requirements, architecture-design, module-design, submodule-design, task-spec."},
 						"title":      {Type: "string", Description: "Título legible de la spec."},
 						"status":     {Type: "string", Description: "Estado opcional: draft | active | stale | done | deprecated."},
+						"shared":     {Type: "boolean", Description: "Opt-in de federación (F4). true ⇒ la spec se proyecta al cerebro central para el recall federado de la malla (solo id/type/title + cuerpo; las anclas NO viajan). Ausente o false ⇒ queda local (default conservador)."},
 						"parent":     {Type: "string", Description: "id de la spec padre (árbol)."},
 						"dependsOn":  {Type: "array", Description: "ids de specs de las que ésta depende.", Items: &Property{Type: "string"}},
 						"references": {Type: "array", Description: "ids de specs referenciadas.", Items: &Property{Type: "string"}},
@@ -916,6 +1047,7 @@ func (s *McpServer) specToolEntries() []toolEntry {
 					Type: "object",
 					Properties: map[string]Property{
 						"id":         {Type: "string", Description: "El id de la spec a editar."},
+						"shared":     {Type: "boolean", Description: "Opt-in de federación (F4). true ⇒ proyecta/actualiza la spec en el cerebro central; false ⇒ la des-federa y retira su proyección local. Se gobierna por este parámetro, NO por set/remove. Ausente ⇒ no se toca el campo."},
 						"set":        {Type: "object", Description: "Campos escalares a fijar (clave→valor). No admite id ni campos lista."},
 						"remove":     {Type: "array", Description: "Campos a borrar. No admite id ni type.", Items: &Property{Type: "string"}},
 						"addList":    {Type: "object", Description: "Items a agregar a un campo lista (clave→items), con union-dedup. No admite anchors: usá el parámetro anchors."},

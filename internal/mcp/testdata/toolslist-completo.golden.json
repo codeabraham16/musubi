@@ -2250,6 +2250,10 @@
               "description": ""
             }
           },
+          "shared": {
+            "type": "boolean",
+            "description": "Opt-in de federación (F4). true ⇒ la spec se proyecta al cerebro central para el recall federado de la malla (solo id/type/title + cuerpo; las anclas NO viajan). Ausente o false ⇒ queda local (default conservador)."
+          },
           "status": {
             "type": "string",
             "description": "Estado opcional: draft | active | stale | done | deprecated."
@@ -2316,6 +2320,10 @@
           "set": {
             "type": "object",
             "description": "Campos escalares a fijar (clave→valor). No admite id ni campos lista."
+          },
+          "shared": {
+            "type": "boolean",
+            "description": "Opt-in de federación (F4). true ⇒ proyecta/actualiza la spec en el cerebro central; false ⇒ la des-federa y retira su proyección local. Se gobierna por este parámetro, NO por set/remove. Ausente ⇒ no se toca el campo."
           }
         },
         "required": [

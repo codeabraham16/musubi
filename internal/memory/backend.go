@@ -661,6 +661,21 @@ type ServiceStore interface {
 	AprobacionesPendientes(projectID string, ahora time.Time, tope int) ([]fleet.SolicitudDeAprobacion, error)
 }
 
+// SpecProjectionStore — federación de specs (spec-graph F4). Una spec marcada `shared: true` se
+// proyecta como observación DERIVADA que REUSA el carril de observaciones (outbox, dead-letter,
+// backfill, redacción forzada del central): no hay un segundo mecanismo de sync para specs (R5). La
+// proyección NO es fuente de verdad —lo es el SPEC.md en el FS—: es función pura del conjunto de
+// specs `shared` en disco, reconciliada al abrir (R10). El `content` lo arma el caller de los campos
+// parseados (D3/D6: core fiel, política de leer el FS en la capa de tools). Son métodos DEDICADOS —no
+// wrappers de SaveObservation— porque una proyección saltea las guardas de observación humana (el
+// sobre de procedencia, el dedup por hash): es una fila reconstruible, no texto humano (D5). Ver
+// internal/memory/spec_projection.go y specs/spec-graph-f4-federacion/.
+type SpecProjectionStore interface {
+	ProjectSpecShared(specID, projectID, content string, emb []float32) error
+	RetractSpecProjection(specID, projectID string) error
+	ReconcileSpecProjections(shared []SpecProjectionInput) error
+}
+
 // StorageBackend es la unión de todos los roles: el contrato que un backend completo debe
 // satisfacer. Embebe io.Closer-equivalente vía Close.
 type StorageBackend interface {
@@ -684,6 +699,7 @@ type StorageBackend interface {
 	Calibrator
 	Insighter
 	OutboxStore
+	SpecProjectionStore
 	DeviceStore
 	ServiceStore
 

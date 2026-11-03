@@ -440,6 +440,14 @@ func runServe(args []string) {
 	// real avisa del backlog. Cierra el stall silencioso (ver reconcileOutboxOnStartup).
 	reconcileOutboxOnStartup(engine, cfg.Sync)
 
+	// Conciliar las proyecciones de specs `shared` con el FS (spec-graph F4, R10), AL LADO del outbox y
+	// DESPUÉS de SetOutboxEnabled (línea 423): así, si el nodo ganó destino, una spec shared sin
+	// proyección se siembra con fila `pending` lista para el drain (T12). Siembra lo que falta, purga las
+	// huérfanas de origen local y deja intactas las `espejo` de otras máquinas (E11). Best-effort.
+	if err := server.ReconcileSpecProjectionsOnStartup(); err != nil {
+		fmt.Fprintf(os.Stderr, "musubi: no se pudieron conciliar las proyecciones de specs 'shared' al arrancar: %v\n", err)
+	}
+
 	// Cerebro híbrido F2: si el sync saliente está activo, arrancar el drain del outbox que
 	// empuja las observaciones 'shared' al cerebro central. El ctx (SIGINT/SIGTERM) también
 	// para el drain. Best-effort: un error de config del cliente NO impide arrancar el serve.
@@ -633,6 +641,12 @@ func runDaemon() {
 	// Conciliar el outbox con la config: purga huérfanas de un nodo terminal / avisa de un backlog
 	// real, ANTES de arrancar el drain (ver reconcileOutboxOnStartup).
 	reconcileOutboxOnStartup(engine, cfg.Sync)
+	// Conciliar las proyecciones de specs `shared` con el FS (F4, R10), simétrico con runServe: después
+	// de SetOutboxEnabled (640) para que el seed de un nodo que ganó destino encole `pending` (T12).
+	// Best-effort: un error se avisa por stderr y NO frena el arranque del daemon.
+	if err := server.ReconcileSpecProjectionsOnStartup(); err != nil {
+		fmt.Fprintf(os.Stderr, "musubi: no se pudieron conciliar las proyecciones de specs 'shared' al arrancar: %v\n", err)
+	}
 	// Drain del outbox (sync saliente) también en el daemon (stdio). El maintCtx (cancelado al
 	// retornar de runDaemon por señal o EOF) también lo detiene.
 	startOutboxDrain(maintCtx, server, cfg.Sync)
