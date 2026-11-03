@@ -46,18 +46,23 @@ const (
 	// UsoCuerpoPedido — alguien pidió su cuerpo por nombre. Sin evidencia: el pedido no viene de
 	// una resolución.
 	UsoCuerpoPedido = "body_requested"
+	// UsoCargada — el agente CARGÓ la skill con la tool `Skill` (camino `.claude/skills/`). Es un
+	// eje DISTINTO de UsoResuelta: ahí matchea el resolver de reflejos; acá decide el consumidor, y
+	// hasta ahora esa decisión no se veía (spec `skills-que-se-miden`, §del límite declarado). Sin
+	// evidencia: la carga no viene de una resolución.
+	UsoCargada = "loaded"
 )
 
 // SkillEvent es un conteo pendiente de bajar a la base.
 type SkillEvent struct {
 	Skill     string
 	ProjectID string
-	Evidence  string // vacío para UsoCuerpoPedido
+	Evidence  string // vacío para UsoCuerpoPedido y UsoCargada
 	Kind      string
 }
 
 func kindValido(k string) bool {
-	return k == UsoResuelta || k == UsoCuerpoEnviado || k == UsoCuerpoPedido
+	return k == UsoResuelta || k == UsoCuerpoEnviado || k == UsoCuerpoPedido || k == UsoCargada
 }
 
 func evidenciaValida(e string) bool {
@@ -119,6 +124,10 @@ type SkillUsageRow struct {
 	PorComodin    int `json:"por_comodin"`
 	BodySent      int `json:"body_sent"`
 	BodyRequested int `json:"body_requested"`
+	// Loaded es cuántas veces el agente la cargó con la tool `Skill`. Eje SEPARADO de Resolved: una
+	// skill de `.claude/skills/` vive casi siempre acá y no en los contadores del resolver, así que
+	// `Loaded>0, Resolved=0` NO es una contradicción sino dos poblaciones distintas.
+	Loaded int `json:"loaded"`
 	// LastAt es lo último que le pasó a esta skill, de cualquier tipo. Vacío si nunca pasó nada.
 	LastAt string `json:"last_at,omitempty"`
 	// Candidata marca un PATRÓN, no un veredicto: nada se retira ni se apaga solo. Retirar es del
@@ -174,6 +183,8 @@ func (e *DbEngine) SkillUsage(ctx context.Context) ([]SkillUsageRow, error) {
 			r.BodySent += n
 		case UsoCuerpoPedido:
 			r.BodyRequested += n
+		case UsoCargada:
+			r.Loaded += n
 		}
 		if lastAt > r.LastAt {
 			r.LastAt = lastAt
@@ -202,9 +213,13 @@ func (e *DbEngine) SkillUsage(ctx context.Context) ([]SkillUsageRow, error) {
 //     `applies_to` sin que alguien lo adivine.
 func MarcarCandidata(r *SkillUsageRow) {
 	switch {
-	case r.Resolved == 0 && r.BodyRequested == 0:
+	// `Loaded == 0` es parte del guard, no un detalle: si el agente la CARGÓ con la tool Skill,
+	// hay señal de uso aunque el resolver nunca la haya matcheado. Llamar «muerta» a algo que se
+	// cargó sería mentir — y es una mentira que aparecería el instante en que el hook corre una vez,
+	// porque las skills de `.claude/skills/` viven en Loaded y no en Resolved.
+	case r.Resolved == 0 && r.BodyRequested == 0 && r.Loaded == 0:
 		r.Candidata = "muerta"
-		r.Porque = "nunca matcheó ni se pidió su cuerpo"
+		r.Porque = "nunca matcheó, ni se pidió su cuerpo, ni se cargó"
 	case r.PorComodin == r.Resolved && r.Resolved > 0 && r.BodyRequested > 0:
 		r.Candidata = "alcance"
 		r.Porque = fmt.Sprintf("matcheó siempre por comodín (%d) y le pidieron el cuerpo %d veces: aplica, pero no puede decir cuándo",
@@ -225,25 +240,26 @@ func FormatSkillUsage(rows, huerfanas []SkillUsageRow) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Uso del arsenal · %d skills instaladas\n\n", len(rows))
-	fmt.Fprintf(&b, "%-24s %8s %7s %7s %8s %8s %9s  %s\n",
-		"SKILL", "MATCHEÓ", "alcance", "glob", "comodín", "CUERPO", "PEDIDOS", "CANDIDATA")
+	fmt.Fprintf(&b, "%-24s %8s %7s %7s %8s %8s %9s %7s  %s\n",
+		"SKILL", "MATCHEÓ", "alcance", "glob", "comodín", "CUERPO", "PEDIDOS", "CARGÓ", "CANDIDATA")
 	var candidatas int
 	for _, r := range rows {
 		if r.Candidata != "" {
 			candidatas++
 		}
-		fmt.Fprintf(&b, "%-24s %8d %7d %7d %8d %8d %9d  %s\n",
-			r.Skill, r.Resolved, r.PorAlcance, r.PorGlob, r.PorComodin, r.BodySent, r.BodyRequested, r.Candidata)
+		fmt.Fprintf(&b, "%-24s %8d %7d %7d %8d %8d %9d %7d  %s\n",
+			r.Skill, r.Resolved, r.PorAlcance, r.PorGlob, r.PorComodin, r.BodySent, r.BodyRequested, r.Loaded, r.Candidata)
 	}
 	fmt.Fprintf(&b, "\n%d con un patrón que amerita mirarlas. Nada se retira solo.\n", candidatas)
 	if len(huerfanas) > 0 {
 		b.WriteString("\nCon contadores pero YA NO INSTALADAS:\n")
 		for _, h := range huerfanas {
-			fmt.Fprintf(&b, "  %-24s matcheó %d · cuerpo %d · pedidos %d\n",
-				h.Skill, h.Resolved, h.BodySent, h.BodyRequested)
+			fmt.Fprintf(&b, "  %-24s matcheó %d · cuerpo %d · pedidos %d · cargó %d\n",
+				h.Skill, h.Resolved, h.BodySent, h.BodyRequested, h.Loaded)
 		}
 	}
-	// Se dice lo que NO se midió, para que nadie lea estos números como utilidad.
-	b.WriteString("Se cuenta activación y pedido de cuerpo. Si una skill SIRVIÓ no se puede medir sin juicio.\n")
+	// Se dice lo que NO se midió, para que nadie lea estos números como utilidad. «Cargó» es un
+	// hecho contado (el agente la abrió con la tool Skill), no un juicio de si le sirvió.
+	b.WriteString("Se cuenta activación, pedido de cuerpo y carga. Si una skill SIRVIÓ no se puede medir sin juicio.\n")
 	return b.String()
 }

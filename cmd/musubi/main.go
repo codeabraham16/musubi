@@ -75,6 +75,8 @@ func main() {
 		runPrecompact()
 	case "capture":
 		runCapture(os.Args[2:])
+	case "skill-loaded":
+		runSkillLoaded()
 	case "ingest":
 		runIngest(os.Args[2:])
 	case "catalog":

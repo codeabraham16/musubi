@@ -241,6 +241,11 @@ func setupProjectWith(exeOverride, agent string) {
 		} else {
 			printOK("Hook PreCompact en .claude/settings.json (el resumen conserva reglas, decisiones y estado del trabajo)")
 		}
+		if err := writeSkillLoadedHook(root, exePath); err != nil {
+			printWarn(fmt.Sprintf("No se pudo registrar el hook PostToolUse(Skill): %v", err))
+		} else {
+			printOK("Hook PostToolUse(Skill) en .claude/settings.json (cuenta cuándo el agente carga una skill)")
+		}
 	} else {
 		printInfo(fmt.Sprintf("%s no tiene sistema de hooks; se registró solo el servidor MCP.", target.Name))
 	}
@@ -470,6 +475,31 @@ func writePreCompactHook(root, exePath string) error {
 		Timeout: 10,
 	}
 	merged, err := bootstrap.MergeClaudeSettings(existing, "PreCompact", "", hook)
+	if err != nil {
+		return fmt.Errorf("error al mergear settings.json: %w", err)
+	}
+	return os.WriteFile(settingsPath, merged, 0644)
+}
+
+// writeSkillLoadedHook inyecta (idempotente) el hook PostToolUse(Skill) en {root}/.claude/settings.json:
+// DESPUÉS de que el agente carga una skill con la tool `Skill`, Musubi cuenta esa carga (skill_loaded.go).
+// Es el PRIMER PostToolUse del setup — puramente observacional, el matcher acota a la tool `Skill`.
+func writeSkillLoadedHook(root, exePath string) error {
+	claudeDir := filepath.Join(root, config.ClaudeDir)
+	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+		return fmt.Errorf("no se pudo crear %s: %w", claudeDir, err)
+	}
+	settingsPath := filepath.Join(claudeDir, config.ClaudeSettingsFile)
+	existing, err := os.ReadFile(settingsPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("error al leer %s: %w", settingsPath, err)
+	}
+	hook := bootstrap.HookCommand{
+		Type:    "command",
+		Command: hookExeCommand(exePath, "skill-loaded --hook-mode"),
+		Timeout: 10,
+	}
+	merged, err := bootstrap.MergeClaudeSettings(existing, "PostToolUse", "Skill", hook)
 	if err != nil {
 		return fmt.Errorf("error al mergear settings.json: %w", err)
 	}
