@@ -1098,6 +1098,9 @@ type Config struct {
 	// pocos segundos, como respaldo 24/7 que no toca el estado git del usuario. Opt-in por
 	// defecto sólo en proyectos team_mode con un remoto que NO sea github.com.
 	RepoVivo RepoVivoConfig `yaml:"repo_vivo,omitempty"`
+	// Crudo es el RESPALDO DEL CRUDO: empaqueta y empuja off-host los transcripts .jsonl de Claude
+	// Code de este proyecto. Lo dispara `musubi backup --crudo`; ver el comentario del tipo.
+	Crudo CrudoConfig `yaml:"crudo,omitempty"`
 }
 
 // FleetConfig configura el latido de fondo de la flota de máquinas (S10).
@@ -1381,6 +1384,59 @@ func normalizeRepoVivoEnabled(s string) string {
 	default:
 		return "auto"
 	}
+}
+
+// CrudoConfig configura el RESPALDO DEL CRUDO: empaqueta los transcripts .jsonl que Claude Code
+// escribe para este proyecto (el registro literal de las sesiones del agente) y los empuja a un
+// destino off-host. Es el Frente 2 de «la memoria sigue al proyecto»: el crudo es irrecuperable si
+// se pierde el disco, y hasta acá se respaldaba a mano, máquina por máquina.
+//
+// NO tiene Enabled: el respaldo lo dispara el comando `musubi backup --crudo` de forma EXPLÍCITA.
+// Un disparo automático de fondo, cuando exista, traerá su propio Enabled; meterlo ahora sería
+// adivinar su forma. Sin Remote declarado el comando FALLA-CERRADO (salvo AllowLocalOnly): un
+// respaldo que se cree hecho y haya quedado sólo en el disco que se quería proteger es peor que
+// ninguno, porque apaga la alarma.
+type CrudoConfig struct {
+	// Remote es el destino off-host en forma scp: user@host:/ruta. Va SIN secreto — la
+	// autenticación la pone el SSH de la máquina (claves en ~/.ssh), nunca este archivo. Vacío ⇒
+	// sin destino (falla-cerrado, salvo AllowLocalOnly).
+	Remote string `yaml:"remote,omitempty"`
+	// Method es el transporte. Hoy sólo "scp", el único validado (davantis-1 → server, por SSH, con
+	// los binarios de System32 que NordVPN no bloquea). Vacío ⇒ "scp".
+	Method string `yaml:"method,omitempty"`
+	// LocalDir es dónde se arma el paquete antes de enviarlo (staging). Vacío ⇒
+	// <workspace>/.musubi/backups, junto a los otros respaldos.
+	LocalDir string `yaml:"local_dir,omitempty"`
+	// RetentionDays es cuántos días se conservan los paquetes locales musubi-crudo-*.tgz. 0 ⇒
+	// default (14). Negativo ⇒ nunca purgar.
+	RetentionDays int `yaml:"retention_days,omitempty"`
+	// AllowLocalOnly es el escape-hatch al falla-cerrado: con true, un Remote vacío NO es error y el
+	// paquete se arma y se verifica localmente sin enviarse. Para una máquina que todavía no tiene
+	// destino declarado.
+	AllowLocalOnly bool `yaml:"allow_local_only,omitempty"`
+	// WaitNetworkSeconds es cuánto esperar a que el host del destino sea alcanzable antes de
+	// rendirse (una laptop que recién despierta). 0 ⇒ no esperar.
+	WaitNetworkSeconds int `yaml:"wait_network_seconds,omitempty"`
+}
+
+// defaultCrudoRetentionDays es la retención por defecto de los paquetes crudo locales.
+const defaultCrudoRetentionDays = 14
+
+// EffectiveRetentionDays aplica el default. Un valor negativo se respeta y significa "no purgar".
+func (c CrudoConfig) EffectiveRetentionDays() int {
+	if c.RetentionDays == 0 {
+		return defaultCrudoRetentionDays
+	}
+	return c.RetentionDays
+}
+
+// EffectiveMethod aplica el default sin que el caller conozca el transporte: hoy "scp" es el único.
+func (c CrudoConfig) EffectiveMethod() string {
+	m := strings.ToLower(strings.TrimSpace(c.Method))
+	if m == "" {
+		return "scp"
+	}
+	return m
 }
 
 // Default devuelve la configuración por defecto (local-first, embeddings desactivados).

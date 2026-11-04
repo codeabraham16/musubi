@@ -193,6 +193,7 @@ func printUsage() {
 	section("Memoria")
 	cmd("maintain", "Fusiona casi-duplicados y archiva memorias frías")
 	cmd("backup [--out <dir>]", "Snapshot consistente de la base (VACUUM INTO); imprime la ruta")
+	cmd("backup --crudo [--todos] [--local-only]", "Respalda el CRUDO de Claude Code (transcripts .jsonl) off-host; destino en crudo.remote del config")
 	cmd("token <new|list|revoke>", "Gestiona el registro de identidad del cerebro (tokens por-miembro)")
 	cmd("doctor", "Diagnostica la memoria; 'doctor repair --check X --apply' repara")
 	cmd("export [--out <ruta>]", "Vuelca un snapshot JSON (salud + tokens + grafo) para dashboards")

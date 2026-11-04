@@ -112,6 +112,23 @@ func CarpetaDeProyecto(ruta string) string {
 	return b.String()
 }
 
+// DirPorDefecto es dónde Claude Code guarda los transcripts: `$CLAUDE_CONFIG_DIR/projects` si la
+// variable está puesta (así lo reubica Claude Code), y si no `~/.claude/projects`. Es cross-OS: en
+// Windows el home sale igual de os.UserHomeDir(). Vive acá, y no en el comando, porque «dónde están
+// las carpetas de Claude Code» es conocimiento de este paquete —el mismo que sabe manglear el
+// nombre (CarpetaDeProyecto) y qué carpetas son experimentos (ExclusionesPorDefecto)—, y así lo
+// comparten el medidor de uso y el respaldo del crudo sin que uno importe al otro.
+func DirPorDefecto() (string, error) {
+	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
+		return filepath.Join(d, "projects"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".claude", "projects"), nil
+}
+
 // ExclusionesPorDefecto son las carpetas de proyecto de la carpeta TEMPORAL del sistema: la de
 // `os.TempDir()` y todas las que cuelgan de ella.
 //

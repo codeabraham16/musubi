@@ -90,6 +90,7 @@ func (e *DbEngine) doctorChecks() []doctorCheck {
 		{code: "stale_conflicts", run: checkStaleConflicts, count: countStaleConflicts, apply: applyDeleteStaleConflicts},
 		{code: "offhost_backup", run: checkOffhostBackup},
 		{code: "snapshot_local", run: checkSnapshotLocal},
+		{code: "crudo_offhost", run: checkCrudoOffhost},
 		{code: "outbox_stall", run: checkOutboxStall},
 		// No es deep: COUNT sobre columnas indexadas (scope/provenance/visibilidad), no recorre
 		// content. Reparable (promueve en lote reusando PromoteObservation), pero FUERA de
@@ -796,6 +797,67 @@ func checkSnapshotLocal(e *DbEngine) CheckResult {
 	}
 	return CheckResult{Code: "snapshot_local", Status: "ok",
 		Message: fmt.Sprintf("último snapshot local hace %s", time.Since(info.ModTime()).Round(time.Hour))}
+}
+
+// crudoOffhostMarkerName / crudoOffhostErrorMarkerName son las marcas que deja el respaldo del crudo.
+// DEBEN COINCIDIR con crudobackup.MarcaOffhost / MarcaOffhostError (el productor): no se importa ese
+// paquete acá porque haría un ciclo (crudobackup→transcripts→memory). El contrato es el nombre del
+// archivo en disco, igual que entre deploy/musubi-backup.sh y offhostMarkerName. Un test en cada lado
+// clava el literal, así una divergencia rompe una prueba en vez de apagar el dead-man en silencio.
+const (
+	crudoOffhostMarkerName      = ".last_crudo_offhost"
+	crudoOffhostErrorMarkerName = ".last_crudo_offhost_error"
+)
+
+// crudoOffhostStaleAfter es la antigüedad máxima tolerada del último respaldo del CRUDO off-host.
+//
+// Es una CONSTANTE, no configurable: calca a su hermano offhostBackupStaleAfter, que tampoco lee
+// config, para que los dos dead-man hablen el mismo idioma. 48 h dejan pasar una corrida saltada —un
+// reinicio, una máquina apagada una noche— y no dejan pasar un emisor que dejó de correr.
+const crudoOffhostStaleAfter = 48 * time.Hour
+
+// checkCrudoOffhost es el DEAD-MAN'S-SWITCH del respaldo del CRUDO off-host: los transcripts .jsonl
+// que Claude Code escribe para este proyecto (ver internal/crudobackup), que —igual que el grafo de
+// código o las entidades locales— NO VIAJAN a ningún lado y se pierden con el disco.
+//
+// Calca a checkOffhostBackup: lee las marcas que deja `musubi backup --crudo` tras cada envío
+// CONFIRMADO POR SHA, y AVISA (warning) si el último éxito envejeció más de crudoOffhostStaleAfter, o
+// si hay un error más nuevo que el último éxito. Marca AUSENTE ⇒ ok+Unmeasured a propósito: esta
+// máquina no respalda el crudo todavía, y un rojo que se aprende a ignorar es peor que un «sin dato».
+// INFORMATIVO, no reparable, no toca readyz.
+func checkCrudoOffhost(e *DbEngine) CheckResult {
+	if e.path == "" {
+		return CheckResult{Code: "crudo_offhost", Status: "ok", Message: "ruta de la base desconocida; no aplica"}
+	}
+	dir := filepath.Join(filepath.Dir(e.path), "backups")
+	okInfo, okErr := os.Stat(filepath.Join(dir, crudoOffhostMarkerName))
+	errInfo, errErr := os.Stat(filepath.Join(dir, crudoOffhostErrorMarkerName))
+
+	// FALLO: hay marca de error y, o bien nunca hubo un envío exitoso, o el último error es más
+	// nuevo que el último éxito.
+	if errErr == nil && (okErr != nil || errInfo.ModTime().After(okInfo.ModTime())) {
+		since := time.Since(errInfo.ModTime()).Round(time.Hour)
+		if okErr != nil {
+			return CheckResult{Code: "crudo_offhost", Status: "warning",
+				Message: fmt.Sprintf("el respaldo del crudo off-host está configurado pero NUNCA tuvo éxito (último intento falló hace %s); corré `musubi backup --crudo` y revisá crudo.remote en .musubi/config.yaml", since)}
+		}
+		return CheckResult{Code: "crudo_offhost", Status: "warning",
+			Message: fmt.Sprintf("el respaldo del crudo off-host viene fallando desde el último éxito (último error hace %s); corré `musubi backup --crudo`", since)}
+	}
+
+	if okErr != nil {
+		// Sin ninguna marca no hay nada que medir: Unmeasured, sin afirmar un verde que sería mentira
+		// ni volcar el rollup a 'issues' en una máquina que no respalda el crudo a propósito.
+		return CheckResult{Code: "crudo_offhost", Status: "ok", Unmeasured: true,
+			Message: "sin registro de respaldo del crudo off-host (esta máquina no lo respalda, o nunca corrió). Los transcripts .jsonl de Claude Code NO se sincronizan a ningún lado: si se pierde este disco, se pierden"}
+	}
+	if age := time.Since(okInfo.ModTime()); age > crudoOffhostStaleAfter {
+		return CheckResult{Code: "crudo_offhost", Status: "warning",
+			Message: fmt.Sprintf("el último respaldo del crudo off-host fue hace %s (> %s): el emisor podría haber dejado de correr (dead-man's-switch)",
+				age.Round(time.Hour), crudoOffhostStaleAfter)}
+	}
+	return CheckResult{Code: "crudo_offhost", Status: "ok",
+		Message: fmt.Sprintf("último respaldo del crudo off-host hace %s", time.Since(okInfo.ModTime()).Round(time.Hour))}
 }
 
 // checkOutboxStall es el detector del STALL SILENCIOSO del sync saliente (F2). Un nodo sano drena el
