@@ -211,6 +211,10 @@ func (e *DbEngine) SkillUsage(ctx context.Context) ([]SkillUsageRow, error) {
 //   - matcheó SIEMPRE por comodín y aun así le piden el cuerpo ⇒ aplica de verdad y no tiene cómo
 //     decir cuándo. Es el más valioso: es la única forma de descubrir un '*' que merece volverse
 //     `applies_to` sin que alguien lo adivine.
+//
+// Dos de esas lecturas —«muerta» y «retiro»— exigen ADEMÁS `Loaded == 0`: una carga por la tool
+// `Skill` es señal de uso aunque el resolver nunca haya matcheado, así que ni «muerta» ni «candidata
+// a sacarla» pueden valer con `Loaded > 0` (R12 y R13). El porqué de cada una, en su `case`.
 func MarcarCandidata(r *SkillUsageRow) {
 	switch {
 	// `Loaded == 0` es parte del guard, no un detalle: si el agente la CARGÓ con la tool Skill,
@@ -224,7 +228,11 @@ func MarcarCandidata(r *SkillUsageRow) {
 		r.Candidata = "alcance"
 		r.Porque = fmt.Sprintf("matcheó siempre por comodín (%d) y le pidieron el cuerpo %d veces: aplica, pero no puede decir cuándo",
 			r.PorComodin, r.BodyRequested)
-	case r.Resolved > 0 && r.BodySent == 0 && r.BodyRequested == 0:
+	// `Loaded == 0` acá por el MISMO motivo que en «muerta»: «retiro» sugiere SACAR la skill, y una
+	// que el agente carga con la tool Skill está en uso por el eje loaded aunque su cuerpo nunca viaje
+	// por el resolver. Proponer retirarla sería un consejo falso —la misma incoherencia que la guarda
+	// de R12 cerró para «muerta», aplicada al otro patrón que acciona sobre la skill—.
+	case r.Resolved > 0 && r.BodySent == 0 && r.BodyRequested == 0 && r.Loaded == 0:
 		r.Candidata = "retiro"
 		r.Porque = fmt.Sprintf("matcheó %d veces y nadie abrió su cuerpo", r.Resolved)
 	}

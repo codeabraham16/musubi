@@ -17,6 +17,9 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 ### Changed
 - **`musubi conflicts shadow --json` pasó de emitir un array a emitir un objeto `{coverage, by_relation}`.** El array era el resumen por relación; ahora va bajo `by_relation` y lo acompaña la cobertura, porque una tasa sin su denominador no se puede interpretar y el consumidor del JSON tenía el mismo agujero que la salida de texto. Es un cambio de forma, no de contenido: se midió que no hay consumidores —ni en el repo ni en los hooks— y la tool MCP `musubi_conflicts` no pasa por este camino.
 
+### Fixed
+- **`MarcarCandidata` ya no propone "retiro" para una skill que el agente CARGA.** El patrón "retiro" —resolvió pero nadie abrió su cuerpo, así que *candidata a sacarla*— no miraba el eje `loaded` que Fase 0 agregó, así que una skill con `resolved>0`, cuerpo sin viajar y `loaded>0` (se resuelve por reflejo pero el agente la abre a mano con la tool `Skill`) salía marcada para retiro aunque está en uso activo por el otro eje. Es la misma clase de incoherencia que la guarda de "muerta" (R12) cerró para su patrón: "retiro" sugiere sacar la skill, y sacar una que el agente carga sería un consejo falso. Ahora el patrón exige también `loaded==0` (R13 del spec `skills-medir-cargas`). De paso, el subcomando `skill-loaded --hook-mode` gana un custodio de la COSTURA —corriéndolo como proceso real, no sólo sus piezas— que fija, en los dos caminos (el feliz y el de base corrupta), que sale 0 y con stdout vacío, y en el de error que el ruido SÍ sale por stderr: el canal del agente queda limpio y el fallo no se traga. Fase 0 cubría R6 en sus piezas (los tests unitarios de `leerEvento…`, `escribirSkillCargada` y `ruidoDe…`); esto suma el custodio de la costura punta a punta, que ninguna pieza por separado veía.
+
 ## [0.148.0] - 2026-11-02
 
 ### Destacado
