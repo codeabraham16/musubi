@@ -152,8 +152,19 @@ func correrMusubi(t *testing.T, dir, home, stdin string, args ...string) string 
 }
 
 // correrMusubiCon es correrMusubi con variables de entorno extra (p. ej. CLAUDE_PLUGIN_ROOT para
-// correr como lo lanza el plugin). Las que decide la prueba se sacan del entorno heredado.
+// correr como lo lanza el plugin). Las que decide la prueba se sacan del entorno heredado. Se queda
+// sólo con stdout; para AFIRMAR sobre stderr, usá correrMusubiSalidas.
 func correrMusubiCon(t *testing.T, dir, home, stdin string, extra []string, args ...string) string {
+	t.Helper()
+	out, _ := correrMusubiSalidas(t, dir, home, stdin, extra, args...)
+	return out
+}
+
+// correrMusubiSalidas es como correrMusubiCon pero devuelve stdout Y stderr por separado, para las
+// pruebas que necesitan afirmar sobre el canal de ERROR —p. ej. que el ruido best-effort de un hook
+// sale por stderr y no por el stdout que el agente lee—. Falla con Fatalf si el proceso sale ≠0, así
+// que el exit-0 lo sigue asegurando el harness para todos los callers.
+func correrMusubiSalidas(t *testing.T, dir, home, stdin string, extra []string, args ...string) (string, string) {
 	t.Helper()
 	// EL HIJO ARRANCA PARADO EN EL PAQUETE Y SE MUDA DESPUÉS (GO_MUSUBI_CWD). Es este mismo binario
 	// de prueba, y su TestMain corre la guarda del presupuesto, que bajo -race lee la política desde
@@ -181,7 +192,7 @@ func correrMusubiCon(t *testing.T, dir, home, stdin string, extra []string, args
 	if err != nil {
 		t.Fatalf("musubi %v terminó mal: %v\n  stdout=%.300q\n  stderr=%s", args, err, out, errBuf.String())
 	}
-	return string(out)
+	return string(out), errBuf.String()
 }
 
 // respuestasJSONRPC separa la salida de un daemon por id.

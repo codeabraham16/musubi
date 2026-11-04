@@ -25,7 +25,8 @@ import (
 //
 // QUÉ GUARDA Y QUÉ NO. Sólo el NOMBRE de la skill (público del catálogo). Los `args` que el agente
 // le pasó NO se tocan: eso mantiene intacta la garantía de privacidad de `tool_invocations`. Puro
-// reflejo, best-effort: cualquier fallo sale 0 y jamás demora al agente.
+// reflejo, best-effort: cualquier fallo sale 0 y no CUELGA al agente —la espera de la escritura
+// tiene techo de 5 s (ver escribirSkillCargada): acotada, no cero—.
 
 // skillLoadedInput es el subconjunto del JSON de stdin de PostToolUse que usamos. La clave del
 // argumento es `skill` porque así se llama el parámetro de la tool `Skill` (análogo a cómo precheck
@@ -92,6 +93,14 @@ func escribirSkillCargada(root string, in skillLoadedInput) error {
 
 	// Evidence vacío: la carga NO viene de una resolución (misma forma que body_requested). La fila
 	// resultante (skill, proj, "", "loaded") queda distinguible de las de resolución (R3).
+	//
+	// El nombre va TAL CUAL lo mandó el agente (sólo TrimSpace), SIN normalizar el prefijo de scope:
+	// `musubi:sdd-flow` (del plugin) y `sdd-flow` (del proyecto) son DOS instalaciones distintas de la
+	// skill, no la misma escrita de dos formas, así que fundirlas borraría una distinción real —y con
+	// skills scopeadas por carpeta (`apps/web:deploy` vs `apps/api:deploy`) colapsar por sufijo uniría
+	// skills que no tienen nada que ver—. El costo conocido y aceptado: si la MISMA skill se carga a
+	// veces con prefijo y a veces sin él, se parte en dos filas. Es raro (1 de 25 en los transcripts) y
+	// se prefiere a conflar; normalizar el scope sería una decisión de producto, no del instrumento.
 	return eng.RecordSkillEvents(ctx, []memory.SkillEvent{{
 		Skill:     strings.TrimSpace(in.ToolInput.Skill),
 		ProjectID: proj,
@@ -115,8 +124,8 @@ func ruidoDeSkillLoaded(err error) string {
 // invocarlo a mano sin efecto). En hook-mode decide, y sólo si le toca abre la base y escribe.
 //
 // PRIMERO DECIDE, DESPUÉS ABRE (molde de precheck): un evento que no aplica no paga la apertura de la
-// base. Best-effort de punta a punta: todo error va a stderr y sale 0, nunca rompe ni demora la
-// sesión (R6).
+// base. Best-effort de punta a punta: todo error va a stderr y sale 0, nunca rompe la sesión ni la
+// CUELGA —la escritura abandona al techo de 5 s (R6)—.
 func runSkillLoaded() {
 	hookMode := false
 	for _, arg := range os.Args[2:] {
@@ -143,7 +152,7 @@ func runSkillLoaded() {
 
 	// Qué de un fallo de la escritura es ruido —nada, si la base no está porque el proyecto no usa
 	// Musubi; el renglón, para cualquier otro error— lo decide ruidoDeSkillLoaded. Imprimimos y
-	// salimos 0 igual: un hook jamás rompe ni demora al agente (R6).
+	// salimos 0 igual: un hook no rompe al agente ni lo cuelga (R6).
 	if ruido := ruidoDeSkillLoaded(escribirSkillCargada(r.Dir, in)); ruido != "" {
 		fmt.Fprint(os.Stderr, ruido)
 	}

@@ -44,6 +44,11 @@ Contrato observable. Cada requisito es verificable y atómico; cada escenario ti
   resuelto ni se le haya pedido el cuerpo. "Muerta" significa *ninguna señal de uso*, y una carga es
   señal de uso. (Coherencia: el reporte no puede llamar muerta a algo que el agente cargó. Sin esta
   guarda, la señal nueva se contradiría con el rótulo en la misma fila.)
+- **R13** — Una skill con `loaded>0` NO DEBE rotularse "retiro" por `MarcarCandidata`, aunque haya
+  resuelto sin que su cuerpo viaje ni se lo pidan. "Retiro" sugiere *sacar* la skill; una que el agente
+  CARGA con la tool `Skill` está en uso por el eje `loaded`, independiente del cuerpo del resolver, así
+  que proponer retirarla sería un consejo falso. Es la misma incoherencia que R12 cierra para "muerta",
+  aplicada al otro patrón que acciona sobre la skill. (El patrón "retiro" exige además `loaded==0`.)
 
 ## Escenarios
 
@@ -87,6 +92,12 @@ Contrato observable. Cada requisito es verificable y atómico; cada escenario ti
 - **When** `MarcarCandidata`
 - **Then** la skill NO se rotula "muerta" (tiene señal de uso: se cargó)
 - **And** una fila con los tres contadores en cero SÍ sigue siendo "muerta"
+
+### Escenario: una skill cargada no es candidata a "retiro"
+- **Given** una fila `(skill="x", resolved=5, body_sent=0, body_requested=0, loaded=10)`
+- **When** `MarcarCandidata`
+- **Then** la skill NO se rotula "retiro" (está en uso por el eje `loaded`)
+- **And** la MISMA fila con `loaded=0` SÍ se rotula "retiro"
 
 ## Fuera de alcance
 - El decididor, el motor, el nudge y cualquier llamada a modelo (Fase 1).

@@ -254,3 +254,96 @@ func TestSkillLoadedBaseAusenteEsSilencio(t *testing.T) {
 		t.Errorf("cualquier otro error SÍ se dice, obtuve %q", ruido)
 	}
 }
+
+// EL HOOK, COMO PROCESO DE VERDAD, NO LE ESCRIBE AL CANAL DEL AGENTE NI SALE ≠0 (R6, punta a punta).
+//
+// Los custodios de arriba prueban las PIEZAS (leerEvento…, escribirSkillCargada, ruidoDe…) en
+// proceso. Falta la COSTURA: `musubi skill-loaded --hook-mode` corriendo como el binario real que
+// dispara el hook —main() → runSkillLoaded → raizDelProceso → escribir— tiene que salir 0 y con
+// stdout VACÍO, que es el canal que el agente ve en un PostToolUse. correrMusubiSalidas re-ejecuta este
+// binario de prueba (TestHelperMusubi), que llama a main() y, si vuelve, os.Exit(0); como falla si el
+// proceso sale ≠0, el exit-0 lo asegura el harness. Acá se afirma, en los DOS caminos —el feliz
+// (escribe la fila) y el de error (base corrupta)—, que stdout queda vacío; y en el de error, que el
+// ruido SÍ sale por stderr.
+//
+// DOS sabotajes, uno por cada canal que el custodio fija —y el segundo es la razón de ser de la
+// aserción de stderr—. Cada uno cuelga de su propia línea «Sabotaje»: el arnés funde en UNA sola
+// directiva todas las líneas `arnes:` que caen bajo un mismo ancla, así que dos directivas completas
+// bajo un solo encabezado se pisarían y una se perdería.
+//
+// Sabotaje 1: mandar el ruido de error a stdout en vez de stderr ⇒ stdout deja de estar vacío (lo
+// caza la aserción de stdout, en el subtest de base corrupta).
+// arnes: archivo="cmd/musubi/skill_loaded.go" de="fmt.Fprint(os.Stderr, ruido)" a="fmt.Fprint(os.Stdout, ruido)"
+//
+// Sabotaje 2: tragarse el ruido —computarlo y no imprimirlo— ⇒ stderr queda vacío (lo caza SÓLO la
+// aserción de stderr; la de stdout seguiría verde, que es justo el hueco que esa mitad cierra).
+// arnes: archivo="cmd/musubi/skill_loaded.go" de="ruido != \"\"" a="ruido == \"\""
+func TestSkillLoadedComoProcesoNoRompeAlAgente(t *testing.T) {
+	const evento = `{"tool_name":"Skill","tool_input":{"skill":"sdd-flow"}}`
+
+	// El hook queda ENCENDIDO en los dos subtests pase lo que haya en el entorno del padre: el hijo
+	// hereda este env, y un MUSUBI_SKILLLOAD_HOOK=0 ambiente lo apagaría —el camino feliz no escribiría
+	// la fila y el de error no emitiría el ruido, y los dos quedarían verdes sin medir nada—. "" no es
+	// "0": deja el hook encendido.
+	t.Setenv("MUSUBI_SKILLLOAD_HOOK", "")
+
+	t.Run("camino feliz: escribe la fila, sale 0, stdout vacío", func(t *testing.T) {
+		home := t.TempDir()
+		dir := t.TempDir()
+		// config.yaml presente ⇒ raizDelProceso resuelve el proyecto SIN activarlo (Activar=false), así
+		// que el hook llega a escribir en vez de callarse.
+		if err := ensureWorkspace(dir); err != nil {
+			t.Fatalf("ensureWorkspace: %v", err)
+		}
+		eng, err := memory.NewDbEngine(dir) // migra el esquema, como el daemon
+		if err != nil {
+			t.Fatalf("NewDbEngine: %v", err)
+		}
+		eng.Close()
+
+		out := correrMusubi(t, dir, home, evento, "skill-loaded", "--hook-mode")
+		if out != "" {
+			t.Errorf("stdout tiene que quedar vacío (canal del agente), obtuve %q", out)
+		}
+
+		// La fila loaded quedó escrita: la costura llegó hasta la base.
+		dbPath := filepath.Join(dir, config.DirName, config.DBFile)
+		db, err := sql.Open("sqlite", dbPath)
+		if err != nil {
+			t.Fatalf("abrir base: %v", err)
+		}
+		defer db.Close()
+		var n int
+		if err := db.QueryRow(`SELECT n FROM skill_usage WHERE kind='loaded' AND skill='sdd-flow'`).Scan(&n); err != nil {
+			t.Fatalf("leer la fila loaded: %v", err)
+		}
+		if n != 1 {
+			t.Errorf("esperaba n=1 para la carga, obtuve %d", n)
+		}
+	})
+
+	t.Run("base corrupta: sale 0, stdout vacío, el error va a stderr", func(t *testing.T) {
+		home := t.TempDir()
+		dir := t.TempDir()
+		if err := ensureWorkspace(dir); err != nil { // config.yaml presente ⇒ el hook llega a escribir
+			t.Fatalf("ensureWorkspace: %v", err)
+		}
+		// memory.db basura: NewDbEngineSinArranque la abre y el camino de escritura falla con un error
+		// que NO es ErrBaseAusente (el archivo existe), así que ruidoDeSkillLoaded devuelve una línea.
+		dbPath := filepath.Join(dir, config.DirName, config.DBFile)
+		if err := os.WriteFile(dbPath, []byte("esto no es una base sqlite"), 0o644); err != nil {
+			t.Fatalf("plantar base corrupta: %v", err)
+		}
+
+		out, errOut := correrMusubiSalidas(t, dir, home, evento, nil, "skill-loaded", "--hook-mode")
+		if out != "" {
+			t.Errorf("ni con la base corrupta el ruido puede ir a stdout (canal del agente), obtuve %q", out)
+		}
+		// Y el ruido SÍ tiene que salir por stderr: un hook que se TRAGARA el error dejaría stdout
+		// vacío igual y pasaría verde sin esta mitad, pero enmudecer ante un fallo real también viola
+		// R6 (esconde que la base está corrupta). stderr es el canal que el agente no lee.
+		if !strings.Contains(errOut, "musubi skill-loaded:") {
+			t.Errorf("el ruido del error tiene que salir por stderr, obtuve %q", errOut)
+		}
+	})
+}
