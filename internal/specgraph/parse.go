@@ -40,6 +40,12 @@ const (
 	// `ruta#símbolo` relativos a la raíz del repo. NO es arista del grafo (como covers/tags);
 	// la rancedumbre de sus anclas se computa en anchors.go.
 	FieldAnchors = "anchors"
+	// FieldShared (F4) marca una spec para federación al cerebro central: un booleano
+	// opt-in. `true` ⇒ se proyecta un gist derivado por el outbox existente; ausente o
+	// `false` ⇒ local, NUNCA viaja (R2, el invariante primario de F4). Se preserva lossless
+	// como cualquier otro campo. El frontmatter normaliza el booleano YAML a string, así que
+	// vive en el mapa como "true"/"false" (ver IsShared).
+	FieldShared = "shared"
 )
 
 // Vocabulario cerrado. Se declaran como slices nuevos (no con append sobre
@@ -78,9 +84,11 @@ var (
 	// tags y anchors son listas pero NO aristas del grafo.
 	ListFields = []string{FieldDependsOn, FieldReferences, FieldImplements, FieldCovers, FieldTags, FieldAnchors}
 
-	// FieldOrder: orden canónico al serializar frontmatter nuevo (create).
+	// FieldOrder: orden canónico al serializar frontmatter nuevo (create). `shared` va
+	// junto a `status`: las dos son metadata de estado/visibilidad de la spec, y ponerla
+	// arriba la hace descubrible al leer el SPEC.md (es una decisión deliberada de federación).
 	FieldOrder = []string{
-		FieldID, FieldType, FieldStatus, FieldTitle,
+		FieldID, FieldType, FieldStatus, FieldShared, FieldTitle,
 		FieldParent,
 		FieldDependsOn, FieldReferences, FieldImplements, FieldCovers, FieldTags, FieldAnchors,
 	}
@@ -256,6 +264,60 @@ func IsSpec(fm Frontmatter) bool {
 		}
 	}
 	return true
+}
+
+// IsShared dice si una spec está marcada para federación (opt-in F4). El frontmatter
+// normaliza el booleano YAML a string ("true"/"false"), así que se compara contra "true"
+// EXACTO: ausente, "false", o cualquier otro valor ⇒ NO compartida. El default es local
+// (R2): lo que importa es qué NO sale de la máquina, así que sólo un `true` explícito federa.
+func IsShared(fm Frontmatter) bool {
+	v, ok := Scalar(fm, FieldShared)
+	return ok && v == "true"
+}
+
+// ValidarShared gatea el campo `shared` AL GUARDAR (R3): si está presente, DEBE ser un booleano —el
+// frontmatter ya lo normalizó a "true"/"false" (ver scalarString)—; cualquier otra cosa ("banana",
+// "1", "yes", una lista) es ERROR, no se coacciona a local en silencio. Un `shared` ausente es
+// válido: el default es local (opt-in, R2). Es el mismo principio con que el resto del frontmatter se
+// valida al crear —un valor fuera del dialecto se rechaza en vez de malinterpretarse después—: si
+// "banana" pasara como local, el autor que quiso federar nunca se enteraría; una relajación que lo
+// tratara como `true` federaría basura. Lo llaman create/update sobre el frontmatter REPARSEADO del
+// archivo, así que también atrapa un `shared` malformado escrito a mano antes de escribir.
+func ValidarShared(fm Frontmatter) error {
+	v, ok := fm[FieldShared]
+	if !ok {
+		return nil
+	}
+	s, isStr := v.(string)
+	if !isStr || (s != "true" && s != "false") {
+		return fmt.Errorf("el campo %q debe ser un booleano (true/false), no %v", FieldShared, v)
+	}
+	return nil
+}
+
+// RenderProjection arma el texto FEDERABLE de una spec (F4) desde sus campos PARSEADOS —id, type,
+// title y el cuerpo—, NUNCA del SPEC.md crudo. Que se construya de lo parseado y no del texto fuente
+// es lo que hace que la huella de las anclas de F2 —que vive DENTRO del frontmatter— no pueda viajar
+// en la proyección: R8/E7 es una garantía ESTRUCTURAL, no un filtro que alguien recuerda aplicar. El
+// id/type/title van PRIMERO para que el gist acotado del motor (que corta por tokens) los conserve
+// aunque el cuerpo sea largo. El cuerpo entra entero: acotarlo es trabajo del gist del motor (R7), no
+// de acá, para no decidir el presupuesto del gist en dos lugares.
+func RenderProjection(fm Frontmatter, body string) string {
+	id, _ := Scalar(fm, FieldID)
+	typ, _ := Scalar(fm, FieldType)
+	title, _ := Scalar(fm, FieldTitle)
+	var sb strings.Builder
+	sb.WriteString("spec ")
+	sb.WriteString(id)
+	sb.WriteString(" (")
+	sb.WriteString(typ)
+	sb.WriteString("): ")
+	sb.WriteString(title)
+	if b := strings.TrimSpace(body); b != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(b)
+	}
+	return sb.String()
 }
 
 // SerializeFrontmatter produce el bloque `---\n...\n---\n` para una spec NUEVA
