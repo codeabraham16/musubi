@@ -143,7 +143,14 @@ func TestLasInstruccionesNombranToolsVisiblesYEntranEnteras(t *testing.T) {
 // techoDelNucleo es cuánto puede pesar el núcleo, en caracteres del JSON compacto que viaja: unos
 // 2.000 tokens por sesión. NO ES UN DERIVADO: es un presupuesto, y subirlo es una decisión — cada
 // tool que las instrucciones nombran se paga en todas las sesiones de todos los repos.
-const techoDelNucleo = 8000
+//
+// Subido de 8000 a 8192 el 2026-11-03 (decisión del dueño): emitir la anotación MCP readOnlyHint
+// en las tools de lectura agrega `"annotations":{"readOnlyHint":true}` a las 3 lecturas del núcleo
+// (musubi_impact, musubi_memory_expand y musubi_recall), ~+110 chars (~27 tokens/sesión). Es el
+// precio de que musubi_recall —la tool más llamada— no pida aprobación en cada invocación en el
+// cliente que respeta la anotación (el cuerpo). El techo sigue siendo un presupuesto, no un
+// derivado: subirlo otra vez es otra decisión.
+const techoDelNucleo = 8192
 
 // EL NÚCLEO ES LO QUE LAS INSTRUCCIONES NOMBRAN, Y CABE EN SU TECHO.
 //

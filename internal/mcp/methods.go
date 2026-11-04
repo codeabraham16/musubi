@@ -38,6 +38,19 @@ type Tool struct {
 	// catálogo del central y el del relé salen sin marcas. omitempty: un cliente que no lo conoce
 	// no ve un campo nuevo.
 	Meta map[string]interface{} `json:"_meta,omitempty"`
+	// Annotations es el sobre de hints de UI que define el protocolo MCP para tools/list. readOnlyHint
+	// le avisa al cliente que la tool no muta estado observable, para que no pida aprobación en cada
+	// invocación. Es un HINT, no autorización: la autorización real sigue en el eje readOnly del
+	// dispatch (RLock/Lock). Lo llena handleToolsList derivándolo del registro, no el spec crudo, así
+	// que no entra a la huella. omitempty: una tool sin hint serializa byte-idéntico a antes.
+	Annotations *ToolAnnotations `json:"annotations,omitempty"`
+}
+
+// ToolAnnotations agrupa los hints de UI del protocolo MCP. Por ahora sólo readOnlyHint; el sobre
+// queda listo para destructiveHint/idempotentHint/openWorldHint sin tocar el cable. El puntero en
+// Tool + omitempty acá hacen que una tool sin hint no emita la clave `annotations`.
+type ToolAnnotations struct {
+	ReadOnlyHint bool `json:"readOnlyHint,omitempty"`
 }
 
 type InputSchema struct {

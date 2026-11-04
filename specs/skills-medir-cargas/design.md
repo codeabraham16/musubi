@@ -38,7 +38,7 @@ Componentes:
 - **`cmd/musubi/agente_plugin.go`** — suma `{"PostToolUse", "Skill", "skill-loaded --hook-mode"}` a `ganchosDelAgente` (lista canónica). Los dos caminos que la materializan (plugin vía `ganchosDelPlugin`; setup repo-por-repo) quedan atados por `TestElPluginLlevaLosMismosGanchosQueSetup`.
 - **`cmd/musubi/setup.go` · `provision.go`** — escriben el hook nuevo. `MergeClaudeSettings` es agnóstico al nombre del evento, así que `PostToolUse` entra sin cambios de fondo; idempotente (R7).
 - **Reporte** (`FormatSkillUsage` / `toolSkillUsage`, y `SkillUsageRow.Loaded`) — incluye `loaded` junto a `resolved`/`body_sent`/`body_requested` (columna `CARGÓ`), **sin** llamarlo utilidad (R11).
-- **`MarcarCandidata`** (skillusage.go) — el caso "muerta" suma `&& r.Loaded == 0` (D7, R12): una skill cargada tiene señal de uso y no puede rotularse muerta.
+- **`MarcarCandidata`** (skillusage.go) — los casos "muerta" y "retiro" suman `&& r.Loaded == 0`: "muerta" por D7/R12 (Fase 0) y "retiro" por R13 (el patch que sigue a Fase 0). Una skill cargada tiene señal de uso por el eje `loaded`, así que ni se rotula muerta ni se propone retirarla, aunque su cuerpo nunca viaje por el resolver.
 
 ## Contratos / interfaces
 - **`SkillEvent`** para una carga: `{Skill: "<nombre>", ProjectID: "<proyecto local>", Evidence: "", Kind: "loaded"}`.

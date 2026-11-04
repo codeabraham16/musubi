@@ -218,8 +218,10 @@ func TestUnaCargaSobreviveAlLadoDeUnKindInvalido(t *testing.T) {
 // loaded y resolved son ejes disjuntos: una skill de `.claude/skills/` vive en loaded. Llamar
 // «muerta» a algo que se cargó sería mentir, y la mentira saldría el instante en que el hook corre.
 //
-// Sabotaje que la hace fallar: sacar `&& r.Loaded == 0` del caso «muerta» de MarcarCandidata.
-// arnes: archivo="internal/memory/skillusage.go" de="r.BodyRequested == 0 && r.Loaded == 0" a="r.BodyRequested == 0"
+// Sabotaje que la hace fallar: sacar `&& r.Loaded == 0` del caso «muerta» de MarcarCandidata. El
+// `de` arranca en `r.Resolved == 0` —el prefijo único de «muerta»— porque «retiro» también termina
+// en `&& r.BodyRequested == 0 && r.Loaded == 0` y el literal corto matchearía las dos (R13).
+// arnes: archivo="internal/memory/skillusage.go" de="r.Resolved == 0 && r.BodyRequested == 0 && r.Loaded == 0" a="r.Resolved == 0 && r.BodyRequested == 0"
 func TestUnaSkillCargadaNoEstaMuerta(t *testing.T) {
 	cargada := SkillUsageRow{Skill: "x", Loaded: 5}
 	MarcarCandidata(&cargada)
@@ -234,6 +236,35 @@ func TestUnaSkillCargadaNoEstaMuerta(t *testing.T) {
 	MarcarCandidata(&sinNada)
 	if sinNada.Candidata != "muerta" {
 		t.Errorf("sin ninguna señal tiene que seguir siendo muerta, quedó %q", sinNada.Candidata)
+	}
+}
+
+// UNA SKILL QUE EL AGENTE CARGA NO ES CANDIDATA A «RETIRO», aunque resuelva sin que su cuerpo viaje.
+//
+// «Retiro» (matcheó y nadie abrió su cuerpo) sugiere SACAR la skill. Pero una que el agente carga con
+// la tool Skill está en uso por el eje loaded, que es independiente del cuerpo del resolver: proponer
+// retirarla sería un consejo falso. Es la misma incoherencia que R12 cerró para «muerta», aplicada al
+// otro patrón que acciona sobre la skill (R13).
+//
+// Sabotaje que la hace fallar: sacar `&& r.Loaded == 0` del caso «retiro» de MarcarCandidata; la skill
+// cargada volvería a salir rotulada «retiro».
+// arnes: archivo="internal/memory/skillusage.go" de="r.Resolved > 0 && r.BodySent == 0 && r.BodyRequested == 0 && r.Loaded == 0" a="r.Resolved > 0 && r.BodySent == 0 && r.BodyRequested == 0"
+func TestUnaSkillCargadaNoEsCandidataARetiro(t *testing.T) {
+	// Resuelve y su cuerpo nunca viajó (el disparador de «retiro»), pero el agente la carga a mano.
+	cargada := SkillUsageRow{Skill: "x", Resolved: 5, Loaded: 10}
+	MarcarCandidata(&cargada)
+	if cargada.Candidata == "retiro" {
+		t.Errorf("una skill cargada %d veces está en uso: no es candidata a retiro; quedó %q (%s)",
+			cargada.Loaded, cargada.Candidata, cargada.Porque)
+	}
+
+	// El “retiro” de verdad sigue siéndolo: MISMA fila (mismos contadores), pero con Loaded=0. (El
+	// guard no rompió el caso real —el mismo que cubre TestA10LosTresPatrones, re-afirmado acá al lado
+	// de su negación—.)
+	sinCarga := SkillUsageRow{Skill: "x", Resolved: 5}
+	MarcarCandidata(&sinCarga)
+	if sinCarga.Candidata != "retiro" {
+		t.Errorf("resuelve, su cuerpo no viajó y no se cargó: tiene que ser retiro, quedó %q", sinCarga.Candidata)
 	}
 }
 
