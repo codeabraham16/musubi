@@ -30,6 +30,8 @@ const procesoDeltaF4 = "---\n" +
 // promoverlo (canónica inexistente) produce una canónica VÁLIDA (id/type/status inyectados) y SIN una
 // sola clave de proceso. Es el caso primario del archive hoy: no existe ninguna SPEC.md todavía.
 //
+// Sabotaje que lo pone en ROJO: neutralizar la poda de claves de proceso (el loop que las borra
+// pasa a un no-op). Entonces artifact/schema_version/change sobreviven y contaminan la canónica (H1).
 // arnes: archivo="internal/mcp/spec_archive.go"
 // arnes: de="	for _, k := range sddProcessKeys {\n		delete(clean, k)\n	}"
 // arnes: a="	_ = sddProcessKeys"
@@ -71,6 +73,8 @@ func TestProyeccionPromocionPodaProcesoEInyectaIdentidad(t *testing.T) {
 // TestProyeccionMergeStatusCanonicoAutoritativo — MERGE (H7): fusionar un delta de proceso status:draft
 // en una canónica status:active NO degrada el status. La canónica es autoritativa sobre su ciclo de vida.
 //
+// Sabotaje que lo pone en ROJO: quitar el delete del status del delta. El status:draft del proceso
+// viaja al merge y degrada el status:active de la canónica (H7).
 // arnes: archivo="internal/mcp/spec_archive.go"
 // arnes: de="	delete(clean, specgraph.FieldStatus)"
 // arnes: a=""
@@ -93,6 +97,8 @@ func TestProyeccionMergeStatusCanonicoAutoritativo(t *testing.T) {
 // TestProyeccionMergeNoContaminaConProceso — MERGE (H1): fusionar el delta de proceso tampoco mete las
 // claves de proceso en la canónica existente, y conserva su cuerpo mientras agrega el del delta.
 //
+// Sabotaje que lo pone en ROJO: neutralizar la poda de claves de proceso (el loop que las borra
+// pasa a un no-op). En el merge, artifact/schema_version/change contaminan la canónica existente (H1).
 // arnes: archivo="internal/mcp/spec_archive.go"
 // arnes: de="	for _, k := range sddProcessKeys {\n		delete(clean, k)\n	}"
 // arnes: a="	_ = sddProcessKeys"
@@ -123,6 +129,8 @@ func TestProyeccionMergeNoContaminaConProceso(t *testing.T) {
 // TestProyeccionPromocionExigeIdentidad — R13: promover (canónica inexistente) un delta de proceso SIN
 // pasar id+type del módulo es error, no una canónica inválida silenciosa.
 //
+// Sabotaje que lo pone en ROJO: quitar la guarda que exige id+type del módulo en promoción. Promover
+// sin identidad NO falla y la canónica nace inválida en silencio (R13).
 // arnes: archivo="internal/mcp/spec_archive.go"
 // arnes: de="	if moduleID == \"\" || moduleType == \"\" {\n		return nil, fmt.Errorf(\"promover el delta a una SPEC.md canónica nueva exige id y type del módulo (R13): el spec.md de proceso del SDD no los trae\")\n	}"
 // arnes: a=""
@@ -138,6 +146,8 @@ func TestProyeccionPromocionExigeIdentidad(t *testing.T) {
 // TestProyeccionPromocionStatusValido — R13: promover con un status fuera del vocabulario de ciclo de
 // vida es error; una canónica no nace con un status basura.
 //
+// Sabotaje que lo pone en ROJO: quitar la guarda que valida el status contra el vocabulario. Promover
+// con un status basura NO falla (R13).
 // arnes: archivo="internal/mcp/spec_archive.go"
 // arnes: de="	if promoteStatus != \"\" && !slices.Contains(specgraph.SpecStatuses, promoteStatus) {\n		return nil, fmt.Errorf(\"status de promoción %q fuera del vocabulario de ciclo de vida %v (R13)\", promoteStatus, specgraph.SpecStatuses)\n	}"
 // arnes: a=""
