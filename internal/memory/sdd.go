@@ -104,8 +104,12 @@ func SDDPhaseDirective(phase, change string) string {
 			"gists/decisiones quedaron stale. Verificá contra la spec: corré build/tests. Registrá los " +
 			"fallos con musubi_log_error. Si todo pasa, cerrá la fase para pasar a archive."
 	case "archive":
-		return fmt.Sprintf("Fase ARCHIVE. Fusioná los delta specs en las specs principales y archivá. "+
-			"Guardá el aprendizaje final con musubi_save_observation topic_key='sdd/%s/archive'.", slug)
+		return fmt.Sprintf("Fase ARCHIVE. Por cada módulo que el cambio tocó, fusioná su delta spec en la "+
+			"SPEC.md canónica con musubi_spec_archive change='%s' path='<ruta root-relative de la SPEC.md "+
+			"canónica del módulo>' (pasá id+type del módulo si la canónica aún no existe: la promueve). La "+
+			"tool proyecta el delta de proceso y escribe la canónica cuando no hay conflictos; si devuelve "+
+			"conflicts, reconciliá esa prosa y volvé a archivar. Después guardá el aprendizaje final con "+
+			"musubi_save_observation topic_key='sdd/%s/archive'.", slug, slug)
 	default:
 		return "Trabajá en esta fase y cerrala con musubi_sdd action=complete."
 	}

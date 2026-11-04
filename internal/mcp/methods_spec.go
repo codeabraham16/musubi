@@ -782,14 +782,15 @@ func specBodyForType(specType, title string) string {
 	return sb.String()
 }
 
-// specToolEntries son las 8 toolEntry del grafo de specs, en orden FIJO (lo
-// congela TestToolsListGolden). grep/recall/get/graph/validate: readOnly (su
-// efecto sobre el repo es nulo; el cache del índice lo protege su propio mutex,
-// D3). create/update/delete: write (candado exclusivo). Casi todas dejan lock en
-// su cero: no hay red ni LLM en el camino. La EXCEPCIÓN es recall, que embebe el
-// query (llamada de red, techo 30 s) cuando hay embebedor: lleva lock=lockSelf
-// —el despacho NO toma candado y el handler no sostiene ninguno durante el
-// embed—, y la guarda candado_no_cruza_la_red lo exige y lo verifica.
+// specToolEntries son las 10 toolEntry del grafo de specs, en orden FIJO (lo
+// congela TestToolsListGolden). grep/recall/get/graph/validate/coverage: readOnly
+// (su efecto sobre el repo es nulo; el cache del índice lo protege su propio
+// mutex, D3). create/update/delete/archive: write (candado exclusivo; mutan el
+// SPEC.md del FS). Casi todas dejan lock en su cero: no hay red ni LLM en el
+// camino. La EXCEPCIÓN es recall, que embebe el query (llamada de red, techo
+// 30 s) cuando hay embebedor: lleva lock=lockSelf —el despacho NO toma candado y
+// el handler no sostiene ninguno durante el embed—, y la guarda
+// candado_no_cruza_la_red lo exige y lo verifica.
 func (s *McpServer) specToolEntries() []toolEntry {
 	return []toolEntry{
 		{
@@ -962,6 +963,26 @@ func (s *McpServer) specToolEntries() []toolEntry {
 			// SIN lockSelf: no hay red ni LLM (a diferencia de recall), sólo lecturas locales de DB.
 			handler:  s.toolSpecCoverage,
 			readOnly: true,
+		},
+		{
+			Tool: Tool{
+				Name:        "musubi_spec_archive",
+				Description: "Fusiona el delta spec de PROCESO de un cambio SDD (specs/<change>/spec.md) en la SPEC.md canónica de su módulo: el DESTINO de la fase `archive` del SDD (spec-graph F4). Proyecta el delta a forma canónica —poda las claves de proceso (artifact/schema_version/change) y no deja que su status degrade la canónica— y lo fusiona: frontmatter determinista (lossless sobre la canónica), cuerpo ADITIVO por secciones. SIN conflictos ESCRIBE la canónica (archivar = persistir el pliegue); con prosa divergente del MISMO heading NO escribe —surfacea los conflicts para que los reconcilie una persona (surface-not-auto)—. Si la canónica no existe, PROMUEVE: nace del delta y exige id+type del módulo. Model-free.",
+				InputSchema: InputSchema{
+					Type: "object",
+					Properties: map[string]Property{
+						"change": {Type: "string", Description: "El cambio SDD cuyo delta archivar: se lee de specs/<change>/spec.md."},
+						"path":   {Type: "string", Description: "La SPEC.md canónica del módulo donde fusionar (root-relative, .md). Si no existe, se promueve una nueva ahí."},
+						"id":     {Type: "string", Description: "Sólo al PROMOVER (canónica inexistente): id del módulo para la canónica nueva. En merge se ignora (la canónica es autoritativa)."},
+						"type":   {Type: "string", Description: "Sólo al PROMOVER: type del módulo (goal-and-requirements | architecture-design | module-design | submodule-design | task-spec). En merge se ignora."},
+						"status": {Type: "string", Description: "Sólo al PROMOVER: status de ciclo de vida de la canónica nueva (draft | active | stale | done | deprecated). Default active. En merge se ignora."},
+					},
+					Required: []string{"change", "path"},
+				},
+			},
+			// write (sin readOnly): en el camino limpio escribe la canónica, igual que create/update/delete.
+			// noCtx: sólo toca el FS (os.Root), no lee tablas scopeadas por tenant como coverage.
+			handler: noCtx(s.toolSpecArchive),
 		},
 	}
 }
