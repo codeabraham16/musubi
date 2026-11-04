@@ -218,8 +218,10 @@ func TestUnaCargaSobreviveAlLadoDeUnKindInvalido(t *testing.T) {
 // loaded y resolved son ejes disjuntos: una skill de `.claude/skills/` vive en loaded. Llamar
 // «muerta» a algo que se cargó sería mentir, y la mentira saldría el instante en que el hook corre.
 //
-// Sabotaje que la hace fallar: sacar `&& r.Loaded == 0` del caso «muerta» de MarcarCandidata.
-// arnes: archivo="internal/memory/skillusage.go" de="r.BodyRequested == 0 && r.Loaded == 0" a="r.BodyRequested == 0"
+// Sabotaje que la hace fallar: sacar `&& r.Loaded == 0` del caso «muerta» de MarcarCandidata. El
+// `de` arranca en `r.Resolved == 0` —el prefijo único de «muerta»— porque «retiro» también termina
+// en `&& r.BodyRequested == 0 && r.Loaded == 0` y el literal corto matchearía las dos (R13).
+// arnes: archivo="internal/memory/skillusage.go" de="r.Resolved == 0 && r.BodyRequested == 0 && r.Loaded == 0" a="r.Resolved == 0 && r.BodyRequested == 0"
 func TestUnaSkillCargadaNoEstaMuerta(t *testing.T) {
 	cargada := SkillUsageRow{Skill: "x", Loaded: 5}
 	MarcarCandidata(&cargada)

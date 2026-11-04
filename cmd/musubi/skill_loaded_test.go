@@ -267,13 +267,16 @@ func TestSkillLoadedBaseAusenteEsSilencio(t *testing.T) {
 // ruido SÍ sale por stderr.
 //
 // DOS sabotajes, uno por cada canal que el custodio fija —y el segundo es la razón de ser de la
-// aserción de stderr—:
-//  1. mandar el ruido de error a stdout en vez de stderr ⇒ stdout deja de estar vacío (lo caza la
-//     aserción de stdout, en el subtest de base corrupta).
-//  2. tragarse el ruido —computarlo y no imprimirlo— ⇒ stderr queda vacío (lo caza SÓLO la aserción
-//     de stderr; la de stdout seguiría verde, que es justo el hueco que esa mitad cierra).
+// aserción de stderr—. Cada uno cuelga de su propia línea «Sabotaje»: el arnés funde en UNA sola
+// directiva todas las líneas `arnes:` que caen bajo un mismo ancla, así que dos directivas completas
+// bajo un solo encabezado se pisarían y una se perdería.
 //
+// Sabotaje 1: mandar el ruido de error a stdout en vez de stderr ⇒ stdout deja de estar vacío (lo
+// caza la aserción de stdout, en el subtest de base corrupta).
 // arnes: archivo="cmd/musubi/skill_loaded.go" de="fmt.Fprint(os.Stderr, ruido)" a="fmt.Fprint(os.Stdout, ruido)"
+//
+// Sabotaje 2: tragarse el ruido —computarlo y no imprimirlo— ⇒ stderr queda vacío (lo caza SÓLO la
+// aserción de stderr; la de stdout seguiría verde, que es justo el hueco que esa mitad cierra).
 // arnes: archivo="cmd/musubi/skill_loaded.go" de="ruido != \"\"" a="ruido == \"\""
 func TestSkillLoadedComoProcesoNoRompeAlAgente(t *testing.T) {
 	const evento = `{"tool_name":"Skill","tool_input":{"skill":"sdd-flow"}}`
