@@ -183,7 +183,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        # macos-13 (Intel), no macos-latest: el runner arm64 hosted se quedó sin
+        # capacidad y el job quedaba `cancelled` sin correr un test (bloqueó #792).
+        # macos-13 se va a retirar; volver a macos-latest cuando arm64 tenga cola.
+        os: [windows-latest, macos-13]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
