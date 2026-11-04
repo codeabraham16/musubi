@@ -56,7 +56,7 @@ func TestReadOnlyHintInvariante(t *testing.T) {
 
 	barridas := 0
 	for i := range s.tools {
-		name := s.tools[i].Tool.Name
+		name := s.tools[i].Name
 		a, presente := ann[name]
 		if !presente {
 			t.Errorf("%s: está en el registro pero no en la salida de tools/list", name)
@@ -75,9 +75,9 @@ func TestReadOnlyHintInvariante(t *testing.T) {
 		// R6/D2: la anotación vive SÓLO en la copia local de handleToolsList. El spec GUARDADO en el
 		// registro —el que marshalea huellaDelCatalogo— nunca la lleva, así catalog_sha256 no se mueve.
 		// Si un refactor la setea sobre el spec, la huella se movería y este invariante lo caza.
-		if s.tools[i].Tool.Annotations != nil {
+		if s.tools[i].Annotations != nil {
 			t.Errorf("%s: el spec guardado trae Annotations=%+v; debe vivir sólo en la copia de tools/list, o la huella se mueve",
-				name, *s.tools[i].Tool.Annotations)
+				name, *s.tools[i].Annotations)
 		}
 		barridas++
 	}
