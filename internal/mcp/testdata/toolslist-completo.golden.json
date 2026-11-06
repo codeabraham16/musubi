@@ -2497,6 +2497,39 @@
       "annotations": {
         "readOnlyHint": true
       }
+    },
+    {
+      "name": "musubi_spec_archive",
+      "description": "Fusiona el delta spec de PROCESO de un cambio SDD (specs/\u003cchange\u003e/spec.md) en la SPEC.md canónica de su módulo: el DESTINO de la fase `archive` del SDD (spec-graph F4). Proyecta el delta a forma canónica —poda las claves de proceso (artifact/schema_version/change) y no deja que su status degrade la canónica— y lo fusiona: frontmatter determinista (lossless sobre la canónica), cuerpo ADITIVO por secciones. SIN conflictos ESCRIBE la canónica (archivar = persistir el pliegue); con prosa divergente del MISMO heading NO escribe —surfacea los conflicts para que los reconcilie una persona (surface-not-auto)—. Si la canónica no existe, PROMUEVE: nace del delta y exige id+type del módulo. Model-free.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "change": {
+            "type": "string",
+            "description": "El cambio SDD cuyo delta archivar: se lee de specs/\u003cchange\u003e/spec.md."
+          },
+          "id": {
+            "type": "string",
+            "description": "Sólo al PROMOVER (canónica inexistente): id del módulo para la canónica nueva. En merge se ignora (la canónica es autoritativa)."
+          },
+          "path": {
+            "type": "string",
+            "description": "La SPEC.md canónica del módulo donde fusionar (root-relative, .md). Si no existe, se promueve una nueva ahí."
+          },
+          "status": {
+            "type": "string",
+            "description": "Sólo al PROMOVER: status de ciclo de vida de la canónica nueva (draft | active | stale | done | deprecated). Default active. En merge se ignora."
+          },
+          "type": {
+            "type": "string",
+            "description": "Sólo al PROMOVER: type del módulo (goal-and-requirements | architecture-design | module-design | submodule-design | task-spec). En merge se ignora."
+          }
+        },
+        "required": [
+          "change",
+          "path"
+        ]
+      }
     }
   ]
 }

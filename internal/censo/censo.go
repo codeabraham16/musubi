@@ -137,11 +137,16 @@ var censo = map[string]Clase{
 	// hermanas de lectura: recién nace, y un cero persistente es el «se construye y no se enciende»
 	// que A3 surfacea, así que va a DebeInvocarse y no a una clase que excuse el cero.
 	"musubi_spec_coverage": DebeInvocarse,
-	"musubi_sync_status":   DebeInvocarse,
-	"musubi_tokens":        DebeInvocarse,
-	"musubi_tool_usage":    DebeInvocarse,
-	"musubi_whoami":        DebeInvocarse,
-	"musubi_work":          DebeInvocarse,
+	// spec-graph F4b: el destino de la fase `archive` del SDD (musubi_spec_archive funde el delta
+	// spec de un cambio en la SPEC.md canónica de su módulo). La invoca la directiva de la fase
+	// archive, así que DEBE invocarse igual que sus hermanas; un cero persistente es el «se construye
+	// y no se enciende» que A3 surfacea, no una clase que lo excuse.
+	"musubi_spec_archive": DebeInvocarse,
+	"musubi_sync_status":  DebeInvocarse,
+	"musubi_tokens":       DebeInvocarse,
+	"musubi_tool_usage":   DebeInvocarse,
+	"musubi_whoami":       DebeInvocarse,
+	"musubi_work":         DebeInvocarse,
 
 	// --- Administrativa: superficie de operación de flota/credenciales; cero esperado. ---
 	"musubi_fleet_approvals":        Administrativa,
