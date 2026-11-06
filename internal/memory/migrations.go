@@ -2248,6 +2248,49 @@ func schemaMigrations() []migration {
 				return agregarColumnaSiFalta(x, "outbox", "sent_at", "sent_at DATETIME")
 			},
 		},
+		{
+			version:        59,
+			name:           "ledger_ab_del_decididor",
+			readCompatible: true,
+			// EL LIBRO MAYOR DEL A/B DEL DECIDIDOR DE SKILLS (spec skills-decididor, R10).
+			//
+			// El decididor se enciende detrás de un A/B default-off: hay que PODER MEDIR si exigir una
+			// skill hace que se cargue más seguido, ANTES de comprometer gasto de motor. Esta tabla es
+			// el substrato de esa medición, agregado por (project_id, brazo):
+			//   - oportunidades: cuántas veces el gate del decididor pasó —tuvo ocasión de actuar—. Es
+			//     el DENOMINADOR. Se cuenta en el central, donde corre exigirSkillSiCorresponde.
+			//   - exigencias: de ésas, cuántas el motor terminó exigiendo una skill. Telemetría para
+			//     leer el lift (si es ~0, el motor casi no exige y no hay lift que esperar).
+			//   - cargadas: cuántas veces se CARGÓ una skill en ese brazo (el eje `loaded`). Es el
+			//     NUMERADOR. Se cuenta donde corre el hook de carga (RecordSkillEvents), por eso ahí se
+			//     estampa el brazo con BrazoAB(project_id, hoy).
+			// El lift = cargadas/oportunidades(on) − cargadas/oportunidades(off), aritmética model-free
+			// (ver DecididorAB/CalcularLift). project_id es la cohorte del brazo: viaja idéntico por el
+			// sync, así que las dos puntas caen en el mismo brazo sin un protocolo que las coordine.
+			//
+			// ⚠️ LÍMITE CONOCIDO (se cierra en un PR posterior, flaggeado en verify): oportunidades nace
+			// en el central y cargadas en la máquina local, así que un lift real exige que las dos
+			// convivan en una base (post-merge del sync). El substrato y la aritmética son correctos y
+			// están cubiertos con fixture sembrado; el flujo cruzando el sync es trabajo siguiente.
+			//
+			// ES readCompatible: una tabla nueva que ningún lector viejo consulta —ninguna respuesta
+			// existente cambia de filas—. Un binario anterior la puede LEER; escribirla la corta
+			// ErrSchemaTooNew, que es el lado seguro en una flota de versiones mixtas.
+			up: func(x execQuerier) error {
+				_, err := x.Exec(`
+					CREATE TABLE IF NOT EXISTS decididor_ab (
+						project_id    TEXT     NOT NULL DEFAULT '',
+						arm           TEXT     NOT NULL CHECK (arm IN ('on','off')),
+						oportunidades INTEGER  NOT NULL DEFAULT 0,
+						exigencias    INTEGER  NOT NULL DEFAULT 0,
+						cargadas      INTEGER  NOT NULL DEFAULT 0,
+						first_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+						last_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+						PRIMARY KEY (project_id, arm)
+					)`)
+				return err
+			},
+		},
 	}
 }
 

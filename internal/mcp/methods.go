@@ -1694,6 +1694,32 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 	res = s.rerankSiCorresponde(ctx, args.Query, res, args.Rerank)
 	res.Correcciones = correcciones
 
+	// TRAMO 3b — SIN CANDADO. El decididor de skills (ola-2 conciencia; spec skills-decididor). Si está
+	// habilitado (motor presente + dial on; en el daemon local y por default es no-op), deja que el
+	// motor elija UNA skill que la tarea EXIJA y la monta como exigencia. best-effort: nunca rompe el
+	// recall. Sólo toca el disco (LoadSkills) cuando está habilitado, para no leer .musubi/skills en
+	// cada recall con el decididor apagado — el caso del stdio local y el default.
+	if s.decididorHabilitado() && s.resolver != nil {
+		// El arsenal es el catálogo nivel-1 COMPLETO (D2b): el input del motor es el mismo que vería
+		// el agente, no una proyección recortada. La proyección a SkillN1 —y el descarte de Rules que
+		// mantiene vivo el eje `loaded` del A/B (R7)— pasa DENTRO de exigirSkillSiCorresponde.
+		var arsenal []skills.Skill
+		s.withReadLock(func() {
+			if cat, lerr := s.resolver.LoadSkills(); lerr == nil {
+				arsenal = cat
+			} else {
+				logx.Error("decididor de skills: no pude leer el arsenal, recall sin exigencia", "error", lerr)
+			}
+		})
+		// reflejas VACÍO a propósito: musubi_recall no trae archivos ni fase/tarea declarada, y el
+		// alcance casa por IGUALDAD contra un tag, no por substring de la query (ver matchAlcance), así
+		// que un reflejo model-free no puede pinar nada desde texto libre. El corte por match-fuerte
+		// queda vivo y testeado como unidad pero DORMIDO acá; cablear señales de archivo al recall es
+		// follow-up, y es ESTE el punto donde reflejas se poblaría. El gate igual corta por catálogo
+		// vacío y texto no sustantivo.
+		res = s.exigirSkillSiCorresponde(ctx, args.Query, res, nil, arsenal)
+	}
+
 	// TIER 2a (specs/recall-envoltorio/tier2-id-corto.md) — el `id` viaja al agente ACORTADO a 8 hex.
 	// El id del payload es un HANDLE opaco para expandir, no contenido que el modelo razone:
 	// musubi_memory_expand resuelve una ref corta igual que el uuid entero (hydrateByIDs/esRefCorta),
@@ -1717,7 +1743,20 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 	if raw, mErr := json.Marshal(res); mErr == nil {
 		res.UsedTokens = memory.EstimateTokens(string(raw))
 	}
-	return jsonResult(res)
+
+	// R7/D4 — la EXIGENCIA se entrega DOS VECES: como campo estructurado en el JSON (para un consumidor
+	// que la lee sin parsear prosa) y como línea imperativa al TOPE del texto (el nudge que hace que el
+	// agente CARGUE la skill, no que la lea como catálogo). SIN el cuerpo. Sin exigencia, el texto sale
+	// byte a byte como jsonResult(res) —marshal compacto—, así que el camino de siempre no cambia.
+	payload, mErr := json.Marshal(res)
+	if mErr != nil {
+		return nil, rpcErrorf(codeInternalError, "error al serializar resultado: %v", mErr)
+	}
+	texto := string(payload)
+	if res.ExigenciaSkill != nil {
+		texto = renderExigencia(*res.ExigenciaSkill) + "\n" + texto
+	}
+	return textResult(texto), nil
 }
 
 // correctorDeTipeo lo implementa el motor real (memory.DbEngine.CorregirConsulta). Interfaz y no

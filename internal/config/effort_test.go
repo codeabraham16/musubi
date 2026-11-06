@@ -184,3 +184,34 @@ func TestReadTimeRerankOnResuelveElPuntero(t *testing.T) {
 		t.Errorf("true ⇒ prendido")
 	}
 }
+
+// R2 — DIAL-DEFAULT-OFF: el decididor nace apagado. Mismo patrón de puntero que el juez.
+func TestDecididorSkillsOnResuelveElPuntero(t *testing.T) {
+	if (CognitionConfig{}).DecididorSkillsOn() {
+		t.Errorf("ausente ⇒ apagado (el decididor nace apagado, R2)")
+	}
+	if (CognitionConfig{DecididorSkills: ptrBool(false)}).DecididorSkillsOn() {
+		t.Errorf("false ⇒ apagado")
+	}
+	if !(CognitionConfig{DecididorSkills: ptrBool(true)}).DecididorSkillsOn() {
+		t.Errorf("true ⇒ prendido")
+	}
+}
+
+// El decididor NO cuelga del preset de potencia: ningún effort —ni turbo— debe prenderlo. Se
+// enciende explícito y detrás de su A/B. Si alguien lo agrega a ApplyEffort, este test se pone en
+// rojo (sabotaje: setear c.DecididorSkills en la rama turbo de ApplyEffort).
+func TestApplyEffortNoTocaElDecidido(t *testing.T) {
+	for _, e := range []string{EffortEco, EffortBalanced, EffortTurbo} {
+		out, err := CognitionConfig{Effort: e}.ApplyEffort()
+		if err != nil {
+			t.Fatalf("%s: %v", e, err)
+		}
+		if out.DecididorSkills != nil {
+			t.Errorf("%s: el preset no debe tocar decididor_skills, quedó %v", e, *out.DecididorSkills)
+		}
+		if out.DecididorSkillsOn() {
+			t.Errorf("%s: ningún preset debe PRENDER el decididor", e)
+		}
+	}
+}

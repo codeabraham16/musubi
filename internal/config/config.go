@@ -728,6 +728,17 @@ type CognitionConfig struct {
 	// ReadTimeRerankTopK es cuántos candidatos del tope se someten al juez (el resto queda intacto
 	// al final). 0 ⇒ default interno. Acota latencia y costo: el juez nunca ve todo el recall.
 	ReadTimeRerankTopK int `yaml:"read_time_rerank_top_k,omitempty"`
+	// DecididorSkills activa el DECIDIDOR DE SKILLS en el recall (ola-2 conciencia): tras el ranking
+	// model-free, el motor elige la skill que la tarea exige y el servidor la entrega como exigencia
+	// imperativa (ver internal/mcp/exigirSkillSiCorresponde). Es un seam de riesgo igual que el juez
+	// —motor en el camino del recall—, por eso nace APAGADO (nil/false ⇒ bit-idéntico: el recall
+	// sigue 100% model-free) y es gateado/cacheado/best-effort. Apagarlo ES el rollback.
+	//
+	// Es *bool y no bool por la misma razón que ReadTimeRerank: distinguir "no lo escribieron" de
+	// "lo escribieron en false". Usar DecididorSkillsOn(). A diferencia del juez, el dial de potencia
+	// (ApplyEffort) NO lo toca: el decididor no cuelga del preset turbo, se prende aparte y detrás de
+	// su A/B default-off.
+	DecididorSkills *bool `yaml:"decididor_skills,omitempty"`
 	// MotorQuotaPerHour es el FRENO DE GASTO del motor: cuántas llamadas al modelo puede provocar
 	// UN principal por hora. Existe porque `quota_per_minute` cuenta todas las tools por igual, y su
 	// default (600/min) está calibrado para tools gratis: aplicado al motor no es un límite.

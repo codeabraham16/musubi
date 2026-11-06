@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Evidencias con las que una skill puede entrar en una resolución. Taxonomía CERRADA, como
@@ -104,6 +105,12 @@ func (e *DbEngine) RecordSkillEvents(ctx context.Context, batch []SkillEvent) er
 		if _, err := stmt.ExecContext(ctx, ev.Skill, ev.ProjectID, ev.Evidence, ev.Kind); err != nil {
 			return fmt.Errorf("contadores de skills: contar %q: %w", ev.Skill, err)
 		}
+	}
+	// Cada carga alimenta además el NUMERADOR del A/B del decididor (eje `loaded`). Se cuenta en la
+	// MISMA transacción y en este único choke point para que no haya una segunda vía que olvidar. Es
+	// UPDATE-only: no corrompe la lectura cuando el A/B está apagado (ver bumpCargadasDecididorTx).
+	if err := bumpCargadasDecididorTx(ctx, tx, batch, time.Now()); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("contadores de skills: commit: %w", err)

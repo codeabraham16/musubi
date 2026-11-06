@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -188,6 +189,51 @@ func TestA8LaQueNuncaMatcheoApareceConCero(t *testing.T) {
 	}
 	if !strings.Contains(txt, "muerta") {
 		t.Errorf("sin conteos, las tres son candidatas «muerta»\n%s", txt)
+	}
+}
+
+// ★ H1 — musubi_skill_usage ADJUNTA EL LIFT DEL A/B DEL DECIDIDOR (spec skills-decididor, R10/E9).
+//
+// Es el SEGUNDO consumidor del A/B: quien mantiene el arsenal, que mira esta misma tool, necesita ver
+// si ENTREGAR la skill como exigencia mueve la carga. Sin esto el experimento se registra pero nadie
+// lo lee desde donde ya se mira el arsenal —la trampa de la magnitud que se construye y no se enciende—.
+// Sabotaje: en el handler, no adjuntar el lift (`_ = filasAB` en vez de `cuerpo += ...FormatLiftDecididor...`)
+// ⇒ el texto no trae el bloque del A/B ⇒ rojo.
+// arnes: archivo="internal/mcp/methods_skillusage.go"
+// arnes: de="cuerpo += memory.FormatLiftDecididor(memory.CalcularLift(filasAB))"
+// arnes: a="_ = filasAB"
+func TestH1SkillUsageAdjuntaElLiftDelAB(t *testing.T) {
+	sink := &sinkEspia{}
+	s := servidorQueCuenta(t, sink)
+
+	// Sin A/B todavía (el default): el bloque aparece igual y dice que no hubo ocasiones.
+	out, rerr := call(t, s, "musubi_skill_usage", nil)
+	if rerr != nil {
+		t.Fatalf("musubi_skill_usage: %+v", rerr)
+	}
+	txt := out.(CallToolResponse).Content[0].Text
+	if !strings.Contains(txt, "A/B del decididor de skills") {
+		t.Fatalf("el bloque del A/B tiene que aparecer aunque esté vacío:\n%s", txt)
+	}
+	if !strings.Contains(txt, "sin ocasiones todavía") {
+		t.Fatalf("sin experimento, el bloque lo dice:\n%s", txt)
+	}
+
+	// Nace UNA oportunidad en un solo brazo: el lift queda indefinido y la tool lo refleja (no un 0).
+	eng := s.engine.(*memory.DbEngine)
+	if err := eng.RegistrarOportunidadDecididor(context.Background(), "p", memory.BrazoOn, true); err != nil {
+		t.Fatalf("RegistrarOportunidadDecididor: %v", err)
+	}
+	out2, rerr := call(t, s, "musubi_skill_usage", nil)
+	if rerr != nil {
+		t.Fatalf("musubi_skill_usage (2): %+v", rerr)
+	}
+	txt2 := out2.(CallToolResponse).Content[0].Text
+	if !strings.Contains(txt2, "INDEFINIDO") {
+		t.Fatalf("con un solo brazo poblado el lift es indefinido y la tool tiene que decirlo:\n%s", txt2)
+	}
+	if strings.Contains(txt2, "+0.0") {
+		t.Fatalf("el lift indefinido no puede imprimirse como 0:\n%s", txt2)
 	}
 }
 
