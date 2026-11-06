@@ -3,9 +3,11 @@ package mcp
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"musubi/internal/embedding"
 	"musubi/internal/logx"
 	"musubi/internal/memory"
+	"musubi/internal/skills"
 )
 
 // marcasDeCerco devuelve el par de marcas que encierra cada memoria en el prompt fundamentado.
@@ -491,4 +494,239 @@ func rerankCachePut(key string, order []string) {
 		rerankCache = map[string][]string{}
 	}
 	rerankCache[key] = order
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EL DECIDIDOR DE SKILLS (ola-2 conciencia; spec skills-decididor). Hermano de
+// rerankSiCorresponde y calcado de su molde probado: guard → gate → caché →
+// freno DENTRO del miss → timeout → motor → best-effort. El JUICIO puro vive en
+// cognition.ElegirSkill; acá está la DISCIPLINA de producción: cuándo vale gastar
+// una llamada al motor, en qué brazo del A/B, y cómo ENTREGAR la orden al agente.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// decididorCache memoiza la elección del motor para un (query + catálogo), igual que rerankCache
+// memoiza el orden del juez. Vive acá y no adentro de ElegirSkill a propósito: es política de
+// producción —estira la suscripción y protege el rate-limit compartido— y adentro falsearía
+// cualquier banco que necesite una llamada por tarea.
+var (
+	decididorCacheMu sync.Mutex
+	decididorCache   = map[string]cognition.Eleccion{}
+)
+
+const decididorCacheCap = 512
+
+// decididorMinQuery es el piso de "texto sustantivo" (D3): por debajo, el gate descarta sin gastar
+// motor. NO es un clasificador de intención —ese es el trabajo del motor—; sólo corta lo obviamente
+// inútil, como una query de una o dos palabras que no puede estar exigiendo una skill.
+const decididorMinQuery = 12
+
+// oportunidadDecididorWriter lo implementa el motor real. Interfaz y no *memory.DbEngine por lo mismo
+// que skillUsageReader: si el backend de turno no sabe del A/B, el decididor NO cuenta la oportunidad
+// pero el recall sigue intacto. El A/B es telemetría; nunca puede tumbar el camino caliente.
+type oportunidadDecididorWriter interface {
+	RegistrarOportunidadDecididor(ctx context.Context, projectID, arm string, exigio bool) error
+}
+
+// decididorHabilitado es el guard de R1+R2 en un solo lugar: el motor EXISTE (no NoopProvider; o sea
+// NO el daemon local, que cae al noop) Y el dial está explícitamente en on. El dial es un puntero:
+// ausente ⇒ off, que es el default del A/B. Apagar el dial ES el rollback (D6). toolRecall lo
+// consulta para NO tocar el disco (LoadSkills) en cada recall cuando el decididor está apagado.
+func (s *McpServer) decididorHabilitado() bool {
+	return cognition.Enabled(s.cognition) && s.cognitionCfg.DecididorSkillsOn()
+}
+
+// hayMatchFuerte dice si el reflejo model-free (los niveles) ya pinó una skill con EVIDENCIA —un glob
+// que casó un archivo real, o un alcance declarado— por oposición a un comodín '*' que casa todo y
+// no distingue nada. Es la señal del gate conservador (R3): si el reflejo ya acertó, el motor no
+// agrega nada y no se gasta la llamada.
+func hayMatchFuerte(reflejas []skills.SkillResuelta) bool {
+	for _, r := range reflejas {
+		if r.Matcheo == skills.PorGlob || r.Matcheo == skills.PorAlcance {
+			return true
+		}
+	}
+	return false
+}
+
+// gatePasaDecididor decide, model-free y barato, si vale la pena invocar al motor (R3/D2a/D3):
+//   - texto sustantivo (query no vacía sobre decididorMinQuery), Y
+//   - catálogo no vacío (hay algo que elegir), Y
+//   - el reflejo NO pinó nada fuerte (si ya acertó por glob/alcance, el motor no suma — 0 llamadas).
+//
+// El catálogo que DESPUÉS ve el motor es el COMPLETO (D2b), no sólo lo que casó el reflejo: el valor
+// del motor es cazar una skill cuyo trigger era demasiado angosto y no disparó. El gate evita gastar
+// cuando el reflejo ya acertó; el input ancho deja que el motor acierte donde el trigger falló.
+func gatePasaDecididor(query string, reflejas []skills.SkillResuelta, catLen int) bool {
+	if len(strings.TrimSpace(query)) < decididorMinQuery {
+		return false
+	}
+	if catLen == 0 {
+		return false
+	}
+	return !hayMatchFuerte(reflejas)
+}
+
+// exigirSkillSiCorresponde es el hermano de rerankSiCorresponde para el decididor de skills. Dado el
+// texto del recall y el catálogo, decide si el motor debe elegir UNA skill que la tarea exija; si la
+// elige, la monta sobre el RecallResult como EXIGENCIA (campo estructurado — el borde lo renderiza
+// como una línea imperativa). Guard → A/B → gate → caché(fuera del freno) → freno(dentro del miss) →
+// timeout → motor → best-effort, calcado del molde de rerank.
+//
+// reflejas es el reflejo model-free (sólo para el gate); arsenal es el catálogo nivel-1 COMPLETO que
+// ve el motor (D2b), con el CUERPO todavía adentro: la conversión a SkillN1 (arsenalN1) lo dropea acá
+// y es lo que preserva el eje loaded (R7) —el cuerpo no viaja ni al motor ni a la exigencia—. En el
+// camino recall de hoy reflejas llega VACÍO —musubi_recall no trae archivos— así que el corte por
+// match-fuerte está vivo y testeado como unidad pero dormido en producción (cablear las señales de
+// archivo es follow-up); el gate igual corta por catálogo vacío y texto corto.
+func (s *McpServer) exigirSkillSiCorresponde(ctx context.Context, query string, res memory.RecallResult, reflejas []skills.SkillResuelta, arsenal []skills.Skill) memory.RecallResult {
+	// R1+R2 — GUARD. Sin motor (daemon local ⇒ NoopProvider) o con el dial off (el default) es no-op
+	// absoluto: ni gate, ni A/B, ni disco. local-first intacto.
+	if !s.decididorHabilitado() {
+		return res
+	}
+	// R3 — GATE CONSERVADOR, model-free y ANTES de contar la oportunidad: una llamada que el gate
+	// descarta no es una ocasión del A/B (el tratamiento ni se consideró), así que no infla el
+	// denominador. Si el reflejo ya pinó fuerte, 0 llamadas al motor.
+	if !gatePasaDecididor(query, reflejas, len(arsenal)) {
+		return res
+	}
+
+	// A PARTIR DE ACÁ HAY UNA OCASIÓN DEL A/B. El brazo sale de BrazoAB(project_id, hoy): crossover
+	// por día, cohorte = tenant, estable para las dos puntas del sync sin coordinarse (ver brazo.go).
+	pid := ""
+	if p := principalFrom(ctx); p != nil {
+		pid = p.ProjectID
+	}
+	arm := memory.BrazoAB(pid, time.Now())
+
+	// BRAZO OFF = CONTROL. Tuvo la ocasión (cuenta en el denominador) pero NO recibe el tratamiento:
+	// no se llama al motor y no se monta exigencia. El numerador del off se acumula aparte, de las
+	// cargas que el agente hace SIN que se le ordene — que es justo contra lo que se mide el tratamiento.
+	if arm == memory.BrazoOff {
+		s.registrarOportunidadDecididor(ctx, pid, arm, false)
+		return res
+	}
+
+	// n1 es lo que el motor VE: la proyección sin cuerpo del arsenal. Convertir acá (y no en el borde)
+	// mantiene en un solo lugar la garantía de que el cuerpo no se filtra (R7), y deja que el gate y el
+	// A/B razonen sobre el arsenal entero.
+	n1 := arsenalN1(arsenal)
+
+	// BRAZO ON = TRATAMIENTO. Caché FUERA del freno (R11): un acierto no llama al motor, así que no
+	// gasta presupuesto justo cuando el sistema se está portando bien. La clave es (query + catálogo):
+	// misma tarea sobre el mismo catálogo ⇒ misma decisión.
+	key := claveDecididor(query, n1)
+	eleccion, hay := decididorCacheGet(key)
+	if !hay {
+		// R5/R11 — EL FRENO, dentro del miss. Sin presupuesto se DEGRADA (no se rechaza): quien llamó
+		// pidió memoria, no una exigencia. La ocasión igual contó (denominador), sin exigencia.
+		if !s.hayPresupuestoDeMotor(ctx) {
+			if s.metrics != nil {
+				s.metrics.motorDenied.Add(1)
+			}
+			logx.Warn("decididor de skills: sin presupuesto de motor, recall sin exigencia",
+				"max_por_hora", s.motorQuota.max)
+			s.registrarOportunidadDecididor(ctx, pid, arm, false)
+			return res
+		}
+		// El TIMEOUT es el backstop de producción (el banco pone el suyo): la cognición tolera latencia.
+		rctx, cancel := context.WithTimeout(ctx, askTimeout)
+		e, err := cognition.ElegirSkill(rctx, s.cognition, query, n1)
+		cancel()
+		if err != nil {
+			// R6 — BEST-EFFORT: motor caído, timeout o respuesta imparseable conservan el recall
+			// model-free intacto. El recall NUNCA se rompe por el motor. La ocasión igual contó.
+			logx.Error("decididor de skills: recall sin exigencia (model-free intacto)", "error", err)
+			s.registrarOportunidadDecididor(ctx, pid, arm, false)
+			return res
+		}
+		eleccion = e
+		decididorCachePut(key, eleccion)
+	}
+
+	// R8 — "ninguna" (Skill == "") es válida y frecuente: oportunidad sin exigencia. ElegirSkill ya
+	// descartó una alucinación (skill fuera del catálogo) a "ninguna", así que acá Skill != "" implica
+	// una skill REAL del catálogo.
+	exigio := eleccion.Skill != ""
+	s.registrarOportunidadDecididor(ctx, pid, arm, exigio)
+	if exigio {
+		// R7 — el dato ESTRUCTURADO; el borde (toolRecall) lo renderiza como línea imperativa SIN el
+		// cuerpo de la skill. Montar el cuerpo acá rompería el eje `loaded`, que es el numerador del A/B.
+		res.ExigenciaSkill = &memory.ExigenciaSkill{Skill: eleccion.Skill, Razon: eleccion.Razon}
+	}
+	return res
+}
+
+// registrarOportunidadDecididor cuenta una ocasión del A/B, best-effort (R6/R12). Si el backend no
+// sabe del A/B, o la base está en sólo lectura, o la escritura falla, se LOGUEA y se sigue: el recall
+// jamás se rompe ni se bloquea por el contador. Es un upsert atómico (una sentencia SQL), de la MISMA
+// clase incidental que el bump de access_count del propio recall (methods.go), así que corre bajo el
+// RLock del despacho sin lost-update —SQLite serializa el UPDATE— y NO promueve musubi_recall a
+// escritura: sigue read-only respecto de las observaciones, que es lo que mira el clasificador.
+func (s *McpServer) registrarOportunidadDecididor(ctx context.Context, pid, arm string, exigio bool) {
+	w, ok := s.engine.(oportunidadDecididorWriter)
+	if !ok {
+		return
+	}
+	var err error
+	s.withReadLock(func() { err = w.RegistrarOportunidadDecididor(ctx, pid, arm, exigio) })
+	if err != nil {
+		logx.Warn("decididor de skills: no pude registrar la oportunidad del A/B (sigo)", "error", err, "arm", arm)
+	}
+}
+
+// claveDecididor arma la clave de caché (query + hash del catálogo), calcada de la de rerank
+// (query + ids): misma tarea sobre el mismo catálogo ⇒ misma decisión. Hashea name+desc+cuando de
+// CADA skill —no sólo el nombre— para que un cambio de descripción invalide la decisión cacheada en
+// vez de servir una tomada contra un catálogo que ya no existe; ordena antes de hashear para que el
+// orden de lectura del disco no cuente. sha256 acota la clave a 32 bytes en vez de arrastrar el
+// catálogo entero por entrada. \x1f separa campos y \x1e separa skills para que no colisionen.
+func claveDecididor(query string, arsenal []cognition.SkillN1) string {
+	partes := make([]string, len(arsenal))
+	for i, sk := range arsenal {
+		partes[i] = sk.Name + "\x1f" + sk.Description + "\x1f" + sk.Cuando
+	}
+	sort.Strings(partes)
+	suma := sha256.Sum256([]byte(strings.Join(partes, "\x1e")))
+	return query + "\x00" + hex.EncodeToString(suma[:])
+}
+
+func decididorCacheGet(key string) (cognition.Eleccion, bool) {
+	decididorCacheMu.Lock()
+	defer decididorCacheMu.Unlock()
+	e, ok := decididorCache[key]
+	return e, ok
+}
+
+func decididorCachePut(key string, e cognition.Eleccion) {
+	decididorCacheMu.Lock()
+	defer decididorCacheMu.Unlock()
+	if len(decididorCache) >= decididorCacheCap { // misma evicción tonta que rerankCache: vaciar al tope
+		decididorCache = map[string]cognition.Eleccion{}
+	}
+	decididorCache[key] = e
+}
+
+// arsenalN1 convierte el catálogo de skills al mínimo que el motor necesita ver (SkillN1): nombre,
+// qué hace y cuándo aplica. `Cuando` sale de AlwaysBecause —la prosa que el autor ya escribió sobre
+// cuándo se activa la skill, justo lo que el matcher de archivos no captura (ver skills/skill.go)—;
+// vacía para una skill que se ata sólo a un glob, y PromptDecididor la omite.
+func arsenalN1(cat []skills.Skill) []cognition.SkillN1 {
+	out := make([]cognition.SkillN1, 0, len(cat))
+	for _, sk := range cat {
+		out = append(out, cognition.SkillN1{
+			Name:        sk.Name,
+			Description: sk.Description,
+			Cuando:      sk.AlwaysBecause,
+		})
+	}
+	return out
+}
+
+// renderExigencia arma la línea imperativa que va al TOPE del texto del recall (R7/D4): una ORDEN, no
+// un campo más, para que el agente CARGUE la skill (invoque la tool Skill) en vez de leerla como
+// catálogo que puede delegar. SIN el cuerpo (las rules). El `razon` se colapsa a una línea: viene del
+// motor, y un salto fabricaría una segunda línea que parecería otra cosa.
+func renderExigencia(e memory.ExigenciaSkill) string {
+	return fmt.Sprintf("⚠️ cargá la skill `%s` ahora, para esto: %s", e.Skill, memory.EnUnaLinea(e.Razon, 300))
 }

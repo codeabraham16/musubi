@@ -54,6 +54,13 @@ func (c CognitionConfig) ReadTimeRerankOn() bool {
 	return c.ReadTimeRerank != nil && *c.ReadTimeRerank
 }
 
+// DecididorSkillsOn resuelve el puntero: ausente ⇒ false (el decididor nace apagado, R2 del spec
+// skills-decididor). Mismo patrón que ReadTimeRerankOn. A diferencia del juez, ApplyEffort NO lo
+// toca: no hay preset que lo encienda, se prende explícito y detrás de su A/B.
+func (c CognitionConfig) DecididorSkillsOn() bool {
+	return c.DecididorSkills != nil && *c.DecididorSkills
+}
+
 // ApplyEffort devuelve la config con el preset del dial aplicado.
 //
 // D0 — LO EXPLÍCITO LE GANA AL PRESET. El preset sólo llena lo que quedó SIN DECLARAR. Si el dial

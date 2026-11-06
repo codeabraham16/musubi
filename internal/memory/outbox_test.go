@@ -258,8 +258,13 @@ func TestMigrationV11OutboxSchema(t *testing.T) {
 	//       outbox.sent_at (cuándo salió de acá), outbox.sent_hash (qué contenido entregó) y la
 	//       tabla sync_viajes (lo que movió cada tick, por día y sentido). Es la ÚNICA migración de
 	//       la ola 2. readCompatible: tabla nueva y dos ADD COLUMN nullables.
-	if latestSchemaVersion() != 58 {
-		t.Errorf("latestSchemaVersion() = %d, esperaba 58", latestSchemaVersion())
+	//    59 · `ledger_ab_del_decididor`. El decididor de skills se enciende detrás de un A/B
+	//       default-off (spec skills-decididor, R10): la tabla decididor_ab guarda por
+	//       (project_id, brazo) las oportunidades (denominador, central), las exigencias
+	//       (telemetría) y las cargadas (numerador, local), para medir el lift antes de
+	//       comprometer gasto de motor. readCompatible: tabla nueva que ningún lector viejo consulta.
+	if latestSchemaVersion() != 59 {
+		t.Errorf("latestSchemaVersion() = %d, esperaba 59", latestSchemaVersion())
 	}
 
 	// La tabla outbox existe con las columnas esperadas.

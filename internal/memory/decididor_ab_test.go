@@ -1,0 +1,233 @@
+package memory
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+)
+
+// Invariantes del A/B del decididor de skills del lado de la base (spec skills-decididor, R10/E9).
+
+func filaABDe(t *testing.T, e *DbEngine, ctx context.Context, pid, arm string) DecididorABRow {
+	t.Helper()
+	rows, err := e.DecididorAB(ctx)
+	if err != nil {
+		t.Fatalf("DecididorAB: %v", err)
+	}
+	for _, r := range rows {
+		if r.ProjectID == pid && r.Arm == arm {
+			return r
+		}
+	}
+	return DecididorABRow{}
+}
+
+func filasABDe(t *testing.T, e *DbEngine, ctx context.Context, pid string) []DecididorABRow {
+	t.Helper()
+	rows, err := e.DecididorAB(ctx)
+	if err != nil {
+		t.Fatalf("DecididorAB: %v", err)
+	}
+	out := make([]DecididorABRow, 0)
+	for _, r := range rows {
+		if r.ProjectID == pid {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// EL LIFT ES LA DIFERENCIA DE TASAS, agregando por brazo todos los proyectos de la lectura. Fixture
+// SEMBRADO: las filas se construyen acá, no se leen del corpus vivo —si CalcularLift leyera una
+// magnitud auto-consumible, el test se mediría a sí mismo (R10/E9)—. Los valores son fracciones
+// exactas en binario (3/4, 1/4, 1/2) para poder comparar sin tolerancia.
+// Sabotaje: cambiar `TasaOn - TasaOff` por `TasaOn + TasaOff` en CalcularLift ⇒ lift 1.0 ⇒ rojo.
+// arnes: archivo="internal/memory/decididor_ab.go"
+// arnes: de="l.Lift = l.TasaOn - l.TasaOff"
+// arnes: a="l.Lift = l.TasaOn + l.TasaOff"
+func TestCalcularLiftMideLaDiferenciaDeTasas(t *testing.T) {
+	rows := []DecididorABRow{
+		{ProjectID: "a", Arm: BrazoOn, Oportunidades: 2, Cargadas: 2},
+		{ProjectID: "b", Arm: BrazoOn, Oportunidades: 2, Cargadas: 1}, // on: oport 4, carg 3 ⇒ 0.75
+		{ProjectID: "a", Arm: BrazoOff, Oportunidades: 2, Cargadas: 1},
+		{ProjectID: "b", Arm: BrazoOff, Oportunidades: 2, Cargadas: 0}, // off: oport 4, carg 1 ⇒ 0.25
+	}
+	l, ok := CalcularLift(rows)
+	if !ok {
+		t.Fatal("con oportunidades en los dos brazos el lift debe estar definido")
+	}
+	if l.OportunidadesOn != 4 || l.CargadasOn != 3 || l.OportunidadesOff != 4 || l.CargadasOff != 1 {
+		t.Fatalf("la agregación por brazo salió mal: %+v", l)
+	}
+	if l.TasaOn != 0.75 || l.TasaOff != 0.25 {
+		t.Fatalf("tasas: on=%v off=%v (esperaba 0.75 / 0.25)", l.TasaOn, l.TasaOff)
+	}
+	if l.Lift != 0.5 {
+		t.Fatalf("lift=%v, esperaba 0.5 (= 0.75 − 0.25)", l.Lift)
+	}
+}
+
+// R10/E9 — SIN DENOMINADOR EN ALGÚN BRAZO EL LIFT ES INDEFINIDO (ok=false), NO CERO. Es el estado
+// natural de un A/B default-off recién encendido: un brazo todavía no vio ocasiones. Reportar lift=0
+// ahí sería afirmar «no hubo efecto» cuando la verdad es «no se puede medir todavía».
+// Sabotaje: borrar el guard `OportunidadesOn==0 || OportunidadesOff==0` ⇒ división por cero devuelve
+// ok=true (con +Inf/NaN) ⇒ rojo.
+// arnes: archivo="internal/memory/decididor_ab.go"
+// arnes: de="if l.OportunidadesOn == 0 || l.OportunidadesOff == 0 {"
+// arnes: a="if false {"
+func TestCalcularLiftSinDenominadorEsIndefinido(t *testing.T) {
+	soloOn := []DecididorABRow{{Arm: BrazoOn, Oportunidades: 5, Cargadas: 3}}
+	if _, ok := CalcularLift(soloOn); ok {
+		t.Fatal("sin oportunidades en el brazo off el lift es INDEFINIDO")
+	}
+	soloOff := []DecididorABRow{{Arm: BrazoOff, Oportunidades: 5, Cargadas: 3}}
+	if _, ok := CalcularLift(soloOff); ok {
+		t.Fatal("sin oportunidades en el brazo on el lift es INDEFINIDO")
+	}
+	if _, ok := CalcularLift(nil); ok {
+		t.Fatal("sin datos el lift es indefinido")
+	}
+}
+
+// LA CARGA CUENTA SÓLO SI YA HAY UNA OPORTUNIDAD para ese (proyecto, brazo). Es la decisión UPDATE-only
+// de bumpCargadasDecididorTx: una carga de un período sin A/B no debe inflar el numerador ni nacer una
+// fila con oportunidades=0 que rompería el lift.
+// Sabotaje: convertir el UPDATE de bumpCargadasDecididorTx en un upsert (INSERT ... ON CONFLICT) ⇒ la
+// carga del paso 1 crea una fila ⇒ `len != 0` ⇒ rojo.
+// arnes: archivo="internal/memory/decididor_ab.go"
+// arnes: de="UPDATE decididor_ab SET cargadas = cargadas + ?, last_at = CURRENT_TIMESTAMP\n\t\t\tWHERE project_id = ? AND arm = ?"
+// arnes: a="INSERT INTO decididor_ab (cargadas, project_id, arm) VALUES (?, ?, ?)\n\t\t\tON CONFLICT(project_id, arm) DO UPDATE SET cargadas = cargadas + excluded.cargadas"
+func TestCargaCuentaSoloConOportunidad(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+	pid := "proj-decididor"
+	arm := BrazoAB(pid, time.Now())
+
+	// 1) Carga sin oportunidad previa: UPDATE-only ⇒ no crea fila, no cuenta.
+	contarSkill(t, e, ctx, SkillEvent{Skill: "go-hygiene", ProjectID: pid, Kind: UsoCargada})
+	if filas := len(filasABDe(t, e, ctx, pid)); filas != 0 {
+		t.Fatalf("una carga sin oportunidad no debe crear fila; hay %d", filas)
+	}
+
+	// 2) Nace la oportunidad (la fila existe) y se vuelve a cargar: ahora sí suma.
+	if err := e.RegistrarOportunidadDecididor(ctx, pid, arm, true); err != nil {
+		t.Fatalf("RegistrarOportunidadDecididor: %v", err)
+	}
+	contarSkill(t, e, ctx, SkillEvent{Skill: "go-hygiene", ProjectID: pid, Kind: UsoCargada})
+
+	fila := filaABDe(t, e, ctx, pid, arm)
+	if fila.Oportunidades != 1 || fila.Exigencias != 1 || fila.Cargadas != 1 {
+		t.Fatalf("esperaba oport=1 exig=1 carg=1, obtuve %+v", fila)
+	}
+}
+
+// EXIGENCIAS SUMA SÓLO CUANDO EL MOTOR EXIGIÓ; oportunidades suma siempre. exigencias es telemetría
+// para leer el lift, no el denominador.
+// Sabotaje: en RegistrarOportunidadDecididor arrancar `inc` en 1 (inc := 1) ⇒ exigencias suma aun sin
+// exigir ⇒ exig=2 ⇒ rojo.
+// arnes: archivo="internal/memory/decididor_ab.go"
+// arnes: de="inc := 0"
+// arnes: a="inc := 1"
+func TestRegistrarOportunidadSumaExigenciasSoloSiExigio(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+	pid := "proj-x"
+	// Brazo fijo: este camino no pasa por el hook de carga, así que no depende del día.
+	e.RegistrarOportunidadDecididor(ctx, pid, BrazoOn, true)  // exigió
+	e.RegistrarOportunidadDecididor(ctx, pid, BrazoOn, false) // no exigió
+
+	fila := filaABDe(t, e, ctx, pid, BrazoOn)
+	if fila.Oportunidades != 2 || fila.Exigencias != 1 {
+		t.Fatalf("2 ocasiones, 1 con exigencia: esperaba oport=2 exig=1, obtuve %+v", fila)
+	}
+}
+
+// Un brazo que no es on/off es un error del caller, no una fila basura en la tabla.
+func TestRegistrarOportunidadRechazaBrazoInvalido(t *testing.T) {
+	e := newTestEngine(t)
+	if err := e.RegistrarOportunidadDecididor(context.Background(), "p", "medio", true); err == nil {
+		t.Fatal("un brazo distinto de on/off debe ser error")
+	}
+}
+
+// Track 19 — LA LECTURA SE ACOTA AL PROYECTO DE LA CREDENCIAL: el experimento de otro tenant no se ve.
+// Sabotaje: quitar scopeSQL de la query de DecididorAB ⇒ proj-b se filtra en la lectura de proj-a ⇒ rojo.
+// arnes: archivo="internal/memory/decididor_ab.go"
+// arnes: de=`scopeSQL, scopeArgs := projectScopeFrom(ctx).scopeClause("")`
+// arnes: a=`scopeSQL, scopeArgs := "", []any(nil)`
+func TestDecididorABAcotaAlProyecto(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+	e.RegistrarOportunidadDecididor(ctx, "proj-a", BrazoOn, true)
+	e.RegistrarOportunidadDecididor(ctx, "proj-b", BrazoOn, true)
+
+	scoped := WithProjectScope(ctx, ProjectScope{ProjectID: "proj-a"})
+	rows, err := e.DecididorAB(scoped)
+	if err != nil {
+		t.Fatalf("DecididorAB: %v", err)
+	}
+	vioA := false
+	for _, r := range rows {
+		if r.ProjectID == "proj-b" {
+			t.Fatalf("la lectura acotada a proj-a vio a proj-b: %+v", r)
+		}
+		if r.ProjectID == "proj-a" {
+			vioA = true
+		}
+	}
+	if !vioA {
+		t.Fatal("proj-a debería estar en su propia lectura")
+	}
+}
+
+// R10/E9 EN LA PRESENTACIÓN — EL LIFT INDEFINIDO SE DICE «INDEFINIDO», NUNCA 0. Es el mismo invariante
+// que CalcularLift custodia en el cálculo, pero en la capa que una persona lee en musubi_skill_usage:
+// con un brazo sin ocasiones, imprimir «0» afirmaría «no hubo efecto» cuando la verdad es «todavía no
+// se puede medir». Fixture SEMBRADO (no lee el corpus vivo). Sabotaje: en la rama !ok de
+// FormatLiftDecididor imprimir el número `l.Lift` (que vale 0) en vez de la palabra INDEFINIDO ⇒
+// aparece «+0.0» y desaparece «INDEFINIDO» ⇒ rojo.
+func TestFormatLiftIndefinidoDiceIndefinidoNoCero(t *testing.T) {
+	// Un solo brazo con ocasiones ⇒ CalcularLift devuelve ok=false (el otro brazo no tiene denominador).
+	soloOn := []DecididorABRow{{Arm: BrazoOn, Oportunidades: 5, Cargadas: 3}}
+	txt := FormatLiftDecididor(CalcularLift(soloOn))
+	if !strings.Contains(txt, "INDEFINIDO") {
+		t.Fatalf("un brazo sin ocasiones hace el lift indefinido y hay que decirlo:\n%s", txt)
+	}
+	if strings.Contains(txt, "+0.0") || strings.Contains(txt, "lift = 0") {
+		t.Fatalf("el lift indefinido NO es 0: no puede imprimir un número de lift:\n%s", txt)
+	}
+	// Pero los crudos del brazo que SÍ tiene ocasiones se muestran: el dato honesto es «faltan ocasiones».
+	if !strings.Contains(txt, "3 cargas / 5 ocasiones") {
+		t.Fatalf("los crudos del brazo con ocasiones tienen que verse:\n%s", txt)
+	}
+}
+
+// Con ocasiones en los DOS brazos el lift es medible y se imprime el número con signo. Sabotaje:
+// forzar la rama !ok (p. ej. no imprimir nunca el número) ⇒ falta «+50.0» ⇒ rojo.
+func TestFormatLiftMedibleMuestraElNumero(t *testing.T) {
+	rows := []DecididorABRow{
+		{Arm: BrazoOn, Oportunidades: 4, Cargadas: 3},  // 75%
+		{Arm: BrazoOff, Oportunidades: 4, Cargadas: 1}, // 25%
+	}
+	txt := FormatLiftDecididor(CalcularLift(rows))
+	if strings.Contains(txt, "INDEFINIDO") {
+		t.Fatalf("con los dos brazos poblados el lift es medible, no indefinido:\n%s", txt)
+	}
+	if !strings.Contains(txt, "+50.0") {
+		t.Fatalf("lift = 75%% − 25%% = +50.0 puntos; no aparece:\n%s", txt)
+	}
+}
+
+// Sin NINGUNA fila (el default: decididor apagado) el bloque lo dice en una línea, sin hablar de un
+// lift que no existe. Distinguir «apagado» de «un brazo sin datos» es lo que evita leer ceros como
+// medición.
+func TestFormatLiftSinFilasLoDice(t *testing.T) {
+	txt := FormatLiftDecididor(CalcularLift(nil))
+	if !strings.Contains(txt, "sin ocasiones todavía") {
+		t.Fatalf("sin filas el bloque tiene que decir que no hubo ocasiones:\n%s", txt)
+	}
+	if strings.Contains(txt, "INDEFINIDO") || strings.Contains(txt, "lift =") {
+		t.Fatalf("sin filas no se habla de lift: no hubo experimento:\n%s", txt)
+	}
+}

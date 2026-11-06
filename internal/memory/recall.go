@@ -182,6 +182,26 @@ type RecallResult struct {
 	// que el agente sepa que los items responden a otra palabra que la que mandó. omitempty ⇒ sin
 	// corrección el JSON sale byte a byte como antes.
 	Correcciones []Correccion `json:"correcciones,omitempty"`
+	// ExigenciaSkill es la skill que el DECIDIDOR (ola-2 conciencia) determinó que la tarea exige.
+	// Recall no la llena: la llena el servidor (exigirSkillSiCorresponde) tras consultar el motor, y
+	// el borde MCP la renderiza como una línea imperativa al tope del texto. Viaja el dato
+	// ESTRUCTURADO —no sólo la prosa— para que un consumidor lo lea sin parsear la línea.
+	//
+	// Es *ExigenciaSkill y no el valor: nil = el camino model-free (el default), y omitempty lo
+	// omite del JSON, así que un recall sin decididor sale byte a byte como antes.
+	//
+	// NO lleva el CUERPO (las `rules`) de la skill a propósito: el nudge es la ORDEN de cargarla, no
+	// la skill embebida. Embeber el cuerpo haría que el agente no invoque la tool Skill y el eje
+	// `loaded` —el numerador del A/B— no registraría nada. Ver R7 del spec.
+	ExigenciaSkill *ExigenciaSkill `json:"exigencia_skill,omitempty"`
+}
+
+// ExigenciaSkill es la skill que el decididor exige cargar, con el porqué. Lleva tags JSON
+// explícitos (musubi-rules #6): sin ellos el borde emitiría {"Skill":...} y un consumidor que
+// parsea en minúscula guardaría un objeto vacío —una falla que se lee como un dato—.
+type ExigenciaSkill struct {
+	Skill string `json:"skill"`
+	Razon string `json:"razon"`
 }
 
 type candidate struct {

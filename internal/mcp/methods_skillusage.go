@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"musubi/internal/logx"
 	"musubi/internal/memory"
 )
 
@@ -17,6 +18,13 @@ import (
 // que usageReader: si el backend de turno no sabe de contadores, la tool lo dice en vez de romper.
 type skillUsageReader interface {
 	SkillUsage(ctx context.Context) ([]memory.SkillUsageRow, error)
+}
+
+// decididorABReader lo implementa el motor real, igual que skillUsageReader. Interfaz y no
+// *memory.DbEngine para degradar con gracia (go-hygiene #3): un backend que no sabe del A/B del
+// decididor omite el bloque del lift en vez de tumbar la tool.
+type decididorABReader interface {
+	DecididorAB(ctx context.Context) ([]memory.DecididorABRow, error)
 }
 
 // toolSkillUsage responde qué pasó con cada skill del arsenal cuando se activó.
@@ -64,10 +72,23 @@ func (s *McpServer) toolSkillUsage(ctx context.Context, _ json.RawMessage) (inte
 		}
 	}
 
+	cuerpo := memory.FormatSkillUsage(out, huerfanas)
 	if (len(out) > 0 || len(huerfanas) > 0) && s.ledger == nil {
-		return textResult(memory.FormatSkillUsage(out, huerfanas) +
-			"\nOJO: el ledger está APAGADO en esta instancia (usage_ledger.enabled: false), " +
-			"así que estos contadores no se están actualizando.\n"), nil
+		cuerpo += "\nOJO: el ledger está APAGADO en esta instancia (usage_ledger.enabled: false), " +
+			"así que estos contadores no se están actualizando.\n"
 	}
-	return textResult(memory.FormatSkillUsage(out, huerfanas)), nil
+
+	// El lift del A/B del decididor va al final, como telemetría SECUNDARIA de esta misma tool: el
+	// mismo mantenedor que mira qué skill vale la pena necesita ver si entregarla como EXIGENCIA mueve
+	// la carga respecto del control. Acotado a la credencial (scopedCtx), como SkillUsage. Degrada con
+	// gracia: un backend sin A/B omite el bloque; y un fallo de LECTURA se logea y se omite —es
+	// secundaria—, no tumba la lectura del arsenal, que es lo que se pidió.
+	if lectorAB, ok := s.engine.(decididorABReader); ok {
+		if filasAB, err := lectorAB.DecididorAB(s.scopedCtx(ctx)); err != nil {
+			logx.Error("skill_usage: no pude leer el A/B del decididor, omito el bloque", "error", err)
+		} else {
+			cuerpo += memory.FormatLiftDecididor(memory.CalcularLift(filasAB))
+		}
+	}
+	return textResult(cuerpo), nil
 }
