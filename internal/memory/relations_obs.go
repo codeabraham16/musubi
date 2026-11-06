@@ -241,18 +241,26 @@ func (e *DbEngine) ResolveObsRelation(id, relation, resolvedBy, reason string) e
 		return fmt.Errorf("no existe la relación %q: %w", id, err)
 	}
 
+	// El EFECTO va ANTES de marcar la relación resuelta. markSuperseded puede RECHAZAR (R3 de F5:
+	// una creencia nunca oculta la proyección de una spec), y si ese rechazo llegara DESPUÉS del UPDATE
+	// la relación quedaría `resolved` sin que nada se ocultara —resuelta-sin-efecto, un estado que
+	// miente: dice "ya se arbitró" cuando el efecto se bloqueó—. Corriendo el efecto primero, un rechazo
+	// deja la relación en `pending`, honesta y re-arbitrable. En el camino feliz (el target es una
+	// creencia) el orden es indistinto: markSuperseded no falla y el estado final es idéntico. Si
+	// markSuperseded gana y el UPDATE de abajo fallara (error transitorio de DB), superseded_by es
+	// idempotente y el reintento converge.
+	if relation == RelSupersedes {
+		if err := e.markSuperseded(targetID, sourceID); err != nil {
+			return err
+		}
+	}
+
 	if _, err := e.db.Exec(`
 		UPDATE observation_relations
 		SET relation=?, status=?, resolved_by=?, reason=?, updated_at=CURRENT_TIMESTAMP
 		WHERE id=?
 	`, relation, RelStatusResolved, nullable(resolvedBy), nullable(reason), id); err != nil {
 		return fmt.Errorf("error al resolver relación %q: %w", id, err)
-	}
-
-	if relation == RelSupersedes {
-		if err := e.markSuperseded(targetID, sourceID); err != nil {
-			return err
-		}
 	}
 	return nil
 }

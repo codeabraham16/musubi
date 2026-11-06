@@ -679,6 +679,10 @@ type SpecProjectionStore interface {
 	ProjectSpecShared(specID, projectID, content string, emb []float32) error
 	RetractSpecProjection(specID, projectID string) error
 	ReconcileSpecProjections(shared []SpecProjectionInput) error
+	// SpecProjectionObsID reconstruye el id determinista de la proyección (mismo criterio de
+	// project_id que ProjectSpecShared) para que la capa mcp dispare la detección spec→creencias (F5)
+	// sin ver `effectiveProjectID` ni el prefijo del namespace, ambos no exportados.
+	SpecProjectionObsID(specID, projectID string) string
 }
 
 // StorageBackend es la unión de todos los roles: el contrato que un backend completo debe

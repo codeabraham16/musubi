@@ -32,6 +32,15 @@ func specProjectionTopicKey(specID string) string {
 	return "spec/" + specID
 }
 
+// SpecProjectionObsID expone —a la capa mcp, que no ve `effectiveProjectID` (no exportado) ni el
+// prefijo del namespace— el id DETERMINISTA de la proyección de una spec, para que F5 dispare
+// DetectRelations con la proyección como source. projectID vacío ⇒ el de la credencial, EXACTAMENTE el
+// mismo criterio que usó ProjectSpecShared al escribir la fila, así que el id reconstruido coincide con
+// el que existe en la base (si divergiera, la detección no encontraría la proyección y R1 no dispararía).
+func (e *DbEngine) SpecProjectionObsID(specID, projectID string) string {
+	return specProjectionID(e.effectiveProjectID(projectID), specID)
+}
+
 // ProjectSpecShared proyecta (o actualiza) la observación DERIVADA de una spec marcada `shared: true`
 // hacia el carril de federación: UPSERT de la obs con id determinista + bump de sync_seq +
 // enqueueOutboxTx, TODO en una transacción. Reusa EXACTAMENTE la cañería de observaciones (outbox,
