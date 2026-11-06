@@ -7,6 +7,14 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [0.149.0] - 2026-11-06
+
+### Destacado
+- Musubi deja de OFRECER un catálogo de skills que el agente casi nunca toma —medido: `loaded=0` en 402 turnos— y pasa a EXIGIR la que la tarea necesita. Cuando el reflejo model-free no pinó ninguna skill fuerte, el motor de conciencia —servido desde el cerebro central; el daemon local cae a un no-op— mira el catálogo y, si la tarea exige una, antepone una orden imperativa a la respuesta del recall que ya ocurre («cargá la skill `X` ahora, para esto») en vez de delegar la elección. Nace apagado y detrás de un A/B, porque prender conciencia cuesta: cuatro frenos heredados del juez de rerank acotan el gasto a lo sumo una llamada por recall, y ante motor caído, timeout o cuota agotada degrada best-effort sin romper el recall. Factura la suscripción vía el proxy, nunca en dólares.
+
+### Highlights
+- Musubi stops OFFERING a skill catalog the agent almost never picks —measured: `loaded=0` across 402 turns— and starts DEMANDING the one the task needs. When the model-free reflex finds no strong skill match, the consciousness engine —served from the central brain; the local daemon falls back to a no-op— looks at the catalog and, if the task demands a skill, prepends an imperative order onto the recall response that already happens ("load skill `X` now, for this") instead of delegating the choice. It ships off by default behind an A/B, because turning on consciousness costs: four brakes inherited from the recall judge cap spend at one engine call per recall at most, and on engine failure, timeout or exhausted quota it degrades best-effort without breaking recall. It bills the subscription via the proxy, never dollars.
+
 ### Added
 - **El DECIDIDOR de skills: la conciencia elige la skill que la tarea EXIGE y se la entrega al agente como una orden, colgada del recall que ya ocurre.** Es la Fase 1 de la ola-2 de conciencia y el primer consumidor de motor que se cuelga de `toolRecall`, hermano de `rerankSiCorresponde`. El problema que ataca está medido: `skill_usage` reportaba **`loaded=0` en 402 turnos** —nadie cargaba una skill— porque el catálogo se le DELEGABA al agente como una lista para que él eligiera, y el agente no elige. El decididor da vuelta la carga de la prueba: cuando el reflejo model-free NO pinó ninguna skill fuerte, el motor (servido desde el central, el daemon local cae a `NoopProvider` y es **no-op**, R1) mira el catálogo nivel-1 **completo** y, si la tarea exige una, la respuesta del recall antepone una **línea imperativa** —`⚠️ cargá la skill \`X\` ahora, para esto: <razón>`— en vez de un catálogo que se delega. La orden llega sin que el agente la pida, que es lo único que movió la aguja en lo medido.
   - **Nace apagado y detrás de un A/B, porque prender conciencia cuesta.** El dial `decididor_skills` es un puntero: ausente ⇒ apagado (R2), y apagarlo ES el rollback. Con el dial en on, cada proyecto cae en el brazo `on` u `off` por `BrazoAB(project_id, fecha)` —hash determinista con **crossover por día** (R9)—, para medir el lift antes de comprometer gasto de motor. La cohorte es el `project_id` (el tenant) a propósito: **coincide a los dos lados del sync sin un protocolo**, que es lo que deja alinear el numerador y el denominador cuando nacen en máquinas distintas.
@@ -9505,7 +9513,8 @@ Release de dos hitos: **el pilar de orquestación/SDD elevado a co-igual de la m
   búsqueda semántica opcional vía Ollama), resolución dinámica de skills y
   telemetría de errores.
 
-[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.148.0...HEAD
+[Unreleased]: https://github.com/codeabraham16/musubi/compare/v0.149.0...HEAD
+[0.149.0]: https://github.com/codeabraham16/musubi/compare/v0.148.0...v0.149.0
 [0.148.0]: https://github.com/codeabraham16/musubi/compare/v0.147.0...v0.148.0
 [0.147.0]: https://github.com/codeabraham16/musubi/compare/v0.146.0...v0.147.0
 [0.146.0]: https://github.com/codeabraham16/musubi/compare/v0.145.0...v0.146.0

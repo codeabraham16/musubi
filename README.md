@@ -27,6 +27,12 @@ optimización de tokens, el ranking y la resolución de skills son deterministas
 
 <!-- novedades:inicio -->
 
+**[v0.149.0](https://github.com/codeabraham16/musubi/releases/tag/v0.149.0)** · 6 nov 2026
+
+- Musubi deja de OFRECER un catálogo de skills que el agente casi nunca toma —medido: `loaded=0` en 402 turnos— y pasa a EXIGIR la que la tarea necesita. Cuando el reflejo model-free no pinó ninguna skill fuerte, el motor de conciencia —servido desde el cerebro central; el daemon local cae a un no-op— mira el catálogo y, si la tarea exige una, antepone una orden imperativa a la respuesta del recall que ya ocurre («cargá la skill `X` ahora, para esto») en vez de delegar la elección. Nace apagado y detrás de un A/B, porque prender conciencia cuesta: cuatro frenos heredados del juez de rerank acotan el gasto a lo sumo una llamada por recall, y ante motor caído, timeout o cuota agotada degrada best-effort sin romper el recall. Factura la suscripción vía el proxy, nunca en dólares.
+
+Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.149.0/CHANGELOG.md#01490---2026-11-06)
+
 **[v0.148.0](https://github.com/codeabraham16/musubi/releases/tag/v0.148.0)** · 2 nov 2026
 
 - Musubi aprende a llevar las specs del proyecto como datos, no como prosa suelta: archivos `SPEC.md` tipados —de objetivo-y-requisitos hasta task-spec— enlazados en un grafo por `parent` y `depends-on`, que el agente navega y mantiene con ocho tools nuevas `musubi_spec_*` en vez de editarlos a mano. Es model-free y local-first como el resto de Musubi: el núcleo se portó del `spec-graph` de thinkrail (Apache-2.0) sin pedir ningún servicio externo ni un LLM. Al cerrar un cambio, `musubi_spec_validate` denuncia enlaces colgantes, ids duplicados y ciclos de `parent` antes de que el grafo mienta.
@@ -38,12 +44,6 @@ Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob
 - El proxy `musubi cerebro` ya no puede marcar el cerebro central como caído por un pico de red en el arranque. Antes reenviaba el saludo MCP (`initialize`) al central —el primer dial en frío de la sesión—, y si la red se demoraba más de 5 s, Claude Code dejaba el server MCP en `failed` para TODA la sesión aunque el central estuviera vivo y contestara en ~250-780 ms. Ahora el saludo se responde localmente, sin discar: el handshake ya no depende de la red y la sesión siempre inicializa.
 
 Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.147.0/CHANGELOG.md#01470---2026-10-28)
-
-**[v0.146.0](https://github.com/codeabraham16/musubi/releases/tag/v0.146.0)** · 28 oct 2026
-
-- Promover, descartar y guardar un recuerdo entienden la referencia corta de 8 hex que el hook emite desde la 0.145.0. Antes, hacerlo por el id corto que el agente ve en el recall fallaba en silencio —la propuesta rancia quedaba viva— o, al guardar, podía pisar o duplicar otra observación; ahora el id corto se resuelve a la observación exacta antes de actuar, y guardar con un id corto se rechaza con instrucciones. Cero pérdida.
-
-Y todo lo demás, en el [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.146.0/CHANGELOG.md#01460---2026-10-28)
 
 <!-- novedades:fin -->
 
