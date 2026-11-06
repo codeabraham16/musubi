@@ -63,6 +63,17 @@ func claudeFalso(guion string) {
 			os.WriteFile(marca, []byte("segui vivo"), 0o600)
 		}
 		os.Exit(0)
+	case strings.HasPrefix(guion, "vuelca-sp:"):
+		// Vuelca a un archivo la ruta de `--system-prompt-file` del argv y su contenido, para que
+		// el test de la COSTURA (TestTurnoPasaElSystemPromptPorArchivoYLoLimpia) compruebe que Turno
+		// cableó el system prompt del cliente al hijo. Después emite un turno limpio y sale 0: así
+		// Turno vuelve sin error y su `defer limpiarSP()` alcanza a correr, y el test verifica que
+		// el temp ya no existe. Mismo patrón que llamarAlEspejo: el hijo lee lo que el padre le pasó.
+		volcarSystemPrompt(strings.TrimPrefix(guion, "vuelca-sp:"))
+		os.Stdout.WriteString(`{"type":"system","subtype":"init","entorno":"x"}` + "\n")
+		os.Stdout.WriteString(`{"type":"stream_event","event":{"type":"message_start","message":{"usage":{}}}}` + "\n")
+		os.Stdout.WriteString(`{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}}` + "\n")
+		os.Exit(0)
 	case guion == "linea-larga":
 		// Imita el `system/init` real del harness, que trae el entorno entero (tools,
 		// plugins, rutas) y pasa holgadamente los 64 KB del default de bufio. Se genera
@@ -140,6 +151,35 @@ func llamarAlEspejo() {
 		return
 	}
 	resp.Body.Close()
+}
+
+// volcarSystemPrompt busca `--system-prompt-file` en el argv de ESTE proceso, lee el archivo al que
+// apunta y deja {ruta, contenido} en `destino` para que el test lo lea. Corre dentro del proceso
+// falso, así que no puede usar `t` ni fallar: sólo registra lo que el padre le pasó. Si la bandera
+// no está —la mutación de cableado que pasa "" en vez de la ruta— ruta y contenido quedan vacíos y
+// el test lo caza. Espejo exacto de llamarAlEspejo, pero para el system prompt en vez de la config MCP.
+func volcarSystemPrompt(destino string) {
+	var ruta string
+	for i, a := range os.Args {
+		if a == "--system-prompt-file" && i+1 < len(os.Args) {
+			ruta = os.Args[i+1]
+		}
+	}
+	var contenido string
+	if ruta != "" {
+		if b, err := os.ReadFile(ruta); err == nil {
+			contenido = string(b)
+		}
+	}
+	b, err := json.Marshal(struct {
+		Ruta      string `json:"ruta"`
+		Contenido string `json:"contenido"`
+	}{ruta, contenido})
+	if err != nil {
+		os.Stderr.WriteString("falso: no pude serializar la captura del system prompt: " + err.Error())
+		return
+	}
+	_ = os.WriteFile(destino, b, 0o600)
 }
 
 // lanzadorFalso devuelve un Lanzador que ejecuta este mismo binario de test con el guion
@@ -464,8 +504,22 @@ func TestBinarioInexistente(t *testing.T) {
 // arnes: archivo="internal/motor/lanzador.go"
 // arnes: de="\tconfigMCP := `{\"mcpServers\":{}}`"
 // arnes: a="\tconfigMCP := \"\""
+//
+// Sabotaje M51: el system prompt vuelve INLINE al argv. Es exactamente el bug de Windows que
+// este cambio arregla: un `--system-prompt` con el prompt real de pi (decenas de KB) revienta
+// el tope de 32.767 chars de la línea de comando de CreateProcess (errno 206) y mata el turno
+// antes de la primera palabra. Lo cubre el test de abajo porque pasa la ruta Y conserva
+// SystemPrompt en el Pedido: con el sabotaje puesto el argv lleva `--system-prompt sos un
+// motor` y la aserción de `--system-prompt-file` cae en rojo.
+// arnes: archivo="internal/motor/lanzador.go"
+// arnes: de="\t\targs = append(args, \"--system-prompt-file\", rutaSystemPrompt)\n"
+// arnes: a="\t\targs = append(args, \"--system-prompt\", p.SystemPrompt)\n"
 func TestElArgvLlevaLasBanderasQueHabilitanElProtocolo(t *testing.T) {
-	args := argumentosCLI(Pedido{Modelo: "claude-opus-5", SystemPrompt: "sos un motor"}, `C:\tmp\s.jsonl`, nil)
+	// SystemPrompt va en el Pedido Y la ruta por separado a propósito (ver sabotaje M51): si
+	// argumentosCLI volviera a leer p.SystemPrompt y lo pasara inline —el bug de Windows—,
+	// emitiría `--system-prompt sos un motor` y la aserción `--system-prompt-file` de abajo
+	// caería en rojo por la causa correcta.
+	args := argumentosCLI(Pedido{Modelo: "claude-opus-5", SystemPrompt: "sos un motor"}, `C:\tmp\s.jsonl`, `C:\tmp\sp.txt`, nil)
 	junto := strings.Join(args, " ")
 
 	for _, quiero := range []string{
@@ -475,7 +529,7 @@ func TestElArgvLlevaLasBanderasQueHabilitanElProtocolo(t *testing.T) {
 		"--input-format stream-json",
 		"--verbose", // obligatorio con stream-json: el binario lo rechaza sin él
 		"--model claude-opus-5",
-		"--system-prompt sos un motor",
+		`--system-prompt-file C:\tmp\sp.txt`,
 		// El prefijo de la historia entra por acá. Ver partirHistoria: sin esto el CLI
 		// desarma el transcript y el modelo responde al primer mensaje.
 		`--resume C:\tmp\s.jsonl`,
@@ -498,7 +552,7 @@ func TestElArgvLlevaLasBanderasQueHabilitanElProtocolo(t *testing.T) {
 	// `--resume` como si fueran la misma cosa. No lo son: sin `--resume` el CLI no reanuda
 	// nada pero IGUAL escribe la sesión nueva en `~/.claude/projects/<cwd>/<uuid>.jsonl`, o
 	// sea en el disco de quien corre el servidor. El test anterior dejaba ese agujero fijado.
-	sinSesion := strings.Join(argumentosCLI(Pedido{}, "", nil), " ")
+	sinSesion := strings.Join(argumentosCLI(Pedido{}, "", "", nil), " ")
 	if strings.Contains(sinSesion, "--resume") {
 		t.Errorf("un turno de un solo mensaje no debe reanudar nada: %s", sinSesion)
 	}
@@ -528,7 +582,7 @@ func TestElArgvLlevaLasBanderasQueHabilitanElProtocolo(t *testing.T) {
 
 	// Sin modelo ni system prompt, esas banderas no van con valor vacío: el binario las
 	// tomaría como un modelo llamado "" y fallaría.
-	pelado := strings.Join(argumentosCLI(Pedido{}, "", nil), " ")
+	pelado := strings.Join(argumentosCLI(Pedido{}, "", "", nil), " ")
 	if strings.Contains(pelado, "--model") || strings.Contains(pelado, "--system-prompt") {
 		t.Errorf("un pedido sin modelo no debe pasar la bandera: %s", pelado)
 	}
@@ -544,7 +598,7 @@ func TestElArgvLlevaLasBanderasQueHabilitanElProtocolo(t *testing.T) {
 	// 2.1.272): sin esas banderas, un turno que no pidió NINGUNA tool igual le mostraba al
 	// modelo 42 tools, con los 12 de los conectores personales de quien corre el servidor
 	// entre ellas. Con las banderas, 30; y con `--tools ""` además, 0.
-	sinEspejo := argumentosCLI(Pedido{}, "", nil)
+	sinEspejo := argumentosCLI(Pedido{}, "", "", nil)
 	juntoSinEspejo := strings.Join(sinEspejo, " ")
 	for _, falta := range []string{"--strict-mcp-config", `--mcp-config {"mcpServers":{}}`} {
 		if !strings.Contains(juntoSinEspejo, falta) {
@@ -562,7 +616,7 @@ func TestElArgvLlevaLasBanderasQueHabilitanElProtocolo(t *testing.T) {
 	// Un solo `--mcp-config` en el argv. Con dos, el resultado depende de cómo el CLI
 	// resuelve la bandera repetida —si gana el primero, el último o se acumulan—, y eso no
 	// está medido: el espejo podría quedar tapado por el mapa vacío sin que nada falle.
-	conEspejo := argumentosCLI(Pedido{}, "", &espejo{url: "http://127.0.0.1:1/x", ruta: "/x"})
+	conEspejo := argumentosCLI(Pedido{}, "", "", &espejo{url: "http://127.0.0.1:1/x", ruta: "/x"})
 	var veces int
 	for _, a := range conEspejo {
 		if a == "--mcp-config" {
@@ -571,6 +625,92 @@ func TestElArgvLlevaLasBanderasQueHabilitanElProtocolo(t *testing.T) {
 	}
 	if veces != 1 {
 		t.Errorf("--mcp-config tiene que ir una sola vez y fue %d: %v", veces, conEspejo)
+	}
+}
+
+// TestElSystemPromptViajaPorArchivoYSeLimpia fija dos contratos del helper archivoSystemPrompt:
+// el contenido viaja VERBATIM (ni un byte de más) y el temp se BORRA al llamar a limpiar(). Prueba
+// el helper directo porque es determinista y no necesita el proceso real; que Turno cablee las dos
+// cosas (la ruta al argv y la limpieza) lo cubre TestTurnoPasaElSystemPromptPorArchivoYLoLimpia.
+func TestElSystemPromptViajaPorArchivoYSeLimpia(t *testing.T) {
+	// Con saltos de línea y SIN newline final: el system prompt del cliente va byte a byte.
+	const quiero = "sos un motor\n\ncon un párrafo y sin newline de más"
+
+	ruta, limpiar, err := archivoSystemPrompt(quiero)
+	if err != nil {
+		t.Fatalf("archivoSystemPrompt: %v", err)
+	}
+	if ruta == "" {
+		t.Fatal("un system prompt no vacío tiene que dar una ruta")
+	}
+
+	b, err := os.ReadFile(ruta)
+	if err != nil {
+		t.Fatalf("leer el archivo del system prompt: %v", err)
+	}
+	if string(b) != quiero {
+		// Un byte de más (un newline, un BOM) es un byte que el modelo no escribió.
+		t.Errorf("contenido = %q, quiero %q", b, quiero)
+	}
+
+	limpiar()
+	if _, err := os.Stat(ruta); !os.IsNotExist(err) {
+		// Sin limpieza, el temp del system prompt se acumula turno a turno en el %TEMP%.
+		t.Errorf("el archivo tenía que estar borrado tras limpiar(); os.Stat err = %v", err)
+	}
+
+	// Un prompt vacío no crea archivo ni deja ruta (mismo contrato que archivoDeSesion).
+	ruta2, limpiar2, err := archivoSystemPrompt("")
+	if err != nil {
+		t.Fatalf("archivoSystemPrompt(vacío): %v", err)
+	}
+	defer limpiar2()
+	if ruta2 != "" {
+		t.Errorf("un system prompt vacío no debe crear archivo; ruta = %q", ruta2)
+	}
+}
+
+// TestTurnoPasaElSystemPromptPorArchivoYLoLimpia es la COSTURA: ejercita Turno de punta a punta con
+// un proceso de verdad, no archivoSystemPrompt ni argumentosCLI por separado. Caza las dos mutaciones
+// de CABLEADO que las piezas sueltas no ven —que el call site de Turno pase "" en vez de la ruta (el
+// system prompt del cliente se pierde en silencio) o que falte el `defer limpiarSP()` (el temp se
+// filtra turno a turno)—, porque el hijo vuelca lo que REALMENTE recibió y el test lo mide.
+func TestTurnoPasaElSystemPromptPorArchivoYLoLimpia(t *testing.T) {
+	const sp = "sos un motor de prueba\ncon dos líneas y sin newline final"
+	captura := filepath.Join(t.TempDir(), "captura-sp.json")
+
+	l := lanzadorFalso("vuelca-sp:" + captura)
+	err := l.Turno(context.Background(), Pedido{
+		Modelo:       "claude-opus-5",
+		SystemPrompt: sp,
+		Mensajes:     []Mensaje{TextoDeUsuario("hola")},
+	}, func(Evento) error { return nil })
+	if err != nil {
+		t.Fatalf("Turno: %v", err)
+	}
+
+	crudo, err := os.ReadFile(captura)
+	if err != nil {
+		t.Fatalf("el proceso falso no dejó su captura: %v", err)
+	}
+	var capt struct {
+		Ruta      string `json:"ruta"`
+		Contenido string `json:"contenido"`
+	}
+	if err := json.Unmarshal(crudo, &capt); err != nil {
+		t.Fatalf("captura ilegible: %v", err)
+	}
+
+	// El call site tiene que pasar la ruta real: con "" el hijo no ve la bandera y Contenido queda vacío.
+	if capt.Contenido != sp {
+		t.Errorf("el hijo recibió el system prompt = %q, quiero %q (ruta vista = %q)", capt.Contenido, sp, capt.Ruta)
+	}
+	if capt.Ruta == "" {
+		t.Fatal("el hijo no vio --system-prompt-file en el argv: Turno no cableó la ruta")
+	}
+	// Cuando Turno volvió, su `defer limpiarSP()` ya corrió: el temp del system prompt no existe.
+	if _, err := os.Stat(capt.Ruta); !os.IsNotExist(err) {
+		t.Errorf("el temp del system prompt tenía que estar borrado al volver Turno; os.Stat err = %v", err)
 	}
 }
 
@@ -616,7 +756,7 @@ func TestElArgvDeclaraElEspejoCuandoElPedidoTraeTools(t *testing.T) {
 		ruta:       "/t0k3nd3lturn0",
 		rutaConfig: filepath.Join(t.TempDir(), "mcp.json"),
 	}
-	args := argumentosCLI(Pedido{Modelo: "claude-opus-5"}, "", esp)
+	args := argumentosCLI(Pedido{Modelo: "claude-opus-5"}, "", "", esp)
 	junto := strings.Join(args, " ")
 
 	for _, quiero := range []string{

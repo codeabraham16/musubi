@@ -173,6 +173,16 @@ func (l *Lanzador) Turno(ctx context.Context, p Pedido, emitir func(Evento) erro
 	}
 	defer limpiar()
 
+	// EL SYSTEM PROMPT VIAJA POR ARCHIVO, no inline en el argv: ver archivoSystemPrompt y el
+	// bloque de `--system-prompt-file` en argumentosCLI. Inline, un prompt de decenas de KB
+	// revienta el tope de la línea de comando de CreateProcess en Windows (errno 206) y mata
+	// el turno antes de la primera palabra.
+	rutaSystemPrompt, limpiarSP, err := archivoSystemPrompt(p.SystemPrompt)
+	if err != nil {
+		return err
+	}
+	defer limpiarSP()
+
 	// EL PLAZO SE RESUELVE ACÁ ARRIBA y no donde nace el ctx, porque el espejo lo necesita: de
 	// este valor sale el `IdleTimeout` de su listener, que tiene que sobrevivirle al turno. Con
 	// la resolución abajo, el espejo sólo podía colgar de la constante, y ahí el yaml invertía
@@ -236,7 +246,7 @@ func (l *Lanzador) Turno(ctx context.Context, p Pedido, emitir func(Evento) erro
 	if bin == "" {
 		bin = "claude"
 	}
-	cmd := exec.CommandContext(ctx, bin, argumentosCLI(p, rutaSesion, esp)...)
+	cmd := exec.CommandContext(ctx, bin, argumentosCLI(p, rutaSesion, rutaSystemPrompt, esp)...)
 	cmd.Dir = p.Dir
 	cmd.Env = entornoAislado(l.entornoBase(), l.ConservarAPIKey)
 
@@ -467,7 +477,7 @@ func bombear(r io.Reader, emitir func(Evento) error) (cerrado bool, err error) {
 //     nombre del servidor es lo que evita que una tool del cliente se frene pidiendo un
 //     permiso que en headless nadie va a contestar (mismo patrón que el protocolo propio
 //     del repo usa con `mcp__musubi`, .claude/fase2/fase2-protocolo.md).
-func argumentosCLI(p Pedido, rutaSesion string, esp *espejo) []string {
+func argumentosCLI(p Pedido, rutaSesion, rutaSystemPrompt string, esp *espejo) []string {
 	// El valor de `--mcp-config` sale de UN solo sitio: el mapa vacío, o la RUTA del archivo
 	// del espejo cuando el pedido trae tools. Un único `--mcp-config` en el argv evita
 	// depender de cómo el CLI resuelve la bandera repetida —si gana el primero, el último, o
@@ -503,16 +513,27 @@ func argumentosCLI(p Pedido, rutaSesion string, esp *espejo) []string {
 	if p.Modelo != "" {
 		args = append(args, "--model", p.Modelo)
 	}
-	if p.SystemPrompt != "" {
+	if rutaSystemPrompt != "" {
 		// Reemplaza el system prompt del CLI (medido), que es lo que corresponde: el
 		// cliente remoto trae el suyo y el del binario describiría otra herramienta.
+		//
+		// VA POR ARCHIVO Y NO INLINE, y no es cosmético: el system prompt real de un cliente
+		// como pi pesa decenas de KB (medido en F6: ~60 KB de texto en un body de 72 KB), y
+		// en Windows la línea de comando de CreateProcess topa en 32.767 chars. Un
+		// `--system-prompt` inline con ese tamaño la revienta y el turno muere con errno 206
+		// («The filename or extension is too long») antes de la primera palabra —el .exe es
+		// corto y válido; lo que no entra es el argv entero—. Linux lo tolera (ARG_MAX
+		// ~128 KB por arg), así que el bug sólo asomaba al compilar el cuerpo para
+		// windows-x64. `--system-prompt-file` es la variante de ARCHIVO del MISMO flag
+		// (reemplaza; NO es `--append-system-prompt-file`, que appendea), y es el mismo idiom
+		// que el `--mcp-config` de arriba, que ya pasa su valor por ruta. Ver archivoSystemPrompt.
 		//
 		// NO lo reemplaza del todo, y eso no se puede arreglar desde acá: quedan dos
 		// bloques fijos por delante —el de facturación y uno que arranca «You are a Claude
 		// agent, built on Anthropic's Claud…»— en TODAS las variantes probadas, `--bare`
 		// incluida. Un cliente de este motor nunca controla su system prompt entero; el
 		// que lo necesite exacto va por ClienteAPI.
-		args = append(args, "--system-prompt", p.SystemPrompt)
+		args = append(args, "--system-prompt-file", rutaSystemPrompt)
 	}
 	if esp != nil {
 		// Lo único que depende del espejo: el permiso. Medido el 2026-10-29, `--allowedTools`
@@ -598,6 +619,39 @@ func (l *Lanzador) archivoDeSesion(prefijo []Mensaje, p Pedido) (string, func(),
 		return "", nada, fmt.Errorf("escribir la sesión: %w", err)
 	}
 	return ruta, limpiar, nil
+}
+
+// archivoSystemPrompt escribe el system prompt en un archivo temporal y devuelve su ruta y
+// una función de limpieza. Con prompt vacío no escribe nada y devuelve ruta "".
+//
+// VA POR ARCHIVO Y NO INLINE EN EL ARGV: ver el bloque de `--system-prompt-file` en
+// argumentosCLI. En Windows un system prompt de decenas de KB inline revienta el tope de la
+// línea de comando de CreateProcess (errno 206) y mata el turno antes de la primera palabra.
+//
+// Es un archivo suelto y no un dir+uuid como archivoDeSesion: `--system-prompt-file` sólo
+// pide una ruta legible, mientras que `--resume` exige un .jsonl dentro de un directorio. El
+// contenido va VERBATIM, sin newline agregado: es el system prompt del cliente y un byte de
+// más es un byte que el modelo no escribió.
+func archivoSystemPrompt(prompt string) (string, func(), error) {
+	nada := func() {}
+	if prompt == "" {
+		return "", nada, nil
+	}
+	f, err := os.CreateTemp("", "musubi-motor-sp-*.txt")
+	if err != nil {
+		return "", nada, fmt.Errorf("archivo temporal para el system prompt: %w", err)
+	}
+	limpiar := func() { _ = os.Remove(f.Name()) }
+	if _, err := f.WriteString(prompt); err != nil {
+		_ = f.Close()
+		limpiar()
+		return "", nada, fmt.Errorf("escribir el system prompt: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		limpiar()
+		return "", nada, fmt.Errorf("cerrar el system prompt: %w", err)
+	}
+	return f.Name(), limpiar, nil
 }
 
 // lineaDeSesion es una línea del archivo de sesión. El formato es INTERNO del CLI: los
