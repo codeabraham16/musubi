@@ -12,6 +12,7 @@
 //     una spec `active` a `draft`.
 //
 // La proyección es la política SDD que repara las dos cosas ANTES del merge, dejando MergeSpecInto puro.
+
 package mcp
 
 import (

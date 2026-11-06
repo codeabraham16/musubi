@@ -14,6 +14,7 @@
 // Lossless (R16): el frontmatter se edita con UpdateFrontmatterText (la misma vía lossless de F2, que
 // conserva comentarios, orden de claves, BOM y line-ending) y el cuerpo de la canónica queda byte a
 // byte intacto; SÓLO se AGREGAN secciones nuevas. Nada de la canónica se reescribe ni se reordena.
+
 package specgraph
 
 import (
