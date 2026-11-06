@@ -392,20 +392,25 @@ func TestUnBinarioAnteriorLeeLaBaseDelContador(t *testing.T) {
 	eng.Close()
 
 	var nueva migration
-	var anteriores []migration
 	for _, m := range schemaMigrations() {
 		if m.name == "contador_honesto_del_sync" {
 			nueva = m
-			continue
 		}
-		anteriores = append(anteriores, m)
 	}
 	if nueva.version == 0 {
 		t.Fatal("no encontré la migración contador_honesto_del_sync: la prueba no mira lo que cree")
 	}
-	for _, m := range anteriores {
-		if m.version > nueva.version {
-			t.Fatalf("hay una migración posterior (v%d %s): esta prueba asume que la del contador es la última y hay que revisarla", m.version, m.name)
+	// Un binario cuya última migración conocida es ANTERIOR a la del contador: conoce todo lo de
+	// `version < nueva.version` y NADA de la v58 en adelante. Antes esto se escribía como «todas
+	// menos el contador» porque el contador ERA la última; ya no lo es (v59 ledger_ab_del_decididor
+	// se agregó después). Pero v58 y v59 son readCompatible, así que no mueven el piso de lectura y un
+	// binario pre-contador sigue pudiendo LEER una base migrada hasta la última — que es justo lo que
+	// esta prueba exige. Tomar `< nueva.version` la deja válida ante cualquier migración posterior que
+	// también sea readCompatible, sin un tripwire que revisar a mano cada vez.
+	var anteriores []migration
+	for _, m := range schemaMigrations() {
+		if m.version < nueva.version {
+			anteriores = append(anteriores, m)
 		}
 	}
 
@@ -414,7 +419,7 @@ func TestUnBinarioAnteriorLeeLaBaseDelContador(t *testing.T) {
 		t.Fatalf("el binario anterior no vio la base como más nueva: %v", err)
 	}
 	if !errors.Is(err, ErrEsquemaLegible) {
-		t.Errorf("un binario v%d no puede LEER la base migrada por la v%d: los procesos viejos de la PC se quedarían sin memoria hasta cerrarlos\n  %v",
-			nueva.version-1, nueva.version, err)
+		t.Errorf("un binario v%d (anterior al contador) no puede LEER la base migrada hasta la v%d: los procesos viejos de la PC se quedarían sin memoria hasta cerrarlos\n  %v",
+			nueva.version-1, latestSchemaVersion(), err)
 	}
 }
