@@ -14,6 +14,9 @@ import (
 //
 // Sabotaje que lo pone en rojo: borrar la mitad "la creencia tiene razón" (el fragmento con
 // `musubi_spec_update`) del texto de surfacing → la aserción del segundo desenlace falla.
+// arnes: archivo="internal/mcp/methods.go"
+// arnes: de=" si la CREENCIA tiene razón (la spec quedó atrás), NO la ocultes: actualizá el SPEC.md con `musubi_spec_update`."
+// arnes: a=""
 func TestF5SurfacingEnunciaLosDosDesenlaces(t *testing.T) {
 	s := newTestServer(t, embedding.NoopProvider{})
 

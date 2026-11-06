@@ -41,6 +41,9 @@ func proyectarSpec(t *testing.T, e *DbEngine, specID, projectID, content, create
 // Sabotaje que lo pone en rojo: quitar el bloque `if opts.DetectOnly { rel = pendingRel(...) }` de
 // DetectRelations. El par está armado para que SIN DetectOnly auto-supersederia la creencia (lex≥auto ∧
 // mismo topic ∧ source estrictamente más nuevo); el DetectOnly es lo único que lo frena a `pending`.
+// arnes: archivo="internal/memory/conflicts.go"
+// arnes: de="rel = pendingRel(src, c, lex, cos)"
+// arnes: a=""
 func TestF5ProyeccionDetectaCreenciaViejaYQuedaPending(t *testing.T) {
 	e := newTestEngine(t)
 	// MISMO topic que la proyección (mismo dominio): así el verde NO depende de la exención de
@@ -79,6 +82,9 @@ func TestF5ProyeccionDetectaCreenciaViejaYQuedaPending(t *testing.T) {
 // Sabotaje que lo pone en rojo: quitar `|| specProjection(b)` de complementaryPair → el par procede y
 // nace una relación con la proyección como target. Con DetectOnly=true queda en `pending` (no toca
 // markSuperseded): el rojo cae limpio sobre la aserción de NACIMIENTO, aislando este guard de T4.
+// arnes: archivo="internal/memory/conflicts.go"
+// arnes: de=" || specProjection(b)"
+// arnes: a=""
 func TestF5CreenciaNoNaceComoSupersederaDeLaProyeccion(t *testing.T) {
 	e := newTestEngine(t)
 	// La creencia es MÁS NUEVA y casi idéntica, mismo topic: sin la protección, un save real la haría
@@ -107,6 +113,9 @@ func TestF5CreenciaNoNaceComoSupersederaDeLaProyeccion(t *testing.T) {
 //
 // Sabotaje que lo pone en rojo: quitar el guard de prefijo al entrar a markSuperseded → no devuelve
 // error y la proyección queda oculta (superseded_by != NULL).
+// arnes: archivo="internal/memory/conflicts.go"
+// arnes: de="if strings.HasPrefix(targetID, specProjectionIDPrefix) {"
+// arnes: a="if false {"
 func TestF5MarkSupersededDirectoRechazaLaProyeccion(t *testing.T) {
 	e := newTestEngine(t)
 	proj := proyectarSpec(t, e, "s1", "", "Usamos PostgreSQL para persistencia.", "2026-01-01 10:00:00")
@@ -168,6 +177,9 @@ func TestF5ResolveObsRelationRechazaYDejaPending(t *testing.T) {
 //
 // Sabotaje que lo pone en rojo: quitar `specProjection(r)` de exentoDeDominios → el par cross-domain se
 // descarta (ninguno de los dos exento) → no nace relación.
+// arnes: archivo="internal/memory/conflicts.go"
+// arnes: de=" || specProjection(r)"
+// arnes: a=""
 func TestF5ProyeccionCruzaDominios(t *testing.T) {
 	e := newTestEngine(t)
 	// Creencia de dominio `deploy`, contradictoria (PostgreSQL vs MySQL) y con ALTO solape léxico: así

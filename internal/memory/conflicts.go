@@ -186,6 +186,7 @@ func specProjection(r obsRow) bool { return strings.HasPrefix(r.id, specProjecti
 // MEDIDO sobre las 169 relaciones de la memoria real: los pares histórico-vs-histórico eran el 20%
 // de la cola y dieron CERO veredictos sustantivos. Los 8 `supersedes` que existen son TODOS
 // nota→nota. La práctica ya respetaba esta regla; el código recién ahora la escribe.
+//
 //	G4 — una proyección de spec como destino (F5). Una creencia NUNCA oculta una spec: la spec es el
 //	     contrato curado y git-trackeado; la proyección se regenera del FS, así que tacharla es a la vez
 //	     fútil e invierte la autoridad. Su señal es el prefijo del id (specProjection), no el topic.
