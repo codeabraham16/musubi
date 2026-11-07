@@ -31,6 +31,14 @@ dentro de `toolRecall`. La disciplina de *cuándo* gastar una llamada vive acá,
 `ExigenciaSkill` (la línea imperativa, sin cuerpo) y **preserva el eje `loaded`** del A/B (R7): un
 turno del brazo de control también se mide.
 
+El insumo del gate `hayMatchFuerte` —los `reflejas`— llega de las **señales declaradas** en
+`musubi_recall` (`modified_files`/`phase`/`task`, espejo de `skills.ResolveRequest`): `toolRecall` las
+resuelve contra el arsenal YA cargado (`NewResolverDeCatalogo(arsenal).ResolveConDetalle`, sin releer
+disco) y le pasa el reflejo al seam. Sin señales el reflejo es `nil` y el gate no corta por match
+fuerte —el camino de texto libre de siempre—. Hasta que se cablearon esas señales, `reflejas` salía
+**siempre vacío** y el corte estaba dormido en producción; ahora es alcanzable cuando el llamador
+declara los archivos que toca, la fase o la tarea.
+
 **Juicio puro** — `ElegirSkill` (en `internal/cognition`): prompt + llamada + parseo + validación
 contra el catálogo que vio. **R8 — elección válida**: sólo puede exigir una skill que EXISTE en el
 catálogo; una que el motor haya inventado se descarta a "ninguna" (exigir cargar un archivo inexistente

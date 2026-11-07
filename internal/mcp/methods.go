@@ -1616,6 +1616,14 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 		// Ver quiereJuez: +114 % en el primer resultado a ~8,5 s la consulta, así que quién paga
 		// esa espera es una decisión de la llamada y no del servidor entero.
 		Rerank *bool `json:"rerank"`
+		// R3 (decididor de skills) — señales OPCIONALES de la situación del llamador. Espejan
+		// skills.ResolveRequest: si uno de los archivos casa un glob de skill, o la fase/tarea casa
+		// un alcance declarado, el reflejo model-free ya pinó una skill con evidencia y el motor NO
+		// se gasta (gatePasaDecididor corta por match-fuerte). Ausentes ⇒ nil ⇒ el camino de texto
+		// libre de siempre. El daemon local nunca las usa: el guard decididorHabilitado corta antes.
+		ModifiedFiles []string `json:"modified_files"`
+		Phase         string   `json:"phase"`
+		Task          string   `json:"task"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return nil, rpcErrorf(codeInvalidParams, "Invalid arguments: %v", err)
@@ -1711,13 +1719,22 @@ func (s *McpServer) toolRecall(ctx context.Context, raw json.RawMessage) (interf
 				logx.Error("decididor de skills: no pude leer el arsenal, recall sin exigencia", "error", lerr)
 			}
 		})
-		// reflejas VACÍO a propósito: musubi_recall no trae archivos ni fase/tarea declarada, y el
-		// alcance casa por IGUALDAD contra un tag, no por substring de la query (ver matchAlcance), así
-		// que un reflejo model-free no puede pinar nada desde texto libre. El corte por match-fuerte
-		// queda vivo y testeado como unidad pero DORMIDO acá; cablear señales de archivo al recall es
-		// follow-up, y es ESTE el punto donde reflejas se poblaría. El gate igual corta por catálogo
-		// vacío y texto no sustantivo.
-		res = s.exigirSkillSiCorresponde(ctx, args.Query, res, nil, arsenal)
+		// R3 DESPIERTO (spec r3-senales-al-recall): si el llamador DECLARÓ señales (archivos tocados,
+		// fase o tarea), resolvemos el reflejo model-free sobre el arsenal YA cargado —sin re-leer el
+		// disco de skills— y se lo pasamos al gate. El alcance casa por IGUALDAD de tag y el glob
+		// contra el nombre del archivo, así que ahora SÍ hay con qué pinar: cuando un trigger ya eligió
+		// una skill con evidencia, el motor no suma y no se gasta. Sin señales declaradas, reflejas
+		// queda nil y el camino es idéntico al de texto libre; el gate igual corta por catálogo vacío
+		// y texto no sustantivo.
+		var reflejas []skills.SkillResuelta
+		if req := (skills.ResolveRequest{ModifiedFiles: args.ModifiedFiles, Phase: args.Phase, Task: args.Task}); req.DeclaraAlgo() && len(arsenal) > 0 {
+			if rs, rerr := skills.NewResolverDeCatalogo(arsenal).ResolveConDetalle(req); rerr == nil {
+				reflejas = rs
+			} else {
+				logx.Error("decididor de skills: no pude resolver el reflejo, gate sin match-fuerte", "error", rerr)
+			}
+		}
+		res = s.exigirSkillSiCorresponde(ctx, args.Query, res, reflejas, arsenal)
 	}
 
 	// TIER 2a (specs/recall-envoltorio/tier2-id-corto.md) — el `id` viaja al agente ACORTADO a 8 hex.
