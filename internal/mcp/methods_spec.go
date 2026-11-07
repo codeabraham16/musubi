@@ -645,10 +645,10 @@ func (s *McpServer) toolSpecCreate(raw json.RawMessage) (interface{}, *RpcError)
 	// (el SPEC.md ya es la fuente de verdad y la reconciliación de apertura lo cubre, R10): se REPORTA
 	// en el mensaje para no decir "federada" cuando no lo está (la última palabra la tiene la salida real).
 	if specgraph.IsShared(reparsed.Frontmatter) {
-		if pErr := s.renderAndProject(args.ID, reparsed.Frontmatter, reparsed.Body); pErr != nil {
+		if surf, pErr := s.renderAndProject(args.ID, reparsed.Frontmatter, reparsed.Body); pErr != nil {
 			msg += fmt.Sprintf("\n⚠️ shared, pero no se pudo proyectar al central (se reconcilia al reabrir): %v", pErr)
 		} else {
-			msg += " · proyectada al central (shared)"
+			msg += " · proyectada al central (shared)" + surf
 		}
 	}
 	return textResult(msg), nil
@@ -768,10 +768,10 @@ func (s *McpServer) toolSpecUpdate(raw json.RawMessage) (interface{}, *RpcError)
 	// Fallo best-effort: la spec en disco ya es la fuente de verdad (reconciliación de apertura, R10);
 	// se REPORTA sin revertir la escritura.
 	if specgraph.IsShared(reparsed.Frontmatter) {
-		if pErr := s.renderAndProject(args.ID, reparsed.Frontmatter, reparsed.Body); pErr != nil {
+		if surf, pErr := s.renderAndProject(args.ID, reparsed.Frontmatter, reparsed.Body); pErr != nil {
 			msg += fmt.Sprintf("\n⚠️ shared, pero no se pudo proyectar al central (se reconcilia al reabrir): %v", pErr)
 		} else {
-			msg += " · proyectada al central (shared)"
+			msg += " · proyectada al central (shared)" + surf
 		}
 	} else if rtErr := s.engine.RetractSpecProjection(args.ID, ""); rtErr != nil {
 		msg += fmt.Sprintf("\n⚠️ no se pudo retirar la proyección local (se reconcilia al reabrir): %v", rtErr)
@@ -876,8 +876,16 @@ func specBodyForType(specType, title string) string {
 // propósito: create/update/delete son tools `write` (candado exclusivo del dispatch) y la guarda
 // candado_no_cruza_la_red prohíbe que una tool `write` toque la red; el gist solo alcanza para el recall
 // federado (R7, model-free). projectID "" ⇒ ProjectSpecShared resuelve el tenant propio del motor.
-func (s *McpServer) renderAndProject(specID string, fm specgraph.Frontmatter, body string) error {
-	return s.engine.ProjectSpecShared(specID, "", specgraph.RenderProjection(fm, body), nil)
+// Devuelve, además del error de proyección, el TEXTO de surfacing de F5: tras commitear la proyección,
+// dispara la detección spec→creencias (detectSpecContradictions) para avisar de las creencias que la
+// spec, al cambiar, pudo dejar viejas (R1/R2). La detección NO cruza la red (sólo DB + índice
+// in-process), así que respeta el candado de la tool `write`. El texto viaja al caller para anexarse a
+// la respuesta del tool.
+func (s *McpServer) renderAndProject(specID string, fm specgraph.Frontmatter, body string) (string, error) {
+	if err := s.engine.ProjectSpecShared(specID, "", specgraph.RenderProjection(fm, body), nil); err != nil {
+		return "", err
+	}
+	return s.detectSpecContradictions(specID), nil
 }
 
 // ReconcileSpecProjectionsOnStartup re-sincroniza las proyecciones de specs `shared` con el FS en la

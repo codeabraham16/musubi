@@ -140,6 +140,17 @@ func isCommit(topicKey string) bool { return topicKey == CommitTopicKey }
 // DES-HACER, y por eso nada puede pedir un veredicto sobre él.
 func historicalRecord(topicKey string) bool { return isCommit(topicKey) || isSDD(topicKey) }
 
+// specProjection reconoce la observación DERIVADA de una spec `shared` (F5). Discrimina por el PREFIJO
+// DEL ID (spec-proj:…), no por el topic_key (spec/<id>): el id es el namespace que F4a reservó para
+// esto, determinista y bajo control del motor, mientras que una nota humana podría usar el topic
+// `spec/*` por casualidad y quedar sobre-protegida. obsRow ya trae el id, así que no hay costo.
+//
+// La proyección es AUTORITATIVA pero reconstruible del FS: una spec es evidencia sobre el contrato de
+// un módulo, así que —como un commit— puede envejecer una creencia de CUALQUIER tema (de ahí la
+// exención de dominiosAjenos), y NUNCA debe ser ocultada por una creencia (de ahí la protección como
+// target en complementaryPair y el guard de markSuperseded). Las dos caras van juntas: ver D5.
+func specProjection(r obsRow) bool { return strings.HasPrefix(r.id, specProjectionIDPrefix) }
+
 // complementaryPair responde UNA pregunta: ¿este par es siquiera COMPARABLE? Lo hace por la
 // ESTRUCTURA (el topic_key), sin importar cuánto se parezcan los textos. No mira el contenido A
 // PROPÓSITO: el parecido entre el `spec` y el `design` de un mismo cambio es alto y CORRECTO —
@@ -175,8 +186,12 @@ func historicalRecord(topicKey string) bool { return isCommit(topicKey) || isSDD
 // MEDIDO sobre las 169 relaciones de la memoria real: los pares histórico-vs-histórico eran el 20%
 // de la cola y dieron CERO veredictos sustantivos. Los 8 `supersedes` que existen son TODOS
 // nota→nota. La práctica ya respetaba esta regla; el código recién ahora la escribe.
+//
+//	G4 — una proyección de spec como destino (F5). Una creencia NUNCA oculta una spec: la spec es el
+//	     contrato curado y git-trackeado; la proyección se regenera del FS, así que tacharla es a la vez
+//	     fútil e invierte la autoridad. Su señal es el prefijo del id (specProjection), no el topic.
 func complementaryPair(_, b obsRow, opts ConflictOptions) bool {
-	return historicalRecord(b.topicKey) || declaredLedger(b.topicKey, opts.LedgerPrefixes)
+	return historicalRecord(b.topicKey) || declaredLedger(b.topicKey, opts.LedgerPrefixes) || specProjection(b)
 }
 
 // declaredLedger extiende la regla de arriba con los géneros que declara el DESPLIEGUE, y no el
@@ -251,8 +266,20 @@ func dominiosAjenos(a, b obsRow) bool {
 	if dominioDe(a.topicKey) == dominioDe(b.topicKey) {
 		return false
 	}
-	return !historicalRecord(a.topicKey) && !historicalRecord(b.topicKey)
+	return !exentoDeDominios(a) && !exentoDeDominios(b)
 }
+
+// exentoDeDominios: géneros que le hablan a una nota de CUALQUIER tema, así que el guardia de dominios
+// no los descarta. Un registro histórico (commit/SDD) es evidencia sobre el mundo —«feat: migrar de X
+// a Y» envejece una nota de cualquier dominio—. Una proyección de spec es lo mismo para el contrato de
+// un módulo: la spec de `auth` puede contradecir una creencia guardada bajo `deploy` o `gotchas`.
+//
+// ⚠️ ACOPLADA con la protección de complementaryPair (D5): eximir la proyección de dominiosAjenos
+// AUMENTA los pares en que participa (ahora cruza dominios), y sin la protección como target de
+// complementaryPair uno de esos pares podría auto-superseder la proyección. Las dos se hacen juntas o
+// se abre un agujero. A diferencia de declaredLedger —que NO se exime acá a propósito, porque sólo
+// declara «esto no se tacha» sin reclamar autoridad sobre otros dominios—, la proyección SÍ la reclama.
+func exentoDeDominios(r obsRow) bool { return historicalRecord(r.topicKey) || specProjection(r) }
 
 type obsRow struct {
 	id        string
@@ -671,6 +698,16 @@ func (e *DbEngine) lexicalConflictCandidates(src obsRow, limit int) ([]obsRow, e
 // markSuperseded marca una observación como reemplazada por otra (la oculta del
 // recall sin borrarla).
 func (e *DbEngine) markSuperseded(targetID, bySourceID string) error {
+	// R3 (F5) EN SU PUNTO MÁS PROFUNDO: una creencia JAMÁS oculta una proyección de spec. markSuperseded
+	// es el ÚNICO choke por el que pasan TODOS los caminos que ocultan memoria —el auto del loop de
+	// DetectRelations y el manual de ResolveObsRelation/musubi_judge—, así que negar acá hace imposible
+	// tachar una spec venga de donde venga. Es defensa EN PROFUNDIDAD, no la única línea: complementaryPair
+	// ya impide que nazca una relación con la proyección como target, así que en el MVP este punto no se
+	// alcanza por el camino normal. El error (no un no-op silencioso) es deliberado: así ResolveObsRelation
+	// propaga el rechazo y la relación NO queda marcada resuelta-sin-efecto (criterio de éxito #2).
+	if strings.HasPrefix(targetID, specProjectionIDPrefix) {
+		return fmt.Errorf("no se oculta la proyección de spec %q: una creencia nunca reemplaza una spec (actualizá el SPEC.md con musubi_spec_update)", targetID)
+	}
 	if _, err := e.db.Exec(
 		`UPDATE observations SET superseded_by=? WHERE id=?`, bySourceID, targetID,
 	); err != nil {

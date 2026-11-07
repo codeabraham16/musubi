@@ -721,6 +721,58 @@ func (s *McpServer) surfaceBandNeighbors(obsID string) string {
 	return b.String()
 }
 
+// detectSpecContradictions corre la detección DISPARADA por una proyección de spec recién escrita (F5,
+// R1/R2) y devuelve el texto a anexar a la respuesta del tool. La proyección es el SOURCE: surfacea las
+// creencias humanas que la spec, al cambiar, pudo dejar viejas. Espeja a detectAndSurface con tres
+// diferencias deliberadas:
+//   - DetectOnly=true (R2): TODA relación nace `pending`. Una contradicción "usamos X" vs una spec que
+//     dice "usamos Z" no es deducible léxicamente, así que no pasa el AND-gate del auto-supersede; el
+//     agente arbitra. Esto además vuelve markSuperseded inalcanzable por este camino (D3).
+//   - Sin anuncio de auto-supersede: con DetectOnly nunca hay `resolved`, nada que anunciar.
+//   - El aviso enuncia LOS DOS desenlaces (R1): ocultar una creencia CORRECTA sería el error, así que el
+//     texto nombra tanto "la spec gana → musubi_judge supersedes" como "la creencia tiene razón →
+//     actualizá el SPEC.md, NO la ocultes".
+//
+// NO cruza la red —DetectRelations sólo lee la DB y el índice in-process—, por eso cabe en el seam
+// `write` sin violar candado_no_cruza_la_red (D3). Best-effort: si la detección está deshabilitada o
+// falla, devuelve ""; un fallo acá JAMÁS rompe la proyección, que ya quedó commiteada.
+func (s *McpServer) detectSpecContradictions(specID string) string {
+	if !s.conflicts.Enabled {
+		return ""
+	}
+	// El id se reconstruye con el MISMO criterio de project_id que usó ProjectSpecShared al escribir la
+	// fila; si divergiera, la detección no encontraría la proyección y R1 no dispararía.
+	projID := s.engine.SpecProjectionObsID(specID, "")
+	rels, err := s.engine.DetectRelations(projID, s.conflictOpts(true))
+	if err != nil {
+		logx.Warn("detección de contradicciones spec→creencia falló (la spec se proyectó igual)", "error", err)
+		return ""
+	}
+	// La sombra se encola igual que en detectAndSurface; no participa del texto (medir no es opinar).
+	s.encolarSombra(rels)
+
+	// Con DetectOnly toda relación nace pending; igual se filtra por status en vez de suponerlo.
+	var pending []memory.ObsRelation
+	for _, r := range rels {
+		if r.Status == memory.RelStatusPending {
+			pending = append(pending, r)
+		}
+	}
+	if len(pending) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n[spec] La spec %s cambió y hay %d creencia(s) que podrían haber quedado viejas. Revisá cada una:", specID, len(pending))
+	for _, r := range pending {
+		fmt.Fprintf(&b, "\n- relation_id=%s creencia=%s (similitud %.2f)", r.ID, r.TargetID, r.Confidence)
+	}
+	// LOS DOS DESENLACES. Borrar la mitad "la creencia tiene razón" es exactamente el sabotaje de T12.
+	b.WriteString("\n  → si la SPEC gana, `musubi_judge` con relation=supersedes oculta la creencia vieja;" +
+		" si la CREENCIA tiene razón (la spec quedó atrás), NO la ocultes: actualizá el SPEC.md con `musubi_spec_update`.")
+	return b.String()
+}
+
 // toolDoctor diagnostica o repara la base de memoria.
 func (s *McpServer) toolDoctor(ctx context.Context, raw json.RawMessage) (interface{}, *RpcError) {
 	var args struct {
