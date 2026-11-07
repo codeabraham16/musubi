@@ -27,6 +27,12 @@ token optimization, ranking and skill resolution are deterministic and offline.
 
 <!-- novedades:inicio -->
 
+**[v0.149.0](https://github.com/codeabraham16/musubi/releases/tag/v0.149.0)** · Nov 6, 2026
+
+- Musubi stops OFFERING a skill catalog the agent almost never picks —measured: `loaded=0` across 402 turns— and starts DEMANDING the one the task needs. When the model-free reflex finds no strong skill match, the consciousness engine —served from the central brain; the local daemon falls back to a no-op— looks at the catalog and, if the task demands a skill, prepends an imperative order onto the recall response that already happens ("load skill `X` now, for this") instead of delegating the choice. It ships off by default behind an A/B, because turning on consciousness costs: four brakes inherited from the recall judge cap spend at one engine call per recall at most, and on engine failure, timeout or exhausted quota it degrades best-effort without breaking recall. It bills the subscription via the proxy, never dollars.
+
+And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.149.0/CHANGELOG.md#01490---2026-11-06)
+
 **[v0.148.0](https://github.com/codeabraham16/musubi/releases/tag/v0.148.0)** · Nov 2, 2026
 
 - Musubi learns to carry the project's specs as data, not loose prose: typed `SPEC.md` files —from goal-and-requirements down to task-spec— linked in a graph by `parent` and `depends-on`, which the agent navigates and maintains with eight new `musubi_spec_*` tools instead of hand-editing them. It is model-free and local-first like the rest of Musubi: the core was ported from thinkrail's `spec-graph` (Apache-2.0) without requiring any external service or an LLM. When closing a change, `musubi_spec_validate` reports dangling links, duplicate ids and `parent` cycles before the graph can lie.
@@ -38,12 +44,6 @@ And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/
 - The `musubi cerebro` proxy can no longer mark the central brain as down because of a startup network spike. It used to forward the MCP handshake (`initialize`) to the central —the session's first cold dial—, and if the network took more than 5s, Claude Code left the MCP server stuck in `failed` for the WHOLE session even though the central was alive and answering in ~250-780 ms. Now the handshake is answered locally, without dialing: it no longer depends on the network and the session always initializes.
 
 And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.147.0/CHANGELOG.md#01470---2026-10-28)
-
-**[v0.146.0](https://github.com/codeabraham16/musubi/releases/tag/v0.146.0)** · Oct 28, 2026
-
-- Promoting, discarding and saving a memory now understand the short 8-hex reference the hook has emitted since 0.145.0. Before, doing it by the short id the agent sees in recall failed silently —the stale proposal stayed alive— or, on save, could overwrite or duplicate another observation; now the short id resolves to the exact observation before acting, and saving with a short id is rejected with instructions. Zero loss.
-
-And everything else, in the [CHANGELOG](https://github.com/codeabraham16/musubi/blob/v0.146.0/CHANGELOG.md#01460---2026-10-28)
 
 _The changelog is written in Spanish._
 
