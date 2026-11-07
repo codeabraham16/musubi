@@ -7,6 +7,9 @@ y el proyecto adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+### Added
+- **El corte R3 del decididor de skills ahora es ALCANZABLE: `musubi_recall` acepta señales declaradas (`modified_files`, `phase`, `task`) que despiertan el gate `hayMatchFuerte`.** La Fase 1 (0.149.0) dejó el gate conservador vivo pero **dormido en producción**: `toolRecall` llamaba al seam con `reflejas=nil` siempre, así que el corte por match fuerte —no gastar el motor cuando un trigger de skill ya pinó la skill con evidencia— nunca disparaba. Ahora el llamador puede declarar qué archivos toca, en qué fase está y qué tarea hace (espejo de `skills.ResolveRequest`); `toolRecall` resuelve ese reflejo contra el arsenal **ya cargado** (`NewResolverDeCatalogo(arsenal).ResolveConDetalle`, sin una segunda lectura de disco) y se lo pasa al gate. Si un glob de skill casa un archivo declarado, o un alcance casa la fase/tarea, el decididor **NO gasta el motor**: el trigger ya eligió. Las tres propiedades son **opcionales y aditivas** —`Required` sigue `["query"]`—: quien no las manda ve el camino de texto libre idéntico a antes, y el daemon local nunca llega a usarlas porque el guard `decididorHabilitado` corta antes de tocar disco. El ahorro es de **adopción incremental**, no automática: el canal existe; que los llamadores del recall manden las señales es un paso aparte. El golden de `tools/list` suma los 3 params bajo `musubi_recall` y nada más.
+
 ## [0.149.0] - 2026-11-06
 
 ### Destacado
