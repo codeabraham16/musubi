@@ -243,9 +243,9 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				InputSchema: InputSchema{
 					Type: "object",
 					Properties: map[string]Property{
-						"query":        {Type: "string", Description: "Texto de la consulta"},
-						"token_budget": {Type: "number", Description: "Cuántos tokens de GISTS traer; acota la selección, no el payload final. used_tokens informa el costo real y puede superarlo. Opcional; default de la config."},
-						"rerank":       {Type: "boolean", Description: "Somete el tope del ranking al juez de pertinencia (un LLM) SÓLO en esta consulta. Medido 2026-08-10 contra la memoria real: pone lo correcto primero (+114 % en el primer resultado) y CUESTA ~8,5 s. Usalo cuando una persona está esperando la respuesta; no en sondeos ni en bucles. Ausente = decide la config del servidor; false lo apaga aunque el servidor esté en turbo. Cuando el juez corre, la respuesta trae `reranked: true` y los items del tope vienen SIN `score`: el orden pasa a ser del juez, y re-ordenar por el puntaje model-free deshace su trabajo."},
+						"query":          {Type: "string", Description: "Texto de la consulta"},
+						"token_budget":   {Type: "number", Description: "Cuántos tokens de GISTS traer; acota la selección, no el payload final. used_tokens informa el costo real y puede superarlo. Opcional; default de la config."},
+						"rerank":         {Type: "boolean", Description: "Somete el tope del ranking al juez de pertinencia (un LLM) SÓLO en esta consulta. Medido 2026-08-10 contra la memoria real: pone lo correcto primero (+114 % en el primer resultado) y CUESTA ~8,5 s. Usalo cuando una persona está esperando la respuesta; no en sondeos ni en bucles. Ausente = decide la config del servidor; false lo apaga aunque el servidor esté en turbo. Cuando el juez corre, la respuesta trae `reranked: true` y los items del tope vienen SIN `score`: el orden pasa a ser del juez, y re-ordenar por el puntaje model-free deshace su trabajo."},
 						"modified_files": {Type: "array", Description: "Opcional. Archivos que toca la tarea; si uno casa el glob de una skill, el decididor no gasta el motor.", Items: &Property{Type: "string", Description: "ruta de archivo"}},
 						"phase":          {Type: "string", Description: "Opcional. Fase declarada (ej. 'phase:implementing'); si casa el alcance de una skill, no gasta el motor."},
 						"task":           {Type: "string", Description: "Opcional. Tarea declarada (ej. 'task:audit'). Igual que phase."},

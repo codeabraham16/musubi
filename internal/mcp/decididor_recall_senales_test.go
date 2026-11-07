@@ -65,6 +65,9 @@ func TestR3GlobDeclaradoApagaElMotor(t *testing.T) {
 // R3-b — ALCANCE DECLARADO APAGA EL MOTOR. El llamador declara la fase; el arsenal tiene una skill con
 // ese alcance. El reflejo pina por alcance (la evidencia más fuerte), el gate corta, 0 llamadas.
 // Sabotaje: igual que R3-a (reflejas=nil) ⇒ 1 llamada ⇒ rojo.
+// arnes: archivo="internal/mcp/methods.go"
+// arnes: de="res = s.exigirSkillSiCorresponde(ctx, args.Query, res, reflejas, arsenal)"
+// arnes: a="res = s.exigirSkillSiCorresponde(ctx, args.Query, res, nil, arsenal)"
 func TestR3AlcanceDeclaradoApagaElMotor(t *testing.T) {
 	motor := &motorEspia{respuesta: respuestaNinguna}
 	s, _ := servidorDecididor(t, motor, 60)
@@ -86,6 +89,9 @@ func TestR3AlcanceDeclaradoApagaElMotor(t *testing.T) {
 // R3-c — SIN SEÑALES, EL MOTOR CORRE. Es la regresión del camino de texto libre: sin archivos ni fase,
 // reflejas queda nil, el gate NO corta por match-fuerte y (en el brazo on) el motor se llama una vez.
 // Sabotaje: hacer que el gate corte siempre (hayMatchFuerte→true) ⇒ 0 llamadas ⇒ rojo.
+// arnes: archivo="internal/mcp/methods_cognition.go"
+// arnes: de="return !hayMatchFuerte(reflejas)"
+// arnes: a="return false"
 func TestR3SinSenalesElMotorCorre(t *testing.T) {
 	motor := &motorEspia{respuesta: respuestaNinguna}
 	s, _ := servidorDecididor(t, motor, 60)
