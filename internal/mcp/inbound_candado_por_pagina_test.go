@@ -37,12 +37,20 @@ func TestLaBajadaSeCortaSiOtroTomoElCandadoEntrePaginas(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		var req struct {
 			Params struct {
+				Name      string `json:"name"`
 				Arguments struct {
 					AfterRowID int64 `json:"after_rowid"`
 				} `json:"arguments"`
 			} `json:"params"`
 		}
 		_ = json.Unmarshal(body, &req)
+		// La bajada del A/B del decididor (musubi_sync_pull_ab) viaja pegada al drain entrante y sale
+		// ANTES de la primera página de obs. Se responde vacía y NO se cuenta ni roba el candado, para
+		// que el robo del lease caiga —como lo busca la prueba— durante la primera página de obs.
+		if req.Params.Name == "musubi_sync_pull_ab" {
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"pull-ab","result":{"content":[{"type":"text","text":` + strconv.Quote(`{"rows":[]}`) + `}]}}`))
+			return
+		}
 		if pedidos.Add(1) == 1 {
 			if err := engine.SetMeta("sync:inbound_lease", "otro-proceso|2999-01-01 00:00:00"); err != nil {
 				t.Errorf("simular al otro proceso: %v", err)

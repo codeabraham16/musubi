@@ -381,6 +381,44 @@ func (s *McpServer) anotarUltimaBajada(v memory.Viaje) {
 	}
 }
 
+// bajarDecididorAB baja el snapshot del A/B del decididor del central y lo mergea en la base local.
+// Es el cable que cierra el límite deferido de decididor_ab.go: trae el DENOMINADOR
+// (oportunidades/exigencias), que nace sólo en el central, a la base donde se cuenta el NUMERADOR
+// (cargadas), para que el UPDATE-only de bumpCargadasDecididorTx tenga filas y el lift se vuelva
+// medible en esta máquina.
+//
+// Es un CANAL LATERAL de la bajada entrante, separado A PROPÓSITO de la bajada de observaciones:
+//   - best-effort: su error SÓLO se logea. Un central viejo que no expone la tool, o un fallo de red,
+//     NO debe cortar la bajada de observaciones ni tocar su cursor.
+//   - NO toca salioALaRed, viaje ni sync_viajes: el contador es diminuto y cambia lento; contarlo
+//     como un viaje más perturbaría el ritmo (calibrado con filas de observación) y la contabilidad.
+//
+// Lo llama drainInboundOnce DESPUÉS de reclamar el candado y pasar el gate de ritmo, así que un solo
+// proceso por base lo corre y sólo cuando la bajada ya iba a salir a la red (sin tráfico extra).
+// callCentral abre su propio contexto con timeout, así que no necesita el del drain.
+func (s *McpServer) bajarDecididorAB() {
+	// Interfaz y no *memory.DbEngine, igual que decididorABReader: un backend que no sabe mergear el
+	// A/B omite el canal en silencio en vez de romper (go-hygiene #3). Es best-effort por diseño.
+	merger, ok := s.engine.(decididorABMerger)
+	if !ok {
+		return
+	}
+	rows, err := s.syncClient.PullDecididorAB()
+	if err != nil {
+		logx.Error("inbound: no se pudo bajar el A/B del decididor del central (best-effort; no corta la bajada de obs)", "error", err)
+		return
+	}
+	if err := merger.MergeDecididorABDesdeCentral(rows); err != nil {
+		logx.Error("inbound: no se pudo mergear el A/B del decididor bajado del central", "error", err)
+	}
+}
+
+// decididorABMerger lo implementa el motor real. Interfaz y no *memory.DbEngine por la misma razón
+// que decididorABReader: el canal lateral del A/B degrada con gracia si el backend no lo soporta.
+type decididorABMerger interface {
+	MergeDecididorABDesdeCentral(rows []memory.DecididorABRow) error
+}
+
 // drainInboundOnce baja páginas de memoria shared del central desde el cursor guardado y las ingiere
 // localmente (IngestShared, anti-loop: NO re-encola en el outbox). Avanza el cursor con el mayor
 // rowid del lote. Best-effort: un fallo de red reintenta en el próximo tick; un fallo de ingest de
@@ -449,6 +487,11 @@ func (s *McpServer) drainInboundOnce(ctx context.Context) {
 	if !s.ritmoBajada.tocaIr(s.hayActividadLocal()) {
 		return
 	}
+	// CANAL LATERAL: bajar el snapshot del A/B del decididor y mergearlo (cierra el límite deferido de
+	// decididor_ab.go — el denominador del central llega a la base donde se cuenta el numerador). Va
+	// ACÁ, tras el gate de ritmo, para no agregar tráfico propio: sólo sale cuando la bajada de obs ya
+	// iba a la red. Best-effort y aparte de la contabilidad de viajes (ver bajarDecididorAB).
+	s.bajarDecididorAB()
 	var cur int64
 	if raw, ok, _ := s.engine.GetMeta(metaInboundCursor); ok {
 		cur, _ = strconv.ParseInt(strings.TrimSpace(raw), 10, 64)

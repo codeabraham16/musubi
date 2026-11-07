@@ -497,8 +497,9 @@ func TestG8MapaDeAutorizacionIntacto(t *testing.T) {
 		"musubi_entity_context": true, "musubi_impact": true, "musubi_insights": true,
 		"musubi_list_skills": true, "musubi_map": true, "musubi_recall_facts": true,
 		"musubi_search_keyword": true, "musubi_search_semantic": true, "musubi_search_skills": true,
-		"musubi_skill_usage": true, "musubi_sync_pull": true, "musubi_sync_status": true,
-		"musubi_tool_usage": true, "musubi_whoami": true,
+		"musubi_skill_usage": true, "musubi_sync_pull": true, "musubi_sync_pull_ab": true,
+		"musubi_sync_status": true,
+		"musubi_tool_usage":  true, "musubi_whoami": true,
 		// F3 · madurez medida: la cabina (read=all, write=none) es su consumidor principal, así que
 		// un reader TIENE que poder llamarla. Si deja de poder, el tablero del cuerpo y el CRM se
 		// quedan sin el puntaje y nadie se entera hasta que alguien abra la pantalla.

@@ -51,7 +51,9 @@ fija timeout, no gatea**: esa disciplina es del llamador, idéntico a `Rerank`.
 **A/B y medición** — brazo `On` (tratamiento: el decididor actúa) / `Off` (control: no actúa), con la
 tabla `decididor_ab` (migración v59, readCompatible) y `skill_usage.ab_arm`. El **lift** se lee
 model-free (`CalcularLift` / `FormatLiftDecididor`) desde `musubi_skill_usage`. El numerador nace local
-y el denominador en el central: el lift cross-machine se materializa post-sync.
+y el denominador en el central: el lift cross-machine se materializa post-sync, cuando la bajada
+entrante trae el denominador a la base local (`MergeDecididorABDesdeCentral`, tool `musubi_sync_pull_ab`;
+spec `specs/ab-lift-bajada/`) y el `UPDATE`-only del numerador ya tiene filas sobre las que sumar.
 
 ## Dependencies
 

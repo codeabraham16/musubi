@@ -1,8 +1,11 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -26,17 +29,39 @@ import (
 // cualquier aserción sobre el ritmo y fallaría éstas. Ninguna duerme: el ritmo cuenta ticks, así que
 // un tick es una llamada a drainInboundOnce.
 
-// centralQueCuenta es centralConFilas contando los pedidos que llegan.
+// centralQueCuenta es centralConFilas contando los pedidos que llegan. La bajada del A/B del
+// decididor (musubi_sync_pull_ab) viaja PEGADA al drain de observaciones —bajo el mismo candado y el
+// mismo gate de ritmo—, pero es un canal lateral aparte (ver bajarDecididorAB): se responde vacía y
+// NO se cuenta, para que las aserciones del ritmo sigan midiendo sólo el costo del drain de obs que el
+// ritmo espacia, sin reescribir ninguno de sus números.
 func centralQueCuenta(t *testing.T, pedidos, filas *atomic.Int64) *httptest.Server {
 	t.Helper()
 	cuerpo := centralConFilas(filas)
 	t.Cleanup(cuerpo.Close)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		if esPullDelAB(body) {
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"pull-ab","result":{"content":[{"type":"text","text":` + strconv.Quote(`{"rows":[]}`) + `}]}}`))
+			return
+		}
 		pedidos.Add(1)
 		cuerpo.Config.Handler.ServeHTTP(w, r)
 	}))
 	t.Cleanup(ts.Close)
 	return ts
+}
+
+// esPullDelAB mira el cuerpo de un pedido al central y dice si es la bajada del A/B del decididor
+// (params.name == "musubi_sync_pull_ab"). Lo usan los stubs que CUENTAN pedidos del drain entrante
+// para no inflar sus cuentas con el canal lateral del A/B.
+func esPullDelAB(body []byte) bool {
+	var sobre struct {
+		Params struct {
+			Name string `json:"name"`
+		} `json:"params"`
+	}
+	return json.Unmarshal(body, &sobre) == nil && sobre.Params.Name == "musubi_sync_pull_ab"
 }
 
 // daemonConRitmo arma un daemon en team_mode sobre `eng` contra el central `url` con `cfg`, y le fija
@@ -495,8 +520,8 @@ func TestUnaPaginaQueNoEntraNoEspaciaLaBajada(t *testing.T) {
 //
 // Sabotaje: que el tick salteado se anote como una bajada.
 // arnes: archivo="internal/mcp/scheduler.go"
-// arnes: de="\t\treturn\n\t}\n\tvar cur int64\n"
-// arnes: a="\t\tsalioALaRed = true\n\t\treturn\n\t}\n\tvar cur int64\n"
+// arnes: de="if !s.ritmoBajada.tocaIr(s.hayActividadLocal()) {\n\t\treturn\n\t}"
+// arnes: a="if !s.ritmoBajada.tocaIr(s.hayActividadLocal()) {\n\t\tsalioALaRed = true\n\t\treturn\n\t}"
 func TestUnTickSalteadoNoEscribeMasQueElCandado(t *testing.T) {
 	var pedidos, filas atomic.Int64
 	central := centralQueCuenta(t, &pedidos, &filas)

@@ -32,6 +32,7 @@ func TestToolReadOnlyClassification(t *testing.T) {
 		"musubi_detect_changes":  true,
 		"musubi_sync_status":     true,
 		"musubi_sync_pull":       true,
+		"musubi_sync_pull_ab":    true,
 		"musubi_code_graph":      true,
 		"musubi_impact":          true,
 		"musubi_map":             true,

@@ -597,6 +597,31 @@ func pushIgnorado(result json.RawMessage) (string, bool) {
 	return cuerpo.Motivo, true
 }
 
+// decididorABPullPayload es el JSON que musubi_sync_pull_ab devuelve dentro de content[0].text: el
+// snapshot entero de la tabla decididor_ab del tenant (a lo sumo dos filas, on/off).
+type decididorABPullPayload struct {
+	Rows []memory.DecididorABRow `json:"rows"`
+}
+
+// PullDecididorAB baja el snapshot del A/B del decididor DESDE el central (sync ENTRANTE): un
+// tools/call de musubi_sync_pull_ab. Trae el DENOMINADOR (oportunidades/exigencias), que nace sólo en
+// el central, para que el merge local lo cruce con el numerador local (cargadas) y el lift se vuelva
+// medible. SIN cursor ni paginación: la tabla es diminuta, entra entera en una respuesta. Reusa
+// callCentral (no el camino gzip-medido de Pull) porque el payload es mínimo y no alimenta
+// sync_viajes. Best-effort: cualquier fallo —red, HTTP, RPC, un central viejo que no expone la tool—
+// devuelve error, y el scheduler entrante lo trata como transitorio sin cortar la bajada de obs.
+func (c *SyncClient) PullDecididorAB() ([]memory.DecididorABRow, error) {
+	txt, err := c.callCentral("pull-ab", "musubi_sync_pull_ab", map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	var pl decididorABPullPayload
+	if err := json.Unmarshal([]byte(txt), &pl); err != nil {
+		return nil, fmt.Errorf("%w: pull del A/B del decididor con payload inválido: %v", errPermanent, err)
+	}
+	return pl.Rows, nil
+}
+
 // syncPullArguments son los argumentos del musubi_sync_pull remoto (sync ENTRANTE C5.3b).
 type syncPullArguments struct {
 	AfterRowID int64 `json:"after_rowid"`
