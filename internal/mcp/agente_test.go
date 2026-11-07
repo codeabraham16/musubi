@@ -148,9 +148,15 @@ func TestLasInstruccionesNombranToolsVisiblesYEntranEnteras(t *testing.T) {
 // en las tools de lectura agrega `"annotations":{"readOnlyHint":true}` a las 3 lecturas del núcleo
 // (musubi_impact, musubi_memory_expand y musubi_recall), ~+110 chars (~27 tokens/sesión). Es el
 // precio de que musubi_recall —la tool más llamada— no pida aprobación en cada invocación en el
-// cliente que respeta la anotación (el cuerpo). El techo sigue siendo un presupuesto, no un
-// derivado: subirlo otra vez es otra decisión.
-const techoDelNucleo = 8192
+// cliente que respeta la anotación (el cuerpo).
+//
+// Subido de 8192 a 8704 el 2026-11-06 (R3 señales al recall): musubi_recall gana 3 params opcionales
+// —modified_files, phase, task— que despiertan el gate del decididor de skills. Espejan los tags de
+// skills.ResolveRequest (nombres del contrato de red, NO renombrables), así que su ESTRUCTURA sola
+// —aun con la descripción vacía— ya pesa ~8244 > 8192: el techo DEBE subir, acortar texto no alcanza.
+// Las descripciones ya van al mínimo útil (~269 chars los tres); +512 deja ~190 de holgura. El techo
+// sigue siendo un presupuesto, no un derivado: subirlo otra vez es otra decisión.
+const techoDelNucleo = 8704
 
 // EL NÚCLEO ES LO QUE LAS INSTRUCCIONES NOMBRAN, Y CABE EN SU TECHO.
 //

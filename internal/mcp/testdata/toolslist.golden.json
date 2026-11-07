@@ -51,6 +51,18 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "modified_files": {
+            "type": "array",
+            "description": "Opcional. Archivos que toca la tarea; si uno casa el glob de una skill, el decididor no gasta el motor.",
+            "items": {
+              "type": "string",
+              "description": "ruta de archivo"
+            }
+          },
+          "phase": {
+            "type": "string",
+            "description": "Opcional. Fase declarada (ej. 'phase:implementing'); si casa el alcance de una skill, no gasta el motor."
+          },
           "query": {
             "type": "string",
             "description": "Texto de la consulta"
@@ -58,6 +70,10 @@
           "rerank": {
             "type": "boolean",
             "description": "Somete el tope del ranking al juez de pertinencia (un LLM) SÓLO en esta consulta. Medido 2026-08-10 contra la memoria real: pone lo correcto primero (+114 % en el primer resultado) y CUESTA ~8,5 s. Usalo cuando una persona está esperando la respuesta; no en sondeos ni en bucles. Ausente = decide la config del servidor; false lo apaga aunque el servidor esté en turbo. Cuando el juez corre, la respuesta trae `reranked: true` y los items del tope vienen SIN `score`: el orden pasa a ser del juez, y re-ordenar por el puntaje model-free deshace su trabajo."
+          },
+          "task": {
+            "type": "string",
+            "description": "Opcional. Tarea declarada (ej. 'task:audit'). Igual que phase."
           },
           "token_budget": {
             "type": "number",
