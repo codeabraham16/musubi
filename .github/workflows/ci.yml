@@ -175,7 +175,7 @@ jobs:
 
   test-cross:
     # Portabilidad (adopción por terceros, Track 16 F4): valida que el código COMPILA y los
-    # tests pasan en Windows y macOS. El job `test` de ubuntu sigue siendo el canónico (race +
+    # tests pasan en Windows. El job `test` de ubuntu sigue siendo el canónico (race +
     # piso de cobertura + govulncheck); acá solo confirmamos que no hay nada POSIX-only. Sin
     # -race a propósito: evita depender de cgo/gcc en Windows (modernc/sqlite es Go puro, así
     # que build y test no necesitan un compilador C). Comandos `go` planos → corren igual en el
@@ -183,10 +183,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-13 (Intel), no macos-latest: el runner arm64 hosted se quedó sin
-        # capacidad y el job quedaba `cancelled` sin correr un test (bloqueó #792).
-        # macos-13 se va a retirar; volver a macos-latest cuando arm64 tenga cola.
-        os: [windows-latest, macos-13]
+        # macOS PAUSADO: los dos runners hosted se quedaron sin cola — macos-latest
+        # (arm64) bloqueó #792 y se movió a macos-13 (Intel), y para 2026-11 macos-13
+        # también quedaba `queued` sin arrancar (10/10 runs recientes). Un job que nunca
+        # corre no da señal y cuelga a los watchers; test-cross queda en windows-latest.
+        # Restaurar macOS —volver a `[windows-latest, macos-N]`— cuando un runner macOS
+        # hosted tenga cola de nuevo. La matrix se conserva para que el nombre del check
+        # requerido siga siendo exactamente `test-cross (windows-latest)`.
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
