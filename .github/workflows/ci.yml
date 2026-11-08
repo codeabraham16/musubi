@@ -183,10 +183,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-13 (Intel), no macos-latest: el runner arm64 hosted se quedó sin
-        # capacidad y el job quedaba `cancelled` sin correr un test (bloqueó #792).
-        # macos-13 se va a retirar; volver a macos-latest cuando arm64 tenga cola.
-        os: [windows-latest, macos-13]
+        # Sólo windows-latest: la pata macOS de los runners GRATIS quedó inservible en
+        # las DOS variantes — el arm64 (macos-latest) se `cancelled` sin correr un test
+        # (bloqueó #792) y el Intel (macos-13, en retiro) se quedaba `queued` horas sin
+        # conseguir runner (dejó #797/#802/#804 colgados en amarillo). No gateaba nada
+        # (main sin branch protection; macos-13 nunca fue check requerido), pero tapaba
+        # la señal real. Se deja como matriz de un elemento para reponer macOS en una
+        # línea (macos-14/15 arm64) cuando haya cola gratis estable. El cross canónico
+        # sigue siendo el job `test` de ubuntu (race + cobertura + govulncheck); el
+        # riesgo macOS-only es bajo porque el código es Go puro (modernc sqlite, sin cgo).
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
