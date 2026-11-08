@@ -121,6 +121,21 @@ type Pedido struct {
 	// cumple. Declarado acá igual para que el día que la bandera exista no haya que cambiar
 	// la interfaz.
 	Thinking int
+
+	// Esfuerzo es el nivel CUALITATIVO de razonamiento ("low" | "medium" | "high" | "xhigh"
+	// | "max") que el Lanzador pasa como `--effort` al CLI. Vacío = sin bandera (el CLI usa
+	// su default). Sale del MISMO `options.reasoning` del cliente que alimenta Thinking, pero
+	// por otra puerta, y esa es la razón de que sea un campo aparte:
+	//
+	//   - Thinking es un BUDGET en tokens y sólo lo entiende ClienteAPI (la Messages API);
+	//   - Esfuerzo es un NIVEL y sólo lo entiende el Lanzador (`claude -p --effort`), que NO
+	//     toma un budget por bandera. Son dos traducciones del mismo dato para dos motores.
+	//
+	// Y no comparten normalización: presupuestoDeThinking clampa xhigh/max→high porque la
+	// tabla de budgets de pi tiene cuatro niveles, pero `--effort` acepta xhigh y max nativos
+	// (medido 2026-11-07, `claude --help`), así que esfuerzoDesdeReasoning (entrada.go) los
+	// pasa DERECHO. Sólo lo usa el Lanzador.
+	Esfuerzo string
 }
 
 // modeloParaElTranscript devuelve el id que va escrito en los turnos del asistente. Ver el
