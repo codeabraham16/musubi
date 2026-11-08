@@ -514,12 +514,25 @@ func TestBinarioInexistente(t *testing.T) {
 // arnes: archivo="internal/motor/lanzador.go"
 // arnes: de="\t\targs = append(args, \"--system-prompt-file\", rutaSystemPrompt)\n"
 // arnes: a="\t\targs = append(args, \"--system-prompt\", p.SystemPrompt)\n"
+//
+// Sabotaje M52: el esfuerzo seteado no llega al argv (el selector del cuerpo queda muerto)
+// arnes: archivo="internal/motor/lanzador.go"
+// arnes: de="\t\targs = append(args, \"--effort\", p.Esfuerzo)\n"
+// arnes: a=""
+//
+// Sabotaje M53: la guarda del esfuerzo se cae y viaja --effort "" (nivel vacío que el CLI rechaza)
+// arnes: archivo="internal/motor/lanzador.go"
+// arnes: de="\tif p.Esfuerzo != \"\" {"
+// arnes: a="\tif true {"
 func TestElArgvLlevaLasBanderasQueHabilitanElProtocolo(t *testing.T) {
 	// SystemPrompt va en el Pedido Y la ruta por separado a propósito (ver sabotaje M51): si
 	// argumentosCLI volviera a leer p.SystemPrompt y lo pasara inline —el bug de Windows—,
 	// emitiría `--system-prompt sos un motor` y la aserción `--system-prompt-file` de abajo
 	// caería en rojo por la causa correcta.
-	args := argumentosCLI(Pedido{Modelo: "claude-opus-5", SystemPrompt: "sos un motor"}, `C:\tmp\s.jsonl`, `C:\tmp\sp.txt`, nil)
+	//
+	// Esfuerzo:"high" cablea la otra bandera de comportamiento del modelo: abajo se exige el
+	// par `--effort high` consecutivo, y el bloque `pelado` exige que un Pedido{} NO la lleve.
+	args := argumentosCLI(Pedido{Modelo: "claude-opus-5", SystemPrompt: "sos un motor", Esfuerzo: "high"}, `C:\tmp\s.jsonl`, `C:\tmp\sp.txt`, nil)
 	junto := strings.Join(args, " ")
 
 	for _, quiero := range []string{
@@ -529,6 +542,9 @@ func TestElArgvLlevaLasBanderasQueHabilitanElProtocolo(t *testing.T) {
 		"--input-format stream-json",
 		"--verbose", // obligatorio con stream-json: el binario lo rechaza sin él
 		"--model claude-opus-5",
+		// Consecutivos [--effort, high]: el substring del par cae en rojo si se appendea el
+		// nivel sin la bandera, o si el nivel se clampa o se pierde en el camino desde reasoning.
+		"--effort high",
 		`--system-prompt-file C:\tmp\sp.txt`,
 		// El prefijo de la historia entra por acá. Ver partirHistoria: sin esto el CLI
 		// desarma el transcript y el modelo responde al primer mensaje.
@@ -585,6 +601,13 @@ func TestElArgvLlevaLasBanderasQueHabilitanElProtocolo(t *testing.T) {
 	pelado := strings.Join(argumentosCLI(Pedido{}, "", "", nil), " ")
 	if strings.Contains(pelado, "--model") || strings.Contains(pelado, "--system-prompt") {
 		t.Errorf("un pedido sin modelo no debe pasar la bandera: %s", pelado)
+	}
+
+	// La contracara del `--effort high` de arriba: sin nivel NO va --effort. Vacío = sin
+	// bandera y el CLI usa su default; un `--effort ""` lo tomaría el binario como un nivel
+	// inválido y mataría el turno. Con la guarda caída (M53) este bloque cae en rojo.
+	if strings.Contains(pelado, "--effort") {
+		t.Errorf("un pedido sin esfuerzo no debe pasar --effort: %s", pelado)
 	}
 
 	// 🔴 ACÁ ESTABA EL AGUJERO FIJADO POR UN TEST, y este bloque es el arreglo. La versión

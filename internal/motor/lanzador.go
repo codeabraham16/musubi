@@ -513,6 +513,13 @@ func argumentosCLI(p Pedido, rutaSesion, rutaSystemPrompt string, esp *espejo) [
 	if p.Modelo != "" {
 		args = append(args, "--model", p.Modelo)
 	}
+	if p.Esfuerzo != "" {
+		// --effort escala el razonamiento del modelo (cualitativo: low…max). El nivel sale de
+		// options.reasoning del cliente, normalizado en esfuerzoDesdeReasoning (entrada.go).
+		// Vacío = sin bandera, y el CLI usa su default. Es la contracara de Thinking, que sólo
+		// vale para ClienteAPI: acá el budget lo fija el CLI y lo que se modula es el nivel.
+		args = append(args, "--effort", p.Esfuerzo)
+	}
 	if rutaSystemPrompt != "" {
 		// Reemplaza el system prompt del CLI (medido), que es lo que corresponde: el
 		// cliente remoto trae el suyo y el del binario describiría otra herramienta.

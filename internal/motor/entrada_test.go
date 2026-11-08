@@ -703,6 +703,67 @@ func TestSinThinkingBudgetsSeUsanLosDePiYNoCeros(t *testing.T) {
 	}
 }
 
+// ─────────────────────────────── el esfuerzo ───────────────────────────────
+
+// Sabotaje E30: el esfuerzo no se cablea en el Pedido (el selector del cuerpo queda muerto)
+// arnes: archivo="internal/motor/entrada.go"
+// arnes: de="\t\tEsfuerzo:       esfuerzoDesdeReasoning(p.Options.Reasoning),"
+// arnes: a=""
+//
+// Sabotaje E31: xhigh/max dejan de aceptarse y caen a "" (se clampa el esfuerzo como el budget)
+// arnes: archivo="internal/motor/entrada.go"
+// arnes: de="\tcase \"low\", \"medium\", \"high\", \"xhigh\", \"max\":"
+// arnes: a="\tcase \"low\", \"medium\", \"high\":"
+//
+// Sabotaje E32: minimal no se mapea a low (viajaría un --effort que el CLI rechaza)
+// arnes: archivo="internal/motor/entrada.go"
+// arnes: de="\tcase \"minimal\":\n\t\treturn \"low\""
+// arnes: a=""
+func TestElEsfuerzoSaleDelNivelYPasaDerechoAlCLI(t *testing.T) {
+	casos := []struct {
+		nombre  string
+		options string
+		quiero  string
+	}{
+		// Sin `reasoning` no va bandera: "" le dice al Lanzador que NO agregue --effort y el
+		// CLI usa su default. Prender un esfuerzo que el cliente no pidió le cambiaría la
+		// latencia y el gasto de razonamiento sin que lo haya pedido.
+		{"sin reasoning", `{}`, ""},
+
+		// El CLI acepta estos tal cual (medido 2026-11-07, `claude --help`). Cada uno llega
+		// DISTINTO a propósito: un test que esperara el mismo valor para todos no custodiaría
+		// el passthrough, sólo que la función devuelve algo.
+		{"low", `{"reasoning":"low"}`, "low"},
+		{"medium", `{"reasoning":"medium"}`, "medium"},
+		{"high", `{"reasoning":"high"}`, "high"},
+
+		// 🔴 EL INVARIANTE CLAVE, Y ES EL OPUESTO AL DEL BUDGET: presupuestoDeThinking clampa
+		// xhigh/max a high porque la tabla de pi tiene cuatro niveles, pero `--effort` acepta
+		// los cinco, así que acá PASAN DERECHO. Clamparlos le robaría al usuario los dos
+		// niveles de arriba justo cuando los pide. (El test hermano del budget los espera en
+		// high; éste los espera en sí mismos: la asimetría es el punto.)
+		{"xhigh pasa derecho", `{"reasoning":"xhigh"}`, "xhigh"},
+		{"max pasa derecho", `{"reasoning":"max"}`, "max"},
+
+		// pi tiene "minimal"; `--effort` no. Se mapea al piso del CLI en vez de viajar crudo y
+		// hacer que el CLI rechace el turno entero.
+		{"minimal cae en low", `{"reasoning":"minimal"}`, "low"},
+
+		// Un nivel que esta versión no conoce cae a "" (sin bandera). Es la caída segura: un
+		// --effort inventado NO lo ignora el CLI, lo rechaza.
+		{"nivel desconocido", `{"reasoning":"turbo"}`, ""},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			p := desdeJSON(t, `{"model":{"id":"m"},"context":{"messages":[
+				{"role":"user","content":"hola"}]},"options":`+c.options+`}`)
+			if p.Esfuerzo != c.quiero {
+				t.Errorf("Esfuerzo = %q, quiero %q", p.Esfuerzo, c.quiero)
+			}
+		})
+	}
+}
+
 // ─────────────────────────────── el viaje completo ───────────────────────────────
 
 func TestUnTranscriptDeDosTurnosConToolsSobreviveElViaje(t *testing.T) {

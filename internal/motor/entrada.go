@@ -151,6 +151,7 @@ func PedidoDesdeProxy(p PedidoProxy) (Pedido, error) {
 		MaxTokens:      tope,
 		Tools:          tools,
 		Thinking:       presupuestoDeThinking(p.Options),
+		Esfuerzo:       esfuerzoDesdeReasoning(p.Options.Reasoning),
 	}, nil
 }
 
@@ -186,6 +187,32 @@ func presupuestoDeThinking(o OpcionesProxy) int {
 	// versión no conoce. Apagar el thinking es la caída segura — pedirle a la API un budget
 	// inventado sí tiraría el turno entero.
 	return 0
+}
+
+// esfuerzoDesdeReasoning traduce el nivel de razonamiento del cliente al valor de `--effort`
+// que el CLI acepta. Es el gemelo de presupuestoDeThinking para el OTRO motor, y la diferencia
+// entre los dos es deliberada, no un olvido:
+//
+//   - presupuestoDeThinking resuelve un BUDGET en tokens para ClienteAPI y clampa xhigh/max a
+//     high, porque la tabla de pi sólo tiene cuatro niveles.
+//   - esto resuelve un NIVEL para el Lanzador, y `--effort` acepta cinco (low, medium, high,
+//     xhigh, max — medido el 2026-11-07 contra el binario, `claude --help`), así que xhigh y
+//     max pasan DERECHO. Unificar las dos normalizaciones volvería a clampar el esfuerzo y le
+//     recortaría al usuario los dos niveles de arriba justo cuando los pide.
+//
+// "minimal" existe en pi pero NO en `--effort`: se mapea a "low", el piso del CLI. Y un nivel
+// que esta versión no conoce cae a "" (sin bandera), que es la caída segura: un `--effort` con
+// un valor inventado NO lo ignora el CLI, lo rechaza y mata el turno entero.
+func esfuerzoDesdeReasoning(reasoning string) string {
+	nivel := strings.TrimSpace(strings.ToLower(reasoning))
+	switch nivel {
+	case "low", "medium", "high", "xhigh", "max":
+		return nivel
+	case "minimal":
+		return "low"
+	default:
+		return ""
+	}
 }
 
 // reproducirTranscript recorre los mensajes una sola vez y devuelve el prompt vigente, las
