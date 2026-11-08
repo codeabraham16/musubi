@@ -22,9 +22,10 @@ Cada requisito es verificable y atómico. Vocabulario RFC 2119.
 - **R5** — Una fila `decididor_ab` que no existía en la base local DEBE nacer con `cargadas = 0` (la
   máquina todavía no contó cargas para ese brazo), con las `oportunidades`/`exigencias` del central.
 - **R6** — Tras el merge, un `bumpCargadasDecididorTx` sobre el brazo de una fila bajada DEBE
-  incrementar `cargadas` (la fila ahora existe; antes el UPDATE-only no afectaba filas). En
-  consecuencia `CalcularLift` sobre la base local DEBE pasar de `ok=false` a `ok=true` cuando los dos
-  brazos tienen oportunidades.
+  incrementar `cargadas` (la fila ahora existe; antes el UPDATE-only no afectaba filas). El MERGE de
+  los dos brazos es lo que vuelve el lift MEDIBLE: `CalcularLift` sobre la base local pasa de
+  `ok=false` (sin denominador local) a `ok=true` apenas bajan las `oportunidades` de ambos brazos, aún
+  con `cargadas=0` y lift 0. El bump posterior es lo que vuelve ese lift NO TRIVIAL (numerador > 0).
 - **R7** — La bajada del contador NO DEBE encolar nada en el outbox ni agregar ninguna vía de SUBIDA:
   el flujo es sólo descendente (sin eco).
 - **R8** — La bajada del contador DEBE ser best-effort: su fallo (red, central viejo sin la tool,
@@ -32,6 +33,12 @@ Cada requisito es verificable y atómico. Vocabulario RFC 2119.
   (`sync_viajes`, cursor, ritmo).
 - **R9** — La bajada del contador DEBE correr sólo bajo el candado de la bajada entrante (un solo
   proceso por base), heredando el gate existente (sync configurado Y team mode).
+- **R10** — Al mergear, `first_at`/`last_at` DEBEN compararse CRONOLÓGICAMENTE y no como texto: las
+  marcas llegan en dos layouts —el central en RFC3339 (`…T…Z`) y las nacidas de `CURRENT_TIMESTAMP`
+  con espacio (`… …`)— cuyo orden lexicográfico NO coincide con el cronológico (el espacio `0x20`
+  ordena antes que la `T` `0x54` en la posición 10). El merge DEBE envolver AMBOS operandos del
+  `MIN`/`MAX` en `datetime()` para que `first_at` quede en la marca real más temprana y `last_at` en
+  la más tardía, cualquiera sea el layout de cada lado.
 
 ## Escenarios
 Formato Given/When/Then (un escenario por comportamiento observable).
@@ -54,18 +61,28 @@ Formato Given/When/Then (un escenario por comportamiento observable).
 - **When** se mergea el snapshot
 - **Then** la fila local queda con oportunidades=12 (del central) y cargadas=5 (preservada)
 
-### Escenario: tras bajar, el lift pasa de indefinido a medible (R6)
-- **Given** una base local a la que se bajó el snapshot con `on` (oportunidades=10) y `off`
-  (oportunidades=8), ambas cargadas=0, y `CalcularLift` devuelve `ok=false`
-- **When** `RecordSkillEvents` procesa una carga del proyecto `P` cuyo brazo del día es `on`
-- **Then** la fila `(P, on)` local queda con cargadas=1 y `CalcularLift` devuelve `ok=true` con un
-  lift real (tasa_on − tasa_off)
+### Escenario: tras bajar, el lift pasa de indefinido a medible, y la carga lo vuelve no trivial (R6)
+- **Given** una base local SIN filas `decididor_ab`, donde `CalcularLift` devuelve `ok=false` (no hay
+  denominador local)
+- **When** se baja el snapshot con `on` (oportunidades=10) y `off` (oportunidades=8) —tras lo cual
+  `CalcularLift` ya devuelve `ok=true` con lift 0— y luego `RecordSkillEvents` procesa una carga del
+  proyecto `P` cuyo brazo del día es `on`
+- **Then** la fila `(P, on)` local queda con cargadas=1 (el bump aterriza porque el merge creó la fila)
+  y `CalcularLift` devuelve un lift real distinto de cero (tasa_on − tasa_off)
 
 ### Escenario: un central viejo sin la tool no rompe la bajada (R8)
 - **Given** una máquina en team mode cuyo central no expone la tool del snapshot
 - **When** corre un ciclo de bajada entrante
 - **Then** el pull del contador falla, se logea, y la bajada de observaciones completa su ciclo
   normal (cursor y `sync_viajes` intactos)
+
+### Escenario: las marcas se comparan cronológicamente, no como texto (R10)
+- **Given** una fila local con `first_at` en formato espacio y TARDÍO (`2026-11-07 23:00:00`) y un
+  snapshot del central con esa fila en RFC3339 y TEMPRANO (`2026-11-07T08:00:00Z`) — y, simétrico, el
+  caso inverso (local RFC3339 temprano, central espacio tardío)
+- **When** se mergea el snapshot
+- **Then** `first_at` queda en la marca cronológicamente más temprana (las 08:00), no en la que gana
+  por orden de texto (las 23:00) — en las DOS orientaciones
 
 ## Fuera de alcance
 - Subir contadores al central (ninguna vía de outbox para `decididor_ab`).

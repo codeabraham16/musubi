@@ -420,22 +420,29 @@ func TestMergeDesbloqueaElLiftCruzandoElSync(t *testing.T) {
 	}
 }
 
-// I4 (hallazgo de la revisión adversarial) — LAS MARCAS SE COMPARAN CRONOLÓGICAMENTE, NO COMO TEXTO.
-// first_at/last_at llegan en DOS layouts: el central en RFC3339 ('…T…Z', porque allá la columna
-// DATETIME se escanea a un string de Go) y una punta vacía en CURRENT_TIMESTAMP ('… …', con espacio).
-// Como el espacio (0x20) ordena ANTES que la 'T' (0x54), un MIN/MAX de TEXTO elige mal el borde de la
-// ventana cuando una fila mezcla los dos; datetime() normaliza los dos lados antes de comparar.
+// I4 (hallazgo de la revisión adversarial, reforzado en la 2ª) — LAS MARCAS SE COMPARAN
+// CRONOLÓGICAMENTE, NO COMO TEXTO, EN LAS DOS ORIENTACIONES. first_at/last_at llegan en DOS layouts: el
+// central en RFC3339 ('…T…Z', porque allá la columna DATETIME se escanea a un string de Go) y una punta
+// en CURRENT_TIMESTAMP ('… …', con espacio). Como el espacio (0x20) ordena ANTES que la 'T' (0x54), un
+// MIN/MAX de TEXTO elige mal el borde de la ventana cuando una fila mezcla los dos; datetime() normaliza
+// LOS DOS operandos antes de comparar.
 //
-// Fixture: el merge #1 siembra la fila local con marcas en formato ESPACIO y TARDÍAS (23:00 / 23:30);
-// el merge #2 trae marcas RFC3339 y TEMPRANAS (08:00 / 09:00). El MIN cronológico tiene que quedarse
-// con las 08:00 (no con las 23:00, que ganan por texto) y el MAX con las 23:30 (no con las 09:00). Se
-// asserta por la HORA, que sobrevive a cualquier normalización de la lectura: importa QUÉ marca ganó.
-// Sabotaje: sacarle el datetime() al MIN del first_at ⇒ vuelve el orden de texto ⇒ first_at se queda
-// con la marca ESPACIO tardía (23:00) en vez de la temprana (08:00) ⇒ rojo. (El last_at, simétrico, se
-// verificó a mano sacándole su datetime(): queda con las 09:00 en vez de las 23:30.)
+// Dos fixtures, porque cada orientación fija un operando distinto del MIN/MAX:
+//   - directa: local en ESPACIO tardío (23:00/23:30), entrante RFC3339 temprano (08:00/09:00). Fija el
+//     datetime() del operando ENTRANTE (excluded.*).
+//   - inversa: local en RFC3339 temprano (08:00/09:00), entrante ESPACIO tardío (23:00/23:30). Fija el
+//     datetime() del operando LOCAL (decididor_ab.*). Sin ésta, un fix one-sided que normalice sólo el
+//     lado entrante quedaba VERDE (lo midió la 2ª revisión).
+//
+// En las dos, first_at tiene que quedar en las 08:00 y last_at en las 23:30. Se asserta por la HORA, que
+// sobrevive a la normalización de la lectura: importa QUÉ marca ganó.
+//
+// Sabotaje: sacarle el datetime() al operando LOCAL del MIN de first_at (el one-sided que la orientación
+// directa NO cazaba) ⇒ la INVERSA vuelve al orden de texto ⇒ su first_at se queda con la marca ESPACIO
+// tardía (23:00) en vez de la temprana (08:00) ⇒ rojo.
 // arnes: archivo="internal/memory/decididor_ab.go"
 // arnes: de="first_at = MIN(datetime(decididor_ab.first_at), datetime(excluded.first_at)),"
-// arnes: a="first_at = MIN(decididor_ab.first_at, excluded.first_at),"
+// arnes: a="first_at = MIN(decididor_ab.first_at, datetime(excluded.first_at)),"
 func TestMergeComparaLasMarcasCronologicamenteNoComoTexto(t *testing.T) {
 	e := newTestEngine(t)
 	ctx := context.Background()
@@ -463,6 +470,30 @@ func TestMergeComparaLasMarcasCronologicamenteNoComoTexto(t *testing.T) {
 	}
 	if !strings.Contains(fila.LastAt, "23:30:00") {
 		t.Fatalf("last_at tiene que ser la marca cronológicamente MÁS TARDÍA (23:30:00), no la que gana por texto; obtuve %q", fila.LastAt)
+	}
+
+	// ORIENTACIÓN INVERSA (hallazgo de la 2ª revisión). El caso de arriba deja el formato ESPACIO del
+	// lado LOCAL y el RFC3339 del ENTRANTE, así que sólo fija el datetime() del operando `excluded.*`.
+	// Acá se da vuelta: la fila local nace en RFC3339 TEMPRANO y el entrante trae ESPACIO TARDÍO, de
+	// modo que el borde correcto sale del operando `decididor_ab.*`. Un fix que normalice sólo el lado
+	// entrante pasaría el caso directo y dejaría ÉSTE en rojo — por eso los dos.
+	pidInv := "proj-merge-crono-inv"
+	if err := e.MergeDecididorABDesdeCentral([]DecididorABRow{
+		{ProjectID: pidInv, Arm: BrazoOn, Oportunidades: 5, Exigencias: 2, FirstAt: "2026-11-07T08:00:00Z", LastAt: "2026-11-07T09:00:00Z"},
+	}); err != nil {
+		t.Fatalf("merge #1 inverso (siembra RFC3339 temprano): %v", err)
+	}
+	if err := e.MergeDecididorABDesdeCentral([]DecididorABRow{
+		{ProjectID: pidInv, Arm: BrazoOn, Oportunidades: 9, Exigencias: 3, FirstAt: "2026-11-07 23:00:00", LastAt: "2026-11-07 23:30:00"},
+	}); err != nil {
+		t.Fatalf("merge #2 inverso (mezcla de formatos): %v", err)
+	}
+	filaInv := filaABDe(t, e, ctx, pidInv, BrazoOn)
+	if !strings.Contains(filaInv.FirstAt, "08:00:00") {
+		t.Fatalf("inverso: first_at tiene que quedar en la marca MÁS TEMPRANA (08:00:00, el lado LOCAL), no la que gana por texto; obtuve %q", filaInv.FirstAt)
+	}
+	if !strings.Contains(filaInv.LastAt, "23:30:00") {
+		t.Fatalf("inverso: last_at tiene que quedar en la marca MÁS TARDÍA (23:30:00, el lado ENTRANTE), no la que gana por texto; obtuve %q", filaInv.LastAt)
 	}
 }
 

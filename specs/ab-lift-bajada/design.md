@@ -57,13 +57,16 @@ ante red/HTTP/RPC (best-effort: el scheduler lo trata como reintentable).
 Merge (SQL, autoridad por columna):
 ```sql
 INSERT INTO decididor_ab (project_id, arm, oportunidades, exigencias, cargadas, first_at, last_at)
-VALUES (?, ?, ?, ?, 0, ?, ?)
+VALUES (?, ?, ?, ?, 0, COALESCE(NULLIF(?, ''), CURRENT_TIMESTAMP), COALESCE(NULLIF(?, ''), CURRENT_TIMESTAMP))
 ON CONFLICT(project_id, arm) DO UPDATE SET
   oportunidades = excluded.oportunidades,   -- REPLACE (idempotente), central = dueño
   exigencias    = excluded.exigencias,      -- REPLACE, central = dueño
   -- cargadas NO se nombra: la local es dueña del numerador (R4)
-  first_at = MIN(decididor_ab.first_at, excluded.first_at),
-  last_at  = MAX(decididor_ab.last_at,  excluded.last_at)
+  -- datetime() en AMBOS operandos (R10): las marcas llegan en dos layouts —RFC3339 del central,
+  -- espacio de CURRENT_TIMESTAMP— y su orden de TEXTO no es el cronológico; normalizarlas antes de
+  -- comparar deja first_at en la más temprana real y last_at en la más tardía.
+  first_at = MIN(datetime(decididor_ab.first_at), datetime(excluded.first_at)),
+  last_at  = MAX(datetime(decididor_ab.last_at),  datetime(excluded.last_at))
 ```
 `arm` se valida (`BrazoOn`/`BrazoOff`) por defensa, igual que `RegistrarOportunidadDecididor`.
 
@@ -82,12 +85,36 @@ ON CONFLICT(project_id, arm) DO UPDATE SET
     `oportunidades + excluded.oportunidades` → segundo merge duplica → rojo.
   - I3/R4: fila local con cargadas=5; merge con cargadas=0 del central; cargadas sigue 5. Sabotaje:
     agregar `cargadas = excluded.cargadas` al `DO UPDATE` → se pisa a 0 → rojo. (El invariante clave.)
-- **Integración (`internal/memory`)** I4/R6: merge siembra la fila del brazo que `BrazoAB(P, now)`
-  elige (el test llama a `BrazoAB` para decidir qué sembrar), luego `RecordSkillEvents` con una carga
-  de `P` → cargadas pasa a 1 y `CalcularLift` pasa de ok=false a ok=true. Sabotaje: saltear el merge →
-  sin fila, el UPDATE-only no afecta nada → cargadas=0, ok=false → rojo.
+- **Integración (`internal/memory`)** I4/R6: el merge siembra los DOS brazos (`on`/`off`) con su
+  denominador; sin filas `CalcularLift` da ok=false, y tras el merge ya da ok=true (lift 0:
+  denominadores presentes). Luego un `RecordSkillEvents` con una carga de `P` aterriza sobre la fila
+  que bajó el merge → cargadas pasa a 1 (bajar ambos brazos cubre cualquier brazo del día). Sabotaje:
+  volver el merge un no-op → sin fila, el UPDATE-only no afecta nada → el lift nunca se vuelve medible → rojo.
+- **Cronología (`internal/memory`)** I-crono/R10: dos merges con marcas en layouts mezclados (espacio
+  de `CURRENT_TIMESTAMP` vs RFC3339 del central), en LAS DOS orientaciones, dejan `first_at`/`last_at`
+  en el borde cronológico real y no en el que gana por texto. Sabotaje: sacar `datetime()` de un
+  operando del MIN/MAX → vuelve el orden de texto → el borde queda en la marca equivocada → rojo.
 - **Golden:** `go test ./internal/mcp -run TestToolsListGolden -update` → sólo
   `toolslist-completo.golden.json` cambia (la tool nueva); el golden del núcleo NO cambia (la tool no
   es del núcleo) y `techoDelNucleo` NO se toca.
-- **R7/R8/R9** se verifican por construcción + revisión adversarial en verify: no hay vía de subida
-  (grep del outbox), el helper sólo logea su error, y corre dentro del candado de `drainInboundOnce`.
+- **R7/R8/R9** tienen sabotaje dedicado en verify (no sólo «por construcción»): R7 — el merge con el
+  outbox armado no encola nada (sabotaje: encolar en el merge → pendiente=1 → rojo); R8 — un pull del
+  A/B que falla no corta la bajada de obs (sabotaje: paniquear) NI toca su contabilidad —`sync_viajes`,
+  cursor, ritmo— (sabotaje: anotar un viaje fantasma en la rama de error → `sync_viajes` se mueve →
+  rojo); R9 — el cable sale bajo el candado en un tick que va a la red (sabotaje: borrar la llamada →
+  0 pulls → rojo). **R2 «sin cursor»** se fija con el request del cliente (sabotaje: mandar
+  `after_rowid`/`limit` → argumentos no vacíos → rojo).
+- **Endurecer (próximo plan):** un assert que CITE R9 para la exclusividad del candado y para la
+  colocación tras el gate de ritmo (D4); hoy ambas están guardadas por pruebas preexistentes que no
+  nombran R9, así que una regresión que las mueva podría quedar verde.
+- **Serialización merge‖bump (evaluada, sin defecto; test explícito diferido):** el merge
+  (`MergeDecididorABDesdeCentral`, RMW que REEMPLAZA el denominador y CONSERVA `cargadas`) y
+  `bumpCargadasDecididorTx` (UPDATE-only sobre `cargadas`) NO se interleavean en un lost-update, por
+  dos razones independientes: (1) ambos abren una transacción IMMEDIATE sobre el mismo `e.db` (el DSN
+  lleva `_txlock=immediate`), y en WAL hay un solo escritor, así que el write-lock los serializa —el
+  segundo espera el `busy_timeout`, no pisa—; el candado `ReclamarBajada` serializa drain-contra-drain,
+  pero la seguridad merge-contra-bump la da este write-lock, que es un mecanismo distinto y también
+  exclusivo. (2) Sus write-sets son columnas DISJUNTAS (merge nunca nombra `cargadas`; bump sólo esa),
+  y un UPDATE preserva las columnas que no nombra sin leerlas a memoria. Ya lo cubren de refilón
+  `TestNewDbEngineEnablesWAL`, `claim_concurrency_test` y `TestMergePreservaCargadasLocal` (R4); un
+  test de concurrencia que fuerce las dos transacciones a la vez es hardening, no un hueco de este cambio.
