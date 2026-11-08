@@ -133,6 +133,32 @@ func (s *McpServer) toolSyncPull(ctx context.Context, raw json.RawMessage) (inte
 	return jsonResult(map[string]interface{}{"items": items, "next_cursor": next, "alcance": s.alcanceDelPull(ctx)})
 }
 
+// toolSyncPullAB sirve el snapshot del A/B del decididor (tabla decididor_ab) ACOTADO al proyecto de
+// la CREDENCIAL (scopedCtx, el mismo aislamiento multi-tenant que toolSyncPull y DecididorAB), para
+// que un cliente en team mode lo baje y lo mergee localmente (MergeDecididorABDesdeCentral). Es la
+// bajada del DENOMINADOR del A/B: oportunidades/exigencias nacen en el central y sin este canal nunca
+// llegaban a la base donde se cuenta el numerador (cargadas), así que el lift era inmedible.
+//
+// Read-only. SIN cursor ni paginación: la tabla tiene a lo sumo dos filas por proyecto (on/off), así
+// que el snapshot entero entra en una respuesta. No toma argumentos. Devuelve {rows:[…]}.
+func (s *McpServer) toolSyncPullAB(ctx context.Context, _ json.RawMessage) (interface{}, *RpcError) {
+	// Interfaz y no *memory.DbEngine, igual que toolSkillUsage: un backend que no sabe del A/B del
+	// decididor sirve un snapshot vacío en vez de tumbar la tool (go-hygiene #3). El cliente que lo
+	// baje mergea cero filas, que es exactamente lo correcto cuando el central no lleva el A/B.
+	lector, ok := s.engine.(decididorABReader)
+	if !ok {
+		return jsonResult(map[string]interface{}{"rows": []memory.DecididorABRow{}})
+	}
+	rows, err := lector.DecididorAB(s.scopedCtx(ctx))
+	if err != nil {
+		return nil, rpcErrorf(codeInternalError, "error al listar el A/B del decididor para pull: %v", err)
+	}
+	if rows == nil {
+		rows = []memory.DecididorABRow{}
+	}
+	return jsonResult(map[string]interface{}{"rows": rows})
+}
+
 // clampLimit normaliza el límite recibido a un rango razonable.
 func clampLimit(limit int) int {
 	if limit <= 0 {

@@ -184,9 +184,12 @@ func TestDecididorABAcotaAlProyecto(t *testing.T) {
 // R10/E9 EN LA PRESENTACIÓN — EL LIFT INDEFINIDO SE DICE «INDEFINIDO», NUNCA 0. Es el mismo invariante
 // que CalcularLift custodia en el cálculo, pero en la capa que una persona lee en musubi_skill_usage:
 // con un brazo sin ocasiones, imprimir «0» afirmaría «no hubo efecto» cuando la verdad es «todavía no
-// se puede medir». Fixture SEMBRADO (no lee el corpus vivo). Sabotaje: en la rama !ok de
-// FormatLiftDecididor imprimir el número `l.Lift` (que vale 0) en vez de la palabra INDEFINIDO ⇒
-// aparece «+0.0» y desaparece «INDEFINIDO» ⇒ rojo.
+// se puede medir». Fixture SEMBRADO (no lee el corpus vivo).
+// Sabotaje: en la rama !ok de FormatLiftDecididor imprimir el número `l.Lift` (que vale 0) en vez de
+// la palabra INDEFINIDO ⇒ aparece «+0.0» y desaparece «INDEFINIDO» ⇒ rojo.
+// arnes: archivo="internal/memory/decididor_ab.go"
+// arnes: de="b.WriteString(\"  lift = INDEFINIDO: un brazo todavía no acumuló ocasiones; no es 0, es que aún no se puede medir.\\n\")"
+// arnes: a="fmt.Fprintf(&b, \"  lift = %+.1f\\n\", l.Lift*100)"
 func TestFormatLiftIndefinidoDiceIndefinidoNoCero(t *testing.T) {
 	// Un solo brazo con ocasiones ⇒ CalcularLift devuelve ok=false (el otro brazo no tiene denominador).
 	soloOn := []DecididorABRow{{Arm: BrazoOn, Oportunidades: 5, Cargadas: 3}}
@@ -203,8 +206,11 @@ func TestFormatLiftIndefinidoDiceIndefinidoNoCero(t *testing.T) {
 	}
 }
 
-// Con ocasiones en los DOS brazos el lift es medible y se imprime el número con signo. Sabotaje:
-// forzar la rama !ok (p. ej. no imprimir nunca el número) ⇒ falta «+50.0» ⇒ rojo.
+// Con ocasiones en los DOS brazos el lift es medible y se imprime el número con signo.
+// Sabotaje: forzar la rama !ok (p. ej. no imprimir nunca el número) ⇒ falta «+50.0» ⇒ rojo.
+// arnes: archivo="internal/memory/decididor_ab.go"
+// arnes: de="\tif ok {"
+// arnes: a="\tif false {"
 func TestFormatLiftMedibleMuestraElNumero(t *testing.T) {
 	rows := []DecididorABRow{
 		{Arm: BrazoOn, Oportunidades: 4, Cargadas: 3},  // 75%
@@ -229,5 +235,298 @@ func TestFormatLiftSinFilasLoDice(t *testing.T) {
 	}
 	if strings.Contains(txt, "INDEFINIDO") || strings.Contains(txt, "lift =") {
 		t.Fatalf("sin filas no se habla de lift: no hubo experimento:\n%s", txt)
+	}
+}
+
+// ─── MergeDecididorABDesdeCentral: el cable que cierra el límite deferido (spec ab-lift-bajada) ───
+
+// I1 (R3) — EL MERGE PUEBLA LA BASE LOCAL CON EL DENOMINADOR DEL CENTRAL. oportunidades/exigencias
+// nacen sólo en el central (RegistrarOportunidadDecididor corre con motor real); sin este canal nunca
+// llegaban a la base local y el lift era inmedible. Fixture SEMBRADO: el snapshot se construye acá.
+// Sabotaje: bindear 0 en vez del oportunidades del central (se conserva el conteo de placeholders,
+// así el rojo es por el VALOR observado y no por un mismatch de args) ⇒ oport=0 ⇒ rojo.
+// arnes: archivo="internal/memory/decididor_ab.go"
+// arnes: de="r.ProjectID, r.Arm, r.Oportunidades, r.Exigencias, r.FirstAt, r.LastAt); err != nil {"
+// arnes: a="r.ProjectID, r.Arm, 0, r.Exigencias, r.FirstAt, r.LastAt); err != nil {"
+func TestMergePueblaElDenominadorLocal(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+	pid := "proj-merge-puebla"
+
+	if err := e.MergeDecididorABDesdeCentral([]DecididorABRow{
+		{ProjectID: pid, Arm: BrazoOn, Oportunidades: 5, Exigencias: 2},
+	}); err != nil {
+		t.Fatalf("MergeDecididorABDesdeCentral: %v", err)
+	}
+
+	fila := filaABDe(t, e, ctx, pid, BrazoOn)
+	if fila.Oportunidades != 5 || fila.Exigencias != 2 {
+		t.Fatalf("el merge tiene que traer el denominador del central; esperaba oport=5 exig=2, obtuve %+v", fila)
+	}
+}
+
+// D3 — UNA FILA NUEVA NACE CON cargadas=0, NO HEREDA EL cargadas DEL CENTRAL. Las cargas del central
+// son de OTRA máquina; heredarlas contaminaría el numerador local y fabricaría un lift falso. El
+// snapshot trae cargadas=777 a propósito: tiene que ser IGNORADO.
+// Sabotaje: insertar cargadas con un literal ≠0 ⇒ la fila nueva nace con ese número ⇒ rojo.
+// arnes: archivo="internal/memory/decididor_ab.go"
+// arnes: de="?, ?, ?, ?, 0, COALESCE"
+// arnes: a="?, ?, ?, ?, 999, COALESCE"
+func TestMergeNoHeredaCargadasDelCentral(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+	pid := "proj-merge-nohereda"
+
+	if err := e.MergeDecididorABDesdeCentral([]DecididorABRow{
+		{ProjectID: pid, Arm: BrazoOn, Oportunidades: 5, Exigencias: 2, Cargadas: 777},
+	}); err != nil {
+		t.Fatalf("MergeDecididorABDesdeCentral: %v", err)
+	}
+
+	if fila := filaABDe(t, e, ctx, pid, BrazoOn); fila.Cargadas != 0 {
+		t.Fatalf("una fila nueva nace con cargadas=0 y NO hereda el 777 del central; obtuve cargadas=%d", fila.Cargadas)
+	}
+}
+
+// I2 (R3) — EL MERGE ES IDEMPOTENTE: bajar el MISMO snapshot dos veces deja los MISMOS números.
+// oportunidades/exigencias se REEMPLAZAN con el valor del central, no se suman; si se sumaran, cada
+// bajada duplicaría el denominador y fabricaría un lift falso.
+// Sabotaje: que el DO UPDATE SUME en vez de reemplazar oportunidades ⇒ la 2ª bajada da oport=10 ⇒ rojo.
+// arnes: archivo="internal/memory/decididor_ab.go"
+// arnes: de="oportunidades = excluded.oportunidades,"
+// arnes: a="oportunidades = decididor_ab.oportunidades + excluded.oportunidades,"
+func TestMergeEsIdempotente(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+	pid := "proj-merge-idem"
+	snap := []DecididorABRow{{ProjectID: pid, Arm: BrazoOn, Oportunidades: 5, Exigencias: 2}}
+
+	for i := 0; i < 2; i++ {
+		if err := e.MergeDecididorABDesdeCentral(snap); err != nil {
+			t.Fatalf("merge #%d: %v", i+1, err)
+		}
+	}
+
+	if fila := filaABDe(t, e, ctx, pid, BrazoOn); fila.Oportunidades != 5 || fila.Exigencias != 2 {
+		t.Fatalf("bajar el mismo snapshot dos veces no debe sumar; esperaba oport=5 exig=2, obtuve %+v", fila)
+	}
+}
+
+// I3 (R4) — EL MERGE PRESERVA EL cargadas LOCAL (el numerador es del dueño LOCAL) mientras REEMPLAZA
+// el denominador con el del central. Es la autoridad por columna: el DO UPDATE no nombra cargadas, así
+// que una bajada no pisa lo que esta máquina contó, aunque el central mande otro valor.
+// Sabotaje: agregar `cargadas = excluded.cargadas` al DO UPDATE ⇒ la bajada pisa el cargadas local
+// (lo lleva a 0, el literal del INSERT) ⇒ rojo.
+// arnes: archivo="internal/memory/decididor_ab.go"
+// arnes: de="\t\t\t\texigencias    = excluded.exigencias,\n"
+// arnes: a="\t\t\t\texigencias    = excluded.exigencias,\n\t\t\t\tcargadas = excluded.cargadas,\n"
+func TestMergePreservaCargadasLocal(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+	pid := "proj-merge-preserva"
+	arm := BrazoAB(pid, time.Now())
+
+	// Estado local previo: una oportunidad (la fila existe) y una carga contada acá ⇒ cargadas=1.
+	if err := e.RegistrarOportunidadDecididor(ctx, pid, arm, true); err != nil {
+		t.Fatalf("RegistrarOportunidadDecididor: %v", err)
+	}
+	contarSkill(t, e, ctx, SkillEvent{Skill: "go-hygiene", ProjectID: pid, Kind: UsoCargada})
+	if fila := filaABDe(t, e, ctx, pid, arm); fila.Cargadas != 1 {
+		t.Fatalf("precondición: esperaba cargadas=1 local, obtuve %+v", fila)
+	}
+
+	// El central manda otro oportunidades/exigencias para ESE mismo (pid, brazo), y un cargadas ajeno.
+	if err := e.MergeDecididorABDesdeCentral([]DecididorABRow{
+		{ProjectID: pid, Arm: arm, Oportunidades: 50, Exigencias: 20, Cargadas: 99},
+	}); err != nil {
+		t.Fatalf("MergeDecididorABDesdeCentral: %v", err)
+	}
+
+	fila := filaABDe(t, e, ctx, pid, arm)
+	if fila.Cargadas != 1 {
+		t.Fatalf("el merge NO debe pisar el cargadas local; esperaba cargadas=1, obtuve %d", fila.Cargadas)
+	}
+	if fila.Oportunidades != 50 || fila.Exigencias != 20 {
+		t.Fatalf("el denominador SÍ se reemplaza con el del central; esperaba oport=50 exig=20, obtuve %+v", fila)
+	}
+}
+
+// Un brazo que no es on/off aborta el merge ENTERO (una sola transacción). El central sólo guarda
+// 'on'/'off' (CHECK de v59), así que recibir otra cosa es una anomalía, no un borde que valga tragarse.
+func TestMergeRechazaBrazoInvalido(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+	pid := "proj-merge-malbrazo"
+
+	err := e.MergeDecididorABDesdeCentral([]DecididorABRow{
+		{ProjectID: pid, Arm: BrazoOn, Oportunidades: 3},
+		{ProjectID: pid, Arm: "medio", Oportunidades: 9}, // brazo inválido: aborta el merge entero
+	})
+	if err == nil {
+		t.Fatal("un brazo distinto de on/off debe ser error")
+	}
+	// Atómico: la fila válida del mismo lote NO quedó a medias.
+	if filas := len(filasABDe(t, e, ctx, pid)); filas != 0 {
+		t.Fatalf("un brazo inválido aborta la transacción entera; no debe quedar ninguna fila, hay %d", filas)
+	}
+}
+
+// T8 (R6) — EL FLUJO CRUZANDO EL SYNC: el merge DESBLOQUEA el lift. Es el end-to-end del límite
+// deferido. Antes del merge la base local no tiene filas (oportunidades nace en el central y el bump
+// es UPDATE-only): el lift es INMEDIBLE (ok=false). El merge baja el denominador de los DOS brazos y
+// el lift se vuelve MEDIBLE (ok=true). Y una carga local AHORA SÍ aterriza sobre la fila que bajó el
+// merge —antes la carga se perdía porque la fila no existía—.
+// Sabotaje: volver el merge un no-op (early return) ⇒ el lift NUNCA se vuelve medible ⇒ rojo.
+// arnes: archivo="internal/memory/decididor_ab.go"
+// arnes: de="\tif len(rows) == 0 {\n\t\treturn nil\n\t}"
+// arnes: a="\tif true {\n\t\treturn nil\n\t}"
+func TestMergeDesbloqueaElLiftCruzandoElSync(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+	pid := "proj-e2e-lift"
+
+	// 1) Sin filas locales no hay denominador: el lift es INDEFINIDO. Es el límite que este PR cierra.
+	if _, ok := CalcularLift(filasABDe(t, e, ctx, pid)); ok {
+		t.Fatal("sin filas locales el lift tiene que ser indefinido (el límite deferido)")
+	}
+
+	// 2) El sync entrante baja el denominador de los DOS brazos (cargadas=777 a propósito: se ignora).
+	if err := e.MergeDecididorABDesdeCentral([]DecididorABRow{
+		{ProjectID: pid, Arm: BrazoOn, Oportunidades: 10, Exigencias: 4, Cargadas: 777},
+		{ProjectID: pid, Arm: BrazoOff, Oportunidades: 8, Exigencias: 3, Cargadas: 777},
+	}); err != nil {
+		t.Fatalf("MergeDecididorABDesdeCentral: %v", err)
+	}
+
+	// 3) Con los dos denominadores presentes el lift YA es medible (ok=true), aunque valga 0: el flujo
+	//    cruzó el sync. cargadas nace en 0 pese al 777 del central.
+	l, ok := CalcularLift(filasABDe(t, e, ctx, pid))
+	if !ok {
+		t.Fatal("tras bajar los dos brazos el lift tiene que ser medible")
+	}
+	if l.CargadasOn != 0 || l.CargadasOff != 0 {
+		t.Fatalf("cargadas del central no se hereda; esperaba 0/0, obtuve on=%d off=%d", l.CargadasOn, l.CargadasOff)
+	}
+
+	// 4) Una carga local aterriza sobre la fila bajada por el merge (el bump UPDATE-only ya la encuentra).
+	//    Bajamos los dos brazos, así que cae sea cual sea el brazo del día.
+	contarSkill(t, e, ctx, SkillEvent{Skill: "go-hygiene", ProjectID: pid, Kind: UsoCargada})
+	l2, ok := CalcularLift(filasABDe(t, e, ctx, pid))
+	if !ok {
+		t.Fatal("el lift sigue medible tras la carga")
+	}
+	if l2.CargadasOn+l2.CargadasOff != 1 {
+		t.Fatalf("la carga tenía que aterrizar sobre una fila bajada del central; cargadas totales on=%d off=%d", l2.CargadasOn, l2.CargadasOff)
+	}
+}
+
+// I4 (hallazgo de la revisión adversarial, reforzado en la 2ª) — LAS MARCAS SE COMPARAN
+// CRONOLÓGICAMENTE, NO COMO TEXTO, EN LAS DOS ORIENTACIONES. first_at/last_at llegan en DOS layouts: el
+// central en RFC3339 ('…T…Z', porque allá la columna DATETIME se escanea a un string de Go) y una punta
+// en CURRENT_TIMESTAMP ('… …', con espacio). Como el espacio (0x20) ordena ANTES que la 'T' (0x54), un
+// MIN/MAX de TEXTO elige mal el borde de la ventana cuando una fila mezcla los dos; datetime() normaliza
+// LOS DOS operandos antes de comparar.
+//
+// Dos fixtures, porque cada orientación fija un operando distinto del MIN/MAX:
+//   - directa: local en ESPACIO tardío (23:00/23:30), entrante RFC3339 temprano (08:00/09:00). Fija el
+//     datetime() del operando ENTRANTE (excluded.*).
+//   - inversa: local en RFC3339 temprano (08:00/09:00), entrante ESPACIO tardío (23:00/23:30). Fija el
+//     datetime() del operando LOCAL (decididor_ab.*). Sin ésta, un fix one-sided que normalice sólo el
+//     lado entrante quedaba VERDE (lo midió la 2ª revisión).
+//
+// En las dos, first_at tiene que quedar en las 08:00 y last_at en las 23:30. Se asserta por la HORA, que
+// sobrevive a la normalización de la lectura: importa QUÉ marca ganó.
+//
+// Sabotaje: sacarle el datetime() al operando LOCAL del MIN de first_at (el one-sided que la orientación
+// directa NO cazaba) ⇒ la INVERSA vuelve al orden de texto ⇒ su first_at se queda con la marca ESPACIO
+// tardía (23:00) en vez de la temprana (08:00) ⇒ rojo.
+// arnes: archivo="internal/memory/decididor_ab.go"
+// arnes: de="first_at = MIN(datetime(decididor_ab.first_at), datetime(excluded.first_at)),"
+// arnes: a="first_at = MIN(decididor_ab.first_at, datetime(excluded.first_at)),"
+func TestMergeComparaLasMarcasCronologicamenteNoComoTexto(t *testing.T) {
+	e := newTestEngine(t)
+	ctx := context.Background()
+	pid := "proj-merge-crono"
+
+	// Merge #1: siembra la fila local con marcas en formato ESPACIO (como las de CURRENT_TIMESTAMP) y
+	// TARDÍAS en el día. El VALUES no normaliza, así que quedan guardadas tal cual (texto con espacio).
+	if err := e.MergeDecididorABDesdeCentral([]DecididorABRow{
+		{ProjectID: pid, Arm: BrazoOn, Oportunidades: 5, Exigencias: 2, FirstAt: "2026-11-07 23:00:00", LastAt: "2026-11-07 23:30:00"},
+	}); err != nil {
+		t.Fatalf("merge #1 (siembra formato espacio): %v", err)
+	}
+
+	// Merge #2: el central manda marcas RFC3339 y TEMPRANAS. Al mezclarse con las de espacio del merge
+	// #1, un MIN/MAX de texto elegiría mal; datetime() tiene que rescatar el orden cronológico.
+	if err := e.MergeDecididorABDesdeCentral([]DecididorABRow{
+		{ProjectID: pid, Arm: BrazoOn, Oportunidades: 9, Exigencias: 3, FirstAt: "2026-11-07T08:00:00Z", LastAt: "2026-11-07T09:00:00Z"},
+	}); err != nil {
+		t.Fatalf("merge #2 (mezcla de formatos): %v", err)
+	}
+
+	fila := filaABDe(t, e, ctx, pid, BrazoOn)
+	if !strings.Contains(fila.FirstAt, "08:00:00") {
+		t.Fatalf("first_at tiene que ser la marca cronológicamente MÁS TEMPRANA (08:00:00), no la que gana por texto; obtuve %q", fila.FirstAt)
+	}
+	if !strings.Contains(fila.LastAt, "23:30:00") {
+		t.Fatalf("last_at tiene que ser la marca cronológicamente MÁS TARDÍA (23:30:00), no la que gana por texto; obtuve %q", fila.LastAt)
+	}
+
+	// ORIENTACIÓN INVERSA (hallazgo de la 2ª revisión). El caso de arriba deja el formato ESPACIO del
+	// lado LOCAL y el RFC3339 del ENTRANTE, así que sólo fija el datetime() del operando `excluded.*`.
+	// Acá se da vuelta: la fila local nace en RFC3339 TEMPRANO y el entrante trae ESPACIO TARDÍO, de
+	// modo que el borde correcto sale del operando `decididor_ab.*`. Un fix que normalice sólo el lado
+	// entrante pasaría el caso directo y dejaría ÉSTE en rojo — por eso los dos.
+	pidInv := "proj-merge-crono-inv"
+	if err := e.MergeDecididorABDesdeCentral([]DecididorABRow{
+		{ProjectID: pidInv, Arm: BrazoOn, Oportunidades: 5, Exigencias: 2, FirstAt: "2026-11-07T08:00:00Z", LastAt: "2026-11-07T09:00:00Z"},
+	}); err != nil {
+		t.Fatalf("merge #1 inverso (siembra RFC3339 temprano): %v", err)
+	}
+	if err := e.MergeDecididorABDesdeCentral([]DecididorABRow{
+		{ProjectID: pidInv, Arm: BrazoOn, Oportunidades: 9, Exigencias: 3, FirstAt: "2026-11-07 23:00:00", LastAt: "2026-11-07 23:30:00"},
+	}); err != nil {
+		t.Fatalf("merge #2 inverso (mezcla de formatos): %v", err)
+	}
+	filaInv := filaABDe(t, e, ctx, pidInv, BrazoOn)
+	if !strings.Contains(filaInv.FirstAt, "08:00:00") {
+		t.Fatalf("inverso: first_at tiene que quedar en la marca MÁS TEMPRANA (08:00:00, el lado LOCAL), no la que gana por texto; obtuve %q", filaInv.FirstAt)
+	}
+	if !strings.Contains(filaInv.LastAt, "23:30:00") {
+		t.Fatalf("inverso: last_at tiene que quedar en la marca MÁS TARDÍA (23:30:00, el lado ENTRANTE), no la que gana por texto; obtuve %q", filaInv.LastAt)
+	}
+}
+
+// I5 (R7) — EL MERGE DE BAJADA NO ENCOLA NADA EN EL OUTBOX (sin eco). El contador del A/B sólo BAJA:
+// si el merge encolara algo para subir, cerraría el loop «re-sube lo que baja» que el sello anti-eco
+// del sync existe para evitar. Se ARMA el uplink (outbox habilitado) y, aun así, tras el merge el
+// outbox tiene que quedar VACÍO.
+// Sabotaje: encolar una fila pendiente en el outbox dentro del merge ⇒ queda 1 pendiente ⇒ rojo.
+// arnes: archivo="internal/memory/decididor_ab.go"
+// arnes: de="if err := tx.Commit(); err != nil {\n\t\treturn fmt.Errorf(\"decididor A/B: commitear el merge de bajada: %w\", err)"
+// arnes: a="if _, e2 := tx.Exec(\"INSERT INTO outbox (obs_id, enqueued_hash, status, attempts, next_attempt_at, created_at, updated_at) VALUES ('ab-echo-saboteo', 'h', 'pending', 0, datetime('now'), datetime('now'), datetime('now'))\"); e2 != nil {\n\t\treturn e2\n\t}\n\tif err := tx.Commit(); err != nil {\n\t\treturn fmt.Errorf(\"decididor A/B: commitear el merge de bajada: %w\", err)"
+func TestMergeNoEncolaNadaEnElOutbox(t *testing.T) {
+	e := newTestEngine(t)
+	e.SetOutboxEnabled(true) // el uplink armado: aun así el merge de bajada no debe encolar nada
+	pid := "proj-merge-noeco"
+
+	if err := e.MergeDecididorABDesdeCentral([]DecididorABRow{
+		{ProjectID: pid, Arm: BrazoOn, Oportunidades: 5, Exigencias: 2},
+		{ProjectID: pid, Arm: BrazoOff, Oportunidades: 4, Exigencias: 1},
+	}); err != nil {
+		t.Fatalf("MergeDecididorABDesdeCentral: %v", err)
+	}
+
+	pending, _, _, err := e.OutboxStats()
+	if err != nil {
+		t.Fatalf("OutboxStats: %v", err)
+	}
+	if pending != 0 {
+		t.Fatalf("el merge de bajada no debe encolar nada para subir; outbox pendiente=%d", pending)
+	}
+	if hay, err := e.HayOutboxPorSubir(); err != nil {
+		t.Fatalf("HayOutboxPorSubir: %v", err)
+	} else if hay {
+		t.Fatal("el merge de bajada no debe dejar nada por subir en el outbox")
 	}
 }

@@ -425,6 +425,11 @@
     "actua_afuera": false
   },
   {
+    "name": "musubi_sync_pull_ab",
+    "read_only": true,
+    "actua_afuera": false
+  },
+  {
     "name": "musubi_sync_requeue",
     "read_only": false,
     "actua_afuera": false

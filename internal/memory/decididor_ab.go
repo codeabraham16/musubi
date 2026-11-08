@@ -24,11 +24,13 @@ package memory
 // (central y local) caen en el mismo brazo sin coordinarse porque dependen sólo de algo que las dos
 // conocen igual. Ver brazo.go.
 //
-// ⚠️ LÍMITE CONOCIDO, DEFERIDO A UN PR POSTERIOR (flaggeado en verify): oportunidades nace en el
-// central y cargadas en la máquina local. Un lift real exige que las dos convivan en una base, cosa
-// que hoy sólo pasa post-merge del sync. El substrato (la tabla), los dos registradores y la
-// aritmética son correctos y están cubiertos con fixture sembrado; el flujo cruzando el sync es
-// trabajo siguiente.
+// EL LÍMITE DEFERIDO YA ESTÁ CERRADO. oportunidades nace en el central y cargadas en la máquina
+// local; un lift real exige que las dos magnitudes convivan en una base. Eso lo cierra
+// MergeDecididorABDesdeCentral (más abajo): el sync ENTRANTE baja el snapshot de oportunidades del
+// central y lo mergea en la base local con autoridad por columna, así el UPDATE-only de
+// bumpCargadasDecididorTx tiene filas sobre las que sumar y CalcularLift ve las dos juntas. El
+// substrato (la tabla), los dos registradores y la aritmética ya estaban cubiertos con fixture
+// sembrado; ahora el flujo cruzando el sync también.
 
 import (
 	"context"
@@ -116,6 +118,73 @@ func bumpCargadasDecididorTx(ctx context.Context, tx *sql.Tx, batch []SkillEvent
 			WHERE project_id = ? AND arm = ?`, n, pid, arm); err != nil {
 			return fmt.Errorf("decididor A/B: contar cargas del proyecto %q: %w", pid, err)
 		}
+	}
+	return nil
+}
+
+// MergeDecididorABDesdeCentral fusiona en la base LOCAL un snapshot de filas decididor_ab bajadas del
+// central (sync ENTRANTE del A/B del decididor). Es el cable que cierra el LÍMITE DEFERIDO del
+// encabezado de este archivo: trae el DENOMINADOR (oportunidades/exigencias), que nace sólo en el
+// central, a la base donde se cuenta el NUMERADOR (cargadas). Hasta acá las dos magnitudes nunca
+// convivían en una base y el lift era inmedible; con las filas de oportunidad presentes, el
+// UPDATE-only de bumpCargadasDecididorTx ya tiene sobre qué sumar y CalcularLift ve las dos juntas.
+//
+// AUTORIDAD POR COLUMNA, Y ES LA DECISIÓN CLAVE. Cada contador tiene UN dueño y el merge lo respeta:
+//
+//   - oportunidades y exigencias: dueño el CENTRAL (nacen de RegistrarOportunidadDecididor, que sólo
+//     corre con motor real, o sea en el central). Se REEMPLAZAN con el valor del central, NO se suman:
+//     así bajar el MISMO snapshot dos veces deja los mismos números (idempotente). Sumar duplicaría el
+//     denominador en cada bajada y fabricaría un lift falso.
+//   - cargadas: dueño la máquina LOCAL (nace de bumpCargadasDecididorTx, el eje `loaded`). El DO
+//     UPDATE NO la nombra: una bajada PRESERVA el numerador local aunque el central mande otro valor.
+//     Una fila NUEVA nace con cargadas=0 —esta máquina todavía no contó cargas para ese brazo— y NO
+//     hereda el cargadas del central, que son cargas de OTRA máquina y contaminarían el lift local.
+//
+// first_at/last_at se amplían a la unión (min/max): la ventana del experimento es la de las dos
+// puntas. OJO CON EL FORMATO, Y ES SUTIL: el central NO llega con el layout de CURRENT_TIMESTAMP sino
+// en RFC3339 ('…T…Z'), porque allá la columna DATETIME se escanea a un string de Go y database/sql
+// formatea el time.Time con RFC3339Nano. Una punta vacía, en cambio, cae a CURRENT_TIMESTAMP
+// ('YYYY-MM-DD HH:MM:SS', con espacio). Comparar esos dos layouts como TEXTO NO es cronológico —el
+// espacio (0x20) ordena antes que la 'T' (0x54), así que una marca con espacio gana siempre el MIN y
+// pierde siempre el MAX, tenga la fecha que tenga—. Por eso cada lado va envuelto en datetime(), que
+// normaliza los dos a un layout único antes del MIN/MAX.
+//
+// SÓLO BAJADA: no encola nada en el outbox ni abre vía de subida. El contador del A/B no sube nunca,
+// así que no hay eco posible («re-sube lo que baja»). Es el espejo mínimo de IngestShared para una
+// tabla de contadores, sin su maquinaria anti-loop, porque sin subida no hay loop que cerrar.
+//
+// Una sola transacción para todo el snapshot (atómico, y el DSN lleva _txlock=immediate). Un brazo
+// inválido aborta el merge entero: el central sólo guarda 'on'/'off' (CHECK de la migración v59), así
+// que recibir otra cosa es una anomalía, no un caso borde que valga tragarse.
+func (e *DbEngine) MergeDecididorABDesdeCentral(rows []DecididorABRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	tx, err := e.db.Begin()
+	if err != nil {
+		return fmt.Errorf("decididor A/B: abrir la transacción del merge de bajada: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, r := range rows {
+		if r.Arm != BrazoOn && r.Arm != BrazoOff {
+			return fmt.Errorf("decididor A/B: merge de bajada con brazo inválido %q (esperaba %q o %q)", r.Arm, BrazoOn, BrazoOff)
+		}
+		// first_at/last_at vacíos (un central viejo que los omite, u omitempty en el JSON) caen al
+		// default de la columna vía CURRENT_TIMESTAMP, igual que RegistrarOportunidadDecididor.
+		if _, err := tx.Exec(`
+			INSERT INTO decididor_ab (project_id, arm, oportunidades, exigencias, cargadas, first_at, last_at)
+			VALUES (?, ?, ?, ?, 0, COALESCE(NULLIF(?, ''), CURRENT_TIMESTAMP), COALESCE(NULLIF(?, ''), CURRENT_TIMESTAMP))
+			ON CONFLICT(project_id, arm) DO UPDATE SET
+				oportunidades = excluded.oportunidades,
+				exigencias    = excluded.exigencias,
+				first_at = MIN(datetime(decididor_ab.first_at), datetime(excluded.first_at)),
+				last_at  = MAX(datetime(decididor_ab.last_at),  datetime(excluded.last_at))`,
+			r.ProjectID, r.Arm, r.Oportunidades, r.Exigencias, r.FirstAt, r.LastAt); err != nil {
+			return fmt.Errorf("decididor A/B: mergear la fila (%q, %q) bajada del central: %w", r.ProjectID, r.Arm, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("decididor A/B: commitear el merge de bajada: %w", err)
 	}
 	return nil
 }

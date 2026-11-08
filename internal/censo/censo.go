@@ -182,6 +182,7 @@ var censo = map[string]Clase{
 	"musubi_distill":         CubiertaPorCiclo, // destilado del acervo (ticker; opt-in por default)
 	"musubi_maintain":        CubiertaPorCiclo, // ciclo de mantenimiento de 24 h
 	"musubi_sync_pull":       CubiertaPorCiclo, // drain/pull del scheduler de sync
+	"musubi_sync_pull_ab":    CubiertaPorCiclo, // bajada del A/B del decididor; la dispara el mismo drain entrante
 
 	// --- SinProductor: telemetría que nadie emite todavía. ---
 	"musubi_log_error":          SinProductor,

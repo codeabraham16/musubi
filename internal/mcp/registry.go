@@ -1089,6 +1089,18 @@ func (s *McpServer) buildRegistry() []toolEntry {
 		},
 		{
 			Tool: Tool{
+				Name:        "musubi_sync_pull_ab",
+				Description: "Sync ENTRANTE del A/B del decididor de skills: devuelve el snapshot de la tabla decididor_ab del proyecto de la credencial (aislado por tenant), para que un cliente en team mode lo baje y lo mergee localmente. Trae el DENOMINADOR (oportunidades/exigencias), que nace sólo en el central, a la base donde se cuenta el numerador (cargadas), y así el lift se vuelve medible en la máquina. Read-only, sin parámetros, sin cursor (la tabla tiene a lo sumo dos filas por proyecto). Devuelve {rows}.",
+				InputSchema: InputSchema{
+					Type:       "object",
+					Properties: map[string]Property{},
+				},
+			},
+			handler:  s.toolSyncPullAB,
+			readOnly: true,
+		},
+		{
+			Tool: Tool{
 				Name:        "musubi_codegraph_index",
 				Description: "Indexa el GRAFO DE CÓDIGO del proyecto (Track 20): deriva del AST (model-free) los símbolos y aristas (IMPORTS/CONTAINS/CALLS) y los persiste, para consultarlos SIN leer archivos. mode='full' (default) re-deriva TODOS los paquetes: corré esto la primera vez. mode='incremental' reconcilia BARATO con el working tree — sólo re-deriva los paquetes con archivos modificados/nuevos, PODA los de archivos borrados y salta lo sin cambios (ideal tras editar unos pocos archivos). Salta .git/.musubi/vendor/testdata. Devuelve {packages, nodes, edges} (incremental agrega pruned y skipped).",
 				InputSchema: InputSchema{
