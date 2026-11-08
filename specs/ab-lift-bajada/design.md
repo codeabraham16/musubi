@@ -94,9 +94,15 @@ ON CONFLICT(project_id, arm) DO UPDATE SET
   de `CURRENT_TIMESTAMP` vs RFC3339 del central), en LAS DOS orientaciones, dejan `first_at`/`last_at`
   en el borde cronológico real y no en el que gana por texto. Sabotaje: sacar `datetime()` de un
   operando del MIN/MAX → vuelve el orden de texto → el borde queda en la marca equivocada → rojo.
-- **Golden:** `go test ./internal/mcp -run TestToolsListGolden -update` → sólo
-  `toolslist-completo.golden.json` cambia (la tool nueva); el golden del núcleo NO cambia (la tool no
-  es del núcleo) y `techoDelNucleo` NO se toca.
+- **Golden:** la tool nueva, por ser VISIBLE (no dormida) y read-only como su hermana
+  `musubi_sync_pull`, entra en los TRES golden de tools: `toolslist.golden.json` (catálogo visible —
+  `handleToolsList()` filtra las dormidas, ver `registry_golden_test.go`), `toolslist-completo.golden.json`
+  (`MUSUBI_TOOLS_ALL=1`, dormidas incluidas) y `contrato-tools.golden.json` (contrato por tool). Regenerar:
+  `-run TestToolsListGolden -update` cubre los dos primeros; el de contrato sale de
+  `TestContratoPorToolFijado` (o un `-update` de todo el paquete). El NÚCLEO —las tools que NOMBRA
+  `agente.go`, pesadas contra `techoDelNucleo` (agente_test.go)— NO cambia: la tool no se nombra ahí.
+  OJO: `toolslist.golden.json` NO es «el golden del núcleo»; su filtro es dormida-vs-visible, no
+  núcleo-vs-no-núcleo.
 - **R7/R8/R9** tienen sabotaje dedicado en verify (no sólo «por construcción»): R7 — el merge con el
   outbox armado no encola nada (sabotaje: encolar en el merge → pendiente=1 → rojo); R8 — un pull del
   A/B que falla no corta la bajada de obs (sabotaje: paniquear) NI toca su contabilidad —`sync_viajes`,
