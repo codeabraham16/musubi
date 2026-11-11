@@ -19,6 +19,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -132,7 +133,23 @@ const (
 )
 
 // runAgent es el punto de entrada de `musubi agent`.
+//
+// Antes que nada mira si a este proceso lo lanzó el Administrador de Servicios de Windows (el
+// servicio Musubi-Flota). Si es así, arranqueComoServicioFlota toma el control y corre el agente
+// bajo el protocolo del SCM —que pide la parada cancelando un contexto, no con SIGTERM—; en ese
+// caso runAgent no sigue. En cualquier arranque normal (consola, Tarea Programada, systemd) el
+// agente corre con un contexto de fondo que nunca se cancela y el apagado llega por señal, como siempre.
 func runAgent(args []string) {
+	if arranqueComoServicioFlota(args) {
+		return
+	}
+	correrAgente(context.Background(), args)
+}
+
+// correrAgente es el cuerpo del agente: parsea flags, resuelve identidad y entra al bucle de
+// latidos. Recibe el ctx para que el servicio de Windows pueda cortarlo limpio; fuera de un
+// servicio es context.Background() y nunca se cancela.
+func correrAgente(ctx context.Context, args []string) {
 	cerebro := strings.TrimSpace(os.Getenv(envCerebro))
 	cred, errCred := cargarCredencial()
 	intervalo := intervaloLatidoDefault
@@ -255,7 +272,7 @@ func runAgent(args []string) {
 		// Estar viva es información útil aunque no se pueda medir cómo está.
 		fmt.Printf("%s sin telemetría: %v\n", cYellow("!"), err)
 	}
-	bucleDeLatidos(base, cred, intervalo, desfase, col)
+	bucleDeLatidos(ctx, base, cred, intervalo, desfase, col)
 }
 
 // nuevoTimer es el seam del reloj del bucle, por la misma razón que azarDelAgente: para que una
@@ -330,12 +347,14 @@ func desfaseDeArranque() time.Duration {
 // pertenece a la flota.
 //
 // Escucha SIGINT/SIGTERM: un agente que ignora la señal de apagado deja al systemd de cada máquina
-// esperando el timeout de kill, y eso se nota en el apagado de un servidor.
+// esperando el timeout de kill, y eso se nota en el apagado de un servidor. También respeta `ctx`:
+// el servicio de Windows (Musubi-Flota) no manda SIGTERM, sino que cancela el contexto para pedir
+// la parada, y el mismo select que atiende las señales lo atiende a él.
 //
 // `desfase` es cuánto tarda el PRIMER latido. Se recibe y no se sortea acá adentro para que el
 // desfase quede bajo el mismo select que las señales —un `systemctl stop` durante esos 30 s
 // tiene que cortar en el acto, no al final del sueño— y para que las pruebas del bucle pasen 0.
-func bucleDeLatidos(base string, cred *credencial, intervalo, desfase time.Duration, col fleet.Colector) {
+func bucleDeLatidos(ctx context.Context, base string, cred *credencial, intervalo, desfase time.Duration, col fleet.Colector) {
 	señales := make(chan os.Signal, 1)
 	signal.Notify(señales, os.Interrupt, syscall.SIGTERM)
 
@@ -361,6 +380,13 @@ func bucleDeLatidos(base string, cred *credencial, intervalo, desfase time.Durat
 
 	for {
 		select {
+		case <-ctx.Done():
+			// El SCM de Windows cancela el contexto para pedir la parada (no manda SIGTERM). Se
+			// corta en el acto, igual que con una señal. El único punto donde este corte puede
+			// esperar es un `latir` en vuelo, pero su cliente tiene timeout de 10 s (ver
+			// clienteParaElCerebro): la cancelación se honra, a lo sumo, dentro de ese timeout.
+			fmt.Printf("\n%s agente detenido\n", cDim("■"))
+			return
 		case <-señales:
 			fmt.Printf("\n%s agente detenido\n", cDim("■"))
 			return

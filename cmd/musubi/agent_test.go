@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"io"
@@ -394,7 +395,7 @@ func TestElBucleEsperaElDesfaseAntesDelPrimerLatido(t *testing.T) {
 
 	listo := make(chan struct{})
 	go func() {
-		bucleDeLatidos(ts.URL, credDePrueba("tok"), 10*time.Millisecond, desfase, nil)
+		bucleDeLatidos(context.Background(), ts.URL, credDePrueba("tok"), 10*time.Millisecond, desfase, nil)
 		close(listo)
 	}()
 	select {
@@ -442,7 +443,7 @@ func TestElBucleSeDetieneAlSerRevocado(t *testing.T) {
 
 	listo := make(chan struct{})
 	go func() {
-		bucleDeLatidos(ts.URL, credDePrueba("tok"), 10*time.Millisecond, 0, nil)
+		bucleDeLatidos(context.Background(), ts.URL, credDePrueba("tok"), 10*time.Millisecond, 0, nil)
 		close(listo)
 	}()
 
@@ -457,6 +458,91 @@ func TestElBucleSeDetieneAlSerRevocado(t *testing.T) {
 	// de milisegundos no puede ponerse rojo por lentitud — que era justo lo que se quería ver.
 	case <-time.After(5 * time.Second):
 		t.Fatal("el agente siguió latiendo tras ser revocado: el kill-switch no se entiende desde la máquina")
+	}
+}
+
+// El bucle se detiene cuando se cancela su contexto, que es como el servicio de Windows
+// (Musubi-Flota) pide la parada: el SCM no manda SIGTERM, cancela el ctx. Sin la rama
+// `case <-ctx.Done()` del select, un agente lanzado por el SCM no pararía jamás, y el servicio
+// quedaría colgado hasta que el SCM lo matara a los ~30 s.
+func TestElBucleSeDetieneAlCancelarseElContexto(t *testing.T) {
+	latió := make(chan struct{}, 1)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case latió <- struct{}{}:
+		default: // ya avisamos del primer latido; los siguientes no bloquean
+		}
+		w.WriteHeader(http.StatusOK) // nunca revoca: la ÚNICA salida del bucle es la cancelación del ctx
+	}))
+	defer ts.Close()
+
+	// El inventario se apaga por lo mismo que en el test del revocado: enumerar los servicios del
+	// sistema cuesta segundos por latido y volvería lenta y flaky una prueba que mide milisegundos.
+	sinInventario(t)
+
+	ctx, cancelar := context.WithCancel(context.Background())
+	listo := make(chan struct{})
+	go func() {
+		bucleDeLatidos(ctx, ts.URL, credDePrueba("tok"), 10*time.Millisecond, 0, nil)
+		close(listo)
+	}()
+
+	// Esperar a que lata DE VERDAD antes de cancelar: si se cancelara sin haber entrado al bucle, la
+	// prueba pasaría aunque el agente nunca hubiera arrancado — un verde que no custodia nada.
+	select {
+	case <-latió:
+	case <-time.After(5 * time.Second):
+		t.Fatal("el bucle no latió ni una vez: la prueba no llegó a ejercitar la cancelación")
+	}
+
+	cancelar()
+
+	select {
+	case <-listo:
+	case <-time.After(5 * time.Second):
+		t.Fatal("el bucle no terminó tras cancelarse el contexto: el servicio de Windows no podría pararlo y quedaría colgado")
+	}
+}
+
+// Un ctx cancelado ANTES del primer latido corta en el acto, aunque el desfase de arranque sea
+// enorme. Es la promesa del comentario de bucleDeLatidos: «un systemctl stop durante esos 30 s tiene
+// que cortar en el acto, no al final del sueño». Esta prueba usa el nuevoTimer REAL (un timer de una
+// hora) y un ctx ya cancelado: sólo pasa si el PRIMER select mira `ctx.Done()` junto al timer, no
+// después de dormirlo. Es distinta de TestElBucleSeDetieneAlCancelarseElContexto, que cancela TRAS
+// latir (con desfase 0): acá el bucle NO debe latir ni una vez. El sabotaje que la pone en rojo —y
+// que aquella prueba de desfase 0 NO cazaría— es sacar la espera del primer timer de abajo del
+// select (dormir el desfase antes de mirar la cancelación): con una hora de desfase se cuelga hasta
+// el plazo. Un latido de arranque incondicional, además, se delata por el conteo.
+func TestElBucleRespetaLaCancelacionInmediataAunConDesfaseLargo(t *testing.T) {
+	var latidos atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		latidos.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	// El inventario se apaga por lo mismo que en los otros tests del bucle: enumerar los servicios del
+	// sistema cuesta segundos y volvería lenta una prueba que mide la reacción en milisegundos.
+	sinInventario(t)
+
+	ctx, cancelar := context.WithCancel(context.Background())
+	cancelar() // cancelado ANTES de arrancar: la primera vuelta del select ya tiene que ver ctx.Done()
+
+	listo := make(chan struct{})
+	go func() {
+		// Desfase de una hora: si el bucle lo durmiera antes de mirar ctx.Done(), esta prueba se
+		// colgaría hasta su propio plazo. Con el timer bajo el select, la cancelación gana al instante.
+		bucleDeLatidos(ctx, ts.URL, credDePrueba("tok"), 10*time.Millisecond, time.Hour, nil)
+		close(listo)
+	}()
+
+	select {
+	case <-listo:
+	case <-time.After(5 * time.Second):
+		t.Fatal("el bucle durmió el desfase de arranque en vez de honrar la cancelación: un servicio recién lanzado tardaría hasta 30 s en parar y el SCM lo mataría")
+	}
+	if n := latidos.Load(); n != 0 {
+		t.Errorf("el bucle latió %d veces pese a estar cancelado desde antes del primer latido: la cancelación no pre-empta la espera de arranque", n)
 	}
 }
 

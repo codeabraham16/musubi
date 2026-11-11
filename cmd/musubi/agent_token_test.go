@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -352,7 +353,7 @@ func TestElBucleProbaraElOtroTokenAntesDeDarseDeBaja(t *testing.T) {
 
 	listo := make(chan struct{})
 	go func() {
-		bucleDeLatidos(ts.URL, c, 10*time.Millisecond, 0, nil)
+		bucleDeLatidos(context.Background(), ts.URL, c, 10*time.Millisecond, 0, nil)
 		close(listo)
 	}()
 	select {

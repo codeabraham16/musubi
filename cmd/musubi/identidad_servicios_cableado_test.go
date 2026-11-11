@@ -128,12 +128,12 @@ func TestElRuntimeQueApareceTardeEntraAlInventario(t *testing.T) {
 	}
 }
 
-// LO QUE runAgent RESUELVE ES LO QUE ENUMERAN LAS FUENTES, y se asigna antes del primer latido.
+// LO QUE correrAgente RESUELVE ES LO QUE ENUMERAN LAS FUENTES, y se asigna antes del primer latido.
 //
-// Se lee el código con go/ast y no con un proceso: runAgent llama a os.Exit y abre la red, y lo que
+// Se lee el código con go/ast y no con un proceso: correrAgente llama a os.Exit y abre la red, y lo que
 // se custodia es el cable (quién asigna, a partir de qué, antes de qué), no lo que hace cada pieza.
 //
-// Sabotaje que la hace fallar: que runAgent resuelva la identidad y no la guarde.
+// Sabotaje que la hace fallar: que correrAgente resuelva la identidad y no la guarde.
 // arnes: archivo="cmd/musubi/agent.go"
 // arnes: de="\tidentidadParaEnumerar = id\n"
 // arnes: a="\t_ = id\n"
@@ -144,7 +144,7 @@ func TestElRuntimeQueApareceTardeEntraAlInventario(t *testing.T) {
 //
 // LOS ARGUMENTOS TAMBIÉN SON EL CABLE. Un setenv que no escribe, o un esDe que siempre dice que no,
 // dejan al agente sin XDG_RUNTIME_DIR y a la fuente --user ausente en silencio, con todas las pruebas
-// de comportamiento en verde: ésas le pasan sus propios dobles, nunca los de runAgent.
+// de comportamiento en verde: ésas le pasan sus propios dobles, nunca los de correrAgente.
 //
 // Sabotaje que la hace fallar: resolver con un uid fijo en vez del del proceso.
 // arnes: archivo="cmd/musubi/agent.go"
@@ -185,9 +185,12 @@ func TestElRuntimeQueApareceTardeEntraAlInventario(t *testing.T) {
 func TestElAgenteEnumeraConLaIdentidadQueResolvio(t *testing.T) {
 	fset := token.NewFileSet()
 
-	run := funcionDelArchivo(t, fset, "agent.go", "runAgent")
+	// Tras partir runAgent en un envoltorio delgado + correrAgente, el cuerpo que resuelve la
+	// identidad y late vive en correrAgente; la guarda lo sigue hasta ahí. runAgent sólo decide si
+	// arranca como servicio de Windows o llama a correrAgente con un contexto de fondo.
+	run := funcionDelArchivo(t, fset, "agent.go", "correrAgente")
 	var (
-		resuelta       string        // el nombre al que runAgent le asigna prepararIdentidadDeServicios(...)
+		resuelta       string        // el nombre al que correrAgente le asigna prepararIdentidadDeServicios(...)
 		posResuelta    token.Pos     // dónde
 		llamada        *ast.CallExpr // y con qué argumentos
 		asignaciones   []*ast.AssignStmt
@@ -219,25 +222,25 @@ func TestElAgenteEnumeraConLaIdentidadQueResolvio(t *testing.T) {
 		return true
 	})
 
-	// CONTROL DE QUE MIRÓ ALGO: sin estas dos, la guarda pasaría en verde sobre un runAgent que
+	// CONTROL DE QUE MIRÓ ALGO: sin estas dos, la guarda pasaría en verde sobre un correrAgente que
 	// cambió de forma sin haber mirado nada.
 	if resuelta == "" {
-		t.Fatal("runAgent no asigna el resultado de prepararIdentidadDeServicios: o dejó de resolver la " +
+		t.Fatal("correrAgente no asigna el resultado de prepararIdentidadDeServicios: o dejó de resolver la " +
 			"identidad al arrancar, o la guarda perdió de vista cómo lo hace")
 	}
 	if llamadasLatido == 0 {
-		t.Fatal("runAgent no llama a latir: la guarda no puede decir si la identidad va antes del primer latido")
+		t.Fatal("correrAgente no llama a latir: la guarda no puede decir si la identidad va antes del primer latido")
 	}
 
 	quiero := []string{"os.Getuid()", "os.Getenv", "os.Setenv", "buscarCuenta", "esDeUid"}
 	if got := argumentosDe(llamada); !reflect.DeepEqual(got, quiero) {
-		t.Errorf("%s: runAgent resuelve la identidad con %v y tienen que ser %v. Con otro setenv o "+
+		t.Errorf("%s: correrAgente resuelve la identidad con %v y tienen que ser %v. Con otro setenv o "+
 			"esDe el agente se queda sin XDG_RUNTIME_DIR, y la fuente --user ausente, sin que nada avise",
 			fset.Position(llamada.Pos()), got, quiero)
 	}
 
 	if len(asignaciones) != 1 {
-		t.Fatalf("runAgent asigna identidadParaEnumerar %d vez/veces; tiene que ser UNA. Sin ninguna, un agente "+
+		t.Fatalf("correrAgente asigna identidadParaEnumerar %d vez/veces; tiene que ser UNA. Sin ninguna, un agente "+
 			"root enumera podman como root y el cerebro da de baja los contenedores del dueño", len(asignaciones))
 	}
 	a := asignaciones[0]

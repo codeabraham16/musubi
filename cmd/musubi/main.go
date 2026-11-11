@@ -158,6 +158,10 @@ func main() {
 		runShell(os.Args[2:])
 	case "agent":
 		runAgent(os.Args[2:])
+	case "flota":
+		// El agente como servicio de Windows (SCM). El dispatch es cross-platform; en un sistema
+		// que no sea Windows, runFlota dice que no aplica y sale.
+		runFlota(os.Args[2:])
 	default:
 		fmt.Printf("Comando desconocido: %s\n", command)
 		printUsage()
@@ -188,6 +192,7 @@ func printUsage() {
 
 	section("Flota")
 	cmd("agent [--brain <url>] [--once]", "Late contra el cerebro para que esta máquina figure en la flota")
+	cmd("flota <instalar|quitar|estado>", "El agente como servicio de Windows (arranque automático · reinicio ante caída · SCM). instalar/quitar piden elevación")
 	cmd("shell <maquina> [--project <id>]", "Terminal interactiva en una máquina de la flota (exige la capacidad `shell`, aparte de `exec`)")
 
 	section("Memoria")
