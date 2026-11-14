@@ -1,6 +1,8 @@
 # Propuesta — adelgazar el envoltorio de `musubi_recall`
 
-**Estado:** propuesta, sin tocar código. Cada recorte se aprueba por separado (☐ al pie de cada uno).
+**Estado:** **CERRADO el 2026-11-13.** Tier 1 completo, Tier 2.1 completo, §3 opción B completa, y el
+Tier 3.1 se hizo en otra forma (id corto, ver `tier2-id-corto.md`). Tier 2.2 y 3.2 quedan ABIERTOS y se
+des-recomiendan al pie (§6). Las casillas de abajo están marcadas con lo que REALMENTE pasó.
 **Fecha:** 2026-10-24 · **Origen:** Fase 0 del pivote de ahorro de tokens (auditoría del reel «Code Mode»).
 **Pilar:** hacer al AGENTE eficiente sin perder potencia (decisiones `c07b47cd`, `4e23c916`; sacrificio máx 10%).
 
@@ -59,7 +61,10 @@ amplifica varias veces).
   agente no actúa sobre el puntaje crudo.
 - **Blast radius:** `RecallItem.Score` (tag `omitempty`); goldens/tests en `internal/mcp/motor_con_freno_test.go`
   e `internal/memory/recall_test.go`. Consumidor = el modelo, no código Go.
-- **Decisión:** ☐ aprobar  ☐ no  ☐ versión gateada (flag)
+- **Decisión:** ☑ **aprobar (dropear, sin flag)** — hecho el 2026-11-13, commit del track
+  `perf/el-payload-del-recall-sin-los-campos-que-nadie-lee`. Se destrabó al medir que el único
+  consumidor (musubi-body) está EN PAUSA desde el 2026-09-24. La guarda 1.1 de
+  `envoltorio_recall_test.go` quedó INVERTIDA, no borrada.
 
 #### Recorte 1.2 — `created_at` a resolución de día
 - **Qué:** emitir `created_at` como fecha (`2026-10-14`, ~10 chars) en vez de ISO8601 con hora
@@ -68,7 +73,7 @@ amplifica varias veces).
 - **Riesgo:** BAJO. «Ayer vs. hace 8 meses» no necesita hora. *A verificar antes del diff:* que ningún
   consumidor ordene por `created_at` con precisión sub-día (no se encontró ninguno; el agente sólo lee la edad).
 - **Blast radius:** `RecallItem.CreatedAt`; mismos tests que 1.1.
-- **Decisión:** ☐ aprobar  ☐ no
+- **Decisión:** ☑ **aprobar** — en main. Guarda 1.2 en `envoltorio_recall_test.go` (10 chars, sin hora).
 
 **Subtotal Tier 1 ≈ 12% del payload ≈ ~11k tok/día (pre-multiplicador), sin perder ni una memoria.**
 
@@ -81,7 +86,10 @@ amplifica varias veces).
 - **Riesgo:** MEDIO. Es la señal con la que el agente decide si vale la pena expandir un gist. Quitarla
   puede empujar a expandir más (o menos) a ciegas → posible roce con la regla de «no perder potencia».
   Alternativa: conservarlo sólo cuando supere un umbral (los gist caros, que son los que importan).
-- **Decisión:** ☐ dropear  ☐ umbral  ☐ no
+- **Decisión:** ☑ **dropear** — hecho el 2026-11-13, mismo commit que 1.1. El riesgo MEDIO que anotaba
+  este ítem («es la señal con la que el agente decide si expandir») resultó **inexistente**: medido, el
+  campo no tuvo lector NUNCA, ni en musubi ni en musubi-body. La señal que el ítem temía perder no
+  estaba siendo usada por nadie.
 
 #### Recorte 2.2 — acortar las claves más largas
 - **Qué:** nombres de campo más cortos para los 2-3 más caros (`topic_key`→`tk`, `created_at`→`ts`,
@@ -90,7 +98,8 @@ amplifica varias veces).
 - **Riesgo:** MEDIO. El agente lee estos campos POR NOMBRE; claves crípticas pueden degradar su uso (la
   regla del 10%). Se mitiga acortando sólo las más largas y dejando las semánticas (`gist`, `id`). **Rompe
   todos los goldens/tests que afirman la forma del JSON.**
-- **Decisión:** ☐ aprobar (lista corta)  ☐ no
+- **Decisión:** ☐ **ABIERTO, y se des-recomienda** — ver §6: hoy `topic_key` es el 20,0 % del payload
+  (el 2º después del gist), así que el ahorro subió; pero la palanca de verdad ya no es el ítem.
 
 ### Tier 3 — mayor payoff, mayor costo/riesgo (sólo si querés empujar)
 
@@ -100,7 +109,10 @@ amplifica varias veces).
 - **Ahorro:** ~11% del payload (el `id` entero) ≈ **~9k tok/día**.
 - **Riesgo:** ALTO/MEDIO. Introduce estado de sesión (mapeo ordinal→UUID) y cambia el contrato de
   `memory_expand`. Feature real, con su propia superficie de prueba.
-- **Decisión:** ☐ explorar en un spec aparte  ☐ no
+- **Decisión:** ☑ **hecho, pero NO como lo propone este ítem** — no se usó un ordinal de sesión (que
+  habría metido estado de sesión). Se emite un **id corto de 8 hex, resolvible sin estado**, y
+  `memory_expand` acepta las dos formas. Spec y medición en `tier2-id-corto.md`. En main desde el
+  2026-11-02, impuesto en toda la flota el 11-09.
 
 #### Recorte 3.2 — serialización tabular (cabecera + filas)
 - **Qué:** emitir los ítems como una tabla compacta (claves una vez en la cabecera) en vez de un objeto por
@@ -108,7 +120,7 @@ amplifica varias veces).
 - **Ahorro:** ~20%+ del payload ≈ **~17k tok/día**.
 - **Riesgo:** ALTO. Cambia el formato que lee el modelo (riesgo de legibilidad/potencia) y rompe todo
   golden/consumidor. Es un cambio de contrato, no un ajuste.
-- **Decisión:** ☐ explorar en un spec aparte  ☐ no
+- **Decisión:** ☐ **ABIERTO, y se des-recomienda** — ver §6.
 
 ---
 
@@ -126,7 +138,9 @@ afecta cómo **cada agente presupuesta su contexto** (pide 1.500 creyendo que te
   deja de mentir el número.
 - **Recomendación:** B. Hace el número honesto sin recortar cobertura; los recortes de la §2 bajan el
   payload de verdad.
-- **Decisión:** ☐ A  ☐ B  ☐ no
+- **Decisión:** ☑ **B** — en main. `used_tokens` ahora mide el JSON final, y la guarda 3 de
+  `envoltorio_recall_test.go` lo ata con dos cotas (supera la suma de gists y coincide con
+  `EstimateTokens` del texto ±2). **Y la §6 explica por qué B no alcanzó.**
 
 ---
 
@@ -144,7 +158,52 @@ afecta cómo **cada agente presupuesta su contexto** (pide 1.500 creyendo que te
 - **Regla del 10%:** para 2.1/2.2/3.x, validar que la conducta del agente (expandir lo correcto, ubicar la
   memoria) no se degrada — con una prueba de conducta, no sólo bytes.
 
-## 5. Qué NO voy a hacer sin tu OK explícito
+## 5. Qué se hizo, y con qué OK
 
-Escribir código, regenerar goldens, commitear o desplegar. Esta propuesta es sólo el plan. Decime qué
-recortes aprobás (por tier o por ítem) y recién ahí armo el diff para que lo revises antes de aplicar.
+Cada recorte se aplicó con una aprobación explícita y puntual (AskUserQuestion), no con una autorización
+general del track. El Tier 1.1 + 2.1 + `author` salieron juntos el 2026-11-13 tras la respuesta «Esos dos +
+author (−24,3 %)».
+
+---
+
+## 6. Cierre medido — el ahorro por ítem es real y NO se traduce en ahorro por llamada
+
+Script: `specs/recall-envoltorio/scripts/` (se movieron al repo justamente porque los de `scratchpad/` que
+citaba la §1 ya se perdieron). Ventanas limpias: la vieja termina antes del escalón del 10-27, y la nueva
+arranca el 11-09, el día en que `len(id)` quedó parejo en toda la flota — **medir desde el merge (11-02) da
+−5,1 % y es una ventana contaminada**, porque las sesiones ya abiertas siguieron con el binario viejo una
+semana.
+
+| | tok/ítem | ítems/llamada | `token_budget` pedido (mediana) | tok/resultado | ratio payload/budget |
+|---|---|---|---|---|---|
+| antes (09-12→10-26, 231 llamadas) | 114,6 | 63,7 | 1.500 | 7.303 | 4,87× |
+| después (11-09→11-13, 36 llamadas) | **105,3** | 79,7 | **1.800** | 8.387 | **4,66×** |
+| | **−8,1 %** | +25 % | +20 % | **+15 %** | −4,3 % |
+
+**El dato incómodo, y es el hallazgo del track:** el ítem adelgazó un 8,1 % y el payload por llamada
+**subió** un 15 %. No es que el cambio fallara: los callers pasaron a pedir budgets más grandes (mediana
+1.500→1.800, p90 3.000→3.500), entraron un 25 % más de ítems, y se comieron el margen y más. La métrica que
+aísla el cambio de la mezcla de llamadas es la última columna, el **ratio payload/budget**, invariante a que
+el caller pida más — y ésa sí bajó.
+
+**Por eso la §3-B no alcanzó.** Reportar `used_tokens` honesto dejó de mentir el número, pero el caller
+sigue pidiendo contra un budget que acota **el gist**, no el payload: pide 1.800 creyendo techar su costo y
+entran ~8.400. Mientras ese factor siga en 4,66×, cada token que se le saca al ítem vuelve como un ítem más.
+
+**Dónde está la palanca que queda** (en orden, y ninguna es «adelgazar más el ítem»):
+
+1. **§3 opción A** — contar el ítem serializado completo contra el budget. Es lo único que cierra el lazo:
+   vuelve el número un techo de verdad. Tiene el costo que ya anotaba la §3 —para el mismo número pedido
+   entran ~4,7× menos ítems, o sea es un recorte de cobertura— así que necesita una prueba de conducta y
+   probablemente que los callers suban sus budgets a propósito, no por accidente.
+2. **Por qué los callers pidieron más.** Subió un 20 % en seis semanas y nadie lo decidió: hay que medir si
+   fue un caller nuevo, una skill, o el hook de arranque.
+3. Tier 2.2 / 3.2 (claves cortas, tabular) sólo después de 1: hoy ahorrarían más que cuando se escribió
+   esta propuesta —`topic_key` es el 20,0 % del payload— pero sin el techo arreglado el ahorro se recicla
+   en más ítems, igual que el de este track.
+
+**Desglose del ítem hoy** (ventana nueva, antes del recorte del 11-13): gist 30,6 % · `topic_key` 20,0 % ·
+`score` 10,8 % · `created_at` 9,1 % · `project_id` 7,5 % · `full_tokens` 6,9 % · `author` 6,6 % · `id` 5,9 %
+· `provenance` 2,3 % · `stale` 0,2 %. El recorte del 11-13 se lleva 24,3 % de eso: proyecta **~80 tok/ítem**
+y un ratio de ~3,6×. Se re-mide cuando el binario nuevo esté parejo en la flota, con el mismo criterio de
+ventana limpia que esta tabla — **no desde el día del merge.**
