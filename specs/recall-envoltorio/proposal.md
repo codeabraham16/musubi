@@ -202,6 +202,43 @@ entran ~8.400. Mientras ese factor siga en 4,66×, cada token que se le saca al 
    esta propuesta —`topic_key` es el 20,0 % del payload— pero sin el techo arreglado el ahorro se recicla
    en más ítems, igual que el de este track.
 
+### Dos mediciones independientes, y por qué sus porcentajes NO coinciden
+
+El −8,1 % de la tabla sale de comparar dos ventanas reales. Existe **otra** medición del mismo cambio,
+del 2026-11-03 (obs. `b561ac75`), hecha con un método distinto y mejor en un aspecto: atribuye cada
+carácter del payload byte-exacto y corre un **contrafactual controlado sobre los mismos 249 ítems**, con
+el estimador de `digest.go` replicado y validado (`est(raw) == used_tokens` del server, 0,00 % de error en
+5 payloads). Da **−7,7 %**. Dos métodos independientes a 0,4 puntos: el número aguanta.
+
+**Pero sus desgloses por campo se leen como si uno mintiera, y ninguno lo hace.** Es el denominador:
+
+| campo | obs. `b561ac75` (11-03) | `cierre_envoltorio.py` (11-13) |
+|---|---|---|
+| `score` | 6,7 % | 10,8 % |
+| `full_tokens` | 1,1 % | 6,9 % |
+| `author` | 3,8 % | 6,6 % |
+
+La del 11-03 cuenta **sólo el valor** y agrupa todas las claves JSON aparte (`KEYS` 25,3 % + `struct`
+6,3 %). La del 11-13 le carga a cada campo **su valor más su clave**, que es lo que de verdad se ahorra al
+dropearlo. Por eso `full_tokens` salta de 1,1 % a 6,9 %: el valor es un entero corto y la clave
+`"full_tokens":` mide 14 caracteres. No hay que elegir una: **la propia obs. `b561ac75` ya hace la cuenta
+de dropear** —«A') dropear score = 9,5 %»— y ahí coincide con el 10,8 % de acá, dentro de lo que explica la
+ventana distinta. Al comparar las dos, mirá si el número incluye la clave.
+
+### Lo que esa medición tenía y este cierre no
+
+- **`project_id` es 7,5 % del payload y es CONSTANTE** (`"musubi"` en 249/249 ítems de un recall
+  mono-proyecto). No se dropea —tiene lector vivo, el hook lo usa en `marcaDeProyecto`— pero se puede
+  **factorizar al envelope** con un gate «si es único en el resultado → al envelope». Misma idea para
+  `author`, que acá se dropeó en vez de factorizarse, y se pudo porque además no tenía lector.
+- **El Tier 2a sólo alcanzó al 54 % de los ítems.** `IDCorto` acorta el UUID canónico de 36 chars; el 46 %
+  restante son ids verbatim —`commit-<sha>` de 23 chars, `sdd/<change>/<phase>` de hasta 50— que quedan
+  largos POR DISEÑO. Por eso el `id` cayó ~5 puntos y no los ~8 que proyectaba la §2. Sub-palanca abierta:
+  acortar también los `commit-<sha>` a 8 hex.
+
+Las dos siguen sujetas al rebote de arriba: suman bytes al ítem, y mientras el budget acote el gist, el
+hueco se llena con otro ítem. Van después del §3-A, no antes.
+
 **Desglose del ítem hoy** (ventana nueva, antes del recorte del 11-13): gist 30,6 % · `topic_key` 20,0 % ·
 `score` 10,8 % · `created_at` 9,1 % · `project_id` 7,5 % · `full_tokens` 6,9 % · `author` 6,6 % · `id` 5,9 %
 · `provenance` 2,3 % · `stale` 0,2 %. El recorte del 11-13 se lleva 24,3 % de eso: proyecta **~80 tok/ítem**
