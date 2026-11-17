@@ -175,7 +175,7 @@ jobs:
 
   test-cross:
     # Portabilidad (adopción por terceros, Track 16 F4): valida que el código COMPILA y los
-    # tests pasan en Windows y macOS. El job `test` de ubuntu sigue siendo el canónico (race +
+    # tests pasan en Windows. El job `test` de ubuntu sigue siendo el canónico (race +
     # piso de cobertura + govulncheck); acá solo confirmamos que no hay nada POSIX-only. Sin
     # -race a propósito: evita depender de cgo/gcc en Windows (modernc/sqlite es Go puro, así
     # que build y test no necesitan un compilador C). Comandos `go` planos → corren igual en el
