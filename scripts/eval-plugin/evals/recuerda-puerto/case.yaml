@@ -1,0 +1,5 @@
+schema_version: "1.1"
+# costo-usd-por-corrida: 0.05 0.12 0.30  (mínimo, típico y máximo por corrida de UN brazo, a precio de lista; lo lee correr.sh)
+name: recuerda-puerto
+context:
+  scaffold_script: andamio.sh
