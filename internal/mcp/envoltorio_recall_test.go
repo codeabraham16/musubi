@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -41,17 +42,51 @@ func TestRecallAdelgazaElEnvoltorio(t *testing.T) {
 		t.Fatalf("esperaba varios items para medir el envoltorio, vinieron %d: %s", len(res.Items), texto)
 	}
 
-	// 1.1 — el puntaje model-free VIAJA en la respuesta: musubi-body (cmd/musubi-body-ui/memoria.go)
-	// lo copia a su Item, y quitarlo lo dejaría con 0 en silencio. Sin rerank (este test) todos los
-	// items traen score > 0, así que la clave está presente. Esta guarda frena que alguien vuelva a
-	// ponerle json:"-" al campo y rompa a ese consumidor sin que ningún test lo note.
-	// Sabotaje: ponerle a RecallItem.Score el tag `json:"-"`.
+	// 1.1 — score, author y full_tokens NO VIAJAN al modelo. ESTA GUARDA EXIGÍA LO CONTRARIO hasta el
+	// 2026-11-13, y el motivo era real: musubi-body (cmd/musubi-body-ui/memoria.go:108) copiaba el
+	// score a su Item, así que sacarlo lo dejaba con 0 en silencio. Lo que cambió es el mundo, no el
+	// razonamiento: ese repo está EN PAUSA desde el 2026-09-24 —último commit, 5 PRs abiertos sin
+	// mergear, y nada corriendo en el server: ni unit, ni proceso, ni contenedor, ni carpeta— y los
+	// tres campos tienen CERO lecturas adentro de musubi (el único uso de Score es
+	// methods_cognition.go, que lo pone en 0 al reordenar; full_tokens no tuvo lector NUNCA).
+	//
+	// Eran 24,3 % del payload de cada ítem —score 10,8 %, author 6,6 %, full_tokens 6,9 %— y un recall
+	// trae ~78 ítems, medido sobre 1.451 transcripts el 2026-11-13.
+	//
+	// LA GUARDA QUEDA, INVERTIDA: el invariante no es «viajan» ni «no viajan», es que NO SE MUEVAN EN
+	// SILENCIO en ninguna de las dos direcciones. Si se retoma musubi-body, invertirla de nuevo junto
+	// con los tags de recall.go —las dos cosas, o el próximo cambio vuelve a ser invisible.
+	// Sabotaje: devolverle a RecallItem.Score el tag que lo hace viajar.
 	// arnes: archivo="internal/memory/recall.go"
-	// arnes: de="json:\"score,omitempty\""
-	// arnes: a="json:\"-\""
+	// arnes: de="Score float64 `json:\"-\"`"
+	// arnes: a="Score float64 `json:\"score,omitempty\"`"
 	// arnes: prueba="TestRecallAdelgazaElEnvoltorio"
-	if !strings.Contains(texto, `"score"`) {
-		t.Errorf("el puntaje model-free no viajó en la respuesta del recall (lo lee musubi-body): %s", texto)
+	for _, clave := range []string{`"score":`, `"author":`, `"full_tokens":`} {
+		if strings.Contains(texto, clave) {
+			t.Errorf("la clave %s viajó en el payload del recall y no tiene lector vivo (ver RecallItem en internal/memory/recall.go): %s", clave, texto)
+		}
+	}
+
+	// 1.1b — LA MITAD ESTRUCTURAL, y no es redundante: tapa un hueco MEDIDO en la de arriba. Un campo
+	// con omitempty y sin valor en la siembra no emite su clave NI CUANDO VIAJA, así que el assert
+	// textual se lo pierde. Comprobado el 2026-11-13 saboteando los tres: con el tag de Author
+	// restaurado a `json:"author,omitempty"` la guarda textual siguió VERDE —las notas que siembra
+	// este test no tienen atribución— mientras score y full_tokens sí se pusieron rojos. El TAG no
+	// depende de la siembra, así que mide los tres por igual.
+	// Sabotaje: devolverle a RecallItem.Author el tag que lo hace viajar.
+	// arnes: archivo="internal/memory/recall.go"
+	// arnes: de="Author string `json:\"-\"`"
+	// arnes: a="Author string `json:\"author,omitempty\"`"
+	// arnes: prueba="TestRecallAdelgazaElEnvoltorio"
+	for _, campo := range []string{"Score", "Author", "FullTokens"} {
+		f, ok := reflect.TypeOf(memory.RecallItem{}).FieldByName(campo)
+		if !ok {
+			t.Errorf("RecallItem ya no tiene el campo %s; si se quitó a propósito, sacalo de esta lista", campo)
+			continue
+		}
+		if tag := f.Tag.Get("json"); tag != "-" {
+			t.Errorf("RecallItem.%s declara json:%q y debería declarar json:\"-\": volvería a viajar al modelo sin tener lector vivo", campo, tag)
+		}
 	}
 
 	// 1.2 — created_at viaja a resolución de DÍA (YYYY-MM-DD), sin hora.

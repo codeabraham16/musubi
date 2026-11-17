@@ -120,22 +120,40 @@ type RecallItem struct {
 	ID       string `json:"id"`
 	TopicKey string `json:"topic_key"`
 	Gist     string `json:"gist"`
-	// Score es el puntaje MODEL-FREE que ORDENA la lista. VIAJA en la respuesta porque consumidores
-	// externos lo leen —musubi-body (cmd/musubi-body-ui/memoria.go) lo copia a su Item para la vista
-	// MEMORIA—: quitarlo del payload los dejaría con 0 en silencio. empaquetar lo fija y, cuando el
-	// juez de pertinencia reordena (RecallResult.Reranked), rerankSiCorresponde lo pone en 0 y omitempty
-	// lo omite: el tope reranked sale sin score, y esa ausencia —más la marca Reranked— avisa que el
-	// orden ya no es el del ranking por defecto.
-	Score      float64 `json:"score,omitempty"`
-	FullTokens int     `json:"full_tokens"` // costo de hidratar el contenido completo
+	// Score es el puntaje MODEL-FREE que ORDENA la lista, y NO VIAJA al modelo: json:"-".
+	//
+	// Viajaba por un consumidor EXTERNO —musubi-body (cmd/musubi-body-ui/memoria.go:108) lo copia a su
+	// Item para la vista MEMORIA— y la guarda 1.1 de envoltorio_recall_test.go exigía su presencia,
+	// justamente para que nadie lo sacara sin verlo. Medido el 2026-11-13: ese repo está EN PAUSA
+	// desde el 2026-09-24 —último commit, 5 PRs abiertos sin mergear, y nada corriendo en el server:
+	// ni unit, ni proceso, ni contenedor, ni carpeta— y adentro de musubi el campo tiene CERO
+	// lecturas: el único uso es methods_cognition.go, que lo pone en 0 al reordenar. Eran 10,8 % del
+	// payload de cada ítem, y un recall trae ~78 ítems.
+	//
+	// Y es el campo más redundante del envoltorio: la lista YA viene ordenada por él, así que el ORDEN
+	// transporta la información y el número la repite. Cuando el juez de pertinencia reordena, lo que
+	// avisa que el orden no es el del ranking por defecto es la marca RecallResult.Reranked.
+	//
+	// SI SE RETOMA musubi-body: devolverle acá el tag `json:"score,omitempty"` Y volver a invertir la
+	// guarda 1.1. Las dos cosas: la guarda existe para que el campo no se mueva en silencio en
+	// NINGUNA de las dos direcciones.
+	Score float64 `json:"-"`
+	// FullTokens es el costo de hidratar el contenido completo, y NO VIAJA: json:"-". Nació para que
+	// el agente decidiera si expandir, pero medido el 2026-11-13 no tuvo lector NUNCA —cero lecturas
+	// en musubi, sólo escrituras, y tampoco lo leía musubi-body—. Eran 6,9 % del payload. Se conserva
+	// en Go porque methods_design.go lo fija y el valor sigue disponible in-process.
+	FullTokens int `json:"-"`
 	// CreatedAt es la fecha ISO8601 de creación. Viaja para que la superficie (los gists que el hook
 	// inyecta en el contexto) pueda mostrar la EDAD de cada memoria: sin ella el agente no distingue
 	// una nota de ayer de una de 8 meses y trata la vieja como verdad ACTUAL — la raíz de la
 	// "divagación" por memoria caduca. omitempty ⇒ no ensucia la respuesta si falta la fecha.
 	CreatedAt string `json:"created_at,omitempty"`
-	// Author es la atribución por PERSONA (C5.1): quién aportó la memoria. omitempty ⇒ no ensucia
-	// la respuesta cuando no hay atribución (captura local/legacy/stdio).
-	Author string `json:"author,omitempty"`
+	// Author es la atribución por PERSONA (C5.1): quién aportó la memoria. NO VIAJA: json:"-".
+	// Medido el 2026-11-13: cero lecturas adentro de musubi, y el único consumidor era musubi-body,
+	// hoy en pausa. Eran 6,6 % del payload. Las dos atribuciones que SÍ viajan son ProjectID —de qué
+	// repo salió la nota, que el hook marca con marcaDeProyecto— y Provenance —qué clase de proceso
+	// la generó—: las dos tienen lector vivo, y éste no.
+	Author string `json:"-"`
 	// ProjectID es el PROYECTO DE ORIGEN de la nota: de qué repo salió. Es la tercera atribución y
 	// no se confunde con las otras dos: Author dice QUIÉN la escribió (la credencial) y Provenance
 	// QUÉ CLASE DE PROCESO la generó; ninguna de las dos dice DE QUÉ PROYECTO habla. Sin esto, el
