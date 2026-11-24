@@ -422,6 +422,9 @@ type McpServer struct {
 	// toolRO: qué tools siguen sirviendo con la base en sólo lectura, para las que no se
 	// deriva de readOnly. Ver roClass en registry.go.
 	toolRO map[string]roClass
+	// toolAccionesLectura[tool][action]=true: acciones de lectura de una tool que no es readOnly.
+	// Sólo pesan en la AUTORIZACIÓN (autorizaPorAccion), nunca en el candado.
+	toolAccionesLectura map[string]map[string]bool
 	// dispatchMu hace seguro el dispatch concurrente (transporte HTTP): las tools que
 	// mutan toman Lock (serializadas, RMW-safe); las de solo-lectura toman RLock
 	// (concurrentes entre sí). En stdio (un goroutine) está siempre libre, costo nulo.
@@ -711,7 +714,15 @@ func NewMcpServer(engine memory.StorageBackend, projectPath string, embedder emb
 	// el default correcto. Así el mapa queda del tamaño de lo que realmente se declaró.
 	s.toolLock = make(map[string]lockClass)
 	s.toolRO = make(map[string]roClass)
+	s.toolAccionesLectura = make(map[string]map[string]bool)
 	for i := range s.tools {
+		if as := s.tools[i].accionesDeLectura; len(as) > 0 {
+			m := make(map[string]bool, len(as))
+			for _, a := range as {
+				m[a] = true
+			}
+			s.toolAccionesLectura[s.tools[i].Name] = m
+		}
 		s.toolIndex[s.tools[i].Name] = s.tools[i].handler
 		if s.tools[i].readOnly {
 			s.toolReadOnly[s.tools[i].Name] = true

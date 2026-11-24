@@ -91,6 +91,11 @@ type toolEntry struct {
 	lock     lockClass
 	ro       roClass
 	dormant  bool
+	// accionesDeLectura: para una tool que NO es readOnly pero tiene acciones que sólo leen
+	// (musubi_work status), cuáles son. Abre esas acciones a un principal write=none con read=all
+	// (la cabina) y a nadie más: ver autorizaPorAccion. No toca el candado ni el escalón de sólo
+	// lectura, que siguen saliendo de readOnly.
+	accionesDeLectura []string
 }
 
 // noCtx adapta un handler que no usa el contexto del request a la firma uniforme
@@ -856,6 +861,8 @@ func (s *McpServer) buildRegistry() []toolEntry {
 				},
 			},
 			handler: noCtx(s.toolWork),
+			// status, bids y savings sólo leen la pizarra: la cabina (reader read=all) puede verla.
+			accionesDeLectura: []string{"status", "bids", "savings"},
 		},
 		{
 			Tool: Tool{
