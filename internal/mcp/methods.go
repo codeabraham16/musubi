@@ -199,7 +199,7 @@ func (s *McpServer) handleToolsCall(ctx context.Context, params json.RawMessage)
 	// local no hay principal ⇒ acceso pleno (confianza local). Se chequea ANTES de tomar
 	// el lock para no serializar denegaciones.
 	p := principalFrom(ctx)
-	if !p.canCall(readOnly) {
+	if !p.canCall(readOnly || s.autorizaPorAccion(p, callReq.Name, callReq.Arguments)) {
 		if s.metrics != nil {
 			s.metrics.authzDenied.Add(1) // rechazo por rol, visible en /metrics (T17.5)
 		}

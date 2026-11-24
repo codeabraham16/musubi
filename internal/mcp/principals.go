@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -913,4 +914,32 @@ func authorFrom(p *Principal) string {
 		return ""
 	}
 	return p.Name
+}
+
+// autorizaPorAccion dice si una llamada a una tool que NO es readOnly cuenta como lectura para
+// la AUTORIZACIÓN porque su `action` es una de las que la tool declaró de sólo lectura
+// (accionesDeLectura). Es lo que deja a la cabina —un reader read=all, write=none— ver el
+// tablero (musubi_work status) sin poder reclamar ni completar unidades.
+//
+// Sólo a read=all, a propósito: la pizarra de musubi_work NO está acotada por proyecto (status
+// sin batch devuelve el batch activo de cualquiera), así que abrirla a un read=own le mostraría
+// lo de otros tenants. Un read=own queda exactamente como antes: rechazado.
+//
+// La action se lee igual que el handler: con TrimSpace. Una action vacía, desconocida o con
+// argumentos ilegibles NO autoriza (fail-closed): el handler decidiría otra cosa.
+func (s *McpServer) autorizaPorAccion(p *Principal, tool string, raw json.RawMessage) bool {
+	acciones := s.toolAccionesLectura[tool]
+	if p == nil || len(acciones) == 0 {
+		return false
+	}
+	if read, _ := p.caps(); read != ReadAll {
+		return false
+	}
+	var args struct {
+		Action string `json:"action"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &args) != nil {
+		return false
+	}
+	return acciones[strings.TrimSpace(args.Action)]
 }
