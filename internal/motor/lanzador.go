@@ -158,6 +158,9 @@ func (l *Lanzador) Turno(ctx context.Context, p Pedido, emitir func(Evento) erro
 	if len(p.Mensajes) == 0 {
 		return errors.New("pedido sin mensajes")
 	}
+	// ANTES DE LA SESIÓN, porque archivoDeSesion también usa el Dir: un cwd que no sirve tiene
+	// que caer al del servidor en los dos lugares, no sólo en el exec.
+	p.Dir = dirUsable(p.Dir)
 
 	// LA HISTORIA SE PARTE EN DOS, y esto es lo que hace que un agent loop funcione. Ver
 	// partirHistoria: el CLI NO interpreta su stdin como un transcript.
@@ -866,4 +869,28 @@ func (c *colaDeTexto) cola() string {
 		return ""
 	}
 	return "; stderr: " + s
+}
+
+// dirUsable devuelve el cwd pedido por el cliente si es un directorio de ESTA máquina, y ""
+// (el cwd del servidor, el comportamiento de antes) si no.
+//
+// NO ES UN ERROR DEL TURNO, Y ES A PROPÓSITO: el cliente puede estar en otra máquina —la
+// laptop contra el motor del server— con rutas que acá no existen. Fallar el turno por eso
+// dejaría a ese cliente sin modelo por un dato que es sólo informativo para el hijo; con
+// `cmd.Dir` apuntando a algo inexistente el exec fallaría igual, así que se cae al de siempre
+// y se avisa por stderr, que es donde el lanzador ya avisa lo que no es error del turno.
+func dirUsable(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	fi, err := os.Stat(dir)
+	if err != nil || !fi.IsDir() {
+		motivo := "no es un directorio"
+		if err != nil {
+			motivo = err.Error()
+		}
+		fmt.Fprintf(os.Stderr, "motor: el cwd del cliente %q no sirve en esta máquina (%s); el turno corre en el del servidor\n", dir, motivo)
+		return ""
+	}
+	return dir
 }

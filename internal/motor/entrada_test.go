@@ -851,3 +851,43 @@ func TestElPedidoTraducidoLoAceptaElCuerpoDelRequest(t *testing.T) {
 	}
 	mismoJSON(t, r.Tools, `[{"name":"x","input_schema":{}}]`)
 }
+
+// Sabotaje M1a: el cwd del cliente no llega al Pedido
+// arnes: archivo="internal/motor/entrada.go"
+// arnes: de="\t\tDir:            dirDelCliente(p.Options),\n"
+// arnes: a=""
+func TestElCwdDelClienteViajaComoDirDelPedido(t *testing.T) {
+	// Sin esto el `claude -p` hijo corre en el cwd de `musubi serve` y el modelo cree que su
+	// carpeta es ésa: medido 2026-11-24, un subagente de pi buscó el proyecto en la carpeta
+	// del motor.
+	casos := []struct {
+		nombre, metadata, quiero string
+	}{
+		{"absoluto", `{"cwd":"/home/x/proyecto"}`, "/home/x/proyecto"},
+		{"se limpia", `{"cwd":"/home/x/proyecto/../otro/"}`, "/home/x/otro"},
+		{"con espacios alrededor", `{"cwd":"  /home/x  "}`, "/home/x"},
+		{"relativo se ignora", `{"cwd":"proyecto"}`, ""},
+		{"vacío", `{"cwd":""}`, ""},
+		{"no es string", `{"cwd":42}`, ""},
+		{"sin cwd", `{"otra":"cosa"}`, ""},
+		{"metadata no es objeto", `"texto"`, ""},
+		{"metadata null", `null`, ""},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			p := desdeJSON(t, `{"model":{"id":"claude-opus-5"},"context":{"messages":[
+				{"role":"user","content":"hola"}]},"options":{"metadata":`+c.metadata+`}}`)
+			if p.Dir != c.quiero {
+				t.Errorf("Dir = %q, quiero %q", p.Dir, c.quiero)
+			}
+		})
+	}
+}
+
+func TestSinMetadataElDirQuedaVacio(t *testing.T) {
+	p := desdeJSON(t, `{"model":{"id":"claude-opus-5"},"context":{"messages":[
+		{"role":"user","content":"hola"}]}}`)
+	if p.Dir != "" {
+		t.Errorf("Dir = %q sin metadata: tiene que quedar el cwd del servidor", p.Dir)
+	}
+}

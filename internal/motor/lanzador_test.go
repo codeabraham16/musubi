@@ -74,6 +74,15 @@ func claudeFalso(guion string) {
 		os.Stdout.WriteString(`{"type":"stream_event","event":{"type":"message_start","message":{"usage":{}}}}` + "\n")
 		os.Stdout.WriteString(`{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}}` + "\n")
 		os.Exit(0)
+	case strings.HasPrefix(guion, "vuelca-cwd:"):
+		// Vuelca el cwd con el que el lanzador arrancó al hijo, para el test del Dir del
+		// cliente (TestElHijoCorreEnElCwdDelCliente). Después cierra un turno limpio.
+		cwd, _ := os.Getwd()
+		_ = os.WriteFile(strings.TrimPrefix(guion, "vuelca-cwd:"), []byte(cwd), 0o600)
+		os.Stdout.WriteString(`{"type":"system","subtype":"init","entorno":"x"}` + "\n")
+		os.Stdout.WriteString(`{"type":"stream_event","event":{"type":"message_start","message":{"usage":{}}}}` + "\n")
+		os.Stdout.WriteString(`{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}}` + "\n")
+		os.Exit(0)
 	case guion == "linea-larga":
 		// Imita el `system/init` real del harness, que trae el entorno entero (tools,
 		// plugins, rutas) y pasa holgadamente los 64 KB del default de bufio. Se genera
@@ -1486,5 +1495,71 @@ func TestElDefectoDelPlazoSonDiezMinutos(t *testing.T) {
 			"configure el suyo, y un plazo corto corta el turno largo —el caso que este paquete "+
 			"existe para servir— con un error que dice «por tiempo» y no nombra la causa",
 			DemoraPorDefecto)
+	}
+}
+
+// Sabotaje M1b: el lanzador ignora el Dir del pedido
+// arnes: archivo="internal/motor/lanzador.go"
+// arnes: de="\tcmd.Dir = p.Dir\n"
+// arnes: a=""
+func TestElHijoCorreEnElCwdDelCliente(t *testing.T) {
+	cwdCliente := t.TempDir()
+	volcado := filepath.Join(t.TempDir(), "cwd")
+	l := lanzadorFalso("vuelca-cwd:" + volcado)
+	err := l.Turno(context.Background(),
+		Pedido{Mensajes: []Mensaje{TextoDeUsuario("hola")}, Dir: cwdCliente},
+		func(Evento) error { return nil })
+	if err != nil {
+		t.Fatalf("Turno: %v", err)
+	}
+	got, err := os.ReadFile(volcado)
+	if err != nil {
+		t.Fatalf("el hijo no volcó su cwd: %v", err)
+	}
+	quiero, _ := filepath.EvalSymlinks(cwdCliente)
+	tengo, _ := filepath.EvalSymlinks(string(got))
+	if tengo != quiero {
+		t.Errorf("el hijo corrió en %q, quiero el cwd del cliente %q", tengo, quiero)
+	}
+}
+
+// Sabotaje M1c: un cwd inexistente tumba el turno en vez de caer al del servidor
+// arnes: archivo="internal/motor/lanzador.go"
+// arnes: de="\tp.Dir = dirUsable(p.Dir)\n"
+// arnes: a=""
+func TestUnCwdQueNoExisteCaeAlDelServidor(t *testing.T) {
+	// El cliente puede estar en otra máquina (la laptop contra el motor del server) con rutas
+	// que acá no existen: el turno tiene que servirse igual, en el cwd del servidor.
+	volcado := filepath.Join(t.TempDir(), "cwd")
+	l := lanzadorFalso("vuelca-cwd:" + volcado)
+	err := l.Turno(context.Background(),
+		Pedido{Mensajes: []Mensaje{TextoDeUsuario("hola")}, Dir: filepath.Join(t.TempDir(), "no-existe")},
+		func(Evento) error { return nil })
+	if err != nil {
+		t.Fatalf("Turno con un cwd inexistente tiene que servirse igual: %v", err)
+	}
+	got, err := os.ReadFile(volcado)
+	if err != nil {
+		t.Fatalf("el hijo no volcó su cwd: %v", err)
+	}
+	quiero, _ := os.Getwd()
+	quiero, _ = filepath.EvalSymlinks(quiero)
+	tengo, _ := filepath.EvalSymlinks(string(got))
+	if tengo != quiero {
+		t.Errorf("el hijo corrió en %q, quiero el cwd del servidor %q", tengo, quiero)
+	}
+}
+
+func TestDirUsableRechazaUnArchivo(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "archivo")
+	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := dirUsable(f); got != "" {
+		t.Errorf("dirUsable(archivo) = %q, quiero \"\"", got)
+	}
+	d := t.TempDir()
+	if got := dirUsable(d); got != d {
+		t.Errorf("dirUsable(dir) = %q, quiero %q", got, d)
 	}
 }
