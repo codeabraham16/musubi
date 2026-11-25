@@ -2,7 +2,9 @@ package motor
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -860,12 +862,19 @@ func TestElCwdDelClienteViajaComoDirDelPedido(t *testing.T) {
 	// Sin esto el `claude -p` hijo corre en el cwd de `musubi serve` y el modelo cree que su
 	// carpeta es ésa: medido 2026-11-24, un subagente de pi buscó el proyecto en la carpeta
 	// del motor.
+	// La raíz es absoluta en el SO que corre la prueba: en Windows "/home/x" no lo es y se descarta.
+	raiz := "/home/x"
+	if runtime.GOOS == "windows" {
+		raiz = `C:\home\x`
+	}
+	cwd := func(v string) string { b, _ := json.Marshal(map[string]string{"cwd": v}); return string(b) }
+	sep := string(filepath.Separator)
 	casos := []struct {
 		nombre, metadata, quiero string
 	}{
-		{"absoluto", `{"cwd":"/home/x/proyecto"}`, "/home/x/proyecto"},
-		{"se limpia", `{"cwd":"/home/x/proyecto/../otro/"}`, "/home/x/otro"},
-		{"con espacios alrededor", `{"cwd":"  /home/x  "}`, "/home/x"},
+		{"absoluto", cwd(raiz + sep + "proyecto"), filepath.Join(raiz, "proyecto")},
+		{"se limpia", cwd(raiz + sep + "proyecto" + sep + ".." + sep + "otro" + sep), filepath.Join(raiz, "otro")},
+		{"con espacios alrededor", cwd("  " + raiz + "  "), raiz},
 		{"relativo se ignora", `{"cwd":"proyecto"}`, ""},
 		{"vacío", `{"cwd":""}`, ""},
 		{"no es string", `{"cwd":42}`, ""},
