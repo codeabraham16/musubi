@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -68,8 +69,9 @@ type ContextoProxy struct {
 
 // OpcionesProxy son las `ProxySerializableStreamOptions` que el cliente serializa
 // (proxy.ts:91). Se leen las que este servidor puede HONRAR; las demás —temperature,
-// samplingParams, cacheRetention, transport, metadata— se ignoran en silencio y es correcto:
-// ninguno de los dos motores las puede aplicar, y aceptarlas sería prometer algo que no pasa.
+// samplingParams, cacheRetention, transport— se ignoran en silencio y es correcto: ninguno de
+// los dos motores las puede aplicar, y aceptarlas sería prometer algo que no pasa. De
+// `metadata` se lee UNA clave, `cwd` (ver Metadata).
 type OpcionesProxy struct {
 	// MaxTokens del PEDIDO. Le gana al del modelo cuando viene.
 	MaxTokens int `json:"maxTokens"`
@@ -83,6 +85,50 @@ type OpcionesProxy struct {
 	// de pi: un struct de ceros se leería como «presupuesto 0» y apagaría el thinking que
 	// el cliente acaba de pedir.
 	ThinkingBudgets *PresupuestosThinking `json:"thinkingBudgets"`
+
+	// Metadata es el `metadata` libre de pi, que streamProxy serializa tal cual en el cuerpo.
+	// Se lee CRUDO a propósito: es un objeto que el cliente arma a mano, y decodificarlo en una
+	// struct haría que un `metadata` con otra forma (un string, un array) tumbe el pedido
+	// entero con 400. Acá sólo se busca `cwd` (ver dirDelCliente) y lo demás se ignora.
+	Metadata json.RawMessage `json:"metadata"`
+}
+
+// dirDelCliente saca de `metadata.cwd` el directorio de trabajo del CLIENTE, que pasa a ser
+// el cwd del `claude -p` hijo (Pedido.Dir → lanzador).
+//
+// POR QUÉ: sin esto el hijo corre en el cwd de `musubi serve`, y el CLI le informa ESE
+// directorio al modelo. Medido el 2026-11-24 con pi de terminal sobre ~/Proyectos/thinkrail y
+// el motor lanzado desde otra carpeta: un subagente de pi-subagents buscó los archivos del
+// proyecto en la carpeta del motor. El agente principal no se confundía porque el system
+// prompt de pi ya trae su cwd; el subagente sí.
+//
+// QUÉ ABRE Y QUÉ NO: con las banderas del lanzador (`--setting-sources ""`, `--tools ""`,
+// `--strict-mcp-config`, `--system-prompt-file`) el hijo NO lee el CLAUDE.md del directorio
+// —medido el 2026-11-24: con un CLAUDE.md con una palabra clave en el cwd, el modelo reportó
+// el cwd y NO la palabra— ni tiene tools para leer archivos. El directorio sólo cambia lo que
+// el modelo cree que es su carpeta y dónde el CLI ubica la sesión. Aun así se exige ruta
+// ABSOLUTA: una relativa se resolvería contra el cwd del servidor, que es justo el error que
+// esto corrige. Lo que no cumple se ignora (cwd del servidor, el comportamiento de antes);
+// que el directorio EXISTA lo verifica el lanzador, que es el que lo usa.
+func dirDelCliente(o OpcionesProxy) string {
+	if len(o.Metadata) == 0 {
+		return ""
+	}
+	var m struct {
+		Cwd any `json:"cwd"`
+	}
+	if err := json.Unmarshal(o.Metadata, &m); err != nil {
+		return ""
+	}
+	cwd, ok := m.Cwd.(string)
+	if !ok {
+		return ""
+	}
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" || !filepath.IsAbs(cwd) {
+		return ""
+	}
+	return filepath.Clean(cwd)
 }
 
 // PresupuestosThinking es el `ThinkingBudgets` de pi (types.ts:139).
@@ -152,6 +198,7 @@ func PedidoDesdeProxy(p PedidoProxy) (Pedido, error) {
 		Tools:          tools,
 		Thinking:       presupuestoDeThinking(p.Options),
 		Esfuerzo:       esfuerzoDesdeReasoning(p.Options.Reasoning),
+		Dir:            dirDelCliente(p.Options),
 	}, nil
 }
 

@@ -2,7 +2,9 @@ package motor
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -850,4 +852,51 @@ func TestElPedidoTraducidoLoAceptaElCuerpoDelRequest(t *testing.T) {
 		t.Errorf("quiero 1 mensaje, tengo %d", len(r.Messages))
 	}
 	mismoJSON(t, r.Tools, `[{"name":"x","input_schema":{}}]`)
+}
+
+// Sabotaje M1a: el cwd del cliente no llega al Pedido
+// arnes: archivo="internal/motor/entrada.go"
+// arnes: de="\t\tDir:            dirDelCliente(p.Options),\n"
+// arnes: a=""
+func TestElCwdDelClienteViajaComoDirDelPedido(t *testing.T) {
+	// Sin esto el `claude -p` hijo corre en el cwd de `musubi serve` y el modelo cree que su
+	// carpeta es ésa: medido 2026-11-24, un subagente de pi buscó el proyecto en la carpeta
+	// del motor.
+	// La raíz es absoluta en el SO que corre la prueba: en Windows "/home/x" no lo es y se descarta.
+	raiz := "/home/x"
+	if runtime.GOOS == "windows" {
+		raiz = `C:\home\x`
+	}
+	cwd := func(v string) string { b, _ := json.Marshal(map[string]string{"cwd": v}); return string(b) }
+	sep := string(filepath.Separator)
+	casos := []struct {
+		nombre, metadata, quiero string
+	}{
+		{"absoluto", cwd(raiz + sep + "proyecto"), filepath.Join(raiz, "proyecto")},
+		{"se limpia", cwd(raiz + sep + "proyecto" + sep + ".." + sep + "otro" + sep), filepath.Join(raiz, "otro")},
+		{"con espacios alrededor", cwd("  " + raiz + "  "), raiz},
+		{"relativo se ignora", `{"cwd":"proyecto"}`, ""},
+		{"vacío", `{"cwd":""}`, ""},
+		{"no es string", `{"cwd":42}`, ""},
+		{"sin cwd", `{"otra":"cosa"}`, ""},
+		{"metadata no es objeto", `"texto"`, ""},
+		{"metadata null", `null`, ""},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			p := desdeJSON(t, `{"model":{"id":"claude-opus-5"},"context":{"messages":[
+				{"role":"user","content":"hola"}]},"options":{"metadata":`+c.metadata+`}}`)
+			if p.Dir != c.quiero {
+				t.Errorf("Dir = %q, quiero %q", p.Dir, c.quiero)
+			}
+		})
+	}
+}
+
+func TestSinMetadataElDirQuedaVacio(t *testing.T) {
+	p := desdeJSON(t, `{"model":{"id":"claude-opus-5"},"context":{"messages":[
+		{"role":"user","content":"hola"}]}}`)
+	if p.Dir != "" {
+		t.Errorf("Dir = %q sin metadata: tiene que quedar el cwd del servidor", p.Dir)
+	}
 }
